@@ -854,6 +854,34 @@ func TestPreviewNightlyDeployMatchesTheBudgetTables(t *testing.T) {
 	}
 }
 
+// No allowed mix of PR previews and the nightly may exceed the 95 usable Cloud SQL slots. The counts come from `cap`.
+func TestPreviewCapAllowsNoMixOverTheBudget(t *testing.T) {
+	t.Parallel()
+	capFull := func(held int, caller string) bool {
+		var list strings.Builder
+		for i := 1; i <= held; i++ {
+			list.WriteString(strconv.Itoa(i) + " t\n")
+		}
+		r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", list.String()) }, "cap", caller)
+		return strings.Contains(r.stdout, "full=true")
+	}
+	maxPR := 0
+	for capFull(maxPR, "99") == false {
+		maxPR++
+		if maxPR > 10 {
+			t.Fatal("a new PR is never refused")
+		}
+	}
+	// The nightly may deploy beside every allowed PR preview, and is refused one PR preview later.
+	if capFull(maxPR, "nightly") || !capFull(maxPR+1, "nightly") {
+		t.Fatalf("nightly cap does not sit one slot above the PR cap of %d", maxPR)
+	}
+	fleet := budgetFleet(t, runPreview(t, nil, "budget"))
+	if got := (maxPR + 1) * fleet; got > 95 {
+		t.Errorf("(%d PR previews + the nightly) x %d connections = %d, over 95", maxPR, fleet, got)
+	}
+}
+
 func TestPreviewSecretsNightlyMakesOnlyThePRSet(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "secrets", "nightly")
@@ -966,29 +994,6 @@ func TestPreviewPrsListsTheNightly(t *testing.T) {
 	}, "prs")
 	if want := "nightly 2026-10-29T00:30:00Z\n7 2026-10-28T02:00:00Z\n"; r.code != 0 || r.stdout != want {
 		t.Fatalf("exit %d, prs = %q, want %q", r.code, r.stdout, want)
-	}
-}
-
-func TestPreviewCapCountsEveryPreview(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		entries string
-		n       int
-		full    bool
-	}{
-		{"", 0, false},
-		{"5 t\n6 t\n", 2, false},
-		{"nightly t\n5 t\n6 t\n", 3, true},
-		{"nightly t\n5 t\n6 t\n9 t\n", 4, true},
-	} {
-		t.Run(strconv.Itoa(c.n), func(t *testing.T) {
-			t.Parallel()
-			r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", c.entries) }, "cap")
-			want := "open=" + strconv.Itoa(c.n) + "\nfull=" + strconv.FormatBool(c.full) + "\n"
-			if r.code != 0 || r.stdout != want {
-				t.Fatalf("exit %d, cap = %q, want %q", r.code, r.stdout, want)
-			}
-		})
 	}
 }
 

@@ -56,6 +56,7 @@ export function ensureTag(
   // `config` sends page_view itself and GA4 derives the traffic source from the
   // referrer and utm_*; a manual page_view would double-count.
   w.gtag('js', new Date())
+  if (pageFields) w.gtag('set', pageFields)
   if (config) w.gtag('config', id, config)
   else w.gtag('config', id)
 
@@ -159,6 +160,16 @@ export function trackSignUp(): void {
 
 export function trackInvoiceValidated(): void {
   sendOrHold('invoice_validated')
+}
+
+// Bounded fields every later hit inherits. Kept until the tag loads, then replayed before `config`.
+let pageFields: Record<string, string> | null = null
+
+/** Bounds `page_location` and `page_referrer` for every hit, not only config and page_view. */
+export function setPageFields(location: string, referrer?: string): void {
+  pageFields = referrer ? { page_location: location, page_referrer: referrer } : { page_location: location }
+  if (!loaded || revoked) return
+  ;(window as GtagWindow).gtag?.('set', pageFields)
 }
 
 /** `pageLocation` is the bounded route pattern, never the live URL. */

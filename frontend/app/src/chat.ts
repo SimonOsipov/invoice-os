@@ -2,6 +2,7 @@
 import {
   ensureTag,
   setAnalyticsRevoked,
+  setPageFields,
   tagIsLoaded,
   trackAppPageView,
   trackInvoiceValidated,
@@ -38,6 +39,22 @@ function appPage(): string {
   return window.location.origin + (name.startsWith('/') ? name : `/${name}`)
 }
 
+// Same-origin referrer becomes its route pattern; a cross-origin one keeps its origin only.
+function appReferrer(): string | undefined {
+  try {
+    const ref = new URL(document.referrer)
+    if (ref.origin !== window.location.origin) return ref.origin
+    const name = routeName(ref.pathname)
+    return ref.origin + (name.startsWith('/') ? name : `/${name}`)
+  } catch {
+    return undefined
+  }
+}
+
+function boundPageFields(): void {
+  setPageFields(appPage(), appReferrer())
+}
+
 function loadAppTag(record: ConsentRecord | null): boolean {
   return ensureTag(window.location.hostname, record, APP_HOSTNAMES, { page_location: appPage() })
 }
@@ -46,6 +63,7 @@ export function bootAppAnalytics(): boolean {
   const record = readConsent()
   // A remount lifts endAppChat's stop; no record holds events, a Reject stays revoked.
   setAnalyticsRevoked(record ? !record.analytics : false)
+  boundPageFields()
   return loadAppTag(record)
 }
 
@@ -118,6 +136,7 @@ export function syncAppConsent(email: string | null): ConsentRecord | null {
 }
 
 export function reportAppPage(): void {
+  boundPageFields()
   trackAppPageView(appPage())
   if (!chatIsLoaded()) return
   hsq().push(['setPath', window.location.pathname], ['trackPageView'])

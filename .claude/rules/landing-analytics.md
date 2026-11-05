@@ -82,6 +82,7 @@ paths:
 - Send the path without its query in every app `setPath`.
 - Report an app route change through `reportAppPage`. It sends a GA page view through `trackAppPageView` and pushes the HubSpot path only while `chatIsLoaded()`.
 - Pass `{ page_location: origin + routeName(path) }` to the app `gtag('config')` and to `trackAppPageView`.
+- Bound every app hit through `setPageFields` (`gtag('set', {page_location, page_referrer})`): `bootAppAnalytics` and `reportAppPage` call it, and `ensureTag` replays it before `config`. A same-origin referrer is `origin + routeName(path)`; a cross-origin one is its origin only; no referrer omits the field.
 - Call `endAppChat` in `leaveToLanding`, in `endRevokedSession` and in `expireSession`. In the first two, call it before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it, `expireSession_endsTheChat` included.
 - On Reject in the app, expire the `_ga` cookies and the HubSpot cookies.
 - Put `data-hs-do-not-collect="true"` on every app `<form>`. `chatSeam.test.ts` enforces it.

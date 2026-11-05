@@ -538,8 +538,8 @@ describe('Google tag', () => {
     bootAppAnalytics()
     chooseAppConsent('accept', EMAIL)
     bootAppAnalytics()
-    expect(layer().map((e) => e[0])).toEqual(['js', 'config', 'event'])
-    expect(layer()[2]).toEqual(['event', 'invoice_validated', {}])
+    expect(layer().map((e) => e[0])).toEqual(['js', 'set', 'config', 'event', 'set'])
+    expect(layer()[3]).toEqual(['event', 'invoice_validated', {}])
   })
 
   it('reportValidatedInvoice_aStoredRejectDropsTheEvent', async () => {
@@ -552,7 +552,7 @@ describe('Google tag', () => {
     expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
   })
 
-  it('everyEventCarriesNoUserIdNoSetCallAndNoFragmentOrQuery', async () => {
+  it('everyEventCarriesNoUserIdAndNoFragmentOrQuery', async () => {
     stubId()
     const { chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
     window.history.replaceState(null, '', `/invoices/${UUID}?q=secret-term#token=abc123`)
@@ -561,9 +561,69 @@ describe('Google tag', () => {
     reportValidatedInvoice({ status: 'validated' })
     reportAppPage()
     expect(layer().length, 'control: the flows pushed entries').toBeGreaterThanOrEqual(5)
-    expect(layer().some((e) => e[0] === 'set')).toBe(false)
     const text = JSON.stringify(layer())
     for (const leak of ['user_id', 'secret-term', 'abc123', '#', '?', UUID, EMAIL, 'ada']) expect(text, leak).not.toContain(leak)
     for (const e of layer().filter((x) => x[0] === 'event' && x[1] !== 'page_view')) expect(e[2]).toEqual({})
+  })
+  const sets = () => layer().filter((e) => e[0] === 'set')
+  const setReferrer = (value: string) => Object.defineProperty(document, 'referrer', { value, configurable: true })
+  afterEach(() => Reflect.deleteProperty(document, 'referrer'))
+
+  it('setPageFields_aValidationOnADetailRouteIsPrecededByTheBoundedSet', async () => {
+    stubId()
+    const { bootAppAnalytics, reportAppPage, reportValidatedInvoice } = await fresh()
+    setConsent(true)
+    bootAppAnalytics()
+    window.history.replaceState(null, '', `/invoices/${UUID}?q=12345678-0001`)
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    const l = layer()
+    const ev = l.findIndex((e) => e[1] === 'invoice_validated')
+    const set = l.map((e, i) => (e[0] === 'set' ? i : -1)).filter((i) => i >= 0 && i < ev).pop()
+    expect(set, 'a set precedes the event').toBeDefined()
+    expect(l[set!][1]).toEqual({ page_location: `${ORIGIN}/invoices/:id` })
+    const text = JSON.stringify(l)
+    for (const leak of ['1b4e28ba', '12345678', '?']) expect(text).not.toContain(leak)
+  })
+
+  it('setPageFields_aSameOriginReferrerIsBoundedAndACrossOriginOneKeepsNoPath', async () => {
+    stubId()
+    setReferrer(`${ORIGIN}/invoices/${UUID}?q=12345678-0001#x`)
+    let chat = await fresh()
+    setConsent(true)
+    chat.bootAppAnalytics()
+    expect(sets()[0][1]).toEqual({ page_location: `${ORIGIN}/`, page_referrer: `${ORIGIN}/invoices/:id` })
+    expect(JSON.stringify(layer())).not.toContain(UUID)
+    document.head.innerHTML = ''
+    delete (window as GaWindow).dataLayer
+    setReferrer('https://www.google.com/search?q=tin-12345678')
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    expect(sets()[0][1]).toMatchObject({ page_referrer: 'https://www.google.com' })
+    expect(JSON.stringify(layer())).not.toContain('12345678')
+  })
+
+  it('setPageFields_aHeldEventFlushedAtAcceptIsPrecededByTheSet', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportValidatedInvoice } = await fresh()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    const names = layer().map((e) => e[0])
+    expect(names).toEqual(['js', 'set', 'config', 'event'])
+  })
+
+  it('setPageFields_revokedOrNotLoadedPushesNoSet', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage } = await fresh()
+    bootAppAnalytics()
+    reportAppPage()
+    expect((window as GaWindow).dataLayer, 'not loaded').toBeUndefined()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('reject', EMAIL)
+    const before = sets().length
+    reportAppPage()
+    expect(before, 'control: the Accept pushed a set').toBeGreaterThan(0)
+    expect(sets()).toHaveLength(before)
   })
 })

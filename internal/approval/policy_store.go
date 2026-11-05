@@ -696,8 +696,8 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 
 // sweepValidatedBacklog arms one run per invoice sitting at `validated` with no live run,
 // inside PublishPolicy's transaction. This IS the backfill — there is no data migration
-// and no background pass — so when publish answers 200 the new version already governs the
-// whole backlog, not only invoices validated after it. A second publish arms zero: every
+// and no background pass. Each invoice is armed with its own first match, not with the
+// published version; one no policy matches gets no run. A second publish arms zero: every
 // invoice the first sweep touched now carries a run the anti-join excludes.
 //
 // RLS is the only tenant filter, as everywhere else in this store. tenantID is passed

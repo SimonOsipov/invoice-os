@@ -2,6 +2,12 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// React's scheduler captures setImmediate at load; delaying it forces the render after a bare waitFor.
+vi.hoisted(() => {
+  globalThis.setImmediate = ((fn: (...a: unknown[]) => void, ...a: unknown[]) =>
+    setTimeout(fn, 2, ...a)) as unknown as typeof setImmediate
+})
+
 import { alignSeries, CHART_H } from '../helpers'
 import { formatShown } from '../metricsApi'
 import { FakeUPlot, type RecordingCtx } from '../uplotFake'
@@ -424,8 +430,11 @@ describe('TimeChart readout', () => {
     const second = FakeUPlot.instances[1]
     expect(first.destroyed).toBe(true)
     expect(second.calls[0]).toEqual(['setCursor', { left: 40, top: 20 }])
-    expect(view.container.querySelector('[data-readout]')).not.toBeNull()
-    expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
+    // React renders the readout in a later scheduler task than the new uPlot instance.
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-readout]')).not.toBeNull()
+      expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
+    })
   })
 })
 

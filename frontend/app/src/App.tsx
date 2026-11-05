@@ -120,6 +120,7 @@ import {
   readConsent,
   reportAppPage,
   syncAppConsent,
+  trackEmailVerified,
 } from './chat'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -2215,6 +2216,7 @@ export default function App() {
     redeemStarted.current = true
     // A bound marker means the gateway confirmed the mailbox, so the state's age does not gate the code.
     const markerBound = holdsPendingVerify()
+    if (markerBound) trackEmailVerified()
     consumePendingVerify()
     const state = consumeSignInState(Date.now(), markerBound)
     const invite = consumePendingInvite()

@@ -14,10 +14,11 @@
 // Error('not implemented')` before ever calling the real authedFetch/fetch (or, for the
 // pure helpers, before returning anything) — that IS the correct RED reason (assertion /
 // not-implemented), not an import/compile/setup error.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncState, type AsyncStatus } from '@invoice-os/api-client'
 
+import { trackClientAdded } from '../chat'
 import { createAuthedFetch } from './authedFetch'
 import * as portfolioModule from './portfolio'
 import {
@@ -65,6 +66,10 @@ async function captureRejection(thunk: () => unknown): Promise<unknown> {
   }
   throw new Error('expected the call to reject, but it resolved')
 }
+
+vi.mock('../chat', () => ({ trackClientAdded: vi.fn() }))
+
+beforeEach(() => vi.mocked(trackClientAdded).mockClear())
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -659,5 +664,55 @@ describe('archiveActionFor labels a customer record as it labels an entity', () 
     expect(archiveActionForUnderTest(active, null, true)).toEqual({ label: 'Confirm archive', kind: 'offboard', confirming: true, notice: null })
     expect(archiveActionForUnderTest(archived, null, false)).toEqual({ label: 'Restore', kind: 'onboard', confirming: false, notice: null })
     expect(archiveActionForUnderTest(archived, null, true)).toEqual({ label: 'Confirm restore', kind: 'onboard', confirming: true, notice: null })
+  })
+})
+
+describe('createEntity reports client_added', () => {
+  it('createEntity_a201SendsClientAddedOnce', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 201, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await createEntity(af, base, { name: 'Acme', tin: '0000000000' })
+
+    expect(result).toEqual(activeEntity)
+    expect(trackClientAdded).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(trackClientAdded).mock.invocationCallOrder[0])
+  })
+
+  it.each([
+    ['400 TIN checksum', 400],
+    ['409', 409],
+    ['403', 403],
+  ])('createEntity_aRefusalSendsNothing: %s', async (_name, status) => {
+    mockFetchOnce({ ok: false, status, json: () => Promise.resolve({ error: 'refused' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => createEntity(af, base, { name: 'Acme', tin: '0000000000' }))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(status)
+    expect(trackClientAdded).not.toHaveBeenCalled()
+  })
+
+  it('createEntity_aRefusalSendsNothing: fetch rejects', async () => {
+    mockFetchRejecting(new TypeError('Failed to fetch'))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => createEntity(af, base, { name: 'Acme', tin: '0000000000' }))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('network')
+    expect(trackClientAdded).not.toHaveBeenCalled()
+  })
+
+  it('editOffboardOnboard_sendNothing', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await updateEntity(af, base, 'e1', { name: 'New' })
+    await offboardEntityUnderTest(af, base, 'e1')
+    await onboardEntityUnderTest(af, base, 'e1')
+
+    expect(trackClientAdded).not.toHaveBeenCalled()
   })
 })

@@ -449,6 +449,28 @@ func TestPolicyHandlers_ScopeSentinelsMapTo400WithTheirMessages(t *testing.T) {
 	}
 }
 
+func TestPolicyHandlers_CatchAllRefusalIs409(t *testing.T) {
+	routes := []struct{ name, method, path, body string }{
+		{"create", "POST", "/v1/approval-policies", `{"name":"x"}`},
+		{"draft", "PUT", "/v1/approval-policies/" + policyHandlerTestID + "/draft", `{"steps":[]}`},
+		{"publish", "POST", "/v1/approval-policies/" + policyHandlerTestID + "/publish", ""},
+		{"delete", "DELETE", "/v1/approval-policies/" + policyHandlerTestID, ""},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			id := caller()
+			rec := servePolicy(t, policyErrSeam(ErrPolicyCatchAll), nil, rt.method, rt.path, rt.body, &id)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+			}
+			want := "a policy with no scopes must stay last while any policy has scopes"
+			if got := errorMessage(t, rec.Body.Bytes()); got != want {
+				t.Errorf("error = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPolicyHandlers_ForwardScopesAndIgnoreTheLegacyScope(t *testing.T) {
 	id := caller()
 	var created, put []*scopeInput

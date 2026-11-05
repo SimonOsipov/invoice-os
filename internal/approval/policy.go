@@ -186,6 +186,7 @@ var (
 	ErrPolicyEmptyBranches    = errors.New("approval: condition has two empty lanes")
 	ErrPolicyNothingToPublish = errors.New("approval: nothing to publish")
 	ErrSweepCapExceeded       = errors.New("approval: validated backlog exceeds the publish sweep cap")
+	ErrPolicyCatchAll         = errors.New("approval: the policy with no scopes must stay last while any policy has scopes")
 
 	ErrScopeDocumentType = errors.New("approval: scope names an unknown document type")
 	ErrScopeEntity       = errors.New("approval: scope names a client company outside the workspace")

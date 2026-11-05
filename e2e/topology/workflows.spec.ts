@@ -97,9 +97,23 @@
 // console-error gate.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { deleteApprovalPolicy, getApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
-import { collectErrors, signInAs } from '../personaSession'
-import { assertFillsColumn, WIDE_WIDTHS } from './layout'
+import {
+  createApprovalPolicy,
+  createEntity,
+  createWorkflowRole,
+  deleteApprovalPolicy,
+  getApprovalPolicy,
+  listApprovalPolicies,
+  login,
+  PERSONAS,
+  provisionRealAccount,
+  signInSession,
+} from '../api/client'
+import { codeListsReady } from '../api/contract-helpers'
+import { freshPolicyName, freshRoleTitle, freshTin } from '../api/fixtures'
+import { collectErrors, signInAs, signInAtFrontDoor } from '../personaSession'
+import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
+import { assertFillsColumn, enclosesRect, settleAnimations, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA } from './targets'
 
 // Per-run-unique, and shaped so the sweep below can recognise it without the id.
@@ -509,6 +523,165 @@ test.afterAll(async () => {
       await deleteApprovalPolicy(token, stray.id)
     } catch {
       // already deleted by the line above
+    }
+  }
+})
+
+// internal/approval/policy.go: the 400 and 409 sentences the screen shows verbatim.
+const CURRENCY_REFUSAL = 'an amount band names a currency outside the NRS currency list'
+const STALE_REFUSAL = 'the policy list changed — reload and try again'
+const DRAFT_PUT = /\/approval-policies\/[^/]+\/draft$/
+const ORDER_PUT = /\/approval-policies\/order$/
+
+async function saveDraft(page: Page) {
+  const put = page.waitForResponse((r) => r.request().method() === 'PUT' && DRAFT_PUT.test(new URL(r.url()).pathname))
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+  return put
+}
+
+async function backToList(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /All policies/ }).click()
+  await expect(page.getByTestId('policies-list')).toBeVisible()
+}
+
+// Every chip inside its cell and the trigger line inside the trigger card, at each wide width.
+async function assertScopeFit(page: Page, label: string): Promise<void> {
+  const card = page.getByTestId('scope-card')
+  const chips = card.locator('button.pf-chip')
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await settleAnimations(card)
+      expect(await chips.count(), `${label}: no chips at ${width}px`).toBeGreaterThan(0)
+      for (const chip of await chips.all()) {
+        const cell = chip.locator('xpath=ancestor::*[starts-with(@data-testid,"scope-cell-")][1]')
+        const [c, cb] = [await chip.boundingBox(), await cell.boundingBox()]
+        expect(c && cb && enclosesRect(cb, c, 1), `${label}: a chip leaves its cell at ${width}px`).toBe(true)
+      }
+      const [line, trigger] = [await page.getByTestId('canvas-trigger-line').boundingBox(), await page.getByTestId('canvas-trigger').boundingBox()]
+      expect(line && trigger && enclosesRect(trigger, line, 1), `${label}: the trigger line leaves the trigger card at ${width}px`).toBe(true)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
+test('firm Workflows, scopes and order: two scoped policies above the catch-all survive a reorder and a reload', async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('apsc04-order', 'firm')
+  const token = (await signInSession(account.email, account.password)).access_token
+  await codeListsReady(token)
+  const entityName = `APSC04 client ${freshTin()} `.padEnd(80, 'x')
+  const entity = await createEntity(token, { name: entityName, tin: freshTin() })
+  const role = await createWorkflowRole(token, { title: freshRoleTitle() })
+  const [nameA, nameB, nameC] = [freshPolicyName(), freshPolicyName(), freshPolicyName()]
+
+  const published: string[] = []
+  page.on('request', (r) => { if (r.url().endsWith('/publish')) published.push(r.url()) })
+  const draft400 = expectedStatusDropper(page, 400, DRAFT_PUT)
+  const order409 = expectedStatusDropper(page, 409, ORDER_PUT)
+  const errors = collectSourcedErrors(page, (text, url) => draft400(text, url) || order409(text, url))
+
+  const rows = page.locator('[data-testid="policies-list"] .pf-row')
+  const rowOf = (name: string) => rows.filter({ has: page.getByText(name, { exact: true }) })
+  const newPolicy = async (name: string) => {
+    await page.getByRole('button', { name: 'New policy' }).click()
+    await page.getByLabel('Policy name').fill(name)
+  }
+  const card = page.getByTestId('scope-card')
+
+  try {
+    await signInAtFrontDoor(page, account, '/workflows')
+    await expect(page.getByTestId('policies-empty'), 'a fresh workspace has no policy').toBeVisible()
+
+    // C: the only and last policy, so it takes no scopes.
+    await newPolicy(nameC)
+    await expect(page.getByTestId('scope-catch-all-reason')).toBeVisible()
+    const controls = card.locator('select, input')
+    expect(await controls.count(), 'the Applies card has three selects and three inputs').toBe(6)
+    for (const control of await controls.all()) await expect(control).toBeDisabled()
+    expect((await saveDraft(page)).ok()).toBe(true)
+    await backToList(page)
+
+    // A: Credit notes and the entity.
+    await newPolicy(nameA)
+    await expect(page.getByTestId('scope-catch-all-reason'), 'A sits above C, so it takes scopes').toHaveCount(0)
+    await page.getByTestId('scope-cell-doc').getByRole('combobox').selectOption({ label: 'Credit notes' })
+    await page.getByTestId('scope-cell-client').getByRole('combobox').selectOption({ label: entityName })
+    const putA = page.waitForRequest((r) => r.method() === 'PUT' && DRAFT_PUT.test(new URL(r.url()).pathname))
+    expect((await saveDraft(page)).ok()).toBe(true)
+    expect((await putA).postDataJSON().scopes).toMatchObject({ document_types: ['credit_note'], entity_ids: [entity.id], workflow_role_keys: [], amount_band: null })
+    await assertScopeFit(page, 'A')
+    await backToList(page)
+
+    // B: the role and a band; an unknown currency is refused first.
+    await newPolicy(nameB)
+    await page.getByTestId('scope-cell-role').getByRole('combobox').selectOption({ label: role.title })
+    await card.getByLabel('Band currency').fill('XYZ')
+    await card.getByLabel('Band from').fill('1000')
+    await card.getByLabel('Band to').fill('50000')
+    expect((await saveDraft(page)).status()).toBe(400)
+    await expect(page.getByTestId('policy-save-error')).toHaveText(CURRENCY_REFUSAL)
+    await card.getByLabel('Band currency').fill('NGN')
+    expect((await saveDraft(page)).ok()).toBe(true)
+    await expect(page.getByTestId('policy-save-error')).toHaveCount(0)
+    await assertScopeFit(page, 'B')
+    await backToList(page)
+
+    // The list: A, B, C with the catch-all pinned.
+    await expect(rows).toHaveCount(3)
+    await expect(rows).toContainText([nameA, nameB, nameC])
+    await expect(page.getByTestId('policy-position')).toHaveText(['1', '2', '3'])
+    await expect(page.getByTestId('policy-summary')).toHaveText([
+      'Credit notes · 1 client · 0 approvals',
+      'NGN 1,000–50,000 · Created by 1 role · 0 approvals',
+      'All invoices · 0 approvals',
+    ])
+    await expect(page.getByTestId('policy-catch-all-reason')).toBeVisible()
+    await expect(page.getByRole('button', { name: `Delete ${nameC}`, exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: `Move ${nameC} up`, exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: `Move ${nameB} down`, exact: true })).toBeDisabled()
+
+    // Move B up, then a reload proves the server holds the order.
+    const orderPut = page.waitForResponse((r) => r.request().method() === 'PUT' && ORDER_PUT.test(new URL(r.url()).pathname))
+    await page.getByRole('button', { name: `Move ${nameB} up`, exact: true }).click()
+    expect((await orderPut).ok()).toBe(true)
+    await expect(rows).toContainText([nameB, nameA, nameC])
+    await page.reload()
+    await expect(rows).toHaveCount(3)
+    await expect(rows).toContainText([nameB, nameA, nameC])
+
+    const live = (await listApprovalPolicies(token)).approval_policies
+    expect(live.map((p) => p.name), 'the API list is in the screen order').toEqual([nameB, nameA, nameC])
+    const [liveB, liveA] = live
+    expect(liveA.scopes).toMatchObject({ document_types: ['credit_note'], entity_ids: [entity.id], workflow_role_keys: [] })
+    expect(liveB.scopes).toMatchObject({ document_types: [], entity_ids: [], workflow_role_keys: [role.key] })
+    expect(liveB.scopes.amount_band?.currency).toBe('NGN')
+    expect([Number(liveB.scopes.amount_band?.lower), Number(liveB.scopes.amount_band?.upper)]).toEqual([1000, 50000])
+
+    // Open B: the role chip and the band survived.
+    await rowOf(nameB).click()
+    await expect(page).toHaveURL(new RegExp(`/workflows/${liveB.id}$`))
+    await expect(card.getByRole('button', { name: `Remove ${role.title}`, exact: true })).toBeVisible()
+    await expect(card.getByLabel('Band currency')).toHaveValue('NGN')
+    await expect(card.getByLabel('Band from')).toHaveValue(/^1000(\.00)?$/)
+    await expect(card.getByLabel('Band to')).toHaveValue(/^50000(\.00)?$/)
+    await backToList(page)
+
+    // A policy made behind the screen turns the next Move into a 409 that refetches.
+    const behind = await createApprovalPolicy(token, { name: freshPolicyName() })
+    await page.getByRole('button', { name: `Move ${nameA} up`, exact: true }).click()
+    await expect(page.getByTestId('policy-reorder-error')).toHaveText(STALE_REFUSAL)
+    await expect(rowOf(behind.name), 'the refusal refetched the list').toBeVisible()
+
+    expect(published, 'the journey published nothing').toEqual([])
+    expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    // Scoped and extra policies first: the catch-all cannot go while a scoped one stays.
+    const live = (await listApprovalPolicies(token)).approval_policies
+    for (const p of [...live.filter((x) => x.name !== nameC), ...live.filter((x) => x.name === nameC)]) {
+      await deleteApprovalPolicy(token, p.id).catch(() => undefined)
     }
   }
 })

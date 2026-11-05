@@ -137,14 +137,14 @@ describe('held events, edge cases', () => {
 
   it('hold_aSentEventHasNoParameterAndAHeldOneKeepsEventOrder', async () => {
     const m = await load()
-    m.trackInvoiceValidated()
     m.trackSignUp()
+    m.trackInvoiceValidated()
     m.trackInvoiceValidated()
     m.applyChoice('accept')
     const events = entries().filter((e) => e[0] === 'event')
     expect(events).toEqual([
-      ['event', 'invoice_validated', {}],
       ['event', 'sign_up', {}],
+      ['event', 'invoice_validated', {}],
       ['event', 'invoice_validated', {}],
     ])
   })

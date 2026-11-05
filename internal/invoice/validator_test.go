@@ -715,8 +715,8 @@ func resetServer(t *testing.T, resets, status int, ok string) (srv *httptest.Ser
 	return srv, snap(&gotBodies), snap(&gotTokens)
 }
 
-const retryOKBody = `{"rule_set_version": 1, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-	"results": [{"ref": "r1", "violations": [], "rule_set_version": 1, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`
+var retryOKBody = fmt.Sprintf(`{"rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+	"results": [{"ref": "r1", "violations": [], "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`, cannedRuleSetVersion)
 
 var retryItems = []ValidateItem{{Ref: "r1", Invoice: map[string]any{"number": "INV-7"}}}
 

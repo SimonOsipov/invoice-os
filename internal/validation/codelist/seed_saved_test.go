@@ -274,23 +274,31 @@ func TestSyncAll_FetchFailureOnEmptyDBSeedsEveryListFromSavedCopy(t *testing.T) 
 }
 
 func TestSyncAll_FetchFailureLeavesAHeldListUntouched(t *testing.T) {
+	// A subset of the saved states: the seed would only add NG-LA, so the shrink guard cannot mask a missing emptiness check.
+	grouped, _, _, _ := savedCopy(saved, listByName(t, "states"))
+	var parts []string
+	for code, es := range grouped {
+		if code != "NG-LA" {
+			for _, e := range es {
+				parts = append(parts, string(e))
+			}
+		}
+	}
 	for name, url := range failedFetches(t) {
 		if name != "tls x509" && name != "503" {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newSeedFixture(t)
-			if err := f.pull(t, map[string]string{"states": envelope(entry("NG-XX", "Xland"))}); err == nil {
-				t.Fatal("seed pull: want the other lists to report ErrEmptyList")
-			}
+			_ = f.pull(t, map[string]string{"states": envelope(parts...)})
 			before := f.rows(t, "states")
-			if len(before) != 1 || before[0].code != "NG-XX" {
-				t.Fatalf("seed: states = %+v, want only NG-XX", before)
+			if len(before) < 36 || hasCode(before, "NG-LA") {
+				t.Fatalf("seed: states holds %d rows (NG-LA %v), want >= 36 without NG-LA", len(before), hasCode(before, "NG-LA"))
 			}
 			failOnce(t, f, url)
 			after := f.rows(t, "states")
-			if len(after) != 1 || after[0] != before[0] {
-				t.Errorf("states = %+v after a failed fetch, want %+v", after, before)
+			if len(after) != len(before) || hasCode(after, "NG-LA") {
+				t.Errorf("states = %d rows (NG-LA %v) after a failed fetch, want %d rows without NG-LA", len(after), hasCode(after, "NG-LA"), len(before))
 			}
 		})
 	}
@@ -342,6 +350,87 @@ func TestSyncAll_FetchFailureSeedLogNamesTheListAndTheFetchError(t *testing.T) {
 		} else if !strings.Contains(errText, "x509") {
 			t.Errorf("%s seeded record err = %q, want the x509 fetch error", l, errText)
 		}
+	}
+}
+
+func TestSyncAll_ConnectionRefusedSeedsFromSavedCopyAndReturnsTheFetchError(t *testing.T) {
+	f := newSeedFixture(t)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+
+	err := failOnce(t, f, url)
+
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("err = %v, want the connection refused fetch error", err)
+	}
+	for _, l := range seededLists {
+		if n := len(f.rows(t, l)); n < 1 {
+			t.Errorf("%s holds %d rows after a refused connection, want the saved copy", l, n)
+		}
+	}
+}
+
+// A cancelled context also fails the seed's own transaction, so nothing is seeded and the error surfaces.
+func TestSyncAll_CancelledContextSeedsNothingAndSurfacesAnError(t *testing.T) {
+	f := newSeedFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.s.baseURL = f.srv(nil)
+
+	err := f.s.SyncAll(ctx)
+
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncAll err = %v, want context.Canceled", err)
+	}
+	for _, l := range seededLists {
+		if n := len(f.rows(t, l)); n != 0 {
+			t.Errorf("%s holds %d rows after a cancelled sync, want 0", l, n)
+		}
+	}
+}
+
+func TestSyncAll_FetchFailureWithACorruptSavedCopySurfacesTheSeedError(t *testing.T) {
+	f := newSeedFixture(t)
+	f.s.seed = fstest.MapFS{"saved/" + f.names["states"] + ".json": &fstest.MapFile{Data: []byte(`{not json`)}}
+
+	err := failOnce(t, f, failedFetches(t)["503"])
+
+	if !strings.Contains(err.Error(), "saved copy of "+f.names["states"]) {
+		t.Errorf("err = %v, want the saved copy error for states", err)
+	}
+	if n := len(f.rows(t, "states")); n != 0 {
+		t.Errorf("states holds %d rows from a corrupt saved copy, want 0", n)
+	}
+}
+
+func TestSyncAll_FetchFailureWithoutASavedFileReturnsTheFetchError(t *testing.T) {
+	f := newSeedFixture(t)
+	f.s.seed = fstest.MapFS{}
+
+	err := failOnce(t, f, failedFetches(t)["503"])
+
+	if !strings.Contains(err.Error(), "status 503") || strings.Contains(err.Error(), "saved copy") {
+		t.Errorf("err = %v, want only the 503 fetch error", err)
+	}
+	for _, l := range seededLists {
+		if n := len(f.rows(t, l)); n != 0 {
+			t.Errorf("%s holds %d rows with no saved file, want 0", l, n)
+		}
+	}
+}
+
+func TestSyncAll_RealPullAfterAFetchFailureSeedReplacesTheSeed(t *testing.T) {
+	f := newSeedFixture(t)
+	failOnce(t, f, failedFetches(t)["tls x509"])
+
+	err := f.pull(t, map[string]string{"states": envelope(entry("NG-XX", "Xland"), entry("NG-YY", "Yland"))})
+
+	if errors.Is(err, ErrHeld) {
+		t.Fatalf("real pull held after a fetch-failure seed: %v", err)
+	}
+	if rows := f.rows(t, "states"); len(rows) != 2 || hasCode(rows, "NG-LA") {
+		t.Errorf("states = %+v, want only NG-XX and NG-YY", rows)
 	}
 }
 

@@ -1563,7 +1563,7 @@ export function staffWorkflowRole(token: string, key: string, members: string[])
 // Step/PolicyVersion/Policy (:17-80). No omitempty on ANY field, and Step/Policy both
 // carry a value-receiver MarshalJSON substituting [] for a nil lane -- so `steps`,
 // `versions`, `then` and `else` are always arrays, and `published_at`/`published_by` are
-// an explicit null rather than absent. Key sets: Policy 8, Step 10, PolicyVersion 5. ----
+// an explicit null rather than absent. Key sets: Policy 10, Step 10, PolicyVersion 5. ----
 
 export interface ApprovalStep {
   // A server-minted uuid, re-minted on EVERY PUT draft (flattenSteps) -- never assert a value.
@@ -1589,10 +1589,26 @@ export interface ApprovalPolicyVersion {
   published_by: string | null // the publisher's subject uuid
 }
 
+// Mirrors internal/approval's AmountBand and Scopes; bounds are numeric text, scale kept.
+export interface ApprovalAmountBand {
+  lower: string | null
+  upper: string | null
+  currency: string
+}
+
+export interface ApprovalPolicyScopes {
+  document_types: string[]
+  entity_ids: string[]
+  workflow_role_keys: string[]
+  amount_band: ApprovalAmountBand | null
+}
+
 export interface ApprovalPolicy {
   id: string
   name: string
-  scope: string // 'All invoices' is the only value normalizeScope accepts today
+  scope: string // legacy; always 'All invoices'
+  position: number // ascending = the order the policies are tried
+  scopes: ApprovalPolicyScopes // the TOP version's scopes; all empty = the catch-all
   status: 'draft' | 'published' // derived from the TOP version's `sealed`
   version: number // the version `steps` belongs to = the HIGHEST version
   sealed: boolean
@@ -1620,12 +1636,12 @@ export interface ApprovalStepInput {
 
 export interface ApprovalPolicyCreateInput {
   name: string
-  scope?: string // absent means the default scope, not a value
+  scopes?: Partial<ApprovalPolicyScopes> // absent = catch-all
 }
 
 export interface ApprovalPolicyDraftInput {
   name?: string
-  scope?: string
+  scopes?: Partial<ApprovalPolicyScopes> // absent keeps the draft's scopes; {} sets the catch-all
   steps: ApprovalStepInput[] // required: a whole-tree replace, never a merge
 }
 
@@ -1648,12 +1664,22 @@ export function createApprovalPolicy(token: string, body: ApprovalPolicyCreateIn
 
 // putApprovalPolicyDraft(): PUT /v1/approval-policies/{id}/draft, a whole-tree replace of
 // the open draft -- or of a fresh max+1 version when the policy holds none. Builds the
-// {name,scope,steps} envelope itself, so it cannot express {"steps":null} (the staffWorkflowRole
+// {name,scopes,steps} envelope itself, so it cannot express {"steps":null} (the staffWorkflowRole
 // precedent) -- that 400 is only reachable through rawFetch.
 export function putApprovalPolicyDraft(token: string, id: string, body: ApprovalPolicyDraftInput): Promise<ApprovalPolicy> {
   return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}/draft`, {
     method: 'PUT',
-    body: { name: body.name, scope: body.scope, steps: body.steps },
+    body: { name: body.name, scopes: body.scopes, steps: body.steps },
+    token,
+  })
+}
+
+// reorderApprovalPolicies(): PUT /v1/approval-policies/order. The ids must be exactly the
+// live policies; answers the list in the new order.
+export function reorderApprovalPolicies(token: string, policyIds: string[]): Promise<ApprovalPoliciesResponse> {
+  return apiFetch<ApprovalPoliciesResponse>(`${apiBase()}/api/invoice/v1/approval-policies/order`, {
+    method: 'PUT',
+    body: { policy_ids: policyIds },
     token,
   })
 }

@@ -39,10 +39,22 @@ export type PolicyVersionWire = {
   published_by: string | null
 }
 
+export type PolicyScopesWire = {
+  document_types: string[]
+  entity_ids: string[]
+  workflow_role_keys: string[]
+  /** Bounds are numeric text, scale kept. */
+  amount_band: { lower: string | null; upper: string | null; currency: string } | null
+}
+
 export type PolicyWire = {
   id: string
   name: string
   scope: string
+  /** Ascending = the order the policies are tried. */
+  position: number
+  /** The TOP version's scopes; all empty = the catch-all. */
+  scopes: PolicyScopesWire
   status: string
   /** The version `steps` belongs to = the HIGHEST version, not necessarily the active one. */
   version: number

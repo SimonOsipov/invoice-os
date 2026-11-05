@@ -52,6 +52,8 @@ const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
   id: 'p1',
   name: 'Standard approval policy',
   scope: 'All invoices',
+  position: 1,
+  scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null },
   status: 'draft',
   version: 1,
   sealed: false,

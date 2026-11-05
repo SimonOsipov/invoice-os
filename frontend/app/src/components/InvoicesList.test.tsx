@@ -437,6 +437,67 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(screen.queryByText('Loading invoices…')).toBeNull()
   })
 
+  it('BUG-82 QA: in-house with no entity (entitiesState loading) still draws its rows and pager, never Loading', async () => {
+    const inhouse = { ...listCtx(null), mode: 'inhouse' } as unknown as PlatformCtx
+    mockFetchSequence([listResponse([row({ id: 'h1', invoice_number: 'INV-HOUSE', entity_id: 'x' })], { limit: 50, offset: 0, total: 51 })])
+
+    render(<InvoicesList ctx={inhouse} />)
+
+    expect(await screen.findByText('INV-HOUSE')).toBeTruthy()
+    expect(screen.getByTestId('invoices-pager')).toBeTruthy()
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
+  })
+
+  it('BUG-82 QA: in-house with no entity and total 0 draws "No invoices yet", not Loading', async () => {
+    const inhouse = { ...listCtx(null), mode: 'inhouse' } as unknown as PlatformCtx
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={inhouse} />)
+
+    expect(await screen.findByTestId('invoices-empty')).toBeTruthy()
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
+  })
+
+  it('BUG-82 QA: Needs attention flipped while the entity is null draws no filtered empty state', async () => {
+    const fetchMock = mockFetchSequence([
+      listResponse([row({ id: 'o1' })], { limit: 50, offset: 0, total: 3 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx(null)} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await act(async () => {})
+
+    expect(urlParams(fetchMock.mock.calls[1][0] as string).get('needs_attention'), 'the second fetch is the filtered one').toBe('true')
+    expect(screen.queryByTestId('invoices-empty-filtered')).toBeNull()
+    expect(screen.queryByTestId('invoices-empty-page')).toBeNull()
+    expect(screen.queryByTestId('invoices-pager')).toBeNull()
+    expect(screen.getByText('Loading invoices…')).toBeTruthy()
+  })
+
+  it('BUG-82 QA: the entity arriving after a tenant-wide fetch settles on that entity\'s rows with no empty page on the way', async () => {
+    const fetchMock = mockFetchSequence([
+      listResponse([row({ id: 'o1', entity_id: 'ent-9' })], { limit: 50, offset: 0, total: 3 }),
+      listResponse([row({ id: 'e1', invoice_number: 'INV-ENT-1', entity_id: 'ent-1' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { rerender } = render(<InvoicesList ctx={listCtx(null)} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(screen.queryByTestId('invoices-empty-page')).toBeNull()
+
+    rerender(<InvoicesList ctx={listCtx('ent-1', '', 'ready')} />)
+    expect(screen.queryByTestId('invoices-empty-page'), 'the commit that sets the entity must not flash the empty page').toBeNull()
+    expect(screen.queryByTestId('invoices-pager')).toBeNull()
+
+    expect(await screen.findByText('INV-ENT-1')).toBeTruthy()
+    expect(urlParams(fetchMock.mock.calls[1][0] as string).get('entity_id')).toBe('ent-1')
+    expect(screen.queryByText('INV-ENT-9')).toBeNull()
+  })
+
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {
     const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
     const p2 = [row({ id: 'p2', invoice_number: 'INV-P2' })]

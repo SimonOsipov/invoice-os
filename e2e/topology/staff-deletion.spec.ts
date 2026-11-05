@@ -249,30 +249,28 @@ test('support console: the tenant header wraps and shows the whole state line at
         await page.setViewportSize({ width, height: HEIGHT })
         await settleAnimations(card, header, text, viewJobs, actions)
         const where = `${state} at ${width}px`
-        const r = {
-          text: await rectOf('the text block', text, width),
-          viewJobs: await rectOf('View jobs', viewJobs, width),
-          actions: await rectOf('the action group', actions, width),
-        }
+        // One synchronous read: a list render landing between per-element reads skews the compared boxes.
+        const buttons = actions.getByRole('button')
+        const targets = await Promise.all([card, text, viewJobs, actions, heading, stateLine, ...(await buttons.all())].map((l) => l.elementHandle({ timeout: 5_000 })))
+        const read = await page.evaluate((els) => els.map((el) => {
+          const { x, y, width: w, height: h } = (el as Element).getBoundingClientRect()
+          return { x, y, width: w, height: h }
+        }), targets)
+        const [cardBox, ...rest] = read
+        const [textBox, viewJobsBox, actionsBox, nameBox, stateBox, ...boxes] = rest
+        const r = { text: textBox, viewJobs: viewJobsBox, actions: actionsBox }
         if (betweenReads && width === NARROW_WIDTHS[0]) await betweenReads()
-        const cardBox = await rectOf('the detail card', card, width)
         for (const part of ['text', 'viewJobs', 'actions'] as const) {
           expect(enclosesRect(cardBox, r[part], 1), `${part} leaves the detail card, ${where}`).toBe(true)
         }
         for (const [a, b] of [['text', 'viewJobs'], ['text', 'actions'], ['viewJobs', 'actions']] as const) {
           expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap, ${where}`).toBe(false)
         }
-        const buttons = actions.getByRole('button')
-        const count = await buttons.count()
-        const boxes: Rect[] = []
-        for (let i = 0; i < count; i++) {
-          const box = await rectOf(`action ${i}`, buttons.nth(i), width)
-          expect(enclosesRect(cardBox, box, 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
-          boxes.push(box)
-        }
+        const count = boxes.length
+        for (let i = 0; i < count; i++) expect(enclosesRect(cardBox, boxes[i], 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
         for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
-        expect((await rectOf('the name', heading, width)).width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
-        expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
+        expect(nameBox.width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
+        expect(stateBox.width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
         const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
         expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
         await noSideways(page, `Tenants, ${where}`)

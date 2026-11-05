@@ -2,6 +2,12 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// React's scheduler captures setImmediate at load; delaying it forces the render after a bare waitFor.
+vi.hoisted(() => {
+  globalThis.setImmediate = ((fn: (...a: unknown[]) => void, ...a: unknown[]) =>
+    setTimeout(fn, 2, ...a)) as unknown as typeof setImmediate
+})
+
 import { alignSeries, CHART_H } from '../helpers'
 import { formatShown } from '../metricsApi'
 import { FakeUPlot, type RecordingCtx } from '../uplotFake'

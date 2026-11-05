@@ -7,6 +7,8 @@ paths:
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
   - "frontend/app/src/chat*"
+  - "frontend/app/src/lib/invoices.ts"
+  - "frontend/app/src/lib/importApi.ts"
   - "frontend/landing/Dockerfile"
   - "frontend/app/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
@@ -31,6 +33,7 @@ paths:
 - Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
 - Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
 - Send `sign_up` through `trackSignUp` and `invoice_validated` through `trackInvoiceValidated`. Neither carries a parameter.
+- Send `invoice_validated` through `reportValidatedInvoice` from `createInvoice`, `revalidateInvoice` and `supplyInvoiceNumber` only.
 - Send `sign_up` from `RegisterModal` only after `registerAccount` resolves. An invite registration on `InvitePage` sends none.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.

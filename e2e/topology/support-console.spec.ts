@@ -1931,6 +1931,10 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
   await expect(totals.first(), 'the daily totals have loaded').toBeVisible()
   const firstTotals = (await totals.all()).slice(0, ROW_CAP)
   const keys = await Promise.all(firstTotals.map((row) => row.getAttribute('data-total-key') as Promise<string>))
+  // A call that lands after the screen read must not fail the screen: totals are a live count(*).
+  const forcedKey = `${new Date().toISOString().slice(0, 10)}|${PERSONAS.A.tenantId}`
+  expect(keys, 'the screen shows a totals row for today and the SUP-03 tenant').toContain(forcedKey)
+  await recordFailedAiCall()
   const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', (t) => `${t.day}|${t.tenant_id}`, keys)
   for (const [i, row] of firstTotals.entries()) {
     const hit = liveTotals.get(keys[i])
@@ -2129,8 +2133,8 @@ function liveMask(page: Page, nav: string): Locator[] {
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    // AI usage adds the oversized call: 30s preview + 120s real-AI suggest + 30s poll = +180s
-    test.setTimeout(s.nav === 'System health' ? 300_000 : s.nav === 'AI usage' ? 300_000 : 120_000)
+    // AI usage adds two oversized calls (one before the screen, one in DAILY TOTALS): 2 x (30s preview + 120s real-AI suggest + 30s poll) = +360s
+    test.setTimeout(s.nav === 'System health' ? 300_000 : s.nav === 'AI usage' ? 480_000 : 120_000)
     if (s.nav === 'AI usage') await recordFailedAiCall()
     const errors = await startSupport(page)
     const armed = s.arm?.(page)

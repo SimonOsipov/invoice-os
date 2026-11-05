@@ -724,7 +724,7 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 const scopedSQL = `(cardinality(v.scope_document_types) > 0 OR cardinality(v.scope_entity_ids) > 0
 	OR cardinality(v.scope_workflow_role_ids) > 0 OR v.scope_amount_currency IS NOT NULL)`
 
-// scopedLiveExistsSQL: a live policy has a scoped top or active version. Check 3 and
+// scopedLiveExistsSQL: a live policy has a scoped top or active version. The last-policy pin and
 // scopedPolicyLiveTx share it.
 const scopedLiveExistsSQL = `EXISTS (
 	SELECT 1
@@ -771,7 +771,7 @@ func requireCatchAllLastTx(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-// requireDeletedNotLastTx is check 3: the just-stamped policy, at position, may not have
+// requireDeletedNotLastTx: the just-stamped policy, at position, may not have
 // been the last live one while any live policy is scoped.
 func requireDeletedNotLastTx(ctx context.Context, tx pgx.Tx, position int) error {
 	var pinned bool
@@ -1328,7 +1328,7 @@ func (s *Store) ReorderPolicies(ctx context.Context, ids []string) ([]Policy, er
 			return err
 		}
 
-		// Check 3: while any live policy is scoped, the last policy stays in place.
+		// While any live policy is scoped, the last policy stays in place.
 		if canon[len(canon)-1] != oldIDs[len(oldIDs)-1] {
 			scoped, err := scopedPolicyLiveTx(ctx, tx)
 			if err != nil {

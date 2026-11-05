@@ -246,7 +246,7 @@ describe('WF_SCOPE_OPTIONS (§2.4)', () => {
   // still carries scopes the server refuses, and policies.test.ts:253-254 proves this list is
   // the EDITOR's own, never a filter on what may arrive.
   it('mirrors the only scope the server stores', () => {
-    // Transcribed from the CHECK at migrations/20260809210326_approval_policies.sql:59.
+    // Transcribed from the scope CHECK in migrations/20260809210326_approval_policies.sql.
     // Never read from the Go source.
     const SERVER_SCOPE = 'All invoices'
     expect([...WF_SCOPE_OPTIONS]).toEqual([SERVER_SCOPE])

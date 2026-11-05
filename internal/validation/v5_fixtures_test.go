@@ -52,6 +52,22 @@ func seedV5Lists(t *testing.T, super *pgxpool.Pool) {
 	})
 }
 
+// pinV5Lists makes tx see exactly the v5Lists codes: the shared nrs_codes can hold the saved copy a booted worker seeded.
+func pinV5Lists(t *testing.T, tx pgx.Tx) {
+	t.Helper()
+	ctx := context.Background()
+	for list, codes := range v5Lists {
+		if _, err := tx.Exec(ctx, `DELETE FROM nrs_codes WHERE list = $1`, list); err != nil {
+			t.Fatalf("clear nrs_codes %s: %v", list, err)
+		}
+		for _, code := range codes {
+			if _, err := tx.Exec(ctx, `INSERT INTO nrs_codes (list, code, entries) VALUES ($1, $2, '[{}]')`, list, code); err != nil {
+				t.Fatalf("pin nrs_codes %s/%s: %v", list, code, err)
+			}
+		}
+	}
+}
+
 // v5MigrationSQL returns the embedded v5 migration file.
 func v5MigrationSQL(t *testing.T) string {
 	t.Helper()

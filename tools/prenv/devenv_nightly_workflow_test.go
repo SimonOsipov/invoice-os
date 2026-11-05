@@ -799,6 +799,12 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 		{"3 PR previews open: the nightly is full", "5 t\n6 t\n9 t\n", "nightly", "open=3\nfull=true\n"},
 		{"a PR that holds a preview is never refused", "5 t\n6 t\n9 t\n", "9", "open=2\nfull=false\n"},
 		{"a nightly preview does not count against a PR", "nightly t\n5 t\n6 t\n", "9", "open=2\nfull=true\n"},
+		{"no previews: a PR is free", "", "9", "open=0\nfull=false\n"},
+		{"no previews: the nightly is free", "", "nightly", "open=0\nfull=false\n"},
+		{"a leftover nightly does not count against the nightly", "nightly t\n5 t\n6 t\n", "nightly", "open=2\nfull=false\n"},
+		{"PR 9 is not PR 19", "19 t\n29 t\n", "9", "open=2\nfull=true\n"},
+		{"PR 19 holding a preview is not PR 9", "19 t\n9 t\n", "19", "open=1\nfull=false\n"},
+		{"PR 9 is not refused for holding 19 and 91", "19 t\n91 t\n", "9", "open=2\nfull=true\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -808,6 +814,54 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 			}
 		})
 	}
+	t.Run("one preview counts once however many resource kinds it owns, and a preview held in one kind counts", func(t *testing.T) {
+		t.Parallel()
+		r := runPreview(t, func(dir string) {
+			writeIn(t, dir, "list-services", "5 t\n5 t\n")
+			writeIn(t, dir, "list-jobs", "5 t\n6 t\n")
+			writeIn(t, dir, "list-buckets", "5 t\n")
+			writeIn(t, dir, "list-secrets", "5 t\nnightly t\n")
+		}, "cap", "9")
+		if want := "open=2\nfull=true\n"; r.code != 0 || r.stdout != want {
+			t.Errorf("exit %d, cap = %q, want %q", r.code, r.stdout, want)
+		}
+		r = runPreview(t, func(dir string) { writeIn(t, dir, "list-buckets", "5 t\n6 t\n") }, "cap", "9")
+		if want := "open=2\nfull=true\n"; r.stdout != want {
+			t.Errorf("bucket-only previews: cap = %q, want %q", r.stdout, want)
+		}
+	})
+	t.Run("cap refuses a missing, empty or malformed caller", func(t *testing.T) {
+		t.Parallel()
+		for _, args := range [][]string{{"cap"}, {"cap", ""}, {"cap", "abc"}, {"cap", "0"}, {"cap", "9x"}} {
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", "5 t\n") }, args...)
+			if r.code == 0 || strings.Contains(r.stdout, "full=") {
+				t.Errorf("%q: exit %d, stdout %q, want a refusal with no verdict", args, r.code, r.stdout)
+			}
+		}
+	})
+	t.Run("the PR step runs after gcloud auth and before every resource-creating step, and only in a PR run", func(t *testing.T) {
+		t.Parallel()
+		var names []string
+		for _, s := range devEnvJob(t, "prepare-env").steps() {
+			names = append(names, s.keys["name"]+s.keys["uses"])
+		}
+		idx := func(prefix string) int {
+			return slices.IndexFunc(names, func(n string) bool { return strings.HasPrefix(n, prefix) })
+		}
+		pr, auth := idx("preview cap for a PR"), idx("google-github-actions/auth")
+		secrets, bucket := idx("Create the PR's secrets"), idx("Create the PR's documents bucket")
+		if pr < 0 || auth < 0 || secrets < 0 || bucket < 0 || !(auth < pr && pr < secrets && pr < bucket) {
+			t.Errorf("step order wrong (auth %d, PR cap %d, secrets %d, bucket %d): %q", auth, pr, secrets, bucket, names)
+		}
+		st, _ := nlStep(devEnvJob(t, "prepare-env"), "preview cap for a PR")
+		if st.keys["if"] != nlOff {
+			t.Errorf("PR cap step if = %q, want %q", st.keys["if"], nlOff)
+		}
+		nt, _ := nlStep(devEnvJob(t, "prepare-env"), "preview cap reached")
+		if nt.keys["if"] != nlOn || !strings.Contains(nlCode(nt.keys["run"]), "preview.sh cap nightly") {
+			t.Errorf("nightly cap step if = %q, run %q", nt.keys["if"], nt.keys["run"])
+		}
+	})
 	// The PR-run step: the one prepare-env step that is off in the nightly and calls `preview.sh cap`.
 	runStep := func(t *testing.T, capOut string) (string, int) {
 		t.Helper()

@@ -488,7 +488,8 @@ cmd_prs() {
 
 # cap: PR previews open besides the caller's (a nightly entry never counts) and whether the caller is refused (ci-preview.md).
 cmd_cap() {
-  local who=${1:?cap needs <pr|nightly>} n limit=2 mine
+  name_arg "${1:-}"
+  local who=$1 n limit=2 mine
   local prs
   prs=$(cmd_prs)
   n=$(awk -v who="$who" '$1 != "nightly" && $1 != who' <<<"$prs" | grep -c . || true)

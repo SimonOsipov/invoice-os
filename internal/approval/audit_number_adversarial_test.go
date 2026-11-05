@@ -130,7 +130,7 @@ func TestAuditNumberAdversarial_AJSONShapedNumberCannotRewriteTheApprovalIdKeys(
 		assertNumberStayedInItsValue(t, super,
 			approvalAuditRowForInvoice(t, super, "invoice.approval_armed", invoiceID),
 			"invoice.approval_armed", "id", invoiceID,
-			[]string{"id", "run_id", "policy_version_id", "steps"}, want)
+			[]string{"id", "run_id", "policy_version_id", "policy_id", "position", "matched_scopes", "steps"}, want)
 
 		if _, err := cancelCarryingNumber(t, app, tenantID, invoiceID, want, "an-adv-cancel-actor"); err != nil {
 			t.Fatalf("CancelLiveRunTx: %v", err)

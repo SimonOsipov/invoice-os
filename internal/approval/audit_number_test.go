@@ -52,7 +52,7 @@ func approvalAuditSites() []approvalAuditSite {
 		{
 			label: "approval_armed", site: "engine.go:239 (ArmTx)", event: "invoice.approval_armed",
 			idKey:    "id",
-			baseKeys: []string{"id", "run_id", "policy_version_id", "steps"},
+			baseKeys: []string{"id", "run_id", "policy_version_id", "policy_id", "position", "matched_scopes", "steps"},
 			drive:    driveApprovalArmed,
 		},
 		{

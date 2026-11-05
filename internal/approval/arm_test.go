@@ -656,10 +656,10 @@ func TestArm_WritesOneAuditRowWithSummaryPayload(t *testing.T) {
 		t.Fatal("payload is empty {} — want id/run_id/policy_version_id/steps populated")
 	}
 
-	allowed := map[string]bool{"id": true, "run_id": true, "policy_version_id": true, "steps": true, "invoice_number": true}
+	allowed := map[string]bool{"id": true, "run_id": true, "policy_version_id": true, "policy_id": true, "position": true, "matched_scopes": true, "steps": true, "invoice_number": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the summary-only allowlist {id, run_id, policy_version_id, steps, invoice_number} — no invoice content", k)
+			t.Errorf("payload key %q is not in the summary-only allowlist {id, run_id, policy_version_id, policy_id, position, matched_scopes, steps, invoice_number} — no invoice content", k)
 		}
 	}
 	for k := range allowed {
@@ -1517,5 +1517,67 @@ func TestReadCreatorRoleIDs_ErrorIsReturned(t *testing.T) {
 	}
 	if want := map[string]bool{roleID: true}; !reflect.DeepEqual(live, want) {
 		t.Errorf("creator roles = %v, want %v", live, want)
+	}
+}
+
+// armedPayload arms the invoice and returns the raw payload of its approval_armed row.
+func armedPayload(t *testing.T, super, app *pgxpool.Pool, tenantID, invoiceID string) []byte {
+	t.Helper()
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-"+invoiceID, "test-actor"); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	var payload []byte
+	if err := super.QueryRow(context.Background(),
+		`SELECT payload FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.approval_armed'`,
+		tenantID).Scan(&payload); err != nil {
+		t.Fatalf("read the audit row: %v", err)
+	}
+	return payload
+}
+
+func TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-02 audit-names-policy")
+	entityID := seedBusinessEntity(t, super, tenantID, "Audit Corp")
+	other := seedBusinessEntity(t, super, tenantID, "Other Corp")
+	note := seedCreditNote(t, super, tenantID, entityID, "audit-names-note-1")
+	setInvoiceMoney(t, super, note, ptr("NGN"), ptr("500.00"))
+
+	seedScopedPolicy(t, super, tenantID, "X matches nothing", 1, scopeSpec{EntityIDs: []string{other}}, "cfo")
+	policyA, versionA := seedScopedPolicy(t, super, tenantID, "A credit notes in band", 2, scopeSpec{
+		DocTypes: []string{"credit_note"}, BandLower: ptr("0.00"), BandUpper: ptr("1000000.00"), BandCurrency: ptr("NGN"),
+	}, "fin_mgr")
+	seedScopedPolicy(t, super, tenantID, "B catch-all", 3, scopeSpec{}, "cfo")
+
+	var body struct {
+		PolicyID        string   `json:"policy_id"`
+		Position        int      `json:"position"`
+		MatchedScopes   []string `json:"matched_scopes"`
+		PolicyVersionID string   `json:"policy_version_id"`
+	}
+	if err := json.Unmarshal(armedPayload(t, super, app, tenantID, note), &body); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if body.PolicyID != policyA || body.Position != 2 || body.PolicyVersionID != versionA {
+		t.Errorf("payload policy/position/version = %s/%d/%s, want %s/2/%s", body.PolicyID, body.Position, body.PolicyVersionID, policyA, versionA)
+	}
+	if want := []string{"document_type", "amount_band"}; !reflect.DeepEqual(body.MatchedScopes, want) {
+		t.Errorf("matched_scopes = %v, want %v", body.MatchedScopes, want)
+	}
+}
+
+func TestArm_AuditCatchAllMatchNamesNoScope(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-02 audit-catch-all")
+	entityID := seedBusinessEntity(t, super, tenantID, "Audit Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "audit-catch-all-1")
+	seedScopedPolicy(t, super, tenantID, "A catch-all", 1, scopeSpec{}, "fin_mgr")
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(armedPayload(t, super, app, tenantID, invoiceID), &raw); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := string(raw["matched_scopes"]); got != "[]" {
+		t.Errorf("matched_scopes = %q, want []", got)
 	}
 }

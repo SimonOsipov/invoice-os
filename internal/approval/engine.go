@@ -165,8 +165,7 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	if !ok {
 		return ArmResult{}, nil
 	}
-	versionID := matchedVersion.VersionID
-	_ = matchedScopes // read by the audit row once it carries them
+	versionID, policyID, position := matchedVersion.VersionID, matchedVersion.PolicyID, matchedVersion.Position
 
 	trees, err := readPolicyTrees(ctx, tx, []string{versionID})
 	if err != nil {
@@ -249,11 +248,14 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	}
 
 	// Last statement, so a failing audit rolls the whole arm — and its caller's promotion —
-	// back. Summary only: no total, no line items, no role keys.
+	// back. Summary only: no total, no line items, no role keys, no scope values (names only).
 	if err := audit.Record(ctx, tx, actor, "invoice.approval_armed", map[string]any{
 		"id":                invoiceID,
 		"run_id":            runID,
 		"policy_version_id": versionID,
+		"policy_id":         policyID,
+		"position":          position,
+		"matched_scopes":    matchedScopes,
 		"steps":             len(steps),
 		"invoice_number":    invoiceNumber,
 	}); err != nil {

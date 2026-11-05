@@ -164,3 +164,53 @@ func TestCaddyPins_CommentedFromIgnored(t *testing.T) {
 	files["frontend/app/Dockerfile"] = "# FROM " + pinnedCaddyImage + "\n"
 	wantCaddyPinProblem(t, files, "no Caddy image reference")
 }
+
+var caddyFromAnyRE = regexp.MustCompile(`(?mi)^FROM\b[^\n]*\bcaddy\b`)
+
+func TestCaddyPins_EveryCaddyDockerfileIsListed(t *testing.T) {
+	root := repoRoot(t)
+	paths, err := filepath.Glob(filepath.Join(root, "frontend", "*", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, p := range caddyPinFiles {
+		listed[p] = true
+	}
+	found := 0
+	for _, abs := range paths {
+		rel, _ := filepath.Rel(root, abs)
+		rel = filepath.ToSlash(rel)
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := len(caddyFromAnyRE.FindAllString(string(b), -1))
+		if n > 0 {
+			found++
+			if !listed[rel] {
+				t.Errorf("%s has a Caddy FROM but is not in caddyPinFiles", rel)
+			}
+		}
+		if n > 1 {
+			t.Errorf("%s has %d Caddy FROM lines, the pin test reads the first only", rel, n)
+		}
+	}
+	if found != 5 {
+		t.Errorf("found %d Dockerfiles with a Caddy FROM, want 5", found)
+	}
+}
+
+func TestCaddyPins_UnreadFromFormsAreFlagged(t *testing.T) {
+	for _, from := range []string{
+		"FROM --platform=linux/amd64 caddy:2-alpine AS serve\n",
+		"FROM docker.io/library/caddy:2-alpine AS serve\n",
+	} {
+		if len(caddyFromAnyRE.FindAllString(from, -1)) != 1 {
+			t.Errorf("discovery regexp misses %q", from)
+		}
+		files := pinnedCaddyFiles()
+		files["frontend/app/Dockerfile"] = from
+		wantCaddyPinProblem(t, files, "frontend/app/Dockerfile: no Caddy image reference")
+	}
+}

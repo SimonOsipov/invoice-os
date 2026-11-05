@@ -264,9 +264,9 @@ func TestSyncAll_FetchFailureOnEmptyDBSeedsEveryListFromSavedCopy(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			f := newSeedFixture(t)
 			failOnce(t, f, url)
-			for _, l := range seededLists {
-				if n := len(f.rows(t, l)); n < 1 {
-					t.Errorf("%s holds %d rows after a %s fetch failure, want the saved copy", l, n, name)
+			for _, l := range Lists {
+				if n := len(f.rows(t, l.Name)); n < 1 {
+					t.Errorf("%s holds %d rows after a %s fetch failure, want the saved copy", l.Name, n, name)
 				}
 			}
 		})
@@ -393,9 +393,20 @@ func TestSyncAll_CancelledContextSeedsNothingAndSurfacesAnError(t *testing.T) {
 func TestSyncAll_FetchFailureWithACorruptSavedCopySurfacesTheSeedError(t *testing.T) {
 	f := newSeedFixture(t)
 	f.s.seed = fstest.MapFS{"saved/" + f.names["states"] + ".json": &fstest.MapFile{Data: []byte(`{not json`)}}
+	// Only states, so the 503 cannot come from another list's own fetch error.
+	var states []List
+	for _, l := range f.s.lists {
+		if l.Name == f.names["states"] {
+			states = append(states, l)
+		}
+	}
+	f.s.lists = states
 
 	err := failOnce(t, f, failedFetches(t)["503"])
 
+	if !strings.Contains(err.Error(), "status 503") {
+		t.Errorf("err = %v, want the 503 fetch error kept", err)
+	}
 	if !strings.Contains(err.Error(), "saved copy of "+f.names["states"]) {
 		t.Errorf("err = %v, want the saved copy error for states", err)
 	}

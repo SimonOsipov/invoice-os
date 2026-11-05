@@ -58,21 +58,21 @@ func (s *Syncer) SyncList(ctx context.Context, l List) (Change, error) {
 }
 
 // seedFromSaved applies the saved copy of l only to a list with no rows. It returns fetchErr
-// unless the seed itself failed.
+// joined with the seed error when the seed itself failed.
 func (s *Syncer) seedFromSaved(ctx context.Context, l List, fetchErr error) (Change, error) {
 	grouped, n, ok, err := savedCopy(s.seed, l)
 	if !ok {
 		return Change{}, fetchErr
 	}
 	if err != nil {
-		return Change{}, fmt.Errorf("codelist: saved copy of %s: %w", l.Name, err)
+		return Change{}, errors.Join(fetchErr, fmt.Errorf("codelist: saved copy of %s: %w", l.Name, err))
 	}
 	ch, err := apply(ctx, s.pool, l, grouped, n, true)
 	if errors.Is(err, errNotEmpty) {
 		return Change{}, fetchErr
 	}
 	if err != nil {
-		return Change{}, err
+		return Change{}, errors.Join(fetchErr, err)
 	}
 	s.log.Warn("codelist seeded from saved copy", "list", l.Name, "entries", ch.Entries, "err", fetchErr)
 	return ch, fetchErr

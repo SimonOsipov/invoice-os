@@ -289,11 +289,31 @@ func TestDeletePolicy_LastPolicyUnderAnOnlyActiveScopedPolicyIs409(t *testing.T)
 	if got := versionScopeColumns(t, super, v2); len(got.Types) != 0 {
 		t.Fatalf("fixture v2 is scoped: %+v", got)
 	}
+	// U above C keeps checks 1 and 2 quiet: only S's active version pins C.
+	seedPolicyShape(t, super, tenantID, "U", false, true)
 	last, _ := seedPolicyShape(t, super, tenantID, "C", false, true)
 
 	_, err := NewStore(app, stubFingerprinter, nil).DeletePolicy(c, last)
 	if !errors.Is(err, ErrPolicyCatchAll) {
 		t.Fatalf("err = %v, want ErrPolicyCatchAll (check 3: S is scoped by its active version)", err)
+	}
+	assertLiveAndActive(t, super, "C", last)
+}
+
+// S is scoped by its top draft v2 only (active v1 is a catch-all): check 3's top-version leg.
+func TestDeletePolicy_LastPolicyPinnedByATopDraftScopeAlone(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-03 delete-last-top-scoped")
+	c, _ := activeAdmin(t, super, tenantID)
+	s, _ := seedPolicyShape(t, super, tenantID, "S", false, true)
+	v2 := seedApprovalPolicyVersionN(t, super, tenantID, s, 2)
+	setVersionScopes(t, super, v2, `scope_document_types = '{credit_note}'`)
+	seedPolicyShape(t, super, tenantID, "U", false, true)
+	last, _ := seedPolicyShape(t, super, tenantID, "C", false, true)
+
+	_, err := NewStore(app, stubFingerprinter, nil).DeletePolicy(c, last)
+	if !errors.Is(err, ErrPolicyCatchAll) {
+		t.Fatalf("err = %v, want ErrPolicyCatchAll (check 3: S is scoped by its top draft)", err)
 	}
 	assertLiveAndActive(t, super, "C", last)
 }
@@ -304,16 +324,17 @@ func TestDeletePolicy_LastPolicyDeletesOnceNoScopeIsLeft(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 	s, _ := seedPolicyShape(t, super, tenantID, "S", true, true)
+	seedPolicyShape(t, super, tenantID, "U", false, true)
 	last, _ := seedPolicyShape(t, super, tenantID, "C", false, true)
 
 	if _, err := store.DeletePolicy(c, s); err != nil {
 		t.Fatalf("delete of the scoped policy above the last: %v", err)
 	}
-	if got, want := listedNames(t, store, c), []string{"C"}; !reflect.DeepEqual(got, want) {
+	if got, want := listedNames(t, store, c), []string{"U", "C"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after deleting S the list = %v, want %v", got, want)
 	}
 	if _, err := store.DeletePolicy(c, last); err != nil {
-		t.Fatalf("delete of the last policy with no scope left: %v", err)
+		t.Fatalf("delete of the last policy with no scope left (U stays above): %v", err)
 	}
 	if policyIsLive(t, super, last) {
 		t.Error("C is still live after a successful delete")

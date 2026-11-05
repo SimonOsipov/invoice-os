@@ -329,10 +329,10 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // would be green on CI and red at home), and published_at is never string-compared against
 // another API timestamp — every other one marshals in pgx's time.Local.
 
-// The eight keys internal/approval's Policy serializes, sorted, and the five and ten of its
+// The ten keys internal/approval's Policy serializes, sorted, and the five and ten of its
 // two nested shapes. No omitempty on any field, and Policy/Step both carry a value-receiver
 // MarshalJSON substituting [] for a nil lane, so every set is fixed whatever the content.
-const POLICY_KEYS = ['id', 'name', 'scope', 'sealed', 'status', 'steps', 'version', 'versions']
+const POLICY_KEYS = ['id', 'name', 'position', 'scope', 'scopes', 'sealed', 'status', 'steps', 'version', 'versions']
 const POLICY_VERSION_KEYS = ['is_active', 'published_at', 'published_by', 'sealed', 'version']
 const STEP_KEYS = [
   'cond_amount',
@@ -373,7 +373,7 @@ function expectStepShape(step: unknown, label: string): Record<string, unknown> 
 // boundary: JS distinguishes [] from null, unlike Go's serializer test.
 function expectPolicyShape(policy: unknown, label: string): Record<string, unknown> {
   const p = policy as Record<string, unknown>
-  expect(Object.keys(p).sort(), `${label}: expected exactly the eight Policy keys`).toEqual(POLICY_KEYS)
+  expect(Object.keys(p).sort(), `${label}: expected exactly the ten Policy keys`).toEqual(POLICY_KEYS)
   expect(Array.isArray(p.steps), `${label}: steps should be an array, never null`).toBe(true)
   expect(Array.isArray(p.versions), `${label}: versions should be an array, never null`).toBe(true)
   const steps = p.steps as unknown[]
@@ -547,7 +547,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(versions[0].published_by, 'published_by is an explicit null before publish').toBeNull()
   })
 
-  test('policy shape: exactly the eight keys, and a populated tree keeps [] never null', async () => {
+  test('policy shape: exactly the ten keys, and a populated tree keeps [] never null', async () => {
     const probe = await createPolicyProbe()
     // A PUT before the GET is REQUIRED: a freshly created policy's draft is empty, so the
     // ten-key Step claim below would otherwise pass vacuously over nothing.

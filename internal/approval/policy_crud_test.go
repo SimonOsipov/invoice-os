@@ -170,6 +170,7 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 		ID:       got.ID,
 		Name:     "Sign-off",
 		Scope:    scopeAllInvoices,
+		Position: 1,
 		Status:   "draft",
 		Version:  1,
 		Sealed:   false,
@@ -500,7 +501,7 @@ func TestPolicy_ListReturnsTreeAndVersions(t *testing.T) {
 
 // TestPolicy_ListOmitsSoftDeleted: deleted_at IS NULL is the list predicate, and the
 // deleted policy's steps are never read. The statement count is the other half of
-// AC-3: three statements whatever the policy count.
+// AC-3: four statements whatever the policy count.
 func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 list-soft-deleted")
@@ -539,17 +540,17 @@ func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 		}
 	}
 
-	// Three statements, constant in policy count: an N+1 tree read would issue one
+	// Four statements, constant in policy count: an N+1 tree read would issue one
 	// per policy and is otherwise invisible, since the results are identical.
-	t.Run("three statements, constant in policy count", func(t *testing.T) {
+	t.Run("four statements, constant in policy count", func(t *testing.T) {
 		traced, rec := tracedAppPool(t)
 		rec.reset()
 		if _, err := NewStore(traced, stubFingerprinter, nil).ListPolicies(c); err != nil {
 			t.Fatalf("ListPolicies on the traced pool: %v", err)
 		}
 		sql := rec.mentioning("approval_polic")
-		if len(sql) != 3 {
-			t.Errorf("ListPolicies issued %d statements against the policy tables, want 3:\n%v", len(sql), sql)
+		if len(sql) != 4 {
+			t.Errorf("ListPolicies issued %d statements against the policy tables, want 4:\n%v", len(sql), sql)
 		}
 	})
 }

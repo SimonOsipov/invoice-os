@@ -55,7 +55,7 @@ var stepWireKeys = []string{
 
 // policyWireKeys is Policy's whole JSON key set, sorted.
 var policyWireKeys = []string{
-	"id", "name", "scope", "sealed", "status", "steps", "version", "versions",
+	"id", "name", "position", "scope", "scopes", "sealed", "status", "steps", "version", "versions",
 }
 
 // stepKinds is the set approval_policy_steps_kind_check accepts.
@@ -187,6 +187,35 @@ func TestPolicy_PolicyMarshalsStableKeys(t *testing.T) {
 		if got := rawField(t, raw, field); got != "[]" {
 			t.Errorf("%q = %s, want []", field, got)
 		}
+	}
+	if got := rawField(t, raw, "scopes"); !strings.HasPrefix(got, "{") {
+		t.Errorf("scopes = %s, want an object", got)
+	}
+}
+
+func TestPolicy_ScopesMarshalFourKeysAndNullBand(t *testing.T) {
+	raw, err := json.Marshal(Scopes{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got, want := keySet(t, raw), []string{"amount_band", "document_types", "entity_ids", "workflow_role_keys"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("key set = %v, want %v", got, want)
+	}
+	for _, f := range []string{"document_types", "entity_ids", "workflow_role_keys"} {
+		if got := rawField(t, raw, f); got != "[]" {
+			t.Errorf("%q = %s, want []", f, got)
+		}
+	}
+	if got := rawField(t, raw, "amount_band"); got != "null" {
+		t.Errorf("amount_band = %s, want null", got)
+	}
+
+	raw, err = json.Marshal(Scopes{AmountBand: &AmountBand{Lower: ptr("1.00"), Currency: "NGN"}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got, want := rawField(t, raw, "amount_band"), `{"lower":"1.00","upper":null,"currency":"NGN"}`; got != want {
+		t.Errorf("amount_band = %s, want %s", got, want)
 	}
 }
 

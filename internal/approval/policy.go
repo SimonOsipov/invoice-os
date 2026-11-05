@@ -54,10 +54,44 @@ type PolicyVersion struct {
 	PublishedBy *string `json:"published_by"`
 }
 
+// AmountBand is a version's scope band; a nil bound is open-ended. Bounds are numeric
+// text with scale kept.
+type AmountBand struct {
+	Lower    *string `json:"lower"`
+	Upper    *string `json:"upper"`
+	Currency string  `json:"currency"`
+}
+
+// Scopes is the wire shape of a version's scope columns; empty everywhere is a catch-all.
+type Scopes struct {
+	DocumentTypes    []string    `json:"document_types"`
+	EntityIDs        []string    `json:"entity_ids"`
+	WorkflowRoleKeys []string    `json:"workflow_role_keys"`
+	AmountBand       *AmountBand `json:"amount_band"`
+}
+
+// MarshalJSON substitutes [] for a nil array (TestPolicy_ScopesMarshalFourKeysAndNullBand).
+func (sc Scopes) MarshalJSON() ([]byte, error) {
+	type scopesJSON Scopes
+	v := scopesJSON(sc)
+	if v.DocumentTypes == nil {
+		v.DocumentTypes = []string{}
+	}
+	if v.EntityIDs == nil {
+		v.EntityIDs = []string{}
+	}
+	if v.WorkflowRoleKeys == nil {
+		v.WorkflowRoleKeys = []string{}
+	}
+	return json.Marshal(v)
+}
+
 type Policy struct {
 	ID       string          `json:"id"`
 	Name     string          `json:"name"`
 	Scope    string          `json:"scope"`
+	Position int             `json:"position"`
+	Scopes   Scopes          `json:"scopes"`  // the version steps belongs to
 	Status   string          `json:"status"`  // "draft" if an unsealed version exists, else "published"
 	Version  int             `json:"version"` // the version steps belongs to
 	Sealed   bool            `json:"sealed"`

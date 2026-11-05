@@ -132,8 +132,68 @@ export async function routeProductionHosts(
         headers: { ...res.headers(), 'access-control-allow-origin': 'https://www.ascomply.com' },
       })
     })
+    await grantOrigin(context, `${targets.gateway}/auth/register`, 'https://www.ascomply.com')
   }
-  // CORS headers: a cross-origin Sentry POST answered without them logs a console error.
+  await stubTelemetryHosts(context)
+}
+
+const APP_ORIGIN = 'https://app.ascomply.com'
+
+/** Answers a JSON preflight itself, echoing the requested headers; adds the grant to every other reply. */
+async function grantOrigin(context: BrowserContext, pattern: string, origin: string): Promise<void> {
+  await context.route(pattern, async (route) => {
+    const request = route.request()
+    if (request.method() === 'OPTIONS') {
+      await route.fulfill({
+        status: 204,
+        headers: {
+          'access-control-allow-origin': origin,
+          'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+          'access-control-allow-headers': (await request.headerValue('access-control-request-headers')) ?? '',
+        },
+      })
+      return
+    }
+    const res = await route.fetch()
+    await route.fulfill({ response: res, headers: { ...res.headers(), 'access-control-allow-origin': origin } })
+  })
+}
+
+/**
+ * Serves app.ascomply.com from the fork app and grants that origin on the fork gateway, so the
+ * production-host app bundle talks to the fork backend.
+ */
+export async function routeAppHost(context: BrowserContext, targets: { app: string; gateway: string }): Promise<void> {
+  await context.route(`${APP_ORIGIN}/**`, async (route) => {
+    const { pathname, search } = new URL(route.request().url())
+    await route.fulfill({ response: await route.fetch({ url: new URL(targets.app).origin + pathname + search }) })
+  })
+  // `*` does not cover Authorization, hence the echo in grantOrigin.
+  await grantOrigin(context, `${new URL(targets.gateway).origin}/**`, APP_ORIGIN)
+  await stubTelemetryHosts(context)
+}
+
+/** The sink for stubbed-host requests the stub did not answer; await `pending` before reading `leaked`. */
+export function watchStubLeaks(page: Page): { leaked: string[]; pending: Promise<void>[] } {
+  const leaked: string[] = []
+  const pending: Promise<void>[] = []
+  page.on('requestfinished', (r) => {
+    if (!isStubbedHost(r.url())) return
+    pending.push(
+      r.response().then((res) => {
+        if (res?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
+      }),
+    )
+  })
+  // the stub fulfils every stubbed-host request, so a failed one never reached it
+  page.on('requestfailed', (r) => {
+    if (isStubbedHost(r.url())) leaked.push(r.url())
+  })
+  return { leaked, pending }
+}
+
+// CORS headers: a cross-origin Sentry POST answered without them logs a console error.
+async function stubTelemetryHosts(context: BrowserContext): Promise<void> {
   await context.route((url) => isStubbedHost(url.href), (route) =>
     route.fulfill({
       status: 200,

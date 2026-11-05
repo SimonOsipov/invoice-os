@@ -444,10 +444,13 @@ func TestDeletePolicy_ReturnsAnInertDraftShape(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 delete-inert-shape")
 	c, _ := activeAdmin(t, super, tenantID)
 
+	seedApprovalPolicy(t, super, tenantID, "First")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	sealApprovalPolicyVersion(t, super, seedVersionWithSteps(t, super, tenantID, policyID, 1, 0))
 	sealApprovalPolicyVersion(t, super, seedVersionWithSteps(t, super, tenantID, policyID, 2, 0))
-	seedPublishedVersion(t, super, tenantID, policyID, 3, 1)
+	v3 := seedVersionWithSteps(t, super, tenantID, policyID, 3, 1)
+	setVersionScopes(t, super, v3, `scope_document_types = '{credit_note}'`)
+	publishApprovalPolicyVersion(t, super, v3, "fixture-publisher")
 
 	got, err := NewStore(app, stubFingerprinter, nil).DeletePolicy(c, policyID)
 	if err != nil {
@@ -457,6 +460,8 @@ func TestDeletePolicy_ReturnsAnInertDraftShape(t *testing.T) {
 		ID:       policyID,
 		Name:     "Sign-off",
 		Scope:    scopeAllInvoices,
+		Position: 2,
+		Scopes:   Scopes{},
 		Status:   "draft",
 		Version:  0,
 		Sealed:   false,

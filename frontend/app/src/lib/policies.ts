@@ -39,10 +39,22 @@ export type PolicyVersionWire = {
   published_by: string | null
 }
 
+export type PolicyScopesWire = {
+  document_types: string[]
+  entity_ids: string[]
+  workflow_role_keys: string[]
+  /** Bounds are numeric text, scale kept. */
+  amount_band: { lower: string | null; upper: string | null; currency: string } | null
+}
+
 export type PolicyWire = {
   id: string
   name: string
   scope: string
+  /** The list sorts by it, ascending. */
+  position: number
+  /** The TOP version's scopes; all empty = the catch-all. */
+  scopes: PolicyScopesWire
   status: string
   /** The version `steps` belongs to = the HIGHEST version, not necessarily the active one. */
   version: number
@@ -218,7 +230,6 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
 export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
   const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
     method: 'PUT',
-    // `scope` is forwarded rather than dropped, so the server sees what the editor holds.
     body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
   })
   return toPolicy(saved)

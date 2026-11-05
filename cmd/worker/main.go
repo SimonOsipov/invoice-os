@@ -208,8 +208,11 @@ func main() {
 	pjw.Purger = purger
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))
 
-	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
-		leader.Lead("codelist-sync", codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll)))
+	syncer := codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger)
+	if seedsCodeLists(platform.Posture(platform.DeployEnv())) {
+		syncer.SeedFromSavedCopy()
+	}
+	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval, leader.Lead("codelist-sync", syncer.SyncAll)))
 
 	cfg, err := reconciliation.ConfigFromEnv()
 	if err != nil {
@@ -399,4 +402,10 @@ func mustEnv(key string) string {
 		platform.Fatal(slog.Default(), "worker: %s is required", key)
 	}
 	return v
+}
+
+// seedsCodeLists reports whether the codelist syncer may seed an empty list from the saved copy.
+// Production (hosted) never does.
+func seedsCodeLists(p platform.PostureKind) bool {
+	return p == platform.PosturePreview || p == platform.PostureNightly || p == platform.PostureLocal
 }

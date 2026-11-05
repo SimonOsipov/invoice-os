@@ -32,7 +32,7 @@ describe('links', () => {
         shipped++
       }
     }
-    expect([soon, shipped]).toEqual([5, 25])
+    expect([soon, shipped]).toEqual([5, 26])
     const clear = FEATURES.find((f) => f.id === 'submit-clear')!
     expect(featurePlatformHref(clear)).toBeNull()
     const reports = FEATURES.find((f) => f.id === 'reports')!

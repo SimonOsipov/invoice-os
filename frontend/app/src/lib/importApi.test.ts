@@ -58,6 +58,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
+import { reportValidatedInvoice } from '../chat'
 import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE, createAuthedFetch } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 import { SessionEndedError } from './renewal'
@@ -205,6 +206,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+vi.mock('../chat', () => ({ reportValidatedInvoice: vi.fn((r: unknown) => r) }))
 
 const base = 'https://gw'
 
@@ -1444,5 +1447,26 @@ describe('importDocument request body', () => {
     expect(Object.keys(seen.body as object).sort()).toEqual(['document_id', 'entity_id'])
     const override = await bodyOf({ entityId: 'e1', documentId: 'd1', documentType: 'commercial_invoice' })
     expect(Object.keys(override.body as object).sort()).toEqual(['document_id', 'document_type', 'entity_id'])
+  })
+})
+
+describe('invoice_validated reporting', () => {
+  const rejection = new ApiError('http', 'x', 409)
+  const req: SupplyNumberRequest = { entity_id: 'e-1', document_id: 'd-1', invoice_number: 'N-1' }
+
+  beforeEach(() => vi.mocked(reportValidatedInvoice).mockClear())
+
+  it('supplyInvoiceNumber_reportsTheResolvedRecord', async () => {
+    const rec = { status: 'validated' }
+    const af = vi.fn().mockResolvedValue(rec) as unknown as AuthedFetch
+    expect(await supplyInvoiceNumber(af, base, req)).toBe(rec)
+    expect(reportValidatedInvoice).toHaveBeenCalledTimes(1)
+    expect(reportValidatedInvoice).toHaveBeenCalledWith(rec)
+  })
+
+  it('aRejectedRequestReportsNothing', async () => {
+    const af = vi.fn().mockRejectedValue(rejection) as unknown as AuthedFetch
+    await expect(supplyInvoiceNumber(af, base, req)).rejects.toBe(rejection)
+    expect(reportValidatedInvoice).not.toHaveBeenCalled()
   })
 })

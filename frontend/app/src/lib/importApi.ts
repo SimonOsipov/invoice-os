@@ -65,6 +65,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError, reportApiFailure } from '@invoice-os/api-client'
 import type { Session } from '../auth'
+import { reportValidatedInvoice } from '../chat'
 import { isPromiseLike, isSuspended, isUnauthorized, isWorkspaceLocked } from './authedFetch'
 import type { InvoiceRecord } from './invoices'
 import type { AuthedFetch } from './portfolio'
@@ -544,7 +545,9 @@ export async function supplyInvoiceNumber(
   base: string,
   req: SupplyNumberRequest,
 ): Promise<InvoiceRecord> {
-  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
+  return reportValidatedInvoice(
+    await authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req }),
+  )
 }
 
 export async function suggestMapping(

@@ -2,6 +2,7 @@
 paths:
   - "frontend/landing/src/analytics*"
   - "frontend/landing/src/components/CookieNotice*"
+  - "frontend/landing/src/components/RegisterModal*"
   - "frontend/landing/src/consent*"
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
@@ -30,6 +31,7 @@ paths:
 - Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
 - Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
 - Send `sign_up` through `trackSignUp` and `invoice_validated` through `trackInvoiceValidated`. Neither carries a parameter.
+- Send `sign_up` from `RegisterModal` only after `registerAccount` resolves. An invite registration on `InvitePage` sends none.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.
 - Add a new CTA source to `DEMO_CTA_SOURCES` and to its `book(source)` call site.

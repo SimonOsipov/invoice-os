@@ -324,6 +324,18 @@ describe('the register view', () => {
     expect(headings()).toEqual(['Check your email'])
   })
 
+  it('signUp_inviteRegistrationSendsNone', async () => {
+    const sent = vi.fn()
+    vi.doMock('../analytics', async (orig) => ({ ...(await orig<typeof import('../analytics')>()), trackSignUp: sent }))
+    stubFetch({ register: () => json(200, {}) })
+    await mount()
+    await toRegisterView()
+    await submit()
+    expect(headings(), 'control: the sent view shows').toEqual(['Check your email'])
+    expect(sent).not.toHaveBeenCalled()
+    vi.doUnmock('../analytics')
+  })
+
   it('invitePage_registerPostsTheTokenOnly', async () => {
     const fetchMock = stubFetch({ register: () => json(200, {}) })
     await mount()

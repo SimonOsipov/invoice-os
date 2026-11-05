@@ -265,9 +265,10 @@ test('AC-GA the routed production app loads the Google tag and sends events only
     await expect.poll(() => gaRequests.some((u) => new URL(u).hostname === 'www.googletagmanager.com'), 'the tag was never requested').toBe(true)
     await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the routed app').toContain('config')
     const first = await layer()
-    expect(first.map((e) => e[0])).toEqual(['js', 'config', 'event'])
-    expect(first[1][2]).toEqual({ page_location: `${PROD_APP}/invoices/:id` })
-    expect(first[2].slice(1)).toEqual(['invoice_validated', {}])
+    expect(first.map((e) => e[0])).toEqual(['js', 'set', 'config', 'event'])
+    expect(first[1][1]).toMatchObject({ page_location: `${PROD_APP}/invoices/:id` })
+    expect(first[2][2]).toEqual({ page_location: `${PROD_APP}/invoices/:id` })
+    expect(first[3].slice(1)).toEqual(['invoice_validated', {}])
 
     // route changes send the bounded pattern
     const before = (await pageViews()).length

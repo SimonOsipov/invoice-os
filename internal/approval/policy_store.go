@@ -364,8 +364,8 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 	if err != nil {
 		return Policy{}, ErrPolicyNotFound
 	}
-	// Copied, never written through: the pointers belong to the caller (UpdateRole,
-	// store.go:211-218). a non-nil "" reaches SQL as the default.
+	// Copied, never written through: the pointers belong to the caller (UpdateRole).
+	// A non-nil "" reaches SQL as the default.
 	if name != nil {
 		n, err := normalizeName(*name)
 		if err != nil {
@@ -633,9 +633,8 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// AFTER the seal, and that ordering is load-bearing: ArmTx resolves the version by
-		// `WHERE is_active`, so a sweep placed any earlier arms the version this publish just
-		// replaced — or, on a tenant's first publish, nothing at all.
+		// AFTER the seal, and that ordering is load-bearing: a sweep placed any earlier arms
+		// without this publish's version.
 		if err := s.sweepValidatedBacklog(ctx, tx, caller.TenantID, caller.Subject); err != nil {
 			return err
 		}

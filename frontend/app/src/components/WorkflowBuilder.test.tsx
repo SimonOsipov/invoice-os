@@ -381,7 +381,7 @@ describe('APPR-09-05 AC-4: Publish states its consequence before the click', () 
     expect(screen.queryByText(NO_POLICY_IN_FORCE)).toBeNull()
   })
 
-  it("Publish says no policy is in force when the tenant's slot is empty", () => {
+  it('Publish says no policy is in force when no policy has an active version', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self, otherPolicy({ status: 'draft', activeVersion: null })] })} policy={self} />)
 
@@ -454,7 +454,7 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
     expect(screen.queryByText(NO_POLICY_IN_FORCE), 'the sealed policy reads as if nothing governed').toBeNull()
   })
 
-  it('a sealed policy that lost the tenant slot is still not publishable', () => {
+  it('a sealed policy with no version in force is still not publishable', () => {
     // The branch a `activeVersion !== null` gate would miss: sealed here, in force elsewhere.
     const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: null }
     render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed, otherPolicy()] })} policy={sealed} />)

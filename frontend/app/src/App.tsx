@@ -1667,8 +1667,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
 
   async function publishPolicy(id: string): Promise<Policy> {
     const published = await publishApprovalPolicy(authedFetch, base!, id)
-    // Refetch, not a one-row patch: publishing changes the policy's versions and order,
-    // which this response does not fully report.
+    // Refetch, not a one-row patch (policiesWiring.test.ts pins the call).
     policiesAsync.run()
     return published
   }

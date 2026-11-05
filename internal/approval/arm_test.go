@@ -298,6 +298,30 @@ func TestArm_TwoPoliciesInForceArmTheOnePublishedLast(t *testing.T) {
 	}
 }
 
+// TestArm_EqualPublishedAtArmsTheHigherVersionId: a tie on published_at is broken by id DESC,
+// so the governing version never depends on heap order. B has the higher policy id.
+func TestArm_EqualPublishedAtArmsTheHigherVersionId(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-01-02 arm-equal-published-at")
+	entityID := seedBusinessEntity(t, super, tenantID, "Arm Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "equal-published-at-invoice-1")
+
+	// The tie-break is on the version id, which is random: read both and expect the larger.
+	at := time.Now().Add(-1 * time.Hour)
+	versionA, versionB := seedTwoPoliciesInForce(t, super, app, tenantID, "fin_mgr", "cfo", &at, &at)
+	want := versionA
+	if versionB > versionA {
+		want = versionB
+	}
+
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-equal-published-at", "test-actor"); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if run := oneApprovalRun(t, super, invoiceID); run.PolicyVersionID != want {
+		t.Errorf("run.PolicyVersionID = %s, want %s (the higher version id of %s and %s)", run.PolicyVersionID, want, versionA, versionB)
+	}
+}
+
 // TestArm_NullPublishedAtDoesNotWin: A is active with NULL published_at, B with a
 // timestamp. B arms; DESC without NULLS LAST would put the NULL row first.
 func TestArm_NullPublishedAtDoesNotWin(t *testing.T) {

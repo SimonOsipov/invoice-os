@@ -569,13 +569,14 @@ func TestRLS_ApprovalPolicyScopesMigrationBackfillsOrderAndKeepsTheActiveVersion
 
 	ids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	slices.Sort(ids)
-	// pc has the smallest id but the latest created_at: created_at must win. pd is soft-deleted.
+	// pc has the smallest id but the latest created_at: created_at must win. pb is inserted before
+	// pa, so the id tie-break (pa < pb) is the only thing that orders them. pd is soft-deleted.
 	pc, pa, pb, pd := ids[0], ids[1], ids[2], uuid.NewString()
 	scSetTenant(t, ctx, tx, tenantID)
 	for _, p := range []struct{ id, name, created string }{
 		{pd, "pd", "2026-01-01T00:00:00Z"},
-		{pa, "pa", "2026-02-01T00:00:00Z"},
 		{pb, "pb", "2026-02-01T00:00:00Z"},
+		{pa, "pa", "2026-02-01T00:00:00Z"},
 		{pc, "pc", "2026-03-01T00:00:00Z"},
 	} {
 		if _, err := tx.Exec(ctx,
@@ -705,11 +706,11 @@ func scSealGuardOriginalBody(t *testing.T) string {
 	return src[i+start+2 : i+start+2+end]
 }
 
-// AC 9: with one active version per workspace the Down restores the old shape and the Up applies again.
+// AC 9: with at most one active version per workspace the Down restores the old shape and the Up applies again.
 func TestRLS_ApprovalPolicyScopesMigrationDownRestoresTheOldShape(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
-	tenantID := scTenant(t)
+	tenantID, otherTenant := scTenant(t), scTenant(t)
 	tx := scMigrationTx(t, ctx)
 	up, down := scopesMigrationSections(t)
 	wantBody := scSealGuardOriginalBody(t)
@@ -721,6 +722,25 @@ func TestRLS_ApprovalPolicyScopesMigrationDownRestoresTheOldShape(t *testing.T) 
 		t.Fatalf("seed policy: %v", err)
 	}
 	scSealedActiveVersion(t, ctx, tx, tenantID, policyID)
+	// An inactive sealed version of a second policy, and another workspace's own active
+	// version: neither makes a workspace "more than one active".
+	var idlePolicy string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, 'idle') RETURNING id`, tenantID).Scan(&idlePolicy); err != nil {
+		t.Fatalf("seed idle policy: %v", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed) VALUES ($1, $2, 1, true)`,
+		tenantID, idlePolicy); err != nil {
+		t.Fatalf("seed idle sealed version: %v", err)
+	}
+	scSetTenant(t, ctx, tx, otherTenant)
+	var otherPolicy string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, 'other') RETURNING id`, otherTenant).Scan(&otherPolicy); err != nil {
+		t.Fatalf("seed other tenant policy: %v", err)
+	}
+	scSealedActiveVersion(t, ctx, tx, otherTenant, otherPolicy)
 	scSetTenant(t, ctx, tx, "")
 
 	count := func(q string, args ...any) int {
@@ -758,8 +778,9 @@ func TestRLS_ApprovalPolicyScopesMigrationDownRestoresTheOldShape(t *testing.T) 
 	if d := indexDef(); !strings.Contains(d, "(tenant_id) WHERE is_active") {
 		t.Errorf("after the Down, %s = %q, want (tenant_id) WHERE is_active", versionsOneActive, d)
 	}
-	if n := count(`SELECT count(*) FROM pg_constraint WHERE conname = 'approval_policies_scope_check'`); n != 1 {
-		t.Errorf("approval_policies_scope_check rows after the Down = %d, want 1", n)
+	if n := count(`SELECT count(*) FROM pg_constraint WHERE conname = 'approval_policies_scope_check'
+	                  AND pg_get_constraintdef(oid) = $1`, "CHECK ((scope = 'All invoices'::text))"); n != 1 {
+		t.Errorf("approval_policies_scope_check rows with the original definition after the Down = %d, want 1", n)
 	}
 	if n := count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public'
 	                 AND ((table_name = 'approval_policies' AND column_name = 'position')
@@ -792,5 +813,175 @@ func TestRLS_ApprovalPolicyScopesMigrationDownRestoresTheOldShape(t *testing.T) 
 	if n := count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public'
 	                 AND table_name = 'approval_policies' AND column_name = 'position'`); n != 1 {
 		t.Errorf("approval_policies.position after the Up = %d, want 1", n)
+	}
+}
+
+// AC 8: the Up numbers each tenant from 1, not across tenants.
+func TestRLS_ApprovalPolicyScopesMigrationBackfillRestartsPerTenant(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, b := scTenant(t), scTenant(t)
+	tx := scMigrationTx(t, ctx)
+	up, down := scopesMigrationSections(t)
+
+	if _, err := tx.Exec(ctx, down); err != nil {
+		t.Fatalf("Down section: %v", err)
+	}
+	// B's policy is created after A's two, so a numbering that spans tenants gives it 3.
+	for _, p := range []struct{ tenant, name, created string }{
+		{a, "a1", "2020-01-01T00:00:00Z"},
+		{a, "a2", "2020-02-01T00:00:00Z"},
+		{b, "b1", "2020-03-01T00:00:00Z"},
+	} {
+		scSetTenant(t, ctx, tx, p.tenant)
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO approval_policies (tenant_id, name, created_at) VALUES ($1, $2, $3::timestamptz)`,
+			p.tenant, p.name, p.created); err != nil {
+			t.Fatalf("seed policy %s: %v", p.name, err)
+		}
+	}
+	scSetTenant(t, ctx, tx, "")
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("Up section: %v", err)
+	}
+
+	got := map[string]int{}
+	for _, tenant := range []string{a, b} {
+		scSetTenant(t, ctx, tx, tenant)
+		rows, err := tx.Query(ctx, `SELECT name, position FROM approval_policies`)
+		if err != nil {
+			t.Fatalf("read positions: %v", err)
+		}
+		for rows.Next() {
+			var name string
+			var pos int
+			if err := rows.Scan(&name, &pos); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			got[name] = pos
+		}
+		rows.Close()
+	}
+	if len(got) != 3 {
+		t.Fatalf("read %d seeded policies back, want 3: %v", len(got), got)
+	}
+	if got["a1"] != 1 || got["a2"] != 2 || got["b1"] != 1 {
+		t.Errorf("positions = %v, want a1=1 a2=2 b1=1 (numbered per tenant)", got)
+	}
+}
+
+// AC 6, tenant isolation: the trigger's advisory lock is keyed per tenant, so one workspace's
+// open insert never makes another workspace's insert wait.
+func TestRLS_ApprovalPoliciesPositionLockIsPerTenant(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, b := scTenant(t), scTenant(t)
+
+	tx1, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			_ = tx1.Rollback(ctx)
+		}
+	}
+	defer release()
+	if _, err := tx1.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, a); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	if _, err := tx1.Exec(ctx, `INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2)`, a, apName("held")); err != nil {
+		t.Fatalf("tenant A insert: %v", err)
+	}
+
+	done := make(chan error, 1)
+	var pos int
+	go func() {
+		done <- db.WithinTenantTx(ctx, h.app, b, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING position`, b, apName("other")).Scan(&pos)
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("tenant B insert beside tenant A's open insert: %v", err)
+		}
+		if pos != 1 {
+			t.Errorf("tenant B first position = %d, want 1", pos)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		<-done
+		t.Fatal("tenant B's insert waited on tenant A's open insert, want the lock keyed per tenant")
+	}
+}
+
+// AC 6/7, tenant isolation: invoice_app cannot probe another tenant's positions. An insert into
+// tenant A under tenant B's context at A's taken position is refused by RLS (42501), not by
+// the exclusion constraint (23P01), which would confirm A's position exists.
+func TestRLS_ApprovalPoliciesCrossTenantPositionIsNoOracle(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, b := scTenant(t), scTenant(t)
+
+	if _, pos := scInsertPolicy(t, false, a); pos != 1 {
+		t.Fatalf("fixture: tenant A first position = %d, want 1", pos)
+	}
+	err := db.WithinTenantTx(ctx, h.app, b, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO approval_policies (tenant_id, name, position) VALUES ($1, $2, 1)`, a, apName("probe"))
+		return e
+	})
+	if err == nil {
+		t.Fatal("cross-tenant insert at a taken position succeeded, want 42501")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Errorf("cross-tenant insert: SQLSTATE = %q, want 42501 (23P01 would leak that A holds position 1): %v", code, err)
+	}
+	var n int
+	if err := h.super.QueryRow(ctx, `SELECT count(*) FROM approval_policies WHERE tenant_id = $1`, a).Scan(&n); err != nil || n != 1 {
+		t.Errorf("tenant A policies = %d (err %v), want 1", n, err)
+	}
+}
+
+// Seal guard, tenant isolation: another tenant's context cannot reach a sealed version's scopes.
+func TestRLS_ApprovalPolicyVersionsCrossTenantScopeUpdateTouchesNothing(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, b := scTenant(t), scTenant(t)
+
+	policyID, cleanup := seedApprovalPolicy(t, a, apName("seal-x"))
+	defer cleanup()
+	var versionID string
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, scope_document_types)
+		 VALUES ($1, $2, 1, ARRAY['credit_note']) RETURNING id`, a, policyID).Scan(&versionID); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	if _, err := h.super.Exec(ctx, `UPDATE approval_policy_versions SET sealed = true WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+
+	var affected int64
+	err := db.WithinTenantTx(ctx, h.app, b, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `UPDATE approval_policy_versions SET scope_document_types = '{debit_note}' WHERE id = $1`, versionID)
+		affected = tag.RowsAffected()
+		return e
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant scope UPDATE: %v, want zero rows and no error", err)
+	}
+	if affected != 0 {
+		t.Errorf("cross-tenant scope UPDATE affected %d rows, want 0", affected)
+	}
+	var types string
+	if err := h.super.QueryRow(ctx, `SELECT scope_document_types::text FROM approval_policy_versions WHERE id = $1`, versionID).Scan(&types); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if types != "{credit_note}" {
+		t.Errorf("scope_document_types = %s, want {credit_note}", types)
 	}
 }

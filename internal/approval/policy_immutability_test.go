@@ -899,7 +899,8 @@ func scopeSnapshot(t *testing.T, q interface {
 }
 
 // TestPIL17_ScopeUpdateOnSealedVersionRejected (PIL-17): each of the six scope columns of a
-// sealed version refuses an UPDATE with 23001, as the owner and as invoice_app.
+// sealed version refuses an UPDATE with 23001, as the owner and as invoice_app, from a set
+// value and from the empty or NULL catch-all value.
 func TestPIL17_ScopeUpdateOnSealedVersionRejected(t *testing.T) {
 	migrator := migratorPool(t)
 	super, app := dbTestPools(t)
@@ -959,6 +960,35 @@ func TestPIL17_ScopeUpdateOnSealedVersionRejected(t *testing.T) {
 	})
 	if after := scopeSnapshot(t, super, versionID); after != before {
 		t.Errorf("committed scopes after the rejected updates = %s, want unchanged %s", after, before)
+	}
+
+	// A sealed catch-all (empty arrays, NULL band) is the common version: a change from NULL
+	// is a change too, which a `<>` comparison would miss.
+	catchPolicy := seedApprovalPolicy(t, super, tenantID, "PIL-17 sealed catch-all policy")
+	catchAll := seedApprovalPolicyVersion(t, super, tenantID, catchPolicy)
+	sealApprovalPolicyVersion(t, super, catchAll)
+	catchBefore := scopeSnapshot(t, super, catchAll)
+
+	tx2, err := migrator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin migrator tx: %v", err)
+	}
+	defer func() { _ = tx2.Rollback(ctx) }()
+	setTenantGUC(t, ctx, tx2, tenantID)
+	for _, c := range []struct{ name, sql string }{
+		{"empty types to one", `UPDATE approval_policy_versions SET scope_document_types = ARRAY['credit_note'] WHERE id = $1`},
+		{"empty entities to one", `UPDATE approval_policy_versions SET scope_entity_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"empty roles to one", `UPDATE approval_policy_versions SET scope_workflow_role_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"NULL lower to a value", `UPDATE approval_policy_versions SET scope_amount_lower = 1.00 WHERE id = $1`},
+		{"NULL upper to a value", `UPDATE approval_policy_versions SET scope_amount_upper = 1.00 WHERE id = $1`},
+		{"NULL currency to a value", `UPDATE approval_policy_versions SET scope_amount_currency = 'NGN' WHERE id = $1`},
+	} {
+		t.Run("catch-all "+c.name, func(t *testing.T) {
+			assertSQLState(t, attemptWithSavepoint(t, ctx, tx2, c.sql, catchAll), "23001")
+		})
+	}
+	if after := scopeSnapshot(t, tx2, catchAll); after != catchBefore {
+		t.Errorf("catch-all scopes after the rejected updates = %s, want unchanged %s", after, catchBefore)
 	}
 }
 

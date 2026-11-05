@@ -147,10 +147,14 @@ func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedPublishedVersion(t, super, tenantID, policyID, 1, 0)
+	otherPolicy := seedApprovalPolicy(t, super, tenantID, "Other sign-off")
+	otherVersion := seedPublishedVersion(t, super, tenantID, otherPolicy, 1, 0)
 
-	// The fixture really holds an active slot, or the assertion below is vacuous.
-	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 1 || ids[0] != versionID {
-		t.Fatalf("fixture active version ids = %v, want exactly [%s]", ids, versionID)
+	// The fixture really holds two active versions, or the assertions below are vacuous.
+	want := []string{versionID, otherVersion}
+	sort.Strings(want)
+	if ids := activeVersionIDs(t, super, tenantID); !reflect.DeepEqual(ids, want) {
+		t.Fatalf("fixture active version ids = %v, want %v", ids, want)
 	}
 
 	if _, err := NewStore(app, stubFingerprinter, nil).DeletePolicy(c, policyID); err != nil {
@@ -165,9 +169,9 @@ func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 		t.Errorf("published_at/by = (%s, %s), want both preserved — deactivation is not un-publishing",
 			strOrNull(v.PublishedAt), strOrNull(v.PublishedBy))
 	}
-	// Tenant-scoped read: the tenant holds no other policy here, so none is active.
-	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 0 {
-		t.Errorf("active version ids = %v, want none — the tenant is left with no active policy", ids)
+	// Tenant-scoped read: the other policy's version stays active.
+	if ids := activeVersionIDs(t, super, tenantID); !reflect.DeepEqual(ids, []string{otherVersion}) {
+		t.Errorf("active version ids = %v, want only the other policy's [%s]", ids, otherVersion)
 	}
 }
 

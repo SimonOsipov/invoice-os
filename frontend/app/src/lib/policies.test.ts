@@ -194,7 +194,7 @@ describe('toPolicy (AC-2)', () => {
     expect(p.status).toBe('draft')
   })
 
-  it("reports a null active version when another policy holds the tenant's slot", () => {
+  it('reports a null active version when no version of the policy is active', () => {
     const p = toPolicy(wire({ version: 2, status: 'draft', versions: [ver(2, false, false), ver(1, true, false)] }))
     expect(p.activeVersion).toBeNull()
     expect(p.version).toBe(2)
@@ -211,7 +211,7 @@ describe('policyStanding / policyInForce (AC-2)', () => {
     expect(policyStanding(policy({ version: 2, activeVersion: null, status: 'draft' }))).toBe('Not in force')
   })
 
-  it('policyInForce finds the other policy holding the slot, and no policy finds itself', () => {
+  it('policyInForce finds the other policy in force, and no policy finds itself', () => {
     const a = policy({ id: 'polA', version: 2, activeVersion: null, status: 'draft' })
     const b = policy({ id: 'polB', version: 1, activeVersion: 1, status: 'published' })
     const list = [a, b]
@@ -389,7 +389,7 @@ describe('QA: policyStanding and policyInForce, without going through the seed',
     expect(policyStanding(policy({ version: 3, activeVersion: 3, status: 'published' }))).toBe('v3 in force')
   })
 
-  it('says Not in force for a version-1 policy that was published and lost the slot', () => {
+  it('says Not in force for a version-1 policy that was published and has no active version', () => {
     expect(policyStanding(policy({ version: 1, activeVersion: null, status: 'published' }))).toBe('Not in force')
   })
 
@@ -887,42 +887,5 @@ describe('AC-3 / AC-1 — the ctx write verbs', () => {
     await expect(harnessSavePolicy(af, before, policy({ id: 'polA' }))).rejects.toBe(boom)
     await expect(harnessDeletePolicy(af, before, 'polA')).rejects.toBe(boom)
     expect(before.map((p) => p.id)).toEqual(['polA'])
-  })
-})
-
-describe('AC-2 — publishing is the one verb a single-row patch cannot mirror', () => {
-  // Publish's response describes B alone; a refetch of the whole list keeps every row
-  // current, including a policy B's publish touched.
-  it('publish’s response cannot report the deactivation it caused on another policy', async () => {
-    const a = policy({ id: 'polA', version: 1, activeVersion: 1, status: 'published' })
-    const b = policy({ id: 'polB', version: 1, activeVersion: null, status: 'draft' })
-    const mirror = [a, b]
-    expect(mirror.filter((p) => p.activeVersion !== null)).toHaveLength(1)
-
-    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] })) })
-    const published = await publishApprovalPolicy(authed(), wireBase, 'polB')
-    expect(published.activeVersion).toBe(1)
-
-    const patched = replacePolicy(mirror, published)
-    // Two policies in force: a tenant state the server's unique index cannot produce.
-    expect(patched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polA', 'polB'])
-
-    mockFetchOnce({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          approval_policies: [
-            wire({ id: 'polA', status: 'published', version: 1, versions: [ver(1, true, false)] }),
-            wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] }),
-          ],
-        }),
-    })
-    const refetched = await listApprovalPolicies(authed(), wireBase)
-
-    expect(refetched).toHaveLength(2)
-    expect(refetched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polB'])
-    expect(refetched[0].activeVersion).toBeNull()
-    expect(policyStanding(refetched[0])).toBe('Not in force')
   })
 })

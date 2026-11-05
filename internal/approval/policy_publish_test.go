@@ -452,7 +452,7 @@ func TestPublish_DeactivatesThePublishedPolicysPreviousVersion(t *testing.T) {
 //
 //	(1) is_active is never true on a row that is not already, or not simultaneously
 //	    becoming, sealed — neither 23514 nor 23505 is ever raised; and
-//	(2) the tenant's outgoing active version is deactivated in an EARLIER statement, so
+//	(2) the policy's outgoing active version is deactivated in an EARLIER statement, so
 //	    the end state is exactly one active row.
 //
 // The plan's stated reason — "any two-statement form of step 8 transiently violates a

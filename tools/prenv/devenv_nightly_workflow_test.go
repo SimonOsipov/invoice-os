@@ -789,6 +789,60 @@ func TestDevEnvNightly_CapStepWaitsForASlot(t *testing.T) {
 	})
 }
 
+// BUG-102: PRs stop at two slots, the third is the nightly's. `preview.sh cap <pr|nightly>` prints
+// open=<PR previews other than the caller> and full=true|false: a new PR is full at 2, the nightly at 3, a PR with a preview never.
+func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, entries, caller, want string }{
+		{"2 PR previews open: a third PR is full", "5 t\n6 t\n", "9", "open=2\nfull=true\n"},
+		{"2 PR previews open: the nightly gets a slot", "5 t\n6 t\n", "nightly", "open=2\nfull=false\n"},
+		{"3 PR previews open: the nightly is full", "5 t\n6 t\n9 t\n", "nightly", "open=3\nfull=true\n"},
+		{"a PR that holds a preview is never refused", "5 t\n6 t\n9 t\n", "9", "open=2\nfull=false\n"},
+		{"a nightly preview does not count against a PR", "nightly t\n5 t\n6 t\n", "9", "open=2\nfull=true\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", c.entries) }, "cap", c.caller)
+			if r.code != 0 || r.stdout != c.want {
+				t.Errorf("exit %d, cap %s = %q, want %q", r.code, c.caller, r.stdout, c.want)
+			}
+		})
+	}
+	// The PR-run step: the one prepare-env step that is off in the nightly and calls `preview.sh cap`.
+	runStep := func(t *testing.T, capOut string) (string, int) {
+		t.Helper()
+		var step workflowStep
+		for _, s := range devEnvJob(t, "prepare-env").steps() {
+			if strings.Contains(s.keys["if"], nlOff) && strings.Contains(nlCode(s.keys["run"]), "preview.sh cap") {
+				step = s
+			}
+		}
+		if step.keys["run"] == "" {
+			t.Fatal("prepare-env has no PR-run step that calls preview.sh cap")
+		}
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1 $2\" in\n\"cap 9\") printf '"+capOut+"' ;;\n*) exit 1 ;;\nesac\n")
+		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9\n"+step.keys["run"])
+		return out + errOut, code
+	}
+	t.Run("a refused PR fails prepare-env with one error naming the cap", func(t *testing.T) {
+		t.Parallel()
+		out, code := runStep(t, "open=2\\nfull=true\\n")
+		if code == 0 || strings.Count(out, "::error::") != 1 || !strings.Contains(out, "preview cap") {
+			t.Errorf("exit %d, output %q, want non-zero with exactly one ::error:: line naming the preview cap", code, out)
+		}
+	})
+	t.Run("a PR with a free slot passes", func(t *testing.T) {
+		t.Parallel()
+		if out, code := runStep(t, "open=1\\nfull=false\\n"); code != 0 {
+			t.Errorf("exit %d, output %q, want 0", code, out)
+		}
+	})
+}
+
 func TestDevEnvNightly_CapStepEdges(t *testing.T) {
 	t.Parallel()
 	full, free := "open=3\\nfull=true", "open=2\\nfull=false"

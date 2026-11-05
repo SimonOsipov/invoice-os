@@ -46,7 +46,7 @@ paths:
 - Seal a version's scopes with it. `approval_policy_versions_seal_guard` refuses a scope change on a sealed version.
 - Treat a version with no scope set as the catch-all.
 - Write no value to the legacy `scope` text on `approval_policies`. The API reads no `scope` key.
-- Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, and an unknown or deleted workflow role with 400.
+- Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, an unknown workflow role, and a deleted workflow role the policy's top version does not already hold, with 400.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
 - Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.

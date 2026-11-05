@@ -499,3 +499,127 @@ func TestCreatePolicy_LegacyScopeColumnKeepsItsDefault(t *testing.T) {
 		t.Errorf("answer scope = %q, want %q", got.Scope, scopeAllInvoices)
 	}
 }
+
+func TestPutDraft_KeepsADeletedRoleTheDraftAlreadyHolds(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 keep-draft")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "kept-role", "Kept role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, versionID, `scope_workflow_role_ids = ARRAY[$2]::uuid[]`, roleID)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
+	softDeleteWorkflowRole(t, super, roleID)
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		DocumentTypes: []string{"credit_note"}, WorkflowRoleKeys: []string{"kept-role"},
+	}, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	stored := versionScopeColumns(t, super, versionID)
+	if !reflect.DeepEqual(stored.RoleIDs, []string{roleID}) || !reflect.DeepEqual(stored.Types, []string{"credit_note"}) {
+		t.Errorf("draft columns = %+v, want role [%s] and types [credit_note]", stored, roleID)
+	}
+	if want := []string{"kept-role"}; !reflect.DeepEqual(got.Scopes.WorkflowRoleKeys, want) {
+		t.Errorf("answer workflow_role_keys = %v, want %v", got.Scopes.WorkflowRoleKeys, want)
+	}
+}
+
+func TestPutDraft_ForkKeepsADeletedRoleTheSealedVersionHolds(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 keep-fork")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "sealed-role", "Sealed role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	seedSealedActiveV1Scoped(t, super, tenantID, policyID, seedBusinessEntity(t, super, tenantID, "Client A"), roleID)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
+	softDeleteWorkflowRole(t, super, roleID)
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		WorkflowRoleKeys: []string{"sealed-role"}, DocumentTypes: []string{"debit_note"},
+	}, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if got.Version != 2 || got.Status != "draft" {
+		t.Fatalf("answer = version %d status %q, want a v2 draft", got.Version, got.Status)
+	}
+	if stored := versionScopeColumns(t, super, openDraft(t, super, policyID).ID); !reflect.DeepEqual(stored.RoleIDs, []string{roleID}) {
+		t.Errorf("fork role ids = %v, want [%s]", stored.RoleIDs, roleID)
+	}
+}
+
+func TestPutDraft_RefusesANewlyAddedDeletedRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 refuse-new")
+	c, _ := activeAdmin(t, super, tenantID)
+	live := seedWorkflowRole(t, super, tenantID, "live-role", "Live role")
+	gone := seedWorkflowRole(t, super, tenantID, "gone-role", "Gone role")
+	softDeleteWorkflowRole(t, super, gone)
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, versionID, `scope_workflow_role_ids = ARRAY[$2]::uuid[]`, live)
+	auditBefore := auditCount(t, super, tenantID, "approval_policy.updated")
+
+	_, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		WorkflowRoleKeys: []string{"live-role", "gone-role"},
+	}, approvalStep("engagement-partner"))
+	if !errors.Is(err, ErrScopeRole) {
+		t.Fatalf("err = %v, want ErrScopeRole", err)
+	}
+	if stored := versionScopeColumns(t, super, versionID); !reflect.DeepEqual(stored.RoleIDs, []string{live}) {
+		t.Errorf("draft role ids = %v, want [%s]", stored.RoleIDs, live)
+	}
+	if n := auditCount(t, super, tenantID, "approval_policy.updated"); n != auditBefore {
+		t.Errorf("updated audit rows = %d, want %d", n, auditBefore)
+	}
+}
+
+func TestPutDraft_RefusesADeletedRoleAnotherPolicyHolds(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 other-policy")
+	c, _ := activeAdmin(t, super, tenantID)
+	gone := seedWorkflowRole(t, super, tenantID, "gone-role", "Gone role")
+	q := seedApprovalPolicy(t, super, tenantID, "Q")
+	setVersionScopes(t, super, seedDraftWithSteps(t, super, tenantID, q, 1), `scope_workflow_role_ids = ARRAY[$2]::uuid[]`, gone)
+	softDeleteWorkflowRole(t, super, gone)
+	p := seedApprovalPolicy(t, super, tenantID, "P")
+	versionID := seedDraftWithSteps(t, super, tenantID, p, 1)
+
+	_, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, p, nil, &scopeInput{
+		WorkflowRoleKeys: []string{"gone-role"},
+	}, approvalStep("engagement-partner"))
+	if !errors.Is(err, ErrScopeRole) {
+		t.Fatalf("err = %v, want ErrScopeRole", err)
+	}
+	if stored := versionScopeColumns(t, super, versionID); len(stored.RoleIDs) != 0 {
+		t.Errorf("P role ids = %v, want none", stored.RoleIDs)
+	}
+}
+
+func TestPutDraft_RefusesAnUnknownRoleKeyEvenWithAStoredDeletedRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 unknown-key")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "kept-role", "Kept role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, versionID, `scope_workflow_role_ids = ARRAY[$2]::uuid[]`, roleID)
+	softDeleteWorkflowRole(t, super, roleID)
+	auditBefore := auditCount(t, super, tenantID, "approval_policy.updated")
+
+	_, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		WorkflowRoleKeys: []string{"kept-role", "no-such-role"}, DocumentTypes: []string{"credit_note"},
+	}, approvalStep("engagement-partner"))
+	if !errors.Is(err, ErrScopeRole) {
+		t.Fatalf("err = %v, want ErrScopeRole", err)
+	}
+	stored := versionScopeColumns(t, super, versionID)
+	if !reflect.DeepEqual(stored.RoleIDs, []string{roleID}) || len(stored.Types) != 0 {
+		t.Errorf("draft columns = %+v, want unchanged", stored)
+	}
+	if n := auditCount(t, super, tenantID, "approval_policy.updated"); n != auditBefore {
+		t.Errorf("updated audit rows = %d, want %d", n, auditBefore)
+	}
+}

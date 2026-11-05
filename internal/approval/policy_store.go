@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,8 +169,9 @@ type scopeRow struct {
 }
 
 // resolveScopesTx checks the scopes against the database: entities visible under RLS, live
-// roles, a currency on the NRS list. Run after requireActiveAdmin.
-func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, error) {
+// roles, or a deleted role the top version already holds (keepRoleIDs), a currency on the NRS
+// list. Run after requireActiveAdmin.
+func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput, keepRoleIDs []string) (scopeRow, error) {
 	row := scopeRow{
 		DocumentTypes: append([]string{}, in.DocumentTypes...),
 		EntityIDs:     make([]string, 0, len(in.EntityIDs)),
@@ -191,7 +193,7 @@ func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, e
 	}
 	if len(in.WorkflowRoleKeys) > 0 {
 		rows, err := tx.Query(ctx,
-			`SELECT key, id FROM workflow_roles WHERE key = ANY($1) AND deleted_at IS NULL`,
+			`SELECT key, id, deleted_at IS NULL FROM workflow_roles WHERE key = ANY($1)`,
 			in.WorkflowRoleKeys)
 		if err != nil {
 			return scopeRow{}, err
@@ -199,11 +201,14 @@ func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, e
 		ids := map[string]string{}
 		for rows.Next() {
 			var k, id string
-			if err := rows.Scan(&k, &id); err != nil {
+			var live bool
+			if err := rows.Scan(&k, &id, &live); err != nil {
 				rows.Close()
 				return scopeRow{}, err
 			}
-			ids[k] = id
+			if live || slices.Contains(keepRoleIDs, id) {
+				ids[k] = id
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -437,7 +442,7 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 			return err
 		}
 
-		row, err := resolveScopesTx(ctx, tx, in)
+		row, err := resolveScopesTx(ctx, tx, in, nil)
 		if err != nil {
 			return err
 		}
@@ -587,7 +592,18 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 
 		var row scopeRow
 		if scopes != nil {
-			r, err := resolveScopesTx(ctx, tx, *scopes)
+			// The top version is the open draft, or the sealed version a fork copies.
+			var keep []string
+			if len(scopes.WorkflowRoleKeys) > 0 {
+				if err := tx.QueryRow(ctx,
+					`SELECT scope_workflow_role_ids::text[]
+					   FROM approval_policy_versions
+					  WHERE policy_id = $1 ORDER BY version DESC LIMIT 1`, policyID,
+				).Scan(&keep); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
+			}
+			r, err := resolveScopesTx(ctx, tx, *scopes, keep)
 			if err != nil {
 				return err
 			}

@@ -227,10 +227,8 @@ describe('AC-4 — lib/workflows.ts is pure reducers over a tree, and nothing el
 
 describe('AC-3 — the list shape App.tsx’s ctx verbs patch (§4.4)', () => {
   // `savePolicy` and `deletePolicy` go through replacePolicy / removePolicy above. Append
-  // has no reducer and needs none; what it does need is the ORDER, because the server
-  // answers ORDER BY created_at, id and a prepend would put the new row where a refetch
-  // will not.
-  it('createPolicy appends, because the server orders by created_at then id', () => {
+  // has no reducer and needs none.
+  it('createPolicy appends to the list', () => {
     const list = seedPolicies().firm.slice(0, 2)
     expect(list).toHaveLength(2)
     const created = { ...newPolicy(), id: 'pol-server-9' }
@@ -248,9 +246,8 @@ describe('WF_SCOPE_OPTIONS (§2.4)', () => {
   // still carries scopes the server refuses, and policies.test.ts:253-254 proves this list is
   // the EDITOR's own, never a filter on what may arrive.
   it('mirrors the only scope the server stores', () => {
-    // Transcribed from internal/approval/policy.go:125 (policyScopeAll), refused by
-    // normalizeScope at :372-379 and by the CHECK at
-    // migrations/20260809210326_approval_policies.sql:59. Never read from the Go source.
+    // Transcribed from the CHECK at migrations/20260809210326_approval_policies.sql:59.
+    // Never read from the Go source.
     const SERVER_SCOPE = 'All invoices'
     expect([...WF_SCOPE_OPTIONS]).toEqual([SERVER_SCOPE])
   })

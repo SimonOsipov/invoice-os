@@ -230,7 +230,6 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
 export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
   const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
     method: 'PUT',
-    // `scope` is forwarded rather than dropped, so the server sees what the editor holds.
     body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
   })
   return toPolicy(saved)

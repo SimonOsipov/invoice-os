@@ -1637,8 +1637,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // that change the list length refetch the status the ladder reads'.
 
   // Creating opens the builder in the same step: a blank row appended to the list with
-  // nothing else happening reads as a click that did nothing. Appended, not prepended —
-  // the server orders by created_at then id.
+  // nothing else happening reads as a click that did nothing.
   async function createPolicy(): Promise<void> {
     const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')
     setPolicies((list) => [...list, created])

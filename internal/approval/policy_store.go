@@ -537,7 +537,6 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 		return Policy{}, ErrPolicyNotFound
 	}
 	// Copied, never written through: the pointers belong to the caller (UpdateRole).
-	// A non-nil "" reaches SQL as the default.
 	if name != nil {
 		n, err := normalizeName(*name)
 		if err != nil {

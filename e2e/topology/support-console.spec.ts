@@ -1926,22 +1926,31 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
   }
   await aiControlsRead(page, 'FAILURES')
 
-  await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
+  const totalsRead = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_AI_TOTALS, { timeout: 15_000 })
+  const [totalsRes] = await Promise.all([totalsRead, mn.getByRole('button', { name: 'DAILY TOTALS' }).click()])
+  expect(totalsRes.status(), 'DAILY TOTALS read status').toBe(200)
+  const rendered = ((await totalsRes.json()) as { totals: LiveAiTotal[] }).totals
   const totals = aiTotalRows(page)
-  await expect(totals.first(), 'the daily totals have loaded').toBeVisible()
+  // The response can land before the render commits: wait for the exact rows it carried.
+  await expect.poll(async () => totals.evaluateAll((rows) => rows.map((r) => r.getAttribute('data-total-key'))), { message: 'the rows on screen are the totals answer' }).toEqual(rendered.map((t) => `${t.day}|${t.tenant_id}`))
   const firstTotals = (await totals.all()).slice(0, ROW_CAP)
-  const keys = await Promise.all(firstTotals.map((row) => row.getAttribute('data-total-key') as Promise<string>))
-  // A call that lands after the screen read must not fail the screen: totals are a live count(*).
+  const keys = rendered.slice(0, firstTotals.length).map((t) => `${t.day}|${t.tenant_id}`)
+  // Screen == the response it rendered; the aggregate grows afterwards, so the live read may only be larger.
+  for (const [i, row] of firstTotals.entries()) {
+    await expect(kid(row, 3), `total ${i} calls`).toHaveText(rendered[i].calls.toLocaleString('en-US'))
+    await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${rendered[i].cost}`)
+    await expect(kid(row, 7), `total ${i} failed`).toHaveText(rendered[i].failed.toLocaleString('en-US'))
+  }
   const forcedKey = `${new Date().toISOString().slice(0, 10)}|${PERSONAS.A.tenantId}`
   expect(keys, 'the screen shows a totals row for today and the SUP-03 tenant').toContain(forcedKey)
   await recordFailedAiCall()
   const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', (t) => `${t.day}|${t.tenant_id}`, keys)
-  for (const [i, row] of firstTotals.entries()) {
-    const hit = liveTotals.get(keys[i])
+  for (const [i, key] of keys.entries()) {
+    const hit = liveTotals.get(key)
     expect(hit, `total ${i} is in the live read`).toBeDefined()
-    await expect(kid(row, 3), `total ${i} calls`).toHaveText(hit!.calls.toLocaleString('en-US'))
-    await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${hit!.cost}`)
-    await expect(kid(row, 7), `total ${i} failed`).toHaveText(hit!.failed.toLocaleString('en-US'))
+    expect(hit!.calls, `total ${i} live calls only grow`).toBeGreaterThanOrEqual(rendered[i].calls)
+    expect(hit!.failed, `total ${i} live failed only grows`).toBeGreaterThanOrEqual(rendered[i].failed)
+    if (key === forcedKey) expect(hit!.calls, 'the forced call landed between the reads').toBeGreaterThan(rendered[i].calls)
   }
   await aiControlsRead(page, 'DAILY TOTALS')
 

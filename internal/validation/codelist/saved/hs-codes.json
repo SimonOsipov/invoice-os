@@ -1,0 +1,34 @@
+{
+  "code": 200,
+  "source": "hand-built, not NRS data: a few common HS headings in NRS format",
+  "data": [
+    {
+      "hscode": "0101.21",
+      "description": "Horses; live, pure-bred breeding animals"
+    },
+    {
+      "hscode": "1006.30",
+      "description": "Rice; semi-milled or wholly milled"
+    },
+    {
+      "hscode": "2710.12",
+      "description": "Light oils and preparations; petroleum"
+    },
+    {
+      "hscode": "3004.90",
+      "description": "Medicaments; put up in measured doses or retail packs"
+    },
+    {
+      "hscode": "8471.30",
+      "description": "Automatic data processing machines; portable, weighing not more than 10 kg"
+    },
+    {
+      "hscode": "8517.13",
+      "description": "Smartphones"
+    },
+    {
+      "hscode": "9403.30",
+      "description": "Furniture; wooden, of a kind used in offices"
+    }
+  ]
+}

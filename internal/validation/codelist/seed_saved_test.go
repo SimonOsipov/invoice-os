@@ -2,6 +2,7 @@ package codelist
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -105,4 +106,26 @@ func hasCode(rows []codeRow, code string) bool {
 		}
 	}
 	return false
+}
+
+// The seed is recorded released, so a real pull that drops most seeded codes replaces it instead of being held.
+func TestSyncAll_RealPullReplacesTheSeed(t *testing.T) {
+	super, app := dbTestPools(t)
+	emptyRealLists(t, super)
+	ctx := context.Background()
+
+	_ = newSyncer(t, app, fakeNRS(t, nil).URL).SyncAll(ctx)
+	if n := len(listRows(t, super, "states")); n < 10 {
+		t.Fatalf("seed: states holds %d rows, want >= 10", n)
+	}
+
+	real := envelope(entry("NG-XX", "Xland"), entry("NG-YY", "Yland"))
+	err := newSyncer(t, app, fakeNRS(t, map[string]string{"states": real}).URL).SyncAll(ctx)
+	if errors.Is(err, ErrHeld) {
+		t.Fatalf("SyncAll held the real pull: %v", err)
+	}
+	rows := listRows(t, super, "states")
+	if len(rows) != 2 || !hasCode(rows, "NG-XX") || hasCode(rows, "NG-LA") {
+		t.Errorf("states after real pull = %+v, want only NG-XX and NG-YY", rows)
+	}
 }

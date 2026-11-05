@@ -43,24 +43,34 @@ func fetch(ctx context.Context, hc *http.Client, baseURL string, l List) (map[st
 	if len(body) > maxBody {
 		return nil, 0, fmt.Errorf("codelist: fetch %s: body exceeds %d bytes", l.Name, maxBody)
 	}
+	grouped, n, err := decode(l, body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("codelist: fetch %s: %w", l.Name, err)
+	}
+	return grouped, n, nil
+}
+
+// decode parses an NRS envelope body into entries grouped by code, plus the entry count.
+// Shared by fetch and the saved copy; unknown envelope keys are ignored.
+func decode(l List, body []byte) (map[string][]json.RawMessage, int, error) {
 	var env struct {
 		Data []json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, 0, fmt.Errorf("codelist: fetch %s: decode: %w", l.Name, err)
+		return nil, 0, fmt.Errorf("decode: %w", err)
 	}
 	if len(env.Data) == 0 {
-		return nil, 0, fmt.Errorf("codelist: fetch %s: %w", l.Name, ErrEmptyList)
+		return nil, 0, ErrEmptyList
 	}
 	grouped := make(map[string][]json.RawMessage)
 	for i, raw := range env.Data {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-			return nil, 0, fmt.Errorf("codelist: fetch %s: entry %d is not an object", l.Name, i)
+			return nil, 0, fmt.Errorf("entry %d is not an object", i)
 		}
 		var code string
 		if err := json.Unmarshal(obj[l.CodeKey], &code); err != nil || code == "" {
-			return nil, 0, fmt.Errorf("codelist: fetch %s: entry %d has no string %q", l.Name, i, l.CodeKey)
+			return nil, 0, fmt.Errorf("entry %d has no string %q", i, l.CodeKey)
 		}
 		grouped[code] = append(grouped[code], raw)
 	}

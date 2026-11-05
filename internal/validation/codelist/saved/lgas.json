@@ -1,0 +1,276 @@
+{
+  "code": 200,
+  "source": "hand-built, not NRS data: every Lagos and Abia LGA plus a few from FCT, Kano and Rivers",
+  "data": [
+    {
+      "name": "Agege",
+      "code": "NG-LA-AGE",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ajeromi-Ifelodun",
+      "code": "NG-LA-AJE",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Alimosho",
+      "code": "NG-LA-ALI",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Amuwo-Odofin",
+      "code": "NG-LA-AMU",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Apapa",
+      "code": "NG-LA-APA",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Badagry",
+      "code": "NG-LA-BAD",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Epe",
+      "code": "NG-LA-EPE",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Eti-Osa",
+      "code": "NG-LA-ETI",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ibeju-Lekki",
+      "code": "NG-LA-IBL",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ifako-Ijaiye",
+      "code": "NG-LA-IFK",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ikeja",
+      "code": "NG-LA-IKJ",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ikorodu",
+      "code": "NG-LA-IKO",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Kosofe",
+      "code": "NG-LA-KOS",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Lagos Island",
+      "code": "NG-LA-LAI",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Lagos Mainland",
+      "code": "NG-LA-LAM",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Mushin",
+      "code": "NG-LA-MUS",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Ojo",
+      "code": "NG-LA-OJO",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Oshodi-Isolo",
+      "code": "NG-LA-OSH",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Somolu",
+      "code": "NG-LA-SOM",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Surulere",
+      "code": "NG-LA-SUR",
+      "state_code": "NG-LA"
+    },
+    {
+      "name": "Aba North",
+      "code": "NG-AB-ANO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Aba South",
+      "code": "NG-AB-ASO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Arochukwu",
+      "code": "NG-AB-ARO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Bende",
+      "code": "NG-AB-BEN",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Ikwuano",
+      "code": "NG-AB-IKW",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Isiala Ngwa North",
+      "code": "NG-AB-INN",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Isiala Ngwa South",
+      "code": "NG-AB-INS",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Isuikwuato",
+      "code": "NG-AB-ISU",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Obi Ngwa",
+      "code": "NG-AB-OBN",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Ohafia",
+      "code": "NG-AB-OHA",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Osisioma",
+      "code": "NG-AB-OSI",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Ugwunagbo",
+      "code": "NG-AB-UGW",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Ukwa East",
+      "code": "NG-AB-UKE",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Ukwa West",
+      "code": "NG-AB-UKW",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Umuahia North",
+      "code": "NG-AB-UNO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Umuahia South",
+      "code": "NG-AB-USO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Umu Nneochi",
+      "code": "NG-AB-UNN",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Abaji",
+      "code": "NG-FC-ABA",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Bwari",
+      "code": "NG-FC-BWA",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Gwagwalada",
+      "code": "NG-FC-GWA",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Kuje",
+      "code": "NG-FC-KUJ",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Kwali",
+      "code": "NG-FC-KWA",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Municipal Area Council",
+      "code": "NG-FC-AMA",
+      "state_code": "NG-FC"
+    },
+    {
+      "name": "Kano Municipal",
+      "code": "NG-KN-KMU",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Nasarawa",
+      "code": "NG-KN-NAS",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Fagge",
+      "code": "NG-KN-FAG",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Dala",
+      "code": "NG-KN-DAL",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Gwale",
+      "code": "NG-KN-GWL",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Tarauni",
+      "code": "NG-KN-TAR",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Ungogo",
+      "code": "NG-KN-UNG",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Kumbotso",
+      "code": "NG-KN-KUM",
+      "state_code": "NG-KN"
+    },
+    {
+      "name": "Port Harcourt",
+      "code": "NG-RI-PHC",
+      "state_code": "NG-RI"
+    },
+    {
+      "name": "Obio/Akpor",
+      "code": "NG-RI-OBA",
+      "state_code": "NG-RI"
+    },
+    {
+      "name": "Eleme",
+      "code": "NG-RI-ELE",
+      "state_code": "NG-RI"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "code": 200,
+  "source": "hand-built, not NRS data: a few UN/ECE Recommendation 20 unit codes",
+  "data": [
+    {
+      "code": "C62",
+      "name": "one",
+      "description": "A unit of count defining the number of pieces (piece: a single item, article or exemplar)."
+    },
+    {
+      "code": "EA",
+      "name": "each",
+      "description": "A unit of count defining the number of each (each: a single item, article or exemplar)."
+    },
+    {
+      "code": "HUR",
+      "name": "hour",
+      "description": "A unit of time equal to 3600 seconds."
+    },
+    {
+      "code": "KGM",
+      "name": "kilogram",
+      "description": "A unit of mass equal to one thousand grams."
+    },
+    {
+      "code": "LTR",
+      "name": "litre",
+      "description": "A unit of volume equal to one cubic decimetre."
+    },
+    {
+      "code": "MTR",
+      "name": "metre",
+      "description": "A unit of length equal to the distance travelled by light in 1/299792458 second."
+    },
+    {
+      "code": "XBX",
+      "name": "box",
+      "description": "A unit of count defining the number of boxes."
+    }
+  ]
+}

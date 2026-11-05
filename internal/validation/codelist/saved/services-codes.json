@@ -1,0 +1,34 @@
+{
+  "code": 200,
+  "source": "hand-built, not NRS data: a few ISIC Rev.4 class codes",
+  "data": [
+    {
+      "code": "0111",
+      "description": "Growing of cereals (except rice), leguminous crops and oil seeds"
+    },
+    {
+      "code": "4711",
+      "description": "Retail sale in non-specialized stores with food, beverages or tobacco predominating"
+    },
+    {
+      "code": "6201",
+      "description": "Computer programming activities"
+    },
+    {
+      "code": "6202",
+      "description": "Computer consultancy and computer facilities management activities"
+    },
+    {
+      "code": "6910",
+      "description": "Legal activities"
+    },
+    {
+      "code": "6920",
+      "description": "Accounting, bookkeeping and auditing activities; tax consultancy"
+    },
+    {
+      "code": "7020",
+      "description": "Management consultancy activities"
+    }
+  ]
+}

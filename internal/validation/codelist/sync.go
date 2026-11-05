@@ -3,6 +3,7 @@ package codelist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -35,12 +36,38 @@ func NewSyncer(pool *pgxpool.Pool, baseURL string, hc *http.Client, log *slog.Lo
 }
 
 // SyncList fetches one list, then applies it. A fetch error opens no transaction.
+// When NRS answers empty and the list has no rows, the saved copy seeds it; the
+// error is still ErrEmptyList, because NRS failed.
 func (s *Syncer) SyncList(ctx context.Context, l List) (Change, error) {
 	grouped, n, err := fetch(ctx, s.hc, s.baseURL, l)
+	if errors.Is(err, ErrEmptyList) {
+		return s.seedFromSaved(ctx, l, err)
+	}
 	if err != nil {
 		return Change{}, err
 	}
-	return apply(ctx, s.pool, l, grouped, n)
+	return apply(ctx, s.pool, l, grouped, n, false)
+}
+
+// seedFromSaved applies the saved copy of l only to a list with no rows. It returns fetchErr
+// unless the seed itself failed.
+func (s *Syncer) seedFromSaved(ctx context.Context, l List, fetchErr error) (Change, error) {
+	grouped, n, ok, err := savedCopy(l)
+	if !ok {
+		return Change{}, fetchErr
+	}
+	if err != nil {
+		return Change{}, fmt.Errorf("codelist: saved copy of %s: %w", l.Name, err)
+	}
+	ch, err := apply(ctx, s.pool, l, grouped, n, true)
+	if errors.Is(err, errNotEmpty) {
+		return Change{}, fetchErr
+	}
+	if err != nil {
+		return Change{}, err
+	}
+	s.log.Warn("codelist seeded from saved copy", "list", l.Name, "entries", ch.Entries)
+	return ch, fetchErr
 }
 
 // SyncAll syncs every list; one failing list does not stop the others.

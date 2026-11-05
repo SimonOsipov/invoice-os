@@ -235,7 +235,14 @@ test('support console: the tenant header wraps and shows the whole state line at
   const text = heading.locator('xpath=../..')
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
 
-  const check = async (state: string, stateLine: Locator): Promise<void> => {
+  // Holds the list reload that follows Start deletion; the 5 s cap keeps a fix that waits for the list from deadlocking.
+  let listHeld = false
+  let releaseList: () => void = () => {}
+  const listRelease = new Promise<void>((resolve) => { releaseList = resolve })
+  const isListGet = (url: URL): boolean => url.pathname === STAFF_TENANTS
+  const search = main(page).getByLabel('Search tenants')
+
+  const check = async (state: string, stateLine: Locator, betweenReads?: () => Promise<void>): Promise<void> => {
     const entry = page.viewportSize()
     try {
       for (const width of NARROW_WIDTHS) {
@@ -247,6 +254,7 @@ test('support console: the tenant header wraps and shows the whole state line at
           viewJobs: await rectOf('View jobs', viewJobs, width),
           actions: await rectOf('the action group', actions, width),
         }
+        if (betweenReads && width === NARROW_WIDTHS[0]) await betweenReads()
         const cardBox = await rectOf('the detail card', card, width)
         for (const part of ['text', 'viewJobs', 'actions'] as const) {
           expect(enclosesRect(cardBox, r[part], 1), `${part} leaves the detail card, ${where}`).toBe(true)
@@ -277,8 +285,20 @@ test('support console: the tenant header wraps and shows the whole state line at
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
   await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await page.route((url) => isListGet(url), async (route) => {
+    if (route.request().method() !== 'GET' || listHeld) return route.fallback()
+    listHeld = true
+    setTimeout(releaseList, 5_000)
+    await listRelease
+    await route.fallback()
+  })
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()
-  await check('scheduled', stateLine)
+  // The list lands above the card at 390px, after the text read and before the card read.
+  await check('scheduled', stateLine, async () => {
+    releaseList()
+    await expect(search, 'the tenant list did not render after release').toBeVisible()
+  })
+  expect(listHeld, 'the tenant list reload was never held').toBe(true)
   expect(errors, errors.join('\n')).toEqual([])
 })

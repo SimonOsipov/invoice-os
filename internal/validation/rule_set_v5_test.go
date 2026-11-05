@@ -28,8 +28,9 @@ const (
 func v5RuleSet(t *testing.T) RuleSet {
 	t.Helper()
 	super, _ := dbTestPools(t)
-	seedV5Lists(t, super)
-	return v5LoadOn(t, v5ReappliedTx(t, super), v5Start, 5)
+	tx := v5ReappliedTx(t, super)
+	pinV5Lists(t, tx)
+	return v5LoadOn(t, tx, v5Start, 5)
 }
 
 // v5LoadOn loads the rule set in force on date through tx and fails unless it is wantVersion.
@@ -456,8 +457,8 @@ func TestV5_BuyerRulesFollowTheInvoiceKind(t *testing.T) {
 
 func TestV5_V4StillJudgesTheDayBefore(t *testing.T) {
 	super, _ := dbTestPools(t)
-	seedV5Lists(t, super)
 	tx := v5ReappliedTx(t, super)
+	pinV5Lists(t, tx)
 	v4 := v5LoadOn(t, tx, "2026-12-31", 4)
 	v5 := v5LoadOn(t, tx, v5Start, 5)
 	if len(v4.Rules) != 20 {

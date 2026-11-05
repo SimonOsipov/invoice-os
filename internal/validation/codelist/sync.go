@@ -3,6 +3,8 @@ package codelist
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 
@@ -27,6 +29,7 @@ type Syncer struct {
 	hc      *http.Client
 	log     *slog.Logger
 	lists   []List
+	seed    fs.FS // saved copies; nil never seeds
 }
 
 // NewSyncer returns a Syncer for the registry Lists. A nil hc uses fetch's default client.
@@ -34,13 +37,45 @@ func NewSyncer(pool *pgxpool.Pool, baseURL string, hc *http.Client, log *slog.Lo
 	return &Syncer{pool: pool, baseURL: baseURL, hc: hc, log: log, lists: Lists}
 }
 
-// SyncList fetches one list, then applies it. A fetch error opens no transaction.
+// SeedFromSavedCopy lets the syncer seed an empty list from the embedded saved copy.
+// The caller decides where that is allowed; production must not call it.
+func (s *Syncer) SeedFromSavedCopy() *Syncer {
+	s.seed = saved
+	return s
+}
+
+// SyncList fetches one list, then applies it. When NRS answers empty and the list has no rows, the saved copy seeds it; the
+// error is still ErrEmptyList, because NRS failed.
 func (s *Syncer) SyncList(ctx context.Context, l List) (Change, error) {
 	grouped, n, err := fetch(ctx, s.hc, s.baseURL, l)
+	if errors.Is(err, ErrEmptyList) && s.seed != nil {
+		return s.seedFromSaved(ctx, l, err)
+	}
 	if err != nil {
 		return Change{}, err
 	}
-	return apply(ctx, s.pool, l, grouped, n)
+	return apply(ctx, s.pool, l, grouped, n, false)
+}
+
+// seedFromSaved applies the saved copy of l only to a list with no rows. It returns fetchErr
+// unless the seed itself failed.
+func (s *Syncer) seedFromSaved(ctx context.Context, l List, fetchErr error) (Change, error) {
+	grouped, n, ok, err := savedCopy(s.seed, l)
+	if !ok {
+		return Change{}, fetchErr
+	}
+	if err != nil {
+		return Change{}, fmt.Errorf("codelist: saved copy of %s: %w", l.Name, err)
+	}
+	ch, err := apply(ctx, s.pool, l, grouped, n, true)
+	if errors.Is(err, errNotEmpty) {
+		return Change{}, fetchErr
+	}
+	if err != nil {
+		return Change{}, err
+	}
+	s.log.Warn("codelist seeded from saved copy", "list", l.Name, "entries", ch.Entries)
+	return ch, fetchErr
 }
 
 // SyncAll syncs every list; one failing list does not stop the others.

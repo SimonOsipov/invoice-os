@@ -11,11 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var errNotEmpty = errors.New("list already has rows")
+
 // apply replaces one list with the published state in a single transaction and
 // records the diff. A pull that omits over 10% of the stored codes is held
 // unless the list's latest sync row is released. The DELETE runs before the
 // upsert so a failed upsert proves the rollback (TestSync_DBErrorRollsBackTheList).
-func apply(ctx context.Context, pool *pgxpool.Pool, l List, grouped map[string][]json.RawMessage, entries int) (Change, error) {
+// seedOnly applies only to a list with no rows (else errNotEmpty) and records the sync
+// as released, so the next real pull replaces the seed past the shrink guard.
+func apply(ctx context.Context, pool *pgxpool.Pool, l List, grouped map[string][]json.RawMessage, entries int, seedOnly bool) (Change, error) {
 	codes := make([]string, 0, len(grouped))
 	texts := make([]string, 0, len(grouped))
 	for c, es := range grouped {
@@ -40,6 +44,9 @@ func apply(ctx context.Context, pool *pgxpool.Pool, l List, grouped map[string][
 	existing, err := queryCodes(ctx, tx, `SELECT code FROM nrs_codes WHERE list = $1`, l.Name)
 	if err != nil {
 		return Change{}, fmt.Errorf("codelist: apply %s: read existing: %w", l.Name, err)
+	}
+	if seedOnly && len(existing) > 0 {
+		return Change{}, errNotEmpty
 	}
 	// ceiling: unindexed latest-row scan, index (list, synced_at) above ~100k rows
 	var latest string
@@ -105,9 +112,13 @@ RETURNING code`, l.Name, codes, texts)
 	slices.Sort(ch.Removed)
 	slices.Sort(ch.Changed)
 
+	status := "applied"
+	if seedOnly {
+		status = "released"
+	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, synced_at) VALUES ($1, $2, $3, $4, $5, clock_timestamp())`,
-		l.Name, ch.Entries, ch.Added, ch.Removed, ch.Changed); err != nil {
+		`INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, status, synced_at) VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())`,
+		l.Name, ch.Entries, ch.Added, ch.Removed, ch.Changed, status); err != nil {
 		return Change{}, fmt.Errorf("codelist: apply %s: record sync: %w", l.Name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

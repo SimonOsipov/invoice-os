@@ -118,10 +118,11 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
 // as Header.test.tsx's HeaderCtx. invoiceQuery (task-331, BUG-01-05) defaults to '' so
 // every pre-existing call site (unfiltered register) is unaffected.
-function listCtx(entityId: string | null = 'ent-1', invoiceQuery = ''): PlatformCtx {
+function listCtx(entityId: string | null = 'ent-1', invoiceQuery = '', entitiesState = 'loading'): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { entityId },
+    entitiesState,
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     openCreate: () => {},
@@ -416,6 +417,24 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(screen.queryByTestId('invoices-empty'), 'no entity is active: "No invoices yet" must not draw').toBeNull()
     expect(screen.queryByTestId('invoices-empty-filtered')).toBeNull()
     expect(screen.getByText('Loading invoices…')).toBeTruthy()
+  })
+
+  it('BUG-82: a firm with no entities (entitiesState empty) still draws "No invoices yet", not Loading', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx(null, '', 'empty')} />)
+
+    expect(await screen.findByTestId('invoices-empty')).toBeTruthy()
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
+  })
+
+  it('BUG-82: a firm whose entities fetch errored (entitiesState error) does not spin forever', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx(null, '', 'error')} />)
+
+    expect(await screen.findByTestId('invoices-empty'), 'the pre-fix render for an unscoped empty list').toBeTruthy()
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
   })
 
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {

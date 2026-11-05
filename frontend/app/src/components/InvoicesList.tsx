@@ -98,7 +98,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // null entityId in firm mode (entities still loading/errored) ALSO omits it -- the
   // network call is a tenant-wide fetch in that window; `noEntity` keeps it off screen.
   const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
-  const noEntity = ctx.mode !== 'inhouse' && activeEntityId === undefined
+  // Only while the entities list loads; a settled empty/errored list has no entity to wait for.
+  const noEntity = ctx.mode !== 'inhouse' && activeEntityId === undefined && ctx.entitiesState === 'loading'
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
   // re-runs the effect (and re-fetches) whenever the toggle flips, the page changes, OR

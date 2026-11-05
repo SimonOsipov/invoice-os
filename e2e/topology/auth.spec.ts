@@ -41,6 +41,7 @@ import {
 import { canonicalTin, freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
 import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
+import { isConfirmPage, STATE_43 } from './verifyLink'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
@@ -1544,13 +1545,6 @@ test('deployed app: a real sign-in names the account holder on the identity card
 
 // frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
-// internal/gateway/signin.go stateShape.
-const STATE_43 = /^[A-Za-z0-9_-]{43}$/
-const isConfirmPage = (u: URL, invite = false) =>
-  u.origin === new URL(GATEWAY_URL).origin &&
-  u.pathname === '/auth/verify' &&
-  STATE_43.test(u.searchParams.get('state') ?? '') &&
-  u.searchParams.has('invite') === invite
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
 async function openMailedLink(page: Page, invite = false): Promise<URL> {

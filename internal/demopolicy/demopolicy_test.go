@@ -341,14 +341,14 @@ func versionsOf(t *testing.T, super *pgxpool.Pool, tenantID string) []versionRow
 	return out
 }
 
-// activeVersionOf returns the tenant's one active version, deterministically
-// — where versionsOf is not once two policies both sit at version 1.
+// activeVersionOf returns the governing version: the active one published last.
 func activeVersionOf(t *testing.T, super *pgxpool.Pool, tenantID string) versionRow {
 	t.Helper()
 	var v versionRow
 	if err := super.QueryRow(context.Background(),
 		`SELECT id::text, sealed, is_active, published_by FROM approval_policy_versions
-		  WHERE tenant_id = $1 AND is_active`, tenantID).
+		  WHERE tenant_id = $1 AND is_active
+		  ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 1`, tenantID).
 		Scan(&v.ID, &v.Sealed, &v.IsActive, &v.PublishedBy); err != nil {
 		t.Fatalf("read the active version for %s: %v", tenantID, err)
 	}

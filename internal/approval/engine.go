@@ -127,11 +127,10 @@ type ArmResult struct {
 // deliberately not caught — it means the invoice already held an open run, an invariant
 // breach that must roll the caller's promotion back rather than read as a conflict.
 func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, actor string) (ArmResult, error) {
-	// is_active alone is the whole resolve: approval_policy_versions_one_active caps it at
-	// one row per tenant and approval_policy_versions_active_is_sealed makes active imply
-	// sealed, so neither ORDER BY nor LIMIT would add anything.
+	// ceiling: with several policies in force the one published last arms; revisit when arming matches scopes.
 	var versionID string
-	err := tx.QueryRow(ctx, `SELECT id FROM approval_policy_versions WHERE is_active`).Scan(&versionID)
+	err := tx.QueryRow(ctx, `SELECT id FROM approval_policy_versions WHERE is_active
+		  ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 1`).Scan(&versionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ArmResult{}, nil
 	}

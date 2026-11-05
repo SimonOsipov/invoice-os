@@ -271,14 +271,14 @@ func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p 
 			return nil
 		}
 
-		// is_active alone is the whole resolve, matching ArmTx: one_active caps it
-		// at one row per tenant and active_is_sealed makes active imply sealed.
+		// ceiling: with several policies in force the one published last governs, as in ArmTx; revisit when arming matches scopes.
 		var active activeVersion
 		err := tx.QueryRow(ctx,
 			`SELECT v.id::text, v.policy_id::text, p.name, coalesce(v.published_by, '')
 			   FROM approval_policy_versions v
 			   JOIN approval_policies p ON p.id = v.policy_id
-			  WHERE v.is_active`).
+			  WHERE v.is_active
+			  ORDER BY v.published_at DESC NULLS LAST, v.id DESC LIMIT 1`).
 			Scan(&active.versionID, &active.policyID, &active.policyName, &active.publishedBy)
 		governed := !errors.Is(err, pgx.ErrNoRows)
 		if err != nil && governed {

@@ -31,7 +31,7 @@ ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/ops-console build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----
-FROM caddy:2-alpine AS serve
+FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/ops-console/dist /srv
 # The commit under test, stamped by scripts/ci/stamp-build-sha.sh before the image build

@@ -411,6 +411,19 @@ describe('Google tag', () => {
     expect((window as GaWindow).dataLayer).toBeUndefined()
   })
 
+  it('bootAppAnalytics_aRemountAfterAnAcceptThenARejectInThePageSendsNothingMore', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('reject', EMAIL)
+    const before = layer().length
+    bootAppAnalytics()
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    expect(before, 'control: the Accept loaded the tag').toBeGreaterThan(0)
+    expect(layer()).toHaveLength(before)
+  })
+
   it('bootAppAnalytics_aRemountWithNoRecordThenAcceptLoadsTheTag', async () => {
     stubId()
     const { bootAppAnalytics, chooseAppConsent, endAppChat, reportAppPage } = await fresh()

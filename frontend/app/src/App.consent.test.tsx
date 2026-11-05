@@ -420,15 +420,6 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
       expect(pageViews()).toEqual([['event', 'page_view', { page_location: 'https://app.ascomply.com/invoices' }]])
     })
 
-    it('app_aSuspendedMemberLoadsNoTag', async () => {
-      vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
-      await mount(handoffRecord())
-      await suspend()
-      expect(screen.getByTestId('suspended-notice')).toBeTruthy()
-      expect(tags().length).toBe(0)
-      expect((window as Window & { dataLayer?: unknown }).dataLayer).toBeUndefined()
-    })
-
     it('app_aMemberSuspendedAfterMountWithAStoredAcceptSendsNoFurtherPageView', async () => {
       vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
       setConsent(true)

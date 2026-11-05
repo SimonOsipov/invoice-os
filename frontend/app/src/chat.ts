@@ -121,5 +121,7 @@ export function reportAppPage(): void {
 }
 
 export function endAppChat(): void {
+  // Page-lifetime stop, not a Reject: the consent record stays untouched.
+  setAnalyticsRevoked(true)
   endChat(window.location.hostname)
 }

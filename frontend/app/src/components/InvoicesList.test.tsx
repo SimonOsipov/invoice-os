@@ -406,6 +406,18 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(screen.getByText('Loading invoices…')).toBeTruthy()
   })
 
+  it('BUG-82: a firm list with total 0 fetched while the active entity is null draws no "No invoices yet"', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx(null)} />)
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByTestId('invoices-empty'), 'no entity is active: "No invoices yet" must not draw').toBeNull()
+    expect(screen.queryByTestId('invoices-empty-filtered')).toBeNull()
+    expect(screen.getByText('Loading invoices…')).toBeTruthy()
+  })
+
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {
     const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
     const p2 = [row({ id: 'p2', invoice_number: 'INV-P2' })]

@@ -430,8 +430,11 @@ describe('TimeChart readout', () => {
     const second = FakeUPlot.instances[1]
     expect(first.destroyed).toBe(true)
     expect(second.calls[0]).toEqual(['setCursor', { left: 40, top: 20 }])
-    expect(view.container.querySelector('[data-readout]')).not.toBeNull()
-    expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
+    // React renders the readout in a later scheduler task than the new uPlot instance.
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-readout]')).not.toBeNull()
+      expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
+    })
   })
 })
 

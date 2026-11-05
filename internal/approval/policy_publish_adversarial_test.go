@@ -310,14 +310,17 @@ func TestPublish_RoleDeletedWhileTheSealWaitsStillSeals(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
-	holderPolicy := seedApprovalPolicy(t, super, tenantID, "Slot holder")
-	holderVersion := seedApprovalDraft(t, super, tenantID, holderPolicy)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
-	versionID, stepID := seedApprovalDraftNamingRole(t, super, tenantID, policyID, "tax-reviewer")
+	holderVersion := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	sealApprovalPolicyVersion(t, super, holderVersion)
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
+	stepID := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("tax-reviewer"),
+	})
 
 	blocker, holderPID := blockerTx(t, ctx, app, tenantID)
 	if _, err := blocker.Exec(ctx,
-		`UPDATE approval_policy_versions SET sealed = true, is_active = true WHERE id = $1`,
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`,
 		holderVersion); err != nil {
 		t.Fatalf("hold the active slot: %v", err)
 	}

@@ -1,11 +1,13 @@
 package codelist
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -223,27 +225,123 @@ func TestSyncAll_SecondNullPullAfterSeedAddsNoSyncRow(t *testing.T) {
 	}
 }
 
-func TestSyncAll_FetchFailuresDoNotSeed(t *testing.T) {
+// failedFetches serves each way a fetch fails without ErrEmptyList; the TLS one fails the x509 handshake.
+func failedFetches(t *testing.T) map[string]string {
+	t.Helper()
+	status := func(code int) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }
+	}
+	body := func(b string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, b) }
+	}
+	out := map[string]string{}
 	for name, h := range map[string]http.HandlerFunc{
-		"500":      func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) },
-		"bad json": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{not json`) },
-		"not obj":  func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"data":[1]}`) },
+		"500": status(500), "503": status(503),
+		"bad json": body(`{not json`), "not obj": body(`{"data":[1]}`),
 	} {
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		out[name] = srv.URL
+	}
+	tlsSrv := httptest.NewTLSServer(body(nullBody))
+	t.Cleanup(tlsSrv.Close)
+	out["tls x509"] = tlsSrv.URL
+	return out
+}
+
+func failOnce(t *testing.T, f *seedFixture, url string) error {
+	t.Helper()
+	f.s.baseURL = url
+	err := f.s.SyncAll(context.Background())
+	if err == nil || errors.Is(err, ErrEmptyList) {
+		t.Fatalf("SyncAll err = %v, want a fetch error that is not ErrEmptyList", err)
+	}
+	return err
+}
+
+func TestSyncAll_FetchFailureOnEmptyDBSeedsEveryListFromSavedCopy(t *testing.T) {
+	for name, url := range failedFetches(t) {
 		t.Run(name, func(t *testing.T) {
 			f := newSeedFixture(t)
-			srv := httptest.NewServer(h)
-			t.Cleanup(srv.Close)
-			f.s.baseURL = srv.URL
-			err := f.s.SyncAll(context.Background())
-			if err == nil || errors.Is(err, ErrEmptyList) {
-				t.Errorf("err = %v, want a non-empty-list error", err)
-			}
+			failOnce(t, f, url)
 			for _, l := range seededLists {
-				if n := len(f.rows(t, l)); n != 0 {
-					t.Errorf("%s holds %d rows after %s, want 0", l, n, name)
+				if n := len(f.rows(t, l)); n < 1 {
+					t.Errorf("%s holds %d rows after a %s fetch failure, want the saved copy", l, n, name)
 				}
 			}
 		})
+	}
+}
+
+func TestSyncAll_FetchFailureLeavesAHeldListUntouched(t *testing.T) {
+	for name, url := range failedFetches(t) {
+		if name != "tls x509" && name != "503" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSeedFixture(t)
+			if err := f.pull(t, map[string]string{"states": envelope(entry("NG-XX", "Xland"))}); err == nil {
+				t.Fatal("seed pull: want the other lists to report ErrEmptyList")
+			}
+			before := f.rows(t, "states")
+			if len(before) != 1 || before[0].code != "NG-XX" {
+				t.Fatalf("seed: states = %+v, want only NG-XX", before)
+			}
+			failOnce(t, f, url)
+			after := f.rows(t, "states")
+			if len(after) != 1 || after[0] != before[0] {
+				t.Errorf("states = %+v after a failed fetch, want %+v", after, before)
+			}
+		})
+	}
+}
+
+func TestSyncAll_FetchFailureWithSeedingOffSeedsNothing(t *testing.T) {
+	for name, url := range failedFetches(t) {
+		t.Run(name, func(t *testing.T) {
+			f := newSeedFixture(t)
+			f.s.seed = nil
+			failOnce(t, f, url)
+			for real := range f.names {
+				if n := len(f.rows(t, real)); n != 0 {
+					t.Errorf("%s holds %d rows with seeding off, want 0", real, n)
+				}
+				if n := len(f.syncs(t, real)); n != 0 {
+					t.Errorf("%s has %d sync rows with seeding off, want 0", real, n)
+				}
+			}
+		})
+	}
+}
+
+// A gate log must show which mode NRS was in: the fallback record carries the fetch error.
+func TestSyncAll_FetchFailureSeedLogNamesTheListAndTheFetchError(t *testing.T) {
+	f := newSeedFixture(t)
+	var buf bytes.Buffer
+	f.s.log = slog.New(slog.NewJSONHandler(&buf, nil))
+
+	failOnce(t, f, failedFetches(t)["tls x509"])
+
+	seeded := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != "codelist seeded from saved copy" {
+			continue
+		}
+		list, _ := rec["list"].(string)
+		errText, _ := rec["err"].(string)
+		seeded[list] = errText
+	}
+	if len(seeded) == 0 {
+		t.Fatalf("no \"codelist seeded from saved copy\" record in the log:\n%s", buf.String())
+	}
+	for _, l := range seededLists {
+		errText, ok := seeded[f.names[l]]
+		if !ok {
+			t.Errorf("no seeded record for list %s", l)
+		} else if !strings.Contains(errText, "x509") {
+			t.Errorf("%s seeded record err = %q, want the x509 fetch error", l, errText)
+		}
 	}
 }
 

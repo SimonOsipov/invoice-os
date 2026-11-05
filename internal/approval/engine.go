@@ -2,7 +2,7 @@ package approval
 
 import (
 	"context"
-	"errors"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -106,16 +106,16 @@ func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
 	return false
 }
 
-// ArmResult is what one arm did. RunID is "" only when the tenant has no active version.
+// ArmResult is what one arm did. RunID is "" when no policy is in force or none matches.
 type ArmResult struct {
 	RunID  string
 	Steps  int
 	Closed bool // written closed 'approved' — no approval step was left pending
 }
 
-// ArmTx resolves the active version with the latest published_at against one invoice and writes
-// its run and ordered steps inside the caller's transaction. A tenant with no active
-// version is the ONE arm that writes nothing at all — no run, no step, no audit row.
+// ArmTx arms the first policy in position order whose set scopes all match the invoice, and
+// writes its run and ordered steps inside the caller's transaction. No policy in force, or
+// none matching, writes nothing at all — no run, no step, no audit row.
 //
 // ArmTx does NOT lock the invoice row; the caller must already hold it
 // (Store.ApplyValidation's SELECT ... FOR UPDATE, internal/invoice/store.go:1697).
@@ -127,15 +127,12 @@ type ArmResult struct {
 // deliberately not caught — it means the invoice already held an open run, an invariant
 // breach that must roll the caller's promotion back rather than read as a conflict.
 func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, actor string) (ArmResult, error) {
-	// ceiling: with several policies in force the one published last arms; revisit when arming matches scopes.
-	var versionID string
-	err := tx.QueryRow(ctx, `SELECT id FROM approval_policy_versions WHERE is_active
-		  ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 1`).Scan(&versionID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ArmResult{}, nil
-	}
+	versions, err := readInForceVersionsTx(ctx, tx)
 	if err != nil {
 		return ArmResult{}, err
+	}
+	if len(versions) == 0 {
+		return ArmResult{}, nil
 	}
 
 	// total::text into a *string, never a bare decimal.Decimal: numeric(14,2) accepts NaN
@@ -143,9 +140,11 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	// unparseable total reads as absent, which evalCondition folds to zero.
 	var totalText *string
 	var invoiceNumber string
+	doc := matchDoc{}
 	if err := tx.QueryRow(ctx,
-		`SELECT total::text, invoice_number FROM invoices WHERE id = $1`, invoiceID,
-	).Scan(&totalText, &invoiceNumber); err != nil {
+		`SELECT total::text, invoice_number, document_type, entity_id::text, currency FROM invoices WHERE id = $1`,
+		invoiceID,
+	).Scan(&totalText, &invoiceNumber, &doc.DocumentType, &doc.EntityID, &doc.Currency); err != nil {
 		return ArmResult{}, err
 	}
 	var total *decimal.Decimal
@@ -154,6 +153,20 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 			total = &parsed
 		}
 	}
+	doc.Total = total
+
+	if slices.ContainsFunc(versions, func(v inForceVersion) bool { return len(v.RoleIDs) > 0 }) {
+		if doc.CreatorRoles, err = readCreatorRoleIDsTx(ctx, tx, invoiceID); err != nil {
+			return ArmResult{}, err
+		}
+	}
+
+	matchedVersion, matchedScopes, ok := firstMatch(doc, versions)
+	if !ok {
+		return ArmResult{}, nil
+	}
+	versionID := matchedVersion.VersionID
+	_ = matchedScopes // read by the audit row once it carries them
 
 	trees, err := readPolicyTrees(ctx, tx, []string{versionID})
 	if err != nil {

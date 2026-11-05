@@ -11,11 +11,11 @@ paths:
 ---
 # Approvals
 
-- Keep one active version per tenant, across all its policies.
-- Publish deactivates the tenant's active version, whichever policy owns it. Delete deactivates only the deleted policy's version.
+- Keep one active version per policy. A workspace can have several policies in force.
+- Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
-- Arm the sweep after the seal. The sweep resolves the governing version with `WHERE is_active`.
+- Arm the sweep after the seal. `ArmTx` resolves the governing version as the active version with the latest `published_at`.
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.
 - Never retry a publish 409 automatically.
 - Re-activate a sealed version by publishing its tree again as a new version. No API path re-activates a sealed version.
@@ -35,7 +35,12 @@ paths:
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
-- Accept only `All invoices` as a policy `scope`. The `CHECK` constraint enforces it.
+- Store a policy's scopes on its version (`approval_policy_versions`): document types, client companies (`business_entities` ids), an amount band with its currency, and workflow roles (`workflow_roles` ids). Each scope is optional.
+- Write a scope edit to the draft. It takes effect at publish.
+- Seal a version's scopes with it. `approval_policy_versions_seal_guard` refuses a scope change on a sealed version.
+- Treat a version with no scope set as the catch-all.
+- Accept only `All invoices` in the legacy `scope` text on `approval_policies`. `normalizeScope` enforces it.
+- Give each live policy a unique order position on `approval_policies`. The trigger `approval_policies_assign_position` assigns the next one on insert.
 - Key approval policies by workspace, not by client company.
 - Return the draft's steps from `GET /v1/approval-policies/{id}` once a draft exists. Never label them active.
 - Read the policy `status` to learn whether the returned steps are a draft. `draft` means the highest version is unsealed.

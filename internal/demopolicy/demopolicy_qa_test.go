@@ -435,7 +435,7 @@ var errAlwaysRollBack = errors.New("demopolicy qa: roll back")
 // A fleet can start more than one invoice container, and both run this at boot.
 //
 // RE-AIMED. This test was written against the pre-lock seeder, where the racing
-// boots reached one_active together and the loser rolled back on 23505. The
+// boots reached the unique active index together and the loser rolled back on 23505. The
 // per-tenant advisory lock (demopolicy.go:250) means they now SERIALISE, so the
 // property to assert is the one the lock actually produces: EVERY boot succeeds,
 // exactly one of them writes, and the rest report the idempotent note. Asserting
@@ -630,7 +630,7 @@ func publishCurrentPlanAsSibling(t *testing.T, tx pgx.Tx, tenantID string, p *pl
 // deterministic rather than hoped for.
 //
 // approval_policies carries no unique index on name, and clearActive removed the
-// one_active refusal that used to stop a second same-named policy. What replaces
+// unique-index refusal that used to stop a second same-named policy. What replaces
 // it is the lock at demopolicy.go:250 — taken as the transaction's FIRST
 // statement, so the active-version probe below it cannot read a snapshot older
 // than the sibling that already committed.

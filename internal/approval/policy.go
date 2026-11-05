@@ -366,10 +366,8 @@ func normalizeName(name string) (string, error) {
 	return name, nil
 }
 
-// normalizeScope is the one place a scope reaches its stored form. Its OUTPUT set
-// is exactly the set approval_policies_scope_check accepts, so no caller can send
-// the column a value the CHECK refuses — "" is legal input and never a legal
-// stored value. There is deliberately no second predicate to diverge from it.
+// normalizeScope is the one place a scope reaches its stored form. "" is legal input and
+// never a legal stored value; only 'All invoices' is stored (no DB CHECK backs it).
 func normalizeScope(scope string) (string, error) {
 	switch strings.TrimSpace(scope) {
 	case "", policyScopeAll: // absent means the default, not a value

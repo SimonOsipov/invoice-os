@@ -54,7 +54,7 @@ func seedVersionWithSteps(t *testing.T, super *pgxpool.Pool, tenantID, policyID 
 	return versionID
 }
 
-// seedPublishedVersion seals the version AND claims the tenant's one_active slot, the
+// seedPublishedVersion seals the version AND claims its policy's active slot, the
 // shape a published policy holds. published_at/by are stamped so the preserved-afterwards
 // assertions are not vacuously NULL == NULL.
 func seedPublishedVersion(t *testing.T, super *pgxpool.Pool, tenantID, policyID string, version, stepCount int) string {
@@ -138,7 +138,7 @@ func TestDeletePolicy_IsSoftAndKeepsVersions(t *testing.T) {
 
 // TestDeletePolicy_DeactivatesTheActiveVersion: without this the soft-deleted policy keeps
 // governing every invoice while being invisible to every read. Deactivating a SEALED row
-// is legal — seal_guard refuses only sealed -> unsealed — and it is not un-publishing, so
+// is legal — seal_guard refuses sealed -> unsealed and a scope change on a sealed row — and it is not un-publishing, so
 // published_at and published_by survive.
 func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -148,7 +148,7 @@ func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedPublishedVersion(t, super, tenantID, policyID, 1, 0)
 
-	// The fixture really holds the tenant's slot, or the assertion below is vacuous.
+	// The fixture really holds an active slot, or the assertion below is vacuous.
 	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 1 || ids[0] != versionID {
 		t.Fatalf("fixture active version ids = %v, want exactly [%s]", ids, versionID)
 	}
@@ -165,8 +165,7 @@ func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 		t.Errorf("published_at/by = (%s, %s), want both preserved — deactivation is not un-publishing",
 			strOrNull(v.PublishedAt), strOrNull(v.PublishedBy))
 	}
-	// Tenant-scoped, never policy-scoped: one_active is ON (tenant_id), so "no active
-	// policy" is a property of the tenant.
+	// Tenant-scoped read: the tenant holds no other policy here, so none is active.
 	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 0 {
 		t.Errorf("active version ids = %v, want none — the tenant is left with no active policy", ids)
 	}

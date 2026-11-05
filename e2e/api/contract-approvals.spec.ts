@@ -352,8 +352,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // and RFC3339Nano trims trailing zeros, so the width varies and must not be pinned.
 const PUBLISHED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/
 
-// A scope approval_policies_scope_check has no value for. normalizeScope refuses it above
-// the transaction, which is what makes it a 400 rather than a 500.
+// A scope normalizeScope refuses (only 'All invoices' is accepted).
 const FOREIGN_SCOPE = 'Capex & fixed assets'
 
 // Walks the tree, not just the roots: the ten-key claim has to hold at depth, which is
@@ -734,9 +733,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
 
   test('400: a foreign scope on POST', async () => {
     // Pinned over the wire rather than through the typed seam, which rejects on 400 and 500
-    // alike: normalizeScope running BELOW the transaction would let
-    // approval_policies_scope_check fire instead, and a 23514 carries no sentinel, so it
-    // would answer 500 — invisible to apiFetch, and the reason this case exists.
+    // alike: a 500 would be invisible to apiFetch, and is the reason this case exists.
     const res = await rawFetch('/api/invoice/v1/approval-policies', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },

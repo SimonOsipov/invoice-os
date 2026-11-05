@@ -162,8 +162,7 @@ describe('App.tsx wiring', () => {
   })
 
   it('refetches the whole list on publish rather than patching one row (AC-2)', () => {
-    // The active slot is tenant-wide, so publishing B deactivates A and publish's own
-    // response describes B alone (lib/policies.test.ts pins that half). The observable
+    // Publish's own response describes B alone (lib/policies.test.ts pins that half). The observable
     // effect on a live tenant is subtask 07's topology spec; this pins the call.
     const sites: number[] = []
     for (let at = APP.indexOf('publishApprovalPolicy('); at !== -1; at = APP.indexOf('publishApprovalPolicy(', at + 1)) sites.push(at)

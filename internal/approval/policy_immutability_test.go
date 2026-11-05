@@ -647,7 +647,7 @@ func TestPIL11_ActiveImpliesSealed(t *testing.T) {
 	}
 }
 
-// TestPIL12_OneActiveVersionPerPolicy (PIL-12): a tenant holds active versions of two
+// TestPIL12_OneActiveVersionPerPolicy (PIL-12): a workspace holds active versions of two
 // policies at once; a second active version of one policy -> 23505 on
 // approval_policy_versions_one_active.
 func TestPIL12_OneActiveVersionPerPolicy(t *testing.T) {

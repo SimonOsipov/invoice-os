@@ -113,7 +113,7 @@ type ArmResult struct {
 	Closed bool // written closed 'approved' — no approval step was left pending
 }
 
-// ArmTx resolves the tenant's active sealed policy version against one invoice and writes
+// ArmTx resolves the active version with the latest published_at against one invoice and writes
 // its run and ordered steps inside the caller's transaction. A tenant with no active
 // version is the ONE arm that writes nothing at all — no run, no step, no audit row.
 //

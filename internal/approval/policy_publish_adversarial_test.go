@@ -184,7 +184,7 @@ func TestPublish_WaitsForTheLockedPolicyRow(t *testing.T) {
 // no FOR UPDATE of its own: the policy row lock already orders same-policy publishers, and
 // the loser's draft resolution then runs on a fresh statement snapshot and finds the
 // version sealed. The loser is ErrPolicyNothingToPublish — never ErrConflict, which would
-// mean both had passed the resolution and raced for the tenant's active slot.
+// mean both had passed the resolution and raced for the policy's active slot.
 func TestPublish_SamePolicyConcurrentPublishesSerialise(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-same-policy-race")

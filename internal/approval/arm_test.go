@@ -1,7 +1,7 @@
 package approval
 
 // Store-adjacent specs for ArmTx: the tx-scoped write half of the arming engine —
-// resolve the tenant's one active sealed version, materialise it against one invoice,
+// resolve the governing (latest published) active version, materialise it against one invoice,
 // and write approval_runs + approval_run_steps + one audit row. Every spec here starts
 // RED against an undefined ArmTx/ArmResult (task-480's Test-first stage).
 //
@@ -882,8 +882,7 @@ func TestArm_AutoApproveSettlesEveryStepAndClosesTheRun(t *testing.T) {
 
 // TestArm_ClosureIsOneRuleNotTwoBranches (D34) pins that the run's closed/approved
 // state comes from ONE predicate reading step states, never from a second branch keyed
-// on `auto` directly. Three legs, each its own tenant (approval_policy_versions_one_active
-// forbids two active versions sharing a tenant): (a) an autoapprove policy closes the
+// on `auto` directly. Three legs, each its own tenant (keeps the arming resolve to one active version): (a) an autoapprove policy closes the
 // run; (b) a notify-only policy closes it too, even though auto is false — an
 // `if auto { close }` implementation fails ONLY this leg; (c) one staffed approval step
 // leaves the run open — the control that rules out a `len(steps)==0` implementation,

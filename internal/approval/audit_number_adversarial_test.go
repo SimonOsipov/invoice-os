@@ -36,7 +36,7 @@ func setInvoiceNumber(t *testing.T, super *pgxpool.Pool, invoiceID, number strin
 	}
 }
 
-// oneActivePolicyVersionID is the tenant's single active version -- what
+// oneActivePolicyVersionID is the tenant's active version -- what
 // seedActivePolicyTenant left behind and what a seeded run must reference.
 func oneActivePolicyVersionID(t *testing.T, super *pgxpool.Pool, tenantID string) string {
 	t.Helper()

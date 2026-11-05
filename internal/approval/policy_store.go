@@ -282,10 +282,8 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 //
 // Both normalizers run ABOVE the transaction and REPLACE their argument, so the caller's
 // raw string is unreachable from the INSERT (the CreateRole precedent, store.go:128-133).
-// That replacement is the whole mechanism: normalizeScope's output set is exactly what
-// approval_policies_scope_check accepts, and an unnormalized scope reaching SQL raises a
-// 23514 that carries no sentinel, which policyStatusForErr answers 500 rather than the
-// 400 this seam promises (TestCreatePolicy_EmptyScopeNormalizedBeforeSQL).
+// That replacement is the whole mechanism: an unnormalized scope would be stored, not
+// refused with the 400 this seam promises (TestCreatePolicy_EmptyScopeNormalizedBeforeSQL).
 //
 // requireActiveAdmin is then the first statement in the closure, before any policy row is
 // read, so a suspended or non-admin caller is refused with nothing written
@@ -367,8 +365,7 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		return Policy{}, ErrPolicyNotFound
 	}
 	// Copied, never written through: the pointers belong to the caller (UpdateRole,
-	// store.go:211-218). normalizeScope's output set is exactly what
-	// approval_policies_scope_check accepts, so a non-nil "" reaches SQL as the default.
+	// store.go:211-218). a non-nil "" reaches SQL as the default.
 	if name != nil {
 		n, err := normalizeName(*name)
 		if err != nil {
@@ -765,7 +762,7 @@ func (s *Store) sweepValidatedBacklog(ctx context.Context, tx pgx.Tx, tenantID, 
 // DeletePolicy stamps deleted_at and, in the same transaction, deactivates the version the
 // policy was governing with: without that a soft-deleted policy keeps deciding every
 // invoice while being invisible to every read. Deactivation is not un-publishing —
-// seal_guard refuses only sealed -> unsealed, and published_at/by survive.
+// seal_guard refuses sealed -> unsealed and a scope change on a sealed row, and published_at/by survive.
 //
 // This deletes a POLICY, not an approval DECISION (Decision Q12): no version row is ever
 // removed. invoice_app holds no DELETE on approval_policy_versions, approval_decisions is

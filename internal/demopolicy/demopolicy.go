@@ -456,8 +456,7 @@ func reactivateSealedVersion(ctx context.Context, tx pgx.Tx, tenantID, versionID
 // The plan is an argument rather than resolved here: seedTenantPlan may be
 // driving a plan planFor would never answer for this tenant.
 func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, p *plan) (string, error) {
-	// scope is left to its column DEFAULT: CHECK (scope = 'All invoices') admits
-	// exactly one value.
+	// scope is left to its column DEFAULT, 'All invoices'.
 	var policyID string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,

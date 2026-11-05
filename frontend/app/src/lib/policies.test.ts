@@ -219,8 +219,8 @@ describe('policyStanding / policyInForce (AC-2)', () => {
     expect(policyInForce(list, b.id)).toBeNull()
   })
 
-  // The tenant-wide unique index allows ONE active version per store; a seed with two would
-  // make policyInForce return the first of them and hide the bug it exists to catch.
+  // policyInForce returns the first policy in force; a seed with two would hide the bug it
+  // exists to catch.
   it('the seed store stays a tenant the server could actually produce', () => {
     const store = seedPolicies()
     for (const mode of ['firm', 'inhouse'] as const) {
@@ -891,9 +891,8 @@ describe('AC-3 / AC-1 — the ctx write verbs', () => {
 })
 
 describe('AC-2 — publishing is the one verb a single-row patch cannot mirror', () => {
-  // The active slot is TENANT-wide, so publishing B DEACTIVATES A. Publish's own response
-  // describes B alone: patching the mirror from it leaves A still claiming the slot on
-  // screen. Only a refetch of the whole list carries the second change.
+  // Publish's response describes B alone; a refetch of the whole list keeps every row
+  // current, including a policy B's publish touched.
   it('publish’s response cannot report the deactivation it caused on another policy', async () => {
     const a = policy({ id: 'polA', version: 1, activeVersion: 1, status: 'published' })
     const b = policy({ id: 'polB', version: 1, activeVersion: null, status: 'draft' })

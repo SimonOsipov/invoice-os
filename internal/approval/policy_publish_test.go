@@ -40,8 +40,7 @@ import (
 // --- fixtures ---------------------------------------------------------------
 
 // versionRow reads one version row by id. versionRows reads a whole policy's, which
-// cannot address the outgoing version of a DIFFERENT policy the tenant-wide deactivation
-// touches.
+// cannot address the version of a DIFFERENT policy that must stay active.
 func versionRow(t *testing.T, super *pgxpool.Pool, versionID string) storedVersion {
 	t.Helper()
 	var v storedVersion
@@ -359,7 +358,7 @@ func TestPublish_EmptyPolicyAllowed(t *testing.T) {
 	}
 }
 
-// --- AC-4: the deactivation is TENANT-wide ------------------------------------
+// --- AC-4: the deactivation is per policy ------------------------------------
 
 // TestPublish_LeavesTheTenantsOtherPolicyActive: publishing policy B leaves policy A's
 // active version active and sealed, with its published_at and published_by unchanged.

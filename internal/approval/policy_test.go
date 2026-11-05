@@ -472,7 +472,6 @@ func TestPolicy_ValidateTreeSlaHoursBounds(t *testing.T) {
 	}
 }
 
-
 // --- validateScopes ---------------------------------------------------------
 
 func TestPolicy_ValidateScopesRefusesBadShapes(t *testing.T) {

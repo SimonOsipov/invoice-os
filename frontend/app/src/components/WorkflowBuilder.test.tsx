@@ -372,11 +372,12 @@ describe('APPR-09-05 AC-3: Publish is a separate verb, gated on a saved tree', (
 })
 
 describe('APPR-09-05 AC-4: Publish states its consequence before the click', () => {
-  it('Publish names the policy it is about to replace', () => {
+  it('Publish says the policies in force stay in force', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self, otherPolicy()] })} policy={self} />)
 
-    expect(screen.getByText('Publishing replaces «Legacy approvals», which is in force now. There is no undo.')).toBeTruthy()
+    expect(screen.getByText('Publishing puts this policy in force. The policies in force now stay in force. There is no undo.')).toBeTruthy()
+    expect(screen.queryByText(/Publishing replaces «Legacy approvals»/)).toBeNull()
     expect(screen.queryByText(NO_POLICY_IN_FORCE)).toBeNull()
   })
 
@@ -460,7 +461,7 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
 
     expect(publishButton().disabled).toBe(true)
     expect(screen.getByText(PUBLISH_SEALED_REASON)).toBeTruthy()
-    expect(screen.queryByText(/Publishing replaces «Legacy approvals»/), 'the note promises to displace a policy this control cannot displace').toBeNull()
+    expect(screen.queryByText(/The policies in force now stay in force/), 'the note promises a publish this control cannot run').toBeNull()
   })
 
   it('an unsaved edit outranks the seal, because saving clears both', () => {

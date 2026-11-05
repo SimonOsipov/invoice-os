@@ -33,7 +33,7 @@ export type PolicyStepWire = {
 export type PolicyVersionWire = {
   version: number
   sealed: boolean
-  /** TENANT-wide slot (`approval_policy_versions_one_active ON (tenant_id)`). */
+  /** This version is its policy's active one (`approval_policy_versions_one_active ON (tenant_id, policy_id)`). */
   is_active: boolean
   published_at: string | null
   published_by: string | null
@@ -180,15 +180,15 @@ export function toPolicy(wire: PolicyWire): Policy {
 export function policyStanding(policy: Policy): string {
   const { version, activeVersion, status } = policy
   if (activeVersion === null) {
-    // A 'published' status means the top version is sealed, so it was in force once and
-    // then lost the tenant's slot. Only an unsealed v1 has never held it.
+    // 'published' means the top version is sealed: it was in force once and is no longer.
+    // Only an unsealed v1 has never been in force.
     return version === 1 && status === 'draft' ? 'Never published' : 'Not in force'
   }
   if (version === activeVersion) return `v${activeVersion} in force`
   return `v${activeVersion} in force · v${version} draft`
 }
 
-/** The policy holding the tenant's single active slot, excluding `selfId`. */
+/** The first other policy with a version in force, excluding `selfId`. */
 export function policyInForce(list: readonly Policy[], selfId: string): Policy | null {
   return list.find((p) => p.id !== selfId && p.activeVersion !== null) ?? null
 }

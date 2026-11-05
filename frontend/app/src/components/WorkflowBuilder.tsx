@@ -90,20 +90,15 @@ function publishBlockedReason(server: Policy, dirty: boolean): string | null {
 }
 
 /**
- * What a publish would displace, off the last LANDED row — or null when nothing can be
- * published, because promising to replace a version the server would refuse to replace is the
- * false claim §5.3 exists to remove.
- *
- * `Policy.status` answers only "is the top version sealed", which is the whole of the first
- * question and none of the second: WHICH policy governs is `activeVersion`, tenant-wide. Three
- * branches after that, because `policyInForce` excludes self by design (policies.ts:192-194):
- * without the first one, the policy that IS in force renders 'nothing is in force'.
+ * The publish note, off the last LANDED row — null when nothing can be published.
+ * Three branches after the sealed check; the first is needed because `policyInForce`
+ * excludes self, so the policy that IS in force would read 'no policy is in force'.
  */
 function publishConsequence(server: Policy, policies: readonly Policy[]): string | null {
   if (server.status === 'published') return null
   if (server.activeVersion !== null) return `Publishing replaces v${server.activeVersion} of this policy, which is in force now. There is no undo.`
   const held = policyInForce(policies, server.id)
-  return held ? `Publishing replaces «${held.name}», which is in force now. There is no undo.` : 'No policy is in force. Publishing puts this one in force.'
+  return held ? 'Publishing puts this policy in force. The policies in force now stay in force. There is no undo.' : 'No policy is in force. Publishing puts this one in force.'
 }
 
 /**

@@ -118,7 +118,7 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
 // as Header.test.tsx's HeaderCtx. invoiceQuery (task-331, BUG-01-05) defaults to '' so
 // every pre-existing call site (unfiltered register) is unaffected.
-function listCtx(entityId = 'ent-1', invoiceQuery = ''): PlatformCtx {
+function listCtx(entityId: string | null = 'ent-1', invoiceQuery = ''): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { entityId },
@@ -391,6 +391,19 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
 
     const [, secondCallUrl] = fetchMock.mock.calls.map((c) => c[0] as string)
     expect(urlParams(secondCallUrl).get('entity_id'), 'the refetch triggered by the switch must be scoped to the NEW entity').toBe('ent-2')
+  })
+
+  it('BUG-82: a firm list fetched while the active entity is null draws no empty page and no pager', async () => {
+    // The tenant-wide fetch can resolve before the entities list sets the active entity.
+    mockFetchSequence([listResponse([row({ id: 'o1', entity_id: 'ent-9' })], { limit: 50, offset: 0, total: 3 })])
+
+    render(<InvoicesList ctx={listCtx(null)} />)
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByTestId('invoices-empty-page'), 'no entity is active: "No invoices on this page" must not draw').toBeNull()
+    expect(screen.queryByTestId('invoices-pager'), 'no entity is active: the pager must not draw').toBeNull()
+    expect(screen.getByText('Loading invoices…')).toBeTruthy()
   })
 
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {

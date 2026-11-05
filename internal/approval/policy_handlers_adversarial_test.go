@@ -542,8 +542,9 @@ func TestPolicyRoutes_HeadAndOptions(t *testing.T) {
 	writePaths := []string{
 		"/v1/approval-policies/" + policyHandlerTestID + "/draft",
 		"/v1/approval-policies/" + policyHandlerTestID + "/publish",
-		"/v1/approval-policies/order",
 	}
+	// HEAD rides GET /{id}, so /order is not a 405 for HEAD; OPTIONS still is.
+	const orderPath = "/v1/approval-policies/order"
 
 	t.Run("HEAD on a GET route runs the handler with no body", func(t *testing.T) {
 		for _, p := range getPaths {
@@ -577,8 +578,19 @@ func TestPolicyRoutes_HeadAndOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("HEAD on /order changes nothing", func(t *testing.T) {
+		id := caller()
+		reordered := false
+		s := policyOkSeam(newPolicy())
+		s.reorder = func(context.Context, []string) ([]Policy, error) { reordered = true; return nil, nil }
+		servePolicy(t, s, nil, "HEAD", orderPath, "", &id)
+		if reordered {
+			t.Error("HEAD /order reached the reorder seam: it would move positions and write an audit row")
+		}
+	})
+
 	t.Run("OPTIONS reaches no handler on any of the seven", func(t *testing.T) {
-		for _, p := range append(append([]string{}, getPaths...), writePaths...) {
+		for _, p := range append(append(append([]string{}, getPaths...), writePaths...), orderPath) {
 			r := httptest.NewRequest("OPTIONS", p, nil)
 			rec := httptest.NewRecorder()
 			policiesMux(failClosedPolicySeam(t), nil).ServeHTTP(rec, r)

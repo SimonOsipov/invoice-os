@@ -43,7 +43,10 @@ function loadAppTag(record: ConsentRecord | null): boolean {
 }
 
 export function bootAppAnalytics(): boolean {
-  return loadAppTag(readConsent())
+  const record = readConsent()
+  // A workspace that mounts again lifts endAppChat's stop; a Reject stays revoked.
+  if (record) setAnalyticsRevoked(!record.analytics)
+  return loadAppTag(record)
 }
 
 export function reportValidatedInvoice<T extends { status: string }>(inv: T): T {

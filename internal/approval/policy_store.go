@@ -423,6 +423,10 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 			return err
 		}
 
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
 		row, err := resolveScopesTx(ctx, tx, in)
 		if err != nil {
 			return err
@@ -436,6 +440,30 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 			 RETURNING id, name, scope, position`,
 			caller.TenantID, name,
 		).Scan(&created.ID, &created.Name, &created.Scope, &created.Position); err != nil {
+			return err
+		}
+
+		// Directly above the last live policy: swap the two positions in one UPDATE (the
+		// exclusion constraint is deferrable). The first live policy keeps its position.
+		var lastID string
+		var lastPos int
+		err = tx.QueryRow(ctx,
+			`SELECT id, position
+			   FROM approval_policies
+			  WHERE deleted_at IS NULL AND id <> $1
+			  ORDER BY position DESC
+			  LIMIT 1`, created.ID).Scan(&lastID, &lastPos)
+		switch {
+		case err == nil:
+			if _, err := tx.Exec(ctx,
+				`UPDATE approval_policies
+				    SET position = CASE WHEN id = $1::uuid THEN $2::int ELSE $3::int END
+				  WHERE id IN ($1::uuid, $4::uuid)`,
+				created.ID, lastPos, created.Position, lastID); err != nil {
+				return err
+			}
+			created.Position = lastPos
+		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
 
@@ -455,6 +483,10 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 			return err
 		}
 		created.Scopes = scopesRead[versionID]
+
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
 
 		// Last statement in the closure: a failing audit write rolls both inserts back
 		// (TestPolicy_CreateAuditsInSameTx). tenant_id comes from the GUC via the audit_log
@@ -519,6 +551,10 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 		caller, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 
@@ -657,6 +693,10 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 		}
 		p.Scopes = scopes[versionID]
 
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
+
 		// Last statement in the closure: a failing audit write rolls the whole rewrite back
 		// (TestPutDraft_AuditsInSameTx). version is the WRITTEN draft's, the forked max+1
 		// when a fork happened.
@@ -671,7 +711,81 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 	return p, nil
 }
 
-// LockTenantPublishTx serialises publishes and demo-seeder backlog sweeps of one tenant
+// scopedSQL is true for a version that carries any scope; v is the version alias.
+const scopedSQL = `(cardinality(v.scope_document_types) > 0 OR cardinality(v.scope_entity_ids) > 0
+	OR cardinality(v.scope_workflow_role_ids) > 0 OR v.scope_amount_currency IS NOT NULL)`
+
+// scopedLiveExistsSQL: a live policy has a scoped top or active version. Check 3 and
+// scopedPolicyLiveTx share it.
+const scopedLiveExistsSQL = `EXISTS (
+	SELECT 1
+	  FROM approval_policies q
+	  JOIN approval_policy_versions v ON v.policy_id = q.id
+	 WHERE q.deleted_at IS NULL
+	   AND (v.is_active OR v.version = (SELECT max(w.version) FROM approval_policy_versions w WHERE w.policy_id = q.id))
+	   AND ` + scopedSQL + `)`
+
+// requireCatchAllLastTx refuses a state where the last live policy (by top version) or
+// the last live policy in force (by active version) carries a scope. No row passes.
+func requireCatchAllLastTx(ctx context.Context, tx pgx.Tx) error {
+	for _, q := range []string{
+		`SELECT tv.scoped
+		   FROM approval_policies p
+		  CROSS JOIN LATERAL (
+		        SELECT ` + scopedSQL + ` AS scoped
+		          FROM approval_policy_versions v
+		         WHERE v.policy_id = p.id
+		         ORDER BY v.version DESC
+		         LIMIT 1) tv
+		  WHERE p.deleted_at IS NULL
+		  ORDER BY p.position DESC
+		  LIMIT 1`,
+		`SELECT ` + scopedSQL + `
+		   FROM approval_policies p
+		   JOIN approval_policy_versions v ON v.policy_id = p.id AND v.is_active
+		  WHERE p.deleted_at IS NULL
+		  ORDER BY p.position DESC
+		  LIMIT 1`,
+	} {
+		var scoped bool
+		err := tx.QueryRow(ctx, q).Scan(&scoped)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if scoped {
+			return ErrPolicyCatchAll
+		}
+	}
+	return nil
+}
+
+// requireDeletedNotLastTx is check 3: the just-stamped policy, at position, may not have
+// been the last live one while any live policy is scoped.
+func requireDeletedNotLastTx(ctx context.Context, tx pgx.Tx, position int) error {
+	var pinned bool
+	if err := tx.QueryRow(ctx,
+		`SELECT $1::int > coalesce(max(p.position), 0) AND `+scopedLiveExistsSQL+`
+		   FROM approval_policies p
+		  WHERE p.deleted_at IS NULL`, position).Scan(&pinned); err != nil {
+		return err
+	}
+	if pinned {
+		return ErrPolicyCatchAll
+	}
+	return nil
+}
+
+// scopedPolicyLiveTx reports whether any live policy has a scoped top or active version.
+func scopedPolicyLiveTx(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var scoped bool
+	err := tx.QueryRow(ctx, `SELECT `+scopedLiveExistsSQL).Scan(&scoped)
+	return scoped, err
+}
+
+// LockTenantPublishTx serialises one tenant's policy writes and backlog sweeps
 // until the transaction ends. Each statement after it sees the earlier holder's commits.
 func LockTenantPublishTx(ctx context.Context, tx pgx.Tx, tenantID string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID)
@@ -809,6 +923,10 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			if uniqueViolationOn(err, "approval_policy_versions_one_active") {
 				return ErrConflict
 			}
+			return err
+		}
+
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
 			return err
 		}
 
@@ -967,6 +1085,10 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
 		// Must stay the first statement touching a policy row: the row-level exclusive lock it
 		// takes is what serialises this against PublishPolicy's FOR UPDATE, in that lock order
 		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite — the race spec passes
@@ -1004,6 +1126,13 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			   FROM approval_policy_versions
 			  WHERE policy_id = $1`, p.ID,
 		).Scan(&version); err != nil {
+			return err
+		}
+
+		if err := requireDeletedNotLastTx(ctx, tx, p.Position); err != nil {
+			return err
+		}
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
 			return err
 		}
 

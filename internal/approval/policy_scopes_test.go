@@ -82,6 +82,7 @@ func TestPublish_AnswersTheSealedVersionsScopesAndPosition(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Second")
 	v := seedApprovalDraft(t, super, tenantID, policyID)
 	setVersionScopes(t, super, v, `scope_document_types = '{debit_note}'`)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID)
 	if err != nil {
@@ -209,6 +210,7 @@ func TestCreatePolicy_WritesScopesToVersionOne(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	entityID := seedBusinessEntity(t, super, tenantID, "Client A")
 	roleID := seedWorkflowRole(t, super, tenantID, "scope-role", "Scope role")
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Scoped", &scopeInput{
 		DocumentTypes:    []string{"credit_note", "debit_note"},
@@ -245,6 +247,7 @@ func TestPutDraft_WritesScopesToTheOpenDraft(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
 		DocumentTypes: []string{"commercial_invoice"},
@@ -336,6 +339,7 @@ func TestPutDraft_OmittedScopesKeepTheDraftsScopes(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 2)
 	setVersionScopes(t, super, versionID, `scope_document_types = '{credit_note}'`)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
@@ -361,6 +365,7 @@ func TestPutDraft_ForkCopiesThePublishedVersionsScopes(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	v1 := seedSealedActiveV1Scoped(t, super, tenantID, policyID, entityID, roleID)
 	before := versionScopeColumns(t, super, v1)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
@@ -447,6 +452,7 @@ func TestCreatePolicy_LegacyScopeColumnKeepsItsDefault(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-02-02 legacy-scope")
 	c, _ := activeAdmin(t, super, tenantID)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
 
 	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off",
 		&scopeInput{DocumentTypes: []string{"credit_note"}})

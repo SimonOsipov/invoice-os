@@ -522,6 +522,8 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "a condition must have at least one step in one of its two lanes"
 	case errors.Is(err, ErrPolicyNothingToPublish):
 		return http.StatusConflict, "this policy has no unpublished changes"
+	case errors.Is(err, ErrPolicyCatchAll):
+		return http.StatusConflict, "a policy with no scopes must stay last while any policy has scopes"
 	// The message names the cap rather than the remedy; the operator remedy is in the
 	// vault runbook "Approvals".
 	case errors.Is(err, ErrSweepCapExceeded):

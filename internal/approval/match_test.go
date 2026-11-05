@@ -125,6 +125,10 @@ func TestFirstMatch_AmountBand(t *testing.T) {
 		{"upper only, zero total", band("", "100.00", "NGN"), dec("0.00"), ptr("NGN"), true},
 		{"lower only, below", band("5000000.00", "", "NGN"), dec("1.00"), ptr("NGN"), false},
 		{"upper only, above", band("", "100.00", "NGN"), dec("100.01"), ptr("NGN"), false},
+		{"lower equals upper, on it", band("100.00", "100.00", "NGN"), dec("100.00"), ptr("NGN"), true},
+		{"lower equals upper, a cent off", band("100.00", "100.00", "NGN"), dec("100.01"), ptr("NGN"), false},
+		{"currency compares case-sensitively", full, dec("10000000.00"), ptr("ngn"), false},
+		{"negative total below the lower bound", full, dec("-10000000.00"), ptr("NGN"), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			doc := commercialDoc()
@@ -150,6 +154,7 @@ func TestFirstMatch_CreatorRole(t *testing.T) {
 		{"creator holds R2 of {R1,R2}", map[string]bool{"R2": true}, true},
 		{"creator holds R3 only", map[string]bool{"R3": true}, false},
 		{"creator holds no role", map[string]bool{}, false},
+		{"a role present as false does not count", map[string]bool{"R1": false}, false},
 		{"creator roles nil", nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -211,14 +216,20 @@ func TestFirstMatch_CatchAllMatchesWithNoScopeNamed(t *testing.T) {
 	docs := []matchDoc{
 		commercialDoc(),
 		{DocumentType: "debit_note", EntityID: "other"},
+		{DocumentType: "credit_note", EntityID: "other", Total: dec("-5.00")},
 	}
-	for _, doc := range docs {
-		got, matched, ok := firstMatch(doc, []inForceVersion{catchAll("v")})
-		if !ok || got.VersionID != "v" {
-			t.Fatalf("catch-all vs %+v: got %q ok=%v, want v ok=true", doc, got.VersionID, ok)
-		}
-		if matched == nil || len(matched) != 0 {
-			t.Errorf("matched = %#v, want a non-nil empty slice", matched)
+	// The database hands back empty, non-nil arrays for an unset scope.
+	emptyArrays := catchAll("v")
+	emptyArrays.DocumentTypes, emptyArrays.EntityIDs, emptyArrays.RoleIDs = []string{}, []string{}, []string{}
+	for _, v := range []inForceVersion{catchAll("v"), emptyArrays} {
+		for _, doc := range docs {
+			got, matched, ok := firstMatch(doc, []inForceVersion{v})
+			if !ok || got.VersionID != "v" {
+				t.Fatalf("catch-all vs %+v: got %q ok=%v, want v ok=true", doc, got.VersionID, ok)
+			}
+			if matched == nil || len(matched) != 0 {
+				t.Errorf("matched = %#v, want a non-nil empty slice", matched)
+			}
 		}
 	}
 }
@@ -231,6 +242,11 @@ func TestFirstMatch_NothingMatches(t *testing.T) {
 	}
 	if _, _, ok := firstMatch(commercialDoc(), nil); ok {
 		t.Error("no versions: ok=true, want false")
+	}
+	unknown := commercialDoc()
+	unknown.DocumentType = ""
+	if _, _, ok := firstMatch(unknown, []inForceVersion{v}); ok {
+		t.Error("document with no type matched a {credit_note} version, want ok=false")
 	}
 	// Control: the same version matches a credit note, so ok=false above is the scope, not a dead matcher.
 	credit := commercialDoc()

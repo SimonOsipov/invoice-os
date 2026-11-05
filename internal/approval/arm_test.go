@@ -1180,8 +1180,6 @@ func pendingRoleKeys(t *testing.T, super *pgxpool.Pool, runID string) []string {
 	return keys
 }
 
-// Seed order in these specs makes the retired published-last rule pick the wrong policy.
-
 func TestArm_LowerPositionWinsOverThePolicyPublishedLast(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-03-01 lower-position-wins")
@@ -1290,6 +1288,8 @@ func TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole(t *testing.T) {
 	}{
 		{"created by a role member", created("creator-member", &member), versionA},
 		{"created by extraction-worker", created("creator-worker", ptr("extraction-worker")), versionB},
+		{"created by system", created("creator-system", ptr("system")), versionB},
+		{"created by backfill-source-rows", created("creator-backfill", ptr("backfill-source-rows")), versionB},
 		{"created by a member of no role", created("creator-outsider", &outsider), versionB},
 		{"no creation history row", created("creator-none", nil), versionB},
 	} {
@@ -1579,5 +1579,229 @@ func TestArm_AuditCatchAllMatchNamesNoScope(t *testing.T) {
 	}
 	if got := string(raw["matched_scopes"]); got != "[]" {
 		t.Errorf("matched_scopes = %q, want []", got)
+	}
+}
+
+// --- APSC-03 QA: adversarial coverage ------------------------------------------------
+
+func TestArm_DebitNoteArmsItsOwnDocumentTypePolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA debit-note")
+	entityID := seedBusinessEntity(t, super, tenantID, "Note Corp")
+	debit := seedCreditNote(t, super, tenantID, entityID, "qa-debit")
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET document_type = 'debit_note' WHERE id = $1`, debit); err != nil {
+		t.Fatalf("make the note a debit note: %v", err)
+	}
+	credit := seedCreditNote(t, super, tenantID, entityID, "qa-credit")
+	invoice := seedInvoice(t, super, tenantID, entityID, "qa-invoice")
+
+	_, vDebit := seedScopedPolicy(t, super, tenantID, "A debit notes", 1, scopeSpec{DocTypes: []string{"debit_note"}}, "fin_mgr")
+	_, vCredit := seedScopedPolicy(t, super, tenantID, "B credit notes", 2, scopeSpec{DocTypes: []string{"credit_note"}}, "cfo")
+	_, vRest := seedScopedPolicy(t, super, tenantID, "C catch-all", 3, scopeSpec{}, "fin_dir")
+
+	for _, c := range []struct{ name, inv, want string }{
+		{"debit note", debit, vDebit}, {"credit note", credit, vCredit}, {"commercial invoice", invoice, vRest},
+	} {
+		if got := armedVersion(t, super, app, tenantID, c.inv); got != c.want {
+			t.Errorf("%s armed %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestArm_NaNTotalNeverMatchesABand(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA nan-total")
+	entityID := seedBusinessEntity(t, super, tenantID, "Nan Corp")
+	inv := seedInvoice(t, super, tenantID, entityID, "qa-nan")
+	setInvoiceMoney(t, super, inv, ptr("NGN"), ptr("NaN"))
+
+	seedScopedPolicy(t, super, tenantID, "A band", 1, scopeSpec{BandLower: ptr("0.00"), BandCurrency: ptr("NGN")}, "fin_mgr")
+	_, versionB := seedScopedPolicy(t, super, tenantID, "B catch-all", 2, scopeSpec{}, "cfo")
+
+	if got := armedVersion(t, super, app, tenantID, inv); got != versionB {
+		t.Errorf("NaN total armed %q, want the catch-all %s and no error", got, versionB)
+	}
+}
+
+func TestArm_InactiveVersionOfALowerPolicyNeverArms(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA inactive-version")
+	entityID := seedBusinessEntity(t, super, tenantID, "Inactive Corp")
+	inv := seedInvoice(t, super, tenantID, entityID, "qa-inactive")
+
+	_, versionA := seedScopedPolicy(t, super, tenantID, "A switched off", 1, scopeSpec{}, "fin_mgr")
+	_, versionB := seedScopedPolicy(t, super, tenantID, "B catch-all", 2, scopeSpec{}, "cfo")
+	if _, err := super.Exec(context.Background(), `UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, versionA); err != nil {
+		t.Fatalf("deactivate A: %v", err)
+	}
+	if got := armedVersion(t, super, app, tenantID, inv); got != versionB {
+		t.Errorf("armed %s, want B's %s (A's only version is inactive)", got, versionB)
+	}
+}
+
+func TestArm_NoPolicyInForceIssuesOnlyTheInForceRead(t *testing.T) {
+	super, _ := dbTestPools(t)
+	traced, rec := tracedAppPool(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA ungoverned")
+	entityID := seedBusinessEntity(t, super, tenantID, "Ungoverned Corp")
+	inv := seedInvoice(t, super, tenantID, entityID, "qa-ungoverned")
+
+	rec.reset()
+	if res, err := arm(t, traced, tenantID, inv, "fp-ungoverned", "test-actor"); err != nil || res != (ArmResult{}) {
+		t.Fatalf("ArmTx = %+v, %v; want the zero result", res, err)
+	}
+	if got := rec.mentioning("invoices"); len(got) != 0 {
+		t.Errorf("an ungoverned tenant read the document: %v, want none", got)
+	}
+}
+
+func TestArm_OnlyTheCreationRowNamesTheCreator(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA creation-row")
+	entityID := seedBusinessEntity(t, super, tenantID, "Creator Corp")
+	roleID := seedWorkflowRole(t, super, tenantID, "preparers", "Preparers")
+	member := seedMemberOf(t, super, tenantID, memberSpec{role: "preparer", roleID: roleID})
+	outsider := seedMemberOf(t, super, tenantID, memberSpec{role: "preparer"})
+
+	_, versionA := seedScopedPolicy(t, super, tenantID, "A preparers", 1, scopeSpec{RoleIDs: []string{roleID}}, "fin_mgr")
+	_, versionB := seedScopedPolicy(t, super, tenantID, "B catch-all", 2, scopeSpec{}, "cfo")
+
+	// Created by an outsider; the role member only moved it along.
+	byOutsider := seedInvoice(t, super, tenantID, entityID, "qa-created-by-outsider")
+	seedHistory(t, super, tenantID, byOutsider, nil, outsider)
+	seedHistory(t, super, tenantID, byOutsider, ptr("draft"), member)
+	// Created by the role member; an outsider moved it along.
+	byMember := seedInvoice(t, super, tenantID, entityID, "qa-created-by-member")
+	seedHistory(t, super, tenantID, byMember, nil, member)
+	seedHistory(t, super, tenantID, byMember, ptr("draft"), outsider)
+
+	if got := armedVersion(t, super, app, tenantID, byOutsider); got != versionB {
+		t.Errorf("created by an outsider, moved by a role member: armed %s, want B's %s", got, versionB)
+	}
+	if got := armedVersion(t, super, app, tenantID, byMember); got != versionA {
+		t.Errorf("created by a role member, moved by an outsider: armed %s, want A's %s", got, versionA)
+	}
+}
+
+func TestArm_CreatorWithADeletedAndALiveRoleMatchesTheLiveOne(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA live-and-deleted-role")
+	entityID := seedBusinessEntity(t, super, tenantID, "Roles Corp")
+	liveRole := seedWorkflowRole(t, super, tenantID, "live-role", "Live")
+	goneRole := seedWorkflowRole(t, super, tenantID, "gone-role", "Gone")
+	member := seedMemberOf(t, super, tenantID, memberSpec{role: "preparer", roleID: liveRole})
+	staffWorkflowRole(t, super, tenantID, goneRole, member, 0)
+	softDeleteWorkflowRole(t, super, goneRole)
+	inv := seedInvoice(t, super, tenantID, entityID, "qa-two-roles")
+	seedHistory(t, super, tenantID, inv, nil, member)
+
+	_, versionGone := seedScopedPolicy(t, super, tenantID, "A deleted role", 1, scopeSpec{RoleIDs: []string{goneRole}}, "fin_mgr")
+	_, versionLive := seedScopedPolicy(t, super, tenantID, "B live role", 2, scopeSpec{RoleIDs: []string{liveRole}}, "cfo")
+
+	if got := armedVersion(t, super, app, tenantID, inv); got != versionLive {
+		t.Errorf("armed %s, want the live role's policy %s, not the deleted role's %s", got, versionLive, versionGone)
+	}
+}
+
+// Another tenant's policies and roles are invisible under RLS, so they never decide this tenant's document.
+func TestArm_AnotherTenantsPolicyAndRoleNeverMatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := policyTenant(t, super, "APSC-03-QA cross-tenant A")
+	tenantB := policyTenant(t, super, "APSC-03-QA cross-tenant B")
+	entityA := seedBusinessEntity(t, super, tenantA, "Tenant A Corp")
+	entityB := seedBusinessEntity(t, super, tenantB, "Tenant B Corp")
+	docA := seedInvoice(t, super, tenantA, entityA, "qa-cross-a")
+	docB := seedInvoice(t, super, tenantB, entityB, "qa-cross-b")
+
+	// B's catch-all sits at position 1 and its role holds A's document creator.
+	roleB := seedWorkflowRole(t, super, tenantB, "b-role", "B role")
+	creator := seedMemberOf(t, super, tenantB, memberSpec{role: "preparer", roleID: roleB})
+	seedHistory(t, super, tenantA, docA, nil, creator)
+	_, versionBAll := seedScopedPolicy(t, super, tenantB, "B catch-all", 1, scopeSpec{}, "cfo")
+
+	// A holds only a policy scoped to B's role and B's client.
+	seedScopedPolicy(t, super, tenantA, "A scoped to B's ids", 1, scopeSpec{RoleIDs: []string{roleB}}, "fin_mgr")
+	seedScopedPolicy(t, super, tenantA, "A scoped to B's client", 2, scopeSpec{EntityIDs: []string{entityB}}, "fin_mgr")
+
+	res, err := arm(t, app, tenantA, docA, "fp-cross-a", "test-actor")
+	if err != nil || res.RunID != "" {
+		t.Fatalf("tenant A ArmTx = %+v, %v; want no run: no policy of A matches, B's catch-all is not A's", res, err)
+	}
+	if n := rowCount(t, super, "approval_runs", tenantA); n != 0 {
+		t.Errorf("tenant A approval_runs = %d, want 0", n)
+	}
+	// Control: B's own document arms B's catch-all.
+	if got := armedVersion(t, super, app, tenantB, docB); got != versionBAll {
+		t.Errorf("tenant B armed %q, want its catch-all %s", got, versionBAll)
+	}
+}
+
+// With the creator read blocked, ArmTx returns the error instead of reading "no roles" and
+// falling to the catch-all.
+func TestArm_CreatorRoleReadErrorIsReturnedByArmTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA creator-read-blocked")
+	entityID := seedBusinessEntity(t, super, tenantID, "Blocked Corp")
+	roleID := seedWorkflowRole(t, super, tenantID, "preparers", "Preparers")
+	creator := seedMemberOf(t, super, tenantID, memberSpec{role: "preparer", roleID: roleID})
+	inv := seedInvoice(t, super, tenantID, entityID, "qa-blocked-1")
+	seedHistory(t, super, tenantID, inv, nil, creator)
+	seedScopedPolicy(t, super, tenantID, "A preparers", 1, scopeSpec{RoleIDs: []string{roleID}}, "fin_mgr")
+	seedScopedPolicy(t, super, tenantID, "B catch-all", 2, scopeSpec{}, "cfo")
+
+	ctx := context.Background()
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the lock holder: %v", err)
+	}
+	defer holder.Rollback(ctx)
+	if _, err := holder.Exec(ctx, `LOCK TABLE invoice_status_history IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock invoice_status_history: %v", err)
+	}
+
+	var res ArmResult
+	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '300ms'`); err != nil {
+			return err
+		}
+		var err error
+		res, err = ArmTx(ctx, tx, tenantID, inv, "fp-blocked", "test-actor")
+		return err
+	})
+	if err == nil {
+		t.Fatalf("ArmTx = %+v, nil; want the creator read's lock timeout returned", res)
+	}
+	if code := pgCode(err); code != "55P03" {
+		t.Errorf("SQLSTATE = %q, want 55P03", code)
+	}
+	if n := rowCount(t, super, "approval_runs", tenantID); n != 0 {
+		t.Errorf("approval_runs = %d after the error, want 0", n)
+	}
+}
+
+func TestArm_AuditNamesEveryScopeInTheFixedOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-QA audit-four-scopes")
+	entityID := seedBusinessEntity(t, super, tenantID, "Four Corp")
+	roleID := seedWorkflowRole(t, super, tenantID, "preparers", "Preparers")
+	creator := seedMemberOf(t, super, tenantID, memberSpec{role: "preparer", roleID: roleID})
+	note := seedCreditNote(t, super, tenantID, entityID, "qa-four")
+	setInvoiceMoney(t, super, note, ptr("NGN"), ptr("500.00"))
+	seedHistory(t, super, tenantID, note, nil, creator)
+
+	seedScopedPolicy(t, super, tenantID, "A all four", 1, scopeSpec{
+		DocTypes: []string{"credit_note"}, EntityIDs: []string{entityID}, RoleIDs: []string{roleID},
+		BandLower: ptr("0.00"), BandUpper: ptr("1000.00"), BandCurrency: ptr("NGN"),
+	}, "fin_mgr")
+
+	var body struct {
+		MatchedScopes []string `json:"matched_scopes"`
+	}
+	if err := json.Unmarshal(armedPayload(t, super, app, tenantID, note), &body); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	want := []string{"document_type", "client", "amount_band", "creator_role"}
+	if !reflect.DeepEqual(body.MatchedScopes, want) {
+		t.Errorf("matched_scopes = %v, want %v", body.MatchedScopes, want)
 	}
 }

@@ -2124,8 +2124,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
           res.invoices.some((i) => i.id === invoiceId),
           'the armed, undecided invoice should be in the filtered page',
         ).toBe(true)
-        // Never an exact total: publishing arms the WHOLE validated backlog, and this
-        // environment inherits whatever earlier specs left validated.
+        // Never an exact total: this environment inherits whatever earlier specs left validated.
         expect(res.pagination.total, 'the filtered total counts at least the armed invoice').toBeGreaterThanOrEqual(1)
       } finally {
         await deleteApprovalPolicy(token, policyId)

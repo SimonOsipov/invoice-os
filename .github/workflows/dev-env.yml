@@ -226,7 +226,7 @@ jobs:
         run: |
           set -euo pipefail
           for ((i = 1; i <= CAP_TRIES; i++)); do
-            out=$(bash scripts/ci/preview.sh cap)
+            out=$(bash scripts/ci/preview.sh cap nightly)
             echo "$out"
             grep -q '^full=false$' <<<"$out" && exit 0
             ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
@@ -234,6 +234,16 @@ jobs:
           open=$(sed -n 's/^open=//p' <<<"$out")
           echo "::error::preview cap reached: $open previews open (.claude/rules/ci-preview.md)"
           exit 1
+      - name: preview cap for a PR
+        if: needs.changes.outputs.nightly != 'true'
+        run: |
+          set -euo pipefail
+          out=$(bash scripts/ci/preview.sh cap "$PR")
+          echo "$out"
+          if grep -q '^full=true$' <<<"$out"; then
+            echo "::error::preview cap reached: two PR previews are open, the third slot is the nightly's (.claude/rules/ci-preview.md)"
+            exit 1
+          fi
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'
         run: bash scripts/ci/preview.sh contact-preflight "$PR"

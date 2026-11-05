@@ -23,7 +23,7 @@
 #   preview.sh contact-token-version nightly print the number of the token's latest version
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
-#   preview.sh cap                        print open=<n> and full=true|false (full at 3 previews or more)
+#   preview.sh cap <pr|nightly>           print open=<other PR previews> and full=true|false (a new PR is full at 2, the nightly at 3)
 #   preview.sh invariants                 fail when preview holds a production secret or reaches prod
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
@@ -486,13 +486,17 @@ cmd_prs() {
   } | sort -k1,1n -k2,2 | awk '!seen[$1]++ {print $1, $2}'
 }
 
-# cap: how many previews exist (a nightly counts) and whether three are open (ci-preview.md).
+# cap: PR previews open besides the caller's (a nightly entry never counts) and whether the caller is refused (ci-preview.md).
 cmd_cap() {
-  local prs n
+  local who=${1:?cap needs <pr|nightly>} n limit=2 mine
+  local prs
   prs=$(cmd_prs)
-  n=$(grep -c . <<<"$prs" || true)
+  n=$(awk -v who="$who" '$1 != "nightly" && $1 != who' <<<"$prs" | grep -c . || true)
+  mine=$(awk -v who="$who" '$1 == who' <<<"$prs" | grep -c . || true)
+  [ "$who" = nightly ] && limit=3
   echo "open=$n"
-  [ "$n" -ge 3 ] && echo "full=true" || echo "full=false"
+  if [ "$mine" -gt 0 ] && [ "$who" != nightly ]; then echo "full=false"; return; fi
+  [ "$n" -ge "$limit" ] && echo "full=true" || echo "full=false"
 }
 
 # budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
@@ -582,7 +586,7 @@ case "${1:-}" in
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
   deal-stage) deal_stage ;;
   prs) cmd_prs ;;
-  cap) cmd_cap ;;
+  cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
   *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;

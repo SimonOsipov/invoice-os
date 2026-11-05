@@ -2,6 +2,7 @@
 import { ApiError, apiFetch } from '@invoice-os/api-client'
 
 import type { Me, Session } from '../auth'
+import { trackWorkspaceCreated } from '../chat'
 import { trimName } from './pendingInvite'
 import { refreshTokens } from './renewal'
 import { decodeJwtPayload, handoffPersona, isHandoffMe, isTokenExpired } from './session'
@@ -208,6 +209,7 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, dis
 async function provisionAndRead(base: string, auth: { token: string; refreshToken: unknown }, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
   try {
     await callRenewing(base, auth, signal, (t) => apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token: t, body: answers, signal }))
+    trackWorkspaceCreated()
   } catch (err) {
     // 409: the identity already holds a membership; the refresh below tells which.
     if (!(err instanceof ApiError && err.status === 409)) {

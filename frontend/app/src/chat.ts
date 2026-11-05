@@ -1,4 +1,11 @@
-// The app's consent and HubSpot chat, bound to `APP_HOSTNAMES`. The only importer of landing source.
+// The app's consent, Google tag and HubSpot chat, bound to `APP_HOSTNAMES`. The only importer of landing source.
+import {
+  ensureTag,
+  setAnalyticsRevoked,
+  tagIsLoaded,
+  trackAppPageView,
+  trackInvoiceValidated,
+} from '../../landing/src/analytics'
 import { analyticsAllowed, readConsent, writeConsent, type ConsentRecord } from '../../landing/src/consent'
 import type { ConsentChoice } from '../../landing/src/components/CookieNotice'
 import { clearGaCookies } from '../../landing/src/gaCookies'
@@ -14,6 +21,7 @@ import {
   shouldLoadChat,
 } from '../../landing/src/hubspotChat'
 import { landingBase } from './auth'
+import { routeName } from './lib/route'
 
 export { APP_NOTICE_BODY, CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { readConsent, type ConsentRecord } from '../../landing/src/consent'
@@ -23,6 +31,25 @@ export function privacyHref(): string {
 }
 
 const hsq = (): unknown[] => ((window as Window & { _hsq?: unknown[] })._hsq ??= [])
+
+// The bounded route pattern, never the live URL: no query, no id.
+function appPage(): string {
+  const name = routeName(window.location.pathname)
+  return window.location.origin + (name.startsWith('/') ? name : `/${name}`)
+}
+
+function loadAppTag(record: ConsentRecord | null): boolean {
+  return ensureTag(window.location.hostname, record, APP_HOSTNAMES, { page_location: appPage() })
+}
+
+export function bootAppAnalytics(): boolean {
+  return loadAppTag(readConsent())
+}
+
+export function reportValidatedInvoice<T extends { status: string }>(inv: T): T {
+  if (inv.status === 'validated') trackInvoiceValidated()
+  return inv
+}
 
 function pushIdentity(email: string | null): void {
   const q = hsq()
@@ -59,7 +86,9 @@ export function chooseAppConsent(choice: ConsentChoice, email: string | null): C
   const host = window.location.hostname
   const accepted = choice === 'accept'
   const record = writeConsent(accepted, undefined, undefined, undefined, host)
+  setAnalyticsRevoked(!accepted)
   if (accepted) {
+    loadAppTag(record)
     loadAppChat(record, email)
   } else {
     clearGaCookies(host)
@@ -72,10 +101,13 @@ export function chooseAppConsent(choice: ConsentChoice, email: string | null): C
 export function syncAppConsent(email: string | null): ConsentRecord | null {
   const record = readConsent()
   if (!record) return null
+  setAnalyticsRevoked(!record.analytics)
   if (record.analytics) {
+    loadAppTag(record)
     loadAppChat(record, email)
   } else {
     const host = window.location.hostname
+    if (tagIsLoaded()) clearGaCookies(host)
     removeChat(host, record, APP_HOSTNAMES)
     clearHubSpotCookies(host)
   }
@@ -83,6 +115,7 @@ export function syncAppConsent(email: string | null): ConsentRecord | null {
 }
 
 export function reportAppPage(): void {
+  trackAppPageView(appPage())
   if (!chatIsLoaded()) return
   hsq().push(['setPath', window.location.pathname], ['trackPageView'])
 }

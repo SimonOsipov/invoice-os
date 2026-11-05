@@ -9,7 +9,12 @@ import { COOKIES, container, installSdk, jarNames, resetJar, seed, w } from '../
 
 type Chat = typeof import('./chat')
 
+type GaWindow = Window & { dataLayer?: IArguments[]; gtag?: unknown }
+
 const EMAIL = 'ada@example.com'
+const UUID = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+const UUID2 = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'
+const ORIGIN = 'https://app.ascomply.com'
 const IDENTIFY = ['identify', { email: EMAIL }]
 const LIFT = ['doNotTrack', { track: true }]
 
@@ -34,6 +39,8 @@ beforeEach(() => {
   document.head.innerHTML = ''
   document.body.innerHTML = ''
   delete w._hsq
+  delete (window as GaWindow).dataLayer
+  delete (window as GaWindow).gtag
   delete w.HubSpotConversations
   delete w.hsConversationsSettings
   delete w.hsConversationsOnReady
@@ -149,7 +156,7 @@ describe('chooseAppConsent', () => {
     expect(hsq().slice(n)).toEqual([LIFT, ['setPath', '/'], ['trackPageView']])
   })
 
-  it('the seam loads no Google tag', async () => {
+  it('with no baked id the seam loads no Google tag', async () => {
     const { chooseAppConsent } = await fresh()
     chooseAppConsent('accept', EMAIL)
     expect(document.querySelectorAll('script[src*="googletagmanager"]').length).toBe(0)
@@ -300,5 +307,107 @@ describe('privacy', () => {
     expect(privacyHref()).toBe('https://landing.example/privacy')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(privacyHref()).toBe('https://www.ascomply.com/privacy')
+  })
+})
+
+describe('Google tag', () => {
+  const layer = () => [...((window as GaWindow).dataLayer ?? [])].map((a) => [...a] as unknown[])
+  const pageViews = () => layer().filter((e) => e[0] === 'event' && e[1] === 'page_view')
+  const tags = () => document.querySelectorAll('script[src*="googletagmanager"]')
+  const stubId = () => vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+
+  it('bootAppAnalytics_storedAcceptSendsTheBoundedLocation', async () => {
+    stubId()
+    const { bootAppAnalytics } = await fresh()
+    setConsent(true)
+    window.history.replaceState(null, '', `/invoices/${UUID}?q=12345678-0001`)
+    bootAppAnalytics()
+    expect(tags().length).toBe(1)
+    expect(layer().filter((e) => e[0] === 'config')).toEqual([['config', 'G-TEST1234', { page_location: `${ORIGIN}/invoices/:id` }]])
+    const text = JSON.stringify(layer())
+    for (const leak of ['1b4e28ba', '12345678', '?']) expect(text).not.toContain(leak)
+  })
+
+  it('bootAppAnalytics_noRecordRejectOrNoIdLoadsNothing', async () => {
+    stubId()
+    let chat = await fresh()
+    chat.bootAppAnalytics()
+    setConsent(false)
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', '')
+    setConsent(true)
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    expect(tags().length).toBe(0)
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+  })
+
+  it('chooseAppConsent_acceptLoadsOnceAndRejectRevokes', async () => {
+    stubId()
+    const { chooseAppConsent, reportAppPage } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length).toBe(1)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+    chooseAppConsent('reject', EMAIL)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('syncAppConsent_followsARejectAndAReGrant', async () => {
+    stubId()
+    const { chooseAppConsent, syncAppConsent, reportAppPage } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    seed('_ga')
+    setConsent(false)
+    syncAppConsent(EMAIL)
+    expect(jarNames()).not.toContain('_ga')
+    reportAppPage()
+    expect(pageViews().length).toBe(0)
+    setConsent(true)
+    syncAppConsent(EMAIL)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('reportAppPage_sendsTheBoundedPatternPerCall', async () => {
+    stubId()
+    const { bootAppAnalytics, reportAppPage } = await fresh()
+    const { reviewPath } = await import('./lib/route')
+    setConsent(true)
+    bootAppAnalytics()
+    for (const path of ['/rules', '/invoices?q=12345678-0001', `/invoices/${UUID}`, reviewPath([UUID, UUID2]), '/no-such/12345678-0001']) {
+      window.history.replaceState(null, '', path)
+      reportAppPage()
+    }
+    expect(pageViews().map((e) => (e[2] as { page_location: string }).page_location)).toEqual(
+      ['/rules', '/invoices', '/invoices/:id', '/imports/:ids/review', '/<unmatched>'].map((p) => ORIGIN + p),
+    )
+    const text = JSON.stringify(layer())
+    for (const leak of ['1b4e28ba', '6ba7b810', '12345678', 'no-such', '?']) expect(text).not.toContain(leak)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('reportValidatedInvoice_sendsOnlyForValidated', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    for (const status of ['validated', 'draft', 'rejected']) {
+      const inv = { status }
+      expect(reportValidatedInvoice(inv)).toBe(inv)
+    }
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
+  it('reportValidatedInvoice_heldBeforeAccept', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    reportValidatedInvoice({ status: 'validated' })
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+    chooseAppConsent('accept', EMAIL)
+    const names = layer().map((e) => e[0] === 'event' ? e[1] : e[0])
+    expect(names.indexOf('invoice_validated')).toBeGreaterThan(names.indexOf('config'))
   })
 })

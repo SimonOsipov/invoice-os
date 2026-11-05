@@ -112,6 +112,7 @@ import { holdCancelLink, peekCancelLink, readCancelLinkFragment } from './lib/wo
 import {
   APP_NOTICE_BODY,
   CookieNotice,
+  bootAppAnalytics,
   bootAppChat,
   chooseAppConsent,
   endAppChat,
@@ -656,7 +657,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   }, [])
   // After the mount alignment above: the first page view reads the aligned path.
   useEffect(() => {
-    if (!suspended) bootAppChat(chatEmail)
+    if (suspended) return
+    bootAppAnalytics()
+    bootAppChat(chatEmail)
   }, [suspended, chatEmail])
   // Backfills the boot entry's stamp once the portfolio resolves, and keeps the popstate
   // handler's view of the active company current. The alignment above runs before the

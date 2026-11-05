@@ -44,11 +44,11 @@ func (s *Syncer) SeedFromSavedCopy() *Syncer {
 	return s
 }
 
-// SyncList fetches one list, then applies it. When NRS answers empty and the list has no rows, the saved copy seeds it; the
-// error is still ErrEmptyList, because NRS failed.
+// SyncList fetches one list, then applies it. When the fetch fails and the list has no rows, the saved copy seeds it;
+// the fetch error is still returned, because NRS failed.
 func (s *Syncer) SyncList(ctx context.Context, l List) (Change, error) {
 	grouped, n, err := fetch(ctx, s.hc, s.baseURL, l)
-	if errors.Is(err, ErrEmptyList) && s.seed != nil {
+	if err != nil && s.seed != nil {
 		return s.seedFromSaved(ctx, l, err)
 	}
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *Syncer) seedFromSaved(ctx context.Context, l List, fetchErr error) (Cha
 	if err != nil {
 		return Change{}, err
 	}
-	s.log.Warn("codelist seeded from saved copy", "list", l.Name, "entries", ch.Entries)
+	s.log.Warn("codelist seeded from saved copy", "list", l.Name, "entries", ch.Entries, "err", fetchErr)
 	return ch, fetchErr
 }
 

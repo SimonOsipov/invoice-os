@@ -10,6 +10,7 @@ paths:
   - "frontend/app/src/chat*"
   - "frontend/app/src/lib/invoices.ts"
   - "frontend/app/src/lib/sessionHandoff.ts"
+  - "frontend/app/src/lib/portfolio.ts"
   - "frontend/app/src/lib/importApi.ts"
   - "frontend/landing/Dockerfile"
   - "frontend/app/Dockerfile"
@@ -37,6 +38,7 @@ paths:
 - Send `sign_up` through `trackSignUp`, `invoice_validated` through `trackInvoiceValidated`, `email_verified` through `trackEmailVerified`, `workspace_created` through `trackWorkspaceCreated` and `client_added` through `trackClientAdded`. None carries a parameter.
 - Send `email_verified` from landing `main.tsx` when `readVerifyOutcome` reads `verified` and the page is not forwarding, and from the app's redeem effect when `holdsPendingVerify()` holds, before `redeemHandoff`.
 - Send `workspace_created` from `provisionAndRead` only, after the POST resolves. A 409 sends none. A join sends none.
+- Send `client_added` from `createEntity` only. An edit, offboard or onboard sends none.
 - Send `invoice_validated` through `reportValidatedInvoice` from `createInvoice`, `revalidateInvoice` and `supplyInvoiceNumber` only.
 - Send `sign_up` from `RegisterModal` only after `registerAccount` resolves. An invite registration on `InvitePage` sends none.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.

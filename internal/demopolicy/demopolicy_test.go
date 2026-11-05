@@ -714,6 +714,60 @@ func TestSeed_GovernedByTheVersionPublishedLast(t *testing.T) {
 	}
 }
 
+// TestSeed_SupersedeLeavesAnotherPolicyActive: a human policy is active at t1 and the
+// seeder's stale `system` version at t2 > t1, so the stale one governs and is superseded.
+// The human policy's version stays active beside the new one.
+func TestSeed_SupersedeLeavesAnotherPolicyActive(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy supersede leaves other")
+	f.addBacklog()
+	ctx := context.Background()
+
+	publishForeignPolicy(t, super, f.tenantID)
+	publishStaleOwnPolicy(t, app, f.tenantID)
+	staleVersionID := activeVersionOf(t, super, f.tenantID).ID
+	var humanVersionID string
+	if err := super.QueryRow(ctx,
+		`SELECT v.id::text FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+		  WHERE v.tenant_id = $1 AND p.name = 'Human published policy'`, f.tenantID).Scan(&humanVersionID); err != nil {
+		t.Fatalf("read the human version: %v", err)
+	}
+	if staleVersionID == humanVersionID {
+		t.Fatal("fixture: the human version governs, so the seeder would supersede nothing")
+	}
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "policy superseded; backlog armed" {
+		t.Fatalf("Note = %q, want %q", res.Note, "policy superseded; backlog armed")
+	}
+
+	var staleActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT is_active FROM approval_policy_versions WHERE id = $1`, staleVersionID).Scan(&staleActive); err != nil {
+		t.Fatalf("read the stale version: %v", err)
+	}
+	if staleActive {
+		t.Error("the stale seeded version is still active, want it superseded")
+	}
+	if res.VersionID == staleVersionID || res.VersionID == humanVersionID {
+		t.Errorf("Result.VersionID = %s, want the new version", res.VersionID)
+	}
+	var newActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT is_active FROM approval_policy_versions WHERE id = $1`, res.VersionID).Scan(&newActive); err != nil {
+		t.Fatalf("read the new version: %v", err)
+	}
+	if !newActive {
+		t.Error("the new seeded version is not active")
+	}
+	if !foreignVersionActive(t, super, f.tenantID) {
+		t.Error("the human policy's version is inactive, want it left active by the supersede")
+	}
+}
+
 // AC-1/AC-2/AC-9. DemoTenants is the safety boundary, not ENVIRONMENT, and it
 // is asserted by VALUE so widening the blast radius cannot be a silent diff.
 // It now names BOTH persona tenants — re-aimed from
@@ -1340,7 +1394,7 @@ func TestSeed_IsIdempotentAcrossBoots(t *testing.T) {
 		t.Fatalf("second seedTenant raised: %v", err)
 	}
 	if second.VersionCreated {
-		t.Error("the second boot created another version; one active version per tenant is a UNIQUE index")
+		t.Error("the second boot created another version; one active version per policy is a UNIQUE index")
 	}
 	if second.VersionID != first.VersionID {
 		t.Errorf("the second boot reports version %s, want the first boot's %s", second.VersionID, first.VersionID)

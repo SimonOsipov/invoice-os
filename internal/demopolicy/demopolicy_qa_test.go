@@ -1175,12 +1175,24 @@ func TestSeed_NoActivePolicySeatIsUnstaffedAcrossTheDemoTenants(t *testing.T) {
 	}
 }
 
+// foreignVersionActive reports whether the foreign policy's version is active.
+func foreignVersionActive(t *testing.T, super *pgxpool.Pool, tenantID string) bool {
+	t.Helper()
+	var active bool
+	if err := super.QueryRow(context.Background(),
+		`SELECT coalesce(bool_or(v.is_active), false) FROM approval_policy_versions v
+		   JOIN approval_policies p ON p.id = v.policy_id
+		  WHERE v.tenant_id = $1 AND p.name = 'Human published policy'`, tenantID).Scan(&active); err != nil {
+		t.Fatalf("read the foreign version's state: %v", err)
+	}
+	return active
+}
+
 // AC-11. publishSeedPolicy, called directly over a tenant that already holds
-// a FOREIGN sealed active version, must clear that slot before activating
-// its own — otherwise approval_policy_versions_one_active raises 23505.
-func TestSeed_PublishClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
+// a FOREIGN sealed active version, activates its own and leaves that one active.
+func TestSeed_PublishLeavesAForeignActiveVersionActive(t *testing.T) {
 	super, app := dbTestPools(t)
-	f := newFixture(t, super, app, "demopolicy publish clears stray")
+	f := newFixture(t, super, app, "demopolicy publish leaves foreign")
 	publishForeignPolicy(t, super, f.tenantID)
 	ctx := context.Background()
 
@@ -1190,7 +1202,7 @@ func TestSeed_PublishClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
 		versionID, err = publishSeedPolicy(ctx, tx, f.tenantID, planFor(f.tenantID))
 		return err
 	}); err != nil {
-		t.Fatalf("publishSeedPolicy over a stray foreign active version: %v", err)
+		t.Fatalf("publishSeedPolicy over a foreign active version: %v", err)
 	}
 
 	var activeCount int
@@ -1199,21 +1211,23 @@ func TestSeed_PublishClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
 		f.tenantID).Scan(&activeCount); err != nil {
 		t.Fatalf("count active versions: %v", err)
 	}
-	if activeCount != 1 {
-		t.Fatalf("%d active version(s) after publish, want exactly 1", activeCount)
+	if activeCount != 2 {
+		t.Errorf("%d active version(s) after publish, want 2 (the seeded one and the foreign one)", activeCount)
 	}
-	active := activeVersionOf(t, super, f.tenantID)
-	if active.ID != versionID {
-		t.Errorf("the active version is %s, want the newly published %s", active.ID, versionID)
+	if !foreignVersionActive(t, super, f.tenantID) {
+		t.Error("the foreign policy's version is inactive, want it left active")
+	}
+	if active := activeVersionOf(t, super, f.tenantID); active.ID != versionID {
+		t.Errorf("the governing version is %s, want the newly published %s", active.ID, versionID)
 	}
 }
 
 // AC-11. reactivateSealedVersion, called directly over a tenant whose OWN
-// version is deactivated while a FOREIGN version holds the active slot, must
-// clear that slot before reactivating ours.
-func TestSeed_ReactivateClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
+// version is deactivated while a FOREIGN version is active, activates ours and
+// leaves the foreign one active.
+func TestSeed_ReactivateLeavesAForeignActiveVersionActive(t *testing.T) {
 	super, app := dbTestPools(t)
-	f := newFixture(t, super, app, "demopolicy reactivate clears stray")
+	f := newFixture(t, super, app, "demopolicy reactivate leaves foreign")
 	ctx := context.Background()
 
 	first, err := seedTenant(ctx, app, f.tenantID)
@@ -1224,12 +1238,12 @@ func TestSeed_ReactivateClearsAStrayActiveVersionBeforeActivating(t *testing.T) 
 		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
 		t.Fatalf("deactivate the seeded version: %v", err)
 	}
-	publishForeignPolicy(t, super, f.tenantID) // now holds the active slot
+	publishForeignPolicy(t, super, f.tenantID)
 
 	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
 		return reactivateSealedVersion(ctx, tx, f.tenantID, first.VersionID)
 	}); err != nil {
-		t.Fatalf("reactivateSealedVersion over a stray foreign active version: %v", err)
+		t.Fatalf("reactivateSealedVersion over a foreign active version: %v", err)
 	}
 
 	var oursActive bool
@@ -1240,16 +1254,8 @@ func TestSeed_ReactivateClearsAStrayActiveVersionBeforeActivating(t *testing.T) 
 	if !oursActive {
 		t.Error("the seeded version is inactive, want active after reactivation")
 	}
-
-	var strayActive bool
-	if err := super.QueryRow(ctx,
-		`SELECT coalesce(bool_or(v.is_active), false) FROM approval_policy_versions v
-		   JOIN approval_policies p ON p.id = v.policy_id
-		  WHERE v.tenant_id = $1 AND p.name = 'Human published policy'`, f.tenantID).Scan(&strayActive); err != nil {
-		t.Fatalf("read the foreign version's state: %v", err)
-	}
-	if strayActive {
-		t.Error("the foreign policy's version is still active; reactivation must clear it first")
+	if !foreignVersionActive(t, super, f.tenantID) {
+		t.Error("the foreign policy's version is inactive, want it left active")
 	}
 }
 

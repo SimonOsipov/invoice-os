@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -457,31 +458,30 @@ func TestPublish_UnknownMalformedAndDeletedAreNotFound(t *testing.T) {
 	}
 }
 
-// TestPublish_DeactivatesAnActiveVersionUnderASoftDeletedPolicy: the deactivation predicate
-// is is_active alone — no policy id, and no deleted_at either. A soft-deleted policy that
-// still holds the tenant's slot must lose it, or the incoming publish would raise 23505
-// against a policy no read can even see.
-func TestPublish_DeactivatesAnActiveVersionUnderASoftDeletedPolicy(t *testing.T) {
+// TestPublish_LeavesASoftDeletedPolicysVersionAlone: a soft-deleted policy that still holds
+// an active version does not block a publish (no 23505), and its version is untouched.
+func TestPublish_LeavesASoftDeletedPolicysVersionAlone(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := policyTenant(t, super, "APPR-05 publish-over-a-deleted-policy")
+	tenantID := policyTenant(t, super, "APSC-01 publish-beside-a-deleted-policy")
 	c, _ := activeAdmin(t, super, tenantID)
 
 	deletedPolicy := seedApprovalPolicy(t, super, tenantID, "Retired")
 	deletedVersion := seedApprovalPolicyVersionN(t, super, tenantID, deletedPolicy, 1)
 	publishApprovalPolicyVersion(t, super, deletedVersion, "earlier-publisher")
 	softDeleteApprovalPolicy(t, super, deletedPolicy)
+	before := versionRow(t, super, deletedVersion)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
 	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID); err != nil {
-		t.Fatalf("PublishPolicy while a soft-deleted policy holds the slot: %v, want success", err)
+		t.Fatalf("PublishPolicy beside a soft-deleted policy's active version: %v, want success", err)
 	}
-	if v := versionRow(t, super, deletedVersion); !v.Sealed || v.IsActive {
-		t.Errorf("the deleted policy's version = %+v, want (sealed true, is_active false)", v)
+	if v := versionRow(t, super, deletedVersion); !reflect.DeepEqual(v, before) {
+		t.Errorf("the deleted policy's version = %+v, want unchanged %+v", v, before)
 	}
-	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 1 || ids[0] != versionID {
-		t.Errorf("active version ids = %v, want exactly [%s]", ids, versionID)
+	if v := versionRow(t, super, versionID); !v.Sealed || !v.IsActive {
+		t.Errorf("the published version = %+v, want (sealed true, is_active true)", v)
 	}
 }
 

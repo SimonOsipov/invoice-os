@@ -15,14 +15,17 @@ import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
-import { NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, wfBackGlyph, type WfPending, pendingNodeType } from './WorkflowParts'
+import { DISABLED_GHOST, NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, wfBackGlyph, WfSelect, type WfOption, type WfPending, pendingNodeType } from './WorkflowParts'
 import { delegateCandidates, inhouseNotifyTargets } from '../lib/members'
 import { policyInForce } from '../lib/policies'
-import { inspectorResolve, resolve } from '../lib/roles'
+import { inspectorResolve, resolve, roleOf } from '../lib/roles'
 import {
   appendNode,
+  bandFrom,
+  boundText,
   canDrop,
   clearSteps,
+  currencyText,
   deleteNode,
   findNode,
   insertNode,
@@ -30,12 +33,15 @@ import {
   newNode,
   parseLoc,
   renamePolicy,
+  setScopes,
   updateNode,
+  SCOPE_DOCUMENT_TYPES,
   SIM_DEFAULT,
   type Loc,
   type NodePatch,
   type NodeType,
   type Policy,
+  type PolicyScopes,
   type RoleKey,
   type SimContext,
 } from '../lib/workflows'
@@ -66,11 +72,92 @@ const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
-/**
- * The ghost variant's disabled paint. Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
- * control on hover.
- */
-const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
+const CATCH_ALL_REASON = 'The last policy decides every document no other policy matches, so it takes no scopes. To scope this policy, move it up the list or create a new policy.'
+const CATCH_ALL_REASON_ID = 'scope-catch-all-reason-text'
+const DELETED_ROLE_NOTE = 'This role was deleted, so this scope matches no creator. Removing it makes the policy match every creator.'
+const SCOPE_HINT = 'A document must match every scope you set. A scope left empty matches every document. Scope changes take effect when you publish.'
+
+/** The persistent-disable recipe the scope controls share; `WfSelect` takes the three props as is. */
+type ScopeLock = { disabled: boolean; title?: string; ariaDescribedBy?: string }
+
+const BAND_INPUT_STYLE = { width: '100%', minWidth: 0, height: 38, padding: '0 10px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 13, boxSizing: 'border-box' } as const
+
+function ScopeMulti({ testId, label, placeholder, anyText, options, chosen, labelOf, onChange, lock, note }: {
+  testId: string
+  label: string
+  placeholder: string
+  anyText: string
+  options: WfOption[]
+  chosen: string[]
+  labelOf: (value: string) => string
+  onChange: (next: string[]) => void
+  lock: ScopeLock
+  note?: ReactNode
+}) {
+  return (
+    <div data-testid={`scope-cell-${testId}`} style={{ minWidth: 0 }}>
+      <WfSelect
+        label={label}
+        value=""
+        options={[{ value: '', label: placeholder }, ...options.filter((o) => !chosen.includes(o.value))]}
+        onChange={(v) => v !== '' && onChange([...chosen, v])}
+        {...lock}
+      />
+      {chosen.length === 0 ? (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--fg-3)' }}>{anyText}</div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {chosen.map((v) => {
+            const text = labelOf(v)
+            return (
+              <button
+                key={v}
+                type="button"
+                className="pf-chip"
+                aria-label={`Remove ${text}`}
+                disabled={lock.disabled}
+                title={lock.title}
+                aria-describedby={lock.ariaDescribedBy}
+                onClick={() => onChange(chosen.filter((c) => c !== v))}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', padding: '3px 5px 3px 10px', fontFamily: 'var(--font-sans)', fontSize: 12, border: '1px solid var(--line-2)', background: 'var(--bg-1)', color: 'var(--fg-2)', ...(lock.disabled ? { cursor: 'not-allowed', color: 'var(--fg-4)' } : null) }}
+              >
+                <span title={text} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {text}
+                </span>
+                <span aria-hidden style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, color: 'var(--fg-3)' }}>
+                  ×
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {note}
+    </div>
+  )
+}
+
+function ScopeBand({ band, onChange, lock }: { band: PolicyScopes['amount_band']; onChange: (next: PolicyScopes['amount_band']) => void; lock: ScopeLock }) {
+  const cur = band?.currency ?? ''
+  const lo = band?.lower ?? ''
+  const up = band?.upper ?? ''
+  const paint = { ...BAND_INPUT_STYLE, ...(lock.disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }
+  const field = (aria: string, placeholder: string, value: string, set: (v: string) => void, extra: object) => (
+    <input type="text" className="pf-input" aria-label={aria} placeholder={placeholder} value={value} onChange={(e) => set(e.target.value)} disabled={lock.disabled} title={lock.title} aria-describedby={lock.ariaDescribedBy} style={paint} {...extra} />
+  )
+  return (
+    <div data-testid="scope-cell-band" style={{ minWidth: 0 }}>
+      <span className="label" style={{ display: 'block', marginBottom: 6 }}>
+        Amount band
+      </span>
+      <div style={{ display: 'grid', gridTemplateColumns: '96px minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}>
+        {field('Band currency', 'Currency', cur, (v) => onChange(bandFrom(currencyText(v), lo, up)), { maxLength: 3 })}
+        {field('Band from', 'From', lo, (v) => onChange(bandFrom(cur, boundText(v), up)), { inputMode: 'decimal' })}
+        {field('Band to', 'To', up, (v) => onChange(bandFrom(cur, lo, boundText(v))), { inputMode: 'decimal' })}
+      </div>
+    </div>
+  )
+}
 
 /**
  * Why Publish cannot run, or null when it can. `dirty` is checked FIRST because saving is the
@@ -158,6 +245,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // WorkflowsView — that forwards ctx whole and reads no role data ([D-BUILDER-GUARD]).
   if (ctx.rolesState === 'loading' || ctx.rolesState === 'idle') return <Loading />
   if (ctx.rolesState === 'error') return ctx.rolesError ? <ErrorState error={ctx.rolesError} onRetry={ctx.refetchRoles} /> : null
+  // Same reason for clients: an unlanded fetch must not read every chip as "Unknown client".
+  if (ctx.entitiesState === 'loading' || ctx.entitiesState === 'idle') return <Loading />
+  if (ctx.entitiesState === 'error') return ctx.entitiesError ? <ErrorState error={ctx.entitiesError} onRetry={ctx.refetchEntities} /> : null
 
   // Local only. Every edit reaches the server through Save draft, never through a keystroke —
   // a per-keystroke PUT composes each request from the last LANDED name and drops the
@@ -188,7 +278,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     try {
       // ONE object into BOTH states. Cloning either side (`setServer({ ...saved })`) leaves
       // `dirty` permanently true and Publish permanently dead.
-      const landed = await ctx.savePolicy(working)
+      const landed = await ctx.savePolicy(working, { sendScopes: working.scopes !== server.scopes })
       setWorking(landed)
       setServer(landed)
       setSaved(true)
@@ -340,6 +430,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // step's, so moving off that step drops it again.
   const roleChoices = roleOptions(ctx.roles, selected?.type === 'approval' ? selected.role : '')
 
+  // A stale list is backstopped by the server's 409 in the save slot.
+  const catchAll = ctx.policies[ctx.policies.length - 1]?.id === working.id
+  const lock: ScopeLock = catchAll ? { disabled: true, title: CATCH_ALL_REASON, ariaDescribedBy: CATCH_ALL_REASON_ID } : { disabled: false }
+  const editScopes = (patch: Partial<PolicyScopes>) => applyEdit(setScopes(working, { ...working.scopes, ...patch }))
+  const hasDeletedRole = working.scopes.workflow_role_keys.some((k) => roleOf(ctx.roles, k).deleted)
+
   return (
     <>
       <button
@@ -413,6 +509,63 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           {saveError && <WriteError testId="policy-save-error">{saveError}</WriteError>}
           {publishError && <WriteError testId="policy-publish-error">{publishError}</WriteError>}
         </div>
+      </div>
+
+      <div data-testid="scope-card" style={{ marginBottom: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 14px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 10 }}>
+          <div className="label">Applies</div>
+          <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>{SCOPE_HINT}</div>
+        </div>
+        <fieldset disabled={submitting} style={FIELDSET_RESET}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+            <ScopeMulti
+              testId="doc"
+              label="Document types"
+              placeholder="Add a document type…"
+              anyText="Any document type"
+              options={SCOPE_DOCUMENT_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+              chosen={working.scopes.document_types}
+              labelOf={(v) => SCOPE_DOCUMENT_TYPES.find((t) => t.value === v)?.label ?? v}
+              onChange={(next) => editScopes({ document_types: next })}
+              lock={lock}
+            />
+            <ScopeMulti
+              testId="client"
+              label="Clients"
+              placeholder="Add a client…"
+              anyText="Any client"
+              options={ctx.entities.map((e) => ({ value: e.id, label: e.name }))}
+              chosen={working.scopes.entity_ids}
+              labelOf={(v) => ctx.entities.find((e) => e.id === v)?.name ?? 'Unknown client'}
+              onChange={(next) => editScopes({ entity_ids: next })}
+              lock={lock}
+            />
+            <ScopeBand band={working.scopes.amount_band} onChange={(next) => editScopes({ amount_band: next })} lock={lock} />
+            <ScopeMulti
+              testId="role"
+              label="Created by a member of"
+              placeholder="Add a workflow role…"
+              anyText="Any creator"
+              options={ctx.roles.map((r) => ({ value: r.key, label: r.title }))}
+              chosen={working.scopes.workflow_role_keys}
+              labelOf={(v) => roleOf(ctx.roles, v).title}
+              onChange={(next) => editScopes({ workflow_role_keys: next })}
+              lock={lock}
+              note={
+                hasDeletedRole && (
+                  <div data-testid="scope-deleted-role-note" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                    {DELETED_ROLE_NOTE}
+                  </div>
+                )
+              }
+            />
+          </div>
+        </fieldset>
+        {catchAll && (
+          <div id={CATCH_ALL_REASON_ID} data-testid="scope-catch-all-reason" style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+            {CATCH_ALL_REASON}
+          </div>
+        )}
       </div>
 
       <div style={{ marginBottom: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 14px 14px' }}>

@@ -616,19 +616,56 @@ test('PW-07 Workflows list row and intro fit at every wide width', async ({ page
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-async function openBuilder(page: Page): Promise<void> {
+// Resolves to whether the seeded policy is the list's last row, read before the builder opens.
+async function openBuilder(page: Page): Promise<boolean> {
   await openWorkflows(page)
+  const seededIsLast = (await screen(page).locator('.pf-row').last().filter({ hasText: SEEDED_POLICY }).count()) > 0
   await policyRow(page).getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(page.getByLabel('Policy name'), 'Edit never opened the builder on the seeded policy').toHaveValue(SEEDED_POLICY)
   await expect(page.getByText('Invoice submitted', { exact: true }), 'the canvas never drew').toBeVisible()
   await settle(page, main(page))
+  return seededIsLast
 }
+
+const SCOPE_BAND_INPUTS = ['bandCurrency', 'bandFrom', 'bandTo']
+const SCOPE_CELLS = ['cellDoc', 'cellClient', 'cellBand', 'cellRole']
+
+// The Applies card's locators for `boxes`, plus the header row and palette it sits between.
+function scopeNamed(page: Page, left: Locator): Named {
+  const card = page.getByTestId('scope-card')
+  return {
+    header: left.locator('xpath=..'),
+    scopeCard: card,
+    palette: page.getByText('Building blocks', { exact: true }).locator('xpath=../..'),
+    cellDoc: page.getByTestId('scope-cell-doc'),
+    cellClient: page.getByTestId('scope-cell-client'),
+    cellBand: page.getByTestId('scope-cell-band'),
+    cellRole: page.getByTestId('scope-cell-role'),
+    bandCurrency: card.getByLabel('Band currency'),
+    bandFrom: card.getByLabel('Band from'),
+    bandTo: card.getByLabel('Band to'),
+  }
+}
+
+// Relationships only: the card sits between the header row and the palette, shares its edges, and holds its cells.
+function scopeCardLayout(rects: Record<string, Rect>, problems: string[]): void {
+  const { header, scopeCard: card, palette } = rects
+  if (header && card && card.y < header.y + header.height - 1) problems.push('the Applies card starts above the bottom of the header row')
+  if (card && palette && palette.y < card.y + card.height - 1) problems.push('the palette starts above the bottom of the Applies card')
+  if (card && palette && Math.abs(card.x - palette.x) > 1) problems.push('the Applies card and the palette differ in left edge')
+  if (card && palette && Math.abs(card.x + card.width - (palette.x + palette.width)) > 1) problems.push('the Applies card and the palette differ in right edge')
+  inside(rects, 'scopeCard', SCOPE_CELLS, problems)
+  noOverlap(rects, SCOPE_CELLS, problems)
+  inside(rects, 'cellBand', SCOPE_BAND_INPUTS, problems)
+  noOverlap(rects, SCOPE_BAND_INPUTS, problems)
+}
+
 
 test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header controls', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   const writes = watchPolicyWrites(page)
-  await openBuilder(page)
+  const seededIsLast = await openBuilder(page)
 
   const trigger = page.getByText('Invoice submitted', { exact: true }).locator('xpath=../..')
   const canvas = trigger.locator('xpath=../..')
@@ -677,6 +714,21 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   await expect(tiles.last(), 'the palette drew no tiles').toBeVisible()
   for (const tile of await tiles.all()) await expectCorners(tile, '6px', 'palette tile')
 
+  // Applies card: the palette card's shell, and locked with its reason exactly when the seeded policy is the list's last.
+  const scopeCard = page.getByTestId('scope-card')
+  const paletteCard = page.getByText('Building blocks', { exact: true }).locator('xpath=../..')
+  const cardStyle = await styles(scopeCard, ['box-shadow', 'background-color'])
+  await expectCorners(scopeCard, '6px', 'Applies card')
+  expect(cardStyle['box-shadow'], 'Applies card shadow').toBe('none')
+  expect(cardStyle['background-color'], 'Applies card background equals the palette card').toBe((await styles(paletteCard, ['background-color']))['background-color'])
+  await expect(scopeCard.locator('select'), 'the Applies card has three selects').toHaveCount(3)
+  await expect(scopeCard.locator('input'), 'the Applies card has three band inputs').toHaveCount(3)
+  for (const control of await scopeCard.locator('select, input').all()) {
+    if (seededIsLast) await expect(control, 'a scope control is enabled on the last policy').toBeDisabled()
+    else await expect(control, 'a scope control is disabled above the last policy').toBeEnabled()
+  }
+  await expect(page.getByTestId('scope-catch-all-reason'), 'the catch-all reason shows iff the policy is last').toHaveCount(seededIsLast ? 1 : 0)
+
   // Header controls (the layout sweep is PW-09).
   const publish = await expectCorners(page.getByRole('button', { name: 'Publish', exact: true }), '7px', 'Publish')
 
@@ -716,7 +768,7 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   await expect(connectors, 'one connector between each pair of steps').toHaveCount((await dots.count()) - 1)
   for (const line of await connectors.all()) expect(await line.locator('*').count(), 'a connector carries an arrowhead element').toBe(0)
 
-  await attachJson(testInfo, 'pw-08-approval-measurements', { canvasStyle, triggerStyle, terminalStyle, probe, rest, lit, badge, move, publish, title, remove, manage, trackRadius, simTitle })
+  await attachJson(testInfo, 'pw-08-approval-measurements', { cardStyle, seededIsLast, canvasStyle, triggerStyle, terminalStyle, probe, rest, lit, badge, move, publish, title, remove, manage, trackRadius, simTitle })
   await attachShot(page, testInfo, 'builder-selected')
 
   // Condition step: the preset equal to the value is lit, the others rest.
@@ -767,6 +819,7 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     right: publish.locator('xpath=../..'),
     publish,
     reason: page.getByTestId('publish-blocked-reason'),
+    ...scopeNamed(page, left),
   }
   const consequence = page.getByTestId('publish-consequence')
   const measured = await sweepWide(page, 'builder header', async () => {
@@ -782,6 +835,7 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
       if (Math.abs(rects.right.y - rects.left.y) > 1) problems.push('the columns do not share a top')
     }
     if (rects.back && rects.left && rects.back.y + rects.back.height > rects.left.y + 1) problems.push('the back link is not above the header row')
+    scopeCardLayout(rects, problems)
     for (const n of ['reason', 'consequence']) {
       if (rects[n] && rects.publish && Math.abs(rects[n].x + rects[n].width - (rects.publish.x + rects.publish.width)) > 1) problems.push(`${n} right edge differs from Publish`)
     }
@@ -795,8 +849,9 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     await expect
       .poll(async () => {
         await settle(page, left)
-        const { rects, problems } = await boxes({ back: named.back, left, right: named.right, trigger: named.trigger, triggerLine: named.triggerLine })
+        const { rects, problems } = await boxes({ back: named.back, left, right: named.right, trigger: named.trigger, triggerLine: named.triggerLine, ...scopeNamed(page, left) })
         noOverlap(rects, ['left', 'right', 'back'], problems)
+        scopeCardLayout(rects, problems)
         inside(rects, 'trigger', ['triggerLine'], problems)
         narrow = rects
         return problems

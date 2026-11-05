@@ -162,7 +162,7 @@ describe('APPR-09-03 QA: the save control writes a draft and nothing else', () =
     // Positive first: a spec that only asserted the absence would pass on a button that
     // was wired to nothing at all.
     expect(savePolicy).toHaveBeenCalledTimes(1)
-    expect(savePolicy).toHaveBeenCalledWith(policy)
+    expect(savePolicy).toHaveBeenCalledWith(policy, { sendScopes: false })
     expect(publishPolicy, 'Save sealed a version — it must not publish').not.toHaveBeenCalled()
   })
 
@@ -974,7 +974,7 @@ describe('APPR-10-04 QA AC-6: the fieldset count holds with a step SELECTED', ()
   // no-selection card and the approval panel is not in the document at all. A `<fieldset>`
   // added AROUND the delegation controls — the exact shortcut P28 exists to forbid — survives
   // it untouched. Measured: with no `disabled` on that wrapper, nothing in the suite failed.
-  it('selecting an approval step adds no wrapper — still two, none flex', () => {
+  it('selecting an approval step adds no wrapper — still three, none flex', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
 
@@ -982,7 +982,7 @@ describe('APPR-10-04 QA AC-6: the fieldset count holds with a step SELECTED', ()
     expect(screen.getByLabelText('Delegate to'), 'no approval panel is open, so this counts the wrong tree').toBeTruthy()
 
     const wrappers = Array.from(document.querySelectorAll('fieldset'))
-    expect(wrappers, 'the canvas and the inspector — the delegation recipe adds none').toHaveLength(2)
+    expect(wrappers, 'the Applies card, the canvas and the inspector — the delegation recipe adds none').toHaveLength(3)
     expect(wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex'), 'no wrapper blockifies a child').toHaveLength(0)
     // AC-2's distinction, stated as a tree property rather than per control: nothing inside the
     // open inspector is shut by ancestry, so every `.disabled` above is the control's own.
@@ -1470,12 +1470,12 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
   // gate. Verified statically alongside this: no `<legend>` and no anchor inside any of the
   // three subtrees (a disabled fieldset reaches neither), and no CSS in `frontend/app/src/styles`
   // or `packages/design-tokens` selects `fieldset` at all.
-  it('the two in-flight wrappers carry the shipped fieldset reset, and neither is a flex box', () => {
+  it('the three in-flight wrappers carry the shipped fieldset reset, and none is a flex box', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self], roles: FIRM_ROLES })} policy={self} />)
 
     const wrappers = Array.from(document.querySelectorAll('fieldset'))
-    expect(wrappers, 'the canvas and the inspector').toHaveLength(2)
+    expect(wrappers, 'the Applies card, the canvas and the inspector').toHaveLength(3)
 
     for (const fs of wrappers) {
       const s = (fs as HTMLElement).style
@@ -2774,5 +2774,294 @@ describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
     const notify = within(inspectorPanel()).getByTestId('notify-not-delivered')
     expect(notify.style.fontSize, 'the notify note is not 11px').toBe('11px')
     expect(notify.style.lineHeight, 'the notify note is not 1.5').toBe('1.5')
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APSC-04-03 — the Applies card sets the four scopes
+// ----------------------------------------------------------------------------
+
+const CLIENT_A = { id: 'e1', name: 'Zenith Foods' }
+const CLIENT_B = { id: 'e2', name: 'Alpha Mills' }
+const ENTITIES = [CLIENT_A, CLIENT_B]
+const BLOCKED_SAVE_FIRST = 'Save your changes first'
+
+function scoped(id: string, scopes: Partial<Policy['scopes']> = {}): Policy {
+  return { ...policyWith('fin_mgr'), id, scopes: { ...CATCH_ALL_SCOPES, ...scopes } }
+}
+
+/** `p` above a catch-all, so the card is editable. */
+function editableCtx(p: Policy, over: Record<string, unknown> = {}): PlatformCtx {
+  return builderCtx({ policies: [p, scoped('last')], roles: FIRM_ROLES, entities: ENTITIES, ...over })
+}
+
+function cell(name: 'doc' | 'client' | 'band' | 'role'): HTMLElement {
+  return screen.getByTestId(`scope-cell-${name}`)
+}
+
+function cellSelect(name: 'doc' | 'client' | 'role'): HTMLSelectElement {
+  return cell(name).querySelector('select') as HTMLSelectElement
+}
+
+function optionLabels(sel: HTMLSelectElement): string[] {
+  return Array.from(sel.options).map((o) => o.textContent ?? '')
+}
+
+function chipLabels(el: HTMLElement): string[] {
+  return Array.from(el.querySelectorAll('button.pf-chip')).map((b) => (b.querySelector('span')?.textContent ?? '').trim())
+}
+
+describe('APSC-04-03: the Applies card', () => {
+  it('the Applies card offers the four scopes on a policy above the last', () => {
+    const p = scoped('p1')
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+
+    const card = screen.getByTestId('scope-card')
+    for (const label of ['Document types', 'Clients', 'Amount band', 'Created by a member of']) {
+      expect(within(card).getByText(label), `no "${label}" cell`).toBeTruthy()
+    }
+    const controls = Array.from(card.querySelectorAll('select, input, button')) as (HTMLSelectElement | HTMLInputElement | HTMLButtonElement)[]
+    expect(controls).toHaveLength(6)
+    expect(controls.filter((c) => c.disabled)).toHaveLength(0)
+    expect(screen.queryByTestId('scope-catch-all-reason')).toBeNull()
+  })
+
+  it('choosing a document type adds a chip and marks the tree unsaved', () => {
+    const p = scoped('p1')
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(screen.queryByTestId('publish-blocked-reason')).toBeNull()
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'credit_note' } })
+
+    expect(chipLabels(cell('doc'))).toEqual(['Credit notes'])
+    expect(screen.getByTestId('publish-blocked-reason').textContent).toContain(BLOCKED_SAVE_FIRST)
+  })
+
+  it('removing a chip removes the value', () => {
+    const p = scoped('p1', { entity_ids: ['e1', 'e2'] })
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(optionLabels(cellSelect('client'))).toEqual(['Add a client…'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Zenith Foods' }))
+
+    expect(chipLabels(cell('client'))).toEqual(['Alpha Mills'])
+    expect(optionLabels(cellSelect('client'))).toEqual(['Add a client…', 'Zenith Foods'])
+  })
+
+  it('the band inputs edit the band', async () => {
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(screen.getByLabelText('Band currency'), { target: { value: 'ngn' } })
+    fireEvent.change(screen.getByLabelText('Band from'), { target: { value: '1,000' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    const [sent, opts] = savePolicy.mock.calls[0] as unknown as [Policy, { sendScopes: boolean }]
+    expect(sent.scopes.amount_band).toEqual({ lower: '1000', upper: null, currency: 'NGN' })
+    expect(opts).toEqual({ sendScopes: true })
+  })
+
+  it('clearing the band sends null', async () => {
+    const p = scoped('p1', { amount_band: { lower: '10', upper: '20', currency: 'NGN' } })
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    for (const name of ['Band currency', 'Band from', 'Band to']) fireEvent.change(screen.getByLabelText(name), { target: { value: '' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    expect((savePolicy.mock.calls[0] as unknown as [Policy])[0].scopes.amount_band).toBeNull()
+  })
+
+  it('Save draft sends the edited scopes and re-seeds from the answer', async () => {
+    const p = scoped('p1')
+    const answer = scoped('p1', { workflow_role_keys: ['fin_mgr', 'cfo'] })
+    const savePolicy = vi.fn(async () => answer)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(cellSelect('role'), { target: { value: 'fin_mgr' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(chipLabels(cell('role'))).toEqual(['Engagement Manager', 'Engagement Partner']))
+    expect((savePolicy.mock.calls[0] as unknown[])[1]).toEqual({ sendScopes: true })
+  })
+
+  it('a save with no scope edit sends no scopes', async () => {
+    const p = scoped('p1', { workflow_role_keys: ['gone'] })
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    expect((savePolicy.mock.calls[0] as unknown[])[1]).toEqual({ sendScopes: false })
+    expect(chipLabels(cell('role'))).toEqual(['Deleted role'])
+  })
+
+  it('a scope edit undone by the answer\'s re-seed resets sendScopes', async () => {
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'credit_note' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+    fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(2))
+    expect((savePolicy.mock.calls[1] as unknown[])[1]).toEqual({ sendScopes: false })
+  })
+
+  it('a scope edit keeps a Deleted role chip and saves', async () => {
+    const p = scoped('p1', { workflow_role_keys: ['gone'] })
+    const savePolicy = vi.fn(async (x: Policy) => scoped('p1', { workflow_role_keys: ['gone'], document_types: x.scopes.document_types }))
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'credit_note' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    const [sent, opts] = savePolicy.mock.calls[0] as unknown as [Policy, { sendScopes: boolean }]
+    expect(opts).toEqual({ sendScopes: true })
+    expect(sent.scopes.workflow_role_keys).toEqual(['gone'])
+    await waitFor(() => expect(screen.queryByText('Saving…')).toBeNull())
+    expect(chipLabels(cell('role'))).toEqual(['Deleted role'])
+    expect(screen.getByTestId('scope-deleted-role-note')).toBeTruthy()
+    expect(screen.queryByTestId('policy-save-error')).toBeNull()
+  })
+
+  it('a Deleted role chip states what removing it does', () => {
+    const p = scoped('p1', { workflow_role_keys: ['gone'] })
+    const { unmount } = render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toBe(
+      'This role was deleted, so this scope matches no creator. Removing it makes the policy match every creator.',
+    )
+    unmount()
+    const live = scoped('p1', { workflow_role_keys: ['fin_mgr'] })
+    render(<WorkflowBuilder ctx={editableCtx(live)} policy={live} />)
+    expect(screen.queryByTestId('scope-deleted-role-note')).toBeNull()
+  })
+
+  it('a long chip label is truncated with its full text in title', () => {
+    const name = 'N'.repeat(80)
+    const p = scoped('p1', { entity_ids: ['long'] })
+    render(<WorkflowBuilder ctx={editableCtx(p, { entities: [{ id: 'long', name }] })} policy={p} />)
+
+    const label = cell('client').querySelector('button.pf-chip span') as HTMLElement
+    expect(label.title).toBe(name)
+    expect(label.style.textOverflow).toBe('ellipsis')
+  })
+
+  it('a select offers only the values not chosen and resets to its placeholder', () => {
+    const p = scoped('p1', { document_types: ['credit_note'] })
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(optionLabels(cellSelect('doc'))).toEqual(['Add a document type…', 'Commercial invoices', 'Debit notes'])
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'commercial_invoice' } })
+
+    expect(cellSelect('doc').value).toBe('')
+  })
+
+  it('a chip for an id outside the lists reads Unknown client or Deleted role', () => {
+    const p = scoped('p1', { entity_ids: ['nobody'], workflow_role_keys: ['gone'] })
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+
+    expect(chipLabels(cell('client'))).toEqual(['Unknown client'])
+    expect(chipLabels(cell('role'))).toEqual(['Deleted role'])
+  })
+
+  it('the last policy\'s scope controls are disabled with one visible reason', () => {
+    const [a, b, c] = [scoped('a'), scoped('b'), scoped('c', { document_types: ['credit_note'] })]
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [a, b, c], roles: FIRM_ROLES, entities: ENTITIES })} policy={c} />)
+
+    const reason = screen.getByTestId('scope-catch-all-reason')
+    expect(reason.textContent).toBe(
+      'The last policy decides every document no other policy matches, so it takes no scopes. To scope this policy, move it up the list or create a new policy.',
+    )
+    const controls = Array.from(screen.getByTestId('scope-card').querySelectorAll('select, input, button')) as HTMLInputElement[]
+    expect(controls.length).toBe(7)
+    for (const c2 of controls) {
+      expect(c2.disabled, `${c2.getAttribute('aria-label') ?? c2.tagName} is enabled`).toBe(true)
+      expect(c2.getAttribute('aria-describedby')).toBe(reason.id)
+    }
+  })
+
+  it('the only policy is the last policy', () => {
+    const a = scoped('a')
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [a], roles: FIRM_ROLES, entities: ENTITIES })} policy={a} />)
+
+    expect(screen.getByTestId('scope-catch-all-reason')).toBeTruthy()
+    expect(cellSelect('doc').disabled).toBe(true)
+    expect((screen.getByLabelText('Band from') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('a policy above the last carries no catch-all reason', () => {
+    const [a, b, c] = [scoped('a'), scoped('b'), scoped('c')]
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [a, b, c], roles: FIRM_ROLES, entities: ENTITIES })} policy={b} />)
+
+    expect(screen.queryByTestId('scope-catch-all-reason')).toBeNull()
+    expect(screen.getByTestId('scope-card').querySelectorAll('[aria-describedby]')).toHaveLength(0)
+  })
+
+  it('the card is inert while a write is in flight and recovers', async () => {
+    const p = scoped('p1', { document_types: ['credit_note'] })
+    const sav = deferred<Policy>()
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy: vi.fn(() => sav.promise) })} policy={p} />)
+    const controls = () => Array.from(screen.getByTestId('scope-card').querySelectorAll('select, input, button'))
+    expect(controls().some(inert)).toBe(false)
+
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(screen.getByText('Saving…')).toBeTruthy())
+    expect(controls().every(inert), 'a card control stayed live mid-save').toBe(true)
+
+    sav.resolve(p)
+    await waitFor(() => expect(controls().some(inert)).toBe(false))
+  })
+
+  it('a 400 scope refusal shows the server sentence and keeps the edit', async () => {
+    const sentence = 'an amount band names a currency outside the NRS currency list'
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async () => {
+      throw new ApiError('http', sentence, 400)
+    })
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(screen.getByLabelText('Band currency'), { target: { value: 'zzz' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(screen.getByTestId('policy-save-error').textContent).toBe(sentence))
+    expect((screen.getByLabelText('Band currency') as HTMLInputElement).value).toBe('ZZZ')
+  })
+
+  it('a 409 catch-all refusal shows the server sentence', async () => {
+    const sentence = 'a policy with no scopes must stay last while any policy has scopes'
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async () => {
+      throw new ApiError('http', sentence, 409)
+    })
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'credit_note' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(screen.getByTestId('policy-save-error').textContent).toBe(sentence))
+  })
+
+  it('an unlanded entities fetch shows Loading, an errored one ErrorState with retry', () => {
+    const p = scoped('p1')
+    const { unmount } = render(<WorkflowBuilder ctx={editableCtx(p, { entitiesState: 'loading' })} policy={p} />)
+    expect(screen.queryByTestId('scope-card')).toBeNull()
+    unmount()
+
+    const refetchEntities = vi.fn()
+    render(<WorkflowBuilder ctx={editableCtx(p, { entitiesState: 'error', entitiesError: new ApiError('http', 'clients down', 503), refetchEntities })} policy={p} />)
+    expect(screen.getByText('clients down')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(refetchEntities).toHaveBeenCalledTimes(1)
   })
 })

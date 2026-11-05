@@ -187,6 +187,9 @@ export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: Poli
   )
 }
 
+/** The ghost variant's disabled paint. Inline, so it outranks `.v2-btn-ghost:hover`. */
+export const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
+
 /**
  * A labelled select with its own chevron. The app-layer strips native select chrome
  * (`appearance: none`) and forbids drawing a chevron into the control's background —

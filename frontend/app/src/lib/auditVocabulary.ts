@@ -54,6 +54,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'approval_policy.updated': { label: 'Policy updated', domain: 'policies' },
   'approval_policy.published': { label: 'Policy published', domain: 'policies' },
   'approval_policy.deleted': { label: 'Policy deleted', domain: 'policies' },
+  'approval_policy.reordered': { label: 'Policies reordered', domain: 'policies' },
 
   'workflow_role.created': { label: 'Role created', domain: 'roles' },
   'workflow_role.updated': { label: 'Role updated', domain: 'roles' },

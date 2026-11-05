@@ -240,85 +240,93 @@ func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, e
 // No access-role gate of its own, the same as ListRoles: any caller the request seam
 // admits may list (TestPolicy_ReadNeedsNoAdminRoleWriteDoes).
 func (s *Store) ListPolicies(ctx context.Context) ([]Policy, error) {
-	policies := []Policy{}
+	var policies []Policy
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT id, name, scope, position
-			   FROM approval_policies
-			  WHERE deleted_at IS NULL
-			  ORDER BY position`)
-		if err != nil {
-			return err
-		}
-		idx := map[string]int{} // policy id -> index into policies
-		for rows.Next() {
-			p := newPolicy()
-			if err := rows.Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
-				rows.Close()
-				return err
-			}
-			idx[p.ID] = len(policies)
-			policies = append(policies, p)
-		}
-		// Closed explicitly rather than deferred: the next query reuses this
-		// transaction's connection.
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		// Unfiltered, like ListRoles' staffing read: a soft-deleted policy's versions are
-		// absent from idx and dropped, so its steps are never even asked for.
-		versions, err := tx.Query(ctx,
-			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  ORDER BY policy_id, version DESC`)
-		if err != nil {
-			return err
-		}
-		topOf := map[string]int{} // top version id -> index into policies
-		versionIDs := []string{}
-		for versions.Next() {
-			policyID, versionID, pv, err := scanPolicyVersionRow(versions)
-			if err != nil {
-				versions.Close()
-				return err
-			}
-			i, ok := idx[policyID]
-			if !ok {
-				continue
-			}
-			// version DESC makes the first surviving row per policy the highest one. It
-			// alone supplies Version, Sealed, Status and the version whose steps are read,
-			// so Steps and Version provably name the same version.
-			if len(policies[i].Versions) == 0 {
-				takeTopVersion(&policies[i], pv)
-				topOf[versionID] = i
-				versionIDs = append(versionIDs, versionID)
-			}
-			policies[i].Versions = append(policies[i].Versions, pv)
-		}
-		versions.Close()
-		if err := versions.Err(); err != nil {
-			return err
-		}
-
-		trees, err := readPolicyTrees(ctx, tx, versionIDs)
-		if err != nil {
-			return err
-		}
-		scopes, err := readPolicyScopes(ctx, tx, versionIDs)
-		if err != nil {
-			return err
-		}
-		for versionID, i := range topOf {
-			policies[i].Steps = trees[versionID]
-			policies[i].Scopes = scopes[versionID]
-		}
-		return nil
+		var err error
+		policies, err = listPoliciesTx(ctx, tx)
+		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	return policies, nil
+}
+
+// listPoliciesTx is ListPolicies' body, shared with ReorderPolicies' answer.
+func listPoliciesTx(ctx context.Context, tx pgx.Tx) ([]Policy, error) {
+	policies := []Policy{}
+	rows, err := tx.Query(ctx,
+		`SELECT id, name, scope, position
+		   FROM approval_policies
+		  WHERE deleted_at IS NULL
+		  ORDER BY position`)
+	if err != nil {
+		return nil, err
+	}
+	idx := map[string]int{} // policy id -> index into policies
+	for rows.Next() {
+		p := newPolicy()
+		if err := rows.Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		idx[p.ID] = len(policies)
+		policies = append(policies, p)
+	}
+	// Closed explicitly rather than deferred: the next query reuses this
+	// transaction's connection.
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Unfiltered, like ListRoles' staffing read: a soft-deleted policy's versions are
+	// absent from idx and dropped, so its steps are never even asked for.
+	versions, err := tx.Query(ctx,
+		`SELECT `+policyVersionColumns+`
+		   FROM approval_policy_versions
+		  ORDER BY policy_id, version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	topOf := map[string]int{} // top version id -> index into policies
+	versionIDs := []string{}
+	for versions.Next() {
+		policyID, versionID, pv, err := scanPolicyVersionRow(versions)
+		if err != nil {
+			versions.Close()
+			return nil, err
+		}
+		i, ok := idx[policyID]
+		if !ok {
+			continue
+		}
+		// version DESC makes the first surviving row per policy the highest one. It
+		// alone supplies Version, Sealed, Status and the version whose steps are read,
+		// so Steps and Version provably name the same version.
+		if len(policies[i].Versions) == 0 {
+			takeTopVersion(&policies[i], pv)
+			topOf[versionID] = i
+			versionIDs = append(versionIDs, versionID)
+		}
+		policies[i].Versions = append(policies[i].Versions, pv)
+	}
+	versions.Close()
+	if err := versions.Err(); err != nil {
+		return nil, err
+	}
+
+	trees, err := readPolicyTrees(ctx, tx, versionIDs)
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := readPolicyScopes(ctx, tx, versionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for versionID, i := range topOf {
+		policies[i].Steps = trees[versionID]
+		policies[i].Scopes = scopes[versionID]
 	}
 	return policies, nil
 }
@@ -1252,7 +1260,112 @@ func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID strin
 	return err
 }
 
-// ReorderPolicies is a compile stub until APSC-02-04 implements it.
+// ReorderPolicies sets the live policies' order: the old positions, permuted. ids must
+// be exactly the live set (else ErrPolicyOrderStale). The same order writes nothing.
 func (s *Store) ReorderPolicies(ctx context.Context, ids []string) ([]Policy, error) {
-	return nil, errors.New("approval: ReorderPolicies not implemented")
+	// Parsed above the tx: a malformed id reaching SQL is a 22P02, unmappable.
+	canon := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		u, err := uuid.Parse(id)
+		if err != nil {
+			return nil, ErrValidation
+		}
+		c := u.String()
+		if seen[c] {
+			return nil, ErrValidation
+		}
+		seen[c] = true
+		canon = append(canon, c)
+	}
+
+	var out []Policy
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT id, position FROM approval_policies
+			  WHERE deleted_at IS NULL ORDER BY position FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		var oldIDs []string
+		var oldPos []int
+		for rows.Next() {
+			var id string
+			var pos int
+			if err := rows.Scan(&id, &pos); err != nil {
+				rows.Close()
+				return err
+			}
+			oldIDs = append(oldIDs, id)
+			oldPos = append(oldPos, pos)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if len(canon) != len(oldIDs) {
+			return ErrPolicyOrderStale
+		}
+		for _, id := range oldIDs {
+			if !seen[id] {
+				return ErrPolicyOrderStale
+			}
+		}
+
+		same := true
+		for i := range canon {
+			if canon[i] != oldIDs[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			out, err = listPoliciesTx(ctx, tx)
+			return err
+		}
+
+		// Check 3: while any live policy is scoped, the last policy stays in place.
+		if canon[len(canon)-1] != oldIDs[len(oldIDs)-1] {
+			scoped, err := scopedPolicyLiveTx(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if scoped {
+				return ErrPolicyCatchAll
+			}
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_policies p
+			    SET position = u.pos
+			   FROM unnest($1::uuid[], $2::int[]) AS u(id, pos)
+			  WHERE p.id = u.id`, canon, oldPos); err != nil {
+			return err
+		}
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
+		out, err = listPoliciesTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, caller.Subject, "approval_policy.reordered", map[string]any{
+			"from_order": oldIDs,
+			"to_order":   canon,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

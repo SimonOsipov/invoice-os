@@ -8,7 +8,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// The six approval-policy handlers. Same division as the workflow-role layer: this
+// The seven approval-policy handlers. Same division as the workflow-role layer: this
 // file owns WIRE shape only — identity, the body cap, whether the body decodes, and
 // PUT's steps presence. Every semantic 400 (name, scope, tree) is the store's, and no
 // handler reads auth.Identity.Role: permission is requireActiveAdmin's.
@@ -197,9 +197,40 @@ func DeletePolicyHandler(del PolicyDeleter, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// ReorderPoliciesHandler is a compile stub until APSC-02-04 implements it.
+// ReorderPoliciesHandler returns PUT /v1/approval-policies/order: identity (401) ->
+// capped decode (400) -> policy_ids presence (400) -> reorder -> 200 with the list.
 func ReorderPoliciesHandler(reorder PolicyReorderer, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
+		var req reorderRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.PolicyIDs == nil {
+			writeError(w, http.StatusBadRequest, "policy_ids must be an array of policy ids")
+			return
+		}
+
+		policies, err := reorder(r.Context(), *req.PolicyIDs)
+		if err != nil {
+			status, msg := policyStatusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "approval: reorder approval policies", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		out := make([]Policy, 0, len(policies))
+		out = append(out, policies...)
+		writeJSON(w, http.StatusOK, policiesResponse{ApprovalPolicies: out})
 	}
 }

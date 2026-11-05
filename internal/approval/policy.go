@@ -153,6 +153,11 @@ type putDraftRequest struct {
 	Steps  *[]stepInput `json:"steps"`
 }
 
+// reorderRequest: PolicyIDs is a pointer so an absent or null key is a 400, not an empty list.
+type reorderRequest struct {
+	PolicyIDs *[]string `json:"policy_ids"`
+}
+
 // stepRow is one approval_policy_steps row, minus the columns the store owns
 // (tenant_id, version_id, created_at).
 type stepRow struct {
@@ -525,6 +530,8 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "this policy has no unpublished changes"
 	case errors.Is(err, ErrPolicyCatchAll):
 		return http.StatusConflict, "a policy with no scopes must stay last while any policy has scopes"
+	case errors.Is(err, ErrPolicyOrderStale):
+		return http.StatusConflict, "the policy list changed — reload and try again"
 	// The message names the cap rather than the remedy; the operator remedy is in the
 	// vault runbook "Approvals".
 	case errors.Is(err, ErrSweepCapExceeded):

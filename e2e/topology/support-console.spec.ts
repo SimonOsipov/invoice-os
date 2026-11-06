@@ -1820,6 +1820,7 @@ type LiveAiPage<K extends string, R> = { page: { has_more: boolean; next_cursor:
 
 const aiCallRows = (page: Page): Locator => mainOf(page).locator('div[data-call-id]')
 const aiTotalRows = (page: Page): Locator => mainOf(page).locator('div[data-total-key]')
+const totalKey = (t: LiveAiTotal): string => `${t.day}|${t.tenant_id}`
 // Cells of a call row: time 1, tenant 2, client 3, purpose 4, model 5, in 6, out 7, cost 8, latency 9, try 10, outcome 11.
 const AI_TRUNCATING_CELLS = [2, 4, 5, 11]
 // Cells of a totals row: day 1, tenant 2, calls 3, tokens in 4, tokens out 5, cost 6, failed 7.
@@ -1932,25 +1933,32 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
   const rendered = ((await totalsRes.json()) as { totals: LiveAiTotal[] }).totals
   const totals = aiTotalRows(page)
   // The response can land before the render commits: wait for the exact rows it carried.
-  await expect.poll(async () => totals.evaluateAll((rows) => rows.map((r) => r.getAttribute('data-total-key'))), { message: 'the rows on screen are the totals answer' }).toEqual(rendered.map((t) => `${t.day}|${t.tenant_id}`))
-  const firstTotals = (await totals.all()).slice(0, ROW_CAP)
-  const keys = rendered.slice(0, firstTotals.length).map((t) => `${t.day}|${t.tenant_id}`)
+  await expect.poll(async () => totals.evaluateAll((rows) => rows.map((r) => r.getAttribute('data-total-key'))), { message: 'the rows on screen are the totals answer' }).toEqual(rendered.map(totalKey))
+  const keys = rendered.slice(0, ROW_CAP).map(totalKey)
+  const forcedKey = `${new Date().toISOString().slice(0, 10)}|${PERSONAS.A.tenantId}`
+  const forcedIdx = rendered.findIndex((t) => totalKey(t) === forcedKey)
+  expect(forcedIdx, 'the response has a totals row for today and the SUP-03 tenant').toBeGreaterThanOrEqual(0)
+  // The forced row may sort beyond ROW_CAP; the poll proved it is on screen, so compare it too.
+  const compared = [...keys.keys(), ...(forcedIdx >= ROW_CAP ? [forcedIdx] : [])]
   // Screen == the response it rendered; the aggregate grows afterwards, so the live read may only be larger.
-  for (const [i, row] of firstTotals.entries()) {
+  for (const i of compared) {
+    const row = totals.nth(i)
     await expect(kid(row, 3), `total ${i} calls`).toHaveText(rendered[i].calls.toLocaleString('en-US'))
     await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${rendered[i].cost}`)
     await expect(kid(row, 7), `total ${i} failed`).toHaveText(rendered[i].failed.toLocaleString('en-US'))
   }
-  const forcedKey = `${new Date().toISOString().slice(0, 10)}|${PERSONAS.A.tenantId}`
-  expect(keys, 'the screen shows a totals row for today and the SUP-03 tenant').toContain(forcedKey)
   await recordFailedAiCall()
-  const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', (t) => `${t.day}|${t.tenant_id}`, keys)
-  for (const [i, key] of keys.entries()) {
-    const hit = liveTotals.get(key)
+  const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', totalKey, compared.map((i) => totalKey(rendered[i])))
+  for (const i of compared) {
+    const hit = liveTotals.get(totalKey(rendered[i]))
     expect(hit, `total ${i} is in the live read`).toBeDefined()
     expect(hit!.calls, `total ${i} live calls only grow`).toBeGreaterThanOrEqual(rendered[i].calls)
     expect(hit!.failed, `total ${i} live failed only grows`).toBeGreaterThanOrEqual(rendered[i].failed)
-    if (key === forcedKey) expect(hit!.calls, 'the forced call landed between the reads').toBeGreaterThan(rendered[i].calls)
+    expect(Number(hit!.cost), `total ${i} live cost only grows`).toBeGreaterThanOrEqual(Number(rendered[i].cost))
+    if (i === forcedIdx) {
+      expect(hit!.calls, 'the forced call landed between the reads').toBeGreaterThan(rendered[i].calls)
+      expect(hit!.failed, 'the forced call failed, so failed grew').toBeGreaterThan(rendered[i].failed)
+    }
   }
   await aiControlsRead(page, 'DAILY TOTALS')
 

@@ -130,18 +130,18 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   const entry = page.viewportSize()
   const measured: unknown[] = []
   const isEntities = (u: URL) => u.pathname === '/api/portfolio/v1/entities'
-  const isTenantList = (r: Response) => {
-    const u = new URL(r.url())
-    return r.request().method() === 'GET' && u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
-  }
+  const isTenantListUrl = (u: URL) => u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
+  const isTenantList = (r: Response) => r.request().method() === 'GET' && isTenantListUrl(new URL(r.url()))
   const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
-  const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
+  const scrollToEnd = async (width: number): Promise<void> => {
     await settleAnimations(notice(page))
     await page.evaluate((wide) => {
       if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)
       else window.scrollTo(0, 1e9)
     }, width > 860)
     await settleAnimations(notice(page))
+  }
+  const measure = async (at: string): Promise<void> => {
     const read = await controlRects(page)
     expect(read.notice, `${at}: the notice has no box`).not.toBeNull()
     expect(read.controls.length, `${at}: no control was measured`).toBeGreaterThan(0)
@@ -149,22 +149,34 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
     expect(hit, `${at}: controls under the notice`).toEqual([])
     measured.push({ at, notice: read.notice, controls: read.controls.length })
   }
+  const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
+    await scrollToEnd(width)
+    await measure(at)
+  }
+  // Holds a GET until its gate opens.
+  const holdUntil = (gate: Promise<void>) => async (r: Route): Promise<void> => {
+    if (r.request().method() !== 'GET') return r.fallback()
+    const res = await r.fetch()
+    await gate
+    await r.fulfill({ response: res }).catch(() => undefined)
+  }
   try {
     for (const { route, width, height } of cases) {
       const at = `${route} at ${width}x${height}`
-      // On /invoices the entities response is held until the tenant-wide list has arrived (BUG-82).
+      // BUG-82: on /invoices hold both responses, scroll while the page is short, then let the tenant-wide list draw its empty page.
       const list = route === '/invoices'
-      let release = (): void => {}
-      const gate = new Promise<void>((done) => { release = done })
-      const hold = async (r: Route): Promise<void> => {
-        if (r.request().method() !== 'GET') return r.fallback()
-        const res = await r.fetch()
-        await gate
-        await r.fulfill({ response: res }).catch(() => undefined)
-      }
-      const listed = list ? page.waitForResponse(isTenantList, { timeout: 30_000 }) : undefined
+      let releaseEntities = (): void => {}
+      let releaseList = (): void => {}
+      const entitiesGate = new Promise<void>((done) => { releaseEntities = done })
+      const listGate = new Promise<void>((done) => { releaseList = done })
+      const holdEntities = holdUntil(entitiesGate)
+      const holdList = holdUntil(listGate)
+      const listed = list ? page.waitForResponse(isTenantList, { timeout: 60_000 }) : undefined
       listed?.catch(() => undefined)
-      if (list) await page.route(isEntities, hold)
+      if (list) {
+        await page.route(isEntities, holdEntities)
+        await page.route(isTenantListUrl, holdList)
+      }
       try {
         await page.setViewportSize({ width, height })
         await page.goto(`${APP_URL}${route}`)
@@ -173,10 +185,14 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
         const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
         await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
         if (listed) {
-          await listed.catch((e: Error) => { throw new Error(`${at}: the tenant-wide GET /api/invoice/v1/invoices never arrived: ${e.message}`) })
+          await scrollToEnd(width)
+          releaseList()
+          const response = await listed.catch((e: Error) => { throw new Error(`${at}: the tenant-wide GET /api/invoice/v1/invoices never reached the page: ${e.message}`) })
+          await response.finished()
           await framesPaint()
-          await scrollAndMeasure(`${at} entities held`, width)
-          release()
+          await settleAnimations(notice(page))
+          await measure(`${at} list held, scroll 0`)
+          releaseEntities()
           const settled = page.getByTestId('invoices-list').or(page.getByTestId('invoices-empty')).or(page.getByTestId('invoices-empty-page')).first()
           await expect(settled, `${at}: the list never settled after the entities response`).toBeVisible({ timeout: 30_000 })
           await framesPaint()
@@ -185,8 +201,12 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
           await scrollAndMeasure(at, width)
         }
       } finally {
-        release()
-        if (list) await page.unroute(isEntities, hold)
+        releaseEntities()
+        releaseList()
+        if (list) {
+          await page.unroute(isEntities, holdEntities)
+          await page.unroute(isTenantListUrl, holdList)
+        }
       }
     }
   } finally {

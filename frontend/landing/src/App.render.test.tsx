@@ -403,7 +403,10 @@ describe('R5-AC6 Compliance, Pricing and the TrustStrip name are gone from the p
     const files = readdirSync(fileURLToPath(new URL('./components', import.meta.url)))
     expect(files.length, 'population floor: the components directory resolved').toBeGreaterThan(30)
     expect(files, 'control: the strip kept under its v2 name').toContain('AudienceStrip.tsx')
-    for (const gone of ['Compliance.tsx', 'Pricing.tsx', 'TrustStrip.tsx']) expect(files, `${gone} is back`).not.toContain(gone)
+    for (const gone of ['Compliance.tsx', 'Pricing.tsx', 'TrustStrip.tsx', 'Coverage.tsx', 'CoverageMap.tsx']) expect(files, `${gone} is back`).not.toContain(gone)
+    const src = readdirSync(fileURLToPath(new URL('.', import.meta.url)))
+    expect(src, 'control: countries.ts is in src').toContain('countries.ts')
+    expect(src, 'africaMap.ts is back').not.toContain('africaMap.ts')
   })
 })
 

@@ -57,7 +57,13 @@ describe('landing positioning copy, on the rendered tree', () => {
 })
 
 describe('landing names Nigeria only', () => {
-  const bodyText = () => textOf(mount().body)
+  // Text nodes joined by a space, so a word at the end of one element never glues to the next element's text.
+  const bodyText = () => {
+    const walker = document.createTreeWalker(mount().body, NodeFilter.SHOW_TEXT)
+    const parts: string[] = []
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.nodeValue ?? '')
+    return parts.join(' ').replace(/\s+/g, ' ').trim()
+  }
 
   it('no element on / links #coverage and #coverage is gone', () => {
     const d = mount()
@@ -73,6 +79,19 @@ describe('landing names Nigeria only', () => {
     const text = bodyText()
     expect(text, 'control: the H1 reads Nigeria').toContain('Nigeria moves.')
     for (const re of [/kenya/i, /south africa/i, /\bKRA\b/, /etims/i, /\bSARS\b/, /pan-african/i, /expansion/i, /across africa/i, /nigeria and africa/i, /africa moves/i]) {
+      expect(text, String(re)).not.toMatch(re)
+    }
+  })
+
+  it('the landing holds no coverage-section map, legend, roadmap row or country button', () => {
+    const d = mount()
+    expect(d.querySelectorAll('[data-intel-workspace]'), 'control: an attribute selector resolves on the page').toHaveLength(1)
+    expect(d.querySelectorAll('[data-cov-map], [data-cov-markers], [data-cov-card], [data-cov-panel], [data-roadmap]'), 'no coverage widget').toHaveLength(0)
+    expect(d.querySelectorAll('svg[role="img"]'), 'no map graphic').toHaveLength(0)
+    expect(d.querySelectorAll('svg[aria-hidden="true"]').length, 'control: decorative svgs resolve').toBeGreaterThan(0)
+    const text = bodyText()
+    expect(text, 'control: the page text resolved').toContain('Nigeria moves.')
+    for (const re of [/discuss your country/i, /first launch/i, /planned (expansion|market)/i, /future vision/i, /nigeria first/i, /every country/i, /launch market/i]) {
       expect(text, String(re)).not.toMatch(re)
     }
   })

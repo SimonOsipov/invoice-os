@@ -376,7 +376,7 @@ describe('PL-08 the capability grid and the narrow tab strip', () => {
   })
 })
 
-// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring and hover dim are declared.
+// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring is declared.
 describe('CV-10 the card buttons keep their focus ring', () => {
   it('landing.css draws the ring on .a-card-btn:focus-visible', () => {
     const rules = parseRules(LANDING_CSS)

@@ -270,7 +270,12 @@ test('landing content: the page names Nigeria only', async ({ page }) => {
   await expect(page.locator('#intelligence button[aria-pressed]'), 'control: the four steps are pressed-state buttons').toHaveCount(4)
   await expect(page.locator('[data-intel-workspace] aside'), 'the workspace aside names Nigeria').toContainText('Nigeria')
 
-  const text = (await page.locator('body').textContent()) ?? ''
+  const text = await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    const parts: string[] = []
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.nodeValue ?? '')
+    return parts.join(' ')
+  })
   expect(text, 'control: the H1 reads Nigeria').toContain('Nigeria moves.')
   for (const re of FORBIDDEN_COUNTRY_PATTERNS) expect(text, String(re)).not.toMatch(re)
   const roadmap = (text.replace(/\s+/g, ' ').match(/[^.]*roadmap[^.]*\./gi) ?? []).map((x) => x.trim())

@@ -11,6 +11,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES, isScrollable, scrollDepthPercent } from './analytics'
 
 afterEach(() => {
@@ -246,7 +247,6 @@ describe('App.tsx CTA bindings (AC-3)', () => {
     expect(bound.length).toBe(DEMO_CTA_SOURCES.length)
     expect(bound.length).toBe(9)
     expect(bound).toContain('platform')
-    expect(bound, "no book('coverage')").not.toContain('coverage')
     expect(new Set(bound).size).toBe(bound.length)
     expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
     expect(bound, 'bindings follow the page order DEMO_CTA_SOURCES lists').toEqual([...DEMO_CTA_SOURCES])
@@ -441,9 +441,17 @@ describe('DEMO_CTA_SOURCES (AC #7, gap)', () => {
   it('N3: the nine sources in page order, no pricing or demo_cta', () => {
     expect(DEMO_CTA_SOURCES.length).toBe(9)
     expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
-    expect(DEMO_CTA_SOURCES).not.toContain('coverage')
     expect(DEMO_CTA_SOURCES).not.toContain('pricing')
     expect(ANALYTICS_SRC, 'Pricing left analytics.ts').not.toMatch(/pricing/i)
     expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
+  })
+
+  // Source scan: a union member no value lists is invisible at runtime and to tsc.
+  it('N3b: the DemoCtaSource union lists exactly the DEMO_CTA_SOURCES values', () => {
+    const decl = /export type DemoCtaSource =([^\n]+)/.exec(stripComments(ANALYTICS_SRC))
+    expect(decl, 'control: the union declaration is found').not.toBeNull()
+    const members = Array.from(decl![1].matchAll(/'([A-Za-z_]+)'/g)).map((m) => m[1])
+    expect(members.length, 'floor: the union has members').toBeGreaterThan(5)
+    expect([...members].sort()).toEqual([...DEMO_CTA_SOURCES].sort())
   })
 })

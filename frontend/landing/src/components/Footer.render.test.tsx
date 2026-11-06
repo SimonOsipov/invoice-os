@@ -202,7 +202,6 @@ describe('R4-FT-2 the Platform column links intelligence, then solutions', () =>
       { tag: 'a', label: 'Solutions for partners', class: 'a-link', href: solutions },
     ])
     expect(controls.at(-1)?.label, 'the Platform column ends with Solutions for partners').toBe('Solutions for partners')
-    expect(controls.filter((c) => c.attrs.href?.endsWith('#coverage')), 'no control links #coverage').toEqual([])
   })
 })
 

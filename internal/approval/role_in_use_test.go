@@ -341,8 +341,8 @@ func TestDeleteRole_DraftScopeRoleDeletedThenPublishIsRefused(t *testing.T) {
 	if !errors.Is(err, ErrPolicyStepRole) {
 		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
 	}
-	if status, msg := policyStatusForErr(err); status != http.StatusConflict || !strings.Contains(msg, "“Tax Reviewer”") {
-		t.Errorf("policyStatusForErr = %d %q, want 409 naming “Tax Reviewer”", status, msg)
+	if status, msg := policyStatusForErr(err); status != http.StatusConflict || !strings.Contains(msg, "\u201cTax Reviewer\u201d") {
+		t.Errorf("policyStatusForErr = %d %q, want 409 naming \u201cTax Reviewer\u201d", status, msg)
 	}
 	if v := versionRow(t, super, versionID); v.Sealed || v.IsActive {
 		t.Errorf("draft version = %+v, want still (sealed false, is_active false)", v)

@@ -1048,9 +1048,9 @@ func TestPublish_RefusalNamesEveryDeletedScopeRoleInOrder(t *testing.T) {
 		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
 	}
 	_, msg := policyStatusForErr(err)
-	z, q := strings.Index(msg, "“Zeta Auditor”"), strings.Index(msg, "“Quill Reviewer”")
+	z, q := strings.Index(msg, "\u201cZeta Auditor\u201d"), strings.Index(msg, "\u201cQuill Reviewer\u201d")
 	if z < 0 || q < 0 || z > q {
-		t.Errorf("msg = %q, want “Zeta Auditor” before “Quill Reviewer”", msg)
+		t.Errorf("msg = %q, want \u201cZeta Auditor\u201d before \u201cQuill Reviewer\u201d", msg)
 	}
 	if strings.Contains(msg, "Marlin Signer") {
 		t.Errorf("msg = %q, names the live role", msg)
@@ -1074,11 +1074,11 @@ func TestPublish_RefusalEchoesATitleVerbatimAndNamesARepeatedTitleOnce(t *testin
 
 	_, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID)
 	_, msg := policyStatusForErr(err)
-	if !strings.Contains(msg, "“"+odd+"”") {
+	if !strings.Contains(msg, "\u201c"+odd+"\u201d") {
 		t.Errorf("msg = %q, want the title %q verbatim in curly quotes", msg, odd)
 	}
-	if n := strings.Count(msg, "“Twin”"); n != 1 {
-		t.Errorf("msg = %q, “Twin” occurs %d times, want 1", msg, n)
+	if n := strings.Count(msg, "\u201cTwin\u201d"); n != 1 {
+		t.Errorf("msg = %q, \u201cTwin\u201d occurs %d times, want 1", msg, n)
 	}
 }
 

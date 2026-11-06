@@ -510,7 +510,7 @@ func (e *scopeRoleDeleted) Unwrap() error { return ErrPolicyStepRole }
 func quoteTitles(titles []string) string {
 	q := make([]string, len(titles))
 	for i, t := range titles {
-		q[i] = "“" + t + "”"
+		q[i] = "\u201c" + t + "\u201d"
 	}
 	return strings.Join(q, ", ")
 }

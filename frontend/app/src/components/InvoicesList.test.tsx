@@ -122,6 +122,7 @@ function listCtx(entityId: string | null = 'ent-1', invoiceQuery = '', entitiesS
   const ctx = {
     mode: 'firm',
     active: { entityId },
+    activeEntity: entityId === null ? null : { id: entityId },
     entitiesState,
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
@@ -3115,6 +3116,30 @@ describe('InvoicesList: New invoice in the page header', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
     render(<InvoicesList ctx={listCtx('ent-1')} />)
     expect(newInvoice().disabled, 'control: entity known').toBe(false)
+  })
+
+  it('IL-NEW-08 New invoice waits for the resolved entity when a restored entityId is set', () => {
+    for (const mode of ['firm', 'inhouse']) {
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+      const openCreate = vi.fn()
+      const ctx = { ...listCtx('ent-1'), mode, activeEntity: null, openCreate } as unknown as PlatformCtx
+      render(<InvoicesList ctx={ctx} />)
+      expect(newInvoice().disabled, mode).toBe(true)
+      fireEvent.click(newInvoice())
+      expect(openCreate, mode).not.toHaveBeenCalled()
+      cleanup()
+    }
+  })
+
+  it('IL-NEW-09 the empty card New invoice waits for the resolved entity when entityId is set', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    const openCreate = vi.fn()
+    render(<InvoicesList ctx={{ ...listCtx('ent-1'), activeEntity: null, openCreate } as unknown as PlatformCtx} />)
+    const empty = await screen.findByTestId('invoices-empty')
+    const card = within(empty).getByRole('button', { name: /New invoice/ }) as HTMLButtonElement
+    expect(card.disabled).toBe(true)
+    fireEvent.click(card)
+    expect(openCreate).not.toHaveBeenCalled()
   })
 
   it("IL-NEW-07 the in-house empty card's New invoice waits for the entity", async () => {

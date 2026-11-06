@@ -101,7 +101,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // Only while the entities list loads; a settled empty/errored list has no entity to wait for.
   const noEntity = ctx.mode !== 'inhouse' && activeEntityId === undefined && ctx.entitiesState === 'loading'
   // Creating before the entity resolves would open the flow with no company to attach to.
-  const entityPending = ctx.active.entityId === null && ctx.entitiesState === 'loading'
+  const entityPending = ctx.activeEntity === null && ctx.entitiesState === 'loading'
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
   // re-runs the effect (and re-fetches) whenever the toggle flips, the page changes, OR

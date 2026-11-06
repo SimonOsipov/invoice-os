@@ -251,6 +251,34 @@ test('landing content: the retired positioning copy is replaced everywhere it sh
   expectNoConsoleErrors(sinks)
 })
 
+// Retyped from App.landingCopy.dom.test.tsx's Nigeria-only sweep, not imported.
+const FORBIDDEN_COUNTRY_PATTERNS = [/kenya/i, /south africa/i, /\bKRA\b/, /etims/i, /\bSARS\b/, /pan-african/i, /expansion/i, /across africa/i, /nigeria and africa/i, /africa moves/i]
+const KEPT_ROADMAP_SENTENCES = [
+  'Our roadmap connects official updates, AI-assisted analysis and human review.',
+  'The systems shown on this page are roadmap targets, not confirmed partnerships or available connectors.',
+]
+
+test('landing content: the page names Nigeria only', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  await expect(page.locator('#intelligence'), 'control: #intelligence is on the page').toHaveCount(1)
+  await expect(page.locator('#coverage'), '#coverage is gone').toHaveCount(0)
+  await expect(page.locator('a[href$="#coverage"]'), 'no link targets #coverage').toHaveCount(0)
+  await expect(page.locator('footer a[href$="#intelligence"]'), 'control: the footer links #intelligence').toHaveCount(1)
+
+  await expect(page.locator('#intelligence button[aria-pressed]:not([data-intel-step])'), 'no country chip in #intelligence').toHaveCount(0)
+  await expect(page.locator('#intelligence button[aria-pressed]'), 'control: the four steps are pressed-state buttons').toHaveCount(4)
+  await expect(page.locator('[data-intel-workspace] aside'), 'the workspace aside names Nigeria').toContainText('Nigeria')
+
+  const text = (await page.locator('body').textContent()) ?? ''
+  expect(text, 'control: the H1 reads Nigeria').toContain('Nigeria moves.')
+  for (const re of FORBIDDEN_COUNTRY_PATTERNS) expect(text, String(re)).not.toMatch(re)
+  const roadmap = (text.replace(/\s+/g, ' ').match(/[^.]*roadmap[^.]*\./gi) ?? []).map((x) => x.trim())
+  expect(roadmap, 'every roadmap sentence is a kept one').toEqual(KEPT_ROADMAP_SENTENCES)
+
+  expectNoConsoleErrors(sinks)
+})
+
 // Retyped from frontend/landing/src/data.tsx#MODULES, in render order.
 const MODULE_TITLES = [
   'Business profile',

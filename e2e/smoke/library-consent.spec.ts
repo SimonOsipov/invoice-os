@@ -239,7 +239,7 @@ async function cookiesNamed(page: Page, name: string | RegExp) {
 
 async function openWww(page: Page): Promise<void> {
   await page.goto(`${WWW}/`)
-  await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Nigeria moves. Compliance keeps up.' })).toBeVisible()
 }
 
 async function openRoutedLibrary(page: Page): Promise<void> {
@@ -265,7 +265,7 @@ async function controlRouting(page: Page, request: APIRequestContext): Promise<v
   }
   await page.goto(`${WWW}/`)
   await expect(
-    page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' }),
+    page.getByRole('heading', { level: 1, name: 'Nigeria moves. Compliance keeps up.' }),
     'routing, not consent: the routed landing did not render its heading',
   ).toBeVisible()
 }

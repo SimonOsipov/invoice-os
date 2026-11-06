@@ -164,11 +164,11 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 
 		role, err := del(r.Context(), r.PathValue("key"))
 		if err != nil {
-			var inUse *roleInUse
-			if errors.As(err, &inUse) {
-				policies := inUse.policies
-				if policies == nil {
-					policies = []PolicyRef{}
+			if errors.Is(err, ErrRoleInUse) {
+				policies := []PolicyRef{}
+				var inUse *roleInUse
+				if errors.As(err, &inUse) {
+					policies = inUse.policies
 				}
 				writeJSON(w, http.StatusConflict, roleInUseResponse{Error: roleInUseMessage, Policies: policies})
 				return

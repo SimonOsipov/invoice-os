@@ -36,6 +36,7 @@ import {
   getApprovalPolicy,
   listApprovalPolicies,
   listWorkflowRoles,
+  ApiError,
   login,
   provisionRealAccount,
   publishApprovalPolicy,
@@ -84,6 +85,15 @@ function assertWireError(res: RawResult, status: number, label: string): void {
   expect(String(body.error), `${label}: the message should carry no sentinel prefix`).not.toContain('approval: ')
 }
 
+// A role sweep swallows only a 404; a 409 means a policy in force still names the role.
+async function sweepRole(token: string, key: string): Promise<void> {
+  try {
+    await deleteWorkflowRole(token, key)
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 404)) throw e
+  }
+}
+
 test.describe('workflow-role contract (API E2E, over the deployed gateway)', () => {
   let token: string
   const createdKeys: string[] = []
@@ -96,14 +106,10 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
   // the delete test already removed its own role, so a 404 here is expected and must never
   // mask a real assertion failure. This SOFT-deletes — every swept row survives with
   // deleted_at set, invisible to every list and every by-key path. The environment is left
-  // free of live probes, not free of probe rows.
+  // free of live probes, not free of probe rows. Only a 404 is swallowed (sweepRole).
   test.afterAll(async () => {
     for (const key of createdKeys) {
-      try {
-        await deleteWorkflowRole(token, key)
-      } catch {
-        // already deleted, or never created
-      }
+      await sweepRole(token, key)
     }
   })
 
@@ -454,11 +460,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
       }
     }
     for (const key of createdRoleKeys) {
-      try {
-        await deleteWorkflowRole(token, key)
-      } catch {
-        // already deleted, or never created
-      }
+      await sweepRole(token, key)
     }
     // B's rows need B's own token — see the array's declaration. Gated on length so the
     // common case never pays for a second sign-in.

@@ -647,8 +647,12 @@ func TestWorkflowRoleHandlers_StatusMatrix(t *testing.T) {
 				if got := errorMessage(t, rec.Body.Bytes()); got != s.msg {
 					t.Errorf("error = %q, want %q", got, s.msg)
 				}
-				if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error" {
-					t.Errorf("error body keys = %v, want exactly [error]", got)
+				wantKeys := "error"
+				if rt.method == "DELETE" && s.err == ErrRoleInUse {
+					wantKeys = "error,policies"
+				}
+				if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != wantKeys {
+					t.Errorf("error body keys = %v, want exactly [%s]", got, wantKeys)
 				}
 			})
 		}
@@ -687,8 +691,8 @@ func TestDeleteRoleHandler_InUseIs409WithThePolicies(t *testing.T) {
 	}
 }
 
-func TestDeleteRoleHandler_InUseWithNoPoliciesSerialisesAnEmptyArray(t *testing.T) {
-	rec := deleteInUse(t, &roleInUse{})
+func TestDeleteRoleHandler_BareErrRoleInUseCarriesAnEmptyPoliciesArray(t *testing.T) {
+	rec := deleteInUse(t, ErrRoleInUse)
 	if got := rawField(t, rec.Body.Bytes(), "policies"); got != "[]" {
 		t.Errorf("policies = %s, want []", got)
 	}

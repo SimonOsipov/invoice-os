@@ -145,7 +145,6 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     if (!role || submitting) return
     setSubmitting(true)
     setWriteError(null)
-    setWriteErrorPolicies([])
     try {
       // `[delete-does-not-demote]`: the server refuses while a policy in force names the role; a draft that names it keeps the key.
       await ctx.deleteRole(role.key)

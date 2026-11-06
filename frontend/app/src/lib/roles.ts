@@ -348,7 +348,7 @@ export function deleteRoleConfirmUnknownUsage(title: string): string {
 
 /** Policy names off a 409 role-in-use body, in body order; `[]` for any other error. */
 export function inUsePolicyNames(err: unknown): string[] {
-  if (!(err instanceof ApiError) || err.kind !== 'http' || err.status !== 409) return []
+  if (!(err instanceof ApiError) || err.status !== 409) return []
   const policies = (err.body as { policies?: unknown } | null | undefined)?.policies
   if (!Array.isArray(policies)) return []
   return policies.flatMap((p) => (typeof p?.name === 'string' ? [p.name] : []))

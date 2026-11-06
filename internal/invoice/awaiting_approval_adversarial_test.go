@@ -123,8 +123,8 @@ func TestRLS_AwaitingApprovalActivePolicyDoesNotLeakAcrossTenants(t *testing.T) 
 
 // TestStoreList_AwaitingApprovalWithASupersededPolicyVersion: is_active alone is the whole
 // resolve, so a tenant carrying a sealed non-active version alongside an active one is
-// still gated. approval_policy_versions_one_active makes "exactly one active" a schema
-// fact; this pins that the fragment reads that one and ignores the other.
+// still gated. approval_policy_versions_one_active makes "one active per policy" a schema
+// fact; this pins that the fragment reads the active one and ignores the other.
 func TestStoreList_AwaitingApprovalWithASupersededPolicyVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := NewStore(app)

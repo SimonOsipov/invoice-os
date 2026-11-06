@@ -61,6 +61,8 @@ func resetInvoicesBeforeFullSchemaReset(t *testing.T, ctx context.Context) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	for _, stmt := range []string{
+		// The approvals Down refuses a workspace with two active policies.
+		`UPDATE approval_policy_versions SET is_active = false WHERE is_active`,
 		`DELETE FROM approval_runs`,
 		`DELETE FROM app_exchange`,
 		`DELETE FROM submission_jobs`,

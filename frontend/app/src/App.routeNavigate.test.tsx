@@ -1528,7 +1528,7 @@ const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
 const CREATED_POLICY_ID = 'd8e90123-4567-4abc-9def-0123456789ac'
 
 function policyWire(id: string, name: string) {
-  return { id, name, scope: 'All invoices', status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
+  return { id, name, scope: 'All invoices', position: 0, scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null }, status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
 }
 
 function okJson(body: unknown) {
@@ -1537,7 +1537,19 @@ function okJson(body: unknown) {
 
 // A separate stub rather than an arm on routeFetch above: that fallback answers the policy
 // list with an envelope-less body, and every ROUTE-06-03 spec depends on it unchanged.
-function stubPolicyGateway(list: ReturnType<typeof policyWire>[]) {
+type PolicyGatewayOpts = {
+  /** Answers `PUT .../order`; absent, the order is echoed. */
+  reorder?: () => Promise<unknown>
+  /** While `held`, the list GET waits on `release`. */
+  holdList?: { held: boolean; release: Promise<void> }
+}
+
+const listGets = () =>
+  (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.filter(
+    ([url, init]) => url.endsWith('/approval-policies') && (init?.method ?? 'GET') === 'GET',
+  ).length
+
+function stubPolicyGateway(list: ReturnType<typeof policyWire>[], opts: PolicyGatewayOpts = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) => {
@@ -1549,8 +1561,13 @@ function stubPolicyGateway(list: ReturnType<typeof policyWire>[]) {
         })
       }
       if (url.includes('/approval-policies')) {
+        if (method === 'PUT' && url.endsWith('/approval-policies/order')) {
+          return opts.reorder ? opts.reorder() : okJson({ approval_policies: list })
+        }
+        if (method === 'PUT' && url.endsWith('/draft')) return okJson(policyWire(url.split('/').slice(-2)[0], 'Saved'))
         if (method === 'POST') return okJson(policyWire(CREATED_POLICY_ID, 'Untitled policy'))
         if (method === 'DELETE') return okJson({})
+        if (opts.holdList?.held) return opts.holdList.release.then(() => ({ ok: true, status: 200, json: () => Promise.resolve({ approval_policies: list }) }))
         return okJson({ approval_policies: list })
       }
       if (url.includes('/workflow-roles')) return okJson({ workflow_roles: [] })
@@ -1576,8 +1593,8 @@ function stubPolicyGateway(list: ReturnType<typeof policyWire>[]) {
   )
 }
 
-async function bootAtWithPolicies(path: string, list: ReturnType<typeof policyWire>[]) {
-  stubPolicyGateway(list)
+async function bootAtWithPolicies(path: string, list: ReturnType<typeof policyWire>[], opts?: PolicyGatewayOpts) {
+  stubPolicyGateway(list, opts)
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
   const rendered = await bootAt(path)
   await waitFor(() =>
@@ -1678,6 +1695,87 @@ describe('ROUTE-07-04 AC-4/AC-5: three ways back to the list, all of them addres
     })
     expect(window.location.pathname, 'deleting from the list must leave the address on the list').toBe('/workflows')
     expect(window.history.length, 'deletePolicy is not a navigation and must add no history entry').toBe(lengthBefore)
+  })
+})
+
+describe('APSC-04-02: the reorder and create verbs write the mirror from the server', () => {
+  const [A, B, C] = ['a', 'b', 'c'].map((id) => policyWire(id, id.toUpperCase()))
+  const ids = () => requireCtx().policies.map((p) => p.id)
+
+  it('reorderPolicies_writesTheMirrorFromTheAnswerWithoutARefetch', async () => {
+    await bootAtWithPolicies('/workflows', [A, B, C], { reorder: () => okJson({ approval_policies: [B, A, C] }) })
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b', 'c']))
+    const getsBefore = listGets()
+
+    await act(async () => {
+      await capturedCtx!.reorderPolicies(['b', 'a', 'c'])
+    })
+
+    expect(ids()).toEqual(['b', 'a', 'c'])
+    expect(listGets(), 'a landed reorder refetched the list').toBe(getsBefore)
+  })
+
+  it('reorderPolicies_aRefusalLeavesTheMirror', async () => {
+    const refusal = () => Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve({ error: 'the policy list changed — reload and try again' }) })
+    await bootAtWithPolicies('/workflows', [A, B, C], { reorder: refusal })
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b', 'c']))
+
+    let caught: unknown
+    await act(async () => {
+      await capturedCtx!.reorderPolicies(['b', 'a', 'c']).catch((e: unknown) => {
+        caught = e
+      })
+    })
+
+    expect((caught as { status?: number } | undefined)?.status, 'the refusal did not reject with the 409').toBe(409)
+    expect(ids()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('reorderPolicies_takesTheAnswersOrderAndPositions', async () => {
+    const answer = [A, C, B].map((w, i) => ({ ...w, position: i }))
+    await bootAtWithPolicies('/workflows', [A, B, C], { reorder: () => okJson({ approval_policies: answer }) })
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b', 'c']))
+
+    await act(async () => {
+      await capturedCtx!.reorderPolicies(['b', 'a', 'c'])
+    })
+
+    expect(ids(), 'the mirror followed the order sent, not the answer').toEqual(['a', 'c', 'b'])
+    expect(requireCtx().policies.map((p) => p.position)).toEqual([0, 1, 2])
+  })
+
+  it('savePolicy_forwardsSendScopesToTheDraftPut', async () => {
+    await bootAtWithPolicies('/workflows', [A, B])
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b']))
+    const draftBodies = () =>
+      (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+        .filter(([url, init]) => url.endsWith('/a/draft') && init?.method === 'PUT')
+        .map(([, init]) => Object.keys(JSON.parse(init?.body as string) as object).sort())
+    const policyA = requireCtx().policies[0]
+
+    await act(async () => {
+      await capturedCtx!.savePolicy(policyA, { sendScopes: true })
+      await capturedCtx!.savePolicy(policyA, { sendScopes: false })
+    })
+
+    expect(draftBodies()).toEqual([['name', 'scopes', 'steps'], ['name', 'steps']])
+  })
+
+  it('createPolicy_putsTheNewPolicyAboveTheLast', async () => {
+    let release!: () => void
+    const holdList = { held: false, release: new Promise<void>((res) => (release = res)) }
+    await bootAtWithPolicies('/workflows', [A, B], { holdList })
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b']))
+    const getsBefore = listGets()
+    holdList.held = true
+
+    await act(async () => {
+      await capturedCtx!.createPolicy()
+    })
+
+    expect(ids(), 'the created row is not above the last before the refetch lands').toEqual(['a', CREATED_POLICY_ID, 'b'])
+    expect(listGets(), 'createPolicy did not refetch').toBe(getsBefore + 1)
+    release()
   })
 })
 

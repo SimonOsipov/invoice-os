@@ -284,6 +284,7 @@ func main() {
 	app.Mux.HandleFunc("PUT /v1/approval-policies/{id}/draft", approval.PutDraftHandler(roleStore.PutDraft, app.Logger))
 	app.Mux.HandleFunc("POST /v1/approval-policies/{id}/publish", approval.PublishPolicyHandler(roleStore.PublishPolicy, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/approval-policies/{id}", approval.DeletePolicyHandler(roleStore.DeletePolicy, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/approval-policies/order", approval.ReorderPoliciesHandler(roleStore.ReorderPolicies, app.Logger))
 
 	// GET /v1/invoices/{id}/approval -- the run read model (APPR-07). No role gate:
 	// any active tenant member may read a run, same as the policy routes above.

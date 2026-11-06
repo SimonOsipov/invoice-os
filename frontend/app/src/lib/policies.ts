@@ -1,7 +1,7 @@
 // The approval-policy wire and its pure mappers.
 
 import type { AuthedFetch } from './portfolio'
-import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './workflows'
+import type { BranchNode, CondOp, Policy, PolicyScopes, PolicyStatus, Sla, WfNode } from './workflows'
 
 // ---------------------------------------------------------------------------
 // Wire types, mirrored field-for-field from internal/approval/policy.go:17-93
@@ -33,16 +33,24 @@ export type PolicyStepWire = {
 export type PolicyVersionWire = {
   version: number
   sealed: boolean
-  /** TENANT-wide slot (`approval_policy_versions_one_active ON (tenant_id)`). */
+  /** This version is its policy's active one (`approval_policy_versions_one_active ON (tenant_id, policy_id)`). */
   is_active: boolean
   published_at: string | null
   published_by: string | null
+  /** The version carries any scope; the catch-all lock reads it for the active version. */
+  scoped: boolean
 }
+
+export type PolicyScopesWire = PolicyScopes
 
 export type PolicyWire = {
   id: string
   name: string
   scope: string
+  /** The list sorts by it, ascending. */
+  position: number
+  /** The TOP version's scopes; all empty = the catch-all. */
+  scopes: PolicyScopesWire
   status: string
   /** The version `steps` belongs to = the HIGHEST version, not necessarily the active one. */
   version: number
@@ -164,10 +172,12 @@ export function toPolicy(wire: PolicyWire): Policy {
   return {
     id: wire.id,
     name: wire.name,
-    scope: wire.scope,
+    position: wire.position,
+    scopes: wire.scopes,
     status: wire.status as PolicyStatus,
     version: wire.version,
     activeVersion: wire.versions.find((v) => v.is_active)?.version ?? null,
+    activeScoped: wire.versions.some((v) => v.is_active && v.scoped),
     nodes: nodesFromSteps(wire.steps),
   }
 }
@@ -180,15 +190,15 @@ export function toPolicy(wire: PolicyWire): Policy {
 export function policyStanding(policy: Policy): string {
   const { version, activeVersion, status } = policy
   if (activeVersion === null) {
-    // A 'published' status means the top version is sealed, so it was in force once and
-    // then lost the tenant's slot. Only an unsealed v1 has never held it.
+    // 'published' means the top version is sealed: it was in force once and is no longer.
+    // Only an unsealed v1 has never been in force.
     return version === 1 && status === 'draft' ? 'Never published' : 'Not in force'
   }
   if (version === activeVersion) return `v${activeVersion} in force`
   return `v${activeVersion} in force · v${version} draft`
 }
 
-/** The policy holding the tenant's single active slot, excluding `selfId`. */
+/** The first other policy with a version in force, excluding `selfId`. */
 export function policyInForce(list: readonly Policy[], selfId: string): Policy | null {
   return list.find((p) => p.id !== selfId && p.activeVersion !== null) ?? null
 }
@@ -214,14 +224,34 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
   return toPolicy(created)
 }
 
+/** A bound of only `.` is no bound: the server refuses it. */
+function wireScopes(s: PolicyScopes): PolicyScopes {
+  const b = s.amount_band
+  if (!b) return s
+  const bound = (v: string | null) => (v === '.' ? null : v)
+  return { ...s, amount_band: { ...b, lower: bound(b.lower), upper: bound(b.upper) } }
+}
+
 /** A whole-tree REPLACE: `steps` always rides along, empty included — the server 400s on an absent key. */
-export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
-  const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
-    method: 'PUT',
-    // `scope` is forwarded rather than dropped, so the server sees what the editor holds.
-    body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
-  })
+export async function putApprovalPolicyDraft(
+  f: AuthedFetch,
+  base: string,
+  id: string,
+  next: Policy,
+  opts?: { sendScopes?: boolean },
+): Promise<Policy> {
+  // An omitted `scopes` keeps the draft's scopes, so an unedited save never re-sends them.
+  const body = opts?.sendScopes
+    ? { name: next.name, scopes: wireScopes(next.scopes), steps: stepInputsFromNodes(next.nodes) }
+    : { name: next.name, steps: stepInputsFromNodes(next.nodes) }
+  const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, { method: 'PUT', body })
   return toPolicy(saved)
+}
+
+/** The whole new order; answers the server's list in its order. */
+export async function reorderApprovalPolicies(f: AuthedFetch, base: string, ids: string[]): Promise<Policy[]> {
+  const body = await f<PoliciesResponseWire>(`${base}/api/invoice/v1/approval-policies/order`, { method: 'PUT', body: { policy_ids: ids } })
+  return body.approval_policies.map((w) => toPolicy(w))
 }
 
 /** No body at all: the handler reads none, and `published_by` is taken from the caller's claim. */

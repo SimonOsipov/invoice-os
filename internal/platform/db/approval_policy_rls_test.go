@@ -296,30 +296,17 @@ func TestRLS_ApprovalPoliciesOwnerInsertRefusedUnderForce(t *testing.T) {
 	}
 }
 
-// PC-07: scope is pinned to the one Q7 value; anything else is a check_violation. Positive
-// control: omitting scope defaults to it.
-func TestRLS_ApprovalPoliciesScopeCheckRejects(t *testing.T) {
+// PC-07: the scope CHECK is gone and the scopes live on the version, defaulting to the catch-all.
+// The legacy scope text keeps its DEFAULT and now takes any value.
+func TestRLS_ApprovalPoliciesScopeColumnsDefaultToCatchAll(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
-	_, err := h.super.Exec(ctx,
-		`INSERT INTO approval_policies (tenant_id, name, scope) VALUES ($1, $2, 'Capex')`,
-		h.tenantA, apName("bad-scope"))
-	if failIfUndefinedApprovalPolicy(t, "scope CHECK provocation", err) {
-		return
-	}
-	if err == nil {
-		t.Fatal("insert with scope = 'Capex' succeeded, want check_violation (SQLSTATE 23514)")
-	}
-	if code := pgCode(err); code != "23514" {
-		t.Fatalf("insert with scope = 'Capex': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
-	}
-	if name := pgConstraint(err); !strings.Contains(name, "scope") {
-		t.Errorf("constraint = %q, want one naming scope", name)
-	}
-
 	policyID, cleanup := seedApprovalPolicy(t, h.tenantA, apName("default-scope"))
 	defer cleanup()
+	versionID, cleanupV := seedApprovalPolicyVersion(t, h.tenantA, policyID)
+	defer cleanupV()
+
 	var scope string
 	if e := h.super.QueryRow(ctx, `SELECT scope FROM approval_policies WHERE id = $1`, policyID).Scan(&scope); e != nil {
 		t.Fatalf("read back scope: %v", e)
@@ -327,6 +314,37 @@ func TestRLS_ApprovalPoliciesScopeCheckRejects(t *testing.T) {
 	if scope != "All invoices" {
 		t.Errorf("scope with none supplied = %q, want %q (DEFAULT not load-bearing)", scope, "All invoices")
 	}
+
+	var types, entities, roles string
+	var lowerNull, upperNull, currencyNull bool
+	err := h.super.QueryRow(ctx,
+		`SELECT scope_document_types::text, scope_entity_ids::text, scope_workflow_role_ids::text,
+		        scope_amount_lower IS NULL, scope_amount_upper IS NULL, scope_amount_currency IS NULL
+		   FROM approval_policy_versions WHERE id = $1`, versionID,
+	).Scan(&types, &entities, &roles, &lowerNull, &upperNull, &currencyNull)
+	if err != nil {
+		t.Fatalf("read back the version scopes: %v", err)
+	}
+	if types != "{}" || entities != "{}" || roles != "{}" || !lowerNull || !upperNull || !currencyNull {
+		t.Errorf("version scopes = (%s, %s, %s, band NULL %v/%v/%v), want three {} arrays and NULL band columns",
+			types, entities, roles, lowerNull, upperNull, currencyNull)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM pg_constraint WHERE conname = 'approval_policies_scope_check'`); n != 0 {
+		t.Errorf("approval_policies_scope_check rows = %d, want 0", n)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'approval_policies' AND column_name LIKE 'scope\_%'`); n != 0 {
+		t.Errorf("scope_* columns on approval_policies = %d, want 0 (scopes live on the version)", n)
+	}
+
+	name := apName("capex-scope")
+	if _, e := h.super.Exec(ctx,
+		`INSERT INTO approval_policies (tenant_id, name, scope) VALUES ($1, $2, 'Capex')`, h.tenantA, name); e != nil {
+		t.Errorf("insert with scope = 'Capex': %v, want success (the CHECK is gone)", e)
+	}
+	_, _ = h.super.Exec(ctx, `DELETE FROM approval_policies WHERE name = $1`, name)
 }
 
 // PC-08: as SUPERUSER (so no policy can be what refuses), a version for tenant A naming

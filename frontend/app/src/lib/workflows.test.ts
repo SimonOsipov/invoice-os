@@ -2,16 +2,24 @@ import { describe, expect, it } from 'vitest'
 
 import {
   appendNode,
+  bandFrom,
+  boundText,
   canDrop,
+  CATCH_ALL_SCOPES,
   clearSteps,
   countApprovals,
   countConditions,
+  currencyText,
   deleteNode,
   evalCondition,
   findNode,
   getLane,
+  insertAboveLast,
   insertNode,
+  isCatchAll,
+  listLock,
   moveNode,
+  moveOrder,
   newNode,
   newPolicy,
   opLabel,
@@ -20,14 +28,14 @@ import {
   removePolicy,
   renamePolicy,
   replacePolicy,
-  rescopePolicy,
+  scopeSummary,
+  setScopes,
   ruleText,
   SIM_DEFAULT,
   simulate,
   slaText,
   updateNode,
   WF_OPS,
-  WF_SCOPE_OPTIONS,
   WF_SLA_OPTIONS,
   type ApprovalNode,
   type ConditionNode,
@@ -56,10 +64,10 @@ const approvalNode = (id: string): ApprovalNode => ({ id, type: 'approval', role
 describe('seed integrity — firm (§2.1)', () => {
   it('ships exactly the three firm policies, in order, with their list-row metadata', () => {
     expect(SEED_FIRM_POLICIES).toHaveLength(3)
-    expect(SEED_FIRM_POLICIES.map((p) => [p.id, p.name, p.scope, p.status])).toEqual([
-      ['polF1', 'Standard approval policy', 'All invoices', 'published'],
-      ['polF2', 'Cross-border & FX', 'Foreign-currency invoices', 'published'],
-      ['polF3', 'Government supply (B2G)', 'Document type · B2G', 'draft'],
+    expect(SEED_FIRM_POLICIES.map((p) => [p.id, p.name, isCatchAll(p.scopes), p.status])).toEqual([
+      ['polF1', 'Standard approval policy', true, 'published'],
+      ['polF2', 'Cross-border & FX', true, 'published'],
+      ['polF3', 'Government supply (B2G)', true, 'draft'],
     ])
   })
 
@@ -103,9 +111,9 @@ describe('seed integrity — firm (§2.1)', () => {
 describe('seed integrity — inhouse (§2.2)', () => {
   it('ships exactly the two in-house policies, in order, with their list-row metadata', () => {
     expect(SEED_INHOUSE_POLICIES).toHaveLength(2)
-    expect(SEED_INHOUSE_POLICIES.map((p) => [p.id, p.name, p.scope, p.status])).toEqual([
-      ['polH1', 'Company approval policy', 'All invoices', 'published'],
-      ['polH2', 'Capital expenditure', 'Capex & fixed assets', 'draft'],
+    expect(SEED_INHOUSE_POLICIES.map((p) => [p.id, p.name, isCatchAll(p.scopes), p.status])).toEqual([
+      ['polH1', 'Company approval policy', true, 'published'],
+      ['polH2', 'Capital expenditure', true, 'draft'],
     ])
   })
 
@@ -214,7 +222,7 @@ describe('AC-4 — lib/workflows.ts is pure reducers over a tree, and nothing el
       appendNode(p, 'approval').policy,
       clearSteps(p),
       renamePolicy(p, 'Renamed'),
-      rescopePolicy(p, 'Consumer invoices (B2C)'),
+      setScopes(p, { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] }),
     ]
     expect(produced).toHaveLength(8)
     for (const next of produced) {
@@ -226,43 +234,146 @@ describe('AC-4 — lib/workflows.ts is pure reducers over a tree, and nothing el
 })
 
 describe('AC-3 — the list shape App.tsx’s ctx verbs patch (§4.4)', () => {
-  // `savePolicy` and `deletePolicy` go through replacePolicy / removePolicy above. Append
-  // has no reducer and needs none; what it does need is the ORDER, because the server
-  // answers ORDER BY created_at, id and a prepend would put the new row where a refetch
-  // will not.
-  it('createPolicy appends, because the server orders by created_at then id', () => {
-    const list = seedPolicies().firm.slice(0, 2)
-    expect(list).toHaveLength(2)
-    const created = { ...newPolicy(), id: 'pol-server-9' }
+  // `savePolicy` and `deletePolicy` go through replacePolicy / removePolicy above.
+  const four = () => ['a', 'b', 'c', 'd'].map((id) => ({ ...newPolicy(), id }))
 
-    const after = [...list, created]
+  it('insertAboveLast puts a new policy before the last row', () => {
+    const list = four()
+    const after = insertAboveLast(list, { ...newPolicy(), id: 'e' })
+    expect(after.map((p) => p.id)).toEqual(['a', 'b', 'c', 'e', 'd'])
+    list.forEach((p, i) => expect(after[i < 3 ? i : 4]).toBe(p))
+  })
 
-    expect(after.map((p) => p.id)).toEqual(['polF1', 'polF2', 'pol-server-9'])
-    expect(after[0]).toBe(list[0])
-    expect(after[1]).toBe(list[1])
+  it('insertAboveLast in an empty list answers the new policy alone', () => {
+    expect(insertAboveLast([], { ...newPolicy(), id: 'e' }).map((p) => p.id)).toEqual(['e'])
   })
 })
 
-describe('WF_SCOPE_OPTIONS (§2.4)', () => {
-  // The seeded-scope containment test that stood here is deleted, not repaired: the fixture
-  // still carries scopes the server refuses, and policies.test.ts:253-254 proves this list is
-  // the EDITOR's own, never a filter on what may arrive.
-  it('mirrors the only scope the server stores', () => {
-    // Transcribed from internal/approval/policy.go:125 (policyScopeAll), refused by
-    // normalizeScope at :372-379 and by the CHECK at
-    // migrations/20260809210326_approval_policies.sql:59. Never read from the Go source.
-    const SERVER_SCOPE = 'All invoices'
-    expect([...WF_SCOPE_OPTIONS]).toEqual([SERVER_SCOPE])
+describe('scopeSummary and isCatchAll', () => {
+  const band = (lower: string | null, upper: string | null, currency = 'NGN') => ({ lower, upper, currency })
+
+  it('scopeSummary reads All invoices for the catch-all', () => {
+    expect(scopeSummary(CATCH_ALL_SCOPES)).toBe('All invoices')
   })
 
-  it('covers the default scope a brand-new policy is created with', () => {
-    expect(WF_SCOPE_OPTIONS).toContain(newPolicy().scope)
+  it('scopeSummary joins the set parts in a fixed order', () => {
+    expect(
+      scopeSummary({ document_types: ['debit_note', 'credit_note'], entity_ids: ['e1', 'e2'], workflow_role_keys: ['r1'], amount_band: band('1000.00', '50000.00') }),
+    ).toBe('Credit notes, Debit notes · 2 clients · NGN 1,000–50,000 · Created by 1 role')
   })
 
-  it('is the one distinct entry the editor offers', () => {
-    expect(WF_SCOPE_OPTIONS).toEqual(['All invoices'])
-    expect(WF_SCOPE_OPTIONS).toHaveLength(1)
-    expect(new Set(WF_SCOPE_OPTIONS).size).toBe(1)
+  it('scopeSummary keeps cents and trims a zero fraction', () => {
+    expect(scopeSummary({ ...CATCH_ALL_SCOPES, amount_band: band('1000.50', '50000.00') })).toBe('NGN 1,000.50–50,000')
+  })
+
+  it('scopeSummary labels the commercial invoice apart from the catch-all', () => {
+    expect(scopeSummary({ ...CATCH_ALL_SCOPES, document_types: ['commercial_invoice'] })).toBe('Commercial invoices')
+  })
+
+  it('scopeSummary reads an open-ended band', () => {
+    expect(scopeSummary({ ...CATCH_ALL_SCOPES, amount_band: band('5000000.00', null) })).toBe('NGN 5,000,000 and above')
+    expect(scopeSummary({ ...CATCH_ALL_SCOPES, amount_band: band(null, '50000000.00', 'USD') })).toBe('USD up to 50,000,000')
+  })
+
+  it('scopeSummary singular and plural counts', () => {
+    expect(scopeSummary({ ...CATCH_ALL_SCOPES, entity_ids: ['e1'], workflow_role_keys: ['a', 'b', 'c'] })).toBe('1 client · Created by 3 roles')
+  })
+
+  it('isCatchAll is false for each single scope', () => {
+    const singles = [{ document_types: ['credit_note'] }, { entity_ids: ['e1'] }, { workflow_role_keys: ['r1'] }, { amount_band: band('1', null) }]
+    expect(singles).toHaveLength(4)
+    for (const one of singles) expect(isCatchAll({ ...CATCH_ALL_SCOPES, ...one }), JSON.stringify(one)).toBe(false)
+  })
+
+  it('isCatchAll is false when only the band is set', () => {
+    expect(isCatchAll({ ...CATCH_ALL_SCOPES, amount_band: band('1', null) })).toBe(false)
+    expect(isCatchAll(CATCH_ALL_SCOPES)).toBe(true)
+  })
+})
+
+describe('moveOrder and listLock', () => {
+  const list = (n: number, scopedAt: number[] = []) =>
+    Array.from({ length: n }, (_, i) => ({
+      ...newPolicy(),
+      id: 'abcdefgh'[i],
+      scopes: scopedAt.includes(i) ? { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] } : CATCH_ALL_SCOPES,
+    }))
+
+  it('moveOrder swaps with the neighbour', () => {
+    expect(moveOrder(list(4), 'c', 'up')).toEqual(['a', 'c', 'b', 'd'])
+    expect(moveOrder(list(4), 'b', 'down')).toEqual(['a', 'c', 'b', 'd'])
+  })
+
+  it('moveOrder answers null at a boundary', () => {
+    expect(moveOrder(list(4), 'a', 'up')).toBeNull()
+    expect(moveOrder(list(4), 'd', 'down')).toBeNull()
+    expect(moveOrder(list(4), 'zz', 'up')).toBeNull()
+    expect(moveOrder(list(4), 'zz', 'down')).toBeNull()
+  })
+
+  it('listLock pins the last row while any policy is scoped', () => {
+    const lock = listLock(list(4, [1]))
+    expect([lock.moveUp(3), lock.moveDown(2), lock.deletable(3)]).toEqual([false, false, false])
+    expect([lock.moveUp(2), lock.moveDown(1), lock.deletable(2)]).toEqual([true, true, true])
+    expect(lock.anyScoped).toBe(true)
+  })
+
+  it('listLock pins the last row when only a policy active version is scoped', () => {
+    // A: published v1 scoped (active) under a v2 draft with scopes cleared; C is the catch-all.
+    const policies = [
+      { ...newPolicy(), id: 'a', version: 2, activeVersion: 1, activeScoped: true },
+      { ...newPolicy(), id: 'b' },
+      { ...newPolicy(), id: 'c' },
+    ]
+    const lock = listLock(policies)
+    expect(lock.anyScoped).toBe(true)
+    expect([lock.moveUp(2), lock.moveDown(1), lock.deletable(2)]).toEqual([false, false, false])
+    expect([lock.moveUp(1), lock.moveDown(0), lock.deletable(1)]).toEqual([true, true, true])
+  })
+
+  it('listLock frees the last row when no policy is scoped', () => {
+    const lock = listLock(list(4))
+    expect([lock.moveUp(3), lock.moveDown(2), lock.deletable(3)]).toEqual([true, true, true])
+    expect([lock.moveUp(0), lock.moveDown(3)]).toEqual([false, false])
+  })
+
+  it('listLock with one policy', () => {
+    const lock = listLock(list(1))
+    expect([lock.moveUp(0), lock.moveDown(0), lock.deletable(0)]).toEqual([false, false, true])
+  })
+})
+
+describe('band inputs', () => {
+  it('currencyText keeps three upper-case letters', () => {
+    expect(currencyText('abcd')).toBe('ABC')
+    expect(currencyText('ngn1')).toBe('NGN')
+    expect(currencyText('u s')).toBe('US')
+  })
+
+  it('boundText strips separators and letters', () => {
+    expect(boundText('5,000,000.50', '')).toBe('5000000.50')
+    expect(boundText('abc', '')).toBe('')
+  })
+
+  it('boundText refuses a change that would add a second dot or pass 12 integer / 2 fraction digits', () => {
+    expect(boundText('1.234.56', '1.2')).toBe('1.2')
+    expect(boundText('1.2.', '1.2')).toBe('1.2')
+    expect(boundText('1.239', '1.23')).toBe('1.23')
+    expect(boundText('1234567890123', '123456789012')).toBe('123456789012')
+    expect(boundText('1234567890123.5', '5')).toBe('5')
+  })
+
+  it('boundText accepts the limits, a bare dot and a leading dot', () => {
+    expect(boundText('123456789012.5', '')).toBe('123456789012.5')
+    expect(boundText('1.23', '1.2')).toBe('1.23')
+    expect(boundText('.', '')).toBe('.')
+    expect(boundText('.5', '.')).toBe('.5')
+  })
+
+  it('bandFrom is null when everything is empty, else a band with null for an empty bound', () => {
+    expect(bandFrom('', '', '')).toBeNull()
+    expect(bandFrom('NGN', '1000', '')).toEqual({ lower: '1000', upper: null, currency: 'NGN' })
+    expect(bandFrom('', '', '50')).toEqual({ lower: null, upper: '50', currency: '' })
   })
 })
 
@@ -573,7 +684,7 @@ describe('policy-level reducers', () => {
     const before = polF1()
     const after = clearSteps(before)
     expect(after.nodes).toEqual([])
-    expect(after).toMatchObject({ id: 'polF1', name: 'Standard approval policy', scope: 'All invoices' })
+    expect(after).toMatchObject({ id: 'polF1', name: 'Standard approval policy', scopes: CATCH_ALL_SCOPES })
     expect(before.nodes).toHaveLength(4)
   })
 
@@ -585,11 +696,11 @@ describe('policy-level reducers', () => {
     expect(before.name).toBe('Standard approval policy')
   })
 
-  it('rescopePolicy rewrites only the scope', () => {
+  it('setScopes rewrites only the scopes', () => {
     const before = polF1()
-    const after = rescopePolicy(before, 'Consumer invoices (B2C)')
-    expect(after).toEqual({ ...before, scope: 'Consumer invoices (B2C)' })
-    expect(before.scope).toBe('All invoices')
+    const scopes = { ...CATCH_ALL_SCOPES, entity_ids: ['e1'] }
+    expect(setScopes(before, scopes)).toEqual({ ...before, scopes })
+    expect(before.scopes).toBe(CATCH_ALL_SCOPES)
   })
 
   it('replacePolicy swaps by id, keeping order, length and sibling identity', () => {
@@ -616,7 +727,7 @@ describe('policy-level reducers', () => {
   })
 
   it('newPolicy starts as an empty draft', () => {
-    expect(newPolicy()).toMatchObject({ name: 'Untitled policy', scope: 'All invoices', status: 'draft', nodes: [] })
+    expect(newPolicy()).toMatchObject({ name: 'Untitled policy', position: 0, scopes: CATCH_ALL_SCOPES, status: 'draft', nodes: [] })
     expect(newPolicy().id).not.toBe(newPolicy().id)
   })
 })

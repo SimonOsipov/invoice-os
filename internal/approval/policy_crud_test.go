@@ -156,7 +156,7 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 create-v1")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", "")
+	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
 	}
@@ -170,6 +170,8 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 		ID:       got.ID,
 		Name:     "Sign-off",
 		Scope:    scopeAllInvoices,
+		Position: 1,
+		Scopes:   Scopes{DocumentTypes: []string{}, EntityIDs: []string{}, WorkflowRoleKeys: []string{}},
 		Status:   "draft",
 		Version:  1,
 		Sealed:   false,
@@ -231,7 +233,7 @@ func TestPolicy_CreateAuditsInSameTx(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 create-audit-atomicity")
 	c, adminID := activeAdmin(t, super, tenantID)
 
-	created, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", "")
+	created, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
 	}
@@ -291,52 +293,6 @@ func TestPolicy_CreateAuditsInSameTx(t *testing.T) {
 
 // --- AC-2: normalization above the transaction --------------------------------
 
-// TestCreatePolicy_ForeignScopeRejected: each of the five retired scopes the server
-// refuses is ErrValidation with nothing written. A raw *pgconn.PgError
-// with code 23514 fails this test — policyStatusForErr takes sentinels only, so an
-// unmapped check violation answers 500 where the design promises 400. The trailing
-// positive control keeps the zero-row assertions from passing against a store that
-// refuses everything.
-func TestCreatePolicy_ForeignScopeRejected(t *testing.T) {
-	super, app := dbTestPools(t)
-
-	for _, scope := range removedScopes {
-		t.Run(scope, func(t *testing.T) {
-			tenantID := policyTenant(t, super, "APPR-05 foreign-scope")
-			c, _ := activeAdmin(t, super, tenantID)
-
-			_, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", scope)
-			if !errors.Is(err, ErrValidation) {
-				t.Errorf("CreatePolicy(scope %q) err = %v, want ErrValidation", scope, err)
-			}
-			if code := pgCode(err); code != "" {
-				t.Errorf("CreatePolicy(scope %q) surfaced a raw Postgres error (SQLSTATE %s) — "+
-					"policyStatusForErr maps sentinels only, so this answers 500 instead of 400", scope, code)
-			}
-			if n := rowCount(t, super, "approval_policies", tenantID); n != 0 {
-				t.Errorf("approval_policies rows = %d, want 0 — the scope is refused above the transaction", n)
-			}
-			if n := rowCount(t, super, "approval_policy_versions", tenantID); n != 0 {
-				t.Errorf("approval_policy_versions rows = %d, want 0", n)
-			}
-			if n := auditCount(t, super, tenantID, "approval_policy.created"); n != 0 {
-				t.Errorf("approval_policy.created audit rows = %d, want 0", n)
-			}
-		})
-	}
-
-	t.Run("control: the accepted scope still writes", func(t *testing.T) {
-		tenantID := policyTenant(t, super, "APPR-05 foreign-scope-control")
-		c, _ := activeAdmin(t, super, tenantID)
-		if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", scopeAllInvoices); err != nil {
-			t.Fatalf("CreatePolicy(%q): %v — the refusals above are vacuous unless this succeeds", scopeAllInvoices, err)
-		}
-		if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
-			t.Errorf("approval_policies rows = %d, want 1", n)
-		}
-	})
-}
-
 // TestCreatePolicy_EmptyNameRejected: a whitespace-only name is ErrValidation with
 // nothing written, and the same caller can still create a named policy.
 func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
@@ -345,7 +301,7 @@ func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	_, err := store.CreatePolicy(c, "   ", "")
+	_, err := store.CreatePolicy(c, "   ", nil)
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("CreatePolicy with a blank name: err = %v, want ErrValidation", err)
 	}
@@ -362,7 +318,7 @@ func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
 		t.Errorf("approval_policy.created audit rows = %d, want 0", n)
 	}
 
-	created, err := store.CreatePolicy(c, "  Sign-off  ", "")
+	created, err := store.CreatePolicy(c, "  Sign-off  ", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy with a real name: %v — the refusal above is vacuous unless this succeeds", err)
 	}
@@ -376,34 +332,6 @@ func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
 	}
 	if stored != "Sign-off" {
 		t.Errorf("stored name = %q, want the trimmed %q", stored, "Sign-off")
-	}
-}
-
-// TestCreatePolicy_EmptyScopeNormalizedBeforeSQL: an absent scope is written as the
-// default, not as "". Reading the stored COLUMN is the load-bearing part — a store
-// that echoes the normalized value while writing the raw one passes a response-only
-// assertion. An explicit "" reaching SQL raises 23514 approval_policies_scope_check,
-// so a Postgres error here IS the regression.
-func TestCreatePolicy_EmptyScopeNormalizedBeforeSQL(t *testing.T) {
-	super, app := dbTestPools(t)
-
-	for _, in := range []string{"", "   ", scopeAllInvoices} {
-		t.Run("scope "+in, func(t *testing.T) {
-			tenantID := policyTenant(t, super, "APPR-05 scope-normalized")
-			c, _ := activeAdmin(t, super, tenantID)
-
-			created, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", in)
-			if err != nil {
-				t.Fatalf("CreatePolicy(scope %q): %v (SQLSTATE %q) — an unnormalized scope reaching SQL "+
-					"raises 23514 on approval_policies_scope_check", in, err, pgCode(err))
-			}
-			if got := storedPolicyScope(t, super, created.ID); got != scopeAllInvoices {
-				t.Errorf("STORED scope column = %q, want %q", got, scopeAllInvoices)
-			}
-			if created.Scope != scopeAllInvoices {
-				t.Errorf("returned scope = %q, want %q", created.Scope, scopeAllInvoices)
-			}
-		})
 	}
 }
 
@@ -502,7 +430,7 @@ func TestPolicy_ListReturnsTreeAndVersions(t *testing.T) {
 
 // TestPolicy_ListOmitsSoftDeleted: deleted_at IS NULL is the list predicate, and the
 // deleted policy's steps are never read. The statement count is the other half of
-// AC-3: three statements whatever the policy count.
+// AC-3: four statements whatever the policy count.
 func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 list-soft-deleted")
@@ -541,17 +469,17 @@ func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 		}
 	}
 
-	// Three statements, constant in policy count: an N+1 tree read would issue one
+	// Four statements, constant in policy count: an N+1 tree read would issue one
 	// per policy and is otherwise invisible, since the results are identical.
-	t.Run("three statements, constant in policy count", func(t *testing.T) {
+	t.Run("four statements, constant in policy count", func(t *testing.T) {
 		traced, rec := tracedAppPool(t)
 		rec.reset()
 		if _, err := NewStore(traced, stubFingerprinter, nil).ListPolicies(c); err != nil {
 			t.Fatalf("ListPolicies on the traced pool: %v", err)
 		}
 		sql := rec.mentioning("approval_polic")
-		if len(sql) != 3 {
-			t.Errorf("ListPolicies issued %d statements against the policy tables, want 3:\n%v", len(sql), sql)
+		if len(sql) != 4 {
+			t.Errorf("ListPolicies issued %d statements against the policy tables, want 4:\n%v", len(sql), sql)
 		}
 	})
 }
@@ -664,7 +592,7 @@ func TestPolicy_ReadNeedsNoAdminRoleWriteDoes(t *testing.T) {
 		t.Fatalf("GetPolicy as a preparer: %v", err)
 	}
 
-	if _, err := store.CreatePolicy(c, "Second policy", ""); !errors.Is(err, ErrNotPermitted) {
+	if _, err := store.CreatePolicy(c, "Second policy", nil); !errors.Is(err, ErrNotPermitted) {
 		t.Errorf("CreatePolicy as a preparer: err = %v, want ErrNotPermitted", err)
 	}
 	if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
@@ -684,7 +612,7 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
-	_, err := NewStore(traced, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", "")
+	_, err := NewStore(traced, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", nil)
 	// The request seam refuses a non-active caller before the store reads anything
 	// (db.WithinRequestTenantTxOpts), so the membership read is the seam's, batched.
 	if !errors.Is(err, db.ErrNotActiveMember) {
@@ -709,7 +637,7 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 		t.Errorf("approval_policy.created audit rows = %d, want 0", n)
 	}
 
-	if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "   ", ""); !errors.Is(err, ErrValidation) {
+	if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "   ", nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("CreatePolicy with a blank name as a suspended admin: err = %v, want ErrValidation — "+
 			"the normalizers run above the transaction, so they answer before the permission check", err)
 	}

@@ -11,15 +11,21 @@ paths:
 ---
 # Approvals
 
-- Keep one active version per tenant, across all its policies.
-- Publish deactivates the tenant's active version, whichever policy owns it. Delete deactivates only the deleted policy's version.
+- Keep one active version per policy. A workspace can have several policies in force.
+- Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
-- Arm the sweep after the seal. The sweep resolves the governing version with `WHERE is_active`.
+- Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
+- Match the scopes in `firstMatch` only. A document type, a client or a creator role matches when the document's value is in the list. An amount band matches when the currency is equal and the total is within both bounds. An unset scope matches every document (`TestFirstMatch_*`).
+- The creator is the actor of the `from_status IS NULL` history row of `invoice_status_history`. Both creator readers use that row.
+- A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.
 - Never retry a publish 409 automatically.
 - Re-activate a sealed version by publishing its tree again as a new version. No API path re-activates a sealed version.
-- Arm a run for every invoice at `validated` while any version is active.
+- Arm a run for every document at `validated` that a policy in force matches. A document that no policy matches gets no run, and the gate blocks it (`TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun`, `TestTransmitClearTx_UnmatchedDocumentIsBlockedWhileAPolicyIsInForce`).
+- Keep an open run on the version it was armed with. A publish or a reorder never re-arms it (`TestPublish_LeavesOpenRunsOnTheirVersion`).
+- Record `policy_id`, `position` and `matched_scopes` in `invoice.approval_armed`. Record scope names, never scope values (`TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes`).
 - Write the run closed `approved` with `closed_by = 'system'` when no approval step is pending. Write no decision row.
 - Enforce the `TransmitClear` gate in `Store.Transition` and `Submitter.BatchSubmit` only.
 - Treat an unreadable approval standing as not clear. Both transmit doors fail closed.
@@ -31,11 +37,24 @@ paths:
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
-- Refuse an approve by the invoice's creator before the second axis. Read the creator through `CreatorStandingTx` only.
+- Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
-- Accept only `All invoices` as a policy `scope`. The `CHECK` constraint enforces it.
+- Store a policy's scopes on its version (`approval_policy_versions`): document types, client companies (`business_entities` ids), an amount band with its currency, and workflow roles (`workflow_roles` ids). Each scope is optional.
+- Write a scope edit to the draft. It takes effect at publish.
+- Seal a version's scopes with it. `approval_policy_versions_seal_guard` refuses a scope change on a sealed version.
+- Treat a version with no scope set as the catch-all.
+- Write no value to the legacy `scope` text on `approval_policies`. The API reads no `scope` key.
+- Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, an unknown workflow role, and a deleted workflow role the policy's top version does not already hold, with 400.
+- Name a workflow role in a scope by its key on the wire. Store its id.
+- Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
+- Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.
+- While any live policy has a scope, refuse with 409 a delete of the last live policy and a reorder that changes the last live policy.
+- Write no audit row for a reorder that keeps the current order.
+- Put a new policy directly above the workspace's last live policy.
+- Order the policies with `PUT /v1/approval-policies/order`. It writes one `approval_policy.reordered` audit row with the old and the new order.
+- Give each live policy a unique order position on `approval_policies`. The trigger `approval_policies_assign_position` assigns the next one on insert.
 - Key approval policies by workspace, not by client company.
 - Return the draft's steps from `GET /v1/approval-policies/{id}` once a draft exists. Never label them active.
 - Read the policy `status` to learn whether the returned steps are a draft. `draft` means the highest version is unsealed.

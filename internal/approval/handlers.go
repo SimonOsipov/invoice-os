@@ -154,14 +154,17 @@ func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// roleInUseResponse is the DELETE 409 body: the sentence plus the policies that name the role.
+// roleInUseResponse is the DELETE 409 body: the sentence, the policies that name the role,
+// and, when an open run waits on it, the invoices (capped) with their full count.
 type roleInUseResponse struct {
-	Error    string      `json:"error"`
-	Policies []PolicyRef `json:"policies"`
+	Error         string       `json:"error"`
+	Policies      []PolicyRef  `json:"policies"`
+	Invoices      []InvoiceRef `json:"invoices,omitempty"`
+	InvoicesTotal int          `json:"invoices_total,omitempty"`
 }
 
 // DeleteRoleHandler returns DELETE /v1/workflow-roles/{key}: identity (401) -> path key
-// -> soft delete -> 200, or 409 with the policies that name the role. No body is read at all. Its `members` is [] because a deleted
+// -> soft delete -> 200, or 409 with the policies and invoices that hold the role. No body is read at all. Its `members` is [] because a deleted
 // role has no addressable holders — that reads as "unstaffed", not "not reported", which
 // is safe only while the SPA's removeRole drops the card without reading the body.
 func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
@@ -177,12 +180,16 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 		role, err := del(r.Context(), r.PathValue("key"))
 		if err != nil {
 			if errors.Is(err, ErrRoleInUse) {
-				policies := []PolicyRef{}
+				resp := roleInUseResponse{Error: roleInUseMessage, Policies: []PolicyRef{}}
 				var inUse *roleInUse
 				if errors.As(err, &inUse) {
-					policies = inUse.policies
+					resp.Error = inUse.message()
+					resp.Invoices, resp.InvoicesTotal = inUse.invoices, inUse.invoicesTotal
+					if inUse.policies != nil {
+						resp.Policies = inUse.policies
+					}
 				}
-				writeJSON(w, http.StatusConflict, roleInUseResponse{Error: roleInUseMessage, Policies: policies})
+				writeJSON(w, http.StatusConflict, resp)
 				return
 			}
 			status, msg := statusForErr(err)

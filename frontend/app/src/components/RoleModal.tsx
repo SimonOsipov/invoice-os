@@ -20,6 +20,7 @@ import {
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
   draftSteps,
+  inUseInvoices,
   inUsePolicyNames,
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
@@ -85,6 +86,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   const [submitting, setSubmitting] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
   const [writeErrorPolicies, setWriteErrorPolicies] = useState<string[]>([])
+  const [writeErrorInvoices, setWriteErrorInvoices] = useState<{ numbers: string[]; total: number }>({ numbers: [], total: 0 })
 
   // AC-7: a write in flight must not be closed out from under by any route, X or Escape included.
   const closeIfIdle = useCallback(() => {
@@ -119,6 +121,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     setSubmitting(true)
     setWriteError(null)
     setWriteErrorPolicies([])
+    setWriteErrorInvoices({ numbers: [], total: 0 })
     try {
       if (role) {
         // Two independent verbs, fired only for what actually changed — a rename-only edit
@@ -154,8 +157,9 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     } catch (err) {
       setWriteError(toApiError(err).message)
       setWriteErrorPolicies(inUsePolicyNames(err))
-      // The refusal means the card's count is stale.
-      if (toApiError(err).status === 409) ctx.refetchRolesInForce()
+      setWriteErrorInvoices(inUseInvoices(err))
+      // Only a refusal that names policies means the card's count is stale; an open-run refusal leaves in_force unchanged.
+      if (toApiError(err).status === 409 && inUsePolicyNames(err).length > 0) ctx.refetchRolesInForce()
     } finally {
       setSubmitting(false)
     }
@@ -372,6 +376,16 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                   {writeErrorPolicies.map((n, i) => (
                     <li key={i}>{n}</li>
                   ))}
+                </ul>
+              )}
+              {writeErrorInvoices.numbers.length > 0 && (
+                <ul data-testid="role-modal-error-invoices" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {writeErrorInvoices.numbers.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                  {writeErrorInvoices.total > writeErrorInvoices.numbers.length && (
+                    <li data-testid="role-modal-error-invoices-more">and {writeErrorInvoices.total - writeErrorInvoices.numbers.length} more</li>
+                  )}
                 </ul>
               )}
             </div>

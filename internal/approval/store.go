@@ -329,9 +329,12 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 	return updated, nil
 }
 
+// roleInRunListCap bounds the invoices a role-in-use refusal lists.
+const roleInRunListCap = 20
+
 // DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
-// roleInUse while a policy in force names the role, under the tenant lock so a publish
-// cannot race it. Nothing cascades: the staffing rows survive, inert, unreachable while
+// roleInUse while a policy in force names the role or an open run waits on it, under the
+// tenant lock so a publish cannot race it. Nothing cascades: the staffing rows survive, inert, unreachable while
 // deleted_at is set. invoice_app holds no DELETE grant on workflow_roles, so a hard
 // delete is structurally unreachable, and there is no undelete path.
 //
@@ -371,8 +374,34 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 		if err != nil {
 			return err
 		}
-		if len(policies) > 0 {
-			return &roleInUse{policies: policies}
+
+		// ceiling: arm does not take the tenant lock, so a delete racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
+		// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
+		runRows, err := tx.Query(ctx,
+			`SELECT i.id, i.invoice_number, count(*) OVER ()
+			   FROM approval_runs r
+			   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
+			  WHERE r.state = 'open'
+			    AND i.status = 'validated'
+			    AND EXISTS (SELECT 1 FROM workflow_roles w WHERE w.key = $1 AND w.deleted_at IS NULL)
+			    AND EXISTS (SELECT 1 FROM approval_run_steps s
+			                 WHERE s.run_id = r.id AND s.kind = 'approval'
+			                   AND s.state = 'pending' AND s.workflow_role_key = $1)
+			  ORDER BY r.opened_at, i.id
+			  LIMIT $2`, key, roleInRunListCap)
+		if err != nil {
+			return err
+		}
+		var invoicesTotal int
+		invoices, err := pgx.CollectRows(runRows, func(row pgx.CollectableRow) (InvoiceRef, error) {
+			var ref InvoiceRef
+			return ref, row.Scan(&ref.ID, &ref.Number, &invoicesTotal)
+		})
+		if err != nil {
+			return err
+		}
+		if len(policies) > 0 || len(invoices) > 0 {
+			return &roleInUse{policies: policies, invoices: invoices, invoicesTotal: invoicesTotal}
 		}
 
 		// One statement, no explicit lock: deleted_at IS NULL is both the existence

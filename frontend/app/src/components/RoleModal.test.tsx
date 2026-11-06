@@ -253,6 +253,21 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(other).not.toHaveBeenCalled()
   })
 
+  it('an open-run-only 409 does not re-read the usage; one that names policies does', async () => {
+    const runOnly = vi.fn()
+    const deleteRoleRun = vi.fn().mockRejectedValue(runConflict(['INV-1']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole: deleteRoleRun, refetchRolesInForce: runOnly })
+    await refuseDelete(deleteRoleRun)
+    expect(runOnly).not.toHaveBeenCalled()
+    cleanup()
+
+    const both = vi.fn()
+    const deleteRoleBoth = vi.fn().mockRejectedValue(runConflict(['INV-1'], 1, ['Credit notes']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole: deleteRoleBoth, refetchRolesInForce: both })
+    await refuseDelete(deleteRoleBoth)
+    expect(both).toHaveBeenCalledOnce()
+  })
+
   it('a 409 refusal with many policies renders every name as text', async () => {
     const long = 'L'.repeat(120)
     const deleteRole = vi.fn().mockRejectedValue(conflict(['One', '<b>x</b>', long, 'Four']))
@@ -305,6 +320,98 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
+  })
+
+  const SRun = 'this workflow role is awaited by an open approval run'
+  const runConflict = (numbers: string[], total = numbers.length, policies: string[] = []) =>
+    new ApiError('http', SRun, 409, {
+      error: SRun,
+      policies: policies.map((name, i) => ({ id: `p${i}`, name })),
+      invoices: numbers.map((invoice_number, i) => ({ id: `i${i}`, invoice_number })),
+      invoices_total: total,
+    })
+
+  it('a 409 run refusal lists the invoices under the server sentence', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(runConflict(['INV-1', 'INV-2']))
+    const { onClose, onFlash } = renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    expect(screen.getByTestId('role-modal')).toBeTruthy()
+    expect(screen.getByTestId('role-modal-error').textContent?.startsWith(SRun)).toBe(true)
+    const items = within(screen.getByTestId('role-modal-error-invoices')).getAllByRole('listitem')
+    expect(items.map((li) => li.textContent)).toEqual(['INV-1', 'INV-2'])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onFlash).not.toHaveBeenCalled()
+  })
+
+  it('an invoice number renders as text', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(runConflict(['<b>x</b>']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    const list = screen.getByTestId('role-modal-error-invoices')
+    expect(within(list).getAllByRole('listitem')[0].textContent).toBe('<b>x</b>')
+    expect(list.querySelector('b')).toBeNull()
+  })
+
+  it('a refusal that names policies and invoices renders both lists, policies first', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(runConflict(['INV-1', 'INV-2'], 2, ['Credit notes', 'Big invoices']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    const policies = screen.getByTestId('role-modal-error-policies')
+    const invoices = screen.getByTestId('role-modal-error-invoices')
+    expect(policies.compareDocumentPosition(invoices) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(policies).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Credit notes', 'Big invoices'])
+    expect(within(invoices).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['INV-1', 'INV-2'])
+  })
+
+  it('the invoice list says how many more the server did not list', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(runConflict(['INV-1', 'INV-2'], 5))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    const items = within(screen.getByTestId('role-modal-error-invoices')).getAllByRole('listitem')
+    expect(items.at(-1)?.getAttribute('data-testid')).toBe('role-modal-error-invoices-more')
+    expect(items.at(-1)?.textContent).toBe('and 3 more')
+    cleanup()
+
+    const exact = vi.fn().mockRejectedValue(runConflict(['INV-1', 'INV-2'], 2))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole: exact })
+    await refuseDelete(exact)
+    expect(screen.queryByTestId('role-modal-error-invoices-more')).toBeNull()
+  })
+
+  it('a policy-only refusal and a 404 render no invoice list', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['Credit notes']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
+    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
+    cleanup()
+
+    const missing = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' }))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole: missing })
+    await refuseDelete(missing)
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
+  })
+
+  it('a second attempt clears the previous invoice list', async () => {
+    const deleteRole = vi
+      .fn()
+      .mockRejectedValueOnce(runConflict(['INV-1']))
+      .mockRejectedValueOnce(new ApiError('http', 'workflow role not found', 404))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+    expect(screen.getByTestId('role-modal-error-invoices')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
     expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
   })
 

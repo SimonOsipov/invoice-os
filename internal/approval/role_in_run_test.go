@@ -286,6 +286,8 @@ func TestRoleInUseMessage_ByCase(t *testing.T) {
 		{"invoices", roleInUse{invoices: inv, invoicesTotal: 1}, roleInRunMessage},
 		{"both", roleInUse{policies: pol, invoices: inv, invoicesTotal: 1}, roleInUseMessage + "; " + roleInRunMessage},
 		{"empty", roleInUse{}, roleInUseMessage},
+		{"last holder, invoices only", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
+		{"last holder, policies set", roleInUse{lastHolder: true, policies: pol, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 	}
 	for _, c := range cases {
 		if got := c.e.message(); got != c.want {
@@ -409,6 +411,7 @@ func TestStatusForErr_RoleInUseComposesTheSentence(t *testing.T) {
 	}{
 		{"run only", &roleInUse{invoices: inv, invoicesTotal: 1}, roleInRunMessage},
 		{"both", &roleInUse{policies: pol, invoices: inv, invoicesTotal: 1}, roleInUseMessage + "; " + roleInRunMessage},
+		{"last holder", &roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 	}
 	for _, c := range cases {
 		status, msg := statusForErr(fmt.Errorf("wrapped: %w", c.e))

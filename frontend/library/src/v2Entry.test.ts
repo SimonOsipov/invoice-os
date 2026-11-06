@@ -159,6 +159,7 @@ describe('library entry', () => {
       './instrument',
       '@invoice-os/design-tokens/v2/styles.css',
       '@invoice-os/design-tokens/v2/app-layer.css',
+      '@invoice-os/design-tokens/v2/mark.css',
       './styles/library.css',
     ])
     expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<CrashBoundary\b[^>]*>[\s\S]*?<\/CrashBoundary>\s*<\/StrictMode>/)

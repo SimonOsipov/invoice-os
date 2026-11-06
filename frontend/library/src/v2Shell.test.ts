@@ -104,7 +104,8 @@ describe('library shell primitives', () => {
     const ts = render(createElement(Logo))
     const img = only(ts, 'img')
     expect(['width', 'height', 'alt', 'aria-hidden'].map((a) => attr(img, a))).toEqual(['28', '28', '', 'true'])
-    expect(style(img)['border-radius']).toBe('var(--radius-md)')
+    expect(attr(img, 'class')?.split(/\s+/)).toContain('asc-mark')
+    expect(style(img)['border-radius']).toBeUndefined()
     expect(style(withText(ts, 'ASComply'))).toMatchObject({
       'font-size': '16px',
       color: 'var(--surface-foreground)',

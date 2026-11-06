@@ -8,10 +8,12 @@ import { describe, expect, it } from 'vitest'
 
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
+import markSvg from '@invoice-os/design-tokens/v2/assets/mark.svg'
 import { BrandMark } from './icons'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOKENS = join(HERE, '../../../packages/design-tokens')
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
 const read = (p: string) => readFileSync(p, 'utf8')
 const stripCss = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -189,7 +191,7 @@ describe('v2 entry', () => {
     expect(links.filter((tag) => /\brel\s*=\s*["']?preconnect/i.test(tag))).toHaveLength(2)
   })
 
-  it('VE-04 BrandMark renders the v2 mark at 26 with a 6px corner', () => {
+  it('VE-04 BrandMark renders the vector master at 26', () => {
     const imgOf = (size?: number) => {
       const html = renderToStaticMarkup(createElement(BrandMark, size === undefined ? {} : { size }))
       const img = html.match(/<img\b[^>]*>/)?.[0]
@@ -198,18 +200,21 @@ describe('v2 entry', () => {
     }
 
     const attr = imgOf()
-    expect.soft(attr('src')).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
+    expect(markSvg).toMatch(/^data:image\/svg\+xml,|\/mark\.svg(\?.*)?$/)
+    expect.soft(attr('src')).toBe(escHtml(markSvg))
+    expect.soft(attr('class')).toBe('asc-mark')
     expect.soft(attr('width')).toBe('26')
     expect.soft(attr('height')).toBe('26')
     expect.soft(attr('alt')).toBe('')
     expect.soft(attr('aria-hidden')).toBe('true')
-    expect.soft(attr('style')).toContain('display:block')
-    expect.soft(attr('style')).toContain('border-radius:var(--radius-md)')
+    expect.soft(attr('style')).toBeUndefined()
 
     const small = imgOf(20)
     expect.soft(small('width'), 'an explicit size still wins').toBe('20')
     expect.soft(small('height'), 'an explicit size wins on height too').toBe('20')
-    expect.soft(small('style'), 'an explicit size keeps the corner').toContain('border-radius:var(--radius-md)')
+    expect.soft(small('src')).toBe(escHtml(markSvg))
+    expect.soft(small('class'), 'an explicit size keeps the mark class').toBe('asc-mark')
+    expect.soft(small('style')).toBeUndefined()
   })
 
   it('VE-05 the dead .ops-input:focus rule names --ring (source pin)', () => {

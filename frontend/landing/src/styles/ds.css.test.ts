@@ -160,6 +160,12 @@ describe('ds.css values', () => {
     expect(Math.abs(spread * (Number(scale?.[1]) / Number(scale?.[2])) - 2)).toBeLessThanOrEqual(0.01)
   })
 
+  it('DSC-10b .ds-logo-mark leaves the corner to mark.css', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-logo-mark', ['display'], 'block')
+    expect(valueOf(css, '.ds-logo-mark', 'border-radius')).toBeUndefined()
+  })
+
   it('DSC-07 the tab panel is sage with 10px bottom corners only', () => {
     const css = readDs()
     expectDecl(css, '.ds-tabs-panel', ['background'], 'var(--sage-panel)')

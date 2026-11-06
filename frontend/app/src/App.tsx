@@ -89,6 +89,7 @@ import {
   addRole,
   createStaffedRole,
   deleteWorkflowRole,
+  listRolesInForce,
   listWorkflowRoles,
   removeRole,
   replaceRole,
@@ -96,6 +97,7 @@ import {
   setRoleMembers,
   updateWorkflowRole,
   type Role,
+  type RolesInForce,
 } from './lib/roles'
 import {
   createApprovalPolicy,
@@ -536,6 +538,12 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   useEffect(() => {
     setRoles(rolesAsync.data ?? [])
   }, [rolesAsync.data])
+  // Policies in force per role. Its own fetch so a refresh after a publish never blanks
+  // `roles` or the builder (App.rolesInForce.test.tsx); not ready reads as unknown.
+  const inForceAsync = useAsync<RolesInForce | null>(
+    () => (base ? listRolesInForce(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null },
+  )
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -1657,6 +1665,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     // The builder is editing the policy that just stopped existing.
     setEditingPolicyId((cur) => (cur === id ? null : cur))
     policiesAsync.run()
+    inForceAsync.run()
   }
 
   // Mirror from the server's answer, after it lands; the list length is unchanged, so no refetch.
@@ -1678,6 +1687,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     const published = await publishApprovalPolicy(authedFetch, base!, id)
     // Refetch, not a one-row patch (policiesWiring.test.ts pins the call).
     policiesAsync.run()
+    inForceAsync.run()
     return published
   }
 
@@ -1794,6 +1804,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     rolesState,
     rolesError: rolesAsync.error,
     refetchRoles: rolesAsync.run,
+    rolesInForce: inForceAsync.status === 'ready' ? inForceAsync.data : null,
     entityId,
     pickedFiles,
     // Derived, never its own state: resetImport clears the selection and the kind goes

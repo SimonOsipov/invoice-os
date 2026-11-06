@@ -18,6 +18,7 @@ import {
   createWorkflowRole,
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
+  draftSteps,
   inUsePolicyNames,
   deleteWorkflowRole,
   drawerRoleHelper,
@@ -31,6 +32,7 @@ import {
   inspectorResolve,
   intro,
   isApprover,
+  listRolesInForce,
   listWorkflowRoles,
   pickerHiddenAmongSelected,
   pickerMembers,
@@ -47,6 +49,7 @@ import {
   setRoleMembers,
   stepsForMember,
   stepsWarning,
+  summary,
   steps as roleSteps,
   unassignedNotice,
   unassignedRoles,
@@ -538,20 +541,21 @@ describe('AC-11 — stepsForMember', () => {
 })
 
 describe('AC-12 — copy helpers', () => {
-  it("roleUsage renders Core AC 3's string in sentence case", () => {
-    const s: RoleSteps = { total: 2, policies: [{ policyName: 'A', count: 1 }, { policyName: 'B', count: 1 }] }
-    expect(roleUsage(s)).toBe('2 approval steps · 2 policies')
+  it("roleUsage renders Core AC 3's string with the scope-only arm", () => {
+    expect(roleUsage({ steps: 2, policies: 2 })).toBe('2 approval steps · 2 policies')
+    expect(roleUsage({ steps: 1, policies: 1 })).toBe('1 approval step · 1 policy')
+    expect(roleUsage({ steps: 2, policies: 1 })).toBe('2 approval steps · 1 policy')
+    expect(roleUsage({ steps: 0, policies: 1 })).toBe('0 approval steps · 1 policy')
   })
 
-  it('roleUsage singularises both nouns independently', () => {
-    const one: RoleSteps = { total: 1, policies: [{ policyName: 'A', count: 1 }] }
-    const twoSteps: RoleSteps = { total: 2, policies: [{ policyName: 'A', count: 2 }] }
-    expect(roleUsage(one)).toBe('1 approval step · 1 policy')
-    expect(roleUsage(twoSteps)).toBe('2 approval steps · 1 policy')
+  it('roleUsage renders the unused sentence at zero policies', () => {
+    expect(roleUsage({ steps: 0, policies: 0 })).toBe('not used in any policy')
   })
 
-  it('roleUsage renders the unused sentence at zero', () => {
-    expect(roleUsage({ total: 0, policies: [] })).toBe('not used in any policy')
+  it('summary folds RoleUse rows', () => {
+    const row = (steps: number, scope: boolean) => ({ id: 'p', name: 'P', steps, scope })
+    expect(summary([row(2, true), row(0, true), row(1, false)])).toEqual({ steps: 3, policies: 3, scopes: 2 })
+    expect(summary(undefined)).toEqual({ steps: 0, policies: 0, scopes: 0 })
   })
 
   it('unassignedNotice pluralises around one', () => {
@@ -720,18 +724,42 @@ describe('AC-6 — canSaveRole gates on the name alone', () => {
 
 describe('AC-7 — deleteRoleConfirm states the in-force rule', () => {
   // DELETE_REFUSED_IN_FORCE mirrors ErrRoleInUse in internal/approval/approval.go.
-  it('deleteRoleConfirm states the in-force rule at zero usage', () => {
-    expect(deleteRoleConfirm('Quality Reviewer', { total: 0, policies: [] })).toBe(
-      'Delete Quality Reviewer? The delete is refused while a policy in force names it in a scope or an approval step.',
-    )
+  const RULE = 'The delete is refused while a policy in force names it in a scope or an approval step.'
+  const TAIL = 'A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.'
+
+  it('deleteRoleConfirm at zero claims no usage', () => {
+    expect(deleteRoleConfirm('Quality Reviewer', { steps: 0, policies: 0, scopes: 0 }, 0)).toBe(`Delete Quality Reviewer? ${RULE}`)
   })
 
-  it('deleteRoleConfirm keeps the usage count and drops "will block"', () => {
-    const text = deleteRoleConfirm('Tax Reviewer', { total: 1, policies: [{ policyName: 'P', count: 1 }] })
-    expect(text).toBe(
-      'Delete Tax Reviewer? 1 approval step · 1 policy. The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.',
-    )
+  it('deleteRoleConfirm states the in-force count and the scope', () => {
+    const text = deleteRoleConfirm('Tax Reviewer', { steps: 2, policies: 2, scopes: 1 }, 0)
+    expect(text).toBe(`Delete Tax Reviewer? In force: 2 approval steps · 2 policies. 1 policy names it in a creator scope. ${RULE}`)
     expect(text).not.toContain('will block')
+    expect(deleteRoleConfirm('Tax Reviewer', { steps: 2, policies: 2, scopes: 2 }, 0)).toContain('2 policies name it in a creator scope.')
+    expect(deleteRoleConfirm('Tax Reviewer', { steps: 2, policies: 2, scopes: 0 }, 0)).toBe(`Delete Tax Reviewer? In force: 2 approval steps · 2 policies. ${RULE}`)
+  })
+
+  it('deleteRoleConfirm keeps the draft tail at zero in-force policies', () => {
+    expect(deleteRoleConfirm('Quality Reviewer', { steps: 0, policies: 0, scopes: 0 }, 1)).toBe(`Delete Quality Reviewer? ${RULE} ${TAIL}`)
+  })
+
+  it('deleteRoleConfirm keeps the draft tail beside an in-force count', () => {
+    const use = { steps: 1, policies: 1, scopes: 0 }
+    expect(deleteRoleConfirm('Tax Reviewer', use, 1)).toBe(`Delete Tax Reviewer? In force: 1 approval step · 1 policy. ${RULE} ${TAIL}`)
+    expect(deleteRoleConfirm('Tax Reviewer', use, 0)).not.toContain(TAIL)
+  })
+
+  it('draftSteps counts approval nodes of unpublished draft top versions only', () => {
+    const approval = (id: string) => ({ id, type: 'approval' as const, role: 'cfo', sla: '48', delegate: false })
+    const as = (status: Policy['status'], nodes: Policy['nodes']) => ({ ...testPolicy('P', nodes), status })
+    const policies = [
+      as('draft', [approval('a1')]),
+      as('draft', [{ id: 'c1', type: 'condition', field: 'amount', op: '>', value: 1, then: [approval('a2')], else: [] }]),
+      as('published', [approval('a3')]),
+      as('draft', [{ id: 'n1', type: 'notify', target: 'cfo', channel: 'Email' }]),
+    ]
+    expect(draftSteps(policies, 'cfo')).toBe(2)
+    expect(draftSteps([], 'cfo')).toBe(0)
   })
 
   it('deleteRoleConfirmUnknownUsage states the in-force rule', () => {
@@ -1199,6 +1227,20 @@ describe('AC-1/AC-2 — listWorkflowRoles hits the workflow-roles path and unwra
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/workflow-roles')
+  })
+})
+
+describe('listRolesInForce reads in_force from the same GET', () => {
+  it('returns the in_force object; absent is null', async () => {
+    const inForce = { cfo: [{ id: 'p1', name: 'P', steps: 0, scope: true }] }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ workflow_roles: [wireRoleA], in_force: inForce }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    expect(await listRolesInForce(af, wireBase)).toEqual(inForce)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles')
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ workflow_roles: [wireRoleA] }) })
+    expect(await listRolesInForce(af, wireBase)).toBeNull()
   })
 })
 

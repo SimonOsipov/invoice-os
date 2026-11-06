@@ -13,7 +13,7 @@ import { useCallback, useEffect, useId, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { membersSurface, viewerIsAdmin, workflowRolesLock } from '../lib/members'
+import { viewerIsAdmin, workflowRolesLock } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -22,7 +22,7 @@ import {
   resolve,
   roleUsage,
   rolesSurface,
-  steps,
+  summary,
   unassignedNotice,
   unassignedRoles,
   type Role,
@@ -192,15 +192,10 @@ function NewRoleButton({ onClick, testId, disabled, lock, noteId }: LockProps & 
 
 function RoleCard({ ctx, role, onEdit, disabled, lock }: LockProps & { ctx: PlatformCtx; role: Role; onEdit: () => void }) {
   const noteId = useId()
-  const { roles, members, policies } = ctx
+  const { roles, members } = ctx
   const held = holders(roles, members, role.key)
   const who = resolve(roles, members, role.key)
   const overflow = held.length - AVATAR_MAX
-  // `surface` above covers roles and members; policies are not in that ladder, and `steps` off
-  // an unlanded fetch reads as "used nowhere" on every card at once. Unlanded renders the EMPTY
-  // STRING — `ABSENT_LABEL`'s em dash claims "nothing here" in its own right (MembersTable.tsx:195).
-  const policiesSurface = membersSurface(ctx.policiesState)
-  const policiesLanded = policiesSurface !== 'loading' && policiesSurface !== 'error'
 
   return (
     // Content, not a control: no onClick and no hover treatment anywhere on the box —
@@ -266,7 +261,7 @@ function RoleCard({ ctx, role, onEdit, disabled, lock }: LockProps & { ctx: Plat
           row's height and every footer in it lands on one line. */}
       <div style={{ marginTop: 'auto', paddingTop: 10, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <span className="mono" style={{ minWidth: 0, fontSize: 9.5, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
-          {policiesLanded ? roleUsage(steps(policies, role.key)) : ''}
+          {ctx.rolesInForce ? roleUsage(summary(ctx.rolesInForce[role.key])) : ''}
         </span>
         <span className="mono" style={{ flex: 'none', fontSize: 9.5, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
           {holderCount(held.length)}

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import { WFROLE_ADMIN_ONLY, type Member } from '../lib/members'
-import type { Role } from '../lib/roles'
+import type { Role, RolesInForce } from '../lib/roles'
 import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { RolesView } from './RolesView'
@@ -54,6 +54,7 @@ function Harness({
   roles = [],
   policies = [],
   policiesState = 'ready',
+  rolesInForce = {},
   rolesState = 'ready',
   rolesError = null,
   membersState = 'ready',
@@ -66,6 +67,7 @@ function Harness({
   roles?: Role[]
   policies?: Policy[]
   policiesState?: AsyncStatus
+  rolesInForce?: RolesInForce | null
   rolesState?: AsyncStatus
   rolesError?: ApiError | null
   membersState?: AsyncStatus
@@ -79,6 +81,7 @@ function Harness({
     roles,
     policies,
     policiesState,
+    rolesInForce,
     policiesError: null,
     refetchPolicies: vi.fn(),
     publishPolicy: vi.fn(),
@@ -221,102 +224,72 @@ describe('AC-4: the roles-unassigned banner stays gated on the full roster surfa
 })
 
 // ============================================================================
-// APPR-09-06 (task-510) — the fifth `ctx.policies` reader
+// APSC-08 -- the card line comes from `ctx.rolesInForce` alone
 // ============================================================================
-// The card footer renders on EVERY card and was gated only by `rolesSurface(rolesState,
-// membersState)`, which does not carry policies — so an unlanded fetch read 'not used in any
-// policy' on every card at once, the same false claim as RoleModal's delete confirm at grid
-// volume. The footer now forks on `policiesLanded` (RolesView.tsx:181).
+// Unknown usage (`null`: loading, failed, or the server omitted `in_force`) renders the EMPTY
+// STRING, never "not used in any policy" and never the em dash (MembersTable.tsx:195).
 
-describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a landed policies fetch', () => {
-  /** Header / holders / footer. MembersTable.test.tsx:42's `row.children[2]` idiom — the
-   *  footer carries no test id, and RolesView.tsx is not edited to give it one. */
+describe('APSC-08: a role card claims policy usage only off a landed rolesInForce', () => {
+  /** Header / holders / footer; the footer carries no test id. */
   function footerOf(card: HTMLElement): HTMLElement {
     return card.children[2] as HTMLElement
   }
+  const use = (steps: number, scope: boolean) => ({ id: 'p1', name: 'Test policy', steps, scope })
 
-  it('a role card claims no policy usage only once the policies fetch has landed', () => {
-    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="loading" />)
-
-    const footer = footerOf(screen.getByTestId('role-card'))
-    // Population floor: the footer's OTHER slot must still render, or both absences below
-    // would pass on a card that simply lost its footer.
-    expect(footer.textContent, 'the footer did not render, so the absences below are vacuous').toContain('0 people')
-    expect(footer.textContent, 'an unlanded policies fetch reads as "this role is used nowhere"').not.toContain('not used in any policy')
-    // The unlanded answer is the EMPTY STRING. '—' claims "nothing here" in its own right —
-    // MembersTable.tsx:195-197 sets that convention, pinned on the roster side at
-    // MembersTable.test.tsx:49.
-    expect(footer.textContent, "the unlanded footer fell back to the em dash, which is its own claim").not.toContain('—')
-  })
-
-  it('a landed-empty policy list still prints the real zero-usage footer', () => {
-    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="empty" />)
-
-    expect(footerOf(screen.getByTestId('role-card')).textContent, 'the guard swallowed a genuinely landed-empty answer').toContain(
-      'not used in any policy',
-    )
-  })
-
-  // ------------------------------------------------------------------------
-  // QA (Stage 4) — adversarial coverage the RED set did not carry
-  // ------------------------------------------------------------------------
-
-  it('a landed policy that names the role prints the real count — the footer CAN make a claim', () => {
-    // The population floor under BOTH absences above: without this, a gate that blanked the
-    // footer in every state would satisfy every assertion in this describe.
-    render(
-      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[policy()]} policiesState="ready" />,
-    )
-
-    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('1 approval step · 1 policy')
-  })
-
-  it('an errored policies fetch withholds the claim too, not only a loading one', () => {
-    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="error" />)
+  it('an unknown usage renders a blank line, never "not used in any policy"', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" rolesInForce={null} />)
 
     const footer = footerOf(screen.getByTestId('role-card'))
+    // Population floor: the holder slot still renders, so the absences below are not vacuous.
     expect(footer.textContent, 'the footer did not render, so the absences below are vacuous').toContain('0 people')
     expect(footer.textContent).not.toContain('not used in any policy')
     expect(footer.textContent).not.toContain('—')
   })
 
-  it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
-    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:586), which WorkflowsView.tsx:65-68
-    // relies on to render its own no-policies-yet card on that build. A gate written as
-    // `surface === 'roster'` would disagree with the Workflows screen about the same fetch.
-    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="idle" />)
+  it('a card with no in-force entry reads not used in any policy', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" rolesInForce={{}} />)
 
     expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('not used in any policy')
   })
 
-  it('a refetch WITHHOLDS the last landed count rather than printing it stale', () => {
-    // Reachable: createPolicy/deletePolicy call `policiesAsync.run()` (App.tsx:1037,:1046), which
-    // dispatches 'start' → status 'loading' while the mirror keeps the rows it just patched
-    // (App.tsx:299-301). So 'loading' WITH rows is a real state, and this pins which way it falls.
-    // DELIBERATE DIVERGENCE from MemberDrawer/MembersTable, which keep printing off the same
-    // stale rows — their gate is `stepsForMember`'s null-at-zero, which never makes a negative
-    // claim, so they have nothing to withhold. Withholding here is one round trip of silence
-    // against a sentence that could be wrong; the Workflows list blanks wholesale in the same
-    // window (WorkflowsView.tsx:116's `surface === 'loading'` arm).
-    render(
-      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[policy()]} policiesState="loading" />,
-    )
+  it('a card whose role a step in force names prints the real count', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" rolesInForce={{ 'finance-approver': [use(1, false)] }} />)
 
-    const footer = footerOf(screen.getByTestId('role-card'))
-    expect(footer.textContent, 'the footer did not render, so the absence below is vacuous').toContain('0 people')
-    expect(footer.textContent, 'the mid-refetch footer printed a count the fetch had not confirmed').not.toContain('approval step')
+    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('1 approval step · 1 policy')
   })
 
-  it('EVERY card blanks, not merely the first', () => {
+  it('a card whose role a scope in force names reads 0 approval steps · 1 policy', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} rolesInForce={{ 'finance-approver': [use(0, true)] }} />)
+
+    const text = footerOf(screen.getByTestId('role-card')).textContent
+    expect(text).toContain('0 approval steps · 1 policy')
+    expect(text).not.toContain('not used in any policy')
+  })
+
+  it('the card line ignores the policies fetch', () => {
+    // An open draft naming the role and a failed policies fetch must not change the line.
+    const { unmount } = render(
+      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[policy()]} policiesState="error" rolesInForce={{}} />,
+    )
+    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('not used in any policy')
+    unmount()
+
+    render(
+      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="loading" rolesInForce={{ 'finance-approver': [use(2, false)] }} />,
+    )
+    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('2 approval steps · 1 policy')
+  })
+
+  it('EVERY card blanks on an unknown usage, not merely the first', () => {
     const roles = [role(), role({ key: 'cfo', title: 'CFO' }), role({ key: 'ceo', title: 'CEO' })]
-    render(<Harness roles={roles} rolesState="ready" membersState="ready" policies={[]} policiesState="loading" />)
+    render(<Harness roles={roles} rolesState="ready" membersState="ready" rolesInForce={null} />)
 
     const cards = screen.getAllByTestId('role-card')
     expect(cards, 'the grid rendered no cards, so the loop below is vacuous').toHaveLength(roles.length)
     for (const card of cards) {
       const footer = footerOf(card)
       expect(footer.textContent, 'a card lost its footer, so its absence below is vacuous').toContain('0 people')
-      expect(footer.textContent, 'one card still claims "used nowhere" off an unlanded fetch').not.toContain('not used in any policy')
+      expect(footer.textContent, 'one card still claims "used nowhere" off an unknown usage').not.toContain('not used in any policy')
     }
   })
 })
@@ -358,7 +331,7 @@ describe('Roles tab v2 paint', () => {
     screen.getAllByTestId('role-card').find((c) => c.textContent?.includes(title)) as HTMLElement
 
   function renderCrew() {
-    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true }), ...crew]} roles={crewRoles} policies={[policy()]} rolesState="ready" membersState="ready" />)
+    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true }), ...crew]} roles={crewRoles} rolesInForce={{ many: [{ id: 'p1', name: 'P', steps: 1, scope: false }] }} rolesState="ready" membersState="ready" />)
   }
 
   it('no oklch, no 99/999 radius and no avatar box-shadow in the grid, the no-match card or the empty card', () => {
@@ -605,7 +578,7 @@ describe('Roles tab write lock', () => {
       role({ key: 'a', title: 'Alpha', desc: 'Alpha desc', members: ['u1'] }),
       role({ key: 'b', title: 'Beta', desc: 'Beta desc', members: [] }),
     ]
-    render(<Harness members={nonAdmin} roles={roles} policies={[policy({ nodes: [{ id: 'n1', type: 'approval', role: 'a', sla: '24', delegate: false }] })]} />)
+    render(<Harness members={nonAdmin} roles={roles} rolesInForce={{ a: [{ id: 'p1', name: 'P', steps: 1, scope: false }] }} />)
 
     const alpha = screen.getAllByTestId('role-card')[0]
     expect(alpha.textContent).toContain('Alpha desc')

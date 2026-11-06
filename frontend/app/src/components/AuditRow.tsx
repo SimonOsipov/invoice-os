@@ -8,9 +8,12 @@
 // REVIEW_GRID_COLUMNS precedent: the row owns the geometry and the header imports it, so
 // the two can never drift apart.
 
+import { useEffect, useRef } from 'react'
+
 import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
 import { auditEventView, TONE_TEXT } from '../lib/auditVocabulary'
+import { bundleCompanyFor } from '../lib/evidenceBundle'
 import { fmtDateTime } from '../lib/format'
 
 import { ActorCell } from './ActorCell'
@@ -24,9 +27,6 @@ import { ActorCell } from './ActorCell'
 export const AUDIT_COLS = 'minmax(190px,1fr) minmax(220px,1.4fr) 160px 170px 44px'
 export const AUDIT_TABLE_MIN_WIDTH = 868
 export const AUDIT_GRID_GAP = 12
-
-const EVIDENCE_REASON_ID = 'audit-evidence-blocked-reason'
-const EVIDENCE_REASON = 'The evidence bundle is not reachable from this screen yet.'
 
 // Both keys are real: `id` from internal/invoice/* and approval/engine.go, `invoice_id`
 // from approval/decision.go and submission/verdict_audit.go.
@@ -63,17 +63,29 @@ export interface AuditRowProps {
   // Absent on an invoice-scoped mount (AUDIT-09): there is nothing to narrow to when the
   // caller already filtered to one invoice, so the affordance simply does not render.
   onFilterToInvoice?: (invoiceId: string, invoiceNumber: string | null) => void
+  // Absent hides the evidence button, like onFilterToInvoice.
+  onOpenEvidence?: (event: AuditEvent, invoiceId: string) => void
+  evidenceBusy?: boolean
+  // This row's evidence drawer is open; focus returns to the button when it closes.
+  evidenceOpen?: boolean
   variant?: 'audit' | 'activity'
 }
 
-export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant = 'audit' }: AuditRowProps) {
+export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenEvidence, evidenceBusy = false, evidenceOpen = false, variant = 'audit' }: AuditRowProps) {
   const audit = variant === 'audit'
   const view = auditEventView(event.event, event.payload)
   const inv = invoiceRef(event.payload)
   const payload = asRecord(event.payload)
   const keys = payload ? Object.keys(payload) : []
   const showLink = inv != null && onFilterToInvoice != null
-  const showEvidence = view.domain === 'submissions' && inv != null
+  const showEvidence = view.domain === 'submissions' && inv != null && bundleCompanyFor(event) != null && onOpenEvidence != null
+
+  const evidenceBtn = useRef<HTMLButtonElement>(null)
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (wasOpen.current && !evidenceOpen) evidenceBtn.current?.focus()
+    wasOpen.current = evidenceOpen
+  }, [evidenceOpen])
 
   const chevSpin = { transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }
 
@@ -130,25 +142,22 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
                   {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
                 </button>
               )}
-              {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
-                  hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
-                  fires in Chromium, so the reason has to be text. */}
               {showEvidence && (
-                <div style={audit ? { display: 'inline-flex', alignItems: 'center', gap: 10 } : undefined}>
-                  <button
-                    type="button"
-                    data-testid="audit-evidence-affordance"
-                    disabled
-                    aria-describedby={EVIDENCE_REASON_ID}
-                    className="v2-btn v2-btn-ghost pf-btn"
-                    style={{ height: 30, fontSize: audit ? 12 : 12.5, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
-                  >
-                    View transmission evidence →
-                  </button>
-                  <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: audit ? 0 : 5, fontSize: 11.5, color: 'var(--fg-3)' }}>
-                    {EVIDENCE_REASON}
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  data-testid="audit-evidence-affordance"
+                  ref={evidenceBtn}
+                  aria-haspopup="dialog"
+                  aria-expanded={evidenceOpen}
+                  onClick={() => {
+                    if (!evidenceBusy) onOpenEvidence(event, inv.id)
+                  }}
+                  {...(evidenceBusy ? { 'aria-disabled': true, 'aria-busy': true } : null)}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{ height: 30, fontSize: audit ? 12 : 12.5, ...(evidenceBusy ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
+                >
+                  View transmission evidence →
+                </button>
               )}
             </div>
           )}

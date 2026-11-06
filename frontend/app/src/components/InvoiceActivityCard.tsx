@@ -8,11 +8,12 @@
 // chip, so `shown` must be the ACTIVE chip's full row count --
 // invoiceActivity_toggleLabelEqualsTheRowsItRenders is the one thing that holds it.
 
-import { useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
-import { getAuditLog, type AuditResponse } from '../lib/audit'
+import { getAuditLog, type AuditEvent, type AuditResponse } from '../lib/audit'
+import { bundlePrefillFor, type BundlePrefill } from '../lib/evidenceBundle'
 import {
   ACTIVITY_COPY,
   ACTIVITY_FETCH_LIMIT,
@@ -24,8 +25,10 @@ import {
 import { shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
+import { AuditExportToast } from './AuditExportToast'
 import { AuditRow } from './AuditRow'
 import { AuditTable } from './AuditTable'
+import { EvidenceBundleDrawer } from './EvidenceBundleDrawer'
 
 // One id per disabled control (ReviewRow.tsx:78's idiom): a title= on a disabled
 // button never fires in Chromium, so the reason has to be a text node the control names.
@@ -36,11 +39,17 @@ export function InvoiceActivityCard({
   ctx,
   invoiceId,
   invoiceNumber,
-}: { ctx: PlatformCtx; invoiceId: string; invoiceNumber: string }): ReactNode {
+  invoiceCreatedAt,
+}: { ctx: PlatformCtx; invoiceId: string; invoiceNumber: string; invoiceCreatedAt: string }): ReactNode {
   const base = gatewayBase()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [chip, setChip] = useState<ActivityChipKey>('all')
   const [showAll, setShowAll] = useState(false)
+  const [bundle, setBundle] = useState<{ initial?: BundlePrefill; rowId?: string } | null>(null)
+  const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number; persist?: boolean } | null>(null)
+  // Stable: the drawer's useDismiss re-registers on identity change.
+  const closeBundle = useCallback(() => setBundle(null), [])
+  const openEvidence = (e: AuditEvent) => setBundle({ initial: bundlePrefillFor(e, invoiceCreatedAt) ?? undefined, rowId: e.id })
 
   // No from/to: an invoice's whole life belongs on its own page, and the 30-day default is
   // the Audit SCREEN's (auditFilters.ts), not the server's. `isEmpty: () => false` because
@@ -154,6 +163,8 @@ export function InvoiceActivityCard({
                 variant="activity"
                 expanded={expandedId === e.id}
                 onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                onOpenEvidence={openEvidence}
+                evidenceOpen={bundle?.rowId === e.id}
               />
             ))}
           </AuditTable>
@@ -194,6 +205,7 @@ export function InvoiceActivityCard({
   }
 
   return (
+    <>
     <div
       data-testid="invoice-activity"
       style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}
@@ -208,5 +220,9 @@ export function InvoiceActivityCard({
         {body}
       </div>
     </div>
+    {/* Outside the overflow:hidden root and `body`, so a status change cannot unmount them. */}
+    {bundle != null && base != null && <EvidenceBundleDrawer ctx={ctx} base={base} initial={bundle.initial} onClose={closeBundle} onToast={setToast} />}
+    {toast != null && <AuditExportToast {...toast} onDismiss={() => setToast(null)} />}
+    </>
   )
 }

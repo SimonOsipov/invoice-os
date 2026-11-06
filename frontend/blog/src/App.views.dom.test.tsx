@@ -337,4 +337,17 @@ describe('cover click', () => {
     expect(window.location.pathname).toBe(`/blog/${id}`)
     expect(window.history.length).toBe(before + 1)
   })
+
+  it("VW-26 each card's cover opens its own post, not another's", async () => {
+    await mount('/')
+    const n = bandCards().length
+    expect(n).toBeGreaterThan(1)
+    for (let i = 0; i < n; i++) {
+      await remount('/')
+      const card = bandCards()[i]
+      const id = idOf(card)
+      click(coverOf(card))
+      expect(window.location.pathname).toBe(`/blog/${id}`)
+    }
+  })
 })

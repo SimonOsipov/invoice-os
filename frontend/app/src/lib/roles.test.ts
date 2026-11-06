@@ -554,7 +554,7 @@ describe('AC-12 — copy helpers', () => {
 
   it('summary folds RoleUse rows', () => {
     const row = (steps: number, scope: boolean) => ({ id: 'p', name: 'P', steps, scope })
-    expect(summary([row(2, true), row(0, true), row(1, false)])).toEqual({ steps: 3, policies: 3, scopes: 2 })
+    expect(summary([row(3, true), row(0, true), row(1, false)])).toEqual({ steps: 4, policies: 3, scopes: 2 })
     expect(summary(undefined)).toEqual({ steps: 0, policies: 0, scopes: 0 })
   })
 
@@ -736,6 +736,9 @@ describe('AC-7 — deleteRoleConfirm states the in-force rule', () => {
     expect(text).toBe(`Delete Tax Reviewer? In force: 2 approval steps · 2 policies. 1 policy names it in a creator scope. ${RULE}`)
     expect(text).not.toContain('will block')
     expect(deleteRoleConfirm('Tax Reviewer', { steps: 2, policies: 2, scopes: 2 }, 0)).toContain('2 policies name it in a creator scope.')
+    expect(deleteRoleConfirm('Tax Reviewer', { steps: 0, policies: 1, scopes: 1 }, 0)).toBe(
+      `Delete Tax Reviewer? In force: 0 approval steps · 1 policy. 1 policy names it in a creator scope. ${RULE}`,
+    )
     expect(deleteRoleConfirm('Tax Reviewer', { steps: 2, policies: 2, scopes: 0 }, 0)).toBe(`Delete Tax Reviewer? In force: 2 approval steps · 2 policies. ${RULE}`)
   })
 

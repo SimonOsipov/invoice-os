@@ -2992,16 +2992,51 @@ describe('APSC-04-03: the Applies card', () => {
     expect(screen.queryByTestId('policy-save-error')).toBeNull()
   })
 
-  it('a Deleted role chip states what removing it does', () => {
+  it('a Deleted role chip states that Publish is refused', () => {
+    const NOTE = 'This role was deleted. Publish is refused while the scope names it — remove it first.'
     const p = scoped('p1', { workflow_role_keys: ['gone'] })
     const { unmount } = render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
-    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toBe(
-      'This role was deleted, so this scope matches no creator. Removing it makes the policy match every creator.',
-    )
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toBe(NOTE)
     unmount()
+    const mixed = scoped('p1', { workflow_role_keys: ['fin_mgr', 'gone'] })
+    const { unmount: unmountMixed } = render(<WorkflowBuilder ctx={editableCtx(mixed)} policy={mixed} />)
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toBe(NOTE)
+    unmountMixed()
     const live = scoped('p1', { workflow_role_keys: ['fin_mgr'] })
     render(<WorkflowBuilder ctx={editableCtx(live)} policy={live} />)
     expect(screen.queryByTestId('scope-deleted-role-note')).toBeNull()
+  })
+
+  // Sentence built in internal/approval/policy.go (policyStatusForErr, quoteTitles).
+  it('a refused publish of a deleted-role scope shows the server sentence and keeps the note', async () => {
+    const sentence = 'a scope names a workflow role that was deleted: \u201cTax Reviewer\u201d — remove it from the scope, then publish'
+    const p = scoped('p1', { workflow_role_keys: ['gone'] })
+    const publishPolicy = vi.fn(() => Promise.reject(new ApiError('http', sentence, 409)))
+    render(<WorkflowBuilder ctx={editableCtx(p, { publishPolicy })} policy={p} />)
+
+    fireEvent.click(publishButton())
+
+    await waitFor(() => expect(screen.getByTestId('policy-publish-error').textContent).toBe(sentence))
+    expect(screen.getByTestId('scope-deleted-role-note')).toBeTruthy()
+    expect(chipLabels(cell('role'))).toEqual(['Deleted role'])
+    expect(screen.queryByTestId('policy-save-error')).toBeNull()
+  })
+
+  it('removing the deleted role and saving clears the note and leaves Publish on its usual rules', async () => {
+    const p = scoped('p1', { workflow_role_keys: ['gone'] })
+    const clean = scoped('p1')
+    const savePolicy = vi.fn(async () => clean)
+    const { unmount } = render(<WorkflowBuilder ctx={editableCtx(clean)} policy={clean} />)
+    const expectedDisabled = publishButton().disabled
+    unmount()
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Deleted role' }))
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByTestId('scope-deleted-role-note')).toBeNull())
+    expect(publishButton().disabled).toBe(expectedDisabled)
   })
 
   it('a long chip label is truncated with its full text in title', () => {

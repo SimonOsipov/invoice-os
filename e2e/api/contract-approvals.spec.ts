@@ -38,6 +38,7 @@ import {
   listWorkflowRoles,
   ApiError,
   login,
+  me,
   provisionRealAccount,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
@@ -372,6 +373,7 @@ const MSG_SCOPE_ROLE = 'a scope names a workflow role that does not exist or was
 const MSG_CATCH_ALL = 'a policy with no scopes must stay last while any policy has scopes' // ErrPolicyCatchAll
 const MSG_NOT_ADMIN = 'only an admin can change approval policies' // ErrNotPermitted
 const MSG_ROLE_IN_USE = 'this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first' // roleInUseMessage (ErrRoleInUse)
+const MSG_ROLE_LAST_HOLDER = 'an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first' // roleLastHolderMessage (ErrRoleInUse)
 const MSG_ROLE_IN_RUN = 'an open approval run is waiting on this workflow role — wait until it is decided, or edit its invoice to cancel it, first' // roleInRunMessage (ErrRoleInUse)
 const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'workflow_role_keys']
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
@@ -1207,6 +1209,33 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     expect(body.error, 'the composed sentence').toBe(`${MSG_ROLE_IN_USE}; ${MSG_ROLE_IN_RUN}`)
     expect(body.policies, 'names the policy').toEqual([{ id: policy.id, name: policy.name }])
     expect(await roleKeys(t), 'the refused role is still listed').toContain(role.key)
+  })
+
+  // The 409 carries more than the error key, so staffWorkflowRole (throws on non-2xx) cannot show it.
+  async function staffRoleRaw(t: string, key: string, members: string[]): Promise<RawResult> {
+    return rawFetch(`/api/invoice/v1/workflow-roles/${key}/members`, { method: 'PUT', headers: authed(t), body: { members } })
+  }
+  const membersOf = async (t: string, key: string) => (await listWorkflowRoles(t)).workflow_roles.find((r) => r.key === key)?.members
+
+  test('409: emptying a role an open approval run waits on, then 200 once an edit cancels the run', async () => {
+    const t = await freshWorkspace()
+    const owner = (await me(t)).user.id
+    const { role, invoice } = await armRunOnRole(t)
+
+    const kept = await staffRoleRaw(t, role.key, [owner])
+    expect(kept.status, 'a set that keeps a signer saves while the run is open').toBe(200)
+    expect((kept.body as { members: string[] }).members, 'the owner is staffed').toEqual([owner])
+
+    const body = assertRoleInRun(await staffRoleRaw(t, role.key, []), invoice, 'emptying a role an open run waits on')
+    expect(body.error, 'the last-holder sentence').toBe(MSG_ROLE_LAST_HOLDER)
+    expect(body.policies, 'staffing names no policy').toEqual([])
+    expect(await membersOf(t, role.key), 'the refused save leaves the owner staffed').toEqual([owner])
+
+    await editInvoice(t, invoice.id, { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] })
+    expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
+    const res = await staffRoleRaw(t, role.key, [])
+    expect(res.status, 'the empty set saves once the run is cancelled').toBe(200)
+    expect(await membersOf(t, role.key), 'the role lists no members').toEqual([])
   })
 
   test('409: deleting a role a policy in force names in a scope, then 200 once the policy is gone', async () => {

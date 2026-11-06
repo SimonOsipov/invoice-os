@@ -25,7 +25,10 @@ export function PostCard({ post, cat, onOpen, cardBd }: PostCardProps) {
         animation: band ? undefined : 'blogPop 320ms var(--ease-out)',
       }}
     >
-      <div style={{ aspectRatio: '16 / 9', position: 'relative', background: 'var(--muted)' }}>
+      <div
+        onClick={onOpen}
+        style={{ aspectRatio: '16 / 9', position: 'relative', background: 'var(--muted)', cursor: 'pointer' }}
+      >
         <Cover post={post} cat={cat} />
       </div>
       <button

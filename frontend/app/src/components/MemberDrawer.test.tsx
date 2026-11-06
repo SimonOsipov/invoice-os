@@ -108,6 +108,29 @@ describe('APPR-04-06 AC3: a rejected workflow-role write renders the server sent
     expect(pill.getAttribute('aria-pressed'), 'a rejected write must never render as if the toggle succeeded').toBe('false')
   })
 
+  it('a 409 on a workflow-role toggle renders the server sentence and leaves the pill unset', async () => {
+    const S = 'the last signer of this role cannot be removed while an open run waits on it'
+    const staffRole = vi.fn().mockRejectedValue(
+      new ApiError('http', S, 409, { error: S, policies: [], invoices: [{ id: 'i1', invoice_number: 'INV-1' }], invoices_total: 1 }),
+    )
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: [] })], staffRole })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    const pill = screen.getByTestId('drawer-wfrole-cfo')
+    fireEvent.click(pill)
+    await drain(staffRole)
+
+    expect(screen.getByText(S)).toBeTruthy()
+    expect(pill.getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('sends only the members axis -- staffRole once, renameRole never', async () => {
     const staffRole = vi.fn().mockResolvedValue(undefined)
     const renameRole = vi.fn()

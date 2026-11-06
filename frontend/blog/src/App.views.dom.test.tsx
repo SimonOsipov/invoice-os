@@ -254,3 +254,115 @@ describe('covers', () => {
     expect(all('#blog-main div').filter((d) => d.style.background === 'var(--sage)')).toHaveLength(2)
   })
 })
+
+describe('cover click', () => {
+  const FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  const bandCards = () => all('#blog-main section div[style*="grid-template-columns"] > div')
+  const idOf = (card: Element) => {
+    const title = card.querySelector('button > span:nth-child(2)')!.textContent
+    return TEST_DATA.posts.find((p) => p.title === title)!.id
+  }
+  const featuredCard = () =>
+    all('#blog-main section')[0].querySelector('button')!.parentElement as HTMLElement
+  const coverOf = (card: Element) => card.firstElementChild as HTMLElement
+
+  it("VW-18 a band card's cover opens its post", async () => {
+    await mount('/')
+    const card = bandCards()[0]
+    const id = idOf(card)
+    click(coverOf(card))
+    expect(window.location.pathname).toBe(`/blog/${id}`)
+  })
+
+  it("VW-19 a category card's cover opens its post", async () => {
+    await mount('/category/c1')
+    const card = all('#blog-main button')
+      .filter((b) => b.textContent?.includes('Read the post'))[1]
+      .parentElement!
+    const id = idOf(card)
+    click(coverOf(card))
+    expect(window.location.pathname).toBe(`/blog/${id}`)
+  })
+
+  it("VW-20 the featured card's cover opens the featured post", async () => {
+    await mount('/')
+    click(coverOf(featuredCard()))
+    expect(window.location.pathname).toBe('/blog/sage-rules')
+  })
+
+  it('VW-21 a click on the cover image opens the post', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    await mount('/category/c1', withCover('/blog/covers/p/1'))
+    click(q('img[alt="Cover image"]'))
+    expect(window.location.pathname).toBe('/blog/sage-rules')
+  })
+
+  it('VW-22 a click on the placeholder after a failed cover opens the post', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    await mount('/category/c1', withCover('/blog/covers/p/1'))
+    const img = q<HTMLImageElement>('img[alt="Cover image"]')
+    const box = img.parentElement!
+    act(() => img.dispatchEvent(new Event('error')))
+    expect(box.querySelector('img')).toBeNull()
+    click(box.firstElementChild!)
+    expect(window.location.pathname).toBe('/blog/sage-rules')
+  })
+
+  it('VW-23 every cover box shows a pointer cursor', async () => {
+    await mount('/')
+    expect(coverOf(featuredCard()).style.cursor).toBe('pointer')
+    expect(bandCards().length).toBeGreaterThan(0)
+    for (const c of bandCards()) expect(coverOf(c).style.cursor).toBe('pointer')
+    await remount('/category/c1')
+    const cards = all('#blog-main button')
+      .filter((b) => b.textContent?.includes('Read the post'))
+      .map((b) => b.parentElement!)
+    expect(cards).toHaveLength(2)
+    for (const c of cards) expect(coverOf(c).style.cursor).toBe('pointer')
+  })
+
+  it('VW-24 a card holds one focusable element', async () => {
+    await mount('/')
+    for (const card of [featuredCard(), ...bandCards()]) {
+      const found = [...card.querySelectorAll(FOCUSABLE)]
+      expect(found).toHaveLength(1)
+      expect(found[0]).toBe(card.querySelector('button'))
+    }
+  })
+
+  it('VW-24b a category card holds one focusable element', async () => {
+    await mount('/category/c1')
+    const cards = all('#blog-main button')
+      .filter((b) => b.textContent?.includes('Read the post'))
+      .map((b) => b.parentElement!)
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      const found = [...card.querySelectorAll(FOCUSABLE)]
+      expect(found).toHaveLength(1)
+      expect(found[0]).toBe(card.querySelector('button'))
+    }
+  })
+
+  it('VW-25 the text button opens the post once', async () => {
+    await mount('/')
+    const card = bandCards()[0]
+    const id = idOf(card)
+    const before = window.history.length
+    click(card.querySelector('button')!)
+    expect(window.location.pathname).toBe(`/blog/${id}`)
+    expect(window.history.length).toBe(before + 1)
+  })
+
+  it("VW-26 each card's cover opens its own post, not another's", async () => {
+    await mount('/')
+    const n = bandCards().length
+    expect(n).toBeGreaterThan(1)
+    for (let i = 0; i < n; i++) {
+      await remount('/')
+      const card = bandCards()[i]
+      const id = idOf(card)
+      click(coverOf(card))
+      expect(window.location.pathname).toBe(`/blog/${id}`)
+    }
+  })
+})

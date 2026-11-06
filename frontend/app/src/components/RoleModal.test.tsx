@@ -442,6 +442,115 @@ describe('AC-10: a rejected save keeps the modal open and shows the server sente
   })
 })
 
+describe('APSC-11: a refused staffing save', () => {
+  const S = 'the last signer of this role cannot be removed while an open run waits on it'
+  const refusal = (numbers: string[], total = numbers.length) =>
+    new ApiError('http', S, 409, {
+      error: S,
+      policies: [],
+      invoices: numbers.map((invoice_number, i) => ({ id: `i${i}`, invoice_number })),
+      invoices_total: total,
+    })
+
+  async function refuseSave(over: Record<string, unknown>) {
+    const staffRole = vi.fn().mockRejectedValue(over.err)
+    const r = renderModal({ mode: 'edit', role: role() }, { ...over.ctx as object, staffRole })
+    fireEvent.click(within(screen.getAllByTestId('role-modal-member')[0]).getByRole('checkbox'))
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    await drain(staffRole)
+    return { ...r, staffRole }
+  }
+  const invoiceItems = () => within(screen.getByTestId('role-modal-error-invoices')).getAllByRole('listitem')
+
+  it('a refused staffing save lists the waiting invoices under the server sentence', async () => {
+    const { onClose, onFlash } = await refuseSave({ err: refusal(['INV-1', 'INV-2']) })
+
+    expect(screen.getByTestId('role-modal')).toBeTruthy()
+    expect(screen.getByTestId('role-modal-error').textContent?.startsWith(S)).toBe(true)
+    expect(invoiceItems().map((li) => li.textContent)).toEqual(['INV-1', 'INV-2'])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onFlash).not.toHaveBeenCalled()
+  })
+
+  it('an invoice number in a refused save renders as text', async () => {
+    await refuseSave({ err: refusal(['<b>x</b>']) })
+    expect(invoiceItems()[0].textContent).toBe('<b>x</b>')
+    expect(screen.getByTestId('role-modal-error-invoices').querySelector('b')).toBeNull()
+  })
+
+  it('a refused staffing save says how many more the server did not list', async () => {
+    await refuseSave({ err: refusal(['INV-1', 'INV-2'], 5) })
+    expect(invoiceItems().at(-1)?.getAttribute('data-testid')).toBe('role-modal-error-invoices-more')
+    expect(invoiceItems().at(-1)?.textContent).toBe('and 3 more')
+    cleanup()
+
+    await refuseSave({ err: refusal(['INV-1', 'INV-2'], 2) })
+    expect(screen.queryByTestId('role-modal-error-invoices-more')).toBeNull()
+  })
+
+  it('after a refused staffing save the picker is editable and Save is usable', async () => {
+    const { staffRole, onClose } = await refuseSave({ err: refusal(['INV-1']) })
+
+    expect((screen.getByTestId('role-modal-save') as HTMLButtonElement).disabled).toBe(false)
+    for (const row of screen.getAllByTestId('role-modal-member')) {
+      expect((within(row).getByRole('checkbox') as HTMLInputElement).disabled).toBe(false)
+    }
+    expect((screen.getByTestId('role-modal-search') as HTMLInputElement).disabled).toBe(false)
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+
+    staffRole.mockResolvedValueOnce(role())
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    await drain(staffRole)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(screen.queryByTestId('role-modal-error')).toBeNull()
+  })
+
+  it('a second save clears the previous invoice list', async () => {
+    const { staffRole } = await refuseSave({ err: refusal(['INV-1']) })
+    expect(screen.getByTestId('role-modal-error-invoices')).toBeTruthy()
+
+    let failSecond: (e: unknown) => void = () => {}
+    staffRole.mockReturnValueOnce(new Promise((_, reject) => { failSecond = reject }))
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByTestId('role-modal-error-invoices'), 'cleared as the next save starts').toBeNull()
+    failSecond(new ApiError('http', 'workflow role not found', 404))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
+  })
+
+  it('a 403 or a 400 on save renders no invoice list', async () => {
+    await refuseSave({ err: new ApiError('http', 'only an admin can change workflow roles', 403) })
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
+    cleanup()
+
+    await refuseSave({ err: new ApiError('http', 'invalid request', 400) })
+    expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('invalid request')
+  })
+
+  it('a refused staffing save after a successful rename keeps the modal open', async () => {
+    const renameRole = vi.fn().mockResolvedValue(role())
+    const staffRole = vi.fn().mockRejectedValue(refusal(['INV-1', 'INV-2']))
+    const { onClose, onFlash } = renderModal({ mode: 'edit', role: role() }, { renameRole, staffRole })
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Chief' } })
+    fireEvent.click(within(screen.getAllByTestId('role-modal-member')[0]).getByRole('checkbox'))
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    await drain(staffRole)
+
+    expect(renameRole).toHaveBeenCalledOnce()
+    expect(screen.getByTestId('role-modal-error').textContent?.startsWith(S)).toBe(true)
+    expect(invoiceItems().map((li) => li.textContent)).toEqual(['INV-1', 'INV-2'])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onFlash).not.toHaveBeenCalled()
+  })
+})
+
 describe('AC-11 [D-PARTIAL-CREATE]: a partially-failed create shows the staffing reason and refetches', () => {
   it('a partially-failed create shows the staffing reason and refetches', async () => {
     const createRole = vi.fn().mockRejectedValue(new ApiError('http', 'invalid request', 400))

@@ -135,6 +135,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
       onClose()
     } catch (err) {
       setWriteError(toApiError(err).message)
+      setWriteErrorInvoices(inUseInvoices(err))
       // `[D-PARTIAL-CREATE]`: createRole's POST can land even though the PUT staffing step
       // after it fails, and App.tsx's mirror is only patched off the whole call's resolved
       // value — so the created-but-unstaffed card would otherwise stay invisible.

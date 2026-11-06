@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -323,29 +325,84 @@ func TestDeleteRole_RefusesWhileTheActiveVersionNamesItUnderADraftThatDropsIt(t 
 	assertRoleUntouched(t, super, tenantID, roleID)
 }
 
-func TestDeleteRole_DraftScopeRoleDeletedThenPublishedMatchesNoCreator(t *testing.T) {
+func TestDeleteRole_DraftScopeRoleDeletedThenPublishIsRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-06 draft scope then publish")
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	policyID, versionID := seedScopedPolicyDraft(t, super, tenantID, "S", 1, scopeSpec{RoleIDs: []string{roleID}})
-	seedActivePolicy(t, super, tenantID, "C", 2, nil)
+	_, catchAllVersion := seedActivePolicy(t, super, tenantID, "C", 2, nil)
 
 	if _, err := store.DeleteRole(c, "tax-reviewer"); err != nil {
 		t.Fatalf("DeleteRole err = %v, want success", err)
 	}
-	if _, err := store.PublishPolicy(c, policyID); err != nil {
-		t.Fatalf("PublishPolicy err = %v, want success — a draft scope naming a deleted role still publishes", err)
+	_, err := store.PublishPolicy(c, policyID)
+	if !errors.Is(err, ErrPolicyStepRole) {
+		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
 	}
-	var held bool
-	if err := super.QueryRow(context.Background(),
-		`SELECT is_active AND $2::uuid = ANY(scope_workflow_role_ids)
-		   FROM approval_policy_versions WHERE id = $1`, versionID, roleID).Scan(&held); err != nil {
-		t.Fatalf("read published scope: %v", err)
+	if status, msg := policyStatusForErr(err); status != http.StatusConflict || !strings.Contains(msg, "“Tax Reviewer”") {
+		t.Errorf("policyStatusForErr = %d %q, want 409 naming “Tax Reviewer”", status, msg)
 	}
-	if !held {
-		t.Error("published version is not active holding the deleted role's id in its scope")
+	if v := versionRow(t, super, versionID); v.Sealed || v.IsActive {
+		t.Errorf("draft version = %+v, want still (sealed false, is_active false)", v)
+	}
+	if ids := activeVersionIDs(t, super, tenantID); !reflect.DeepEqual(ids, []string{catchAllVersion}) {
+		t.Errorf("active versions = %v, want only the catch-all %s", ids, catchAllVersion)
+	}
+	if n := auditCount(t, super, tenantID, "approval_policy.published"); n != 0 {
+		t.Errorf("approval_policy.published audit rows = %d, want 0", n)
+	}
+	if got := versionScopeColumns(t, super, versionID).RoleIDs; !reflect.DeepEqual(got, []string{roleID}) {
+		t.Errorf("draft scope role ids = %v, want [%s] kept", got, roleID)
 	}
 	assertRoleDeleted(t, super, tenantID, roleID)
+}
+
+func TestPublish_ConcurrentScopeRoleDeleteAndPublishNeverBothSucceed(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app, stubFingerprinter, nil)
+	for round := 0; round < 8; round++ {
+		tenantID := policyTenant(t, super, "APSC-09 scope race")
+		c, _ := activeAdmin(t, super, tenantID)
+		roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+		policyID, _ := seedScopedPolicyDraft(t, super, tenantID, "S", 1, scopeSpec{RoleIDs: []string{roleID}})
+		seedActivePolicy(t, super, tenantID, "C", 2, nil)
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		var pubErr, delErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, pubErr = store.PublishPolicy(c, policyID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, delErr = store.DeleteRole(c, "tax-reviewer")
+		}()
+		close(start)
+		wg.Wait()
+
+		publishWon := pubErr == nil && errors.Is(delErr, ErrRoleInUse)
+		deleteWon := delErr == nil && errors.Is(pubErr, ErrPolicyStepRole)
+		if !publishWon && !deleteWon {
+			t.Fatalf("round %d: publish err = %v, delete err = %v, want exactly one of (publish ok, delete ErrRoleInUse) or (delete ok, publish ErrPolicyStepRole)", round, pubErr, delErr)
+		}
+
+		var dangling int
+		if err := super.QueryRow(context.Background(),
+			`SELECT count(*)
+			   FROM approval_policy_versions v
+			   JOIN workflow_roles r ON r.id = ANY(v.scope_workflow_role_ids)
+			  WHERE v.tenant_id = $1 AND v.is_active AND r.deleted_at IS NOT NULL`, tenantID,
+		).Scan(&dangling); err != nil {
+			t.Fatalf("read dangling: %v", err)
+		}
+		if dangling != 0 {
+			t.Fatalf("round %d: %d active versions name a deleted role in their scope", round, dangling)
+		}
+	}
 }

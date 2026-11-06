@@ -917,6 +917,13 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		if err := validateForPublish(p.Steps, liveKeys); err != nil {
 			return err
 		}
+		titles, err := deletedScopeRoleTitles(ctx, tx, versionID)
+		if err != nil {
+			return err
+		}
+		if len(titles) > 0 {
+			return &scopeRoleDeleted{titles: titles}
+		}
 
 		// Only this policy's previous version leaves; other policies stay active
 		// (TestPublish_LeavesTheTenantsOtherPolicyActive).
@@ -1376,4 +1383,30 @@ func (s *Store) ReorderPolicies(ctx context.Context, ids []string) ([]Policy, er
 		return nil, err
 	}
 	return out, nil
+}
+
+// deletedScopeRoleTitles lists the titles of deleted roles in the version's scope, in scope
+// order. Titles are not unique, so a repeated title is grouped.
+func deletedScopeRoleTitles(ctx context.Context, tx pgx.Tx, versionID string) ([]string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT r.title
+		   FROM approval_policy_versions v
+		  CROSS JOIN LATERAL unnest(v.scope_workflow_role_ids) WITH ORDINALITY AS o(role_id, ord)
+		   JOIN workflow_roles r ON r.id = o.role_id
+		  WHERE v.id = $1 AND r.deleted_at IS NOT NULL
+		  GROUP BY r.title
+		  ORDER BY min(o.ord)`, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var titles []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		titles = append(titles, t)
+	}
+	return titles, rows.Err()
 }

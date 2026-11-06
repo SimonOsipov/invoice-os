@@ -1022,3 +1022,148 @@ func TestPublish_SweepAboveCapReturns409(t *testing.T) {
 		t.Errorf("version row = %+v, want still (sealed false, is_active false)", v)
 	}
 }
+
+// --- APSC-09: publish refuses a scope that names a deleted role ----------------
+
+func scopeDraftNaming(t *testing.T, super *pgxpool.Pool, tenantID, name string, position int, roleIDs ...string) (policyID, versionID string) {
+	t.Helper()
+	policyID, versionID = seedScopedPolicyDraft(t, super, tenantID, name, position, scopeSpec{RoleIDs: roleIDs})
+	seedActivePolicy(t, super, tenantID, name+" catch-all", position+1, nil)
+	return policyID, versionID
+}
+
+func TestPublish_RefusalNamesEveryDeletedScopeRoleInOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 order")
+	c, _ := activeAdmin(t, super, tenantID)
+	live := seedWorkflowRole(t, super, tenantID, "marlin", "Marlin Signer")
+	zeta := seedWorkflowRole(t, super, tenantID, "zeta", "Zeta Auditor")
+	quill := seedWorkflowRole(t, super, tenantID, "quill", "Quill Reviewer")
+	softDeleteWorkflowRole(t, super, zeta)
+	softDeleteWorkflowRole(t, super, quill)
+	policyID, _ := scopeDraftNaming(t, super, tenantID, "S", 1, live, zeta, quill)
+
+	_, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID)
+	if !errors.Is(err, ErrPolicyStepRole) {
+		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
+	}
+	_, msg := policyStatusForErr(err)
+	z, q := strings.Index(msg, "“Zeta Auditor”"), strings.Index(msg, "“Quill Reviewer”")
+	if z < 0 || q < 0 || z > q {
+		t.Errorf("msg = %q, want “Zeta Auditor” before “Quill Reviewer”", msg)
+	}
+	if strings.Contains(msg, "Marlin Signer") {
+		t.Errorf("msg = %q, names the live role", msg)
+	}
+}
+
+func TestPublish_RefusalEchoesATitleVerbatimAndNamesARepeatedTitleOnce(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 verbatim")
+	c, _ := activeAdmin(t, super, tenantID)
+	const odd = `Say "hi" \ ok`
+	ids := []string{
+		seedWorkflowRole(t, super, tenantID, "odd", odd),
+		seedWorkflowRole(t, super, tenantID, "twin-a", "Twin"),
+		seedWorkflowRole(t, super, tenantID, "twin-b", "Twin"),
+	}
+	for _, id := range ids {
+		softDeleteWorkflowRole(t, super, id)
+	}
+	policyID, _ := scopeDraftNaming(t, super, tenantID, "S", 1, ids...)
+
+	_, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID)
+	_, msg := policyStatusForErr(err)
+	if !strings.Contains(msg, "“"+odd+"”") {
+		t.Errorf("msg = %q, want the title %q verbatim in curly quotes", msg, odd)
+	}
+	if n := strings.Count(msg, "“Twin”"); n != 1 {
+		t.Errorf("msg = %q, “Twin” occurs %d times, want 1", msg, n)
+	}
+}
+
+func TestPublish_RefusesAForkThatKeepsADeletedScopeRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 fork")
+	c, _ := activeAdmin(t, super, tenantID)
+	store := NewStore(app, stubFingerprinter, nil)
+	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	roleID := seedWorkflowRole(t, super, tenantID, "sealed-role", "Sealed role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	v1 := seedSealedActiveV1Scoped(t, super, tenantID, policyID, seedBusinessEntity(t, super, tenantID, "Client A"), roleID)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
+	softDeleteWorkflowRole(t, super, roleID)
+
+	if _, err := store.PutDraft(c, policyID, nil, &scopeInput{WorkflowRoleKeys: []string{"sealed-role"}},
+		approvalStep("engagement-partner")); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if _, err := store.PublishPolicy(c, policyID); !errors.Is(err, ErrPolicyStepRole) {
+		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
+	}
+	if v := versionRow(t, super, v1); !v.Sealed || !v.IsActive {
+		t.Errorf("v1 = %+v, want still (sealed true, is_active true)", v)
+	}
+	if d := openDraft(t, super, policyID); d.Sealed || d.IsActive {
+		t.Errorf("v2 = %+v, want unsealed and inactive", d)
+	}
+}
+
+func TestPublish_PublishesOnceTheDeletedScopeRoleIsRemoved(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 fixed")
+	c, _ := activeAdmin(t, super, tenantID)
+	store := NewStore(app, stubFingerprinter, nil)
+	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	roleID := seedWorkflowRole(t, super, tenantID, "gone", "Gone")
+	softDeleteWorkflowRole(t, super, roleID)
+	policyID, versionID := scopeDraftNaming(t, super, tenantID, "S", 1, roleID)
+
+	if _, err := store.PublishPolicy(c, policyID); !errors.Is(err, ErrPolicyStepRole) {
+		t.Fatalf("first PublishPolicy err = %v, want ErrPolicyStepRole", err)
+	}
+	if _, err := store.PutDraft(c, policyID, nil, &scopeInput{DocumentTypes: []string{"credit_note"}, WorkflowRoleKeys: []string{}},
+		approvalStep("engagement-partner")); err != nil {
+		t.Fatalf("PutDraft dropping the role: %v", err)
+	}
+	if _, err := store.PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy after the fix: %v, want success", err)
+	}
+	if v := versionRow(t, super, versionID); !v.Sealed || !v.IsActive {
+		t.Errorf("version = %+v, want (sealed true, is_active true)", v)
+	}
+	if n := auditCount(t, super, tenantID, "approval_policy.published"); n != 1 {
+		t.Errorf("approval_policy.published audit rows = %d, want 1", n)
+	}
+}
+
+func TestPublish_ALiveScopeRolePublishes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 live")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "live", "Live")
+	policyID, _ := scopeDraftNaming(t, super, tenantID, "S", 1, roleID)
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy naming a live scope role: %v, want success", err)
+	}
+}
+
+func TestPublish_DeadStepRoleKeepsTheStepSentence(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-09 step first")
+	c, _ := activeAdmin(t, super, tenantID)
+	scopeRole := seedWorkflowRole(t, super, tenantID, "gone-scope", "Gone scope")
+	stepRole := seedWorkflowRole(t, super, tenantID, "gone-step", "Gone step")
+	softDeleteWorkflowRole(t, super, scopeRole)
+	softDeleteWorkflowRole(t, super, stepRole)
+	policyID, versionID := scopeDraftNaming(t, super, tenantID, "S", 1, scopeRole)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("gone-step"),
+	})
+
+	_, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID)
+	if _, msg := policyStatusForErr(err); msg != "an approval step names a workflow role that no longer exists" {
+		t.Errorf("msg = %q, want the step sentence", msg)
+	}
+}

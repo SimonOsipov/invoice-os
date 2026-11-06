@@ -192,9 +192,9 @@ test.describe('Audit screen', () => {
 
       await prev.click({ timeout: 15_000 })
       await expect(prev).toBeDisabled()
-      // Back on page one, the client-held cursor stack returned the original rows.
+      // prev refetches page one live: the new row may sit on top, so assert containment.
       await expect
-        .poll(async () => (await page.getByTestId('audit-row').first().innerText()) === firstRowText, {
+        .poll(async () => (await page.getByTestId('audit-row').allInnerTexts()).includes(firstRowText), {
           message: 'prev must land back on the first page',
           timeout: 15_000,
         })

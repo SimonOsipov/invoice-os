@@ -505,8 +505,7 @@ type scopeRoleDeleted struct{ titles []string }
 func (e *scopeRoleDeleted) Error() string { return ErrPolicyStepRole.Error() }
 func (e *scopeRoleDeleted) Unwrap() error { return ErrPolicyStepRole }
 
-// quoteTitles wraps each title in curly quotes, unescaped, so the admin reads the title
-// the role card shows.
+// quoteTitles wraps each title in curly quotes, unescaped.
 func quoteTitles(titles []string) string {
 	q := make([]string, len(titles))
 	for i, t := range titles {
@@ -543,7 +542,11 @@ func policyStatusForErr(err error) (status int, msg string) {
 	case errors.Is(err, ErrPolicyNotFound):
 		return http.StatusNotFound, "approval policy not found"
 	case errors.As(err, &sr):
-		return http.StatusConflict, "a scope names a workflow role that was deleted: " + quoteTitles(sr.titles) + " — remove it from the scope, then publish"
+		remedy := "remove it"
+		if len(sr.titles) > 1 {
+			remedy = "remove them"
+		}
+		return http.StatusConflict, "a scope names a workflow role that was deleted: " + quoteTitles(sr.titles) + " — " + remedy + " from the scope, then publish"
 	case errors.Is(err, ErrPolicyStepRole):
 		return http.StatusConflict, "an approval step names a workflow role that no longer exists"
 	case errors.Is(err, ErrPolicyEmptyBranches):

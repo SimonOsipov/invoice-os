@@ -387,9 +387,10 @@ func TestPublish_ConcurrentScopeRoleDeleteAndPublishNeverBothSucceed(t *testing.
 		wg.Wait()
 
 		publishWon := pubErr == nil && errors.Is(delErr, ErrRoleInUse)
-		deleteWon := delErr == nil && errors.Is(pubErr, ErrPolicyStepRole)
+		var scopeRefusal *scopeRoleDeleted
+		deleteWon := delErr == nil && errors.As(pubErr, &scopeRefusal)
 		if !publishWon && !deleteWon {
-			t.Fatalf("round %d: publish err = %v, delete err = %v, want exactly one of (publish ok, delete ErrRoleInUse) or (delete ok, publish ErrPolicyStepRole)", round, pubErr, delErr)
+			t.Fatalf("round %d: publish err = %v, delete err = %v, want exactly one of (publish ok, delete ErrRoleInUse) or (delete ok, publish scopeRoleDeleted)", round, pubErr, delErr)
 		}
 
 		var dangling int

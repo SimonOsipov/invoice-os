@@ -402,7 +402,8 @@ func TestPolicyHandlers_StatusCodes(t *testing.T) {
 		{"not permitted", ErrNotPermitted, http.StatusForbidden, "only an admin can change approval policies"},
 		{"not found", ErrPolicyNotFound, http.StatusNotFound, "approval policy not found"},
 		{"step role", ErrPolicyStepRole, http.StatusConflict, "an approval step names a workflow role that no longer exists"},
-		{"scope role deleted", &scopeRoleDeleted{titles: []string{"Tax Reviewer", "Ops"}}, http.StatusConflict, "a scope names a workflow role that was deleted: \u201cTax Reviewer\u201d, \u201cOps\u201d — remove it from the scope, then publish"},
+		{"scope role deleted", &scopeRoleDeleted{titles: []string{"Tax Reviewer", "Ops"}}, http.StatusConflict, "a scope names a workflow role that was deleted: \u201cTax Reviewer\u201d, \u201cOps\u201d — remove them from the scope, then publish"},
+		{"scope role deleted, one title", &scopeRoleDeleted{titles: []string{"Tax Reviewer"}}, http.StatusConflict, "a scope names a workflow role that was deleted: \u201cTax Reviewer\u201d — remove it from the scope, then publish"},
 		{"empty branches", ErrPolicyEmptyBranches, http.StatusConflict, "a condition must have at least one step in one of its two lanes"},
 		{"nothing to publish", ErrPolicyNothingToPublish, http.StatusConflict, "this policy has no unpublished changes"},
 		// AC-3 (task-484): the publish sweep's cap refusal.

@@ -1193,6 +1193,7 @@ test.describe('approval-policy publish refuses a scope naming a deleted role (fr
     const error = String((res.body as Record<string, unknown>).error)
     expect(error).toContain(`“${role.title}”`)
     expect(error).toContain(MSG_SCOPE_ROLE_DELETED)
+    expect(error).toContain('remove it from the scope, then publish')
 
     const after = await getApprovalPolicy(t, s.id)
     expect(after.sealed, 'S stays unsealed').toBe(false)

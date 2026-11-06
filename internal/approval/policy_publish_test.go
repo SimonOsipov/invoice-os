@@ -1023,7 +1023,7 @@ func TestPublish_SweepAboveCapReturns409(t *testing.T) {
 	}
 }
 
-// --- APSC-09: publish refuses a scope that names a deleted role ----------------
+// --- publish refuses a scope that names a deleted role ----------------
 
 func scopeDraftNaming(t *testing.T, super *pgxpool.Pool, tenantID, name string, position int, roleIDs ...string) (policyID, versionID string) {
 	t.Helper()
@@ -1098,8 +1098,9 @@ func TestPublish_RefusesAForkThatKeepsADeletedScopeRole(t *testing.T) {
 		approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
-	if _, err := store.PublishPolicy(c, policyID); !errors.Is(err, ErrPolicyStepRole) {
-		t.Fatalf("PublishPolicy err = %v, want ErrPolicyStepRole", err)
+	var scopeRefusal *scopeRoleDeleted
+	if _, err := store.PublishPolicy(c, policyID); !errors.As(err, &scopeRefusal) {
+		t.Fatalf("PublishPolicy err = %v, want scopeRoleDeleted", err)
 	}
 	if v := versionRow(t, super, v1); !v.Sealed || !v.IsActive {
 		t.Errorf("v1 = %+v, want still (sealed true, is_active true)", v)

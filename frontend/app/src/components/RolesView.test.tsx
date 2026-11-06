@@ -252,7 +252,7 @@ describe('AC-4: the roles-unassigned banner stays gated on the full roster surfa
 // APSC-08 -- the card line comes from `ctx.rolesInForce` alone
 // ============================================================================
 // Unknown usage (`null`: loading, failed, or the server omitted `in_force`) renders the EMPTY
-// STRING, never "not used in any policy" and never the em dash (MembersTable.tsx:195).
+// STRING, never "not used in any policy" and never the em dash (ABSENT_LABEL).
 
 describe('APSC-08: a role card claims policy usage only off a landed rolesInForce', () => {
   /** Header / holders / footer; the footer carries no test id. */

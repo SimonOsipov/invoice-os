@@ -849,7 +849,7 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header and pager relations', async ({ page }, testInfo) => {
+test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk bar, header and pager relations', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
@@ -874,11 +874,19 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
   await attachShot(page, testInfo, 'invoices-default')
 
   const header = async (): Promise<Read> => {
-    const b = await boxes(page, { header: heading(page).locator('xpath=../..'), title: heading(page).locator('xpath=..'), toggle })
-    return {
-      problems: [...within(b.header, b.title, 'title block in the header'), ...within(b.header, b.toggle, 'toggle in the header'), ...apart(b.title, b.toggle, 'title block vs toggle')],
-      rects: { header: b.header, title: b.title, toggle: b.toggle },
-    }
+    const b = await boxes(page, { header: heading(page).locator('xpath=../..'), title: heading(page).locator('xpath=..'), toggle, newInvoice: page.getByTestId('invoices-new-invoice') })
+    const problems = [
+      ...within(b.header, b.title, 'title block in the header'),
+      ...within(b.header, b.toggle, 'toggle in the header'),
+      ...within(b.header, b.newInvoice, 'New invoice in the header'),
+      ...apart(b.title, b.toggle, 'title block vs toggle'),
+      ...apart(b.title, b.newInvoice, 'title block vs New invoice'),
+      ...apart(b.toggle, b.newInvoice, 'toggle vs New invoice'),
+      ...leftOf(b.toggle, b.newInvoice, 'toggle vs New invoice'),
+    ]
+    if (Math.abs(centreY(b.toggle) - centreY(b.newInvoice)) > 1) problems.push('toggle and New invoice centres differ')
+    if (Math.abs(b.title.y + b.title.height - (b.newInvoice.y + b.newInvoice.height)) > 1) problems.push('New invoice bottom vs title block bottom')
+    return { problems, rects: { header: b.header, title: b.title, toggle: b.toggle, newInvoice: b.newInvoice } }
   }
   const bulk = await bulkFlow(
     page,

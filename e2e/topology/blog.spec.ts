@@ -974,4 +974,38 @@ test.describe('blog journeys', () => {
     await expect(aside(page).locator('nav button.blog-nav:nth-of-type(n+2)').first(), 'no sidebar category after recovery').toBeVisible()
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('blog journeys: clicking a cover opens the post', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const clickCover = async (box: Locator, title: string) => {
+      await expect(box, 'cover box cursor').toHaveCSS('cursor', 'pointer')
+      await expect(box.locator(':scope > *').first(), 'cover child cursor').toHaveCSS('cursor', 'pointer')
+      await box.click()
+      await expect(main(page).locator('article h1')).toHaveText(title)
+      await expect(page).not.toHaveURL(`${BLOG_URL}/`)
+    }
+
+    await visit(page)
+    const text = main(page).locator('section').first().getByRole('button', { name: /Read the post/ })
+    await expect(text, 'control: no featured card').toBeVisible()
+    const featured = (await text.locator(':scope > span').nth(1).textContent()) ?? ''
+    await clickCover(text.locator('..').locator(':scope > div').first(), featured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+
+    await visit(page)
+    const band = main(page).locator(`section ${GRID}`).first().locator(':scope > div').first()
+    await expect(band.locator('button'), 'control: no band card').toBeVisible()
+    const bandTitle = (await band.locator('button > span:nth-child(2)').textContent()) ?? ''
+    await clickCover(band.locator(':scope > div').first(), bandTitle)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+
+    await visit(page, '/category/regulation')
+    const card = main(page).locator(`section ${GRID}`).first().locator(':scope > div').first()
+    await expect(card.locator('button'), 'control: no category card').toBeVisible()
+    const cardTitle = (await card.locator('button > span:nth-child(2)').textContent()) ?? ''
+    await clickCover(card.locator(':scope > div').first(), cardTitle)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
 })

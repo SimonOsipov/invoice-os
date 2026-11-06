@@ -73,6 +73,7 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"approval_policy.updated":      {"policy_id": policyID},
 		"approval_policy.published":    {"policy_id": policyID},
 		"approval_policy.deleted":      {"policy_id": policyID},
+		"approval_policy.reordered":    {"from_order": []string{policyID}, "to_order": []string{policyID}},
 		"workflow_role.created":        {"key": "approver"},
 		"workflow_role.updated":        {"key": "approver"},
 		"workflow_role.deleted":        {"key": "approver"},
@@ -185,8 +186,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 35 {
-		t.Fatalf("rule-D payload map holds %d events, want 35", len(ruleD))
+	if len(ruleD) != 36 {
+		t.Fatalf("rule-D payload map holds %d events, want 36", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

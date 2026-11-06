@@ -318,6 +318,35 @@ func TestApprove_ReviewerWithWorkflowRoleAllowed(t *testing.T) {
 	}
 }
 
+// TestDecide_ApprovesARunWhoseVersionIsNoLongerActive: decideTx never reads the run's
+// version, so deactivating it leaves the run approvable.
+func TestDecide_ApprovesARunWhoseVersionIsNoLongerActive(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APSC-03-04 version-inactive", "inactive-version-role")
+	versionID := oneApprovalRun(t, super, f.invoiceID).PolicyVersionID
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("deactivate the run's version: %v", err)
+	}
+	reviewer := activeApprover(t, super, f.tenantID)
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, reviewer, 0)
+
+	run, err := approve(t, app, f.tenantID, reviewer, f.invoiceID, nil)
+	if err != nil {
+		t.Fatalf("Decide(approved) on a run whose version is inactive: %v, want success", err)
+	}
+	if run.State != "approved" {
+		t.Errorf("returned run.State = %q, want approved", run.State)
+	}
+	stored := oneApprovalRun(t, super, f.invoiceID)
+	if stored.State != "approved" || stored.PolicyVersionID != versionID {
+		t.Errorf("stored run = {state %s, version %s}, want {approved, %s}", stored.State, stored.PolicyVersionID, versionID)
+	}
+	if steps := runStepsOf(t, super, f.runID); len(steps) != 1 || steps[0].State != "satisfied" {
+		t.Errorf("run steps = %+v, want the single step satisfied", steps)
+	}
+}
+
 func TestApprove_NonApproverRoleRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	f := newApproveFixture(t, super, app, "APPR-07 non-approver-refused", "non-approver-role")

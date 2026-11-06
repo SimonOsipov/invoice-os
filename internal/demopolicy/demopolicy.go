@@ -183,10 +183,10 @@ func planFor(tenantID string) *plan {
 
 // Result is what one Seed call did. BacklogFound and RunsArmed are separate
 // fields: equal means every candidate armed, a gap means ArmTx answered
-// RunID == "" — which happens only when no active version exists.
+// RunID == "" — which happens when no policy matches the invoice.
 type Result struct {
 	VersionCreated bool   // the policy/version/step statements ran on THIS call
-	VersionID      string // the tenant's active version, created now or found
+	VersionID      string // the seeded policy's active version, else the first foreign one in order
 	BacklogFound   int    // rows the anti-join returned, BEFORE arming
 	RunsArmed      int    // ArmTx calls that wrote a run
 	Note           string // which "did nothing, but why" cause applies
@@ -230,7 +230,7 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string) (Resul
 	return seedTenantPlan(ctx, pool, tenantID, planFor(tenantID))
 }
 
-// activeVersion is the tenant's governing version, whoever wrote it.
+// activeVersion is the version the seeder acts on, whoever wrote it: its own, else the first in position order.
 type activeVersion struct {
 	versionID   string
 	policyID    string
@@ -248,12 +248,12 @@ type activeVersion struct {
 func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p *plan) (Result, error) {
 	var res Result
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
-		// One converger per tenant at a time. clearActive would otherwise let a
-		// boot that probed before a sibling committed deactivate that sibling and
-		// insert a SECOND policy of the same name -- approval_policies has no
-		// unique index on name, and one_active no longer refuses it. Released on
-		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion).
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
+		// One converger per tenant at a time. A boot that probed before a
+		// sibling committed would insert a SECOND policy of the same name --
+		// approval_policies has no unique index on name. Released on
+		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion). Shared with PublishPolicy,
+		// so a human publish and the seeder's sweep never run together.
+		if err := approval.LockTenantPublishTx(ctx, tx, tenantID); err != nil {
 			res.Note = "tenant lock failed"
 			return err
 		}
@@ -271,14 +271,14 @@ func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p 
 			return nil
 		}
 
-		// is_active alone is the whole resolve, matching ArmTx: one_active caps it
-		// at one row per tenant and active_is_sealed makes active imply sealed.
+		// The seeded policy's own active version first, else the first policy in position order.
 		var active activeVersion
 		err := tx.QueryRow(ctx,
 			`SELECT v.id::text, v.policy_id::text, p.name, coalesce(v.published_by, '')
 			   FROM approval_policy_versions v
 			   JOIN approval_policies p ON p.id = v.policy_id
-			  WHERE v.is_active`).
+			  WHERE v.is_active
+			  ORDER BY (p.name = $1 AND p.deleted_at IS NULL) DESC, p.position, p.id LIMIT 1`, p.policyName).
 			Scan(&active.versionID, &active.policyID, &active.policyName, &active.publishedBy)
 		governed := !errors.Is(err, pgx.ErrNoRows)
 		if err != nil && governed {
@@ -409,13 +409,13 @@ func seatProblem(ctx context.Context, tx pgx.Tx, keys []string) (string, error) 
 	return "", nil
 }
 
-// clearActive frees the tenant's one active slot, mirroring PublishPolicy's own
-// deactivation (policy_store.go:617-620). Issued immediately before EVERY
-// activation: one_active is a partial UNIQUE index, so activating over a held
-// slot raises 23505 and rolls the tenant back. No policy predicate -- RLS is the
-// tenant scope, and deactivation is not un-publishing.
-func clearActive(ctx context.Context, tx pgx.Tx) error {
-	_, err := tx.Exec(ctx, `UPDATE approval_policy_versions SET is_active = false WHERE is_active`)
+// clearActive deactivates the active version of versionID's policy, before every
+// activation: one_active is per policy, so activating over a held slot raises 23505.
+func clearActive(ctx context.Context, tx pgx.Tx, versionID string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE approval_policy_versions SET is_active = false
+		  WHERE is_active
+		    AND policy_id = (SELECT policy_id FROM approval_policy_versions WHERE id = $1)`, versionID)
 	return err
 }
 
@@ -438,11 +438,11 @@ func sealedVersionByName(ctx context.Context, tx pgx.Tx, name string) (string, e
 	return versionID, err
 }
 
-// reactivateSealedVersion puts an already-sealed version back in the tenant's
+// reactivateSealedVersion puts an already-sealed version back in its policy's
 // active slot. tenantID is not a predicate -- RLS is -- and is taken for
 // call-site symmetry with the other two activation paths.
 func reactivateSealedVersion(ctx context.Context, tx pgx.Tx, tenantID, versionID string) error {
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx,
@@ -457,8 +457,7 @@ func reactivateSealedVersion(ctx context.Context, tx pgx.Tx, tenantID, versionID
 // The plan is an argument rather than resolved here: seedTenantPlan may be
 // driving a plan planFor would never answer for this tenant.
 func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, p *plan) (string, error) {
-	// scope is left to its column DEFAULT: CHECK (scope = 'All invoices') admits
-	// exactly one value.
+	// scope is left to its column DEFAULT, 'All invoices'.
 	var policyID string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,
@@ -479,7 +478,7 @@ func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, p *plan)
 		return "", err
 	}
 
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return "", err
 	}
 	// One statement: is_active is never set on a row that is not simultaneously
@@ -533,7 +532,7 @@ func supersedeIfStale(ctx context.Context, tx pgx.Tx, tenantID string, p *plan, 
 	if err := writeLane(ctx, tx, tenantID, versionID, nil, nil, p.steps); err != nil {
 		return "", false, err
 	}
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return "", false, err
 	}
 	if _, err := tx.Exec(ctx,

@@ -52,12 +52,48 @@ type PolicyVersion struct {
 	IsActive    bool    `json:"is_active"`
 	PublishedAt *string `json:"published_at"`
 	PublishedBy *string `json:"published_by"`
+	// Scoped: the version carries any scope. The SPA's catch-all lock reads it for the active version.
+	Scoped bool `json:"scoped"`
+}
+
+// AmountBand is a version's scope band; a nil bound is open-ended. Bounds are numeric
+// text with scale kept.
+type AmountBand struct {
+	Lower    *string `json:"lower"`
+	Upper    *string `json:"upper"`
+	Currency string  `json:"currency"`
+}
+
+// Scopes is the wire shape of a version's scope columns; empty everywhere is a catch-all.
+type Scopes struct {
+	DocumentTypes    []string    `json:"document_types"`
+	EntityIDs        []string    `json:"entity_ids"`
+	WorkflowRoleKeys []string    `json:"workflow_role_keys"`
+	AmountBand       *AmountBand `json:"amount_band"`
+}
+
+// MarshalJSON substitutes [] for a nil array (TestPolicy_ScopesMarshalFourKeysAndNullBand).
+func (sc Scopes) MarshalJSON() ([]byte, error) {
+	type scopesJSON Scopes
+	v := scopesJSON(sc)
+	if v.DocumentTypes == nil {
+		v.DocumentTypes = []string{}
+	}
+	if v.EntityIDs == nil {
+		v.EntityIDs = []string{}
+	}
+	if v.WorkflowRoleKeys == nil {
+		v.WorkflowRoleKeys = []string{}
+	}
+	return json.Marshal(v)
 }
 
 type Policy struct {
 	ID       string          `json:"id"`
 	Name     string          `json:"name"`
 	Scope    string          `json:"scope"`
+	Position int             `json:"position"`
+	Scopes   Scopes          `json:"scopes"`  // the version steps belongs to
 	Status   string          `json:"status"`  // "draft" if an unsealed version exists, else "published"
 	Version  int             `json:"version"` // the version steps belongs to
 	Sealed   bool            `json:"sealed"`
@@ -92,17 +128,36 @@ type stepInput struct {
 	Else            []stepInput `json:"else"`
 }
 
+// scopeInput is the request shape of Scopes; a nil array is empty.
+type scopeInput struct {
+	DocumentTypes    []string         `json:"document_types"`
+	EntityIDs        []string         `json:"entity_ids"`
+	WorkflowRoleKeys []string         `json:"workflow_role_keys"`
+	AmountBand       *amountBandInput `json:"amount_band"`
+}
+
+type amountBandInput struct {
+	Lower    *string `json:"lower"`
+	Upper    *string `json:"upper"`
+	Currency string  `json:"currency"`
+}
+
 type createPolicyRequest struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"` // optional; "" means the default scope
+	Name   string      `json:"name"`
+	Scopes *scopeInput `json:"scopes"` // absent = catch-all
 }
 
 // Steps is *[]stepInput: a nil slice means "clear the tree" at the store, so
 // without the presence check {} would silently wipe a policy's steps.
 type putDraftRequest struct {
-	Name  *string      `json:"name"`
-	Scope *string      `json:"scope"`
-	Steps *[]stepInput `json:"steps"`
+	Name   *string      `json:"name"`
+	Scopes *scopeInput  `json:"scopes"` // absent or null keeps the draft's scopes
+	Steps  *[]stepInput `json:"steps"`
+}
+
+// reorderRequest: PolicyIDs is a pointer so an absent or null key is a 400, not an empty list.
+type reorderRequest struct {
+	PolicyIDs *[]string `json:"policy_ids"`
 }
 
 // stepRow is one approval_policy_steps row, minus the columns the store owns
@@ -138,6 +193,14 @@ var (
 	ErrPolicyEmptyBranches    = errors.New("approval: condition has two empty lanes")
 	ErrPolicyNothingToPublish = errors.New("approval: nothing to publish")
 	ErrSweepCapExceeded       = errors.New("approval: validated backlog exceeds the publish sweep cap")
+	ErrPolicyCatchAll         = errors.New("approval: the policy with no scopes must stay last while any policy has scopes")
+	ErrPolicyOrderStale       = errors.New("approval: the reorder list is not the live policy list")
+
+	ErrScopeDocumentType = errors.New("approval: scope names an unknown document type")
+	ErrScopeEntity       = errors.New("approval: scope names a client company outside the workspace")
+	ErrScopeBand         = errors.New("approval: malformed amount band")
+	ErrScopeCurrency     = errors.New("approval: amount band names an unknown currency")
+	ErrScopeRole         = errors.New("approval: scope names an unknown or deleted workflow role")
 )
 
 // The sets the approval_policy_steps CHECK constraints accept.
@@ -366,17 +429,73 @@ func normalizeName(name string) (string, error) {
 	return name, nil
 }
 
-// normalizeScope is the one place a scope reaches its stored form. Its OUTPUT set
-// is exactly the set approval_policies_scope_check accepts, so no caller can send
-// the column a value the CHECK refuses — "" is legal input and never a legal
-// stored value. There is deliberately no second predicate to diverge from it.
-func normalizeScope(scope string) (string, error) {
-	switch strings.TrimSpace(scope) {
-	case "", policyScopeAll: // absent means the default, not a value
-		return policyScopeAll, nil
-	default:
-		return "", ErrValidation
+// scopeDocumentTypes mirrors approval_policy_versions_scope_document_types_check.
+var scopeDocumentTypes = map[string]bool{"commercial_invoice": true, "credit_note": true, "debit_note": true}
+
+// validateScopes is the pre-tx shape gate; existence checks (entities, roles, currency)
+// are resolveScopesTx's.
+func validateScopes(sc scopeInput) error {
+	seen := map[string]bool{}
+	for _, d := range sc.DocumentTypes {
+		if !scopeDocumentTypes[d] {
+			return ErrScopeDocumentType
+		}
+		if seen[d] {
+			return ErrValidation
+		}
+		seen[d] = true
 	}
+	seen = map[string]bool{}
+	for _, e := range sc.EntityIDs {
+		u, err := uuid.Parse(e)
+		if err != nil {
+			return ErrScopeEntity
+		}
+		if seen[u.String()] {
+			return ErrValidation
+		}
+		seen[u.String()] = true
+	}
+	seen = map[string]bool{}
+	for _, k := range sc.WorkflowRoleKeys {
+		if hasNUL(&k) {
+			return ErrValidation
+		}
+		if k == "" {
+			return ErrScopeRole
+		}
+		if seen[k] {
+			return ErrValidation
+		}
+		seen[k] = true
+	}
+	b := sc.AmountBand
+	if b == nil {
+		return nil
+	}
+	if hasNUL(&b.Currency) {
+		return ErrValidation
+	}
+	if b.Currency == "" || (b.Lower == nil && b.Upper == nil) {
+		return ErrScopeBand
+	}
+	var lower, upper decimal.Decimal
+	for _, bound := range []struct {
+		in  *string
+		out *decimal.Decimal
+	}{{b.Lower, &lower}, {b.Upper, &upper}} {
+		if bound.in == nil {
+			continue
+		}
+		if validateCondAmount(*bound.in) != nil {
+			return ErrScopeBand
+		}
+		*bound.out = decimal.RequireFromString(*bound.in)
+	}
+	if b.Lower != nil && b.Upper != nil && lower.GreaterThan(upper) {
+		return ErrScopeBand
+	}
+	return nil
 }
 
 // policyStatusForErr is the policy seam's mapper. Messages are hand-written rather
@@ -389,6 +508,16 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, db.ErrWorkspaceLocked):
 		return http.StatusForbidden, db.WorkspaceLockedMessage
+	case errors.Is(err, ErrScopeDocumentType):
+		return http.StatusBadRequest, "a scope names an unknown document type"
+	case errors.Is(err, ErrScopeEntity):
+		return http.StatusBadRequest, "a scope names a client company outside this workspace"
+	case errors.Is(err, ErrScopeBand):
+		return http.StatusBadRequest, "an amount band needs a currency, at least one bound, and a lower bound no higher than the upper"
+	case errors.Is(err, ErrScopeCurrency):
+		return http.StatusBadRequest, "an amount band names a currency outside the NRS currency list"
+	case errors.Is(err, ErrScopeRole):
+		return http.StatusBadRequest, "a scope names a workflow role that does not exist or was deleted"
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, "invalid request"
 	case errors.Is(err, ErrNotPermitted):
@@ -401,6 +530,10 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "a condition must have at least one step in one of its two lanes"
 	case errors.Is(err, ErrPolicyNothingToPublish):
 		return http.StatusConflict, "this policy has no unpublished changes"
+	case errors.Is(err, ErrPolicyCatchAll):
+		return http.StatusConflict, "a policy with no scopes must stay last while any policy has scopes"
+	case errors.Is(err, ErrPolicyOrderStale):
+		return http.StatusConflict, "the policy list changed — reload and try again"
 	// The message names the cap rather than the remedy; the operator remedy is in the
 	// vault runbook "Approvals".
 	case errors.Is(err, ErrSweepCapExceeded):

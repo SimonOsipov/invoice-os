@@ -19,6 +19,7 @@ import {
   deletedNotice,
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
+  inUsePolicyNames,
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
   hiddenInvitedCount,
@@ -82,6 +83,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // instead of closing on it.
   const [submitting, setSubmitting] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
+  const [writeErrorPolicies, setWriteErrorPolicies] = useState<string[]>([])
 
   // AC-7: a write in flight must not be closed out from under by any route, X or Escape included.
   const closeIfIdle = useCallback(() => {
@@ -116,6 +118,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     const trimmedDesc = desc.trim()
     setSubmitting(true)
     setWriteError(null)
+    setWriteErrorPolicies([])
     try {
       if (role) {
         // Two independent verbs, fired only for what actually changed — a rename-only edit
@@ -143,14 +146,14 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     setSubmitting(true)
     setWriteError(null)
     try {
-      // `[delete-does-not-demote]`: the role goes and NO policy is written. A published
-      // policy whose step named it stays published, and that step blocks.
+      // `[delete-does-not-demote]`: the server refuses while a policy in force names the role; a draft that names it keeps the key.
       await ctx.deleteRole(role.key)
       // The STORED title, not the field: an unsaved rename is not what is being deleted.
       onFlash(deletedNotice(role.title))
       onClose()
     } catch (err) {
       setWriteError(toApiError(err).message)
+      setWriteErrorPolicies(inUsePolicyNames(err))
     } finally {
       setSubmitting(false)
     }
@@ -360,6 +363,13 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               style={{ marginBottom: 10, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 13, lineHeight: 1.5, color: 'var(--status-red-text)' }}
             >
               {writeError}
+              {writeErrorPolicies.length > 0 && (
+                <ul data-testid="role-modal-error-policies" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {writeErrorPolicies.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

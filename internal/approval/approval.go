@@ -35,7 +35,23 @@ var (
 	ErrNotFound     = errors.New("approval: workflow role not found")
 	ErrNotPermitted = errors.New("approval: not permitted")
 	ErrConflict     = errors.New("approval: conflict")
+	ErrRoleInUse    = errors.New("approval: workflow role is named by a policy in force")
 )
+
+// roleInUseMessage is the 409 sentence for ErrRoleInUse.
+const roleInUseMessage = "this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first"
+
+// PolicyRef names one policy in the role-in-use refusal.
+type PolicyRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// roleInUse is DeleteRole's refusal; it carries the policies so the handler can list them.
+type roleInUse struct{ policies []PolicyRef }
+
+func (e *roleInUse) Error() string { return ErrRoleInUse.Error() }
+func (e *roleInUse) Unwrap() error { return ErrRoleInUse }
 
 // Body caps applied before decode — the platform server sets no limit of its own.
 const (
@@ -83,6 +99,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusNotFound, "workflow role not found"
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict, "that role was just created — try again"
+	case errors.Is(err, ErrRoleInUse):
+		return http.StatusConflict, roleInUseMessage
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

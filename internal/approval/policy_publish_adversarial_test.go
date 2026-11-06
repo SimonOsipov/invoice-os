@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -183,7 +184,7 @@ func TestPublish_WaitsForTheLockedPolicyRow(t *testing.T) {
 // no FOR UPDATE of its own: the policy row lock already orders same-policy publishers, and
 // the loser's draft resolution then runs on a fresh statement snapshot and finds the
 // version sealed. The loser is ErrPolicyNothingToPublish — never ErrConflict, which would
-// mean both had passed the resolution and raced for the tenant's active slot.
+// mean both had passed the resolution and raced for the policy's active slot.
 func TestPublish_SamePolicyConcurrentPublishesSerialise(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-same-policy-race")
@@ -240,28 +241,26 @@ func TestPublish_SamePolicyConcurrentPublishesSerialise(t *testing.T) {
 // --- the concurrent-publish loser ---------------------------------------------
 
 // TestPublish_LosingTheActiveSlotIsErrConflict drives the 23505 the design promises as a
-// 409. The competitor claims the tenant's one_active slot in an uncommitted transaction,
-// so the publish under test passes its own deactivation (which cannot see an uncommitted
-// row) and then waits on the unique index; committing the competitor turns that wait into
-// the constraint violation.
+// 409. The competitor activates another sealed version of the SAME policy in an uncommitted
+// transaction, so the publish's deactivation cannot see it and waits on the unique index.
+// Committing the competitor turns that wait into the violation.
 //
-// Mapping is by constraint NAME: uniqueViolationOn pointed at any other constraint leaves
-// the whole acceptance-criteria suite green and answers 500 here.
+// Mapping is by constraint NAME: uniqueViolationOn pointed at any other constraint answers 500.
 func TestPublish_LosingTheActiveSlotIsErrConflict(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	tenantID := policyTenant(t, super, "APPR-05 publish-loses-the-slot")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	competitorPolicy := seedApprovalPolicy(t, super, tenantID, "Competitor")
-	competitorVersion := seedApprovalDraft(t, super, tenantID, competitorPolicy)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
-	versionID := seedApprovalDraft(t, super, tenantID, policyID)
+	competitorVersion := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	sealApprovalPolicyVersion(t, super, competitorVersion)
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
 
 	blocker, holderPID := blockerTx(t, ctx, app, tenantID)
 	if _, err := blocker.Exec(ctx,
 		`UPDATE approval_policy_versions
-		    SET sealed = true, is_active = true, published_at = now(), published_by = $2
+		    SET is_active = true, published_at = now(), published_by = $2
 		  WHERE id = $1`, competitorVersion, "competing-publisher"); err != nil {
 		t.Fatalf("competitor claims the active slot: %v", err)
 	}
@@ -312,14 +311,17 @@ func TestPublish_RoleDeletedWhileTheSealWaitsStillSeals(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
-	holderPolicy := seedApprovalPolicy(t, super, tenantID, "Slot holder")
-	holderVersion := seedApprovalDraft(t, super, tenantID, holderPolicy)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
-	versionID, stepID := seedApprovalDraftNamingRole(t, super, tenantID, policyID, "tax-reviewer")
+	holderVersion := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	sealApprovalPolicyVersion(t, super, holderVersion)
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
+	stepID := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("tax-reviewer"),
+	})
 
 	blocker, holderPID := blockerTx(t, ctx, app, tenantID)
 	if _, err := blocker.Exec(ctx,
-		`UPDATE approval_policy_versions SET sealed = true, is_active = true WHERE id = $1`,
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`,
 		holderVersion); err != nil {
 		t.Fatalf("hold the active slot: %v", err)
 	}
@@ -456,31 +458,30 @@ func TestPublish_UnknownMalformedAndDeletedAreNotFound(t *testing.T) {
 	}
 }
 
-// TestPublish_DeactivatesAnActiveVersionUnderASoftDeletedPolicy: the deactivation predicate
-// is is_active alone — no policy id, and no deleted_at either. A soft-deleted policy that
-// still holds the tenant's slot must lose it, or the incoming publish would raise 23505
-// against a policy no read can even see.
-func TestPublish_DeactivatesAnActiveVersionUnderASoftDeletedPolicy(t *testing.T) {
+// TestPublish_LeavesASoftDeletedPolicysVersionAlone: a soft-deleted policy that still holds
+// an active version does not block a publish (no 23505), and its version is untouched.
+func TestPublish_LeavesASoftDeletedPolicysVersionAlone(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := policyTenant(t, super, "APPR-05 publish-over-a-deleted-policy")
+	tenantID := policyTenant(t, super, "APSC-01 publish-beside-a-deleted-policy")
 	c, _ := activeAdmin(t, super, tenantID)
 
 	deletedPolicy := seedApprovalPolicy(t, super, tenantID, "Retired")
 	deletedVersion := seedApprovalPolicyVersionN(t, super, tenantID, deletedPolicy, 1)
 	publishApprovalPolicyVersion(t, super, deletedVersion, "earlier-publisher")
 	softDeleteApprovalPolicy(t, super, deletedPolicy)
+	before := versionRow(t, super, deletedVersion)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
 	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID); err != nil {
-		t.Fatalf("PublishPolicy while a soft-deleted policy holds the slot: %v, want success", err)
+		t.Fatalf("PublishPolicy beside a soft-deleted policy's active version: %v, want success", err)
 	}
-	if v := versionRow(t, super, deletedVersion); !v.Sealed || v.IsActive {
-		t.Errorf("the deleted policy's version = %+v, want (sealed true, is_active false)", v)
+	if v := versionRow(t, super, deletedVersion); !reflect.DeepEqual(v, before) {
+		t.Errorf("the deleted policy's version = %+v, want unchanged %+v", v, before)
 	}
-	if ids := activeVersionIDs(t, super, tenantID); len(ids) != 1 || ids[0] != versionID {
-		t.Errorf("active version ids = %v, want exactly [%s]", ids, versionID)
+	if v := versionRow(t, super, versionID); !v.Sealed || !v.IsActive {
+		t.Errorf("the published version = %+v, want (sealed true, is_active true)", v)
 	}
 }
 

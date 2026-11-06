@@ -540,7 +540,8 @@ export type PlatformCtx = {
   closePolicy: () => void
   createPolicy: () => Promise<void>
   deletePolicy: (id: string) => Promise<void>
-  savePolicy: (next: Policy) => Promise<Policy>
+  reorderPolicies: (ids: string[]) => Promise<void>
+  savePolicy: (next: Policy, opts?: { sendScopes?: boolean }) => Promise<Policy>
   publishPolicy: (id: string) => Promise<Policy>
   // Settings › Members. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError

@@ -842,8 +842,8 @@ const UNSAVED_POLICY_NAME = 'Untitled policy'
 // (lib/policies.ts).
 //
 // [topology-never-publishes] holds here as it does in workflows.spec.ts — create, save,
-// delete; NEVER publish. A publish seals a version permanently and takes the tenant's ONE
-// active slot on a deployment three suites share.
+// delete; NEVER publish. A publish seals a version permanently and puts the policy in force
+// on a deployment three suites share.
 test('in-house: a created role survives a reload, is selectable on a step this test builds, and blocks it once deleted', async ({
   page,
 }) => {
@@ -1024,7 +1024,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await page.getByTestId('role-delete').click()
   // The confirm names the role AND its usage, so the consequence is stated before the click.
   await expect(page.getByTestId('role-delete-confirm')).toContainText(
-    `Delete ${title}? 1 approval step · 1 policy. Those steps will block until you point them somewhere else.`,
+    `Delete ${title}? 1 approval step · 1 policy. The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`,
   )
   await expect(page.getByTestId('role-delete-cancel')).toBeVisible()
   await page.getByTestId('role-delete-confirmed').click()
@@ -1082,7 +1082,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
 // its `APPR09 <stamp>`, and both run as tenant A.
 //
 // If even this sweep dies, the stray is a policy that was never published — Test 3 does not
-// publish at all — so it can never hold the tenant's one active slot, and Test 1/2's usage
+// publish at all — so it is never in force, and Test 1/2's usage
 // assertions are shape-matched (USAGE_SHAPE) precisely so a stray cannot turn them red.
 test.afterAll(async () => {
   const token = await login(PERSONAS.B)

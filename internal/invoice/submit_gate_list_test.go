@@ -74,7 +74,7 @@ func detailSubmitPair(t *testing.T, store *Store, ctx context.Context, invID, la
 //
 // TWO tenants, and they cannot be merged. TransmitClearTx's gate is
 // `EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)`, which is
-// TENANT-wide under RLS, so one active policy makes every unarmed row in that tenant
+// workspace-wide under RLS, so one active policy makes every unarmed row in that tenant
 // read blocked and the seven-status walk stops testing the status rungs.
 //
 // The armed-state claim itself lives in

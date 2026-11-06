@@ -109,9 +109,9 @@ func TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite(t *testing.T) {
 	}
 
 	sql := rec.mentioning("approval_polic")
-	if len(sql) != 3 {
-		t.Fatalf("DeletePolicy issued %d approval_polic* statements, want 3 (the stamp, the "+
-			"deactivation, the max read):\n%v", len(sql), sql)
+	if len(sql) != 6 {
+		t.Fatalf("DeletePolicy issued %d approval_polic* statements, want 6 (the stamp, the "+
+			"deactivation, the max read, check 3, check 1, check 2):\n%v", len(sql), sql)
 	}
 
 	first := strings.ToLower(strings.TrimSpace(sql[0]))
@@ -321,7 +321,7 @@ func TestDeletePolicy_FreesTheNameForANewPolicy(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	first, err := store.CreatePolicy(c, "Sign-off", scopeAllInvoices)
+	first, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestDeletePolicy_FreesTheNameForANewPolicy(t *testing.T) {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
-	second, err := store.CreatePolicy(c, "Sign-off", scopeAllInvoices)
+	second, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy reusing a deleted policy's name: %v, want success", err)
 	}

@@ -38,6 +38,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'approval_policy.updated',
     'approval_policy.published',
     'approval_policy.deleted',
+    'approval_policy.reordered',
   ],
   roles: ['workflow_role.created', 'workflow_role.updated', 'workflow_role.deleted', 'workflow_role.staffed'],
   companies: [
@@ -128,6 +129,7 @@ describe('audit vocabulary', () => {
         expect(AUDIT_EVENTS[id].domain).toBe(domain)
       }
     }
+    expect(AUDIT_EVENTS['approval_policy.reordered']?.label).toBe('Policies reordered')
   })
 
   it('auditVocabulary_accountLabels', () => {

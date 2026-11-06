@@ -27,6 +27,7 @@ type ApprovalPolicyTransport = {
   list: (token: string) => Promise<ApprovalPoliciesResponse>
   putDraft: (token: string, id: string, body: ApprovalPolicyDraftInput) => Promise<ApprovalPolicy>
   publish: (token: string, id: string) => Promise<ApprovalPolicy>
+  delete: (token: string, id: string) => Promise<ApprovalPolicy>
 }
 type EnsureFirmPolicyActive = (token: string, transport?: ApprovalPolicyTransport) => Promise<ApprovalPolicy>
 type EnsureInhousePolicyActive = EnsureFirmPolicyActive
@@ -105,7 +106,7 @@ const GOOD_TREE: ApprovalStep[] = [
 ]
 
 function version(v: number, isActive: boolean, sealed = true): ApprovalPolicyVersion {
-  return { version: v, sealed, is_active: isActive, published_at: '2026-01-01T00:00:00Z', published_by: 'system' }
+  return { version: v, sealed, is_active: isActive, published_at: '2026-01-01T00:00:00Z', published_by: 'system', scoped: false }
 }
 
 function policy(opts: {
@@ -119,6 +120,8 @@ function policy(opts: {
     id: opts.id,
     name: opts.name,
     scope: 'All invoices',
+    position: 1,
+    scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null },
     status: 'published',
     version: opts.version,
     sealed: true,
@@ -218,7 +221,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(restored)
 
-    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish })
+    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() })
 
     expect(result.id).toBe(SEEDED_ID)
     expect(putDraft).toHaveBeenCalledWith('tok', SEEDED_ID, { steps: mapApprovalSteps(GOOD_TREE) })
@@ -226,10 +229,9 @@ describe('ensureFirmPolicyActive', () => {
     expect(list).toHaveBeenCalledTimes(2)
   })
 
-  // AC-2. Correction 1's two-call sequence is what makes this true: publish deactivates
-  // tenant-wide BEFORE claiming the slot, so whichever policy a failed delete left active
-  // is displaced by the seeded policy's own publish, not specifically targeted.
-  it('AC-2: converges over a competing active policy left behind by a failed delete', async () => {
+  // AC-2. A publish leaves the other policies in force, so the helper deletes a probe a
+  // failed delete left active, before it restores the seeded policy.
+  it('AC-2: converges over a competing active probe left behind by a failed delete', async () => {
     const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })
     const competing = policy({ id: 'pol-competing', name: 'Probe Policy 1234-9', version: 1, steps: [], versions: [version(1, true)] })
     const restoredSeeded = policy({
@@ -239,30 +241,117 @@ describe('ensureFirmPolicyActive', () => {
       steps: GOOD_TREE,
       versions: [version(2, true), version(1, false)],
     })
-    const competingNowInactive = policy({
-      id: 'pol-competing',
-      name: 'Probe Policy 1234-9',
-      version: 1,
-      steps: [],
-      versions: [version(1, false)],
-    })
 
     const list = vi
       .fn()
       .mockResolvedValueOnce({ approval_policies: [competing, source] } satisfies ApprovalPoliciesResponse)
-      .mockResolvedValueOnce({ approval_policies: [competingNowInactive, restoredSeeded] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [restoredSeeded] } satisfies ApprovalPoliciesResponse)
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(restoredSeeded)
+    const del = vi.fn().mockResolvedValue(competing)
 
-    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish })
+    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: del })
 
     expect(result.id).toBe(SEEDED_ID)
-    expect(putDraft).toHaveBeenCalledWith('tok', SEEDED_ID, expect.anything())
+    expect(del).toHaveBeenCalledWith('tok', 'pol-competing')
+    expect(del.mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[0])
     expect(publish).toHaveBeenCalledWith('tok', SEEDED_ID)
-    // The competing policy is never touched -- displaced by publish's tenant-wide
-    // deactivation, not by the helper deliberately targeting it.
-    expect(putDraft).not.toHaveBeenCalledWith('tok', 'pol-competing', expect.anything())
     expect(publish).not.toHaveBeenCalledWith('tok', 'pol-competing')
+  })
+
+  it('an inactive probe is not deleted', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const inactive = policy({ id: 'pol-p', name: 'Probe Policy 1-2', version: 1, steps: [], versions: [version(1, false)] })
+    const list = vi.fn().mockResolvedValue({ approval_policies: [inactive, source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn()
+
+    await ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del })
+
+    expect(del).not.toHaveBeenCalled()
+  })
+
+  it('a non-probe active policy is left and named', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const capex = policy({ id: 'pol-capex', name: 'Capex policy', version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValue({ approval_policies: [capex, source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn()
+
+    const err = await captureRejection(
+      ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del }),
+    )
+
+    expect(del).not.toHaveBeenCalled()
+    expect(err.message).toContain('Capex policy')
+  })
+
+  it('converges over an active workflows.spec stray (APPR09 <n>)', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })
+    const stray = policy({ id: 'pol-appr09', name: 'APPR09 1730000000000', version: 1, steps: [], versions: [version(1, true)] })
+    const restored = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ approval_policies: [stray, source] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [restored] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn().mockResolvedValue(stray)
+
+    const result = await ensureFirmPolicyActive('tok', {
+      list,
+      putDraft: vi.fn().mockResolvedValue(source),
+      publish: vi.fn().mockResolvedValue(restored),
+      delete: del,
+    })
+
+    expect(result.id).toBe(SEEDED_ID)
+    expect(del).toHaveBeenCalledWith('tok', 'pol-appr09')
+  })
+
+  it.each(['Untitled policy', 'E2E policy 42'])('deletes an active %s stray', async (name) => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const stray = policy({ id: 'pol-s', name, version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ approval_policies: [stray, source] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn().mockResolvedValue(stray)
+
+    await ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del })
+
+    expect(del).toHaveBeenCalledWith('tok', 'pol-s')
+  })
+
+  it('does not delete an active name no e2e spec owns, even one that contains an owned name', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const foreign = policy({ id: 'pol-f', name: 'My APPR09 123', version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValue({ approval_policies: [foreign, source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn()
+
+    const err = await captureRejection(
+      ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del }),
+    )
+
+    expect(del).not.toHaveBeenCalled()
+    expect(err.message).toContain('My APPR09 123')
+  })
+
+  it('a failed probe delete still converges', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })
+    const probe = policy({ id: 'pol-p', name: 'Probe Policy 1-3', version: 1, steps: [], versions: [version(1, true)] })
+    const restored = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ approval_policies: [probe, source] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [restored] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn().mockRejectedValue(new Error('500'))
+
+    const result = await ensureFirmPolicyActive('tok', {
+      list,
+      putDraft: vi.fn().mockResolvedValue(source),
+      publish: vi.fn().mockResolvedValue(restored),
+      delete: del,
+    })
+
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(result.id).toBe(SEEDED_ID)
   })
 
   // The restore "must not depend on the swallowed deletes having succeeded" (task-571's
@@ -274,7 +363,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockRejectedValue(new Error('409 this policy has no unpublished changes'))
     const publish = vi.fn().mockRejectedValue(new Error('409 this policy has no unpublished changes'))
 
-    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish })
+    const result = await ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() })
 
     expect(result.id).toBe(SEEDED_ID)
   })
@@ -305,7 +394,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(publishResponseLie)
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/did not converge/i)
     expect(list).toHaveBeenCalledTimes(2)
@@ -329,7 +418,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(afterNoneActive)
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/did not converge/i)
     expect(err.message).toContain('0')
@@ -354,7 +443,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(stillActiveSeeded)
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toContain(POLICY_NAME)
     expect(err.message).toContain('Rogue Policy')
@@ -368,7 +457,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn()
     const publish = vi.fn()
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/ungated/i)
     expect(putDraft).not.toHaveBeenCalled()
@@ -388,7 +477,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn()
     const publish = vi.fn()
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/ungated/i)
     expect(putDraft).not.toHaveBeenCalled()
@@ -406,7 +495,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn()
     const publish = vi.fn()
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/ungated/i)
     expect(putDraft).not.toHaveBeenCalled()
@@ -432,7 +521,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(source)
     const publish = vi.fn().mockResolvedValue(afterEmpty)
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toMatch(/ungated/i)
   })
@@ -447,7 +536,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn()
     const publish = vi.fn()
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toContain('2')
     expect(putDraft).not.toHaveBeenCalled()
@@ -459,7 +548,7 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn()
     const publish = vi.fn()
 
-    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish }))
+    const err = await captureRejection(ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() }))
 
     expect(err.message).toContain(POLICY_NAME)
     expect(putDraft).not.toHaveBeenCalled()
@@ -494,8 +583,8 @@ describe('ensureFirmPolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValueOnce(v1).mockResolvedValueOnce(v2Active)
     const publish = vi.fn().mockResolvedValueOnce(v2Active).mockResolvedValueOnce(v3Active)
 
-    const first = await ensureFirmPolicyActive('tok', { list, putDraft, publish })
-    const second = await ensureFirmPolicyActive('tok', { list, putDraft, publish })
+    const first = await ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() })
+    const second = await ensureFirmPolicyActive('tok', { list, putDraft, publish, delete: vi.fn() })
 
     expect(first.name).toBe(POLICY_NAME)
     expect(second.name).toBe(POLICY_NAME)
@@ -519,7 +608,7 @@ describe('ensureInhousePolicyActive', () => {
     const putDraft = vi.fn().mockResolvedValue(draft)
     const publish = vi.fn().mockResolvedValue(active)
 
-    const result = await ensureInhousePolicyActive('tok', { list, putDraft, publish })
+    const result = await ensureInhousePolicyActive('tok', { list, putDraft, publish, delete: vi.fn() })
 
     expect(result.id).toBe(ID)
     expect(putDraft).toHaveBeenCalledWith('tok', ID, { steps: mapApprovalSteps(TREE) })
@@ -532,7 +621,7 @@ describe('ensureInhousePolicyActive', () => {
       const putDraft = vi.fn()
       const publish = vi.fn()
       const err = await captureRejection(
-        ensureInhousePolicyActive('tok', { list: vi.fn().mockResolvedValue(res(...listed)), putDraft, publish }),
+        ensureInhousePolicyActive('tok', { list: vi.fn().mockResolvedValue(res(...listed)), putDraft, publish, delete: vi.fn() }),
       )
       expect(err.message).toContain(NAME)
       expect(putDraft).not.toHaveBeenCalled()
@@ -540,31 +629,44 @@ describe('ensureInhousePolicyActive', () => {
     }
   })
 
+  it('deletes an active probe before the restore', async () => {
+    const probe = policy({ id: 'pol-probe', name: 'Probe Policy 1-1', version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValueOnce(res(probe, draft)).mockResolvedValueOnce(res(active))
+    const publish = vi.fn().mockResolvedValue(active)
+    const del = vi.fn().mockResolvedValue(probe)
+
+    const result = await ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish, delete: del })
+
+    expect(del).toHaveBeenCalledWith('tok', 'pol-probe')
+    expect(del.mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[0])
+    expect(result.id).toBe(ID)
+  })
+
   it('tolerates a failed mutation when the read shows it already converged', async () => {
     const list = vi.fn().mockResolvedValue(res(active))
     const fail = vi.fn().mockRejectedValue(new Error('409'))
 
-    const result = await ensureInhousePolicyActive('tok', { list, putDraft: fail, publish: fail })
+    const result = await ensureInhousePolicyActive('tok', { list, putDraft: fail, publish: fail, delete: vi.fn() })
 
     expect(result.id).toBe(ID)
   })
 
-  it('throws naming what it found when another policy holds the active slot', async () => {
+  it('throws naming what it found when another policy is also in force', async () => {
     const other = policy({ id: 'pol-other', name: 'Standard approval policy', version: 1, steps: GOOD_TREE, versions: [version(1, true)] })
     const list = vi.fn().mockResolvedValueOnce(res(draft)).mockResolvedValueOnce(res(draft, other))
     const publish = vi.fn().mockResolvedValue(active)
 
-    const err = await captureRejection(ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish }))
+    const err = await captureRejection(ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish, delete: vi.fn() }))
 
     expect(err.message).toContain('Standard approval policy')
   })
 
-  it('throws when the company policy shares the active slot with another policy', async () => {
+  it('throws when the company policy is in force beside another policy', async () => {
     const other = policy({ id: 'pol-other', name: 'Standard approval policy', version: 1, steps: GOOD_TREE, versions: [version(1, true)] })
     const list = vi.fn().mockResolvedValueOnce(res(draft)).mockResolvedValueOnce(res(active, other))
 
     const err = await captureRejection(
-      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(active) }),
+      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(active), delete: vi.fn() }),
     )
 
     expect(err.message).toContain('(2)')
@@ -574,7 +676,7 @@ describe('ensureInhousePolicyActive', () => {
     const list = vi.fn().mockResolvedValue(res(draft))
 
     const err = await captureRejection(
-      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(draft) }),
+      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(draft), delete: vi.fn() }),
     )
 
     expect(err.message).toContain('none')

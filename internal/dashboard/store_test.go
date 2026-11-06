@@ -237,8 +237,8 @@ func seedResolvedFailed(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 // seedApprovalPolicy inserts one approval_policies row plus one
 // approval_policy_versions row for tenantID. When active, `sealed` is written
 // first: approval_policy_versions_active_is_sealed forbids an active-but-unsealed
-// row, and approval_policy_versions_one_active caps the tenant at one active
-// version, so a tenant may take active=true only once.
+// row, and approval_policy_versions_one_active caps a policy at one active
+// version; this helper seeds one policy per tenant.
 func seedApprovalPolicy(t *testing.T, super *pgxpool.Pool, tenantID string, active bool) (policyID, versionID string) {
 	t.Helper()
 	ctx := context.Background()

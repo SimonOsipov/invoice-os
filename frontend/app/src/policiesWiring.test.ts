@@ -30,7 +30,7 @@ const TYPES = readFileSync(join(SRC, 'types.ts'), 'utf8')
 // typing against the real ctx keeps a rename — or an absent field — from silently passing.
 type PolicyCtx = Pick<
   PlatformCtx,
-  'policies' | 'policiesState' | 'policiesError' | 'refetchPolicies' | 'createPolicy' | 'deletePolicy' | 'savePolicy' | 'publishPolicy' | 'openPolicy' | 'closePolicy'
+  'policies' | 'policiesState' | 'policiesError' | 'refetchPolicies' | 'createPolicy' | 'deletePolicy' | 'reorderPolicies' | 'savePolicy' | 'publishPolicy' | 'openPolicy' | 'closePolicy'
 >
 
 const policyCtx = (over: Partial<PolicyCtx> = {}): PolicyCtx => ({
@@ -40,6 +40,7 @@ const policyCtx = (over: Partial<PolicyCtx> = {}): PolicyCtx => ({
   refetchPolicies: vi.fn(),
   createPolicy: vi.fn(async () => {}),
   deletePolicy: vi.fn(async (_id: string) => {}),
+  reorderPolicies: vi.fn(async (_ids: string[]) => {}),
   savePolicy: vi.fn(async (next: Policy) => next),
   publishPolicy: vi.fn(async (_id: string) => newPolicy()),
   openPolicy: vi.fn(),
@@ -162,8 +163,7 @@ describe('App.tsx wiring', () => {
   })
 
   it('refetches the whole list on publish rather than patching one row (AC-2)', () => {
-    // The active slot is tenant-wide, so publishing B deactivates A and publish's own
-    // response describes B alone (lib/policies.test.ts pins that half). The observable
+    // Publish's own response describes B alone (lib/policies.test.ts pins that half). The observable
     // effect on a live tenant is subtask 07's topology spec; this pins the call.
     const sites: number[] = []
     for (let at = APP.indexOf('publishApprovalPolicy('); at !== -1; at = APP.indexOf('publishApprovalPolicy(', at + 1)) sites.push(at)

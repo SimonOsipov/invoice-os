@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import { WFROLE_ADMIN_ONLY, type Member } from '../lib/members'
 import type { Role } from '../lib/roles'
-import type { Policy } from '../lib/workflows'
+import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { RolesView } from './RolesView'
 
@@ -39,7 +39,8 @@ function policy(over: Partial<Policy> = {}): Policy {
   return {
     id: 'p1',
     name: 'Test policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,

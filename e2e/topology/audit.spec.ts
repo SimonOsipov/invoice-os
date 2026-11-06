@@ -188,7 +188,8 @@ test.describe('Audit screen', () => {
         .toBe(true)
 
       // A newer row lands before prev refetches page one, so a refetch (not a cached page) shows a different first row.
-      await createEntity(token, { name: `BUG-88 pager ${Date.now()}`, tin: freshTin() })
+      const entityName = `BUG-88 pager ${Date.now()}`
+      await createEntity(token, { name: entityName, tin: freshTin() })
 
       await prev.click({ timeout: 15_000 })
       await expect(prev).toBeDisabled()
@@ -199,6 +200,8 @@ test.describe('Audit screen', () => {
           timeout: 15_000,
         })
         .toBe(true)
+      // The new row on page one proves prev refetched live, not a cached page.
+      await expect(page.getByTestId('audit-row').filter({ hasText: entityName }), 'prev must refetch page one').toHaveCount(1)
     }
   })
 

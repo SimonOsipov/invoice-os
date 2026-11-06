@@ -105,6 +105,8 @@ function ctxOf(authedFetch: unknown, over: Record<string, unknown> = {}): Platfo
   } as unknown as PlatformCtx
 }
 
+const headerRow = () => screen.getByRole('heading', { name: 'Rules' }).parentElement!.parentElement as HTMLElement
+
 async function mount(f: FetchMock, over: Record<string, unknown> = {}) {
   const ctx = ctxOf(f, over)
   const view = render(<RulesView ctx={ctx} />)
@@ -453,6 +455,9 @@ describe('RulesView, admin gating', () => {
     await mount(fakeFetch(), { members: [{ ...ADMIN[0], status: 'suspended' }] })
     expect(screen.getByTestId('rules-new').hasAttribute('disabled')).toBe(true)
     expect(screen.getByTestId('rules-admin-reason')).toBeTruthy()
+    const row = headerRow()
+    expect(within(row).queryByText(/RULES$/)).toBeNull()
+    expect(row.lastElementChild).toBe(screen.getByTestId('rules-new'))
   })
 })
 
@@ -525,11 +530,20 @@ describe('RulesView, reskin pins', () => {
     document.querySelectorAll<HTMLElement>('.pf-knob').forEach((k) => expect(k.style.borderRadius).toBe('50%'))
   })
 
-  it('New rule copies the Invite people recipe and sits left of the count', async () => {
+  it('New rule copies the Invite people recipe and ends the header row', async () => {
     await mount(fakeFetch())
     const btn = screen.getByTestId('rules-new')
     expect(btn.className).toContain('v2-btn-primary')
-    expect(btn.nextElementSibling?.textContent).toBe('5 RULES')
+    expect(btn.parentElement).toBe(headerRow())
+    expect(btn.nextElementSibling).toBeNull()
+    expect(within(btn.parentElement!).queryByText(/RULES$/)).toBeNull()
+  })
+
+  it('the rule count shows once, in the Rules in force bar', async () => {
+    await mount(fakeFetch())
+    const counts = screen.getAllByText('5 RULES')
+    expect(counts).toHaveLength(1)
+    expect(counts[0].parentElement!.textContent).toContain('GOLDEN v4 + 2 CUSTOM')
   })
 
   it('a disabled New rule wears the Invite people disabled recipe', async () => {
@@ -544,9 +558,12 @@ describe('RulesView, reskin pins', () => {
     const box = screen.getByText(/^No custom rules yet/)
     expect(box.style.padding).toBe('18px 16px')
     expect(box.style.lineHeight).toBe('1.55')
+    const row = headerRow()
+    expect(within(row).queryByText(/RULES$/)).toBeNull()
+    expect(row.lastElementChild).toBe(screen.getByTestId('rules-new'))
   })
 
-  it('headings carry no inline weight; the header row wraps and its count does not shrink', async () => {
+  it('headings carry no inline weight; the header row wraps and the button does not shrink', async () => {
     await mount(fakeFetch())
     const h1 = screen.getByRole('heading', { name: 'Rules' })
     const inForce = screen.getByText('Rules in force')
@@ -559,12 +576,9 @@ describe('RulesView, reskin pins', () => {
     expect(row.style.flexWrap).toBe('wrap')
     expect(row.style.gap).toBe('20px')
     expect(h1.parentElement!.style.minWidth).toBe('0')
-    const group = row.lastElementChild as HTMLElement
-    const count = group.lastElementChild as HTMLElement
-    expect(count.textContent).toBe('5 RULES')
-    expect(group.contains(screen.getByTestId('rules-new'))).toBe(true)
-    expect(group.style.flex).toBe('0 0 auto')
-    expect(count.style.letterSpacing).toBe('')
+    const btn = row.lastElementChild as HTMLElement
+    expect(btn).toBe(screen.getByTestId('rules-new'))
+    expect(btn.style.flex).toBe('0 0 auto')
   })
 
   it('the version tags are 4px pills and the version row gaps 10px', async () => {

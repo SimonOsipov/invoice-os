@@ -227,23 +227,18 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{subtitle}</p>
         </div>
         {ready && (
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button
-              type="button"
-              disabled={!canWrite}
-              onClick={() => setEditor({})}
-              title={reason ?? undefined}
-              aria-describedby={reason ? 'rules-admin-reason' : undefined}
-              data-testid="rules-new"
-              className="v2-btn v2-btn-primary pf-btn"
-              style={{ flex: 'none', height: 36, gap: 7, ...(canWrite ? null : DISABLED_STYLE) }}
-            >
-              <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> New rule
-            </button>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              {total} RULES
-            </span>
-          </div>
+          <button
+            type="button"
+            disabled={!canWrite}
+            onClick={() => setEditor({})}
+            title={reason ?? undefined}
+            aria-describedby={reason ? 'rules-admin-reason' : undefined}
+            data-testid="rules-new"
+            className="v2-btn v2-btn-primary pf-btn"
+            style={{ flex: 'none', height: 36, gap: 7, ...(canWrite ? null : DISABLED_STYLE) }}
+          >
+            <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> New rule
+          </button>
         )}
       </div>
 

@@ -467,29 +467,17 @@ describe('APPR-09-04 QA: the two error slots survive each other, in both orders'
   })
 })
 
-describe('APPR-09-04 QA: the intro states what publishing does today', () => {
-  it('states that publishing opens an approval and makes no claim that transmission is unheld', () => {
-    render(<WorkflowsView ctx={listCtx([policy()])} />)
+describe('WL-14 the list carries no intro', () => {
+  it('WL-14 the list carries no intro paragraph', () => {
+    for (const state of STATES) {
+      render(<WorkflowsView ctx={listCtx([policy()], { policiesState: state, policiesError: DOWN() })} />)
 
-    expect(
-      screen.getByText(/Publishing a policy opens an approval on every matching invoice\./),
-      'the intro lost the sentence that says publishing opens an approval',
-    ).toBeTruthy()
-    expect(
-      screen.queryByText(/Transmission is not held for approval yet/),
-      'the intro still claims transmission is not held for approval',
-    ).toBeNull()
-    expect(screen.queryByText(/applies it to every matching invoice/), 'the superseded claim is still on screen').toBeNull()
-  })
-
-  // The null assertion above is case-sensitive and exact; this one catches a reworded caveat.
-  it('ends the intro at the publishing sentence, with no caveat after it in any wording', () => {
-    render(<WorkflowsView ctx={listCtx([policy()])} />)
-
-    const intro = screen.getByText(/^Each policy decides who signs off/).textContent ?? ''
-    expect(intro.length, 'the intro rendered no text').toBeGreaterThan(0)
-    expect(intro, 'a sentence follows the publishing sentence').toMatch(/Publishing a policy opens an approval on every matching invoice\.$/)
-    expect(intro, 'the intro says transmission is not held, in some letter case').not.toMatch(/transmission is not held/i)
+      expect(screen.getByText('Approval policies'), `the header must render over '${state}'`).toBeTruthy()
+      expect(screen.queryByText(/Each policy decides/), `'${state}' renders the intro`).toBeNull()
+      expect(screen.queryByText(/Steps run top to bottom/), `'${state}' renders the intro`).toBeNull()
+      expect(screen.queryByText(/Publishing a policy opens/), `'${state}' renders the intro`).toBeNull()
+      cleanup()
+    }
   })
 })
 
@@ -522,13 +510,17 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
     expect(btn.style.color, 'the label is not primary-foreground').toBe('var(--primary-foreground)')
   })
 
-  it('WL-03 the intro row centres its count', () => {
+  it('WL-03 the count sits alone in its own row, apart from the header', () => {
     render(<WorkflowsView ctx={listCtx(two())} />)
 
-    const row = screen.getByText(/^Each policy decides who signs off/).parentElement as HTMLElement
-    const count = screen.getByText('2 POLICIES')
-    expect(row.contains(count), 'the count is not in the intro row').toBe(true)
-    expect(row.style.alignItems, 'the intro row does not centre its count').toBe('center')
+    const row = screen.getByText('2 POLICIES').parentElement as HTMLElement
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Approval policies' })
+    const header = h1.parentElement!.parentElement as HTMLElement
+    expect(row, 'the count is in the header row').not.toBe(header)
+    expect(row.contains(h1), 'the count row holds the title').toBe(false)
+    expect(row.children, 'the count row holds more than the count').toHaveLength(1)
+    // Authored value only: jsdom has no layout, so PW-07 owns the rendered edge.
+    expect(row.style.justifyContent).toBe('flex-end')
   })
 
   it('WL-04 rows and icon tiles are 6px with no shadow', () => {

@@ -131,6 +131,10 @@ describe('content', () => {
     const text = [f.title, f.short, f.desc, ...f.benefits, JSON.stringify(f.sc)].join(' ')
     for (const w of [/issue/i, /register/i, /approval/i, /checks/i]) expect(f.desc).toMatch(w)
     expect(text).not.toMatch(/\b(send\w*|sent|submi\w*|transmi\w*|clear\w*|NRS)\b/i)
+    expect(text).not.toMatch(/approval path/i)
+    expect(f.desc).toMatch(/follows the approval policy that matches it/)
+    expect(f.desc).toMatch(/same checks as an invoice/)
+    expect(f.benefits[1]).toMatch(/approval policy that matches it/)
   })
 
   it('content_sendAgainIsShippedOnInvoices', () => {

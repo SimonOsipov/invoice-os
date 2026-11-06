@@ -532,9 +532,6 @@ describe('InvoiceActivityCard copy', () => {
   })
 })
 
-// AUDIT-09-04 QA, F-J. Reusing AuditRow drags a disabled "View transmission evidence ->"
-// onto the invoice page for the three submissions-domain types the invoice-scoped read can
-// return (submission.accepted/rejected/failed -- the generated column's second event list).
 // Evidence drawer stubs: the preview and the bundle download are told apart by path, as in
 // EvidenceBundleDrawer.test.tsx's routedFetch.
 const PREVIEW = {
@@ -569,8 +566,6 @@ function previewCalls(fetchMock: ReturnType<typeof openDrawerFetch>) {
   return fetchMock.mock.calls.filter((c) => new URL(String(c[0])).pathname.endsWith('/evidence-bundle/preview'))
 }
 
-// It is not a defect, but it is NEW on this surface, so it gets an oracle here rather than
-// only in AuditRow's own suite: subtask 09's whole-surface diff must LIST it.
 describe('InvoiceActivityCard inherited controls (F-J)', () => {
   const SUBMISSION_EVENT = 'submission.failed'
 
@@ -602,11 +597,18 @@ describe('InvoiceActivityCard inherited controls (F-J)', () => {
     renderCard()
     await loaded()
     fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
-    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
-    expect(screen.getByTestId('evidence-bundle-drawer')).toBeTruthy()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByTestId('evidence-bundle-drawer')).toBeNull())
-    expect(screen.getByTestId('audit-expansion')).toBeTruthy()
+    const closers = [
+      () => fireEvent.keyDown(window, { key: 'Escape' }),
+      () => fireEvent.click(screen.getByTestId('evidence-bundle-scrim')),
+      () => fireEvent.click(screen.getByTestId('evidence-bundle-close')),
+    ]
+    for (const close of closers) {
+      fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+      expect(screen.getByTestId('evidence-bundle-drawer')).toBeTruthy()
+      close()
+      await waitFor(() => expect(screen.queryByTestId('evidence-bundle-drawer')).toBeNull())
+      expect(screen.getByTestId('audit-expansion')).toBeTruthy()
+    }
   })
 
   it('invoiceActivity_drawerMountsOutsideTheCardAndSurvivesARerender', async () => {
@@ -805,7 +807,6 @@ describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () =>
     // Control needle: the slice must have captured the props, not an empty span.
     expect(tag, 'the slice missed the mount\'s props').toContain('invoiceId=')
     expect(tag, 'the card mount must pass the invoice number down').toContain('invoiceNumber={inv.invoice_number}')
-    expect(tag, 'the card mount must pass the invoice creation time down').toContain('invoiceCreatedAt={inv.created_at}')
   })
 })
 

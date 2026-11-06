@@ -753,6 +753,10 @@ describe('bundlePrefill', () => {
       ev({ company_scope: 'workspace', entity_id: null }),
       ev({ company_scope: 'unattributed', entity_id: null }),
       ev({ company_name: null }),
+      ev({ company_scope: 'workspace' }),
+      ev({ company_scope: 'unattributed' }),
+      ev({ entity_id: null }),
+      ev({ company_name: '' }),
     ]
     for (const c of cases) {
       expect(bundleCompanyFor(c)).toBeNull()

@@ -3265,6 +3265,21 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
     expect(screen.getByTestId('evidence-company-trigger').textContent).toContain('Beta')
     expect((screen.getByTestId('evidence-period-from') as HTMLInputElement).value).toBe('2026-08-19')
     expect((screen.getByTestId('evidence-period-to') as HTMLInputElement).value).toBe('2026-08-21')
+
+    // The stale read answers first: it must not open the drawer for the row pressed earlier.
+    fireEvent.click(screen.getByTestId('evidence-bundle-close'))
+    await waitFor(() => expect(drawer()).toBeNull())
+    await expandRow(0)
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls.length).toBe(4))
+    await expandRow(1)
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls.length).toBe(5))
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
+    await h.ok('inv-2', '2026-08-19T10:00:00Z')
+    await waitFor(() => expect(drawer()).toBeTruthy())
+    expect(screen.getByTestId('evidence-company-trigger').textContent).toContain('Beta')
   })
 
   it('auditView_aReadAfterCloseOpensNothing', async () => {
@@ -3280,6 +3295,28 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
     await h.ok('inv-1')
     expect(drawer()).toBeNull()
     expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+
+    // A read that fails after the header opened the drawer shows no toast.
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls.length).toBe(2))
+    fireEvent.click(screen.getByTestId('audit-bundle-open'))
+    await waitFor(() => expect(drawer()).toBeTruthy())
+    await h.fail('inv-1', 404, 'invoice not found')
+    expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+    expect(drawer()).toBeTruthy()
+    fireEvent.click(screen.getByTestId('evidence-bundle-close'))
+    await waitFor(() => expect(drawer()).toBeNull())
+
+    // A read pressed under an open row drawer, then the drawer closes: it opens nothing.
+    fireEvent.click(evButtons()[0])
+    await h.ok('inv-1')
+    await waitFor(() => expect(drawer()).toBeTruthy())
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls.length).toBe(4))
+    fireEvent.click(screen.getByTestId('evidence-bundle-close'))
+    await waitFor(() => expect(drawer()).toBeNull())
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
   })
 
   it('auditView_closingTheRowDrawerKeepsTheRowExpanded', async () => {

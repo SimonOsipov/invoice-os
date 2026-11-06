@@ -59,7 +59,9 @@ describe('landing positioning copy, on the rendered tree', () => {
 describe('landing names Nigeria only', () => {
   // Text nodes joined by a space, so a word at the end of one element never glues to the next element's text.
   const bodyText = () => {
-    const walker = document.createTreeWalker(mount().body, NodeFilter.SHOW_TEXT)
+    const walker = document.createTreeWalker(mount().body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement?.closest('script,style,noscript,template') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    })
     const parts: string[] = []
     for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.nodeValue ?? '')
     return parts.join(' ').replace(/\s+/g, ' ').trim()

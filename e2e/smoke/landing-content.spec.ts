@@ -271,7 +271,10 @@ test('landing content: the page names Nigeria only', async ({ page }) => {
   await expect(page.locator('[data-intel-workspace] aside'), 'the workspace aside names Nigeria').toContainText('Nigeria')
 
   const text = await page.evaluate(() => {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    // Rendered text only: script, style, noscript and template content is never shown.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement?.closest('script,style,noscript,template') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    })
     const parts: string[] = []
     for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.nodeValue ?? '')
     return parts.join(' ')

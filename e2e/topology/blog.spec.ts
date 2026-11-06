@@ -796,7 +796,7 @@ test.describe('blog demo at wide widths', () => {
 
 type ApiCategory = { id: string; name: string; icon: string; post_count: number }
 type ApiBlock = { text?: string; title?: string; items?: string[] }
-type ApiPost = { title: string; summary: string; category_id: string; body: ApiBlock[] }
+type ApiPost = { id: string; title: string; summary: string; category_id: string; body: ApiBlock[] }
 
 // Loads `/` and returns the two gateway responses that this page load received. Other specs
 // (blog-editor) write categories and posts on the same preview, so a test never reads them separately.
@@ -979,12 +979,15 @@ test.describe('blog journeys', () => {
     const errors = collectErrors(page)
     await prepare(page)
     await resize(page, 1280, 1080)
+    const live = (await (await fetch(`${GATEWAY_URL}/blog/posts`)).json()) as { posts: ApiPost[] }
     const clickCover = async (box: Locator, title: string) => {
+      const id = live.posts.find((p) => p.title === title)?.id
+      expect(id, `control: no API post titled ${title}`).toBeTruthy()
       await expect(box, 'cover box cursor').toHaveCSS('cursor', 'pointer')
       await expect(box.locator(':scope > *').first(), 'cover child cursor').toHaveCSS('cursor', 'pointer')
       await box.click()
       await expect(main(page).locator('article h1')).toHaveText(title)
-      await expect(page).not.toHaveURL(`${BLOG_URL}/`)
+      await expect(page).toHaveURL(new RegExp(`/${id}$`))
     }
 
     await visit(page)

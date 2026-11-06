@@ -258,8 +258,10 @@ describe('covers', () => {
 describe('cover click', () => {
   const FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
   const bandCards = () => all('#blog-main section div[style*="grid-template-columns"] > div')
-  const idOf = (card: Element) =>
-    TEST_DATA.posts.find((p) => card.querySelector('button')!.textContent!.includes(p.title))!.id
+  const idOf = (card: Element) => {
+    const title = card.querySelector('button > span:nth-child(2)')!.textContent
+    return TEST_DATA.posts.find((p) => p.title === title)!.id
+  }
   const featuredCard = () =>
     all('#blog-main section')[0].querySelector('button')!.parentElement as HTMLElement
   const coverOf = (card: Element) => card.firstElementChild as HTMLElement
@@ -322,6 +324,19 @@ describe('cover click', () => {
   it('VW-24 a card holds one focusable element', async () => {
     await mount('/')
     for (const card of [featuredCard(), ...bandCards()]) {
+      const found = [...card.querySelectorAll(FOCUSABLE)]
+      expect(found).toHaveLength(1)
+      expect(found[0]).toBe(card.querySelector('button'))
+    }
+  })
+
+  it('VW-24b a category card holds one focusable element', async () => {
+    await mount('/category/c1')
+    const cards = all('#blog-main button')
+      .filter((b) => b.textContent?.includes('Read the post'))
+      .map((b) => b.parentElement!)
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
       const found = [...card.querySelectorAll(FOCUSABLE)]
       expect(found).toHaveLength(1)
       expect(found[0]).toBe(card.querySelector('button'))

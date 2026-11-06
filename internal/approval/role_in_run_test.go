@@ -147,12 +147,11 @@ func seedWaitingRuns(t *testing.T, f runFixture, n int) (firstInvoice string) {
 func TestDeleteRole_RefusalCapsTheInvoiceListAtTwentyAndCountsAll(t *testing.T) {
 	f := newRunFixture(t, "APSC-10 cap 21")
 	seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
-	first := seedWaitingRuns(t, f, roleInRunListCap+1)
+	first := seedWaitingRuns(t, f, 21)
 
 	inUse := f.wantInUse(t, "tax-reviewer")
-	if len(inUse.invoices) != roleInRunListCap || inUse.invoicesTotal != roleInRunListCap+1 {
-		t.Errorf("len(invoices) = %d, total = %d, want %d and %d",
-			len(inUse.invoices), inUse.invoicesTotal, roleInRunListCap, roleInRunListCap+1)
+	if len(inUse.invoices) != 20 || inUse.invoicesTotal != 21 {
+		t.Errorf("len(invoices) = %d, total = %d, want 20 and 21", len(inUse.invoices), inUse.invoicesTotal)
 	}
 	if inUse.invoices[0].ID != first {
 		t.Errorf("first invoice = %s, want the oldest run's %s", inUse.invoices[0].ID, first)
@@ -162,12 +161,11 @@ func TestDeleteRole_RefusalCapsTheInvoiceListAtTwentyAndCountsAll(t *testing.T) 
 func TestDeleteRole_RefusalAtExactlyTwentyListsAllTwentyAndTotalsTwenty(t *testing.T) {
 	f := newRunFixture(t, "APSC-10 cap 20")
 	seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
-	seedWaitingRuns(t, f, roleInRunListCap)
+	seedWaitingRuns(t, f, 20)
 
 	inUse := f.wantInUse(t, "tax-reviewer")
-	if len(inUse.invoices) != roleInRunListCap || inUse.invoicesTotal != roleInRunListCap {
-		t.Errorf("len(invoices) = %d, total = %d, want %d and %d",
-			len(inUse.invoices), inUse.invoicesTotal, roleInRunListCap, roleInRunListCap)
+	if len(inUse.invoices) != 20 || inUse.invoicesTotal != 20 {
+		t.Errorf("len(invoices) = %d, total = %d, want 20 and 20", len(inUse.invoices), inUse.invoicesTotal)
 	}
 }
 
@@ -175,7 +173,8 @@ func TestDeleteRole_DeletesOnceTheRunIsApproved(t *testing.T) {
 	f := newRunFixture(t, "APSC-10 approved")
 	roleID := seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
 	_, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID,
-		runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("tax-reviewer")})
+		runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("tax-reviewer")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("tax-reviewer")}) // run state alone closes it
 	closeApprovalRunFor(t, f.super, runID, "approved", "someone")
 
 	if _, err := f.store.DeleteRole(f.admin, "tax-reviewer"); err != nil {

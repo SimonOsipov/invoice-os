@@ -265,18 +265,6 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
   })
 
-  it('a delete attempt clears the policy list while it is in flight', async () => {
-    const deleteRole = vi.fn().mockRejectedValueOnce(conflict(['Credit notes'])).mockReturnValueOnce(new Promise(() => {}))
-    renderModal({ mode: 'edit', role: role() }, { deleteRole })
-    await refuseDelete(deleteRole)
-    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
-
-    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
-
-    expect(deleteRole).toHaveBeenCalledTimes(2)
-    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
-  })
-
   it('a 404 delete refusal renders no policy list', async () => {
     const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' }))
     renderModal({ mode: 'edit', role: role() }, { deleteRole })

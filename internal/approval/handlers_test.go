@@ -691,6 +691,62 @@ func TestDeleteRoleHandler_InUseIs409WithThePolicies(t *testing.T) {
 	}
 }
 
+func TestDeleteRoleHandler_RunRefusalIs409WithTheInvoices(t *testing.T) {
+	want := []InvoiceRef{{ID: "i1", Number: "INV-1"}, {ID: "i2", Number: "INV-2"}}
+	rec := deleteInUse(t, &roleInUse{invoices: want, invoicesTotal: 5})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error,invoices,invoices_total,policies" {
+		t.Errorf("body keys = %v, want exactly [error invoices invoices_total policies]", got)
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != roleInRunMessage {
+		t.Errorf("error = %q, want roleInRunMessage", got)
+	}
+	if got := rawField(t, rec.Body.Bytes(), "policies"); got != "[]" {
+		t.Errorf("policies = %s, want []", got)
+	}
+	if got := rawField(t, rec.Body.Bytes(), "invoices_total"); got != "5" {
+		t.Errorf("invoices_total = %s, want 5", got)
+	}
+	var body struct {
+		Invoices []InvoiceRef `json:"invoices"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Invoices) != 2 || body.Invoices[0] != want[0] || body.Invoices[1] != want[1] {
+		t.Errorf("invoices = %+v, want %+v in the stub's order", body.Invoices, want)
+	}
+}
+
+func TestDeleteRoleHandler_PolicyOnlyRefusalKeepsItsTwoKeys(t *testing.T) {
+	rec := deleteInUse(t, &roleInUse{policies: []PolicyRef{{ID: "p1", Name: "A"}}})
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error,policies" {
+		t.Errorf("body keys = %v, want exactly [error policies]", got)
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != roleInUseMessage {
+		t.Errorf("error = %q, want roleInUseMessage", got)
+	}
+}
+
+func TestDeleteRoleHandler_BothRefusalCarriesTheComposedSentence(t *testing.T) {
+	rec := deleteInUse(t, &roleInUse{
+		policies:      []PolicyRef{{ID: "p1", Name: "A"}},
+		invoices:      []InvoiceRef{{ID: "i1", Number: "INV-1"}},
+		invoicesTotal: 1,
+	})
+	if got, want := errorMessage(t, rec.Body.Bytes()), roleInUseMessage+"; "+roleInRunMessage; got != want {
+		t.Errorf("error = %q, want %q", got, want)
+	}
+	if got := rawField(t, rec.Body.Bytes(), "policies"); !strings.Contains(got, `"p1"`) {
+		t.Errorf("policies = %s, want p1 listed", got)
+	}
+	if got := rawField(t, rec.Body.Bytes(), "invoices"); !strings.Contains(got, `"INV-1"`) {
+		t.Errorf("invoices = %s, want INV-1 listed", got)
+	}
+}
+
 func TestDeleteRoleHandler_BareErrRoleInUseCarriesAnEmptyPoliciesArray(t *testing.T) {
 	rec := deleteInUse(t, ErrRoleInUse)
 	if got := rawField(t, rec.Body.Bytes(), "policies"); got != "[]" {
@@ -713,6 +769,7 @@ func TestWorkflowRoleHandlers_ErrorsBelow500AreNotLoggedAtError(t *testing.T) {
 		{"conflict", ErrConflict, http.StatusConflict, 0},
 		{"role in use", ErrRoleInUse, http.StatusConflict, 0},
 		{"role in use with policies", &roleInUse{policies: []PolicyRef{{ID: "p1", Name: "N"}}}, http.StatusConflict, 0},
+		{"role in use with invoices", &roleInUse{invoices: []InvoiceRef{{ID: "i1", Number: "INV-1"}}, invoicesTotal: 1}, http.StatusConflict, 0},
 		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, 0},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, 1},
 	}

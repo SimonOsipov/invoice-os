@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   LANDING_SRC,
+  V2_DIR,
   customPropNames,
   declarations,
   parseRules,
@@ -133,9 +134,30 @@ describe('ds.css values', () => {
     expect(v2Tokens().has('--ring')).toBe(true)
   })
 
-  it('DSC-10 the Logo mark has the 6px corner', () => {
-    expectDecl(readDs(), '.ds-logo-mark', ['border-radius'], 'var(--radius-md)')
-    expect(v2Tokens().has('--radius-md')).toBe(true)
+  it('DSC-10 the mark corner equals the master tile and the ring is on a dark band only', () => {
+    const css = stripSource('mark.css', readFileSync(join(V2_DIR, 'mark.css'), 'utf8'))
+    const svg = readFileSync(join(V2_DIR, 'assets', 'mark.svg'), 'utf8')
+    const attr = (name: string) => Number(new RegExp(`<rect[^>]*\\s${name}="([\\d.]+)"`).exec(svg)?.[1])
+    const rx = attr('rx')
+    expect(rx, 'tile rx read from mark.svg').toBeGreaterThan(0)
+    const radius = (rx / attr('width')) * 100
+
+    const radiusDecl = valueOf(css, '.asc-mark', 'border-radius') ?? ''
+    expect(radiusDecl.endsWith('%'), `.asc-mark border-radius ${radiusDecl} is a percentage`).toBe(true)
+    expect(Math.abs(parseFloat(radiusDecl) - radius)).toBeLessThanOrEqual(0.05)
+    expectDecl(css, '.asc-mark', ['display'], 'block')
+    expectDecl(css, '.asc-mark', ['scale'], 'calc(128 / 144)')
+    expectDecl(css, '.asc-dark .asc-mark', ['box-shadow'], '0 0 0 2.25px #ffffff')
+
+    for (const r of parseRules(css)) {
+      if (selectorParts(r).every((s) => s === '.asc-dark .asc-mark')) continue
+      const ring = declarations(r.body).filter((d) => ['box-shadow', 'outline', 'border'].includes(d.prop))
+      expect(ring, `${r.selector} draws no ring`).toEqual([])
+    }
+
+    const spread = parseFloat(/0 0 0 ([\d.]+)px/.exec(valueOf(css, '.asc-dark .asc-mark', 'box-shadow') ?? '')?.[1] ?? 'NaN')
+    const scale = /calc\(\s*(\d+)\s*\/\s*(\d+)\s*\)/.exec(valueOf(css, '.asc-mark', 'scale') ?? '')
+    expect(Math.abs(spread * (Number(scale?.[1]) / Number(scale?.[2])) - 2)).toBeLessThanOrEqual(0.01)
   })
 
   it('DSC-07 the tab panel is sage with 10px bottom corners only', () => {

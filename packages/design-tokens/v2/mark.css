@@ -1,0 +1,3 @@
+/* Corner = rx/width of assets/mark.svg; scale keeps the old 128/144 tile; ring draws 2px. */
+.asc-mark { display: block; border-radius: 28.5%; scale: calc(128 / 144); }
+.asc-dark .asc-mark { box-shadow: 0 0 0 2.25px #ffffff; }

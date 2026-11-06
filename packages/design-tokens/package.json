@@ -6,6 +6,8 @@
   "exports": {
     "./v2/styles.css": "./v2/styles.css",
     "./v2/assets/mark.png": "./v2/assets/mark.png",
+    "./v2/assets/mark.svg": "./v2/assets/mark.svg",
+    "./v2/mark.css": "./v2/mark.css",
     "./v2/app-layer.css": "./v2/app-layer.css"
   }
 }

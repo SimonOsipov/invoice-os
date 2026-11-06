@@ -1191,7 +1191,8 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     expect(body.policies, 'no policy in force names the role').toEqual([])
     expect(await roleKeys(t), 'the refused role is still listed').toContain(role.key)
 
-    await editInvoice(t, invoice.id, { invoice_number: `INV-APSC10-${freshTin()}` })
+    // A line change is what a validated invoice accepts; the invoice number is draft-only.
+    await editInvoice(t, invoice.id, { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] })
     expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
     const res = await deleteRoleRaw(t, role.key)
     expect(res.status, 'the delete answers 200 once the run is cancelled').toBe(200)

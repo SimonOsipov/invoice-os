@@ -1514,8 +1514,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 // before this subtask -- scoped to just this submitting test rather than the whole file,
 // so unrelated tests below (INVCR-E2E-2, BULK-E2E-*, ...) stay untouched by it. Self-heal,
 // unwrapped: the api run ahead of this one
-// leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
-// cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
+// may leave a stray active probe policy in force on the firm tenant, and [topology-never-publishes] stays satisfied -- this restores the tenant's
 // OWN seeded policy, never a new one (.claude/rules/e2e.md).
 test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
   test.beforeAll(async () => {

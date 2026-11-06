@@ -150,7 +150,7 @@ func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 
 // --- copy, don't alias ----------------------------------------------------------
 
-// TestPutDraft_NormalizersLeaveTheCallersPointeesAlone: both normalizers reassign the
+// TestPutDraft_NormalizersLeaveTheCallersPointeesAlone: the name normalizer reassigns the
 // PARAMETER to a fresh local (UpdateRole's precedent), never write through the caller's
 // pointer. 07 decodes putDraftRequest and hands over &req.Name — a store that normalised
 // in place would silently rewrite the handler's own request struct, which is a
@@ -162,8 +162,8 @@ func TestPutDraft_NormalizersLeaveTheCallersPointeesAlone(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedDraftWithSteps(t, super, tenantID, policyID, 1)
 
-	name, scope := "  Renamed  ", ""
-	if _, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, &name, &scope, approvalStep("engagement-partner")); err != nil {
+	name := "  Renamed  "
+	if _, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, &name, nil, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 
@@ -172,15 +172,9 @@ func TestPutDraft_NormalizersLeaveTheCallersPointeesAlone(t *testing.T) {
 	if got := storedPolicyName(t, super, policyID); got != "Renamed" {
 		t.Fatalf("stored name = %q, want the trimmed %q", got, "Renamed")
 	}
-	if got := storedPolicyScope(t, super, policyID); got != scopeAllInvoices {
-		t.Fatalf("stored scope = %q, want %q", got, scopeAllInvoices)
-	}
 
 	if name != "  Renamed  " {
 		t.Errorf("the caller's name variable reads %q, want the untouched %q — the normalizer wrote through the pointer", name, "  Renamed  ")
-	}
-	if scope != "" {
-		t.Errorf("the caller's scope variable reads %q, want the untouched empty string — the normalizer wrote through the pointer", scope)
 	}
 }
 
@@ -280,8 +274,7 @@ func sealedInactiveVersion(t *testing.T, super *pgxpool.Pool, tenantID, policyID
 }
 
 // TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive: policy A holds v1 and v2,
-// both sealed and NEITHER active, because approval_policy_versions_one_active spans the
-// TENANT and policy B holds that slot. "The active version" of A does not exist; the
+// both sealed and NEITHER active (the fixture seeds A that way). "The active version" of A does not exist; the
 // newest sealed one is v2. The fork must number max(version)+1 = 3 — a store deriving the
 // number from the active version, or defaulting to 1, breaks only on this shape.
 func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
@@ -289,7 +282,7 @@ func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 put-d7-no-active")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	holder := seedApprovalPolicy(t, super, tenantID, "Holds the tenant's active slot")
+	holder := seedApprovalPolicy(t, super, tenantID, "Holds an active version")
 	holderV1 := seedSealedActiveV1(t, super, tenantID, holder)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -338,7 +331,7 @@ func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
 				untouched.label, len(got), untouched.steps, got)
 		}
 	}
-	// The tenant's one active slot is still policy B's.
+	// Policy B's active version is untouched.
 	for _, v := range versionRows(t, super, holder) {
 		if v.ID == holderV1 && !v.IsActive {
 			t.Errorf("policy B's active version was deactivated by a PUT against policy A: %+v", v)
@@ -363,7 +356,7 @@ func TestPutDraft_RenamesAndRewritesInOneCall(t *testing.T) {
 		{Kind: "notify", NotifyTarget: ptr("finance@example.com"), NotifyChannel: ptr("email")},
 	}
 
-	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, ptr("  Renamed in the same call  "), ptr(""), tree)
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, ptr("  Renamed in the same call  "), nil, tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}

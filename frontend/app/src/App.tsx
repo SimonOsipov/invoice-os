@@ -103,8 +103,9 @@ import {
   listApprovalPolicies,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
+  reorderApprovalPolicies,
 } from './lib/policies'
-import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
+import { insertAboveLast, removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
 import { WorkspaceDeletionNotice } from './components/WorkspaceDeletionNotice'
@@ -1640,12 +1641,11 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // making the previous fetch's claim. Pinned by policiesWiring.test.ts, 'the two verbs
   // that change the list length refetch the status the ladder reads'.
 
-  // Creating opens the builder in the same step: a blank row appended to the list with
-  // nothing else happening reads as a click that did nothing. Appended, not prepended —
-  // the server orders by created_at then id.
+  // Creating opens the builder in the same step: a blank row with
+  // nothing else happening reads as a click that did nothing.
   async function createPolicy(): Promise<void> {
     const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')
-    setPolicies((list) => [...list, created])
+    setPolicies((list) => insertAboveLast(list, created))
     navigate('workflows', { id: created.id })
     policiesAsync.run()
   }
@@ -1659,20 +1659,24 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     policiesAsync.run()
   }
 
+  // Mirror from the server's answer, after it lands; the list length is unchanged, so no refetch.
+  async function reorderPolicies(ids: string[]): Promise<void> {
+    setPolicies(await reorderApprovalPolicies(authedFetch, base!, ids))
+  }
+
   // The ONE write funnel for a policy's contents: the builder composes the next Policy
   // with the pure reducers and hands the whole object back, so nothing here needs to
   // know the node tree's shape. The row that lands is the server's — it re-mints every
   // step id and may bump the version, so the composed one is already stale.
-  async function savePolicy(next: Policy): Promise<Policy> {
-    const saved = await putApprovalPolicyDraft(authedFetch, base!, next.id, next)
+  async function savePolicy(next: Policy, opts?: { sendScopes?: boolean }): Promise<Policy> {
+    const saved = await putApprovalPolicyDraft(authedFetch, base!, next.id, next, opts)
     setPolicies((list) => replacePolicy(list, saved))
     return saved
   }
 
   async function publishPolicy(id: string): Promise<Policy> {
     const published = await publishApprovalPolicy(authedFetch, base!, id)
-    // Refetch, not a one-row patch: the active slot is TENANT-wide, so publishing this
-    // policy deactivates whichever other one held it — a change this response cannot report.
+    // Refetch, not a one-row patch (policiesWiring.test.ts pins the call).
     policiesAsync.run()
     return published
   }
@@ -1857,6 +1861,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     closePolicy,
     createPolicy,
     deletePolicy,
+    reorderPolicies,
     savePolicy,
     publishPolicy,
     setMemberStatus,

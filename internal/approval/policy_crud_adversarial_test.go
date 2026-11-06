@@ -36,8 +36,7 @@ func publishApprovalPolicyVersion(t *testing.T, super *pgxpool.Pool, versionID, 
 	}
 }
 
-// stampPolicyCreatedAt forces created_at so the L1 ordering and its id tie-break are
-// observable rather than at the mercy of now() resolution.
+// stampPolicyCreatedAt forces created_at, so a test can set it against position.
 func stampPolicyCreatedAt(t *testing.T, super *pgxpool.Pool, policyID, at string) {
 	t.Helper()
 	tag, err := super.Exec(context.Background(),
@@ -298,7 +297,7 @@ func TestPolicy_PolicyWithNoVersionRowsIsAnInertDraft(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Orphan")
 
 	want := Policy{
-		ID: policyID, Name: "Orphan", Scope: scopeAllInvoices,
+		ID: policyID, Name: "Orphan", Scope: scopeAllInvoices, Position: 1,
 		Status: "draft", Version: 0, Sealed: false,
 		Steps: []Step{}, Versions: []PolicyVersion{},
 	}
@@ -339,10 +338,10 @@ func TestPolicy_PolicyWithNoVersionRowsIsAnInertDraft(t *testing.T) {
 
 // --- list scaling and tenancy --------------------------------------------------
 
-// TestPolicy_ListStaysThreeStatementsAsPoliciesGrow: the acceptance spec counts statements
+// TestPolicy_ListStaysFourStatementsAsPoliciesGrow: the acceptance spec counts statements
 // at two policies, where an N+1 tree read costs two — close enough to three to be a
 // coincidence. Twenty makes the difference structural.
-func TestPolicy_ListStaysThreeStatementsAsPoliciesGrow(t *testing.T) {
+func TestPolicy_ListStaysFourStatementsAsPoliciesGrow(t *testing.T) {
 	super, app := dbTestPools(t)
 	_ = app
 
@@ -378,8 +377,8 @@ func TestPolicy_ListStaysThreeStatementsAsPoliciesGrow(t *testing.T) {
 				t.Fatalf("ListPolicies returned %d policies, want %d", len(got), n)
 			}
 			sql := rec.mentioning("approval_polic")
-			if len(sql) != 3 {
-				t.Fatalf("ListPolicies issued %d statements against the policy tables at %d policies, want 3:\n%v",
+			if len(sql) != 4 {
+				t.Fatalf("ListPolicies issued %d statements against the policy tables at %d policies, want 4:\n%v",
 					len(sql), n, sql)
 			}
 			// The step array is built in Go from the version scan, so exactly one tree read
@@ -445,8 +444,8 @@ func TestPolicy_ListIsBoundedToTheTenantByRLSAlone(t *testing.T) {
 	}
 
 	sql := rec.mentioning("approval_polic")
-	if len(sql) != 3 {
-		t.Fatalf("ListPolicies issued %d statements, want 3:\n%v", len(sql), sql)
+	if len(sql) != 4 {
+		t.Fatalf("ListPolicies issued %d statements, want 4:\n%v", len(sql), sql)
 	}
 	for _, s := range sql {
 		if strings.Contains(strings.ToLower(s), "tenant_id") {
@@ -483,46 +482,37 @@ func TestPolicy_ListWithNoPoliciesIsEmptyNotNull(t *testing.T) {
 
 // --- ordering ------------------------------------------------------------------
 
-// TestPolicy_ListOrderIsStableAcrossEqualCreatedAt: created_at alone does not order a
-// batch created inside one clock tick, so id is the tie-break and the order must not move
-// between calls.
-func TestPolicy_ListOrderIsStableAcrossEqualCreatedAt(t *testing.T) {
+// TestPolicy_ListOrdersByPosition: the list follows position, whatever created_at says.
+func TestPolicy_ListOrdersByPosition(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := policyTenant(t, super, "APPR-05 order-stability")
+	tenantID := policyTenant(t, super, "APSC-02 order-by-position")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter, nil)
 
 	ids := []string{}
-	for i := 0; i < 8; i++ {
+	for i, at := range []string{"2026-01-01 00:00:00+00", "2026-01-02 00:00:00+00", "2026-01-03 00:00:00+00"} {
 		id := seedApprovalPolicy(t, super, tenantID, fmt.Sprintf("Policy %d", i))
-		stampPolicyCreatedAt(t, super, id, "2026-01-01 00:00:00+00")
+		stampPolicyCreatedAt(t, super, id, at)
 		seedApprovalPolicyVersionN(t, super, tenantID, id, 1)
 		ids = append(ids, id)
 	}
+	// One statement: the live-position exclusion is deferrable, a swap passes at statement end.
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policies p SET position = m.pos
+		   FROM unnest($1::uuid[], ARRAY[3,1,2]) AS m(id, pos)
+		  WHERE p.id = m.id`, ids); err != nil {
+		t.Fatalf("set positions: %v", err)
+	}
 
-	first, err := store.ListPolicies(c)
+	got, err := NewStore(app, stubFingerprinter, nil).ListPolicies(c)
 	if err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
-	order := policyIDs(first)
-	if len(order) != len(ids) {
-		t.Fatalf("ListPolicies returned %d policies, want %d", len(order), len(ids))
+	if want := []string{ids[1], ids[2], ids[0]}; !reflect.DeepEqual(policyIDs(got), want) {
+		t.Fatalf("order = %v, want the position order %v", policyIDs(got), want)
 	}
-	for i := 0; i < 4; i++ {
-		again, err := store.ListPolicies(c)
-		if err != nil {
-			t.Fatalf("ListPolicies (call %d): %v", i+2, err)
-		}
-		if !reflect.DeepEqual(policyIDs(again), order) {
-			t.Fatalf("call %d order = %v, want the stable %v — created_at ties need the id tie-break",
-				i+2, policyIDs(again), order)
-		}
-	}
-	sorted := append([]string(nil), order...)
-	for i := 1; i < len(sorted); i++ {
-		if sorted[i-1] >= sorted[i] {
-			t.Errorf("order is not ascending by id at %d: %v", i, order)
-			break
+	for i, p := range got {
+		if p.Position != []int{1, 2, 3}[i] {
+			t.Errorf("policy %d position = %d, want %d", i, p.Position, i+1)
 		}
 	}
 }
@@ -549,7 +539,7 @@ func TestPolicy_NameWithSQLAndUnicodeRoundTripsByte(t *testing.T) {
 			tenantID := policyTenant(t, super, fmt.Sprintf("APPR-05 name-roundtrip %d", i))
 			c, _ := activeAdmin(t, super, tenantID)
 
-			created, err := store.CreatePolicy(c, name, "")
+			created, err := store.CreatePolicy(c, name, nil)
 			if err != nil {
 				t.Fatalf("CreatePolicy(%q): %v", name, err)
 			}
@@ -595,7 +585,7 @@ func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
 			tenantID := policyTenant(t, super, fmt.Sprintf("APPR-05 name-nul %d", i))
 			c, _ := activeAdmin(t, super, tenantID)
 
-			_, err := store.CreatePolicy(c, name, "")
+			_, err := store.CreatePolicy(c, name, nil)
 			if !errors.Is(err, ErrValidation) {
 				t.Errorf("CreatePolicy(%q) err = %v, want ErrValidation", name, err)
 			}
@@ -618,7 +608,7 @@ func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
 	t.Run("control: the same name without the NUL still writes", func(t *testing.T) {
 		tenantID := policyTenant(t, super, "APPR-05 name-nul-control")
 		c, _ := activeAdmin(t, super, tenantID)
-		if _, err := store.CreatePolicy(c, "Signoff", ""); err != nil {
+		if _, err := store.CreatePolicy(c, "Signoff", nil); err != nil {
 			t.Fatalf("CreatePolicy: %v — the refusals above are vacuous unless this succeeds", err)
 		}
 		if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
@@ -635,11 +625,11 @@ func TestPolicy_DuplicateNamesAreLegalAndBothAddressable(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	a, err := store.CreatePolicy(c, "Sign-off", "")
+	a, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (first): %v", err)
 	}
-	b, err := store.CreatePolicy(c, "Sign-off", "")
+	b, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (second): %v", err)
 	}
@@ -673,13 +663,13 @@ func TestPolicy_RecreatingASoftDeletedNameFindsOnlyTheLiveOne(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	old, err := store.CreatePolicy(c, "Sign-off", "")
+	old, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (original): %v", err)
 	}
 	softDeleteApprovalPolicy(t, super, old.ID)
 
-	fresh, err := store.CreatePolicy(c, "Sign-off", "")
+	fresh, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (recreated): %v — a soft-deleted name must not block the reuse", err)
 	}
@@ -731,7 +721,7 @@ func TestPolicy_ConcurrentCreatesEachGetTheirOwnDraft(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			p, err := store.CreatePolicy(c, fmt.Sprintf("Concurrent %d", i), "")
+			p, err := store.CreatePolicy(c, fmt.Sprintf("Concurrent %d", i), nil)
 			ids[i], errs[i] = p.ID, err
 		}(i)
 	}

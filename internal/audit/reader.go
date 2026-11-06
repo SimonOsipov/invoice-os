@@ -120,6 +120,7 @@ var firmWideEvents = map[string]struct{}{
 	"approval_policy.updated":          {},
 	"approval_policy.published":        {},
 	"approval_policy.deleted":          {},
+	"approval_policy.reordered":        {},
 	"workflow_role.created":            {},
 	"workflow_role.updated":            {},
 	"workflow_role.deleted":            {},

@@ -53,7 +53,7 @@ import {
   type RoleSteps,
 } from './roles'
 import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES } from './policies.fixture'
-import type { Policy } from './workflows'
+import { CATCH_ALL_SCOPES, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The mock roster and the role lists that staff it, copied here when lib/members.ts stopped
@@ -321,7 +321,7 @@ function approvalRoles(policies: readonly Policy[]): string[] {
 const role = (key: string, title: string, desc: string, members: string[]): Role => ({ key, title, desc, members })
 
 /** A hand-built policy, for traversal facts no seeded policy exercises (see QA note below). */
-const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', version: 1, activeVersion: 1, nodes })
+const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, position: 0, scopes: CATCH_ALL_SCOPES, status: 'published', version: 1, activeVersion: 1, nodes })
 
 describe('AC-2 — seed keys, titles, descriptions', () => {
   // The three tautological seed-shape tests this block used to open with (key order, firm

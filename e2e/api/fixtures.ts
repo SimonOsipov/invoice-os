@@ -79,13 +79,22 @@ export function freshRoleTitle(): string {
   return `Probe Role ${tinRunSeed}-${tinCounter}`
 }
 
+export const PROBE_POLICY_PREFIX = 'Probe Policy '
+
+// Every policy name an e2e spec creates (api probes, workflows.spec, roles.spec, and the
+// UI's pre-rename name). The restore helpers delete an ACTIVE policy with one of these names.
+const E2E_POLICY_NAMES = [/^Probe Policy /, /^APPR09 \d+$/, /^E2E policy \d+$/, /^Untitled policy$/]
+export function isE2ePolicyName(name: string): boolean {
+  return E2E_POLICY_NAMES.some((re) => re.test(name))
+}
+
 // freshPolicyName(): a per-run-unique approval-policy name, on the same seed + counter as
 // freshRoleTitle above. Like a role title and unlike a TIN, a colliding name cannot fail
 // loud — nothing constrains approval_policies.name — so this buys identifiability in a
 // never-reset environment, not constraint safety.
 export function freshPolicyName(): string {
   tinCounter += 1
-  return `Probe Policy ${tinRunSeed}-${tinCounter}`
+  return `${PROBE_POLICY_PREFIX}${tinRunSeed}-${tinCounter}`
 }
 
 // canonicalTin(): the portfolio service canonicalizes an accepted TIN to its

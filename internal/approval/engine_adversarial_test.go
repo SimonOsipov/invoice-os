@@ -286,7 +286,7 @@ func TestArm_NullInvoiceTotalFoldsToZero(t *testing.T) {
 	}
 }
 
-// --- AC-10: the active version is resolved by is_active alone, never "newest sealed" -
+// --- AC-10: ArmTx resolves an active version, never "newest sealed" -
 
 // TestArm_ResolvesActiveVersionNotNewestSealed: version 1 is active; a NEWER version 2
 // is sealed but never activated and carries a different tree. The run must resolve

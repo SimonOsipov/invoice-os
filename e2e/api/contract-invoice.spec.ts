@@ -62,6 +62,9 @@ import {
   decideInvoiceApproval,
   getInvoiceHistory,
   getAuditLog,
+  getApprovalPolicy,
+  listApprovalPolicies,
+  reorderApprovalPolicies,
   approveUntilClosed,
   firmApproverTokens,
   PERSONAS,
@@ -70,7 +73,7 @@ import {
 import { freshTin, freshPolicyName } from './fixtures'
 import { steerExplainMarker, steerMarker } from '../importFixtures'
 import { nightlyTarget } from '../targets'
-import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
+import { assertErrorEnvelope, codeListsReady, ensureFirmPolicyActive } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
 // between spec files), mirroring e2e/topology/invoice-surfaces.spec.ts's
@@ -211,6 +214,13 @@ async function acceptedOriginal(tok: string, entityId: string, number: string) {
   expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
   await approveUntilClosed(created.id, await firmApproverTokens())
   return submitAndAwait(tok, created.id, 'accepted')
+}
+
+// Puts `ids` at the head of the workspace order, in that order; every other policy keeps its place.
+async function moveToFront(tok: string, ids: string[]): Promise<void> {
+  const { approval_policies } = await listApprovalPolicies(tok)
+  const rest = approval_policies.map((p) => p.id).filter((id) => !ids.includes(id))
+  await reorderApprovalPolicies(tok, [...ids, ...rest])
 }
 
 function noteBody(original: { line_items?: { id: string }[] }, number: string) {
@@ -1415,8 +1425,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   // firm policy (internal/demopolicy, "Standard approval policy": fin_mgr@0, compliance@1
   // for every invoice under the firm's ~193,500 backlog ceiling -- both condition
   // thresholds are above it) rather than publishing their own. Placed ABOVE 'approval
-  // decision': that block's armedInvoice() deactivates the tenant's one active-policy slot
-  // per test, so anything relying on the seeded policy must run before it does.
+  // decision'. That block's probe policies are in force beside the seeded one, and each is
+  // deleted after its test.
   //
   // RESOLVED by APPR-14-05: contract-approvals.spec.ts strips the firm tenant's seeded
   // policy in its own tests but restores it in `afterAll`, and this file's own `beforeAll`
@@ -1467,9 +1477,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // ?awaiting_approval=true list filter, and the transitions door that actually enforces
     // it are three copies of one predicate (internal/dashboard/store.go, internal/invoice/
     // store.go, internal/approval/gate.go's TransmitClearTx). This must run ABOVE :1154:
-    // below that boundary armedInvoice()'s own finally deletes the tenant's only active
-    // policy version between tests, so both reporting predicates' EXISTS(is_active) conjunct
-    // would read zero and the agreement would hold vacuously.
+    // below that boundary a probe policy may govern, and the agreement should be read
+    // against the seeded policy alone.
     //
     // Self-seeded, not leaned on the file's leftover backlog (task-575's own notes reject a
     // probe policy: NOT EXISTS(approved run) is satisfied vacuously by an invoice with ZERO
@@ -1587,21 +1596,18 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // APPR-07-08 (D38): db/seed.dev.sql has NO seeded approval policy (internal/demopolicy
-  // seeds one at invoice-service boot instead), and publishing takes the tenant's SINGLE
-  // active slot tenant-wide, arming every invoice this shared tenant
-  // validates. Every test below creates its own one-step policy and deletes it in a
-  // `finally`, so the tenant returns to zero active versions before the next spec runs.
-  // Boundary: above here the seeded firm policy governs (armed in this file's beforeAll);
-  // below, armedInvoice() owns the active slot per test, unarmed between them. `notes` re-arms the firm policy.
+  // internal/demopolicy seeds the firm policy at invoice-service boot. A publish leaves it in
+  // force, so each test below creates its own one-step policy and deletes it in a `finally`.
+  // `notes` restores the firm policy.
   test.describe('approval decision', () => {
-    // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
-    // invoice validated against it -- ApplyValidation's promotion arms exactly one open
-    // run with one pending step (engine.go's ArmTx). Caller must delete policyId (D38).
-    // The preparer creates by default, so `token` is no creator and may approve it.
+    // armedInvoice(): a fresh one-step policy naming roleKey, scoped to `entity` and first in
+    // order, published, then a clean invoice validated against it -- ApplyValidation's promotion
+    // arms exactly one open run with one pending step (engine.go's ArmTx). Caller must delete
+    // policyId (D38). The preparer creates by default, so `token` is no creator and may approve it.
     async function armedInvoice(roleKey: string, createdBy?: string): Promise<{ invoiceId: string; policyId: string }> {
-      const policy = await createApprovalPolicy(token, { name: freshPolicyName() })
+      const policy = await createApprovalPolicy(token, { name: freshPolicyName(), scopes: { entity_ids: [entity.id] } })
       await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: roleKey }] })
+      await moveToFront(token, [policy.id])
       await publishApprovalPolicy(token, policy.id)
 
       try {
@@ -1612,9 +1618,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
         return { invoiceId: created.id, policyId: policy.id }
       } catch (e) {
-        // A throw here happens before the caller's own try/finally starts, so it must
-        // free the tenant's single active-policy slot (D38) itself; best-effort so a
-        // delete failure can never mask the real setup error.
+        // A throw here happens before the caller's own try/finally starts, so delete the
+        // probe here; best-effort so a delete failure never masks the setup error.
         await deleteApprovalPolicy(token, policy.id).catch(() => {})
         throw e
       }
@@ -1996,25 +2001,18 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
-    test('404: a validated invoice with no armed run answers 404, not an empty run', async () => {
-      // Distinct from :1227-1234 (a nonexistent invoice id on POST): this is a real,
-      // validated invoice reaching ErrRunNotFound through a real row lookup on the GET
-      // endpoint -- the contract the SPA's empty state depends on (isNoApprovalRun,
-      // APPR-13-01). Unarmed here not because the tenant lacks a policy (it has a seeded
-      // one, :1104-1109) but because every prior test in this describe deletes its own
-      // probe policy in a `finally` (:1161-1162) first. No policy of its own is created,
-      // so no finally is needed here.
+    test('404: an invoice with no armed run answers 404, not an empty run', async () => {
+      // The seeded policy stays in force, so a validated invoice is always armed; the validated case is
+      // TestRunHandler_ValidatedInvoiceWithNoRunOverRealHTTPLeaksNoExistence.
       const created = await createInvoice(token, {
         entity_id: entity.id,
         ...cleanInvoiceFields(`INV-APPR-NORUN-${freshTin()}`),
       })
-      const validated = await validateInvoice(token, created.id)
-      expect(validated.status, 'setup: with no active policy, validate does not arm a run').toBe('validated')
 
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/approval`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      assertErrorEnvelope(res, 404, 'validated invoice with no armed run')
+      assertErrorEnvelope(res, 404, 'invoice with no armed run')
     })
 
     // --- APPR-08-10: the always-visible surface ------------------------------
@@ -2119,21 +2117,203 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     test('contract: awaiting_approval filter answers 200 and finds the armed invoice', async () => {
       const { invoiceId, policyId } = await armedInvoice('cfo')
       try {
-        // INSIDE the try, deliberately: deleteApprovalPolicy in the finally deactivates
-        // the version, and the filter's own EXISTS(is_active) conjunct then matches ZERO
-        // rows for the whole tenant -- the same assertion after the finally is a
-        // guaranteed false.
+        // INSIDE the try, deliberately: the probe governs only while it is in force; the
+        // finally deletes it.
         const res = await listInvoices(token, { awaiting_approval: true, limit: 50 })
         expect(
           res.invoices.some((i) => i.id === invoiceId),
           'the armed, undecided invoice should be in the filtered page',
         ).toBe(true)
-        // Never an exact total: publishing arms the WHOLE validated backlog, and this
-        // environment inherits whatever earlier specs left validated.
+        // Never an exact total: this environment inherits whatever earlier specs left validated.
         expect(res.pagination.total, 'the filtered total counts at least the armed invoice').toBeGreaterThanOrEqual(1)
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }
+    })
+
+    test('a newer probe wins over an older one left in force', async () => {
+      const older = await armedInvoice('cfo')
+      try {
+        const newer = await armedInvoice('quality_reviewer')
+        try {
+          const run = await getInvoiceApproval(token, newer.invoiceId)
+          const pending = run.steps.filter((s) => s.state === 'pending')
+          expect(pending.map((s) => s.workflow_role_key), 'the newer probe arms, not the older one').toEqual(['quality_reviewer'])
+        } finally {
+          await deleteApprovalPolicy(token, newer.policyId)
+        }
+      } finally {
+        await deleteApprovalPolicy(token, older.policyId)
+      }
+    })
+  })
+
+  // Each document reaches the first matching policy in order (internal/approval/match.go).
+  test.describe('approval routing (first match)', () => {
+    test.describe.configure({ timeout: 240_000 })
+    const ARMED = 'invoice.approval_armed' // engine.go ArmTx audit action
+    const SEEDED_POLICY_NAME = 'Standard approval policy' // internal/demopolicy
+    // match.go scope names: scopeDocumentType, scopeClient, scopeAmountBand.
+    const DOCUMENT_TYPE = 'document_type'
+    const CLIENT = 'client'
+    const AMOUNT_BAND = 'amount_band'
+
+    let entityE: Entity
+    let entityF: Entity
+    let original: Awaited<ReturnType<typeof acceptedOriginal>>
+    let seededId: string
+    let p1: string
+    let p2: string
+    let p3: string
+    let p4: string
+
+    async function probe(scopes: Parameters<typeof createApprovalPolicy>[1]['scopes']): Promise<string> {
+      const policy = await createApprovalPolicy(token, { name: freshPolicyName(), scopes })
+      await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: 'cfo' }] })
+      return policy.id
+    }
+
+    test.beforeAll(async () => {
+      await ensureFirmPolicyActive(token)
+      entityE = await createEntity(token, { name: `APSC first match E ${freshTin()}`, tin: freshTin() })
+      entityF = await createEntity(token, { name: `APSC first match F ${freshTin()}`, tin: freshTin() })
+      // Before any probe exists, so it arms on the seeded policy and can reach accepted.
+      original = await acceptedOriginal(token, entityE.id, `INV-FM-${freshTin()}`)
+
+      const seeded = (await listApprovalPolicies(token)).approval_policies.filter((p) => p.name === SEEDED_POLICY_NAME)
+      expect(seeded, `exactly one live "${SEEDED_POLICY_NAME}"`).toHaveLength(1)
+      seededId = seeded[0].id
+
+      const client = { entity_ids: [entityE.id] }
+      p1 = await probe({ ...client, document_types: ['credit_note'] })
+      p2 = await probe({ ...client, amount_band: { lower: '1000.00', upper: '2000.00', currency: 'NGN' } })
+      p3 = await probe({ ...client, amount_band: { lower: '1000.00', upper: '2000.00', currency: 'USD' } })
+      p4 = await probe(client)
+      await moveToFront(token, [p1, p2, p3, p4])
+      for (const id of [p1, p2, p3, p4]) await publishApprovalPolicy(token, id)
+    })
+
+    test.afterAll(async () => {
+      for (const id of [p1, p2, p3, p4]) {
+        try {
+          if (id) await deleteApprovalPolicy(token, id)
+        } catch {
+          // best effort; ensureFirmPolicyActive sweeps the strays
+        }
+      }
+      await ensureFirmPolicyActive(token)
+    })
+
+    async function armedRow(invoiceId: string): Promise<Record<string, unknown>> {
+      const { events } = await getAuditLog(token, { invoice_id: invoiceId, event: [ARMED] })
+      expect(events, 'one armed row for the invoice').toHaveLength(1)
+      return events[0].payload as Record<string, unknown>
+    }
+
+    async function positionOf(id: string): Promise<number> {
+      return (await getApprovalPolicy(token, id)).position
+    }
+
+    async function validatedInvoice(fields: Parameters<typeof createInvoice>[1]): Promise<string> {
+      const created = await createInvoice(token, fields)
+      const res = await validateInvoice(token, created.id)
+      const errors = (res.violations ?? []).filter((v) => v.severity === 'error').map((v) => v.rule_key)
+      expect(res.status, `the fixture validates; error violations: ${errors.join(', ') || 'none'}`).toBe('validated')
+      expect(errors, 'no error violation').toEqual([])
+      return created.id
+    }
+
+    test('a credit note reaches the document-type policy', async () => {
+      const note = await issueNote(token, original.id, noteBody(original, `CN-FM-${freshTin()}`))
+      expect((await validateInvoice(token, note.id)).status, 'a note validates clean').toBe('validated')
+      const row = await armedRow(note.id)
+      expect(row.policy_id, 'P1 arms the credit note').toBe(p1)
+      expect(row.matched_scopes, 'matched_scopes').toEqual([DOCUMENT_TYPE, CLIENT])
+      expect(row.position, "position is P1's own").toBe(await positionOf(p1))
+      expect(row.position as number, 'P1 sits ahead of the seeded policy').toBeLessThan(await positionOf(seededId))
+    })
+
+    test('an NGN invoice inside the NGN band takes it', async () => {
+      const id = await validatedInvoice({ entity_id: entityE.id, ...cleanInvoiceFields(`INV-FM-${freshTin()}`) })
+      const row = await armedRow(id)
+      expect(row.policy_id, 'P2 arms the NGN 1,075.00 invoice').toBe(p2)
+      expect(row.matched_scopes, 'matched_scopes').toEqual([CLIENT, AMOUNT_BAND])
+    })
+
+    test('a USD invoice skips an NGN band and takes the USD band', async () => {
+      await codeListsReady(token)
+      const line = (tax_category: string, amount: string, percent: string, tax: string) => ({
+        description: 'Laptop',
+        quantity: '1',
+        unit_price: amount,
+        line_total: amount,
+        line_tax: tax,
+        tax_category,
+        tax_percent: percent,
+        hsn_code: '8471.30',
+        product_category: 'Computers',
+        sellers_item_identification: `SKU-${tax_category}`,
+        base_quantity: '1.000',
+        price_unit: 'EA',
+      })
+      const id = await validatedInvoice({
+        entity_id: entityE.id,
+        invoice_number: `INV-FM-USD-${freshTin()}`,
+        issue_date: '2027-01-04T00:00:00Z',
+        currency: 'USD',
+        tax_currency_code: 'NGN',
+        invoice_kind: 'B2B',
+        supplier_tin: freshTin(),
+        supplier_name: 'Acme Nigeria Ltd',
+        supplier_email: 'accounts@example.ng',
+        supplier_street: '1 Marina Road',
+        supplier_city: 'Lagos',
+        supplier_postal_zone: '100001',
+        supplier_lga: 'NG-LA-AGE',
+        supplier_state: 'NG-LA',
+        supplier_country: 'NG',
+        buyer_tin: '87654321-0002',
+        buyer_name: 'Buyer Ltd',
+        buyer_email: 'accounts@example.ng',
+        buyer_street: '1 Marina Road',
+        buyer_city: 'Lagos',
+        buyer_postal_zone: '100001',
+        buyer_lga: 'NG-FC-AML',
+        buyer_state: 'NG-FC',
+        buyer_country: 'NG',
+        subtotal: '1700.00',
+        vat: '75.00',
+        total: '1775.00',
+        line_items: [
+          line('STANDARD_VAT', '1000.00', '7.50', '75.00'),
+          line('ZERO_VAT', '500.00', '0.00', '0.00'),
+          line('EXEMPTED', '200.00', '0.00', '0.00'),
+        ],
+      })
+      const row = await armedRow(id)
+      expect(row.policy_id, 'P3 arms the USD invoice; P2 NGN band skipped').toBe(p3)
+      expect(row.matched_scopes, 'matched_scopes').toEqual([CLIENT, AMOUNT_BAND])
+    })
+
+    test('an invoice outside both bands takes the client policy', async () => {
+      const id = await validatedInvoice({
+        entity_id: entityE.id,
+        ...cleanInvoiceFields(`INV-FM-${freshTin()}`),
+        subtotal: '10000',
+        vat: '750',
+        total: '10750',
+        line_items: [{ description: 'Widget', quantity: '100', unit_price: '100', line_total: '10000' }],
+      })
+      const row = await armedRow(id)
+      expect(row.policy_id, 'P4 arms the NGN 10,750.00 invoice').toBe(p4)
+      expect(row.matched_scopes, 'matched_scopes').toEqual([CLIENT])
+    })
+
+    test('a document no scoped policy matches falls through to the catch-all', async () => {
+      const id = await validatedInvoice({ entity_id: entityF.id, ...cleanInvoiceFields(`INV-FM-${freshTin()}`) })
+      const row = await armedRow(id)
+      expect(row.policy_id, 'the seeded policy arms an invoice on F').toBe(seededId)
+      expect(row.matched_scopes, 'a catch-all names no scope').toEqual([])
     })
   })
 
@@ -2418,7 +2598,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
   test.describe('notes', () => {
     test.describe.configure({ timeout: 240_000 })
-    // `approval decision` leaves no active policy; notes need one to arm a run.
+    // Restore the seeded firm policy, which notes need to arm a run.
     test.beforeAll(async () => {
       await ensureFirmPolicyActive(token)
     })

@@ -17,6 +17,8 @@ import {
   createStaffedRole,
   createWorkflowRole,
   deleteRoleConfirm,
+  deleteRoleConfirmUnknownUsage,
+  inUsePolicyNames,
   deleteWorkflowRole,
   drawerRoleHelper,
   filterPickerMembers,
@@ -53,7 +55,7 @@ import {
   type RoleSteps,
 } from './roles'
 import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES } from './policies.fixture'
-import type { Policy } from './workflows'
+import { CATCH_ALL_SCOPES, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The mock roster and the role lists that staff it, copied here when lib/members.ts stopped
@@ -321,7 +323,7 @@ function approvalRoles(policies: readonly Policy[]): string[] {
 const role = (key: string, title: string, desc: string, members: string[]): Role => ({ key, title, desc, members })
 
 /** A hand-built policy, for traversal facts no seeded policy exercises (see QA note below). */
-const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', version: 1, activeVersion: 1, nodes })
+const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, position: 0, scopes: CATCH_ALL_SCOPES, status: 'published', version: 1, activeVersion: 1, nodes })
 
 describe('AC-2 — seed keys, titles, descriptions', () => {
   // The three tautological seed-shape tests this block used to open with (key order, firm
@@ -716,32 +718,53 @@ describe('AC-6 — canSaveRole gates on the name alone', () => {
   })
 })
 
-describe('AC-7 — deleteRoleConfirm names the role and its usage', () => {
-  it('a used role names its usage sentence and warns those steps will block', () => {
-    // 'compliance' (Tax Reviewer) is named once each in polF1/polF2/polF3 — three approval
-    // steps across three policies (SEED_FIRM_POLICIES in policies.fixture.ts).
-    const usage = roleSteps(SEED_FIRM_POLICIES, 'compliance')
-    expect(usage).toEqual({
-      total: 3,
-      policies: [
-        { policyName: 'Standard approval policy', count: 1 },
-        { policyName: 'Cross-border & FX', count: 1 },
-        { policyName: 'Government supply (B2G)', count: 1 },
-      ],
-    }) // guard: pins the exact usage this test's assertion depends on
-    const text = deleteRoleConfirm('Tax Reviewer', usage)
-    expect(text).toContain('Tax Reviewer')
-    expect(text).toContain('3 approval steps · 3 policies')
-    expect(text).toContain('will block')
+describe('AC-7 — deleteRoleConfirm states the in-force rule', () => {
+  // DELETE_REFUSED_IN_FORCE mirrors ErrRoleInUse in internal/approval/approval.go.
+  it('deleteRoleConfirm states the in-force rule at zero usage', () => {
+    expect(deleteRoleConfirm('Quality Reviewer', { total: 0, policies: [] })).toBe(
+      'Delete Quality Reviewer? The delete is refused while a policy in force names it in a scope or an approval step.',
+    )
   })
 
-  it('an unused role names "not used in any policy" and claims no blocking', () => {
-    const usage = roleSteps(SEED_FIRM_POLICIES, 'quality_reviewer')
-    expect(usage).toEqual({ total: 0, policies: [] }) // guard
-    const text = deleteRoleConfirm('Quality Reviewer', usage)
-    expect(text).toContain('Quality Reviewer')
-    expect(text).toContain('not used in any policy')
+  it('deleteRoleConfirm keeps the usage count and drops "will block"', () => {
+    const text = deleteRoleConfirm('Tax Reviewer', { total: 1, policies: [{ policyName: 'P', count: 1 }] })
+    expect(text).toBe(
+      'Delete Tax Reviewer? 1 approval step · 1 policy. The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.',
+    )
     expect(text).not.toContain('will block')
+  })
+
+  it('deleteRoleConfirmUnknownUsage states the in-force rule', () => {
+    expect(deleteRoleConfirmUnknownUsage('Tax Reviewer')).toBe(
+      'Delete Tax Reviewer? Its policy usage could not be loaded. The delete is refused while a policy in force names it in a scope or an approval step.',
+    )
+  })
+})
+
+describe('inUsePolicyNames', () => {
+  const S = 'this workflow role is named by a policy in force'
+  const conflict = (body: unknown) => new ApiError('http', S, 409, body)
+
+  it("inUsePolicyNames returns the 409 body's policy names in order", () => {
+    const err = conflict({ error: S, policies: [{ id: 'a', name: 'Credit notes' }, { id: 'b', name: 'Big invoices' }] })
+    expect(inUsePolicyNames(err)).toEqual(['Credit notes', 'Big invoices'])
+  })
+
+  it.each([
+    ['409 with empty policies', conflict({ error: S, policies: [] })],
+    ['409 with no policies', conflict({ error: S })],
+    ['404 with error only', new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' })],
+    ['404 carrying policies', new ApiError('http', 'x', 404, { policies: [{ id: 'a', name: 'N' }] })],
+    ['network error', new ApiError('network', 'x')],
+    ['plain Error', new Error('x')],
+    ['undefined', undefined],
+  ])('inUsePolicyNames is empty for any other error: %s', (_label, err) => {
+    expect(inUsePolicyNames(err)).toEqual([])
+  })
+
+  it('inUsePolicyNames skips an entry without a string name', () => {
+    const err = conflict({ error: S, policies: [{ id: 'a' }, { id: 'b', name: 7 }, null, { id: 'c', name: 'Kept' }] })
+    expect(inUsePolicyNames(err)).toEqual(['Kept'])
   })
 })
 

@@ -36,7 +36,7 @@ func setInvoiceNumber(t *testing.T, super *pgxpool.Pool, invoiceID, number strin
 	}
 }
 
-// oneActivePolicyVersionID is the tenant's single active version -- what
+// oneActivePolicyVersionID is the tenant's active version -- what
 // seedActivePolicyTenant left behind and what a seeded run must reference.
 func oneActivePolicyVersionID(t *testing.T, super *pgxpool.Pool, tenantID string) string {
 	t.Helper()
@@ -130,7 +130,7 @@ func TestAuditNumberAdversarial_AJSONShapedNumberCannotRewriteTheApprovalIdKeys(
 		assertNumberStayedInItsValue(t, super,
 			approvalAuditRowForInvoice(t, super, "invoice.approval_armed", invoiceID),
 			"invoice.approval_armed", "id", invoiceID,
-			[]string{"id", "run_id", "policy_version_id", "steps"}, want)
+			[]string{"id", "run_id", "policy_version_id", "policy_id", "position", "matched_scopes", "steps"}, want)
 
 		if _, err := cancelCarryingNumber(t, app, tenantID, invoiceID, want, "an-adv-cancel-actor"); err != nil {
 			t.Fatalf("CancelLiveRunTx: %v", err)

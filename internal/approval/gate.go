@@ -51,7 +51,6 @@ func TransmitClear(policyActive, approvedRun bool) bool {
 func TransmitClearTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]bool, error) {
 	clear := make(map[string]bool, len(ids))
 
-	// is_active alone is the whole resolve (ArmTx, engine.go:130-134).
 	var policyActive bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)`,

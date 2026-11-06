@@ -1,7 +1,7 @@
 package approval
 
 // PIL-01..14: the five-mechanism seal lock (design doc §6) — content lock, TRUNCATE lock,
-// parent seal guard, active-implies-sealed CHECK, one-active-per-tenant index. Written before
+// parent seal guard, active-implies-sealed CHECK, one-active-per-policy index. PIL-17..18: scope lock. Written before
 // APPR-03-04's migration exists, so ten specs are RED (the op simply succeeds where an error
 // was expected — not 42703, `sealed` already shipped in APPR-03-02) and four are POSITIVE
 // CONTROLS, exempt from the RED gate and marked as such, each citing the APPR-03-07 mutation
@@ -647,48 +647,50 @@ func TestPIL11_ActiveImpliesSealed(t *testing.T) {
 	}
 }
 
-// TestPIL12_OneActiveVersionPerTenant (PIL-12): a second is_active = true version for the same
-// tenant -> 23505 on approval_policy_versions_one_active. Control: a second TENANT's active
-// version succeeds — the index is per-tenant, unlike rule_set_versions_one_active.
-func TestPIL12_OneActiveVersionPerTenant(t *testing.T) {
+// TestPIL12_OneActiveVersionPerPolicy (PIL-12): a workspace holds active versions of two
+// policies at once; a second active version of one policy -> 23505 on
+// approval_policy_versions_one_active.
+func TestPIL12_OneActiveVersionPerPolicy(t *testing.T) {
 	migrator := migratorPool(t)
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
-	tenantA := seedTenant(t, super, "APPR-03 pil-12 A")
-	policyA1 := seedApprovalPolicy(t, super, tenantA, "PIL-12 A active policy")
-	activeA := seedApprovalPolicyVersion(t, super, tenantA, policyA1)
+	tenantID := seedTenant(t, super, "APPR-03 pil-12")
+	policyA := seedApprovalPolicy(t, super, tenantID, "PIL-12 policy A")
+	activeA := seedApprovalPolicyVersion(t, super, tenantID, policyA)
 	sealApprovalPolicyVersion(t, super, activeA)
 	if _, err := super.Exec(ctx, `UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, activeA); err != nil {
-		t.Fatalf("seed active version: %v", err)
+		t.Fatalf("seed active version of A: %v", err)
 	}
-	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantA) })
-	policyA2 := seedApprovalPolicy(t, super, tenantA, "PIL-12 A second policy")
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	var secondA string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed) VALUES ($1, $2, 2, true) RETURNING id`,
+		tenantID, policyA).Scan(&secondA); err != nil {
+		t.Fatalf("seed sealed second version of A: %v", err)
+	}
+	policyB := seedApprovalPolicy(t, super, tenantID, "PIL-12 policy B")
+	versionB := seedApprovalPolicyVersion(t, super, tenantID, policyB)
+	sealApprovalPolicyVersion(t, super, versionB)
 
 	tx, err := migrator.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin migrator tx: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	setTenantGUC(t, ctx, tx, tenantA)
+	setTenantGUC(t, ctx, tx, tenantID)
 
-	// sealed=true isolates this from PIL-11's active_is_sealed CHECK — only the one-active
-	// index is under test here.
+	if err := attemptWithSavepoint(t, ctx, tx,
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, versionB); err != nil {
+		t.Fatalf("activate B's version while A's is active: %v, want success (the index is per policy)", err)
+	}
+
 	opErr := attemptWithSavepoint(t, ctx, tx,
-		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, is_active, sealed) VALUES ($1, $2, 1, true, true)`,
-		tenantA, policyA2)
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, secondA)
 	assertSQLState(t, opErr, "23505")
 	if name := pgConstraint(opErr); name != "approval_policy_versions_one_active" {
 		t.Errorf("constraint = %q, want approval_policy_versions_one_active", name)
-	}
-
-	tenantB := seedTenant(t, super, "APPR-03 pil-12 B")
-	policyB := seedApprovalPolicy(t, super, tenantB, "PIL-12 B active policy")
-	activeB := seedApprovalPolicyVersion(t, super, tenantB, policyB)
-	sealApprovalPolicyVersion(t, super, activeB)
-	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantB) })
-	if _, err := super.Exec(ctx, `UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, activeB); err != nil {
-		t.Fatalf("control: activate tenant B's version: %v, want success", err)
 	}
 }
 
@@ -876,5 +878,174 @@ func TestPIL16_RemainingContentColumnsUpdateOnSealedStepRejected(t *testing.T) {
 	}
 	if afterSnap != before {
 		t.Errorf("step snapshot after rejected content updates = %s, want unchanged %s", afterSnap, before)
+	}
+}
+
+// --- the scope lock (APSC-01) -------------------------------------------------
+
+const scopeSnapshotSQL = `SELECT jsonb_build_array(scope_document_types, scope_entity_ids,
+	scope_workflow_role_ids, scope_amount_lower, scope_amount_upper, scope_amount_currency)::text
+	FROM approval_policy_versions WHERE id = $1`
+
+func scopeSnapshot(t *testing.T, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, versionID string) string {
+	t.Helper()
+	var snap string
+	if err := q.QueryRow(context.Background(), scopeSnapshotSQL, versionID).Scan(&snap); err != nil {
+		t.Fatalf("snapshot scopes of version %s: %v", versionID, err)
+	}
+	return snap
+}
+
+// TestPIL17_ScopeUpdateOnSealedVersionRejected (PIL-17): each of the six scope columns of a
+// sealed version refuses an UPDATE with 23001, as the owner and as invoice_app, from a set
+// value and from the empty or NULL catch-all value.
+func TestPIL17_ScopeUpdateOnSealedVersionRejected(t *testing.T) {
+	migrator := migratorPool(t)
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APSC-01 pil-17")
+	policyID := seedApprovalPolicy(t, super, tenantID, "PIL-17 scope lock policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions
+		    SET scope_document_types = ARRAY['commercial_invoice'],
+		        scope_entity_ids = ARRAY[gen_random_uuid()],
+		        scope_workflow_role_ids = ARRAY[gen_random_uuid()],
+		        scope_amount_lower = 1.00, scope_amount_upper = 10.00, scope_amount_currency = 'NGN'
+		  WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("seed scopes on the draft: %v", err)
+	}
+	sealApprovalPolicyVersion(t, super, versionID)
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	before := scopeSnapshot(t, super, versionID)
+
+	tx, err := migrator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin migrator tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	setTenantGUC(t, ctx, tx, tenantID)
+
+	cases := []struct{ name, sql string }{
+		{"scope_document_types", `UPDATE approval_policy_versions SET scope_document_types = ARRAY['credit_note'] WHERE id = $1`},
+		{"scope_entity_ids", `UPDATE approval_policy_versions SET scope_entity_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"scope_workflow_role_ids", `UPDATE approval_policy_versions SET scope_workflow_role_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"scope_amount_lower", `UPDATE approval_policy_versions SET scope_amount_lower = 2.00 WHERE id = $1`},
+		{"scope_amount_upper", `UPDATE approval_policy_versions SET scope_amount_upper = 9.00 WHERE id = $1`},
+		{"scope_amount_currency", `UPDATE approval_policy_versions SET scope_amount_currency = 'USD' WHERE id = $1`},
+	}
+	for _, c := range cases {
+		t.Run("owner "+c.name, func(t *testing.T) {
+			assertSQLState(t, attemptWithSavepoint(t, ctx, tx, c.sql, versionID), "23001")
+		})
+	}
+	if after := scopeSnapshot(t, tx, versionID); after != before {
+		t.Errorf("scopes after the rejected owner updates = %s, want unchanged %s", after, before)
+	}
+	// An unexpectedly successful owner update holds a row lock; release it so the app write
+	// below fails on its assertion instead of blocking.
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the owner tx: %v", err)
+	}
+
+	t.Run("invoice_app scope_document_types", func(t *testing.T) {
+		appErr := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, cases[0].sql, versionID)
+			return err
+		})
+		assertSQLState(t, appErr, "23001")
+	})
+	if after := scopeSnapshot(t, super, versionID); after != before {
+		t.Errorf("committed scopes after the rejected updates = %s, want unchanged %s", after, before)
+	}
+
+	// A sealed catch-all (empty arrays, NULL band) is the common version: a change from NULL
+	// is a change too, which a `<>` comparison would miss.
+	catchPolicy := seedApprovalPolicy(t, super, tenantID, "PIL-17 sealed catch-all policy")
+	catchAll := seedApprovalPolicyVersion(t, super, tenantID, catchPolicy)
+	sealApprovalPolicyVersion(t, super, catchAll)
+	catchBefore := scopeSnapshot(t, super, catchAll)
+
+	tx2, err := migrator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin migrator tx: %v", err)
+	}
+	defer func() { _ = tx2.Rollback(ctx) }()
+	setTenantGUC(t, ctx, tx2, tenantID)
+	for _, c := range []struct{ name, sql string }{
+		{"empty types to one", `UPDATE approval_policy_versions SET scope_document_types = ARRAY['credit_note'] WHERE id = $1`},
+		{"empty entities to one", `UPDATE approval_policy_versions SET scope_entity_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"empty roles to one", `UPDATE approval_policy_versions SET scope_workflow_role_ids = ARRAY[gen_random_uuid()] WHERE id = $1`},
+		{"NULL lower to a value", `UPDATE approval_policy_versions SET scope_amount_lower = 1.00 WHERE id = $1`},
+		{"NULL upper to a value", `UPDATE approval_policy_versions SET scope_amount_upper = 1.00 WHERE id = $1`},
+		{"NULL currency to a value", `UPDATE approval_policy_versions SET scope_amount_currency = 'NGN' WHERE id = $1`},
+	} {
+		t.Run("catch-all "+c.name, func(t *testing.T) {
+			assertSQLState(t, attemptWithSavepoint(t, ctx, tx2, c.sql, catchAll), "23001")
+		})
+	}
+	if after := scopeSnapshot(t, tx2, catchAll); after != catchBefore {
+		t.Errorf("catch-all scopes after the rejected updates = %s, want unchanged %s", after, catchBefore)
+	}
+}
+
+// TestPIL18_ScopeWritesOnDraftAndLegalSealedWritesAllowed (PIL-18).
+//
+// POSITIVE CONTROL: the scope lock is not a blanket ban. A draft takes scope writes, one UPDATE
+// may seal a draft and set its scopes, and a sealed version keeps its no-op write and its
+// is_active changes.
+func TestPIL18_ScopeWritesOnDraftAndLegalSealedWritesAllowed(t *testing.T) {
+	migrator := migratorPool(t)
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APSC-01 pil-18")
+	policyID := seedApprovalPolicy(t, super, tenantID, "PIL-18 legal scope writes policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	exec := func(step, sql string) {
+		t.Helper()
+		if err := db.WithinTenantTx(ctx, migrator, tenantID, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, sql, versionID)
+			return err
+		}); err != nil {
+			t.Fatalf("%s: %v, want success", step, err)
+		}
+	}
+
+	exec("draft: write all six scope columns", `UPDATE approval_policy_versions
+		SET scope_document_types = ARRAY['credit_note'], scope_entity_ids = ARRAY[gen_random_uuid()],
+		    scope_workflow_role_ids = ARRAY[gen_random_uuid()],
+		    scope_amount_lower = 2.00, scope_amount_upper = 9.00, scope_amount_currency = 'USD'
+		WHERE id = $1`)
+	var typesOK bool
+	if err := super.QueryRow(ctx,
+		`SELECT scope_document_types = ARRAY['credit_note'] AND cardinality(scope_entity_ids) = 1
+		        AND cardinality(scope_workflow_role_ids) = 1 AND scope_amount_lower = 2.00
+		        AND scope_amount_upper = 9.00 AND scope_amount_currency = 'USD'
+		   FROM approval_policy_versions WHERE id = $1`, versionID).Scan(&typesOK); err != nil || !typesOK {
+		t.Fatalf("draft scopes read back: ok=%v err=%v, want the six values written", typesOK, err)
+	}
+
+	exec("seal and change the document types in one UPDATE",
+		`UPDATE approval_policy_versions SET sealed = true, scope_document_types = ARRAY['debit_note'] WHERE id = $1`)
+	sealed := scopeSnapshot(t, super, versionID)
+	var types string
+	if err := super.QueryRow(ctx,
+		`SELECT scope_document_types::text FROM approval_policy_versions WHERE id = $1 AND sealed`, versionID).Scan(&types); err != nil {
+		t.Fatalf("read the now sealed version: %v", err)
+	}
+	if types != "{debit_note}" {
+		t.Errorf("scope_document_types after seal = %s, want {debit_note}", types)
+	}
+
+	exec("sealed: no-op scope write", `UPDATE approval_policy_versions SET scope_document_types = scope_document_types WHERE id = $1`)
+	exec("sealed: activate", `UPDATE approval_policy_versions SET is_active = true WHERE id = $1`)
+	exec("sealed: deactivate", `UPDATE approval_policy_versions SET is_active = false WHERE id = $1`)
+	if after := scopeSnapshot(t, super, versionID); after != sealed {
+		t.Errorf("scopes after the legal sealed writes = %s, want unchanged %s", after, sealed)
 	}
 }

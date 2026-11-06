@@ -329,8 +329,9 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 	return updated, nil
 }
 
-// DeleteRole soft-deletes a role and audits it in the same transaction. It never refuses
-// a live role and nothing cascades: the staffing rows survive, inert, unreachable while
+// DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
+// roleInUse while a policy in force names the role, under the tenant lock so a publish
+// cannot race it. Nothing cascades: the staffing rows survive, inert, unreachable while
 // deleted_at is set. invoice_app holds no DELETE grant on workflow_roles, so a hard
 // delete is structurally unreachable, and there is no undelete path.
 //
@@ -343,6 +344,35 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 
 		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
 			return err
+		}
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		// Active versions only: an open draft on top does not hide the version in force.
+		rows, err := tx.Query(ctx,
+			`SELECT p.id, p.name
+			   FROM approval_policies p
+			   JOIN approval_policy_versions v ON v.policy_id = p.id AND v.is_active
+			   JOIN workflow_roles r ON r.key = $1 AND r.deleted_at IS NULL
+			  WHERE p.deleted_at IS NULL
+			    AND (r.id = ANY(v.scope_workflow_role_ids)
+			         OR EXISTS (SELECT 1 FROM approval_policy_steps s
+			                     WHERE s.version_id = v.id AND s.kind = 'approval'
+			                       AND s.workflow_role_key = r.key))
+			  ORDER BY p.position, p.id`, key)
+		if err != nil {
+			return err
+		}
+		policies, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (PolicyRef, error) {
+			var ref PolicyRef
+			return ref, row.Scan(&ref.ID, &ref.Name)
+		})
+		if err != nil {
+			return err
+		}
+		if len(policies) > 0 {
+			return &roleInUse{policies: policies}
 		}
 
 		// One statement, no explicit lock: deleted_at IS NULL is both the existence

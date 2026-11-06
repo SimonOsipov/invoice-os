@@ -50,6 +50,8 @@ export function NodeGlyph({ type, size = 18 }: { type: NodeType; size?: number }
 export const wfBranchGlyph = <Icon paths={NODE_PATHS.condition} size={18} />
 export const wfPlusGlyph = <Icon paths={['M12 5v14M5 12h14']} size={15} strokeWidth={2} />
 export const wfCrossGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={12} strokeWidth={2.2} />
+export const wfUpGlyph = <Icon paths={['m18 15-6-6-6 6']} size={12} strokeWidth={2.2} />
+export const wfDownGlyph = <Icon paths={['m6 9 6 6 6-6']} size={12} strokeWidth={2.2} />
 export const wfBackGlyph = <Icon paths={['m15 18-6-6 6-6']} size={14} strokeWidth={2} />
 export const wfTriggerGlyph = <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8M16 17H8']} size={18} />
 export const wfSendGlyph = <Icon paths={['M22 2 11 13', 'M22 2l-7 20-4-9-9-4 20-7Z']} size={15} />
@@ -186,6 +188,9 @@ export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: Poli
     </span>
   )
 }
+
+/** The ghost variant's disabled paint. Inline, so it outranks `.v2-btn-ghost:hover`. */
+export const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
 
 /**
  * A labelled select with its own chevron. The app-layer strips native select chrome

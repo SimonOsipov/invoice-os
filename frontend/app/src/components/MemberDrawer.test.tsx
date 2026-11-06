@@ -24,7 +24,7 @@ import {
   type Member,
 } from '../lib/members'
 import { approverGapNotice, APPROVERS_UNCHECKED, drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
-import type { Policy } from '../lib/workflows'
+import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { MemberDrawer } from './MemberDrawer'
 
@@ -159,7 +159,8 @@ describe('APPR-04-06 AC4: drawer copy this subtask does not own stays byte-uncha
     const policy: Policy = {
       id: 'p1',
       name: 'Test policy',
-      scope: 'All invoices',
+      position: 0,
+      scopes: CATCH_ALL_SCOPES,
       status: 'draft',
       version: 1,
       activeVersion: null,
@@ -245,7 +246,8 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
     const policy: Policy = {
       id: 'p1',
       name: 'Test policy',
-      scope: 'All invoices',
+      position: 0,
+      scopes: CATCH_ALL_SCOPES,
       status: 'draft',
       version: 1,
       activeVersion: null,
@@ -375,7 +377,8 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at a
     const policy: Policy = {
       id: 'p1',
       name: 'Test policy',
-      scope: 'All invoices',
+      position: 0,
+      scopes: CATCH_ALL_SCOPES,
       status: 'draft',
       version: 1,
       activeVersion: null,

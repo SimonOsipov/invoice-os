@@ -785,12 +785,12 @@ function extractedPayloadKeys(): Record<string, string[]> {
 const TRANSCRIBED_PAYLOAD_KEYS: Record<string, string[]> = {
   'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number', 'approved_as'],
   'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
-  'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'steps', 'invoice_number'],
+  'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'policy_id', 'position', 'matched_scopes', 'steps', 'invoice_number'],
   'invoice.approval_cancelled': ['id', 'run_id', 'invoice_number'],
 }
 
 const RETIRED_FIELD_KEYS = ['run_id', 'step_ord', 'reason']
-const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps', 'invoice_number', 'approved_as']
+const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'policy_id', 'position', 'matched_scopes', 'steps', 'invoice_number', 'approved_as']
 
 const RUN_ID_SENTINEL = 'run-7f21-nothing-dropped'
 const STEP_ORD_SENTINEL = 7

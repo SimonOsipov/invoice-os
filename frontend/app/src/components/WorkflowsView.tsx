@@ -11,10 +11,10 @@ import { Fragment, useState, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { WorkflowBuilder } from './WorkflowBuilder'
-import { PolicyStatusPill, wfBranchGlyph, wfCrossGlyph, wfPlusGlyph } from './WorkflowParts'
+import { DISABLED_GHOST, PolicyStatusPill, wfBranchGlyph, wfCrossGlyph, wfDownGlyph, wfPlusGlyph, wfUpGlyph } from './WorkflowParts'
 import { membersSurface } from '../lib/members'
 import { policyStanding } from '../lib/policies'
-import { policySummary, type Policy } from '../lib/workflows'
+import { listLock, moveOrder, policySummary, scopeSummary, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
 const INTRO =
@@ -23,6 +23,9 @@ const INTRO =
 // Two nodes, not one: the shipped sentence splits at its em dash.
 const EMPTY_TITLE = 'No approval policies yet'
 const EMPTY_MESSAGE = 'Every invoice transmits as soon as it validates. Create one to require sign-off first.'
+
+const CATCH_ALL_REASON = 'This policy decides every document no other policy matches. It stays last, and cannot be moved or deleted, while any policy has scopes.'
+const CATCH_ALL_REASON_ID = 'policy-catch-all-reason-text'
 
 export function WorkflowsView({ ctx }: { ctx: PlatformCtx }) {
   const editing = ctx.editingPolicyId ? (ctx.policies.find((p) => p.id === ctx.editingPolicyId) ?? null) : null
@@ -63,11 +66,30 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
   // 'idle' arm (no gateway configured) renders the empty card, exactly as Members and Roles
   // already do on that build.
   const surface = membersSurface(ctx.policiesState)
-  // Two slots, never one. Create is a screen singleton so its reason is a bare string
+  // Create is a screen singleton so its reason is a bare string
   // (RoleModal.tsx:75); delete is row-scoped so its reason is keyed by id
   // (MembersView.tsx:78). One shared slot would let a create failure blank a row's reason.
   const [createError, setCreateError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null)
+  // A third slot, row-keyed like delete. A refusal also refetches, so the next Move starts from the server's list.
+  const [reorderError, setReorderError] = useState<{ id: string; message: string } | null>(null)
+  const [reordering, setReordering] = useState(false)
+  const lock = listLock(policies)
+
+  const move = async (id: string, dir: 'up' | 'down') => {
+    const order = moveOrder(policies, id, dir)
+    if (!order) return
+    setReorderError(null)
+    setReordering(true)
+    try {
+      await ctx.reorderPolicies(order)
+    } catch (err) {
+      setReorderError({ id, message: toApiError(err).message })
+      ctx.refetchPolicies()
+    } finally {
+      setReordering(false)
+    }
+  }
 
   return (
     <>
@@ -120,12 +142,17 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'roster' && (
         <div data-testid="policies-list" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {policies.map((p) => (
+          {policies.map((p, i) => (
             // A Fragment, not a wrapper div: the column's `gap: 10` spaces the message and
             // `.pf-row` stays the row hook the topology spec counts on.
             <Fragment key={p.id}>
               <PolicyRow
                 policy={p}
+                index={i}
+                lock={lock}
+                count={policies.length}
+                reordering={reordering}
+                onMove={(dir) => void move(p.id, dir)}
                 onEdit={() => ctx.openPolicy(p.id)}
                 onDelete={() => {
                   setDeleteError(null)
@@ -134,6 +161,12 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
               />
               {/* OUTSIDE `.pf-row`: the row's whole box carries `onClick={onEdit}`, so a
                   message nested inside it would open the builder when clicked. */}
+              {i === policies.length - 1 && lock.anyScoped && (
+                <div id={CATCH_ALL_REASON_ID} data-testid="policy-catch-all-reason" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                  {CATCH_ALL_REASON}
+                </div>
+              )}
+              {reorderError?.id === p.id && <PolicyError testId="policy-reorder-error">{reorderError.message}</PolicyError>}
               {deleteError?.id === p.id && <PolicyError testId="policy-delete-error">{deleteError.message}</PolicyError>}
             </Fragment>
           ))}
@@ -156,7 +189,40 @@ function PolicyError({ testId, maxWidth, children }: { testId: string; maxWidth?
   )
 }
 
-function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () => void; onDelete: () => void }) {
+type RowProps = {
+  policy: Policy
+  index: number
+  count: number
+  lock: ReturnType<typeof listLock>
+  reordering: boolean
+  onMove: (dir: 'up' | 'down') => void
+  onEdit: () => void
+  onDelete: () => void
+}
+
+function PolicyRow({ policy, index, count, lock, reordering, onMove, onEdit, onDelete }: RowProps) {
+  // A bound reads "no reason"; a lock reads the catch-all sentence.
+  const moveUpOk = lock.moveUp(index)
+  const moveDownOk = lock.moveDown(index)
+  const deleteOk = lock.deletable(index)
+  const locked = (ok: boolean, boundary: boolean) => !ok && !boundary
+  const iconBtn = (label: string, glyph: ReactNode, disabled: boolean, reason: boolean, onClick: () => void) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={reason ? CATCH_ALL_REASON : label}
+      aria-describedby={reason ? CATCH_ALL_REASON_ID : undefined}
+      disabled={disabled}
+      onClick={onClick}
+      className="v2-btn v2-btn-ghost pf-btn"
+      style={{ flex: 'none', width: 34, height: 34, padding: 0, justifyContent: 'center', color: 'var(--fg-4)', ...(disabled ? DISABLED_GHOST : {}) }}
+    >
+      {glyph}
+    </button>
+  )
+  // Draft scopes are not on the wire for a published row: mark the line instead.
+  const draft = policy.activeVersion !== null && policy.version !== policy.activeVersion
+  const summary = `${draft ? 'Draft: ' : ''}${scopeSummary(policy.scopes)} · ${policySummary(policy)}`
   return (
     // pf-ROW, not pf-btn: the prototype markup says pf-btn, but in this repo that
     // class forces `border-radius` with `!important`. pf-row is the repo's clickable-row hover.
@@ -165,6 +231,9 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
       onClick={onEdit}
       style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '15px 18px', cursor: 'pointer' }}
     >
+      {/* A span: the standing is found as the row's only mono child `div`. */}
+      <span className="mono" data-testid="policy-position" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>{index + 1}</span>
+
       <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfBranchGlyph}</span>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -172,42 +241,25 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
           <span style={{ fontSize: 14.5, fontWeight: 600 }}>{policy.name}</span>
           <PolicyStatusPill status={policy.status} />
         </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4 }}>
-          {policy.scope} · {policySummary(policy)}
+        <div className="mono" data-testid="policy-summary" title={summary} style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {summary}
         </div>
       </div>
 
       <div className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)' }}>{policyStanding(policy)}</div>
 
-      <button
-        type="button"
-        onClick={(e) => {
-          // The whole row navigates; editing is what a plain click already does.
-          e.stopPropagation()
-          onEdit()
-        }}
-        className="v2-btn v2-btn-ghost pf-btn"
-        style={{ flex: 'none', height: 34, padding: '0 15px', fontSize: 13 }}
-      >
-        Edit
-      </button>
+      {/* One wrapper stops every button click, enabled or not, from reaching the row's onEdit. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 15, flex: 'none' }} onClick={(e) => e.stopPropagation()}>
+        {iconBtn(`Move ${policy.name} up`, wfUpGlyph, reordering || !moveUpOk, locked(moveUpOk, index === 0), () => onMove('up'))}
+        {iconBtn(`Move ${policy.name} down`, wfDownGlyph, reordering || !moveDownOk, locked(moveDownOk, index === count - 1), () => onMove('down'))}
 
-      {/* No confirmation step: the prototype deletes outright and the Rules screen's
-          own remove action does the same, so adding one here would be this screen
-          inventing a pattern the app does not have. Flagged in the port notes. */}
-      <button
-        type="button"
-        aria-label={`Delete ${policy.name}`}
-        title={`Delete ${policy.name}`}
-        onClick={(e) => {
-          e.stopPropagation()
-          onDelete()
-        }}
-        className="v2-btn v2-btn-ghost pf-btn"
-        style={{ flex: 'none', width: 34, height: 34, padding: 0, justifyContent: 'center', color: 'var(--fg-4)' }}
-      >
-        {wfCrossGlyph}
-      </button>
+        <button type="button" onClick={onEdit} className="v2-btn v2-btn-ghost pf-btn" style={{ flex: 'none', height: 34, padding: '0 15px', fontSize: 13 }}>
+          Edit
+        </button>
+
+        {/* No confirmation step: the Rules screen's remove action deletes outright too. */}
+        {iconBtn(`Delete ${policy.name}`, wfCrossGlyph, !deleteOk, !deleteOk, onDelete)}
+      </div>
     </div>
   )
 }

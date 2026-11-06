@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,10 +24,11 @@ import (
 type (
 	PolicyLister    func(ctx context.Context) ([]Policy, error)
 	PolicyGetter    func(ctx context.Context, id string) (Policy, error)
-	PolicyCreator   func(ctx context.Context, name, scope string) (Policy, error)
-	PolicyDrafter   func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
+	PolicyCreator   func(ctx context.Context, name string, scopes *scopeInput) (Policy, error)
+	PolicyDrafter   func(ctx context.Context, id string, name *string, scopes *scopeInput, steps []stepInput) (Policy, error)
 	PolicyPublisher func(ctx context.Context, id string) (Policy, error)
 	PolicyDeleter   func(ctx context.Context, id string) (Policy, error)
+	PolicyReorderer func(ctx context.Context, ids []string) ([]Policy, error)
 )
 
 var (
@@ -36,6 +38,7 @@ var (
 	_ PolicyDrafter   = new(Store).PutDraft
 	_ PolicyPublisher = new(Store).PublishPolicy
 	_ PolicyDeleter   = new(Store).DeletePolicy
+	_ PolicyReorderer = new(Store).ReorderPolicies
 )
 
 // newPolicy is what every read and the create start from: lanes and versions are []
@@ -60,14 +63,15 @@ func takeTopVersion(p *Policy, pv PolicyVersion) {
 
 // policyVersionColumns is the one column list both version reads use, so the scan below
 // serves each of them.
-const policyVersionColumns = `policy_id, id, version, sealed, is_active, published_at, published_by`
+const policyVersionColumns = `v.policy_id, v.id, v.version, v.sealed, v.is_active, v.published_at, v.published_by,
+	` + scopedSQL
 
 // scanPolicyVersionRow reads one version row: its policy id, its own id, and the wire
 // shape. published_at is formatted in Go rather than read as ::text — the column's text
 // form is not RFC3339, which is what every other timestamp on this API marshals to.
 func scanPolicyVersionRow(rows pgx.Rows) (policyID, versionID string, pv PolicyVersion, err error) {
 	var at *time.Time
-	if err := rows.Scan(&policyID, &versionID, &pv.Version, &pv.Sealed, &pv.IsActive, &at, &pv.PublishedBy); err != nil {
+	if err := rows.Scan(&policyID, &versionID, &pv.Version, &pv.Sealed, &pv.IsActive, &at, &pv.PublishedBy, &pv.Scoped); err != nil {
 		return "", "", PolicyVersion{}, err
 	}
 	if at != nil {
@@ -123,88 +127,212 @@ func readPolicyTrees(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[s
 	return trees, nil
 }
 
-// ListPolicies returns the tenant's live policies, each with its version list newest
-// first and the highest version's step tree. Three statements, constant in the number of
-// policies: the policies, every version, then every step of the top versions in ONE
-// query, grouped in Go.
+// readPolicyScopes returns the scopes of each named version in one statement. Role keys
+// join workflow_roles with no deleted_at filter: a soft-deleted role keeps its key. No
+// tenant_id: RLS scopes the read.
+func readPolicyScopes(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[string]Scopes, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT v.id, v.scope_document_types, v.scope_entity_ids::text[],
+		        v.scope_amount_lower::text, v.scope_amount_upper::text, v.scope_amount_currency,
+		        coalesce((SELECT array_agg(r.key ORDER BY o.ord)
+		                    FROM unnest(v.scope_workflow_role_ids) WITH ORDINALITY AS o(role_id, ord)
+		                    JOIN workflow_roles r ON r.id = o.role_id), '{}')
+		   FROM approval_policy_versions v
+		  WHERE v.id = ANY($1::uuid[])`, versionIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]Scopes, len(versionIDs))
+	for rows.Next() {
+		var id string
+		var sc Scopes
+		var lower, upper, currency *string
+		if err := rows.Scan(&id, &sc.DocumentTypes, &sc.EntityIDs, &lower, &upper, &currency, &sc.WorkflowRoleKeys); err != nil {
+			return nil, err
+		}
+		if currency != nil {
+			sc.AmountBand = &AmountBand{Lower: lower, Upper: upper, Currency: *currency}
+		}
+		out[id] = sc
+	}
+	return out, rows.Err()
+}
+
+const scopeColumns = `scope_document_types, scope_entity_ids, scope_workflow_role_ids,
+	scope_amount_lower, scope_amount_upper, scope_amount_currency`
+
+// scopeRow is a scopeInput resolved to its stored form: arrays never nil, roles as ids.
+type scopeRow struct {
+	DocumentTypes, EntityIDs, RoleIDs []string
+	Lower, Upper, Currency            *string
+}
+
+// resolveScopesTx checks the scopes against the database: entities visible under RLS, live
+// roles, or a deleted role the top version already holds (keepRoleIDs), a currency on the NRS
+// list. Run after requireActiveAdmin.
+func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput, keepRoleIDs []string) (scopeRow, error) {
+	row := scopeRow{
+		DocumentTypes: append([]string{}, in.DocumentTypes...),
+		EntityIDs:     make([]string, 0, len(in.EntityIDs)),
+		RoleIDs:       make([]string, 0, len(in.WorkflowRoleKeys)),
+	}
+	for _, e := range in.EntityIDs {
+		row.EntityIDs = append(row.EntityIDs, uuid.MustParse(e).String())
+	}
+	if len(row.EntityIDs) > 0 {
+		var n int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM business_entities WHERE id = ANY($1::text[]::uuid[])`,
+			row.EntityIDs).Scan(&n); err != nil {
+			return scopeRow{}, err
+		}
+		if n != len(row.EntityIDs) {
+			return scopeRow{}, ErrScopeEntity
+		}
+	}
+	if len(in.WorkflowRoleKeys) > 0 {
+		rows, err := tx.Query(ctx,
+			`SELECT key, id, deleted_at IS NULL FROM workflow_roles WHERE key = ANY($1)`,
+			in.WorkflowRoleKeys)
+		if err != nil {
+			return scopeRow{}, err
+		}
+		ids := map[string]string{}
+		for rows.Next() {
+			var k, id string
+			var live bool
+			if err := rows.Scan(&k, &id, &live); err != nil {
+				rows.Close()
+				return scopeRow{}, err
+			}
+			if live || slices.Contains(keepRoleIDs, id) {
+				ids[k] = id
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return scopeRow{}, err
+		}
+		for _, k := range in.WorkflowRoleKeys {
+			id, ok := ids[k]
+			if !ok {
+				return scopeRow{}, ErrScopeRole
+			}
+			row.RoleIDs = append(row.RoleIDs, id)
+		}
+	}
+	if b := in.AmountBand; b != nil {
+		var ok bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM nrs_codes WHERE list = 'currencies' AND code = $1)`,
+			b.Currency).Scan(&ok); err != nil {
+			return scopeRow{}, err
+		}
+		if !ok {
+			return scopeRow{}, ErrScopeCurrency
+		}
+		row.Lower, row.Upper, row.Currency = b.Lower, b.Upper, &b.Currency
+	}
+	return row, nil
+}
+
+// ListPolicies returns the tenant's live policies by position, each with its version list
+// newest first and the highest version's step tree and scopes. Four statements, constant
+// in the number of policies: the policies, every version, every step of the top versions
+// and their scopes, each in ONE query, grouped in Go.
 //
 // No access-role gate of its own, the same as ListRoles: any caller the request seam
 // admits may list (TestPolicy_ReadNeedsNoAdminRoleWriteDoes).
 func (s *Store) ListPolicies(ctx context.Context) ([]Policy, error) {
-	policies := []Policy{}
+	var policies []Policy
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT id, name, scope
-			   FROM approval_policies
-			  WHERE deleted_at IS NULL
-			  ORDER BY created_at, id`)
-		if err != nil {
-			return err
-		}
-		idx := map[string]int{} // policy id -> index into policies
-		for rows.Next() {
-			p := newPolicy()
-			if err := rows.Scan(&p.ID, &p.Name, &p.Scope); err != nil {
-				rows.Close()
-				return err
-			}
-			idx[p.ID] = len(policies)
-			policies = append(policies, p)
-		}
-		// Closed explicitly rather than deferred: the next query reuses this
-		// transaction's connection.
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		// Unfiltered, like ListRoles' staffing read: a soft-deleted policy's versions are
-		// absent from idx and dropped, so its steps are never even asked for.
-		versions, err := tx.Query(ctx,
-			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  ORDER BY policy_id, version DESC`)
-		if err != nil {
-			return err
-		}
-		topOf := map[string]int{} // top version id -> index into policies
-		versionIDs := []string{}
-		for versions.Next() {
-			policyID, versionID, pv, err := scanPolicyVersionRow(versions)
-			if err != nil {
-				versions.Close()
-				return err
-			}
-			i, ok := idx[policyID]
-			if !ok {
-				continue
-			}
-			// version DESC makes the first surviving row per policy the highest one. It
-			// alone supplies Version, Sealed, Status and the version whose steps are read,
-			// so Steps and Version provably name the same version.
-			if len(policies[i].Versions) == 0 {
-				takeTopVersion(&policies[i], pv)
-				topOf[versionID] = i
-				versionIDs = append(versionIDs, versionID)
-			}
-			policies[i].Versions = append(policies[i].Versions, pv)
-		}
-		versions.Close()
-		if err := versions.Err(); err != nil {
-			return err
-		}
-
-		trees, err := readPolicyTrees(ctx, tx, versionIDs)
-		if err != nil {
-			return err
-		}
-		for versionID, i := range topOf {
-			policies[i].Steps = trees[versionID]
-		}
-		return nil
+		var err error
+		policies, err = listPoliciesTx(ctx, tx)
+		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	return policies, nil
+}
+
+// listPoliciesTx is ListPolicies' body, shared with ReorderPolicies' answer.
+func listPoliciesTx(ctx context.Context, tx pgx.Tx) ([]Policy, error) {
+	policies := []Policy{}
+	rows, err := tx.Query(ctx,
+		`SELECT id, name, scope, position
+		   FROM approval_policies
+		  WHERE deleted_at IS NULL
+		  ORDER BY position`)
+	if err != nil {
+		return nil, err
+	}
+	idx := map[string]int{} // policy id -> index into policies
+	for rows.Next() {
+		p := newPolicy()
+		if err := rows.Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		idx[p.ID] = len(policies)
+		policies = append(policies, p)
+	}
+	// Closed explicitly rather than deferred: the next query reuses this
+	// transaction's connection.
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Unfiltered, like ListRoles' staffing read: a soft-deleted policy's versions are
+	// absent from idx and dropped, so its steps are never even asked for.
+	versions, err := tx.Query(ctx,
+		`SELECT `+policyVersionColumns+`
+		   FROM approval_policy_versions v
+		  ORDER BY v.policy_id, v.version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	topOf := map[string]int{} // top version id -> index into policies
+	versionIDs := []string{}
+	for versions.Next() {
+		policyID, versionID, pv, err := scanPolicyVersionRow(versions)
+		if err != nil {
+			versions.Close()
+			return nil, err
+		}
+		i, ok := idx[policyID]
+		if !ok {
+			continue
+		}
+		// version DESC makes the first surviving row per policy the highest one. It
+		// alone supplies Version, Sealed, Status and the version whose steps are read,
+		// so Steps and Version provably name the same version.
+		if len(policies[i].Versions) == 0 {
+			takeTopVersion(&policies[i], pv)
+			topOf[versionID] = i
+			versionIDs = append(versionIDs, versionID)
+		}
+		policies[i].Versions = append(policies[i].Versions, pv)
+	}
+	versions.Close()
+	if err := versions.Err(); err != nil {
+		return nil, err
+	}
+
+	trees, err := readPolicyTrees(ctx, tx, versionIDs)
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := readPolicyScopes(ctx, tx, versionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for versionID, i := range topOf {
+		policies[i].Steps = trees[versionID]
+		policies[i].Scopes = scopes[versionID]
 	}
 	return policies, nil
 }
@@ -225,10 +353,10 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 		// u.String() is the canonical form: uuid.Parse also accepts the urn and braced
 		// spellings Postgres's ::uuid rejects. deleted_at IS NULL is the existence predicate.
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, scope
+			`SELECT id, name, scope, position
 			   FROM approval_policies
 			  WHERE id = $1 AND deleted_at IS NULL`, u.String(),
-		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+		).Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrPolicyNotFound
 			}
@@ -237,9 +365,9 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, p.ID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, p.ID)
 		if err != nil {
 			return err
 		}
@@ -269,6 +397,11 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 		p.Steps = trees[topVersionID]
+		scopes, err := readPolicyScopes(ctx, tx, []string{topVersionID})
+		if err != nil {
+			return err
+		}
+		p.Scopes = scopes[topVersionID]
 		return nil
 	})
 	if err != nil {
@@ -277,26 +410,21 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 	return p, nil
 }
 
-// CreatePolicy inserts a policy and its empty draft version 1, auditing both in the same
-// transaction. Statement order is the security property, on two axes:
-//
-// Both normalizers run ABOVE the transaction and REPLACE their argument, so the caller's
-// raw string is unreachable from the INSERT (the CreateRole precedent, store.go:128-133).
-// That replacement is the whole mechanism: normalizeScope's output set is exactly what
-// approval_policies_scope_check accepts, and an unnormalized scope reaching SQL raises a
-// 23514 that carries no sentinel, which policyStatusForErr answers 500 rather than the
-// 400 this seam promises (TestCreatePolicy_EmptyScopeNormalizedBeforeSQL).
-//
-// requireActiveAdmin is then the first statement in the closure, before any policy row is
-// read, so a suspended or non-admin caller is refused with nothing written
+// CreatePolicy inserts a policy and its draft version 1 carrying the scopes, auditing both
+// in the same transaction. The name and scopes are validated ABOVE the transaction
+// (TestCreatePolicy_RefusesEachBadScopeWithNothingWritten); requireActiveAdmin is the first
+// statement in the closure and the scope lookups follow it
 // (TestPolicy_CreatePermissionCheckedBeforeRowRead).
-func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, error) {
+func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInput) (Policy, error) {
 	name, err := normalizeName(name)
 	if err != nil {
 		return Policy{}, err
 	}
-	scope, err = normalizeScope(scope)
-	if err != nil {
+	in := scopeInput{}
+	if scopes != nil {
+		in = *scopes
+	}
+	if err := validateScopes(in); err != nil {
 		return Policy{}, err
 	}
 
@@ -311,24 +439,68 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 			return err
 		}
 
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		row, err := resolveScopesTx(ctx, tx, in, nil)
+		if err != nil {
+			return err
+		}
+
 		// tenant_id is explicit: the column has no DEFAULT and the RLS WITH CHECK ties it
-		// to the GUC. scope is the normalized local, never the argument as received.
+		// to the GUC. The legacy scope column keeps its default.
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO approval_policies (tenant_id, name, scope)
-			 VALUES ($1, $2, $3)
-			 RETURNING id, name, scope`,
-			caller.TenantID, name, scope,
-		).Scan(&created.ID, &created.Name, &created.Scope); err != nil {
+			`INSERT INTO approval_policies (tenant_id, name)
+			 VALUES ($1, $2)
+			 RETURNING id, name, scope, position`,
+			caller.TenantID, name,
+		).Scan(&created.ID, &created.Name, &created.Scope, &created.Position); err != nil {
+			return err
+		}
+
+		// Directly above the last live policy: swap the two positions in one UPDATE (the
+		// exclusion constraint is deferrable). The first live policy keeps its position.
+		var lastID string
+		var lastPos int
+		err = tx.QueryRow(ctx,
+			`SELECT id, position
+			   FROM approval_policies
+			  WHERE deleted_at IS NULL AND id <> $1
+			  ORDER BY position DESC
+			  LIMIT 1`, created.ID).Scan(&lastID, &lastPos)
+		switch {
+		case err == nil:
+			if _, err := tx.Exec(ctx,
+				`UPDATE approval_policies
+				    SET position = CASE WHEN id = $1::uuid THEN $2::int ELSE $3::int END
+				  WHERE id IN ($1::uuid, $4::uuid)`,
+				created.ID, lastPos, created.Position, lastID); err != nil {
+				return err
+			}
+			created.Position = lastPos
+		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
 
 		// sealed and is_active take their false DEFAULTs. Never set is_active here:
-		// approval_policy_versions_one_active spans the whole tenant, and publishing is
-		// its own seam.
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
-			 VALUES ($1, $2, 1)`,
-			caller.TenantID, created.ID); err != nil {
+		// publishing is its own seam.
+		var versionID string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, `+scopeColumns+`)
+			 VALUES ($1, $2, 1, $3::text[], $4::text[]::uuid[], $5::text[]::uuid[], $6::numeric, $7::numeric, $8::text)
+			 RETURNING id`,
+			caller.TenantID, created.ID, row.DocumentTypes, row.EntityIDs, row.RoleIDs,
+			row.Lower, row.Upper, row.Currency).Scan(&versionID); err != nil {
+			return err
+		}
+		scopesRead, err := readPolicyScopes(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		created.Scopes = scopesRead[versionID]
+
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
 			return err
 		}
 
@@ -348,29 +520,29 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 
 // PutDraft rewrites a policy's open draft wholesale: the submitted tree replaces that
 // version's whole step set. A policy holding no open draft is forked a fresh version
-// numbered max+1 carrying only what was sent — a fork copies no steps.
+// numbered max+1 — a fork copies no steps.
 //
 // A sealed version is never reached: the resolution predicate is NOT sealed, never "the
-// active version", because approval_policy_versions_one_active spans the tenant and a
-// policy can hold sealed versions with no active one. approval_policy_steps_content_lock
+// active version", because a policy can hold sealed versions with no active one. approval_policy_steps_content_lock
 // would raise 23001 if the predicate ever broke, and that stays an honest 500 — it is a
 // plpgsql RAISE carrying no constraint name, so no mapper can catch it by accident.
 //
-// Statement order is the security property, as in CreatePolicy: the id is parsed and both
-// normalizers run ABOVE the transaction, so neither a malformed uuid (22P02) nor an
-// unnormalized scope (23514) reaches SQL — both carry no sentinel and would answer 500
-// where this seam promises 404 and 400. requireActiveAdmin is then the first statement in
-// the closure, before any policy row is read.
-func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error) {
+// A nil scopes keeps the open draft's scopes; a fork copies the previous top version's.
+// A non-nil scopes (even empty) replaces them.
+//
+// Statement order is the security property, as in CreatePolicy: the id is parsed and the
+// name, scopes and tree are validated ABOVE the transaction, so neither a malformed uuid
+// (22P02) nor a bad scope reaches SQL. requireActiveAdmin is then the first statement in
+// the closure, before any policy row is read; the scope lookups run after the row lock and
+// before the first write.
+func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *scopeInput, steps []stepInput) (Policy, error) {
 	// GetPolicy's parse, and its choice of sentinel: 400 against 404 on a path resource
 	// would be an existence oracle.
 	u, err := uuid.Parse(id)
 	if err != nil {
 		return Policy{}, ErrPolicyNotFound
 	}
-	// Copied, never written through: the pointers belong to the caller (UpdateRole,
-	// store.go:211-218). normalizeScope's output set is exactly what
-	// approval_policies_scope_check accepts, so a non-nil "" reaches SQL as the default.
+	// Copied, never written through: the pointers belong to the caller (UpdateRole).
 	if name != nil {
 		n, err := normalizeName(*name)
 		if err != nil {
@@ -378,12 +550,10 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		}
 		name = &n
 	}
-	if scope != nil {
-		sc, err := normalizeScope(*scope)
-		if err != nil {
+	if scopes != nil {
+		if err := validateScopes(*scopes); err != nil {
 			return Policy{}, err
 		}
-		scope = &sc
 	}
 	if err := validateTree(steps); err != nil {
 		return Policy{}, err
@@ -396,6 +566,10 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		caller, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 
@@ -417,14 +591,34 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 			return err
 		}
 
+		var row scopeRow
+		if scopes != nil {
+			// The top version is the open draft, or the sealed version a fork copies.
+			var keep []string
+			if len(scopes.WorkflowRoleKeys) > 0 {
+				if err := tx.QueryRow(ctx,
+					`SELECT scope_workflow_role_ids::text[]
+					   FROM approval_policy_versions
+					  WHERE policy_id = $1 ORDER BY version DESC LIMIT 1`, policyID,
+				).Scan(&keep); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
+			}
+			r, err := resolveScopesTx(ctx, tx, *scopes, keep)
+			if err != nil {
+				return err
+			}
+			row = r
+		}
+
 		// coalesce rather than Go-merged values: only the fields that were sent appear in
-		// the effective write. $3 is the NORMALIZED local, never the argument as received.
+		// the effective write.
 		if err := tx.QueryRow(ctx,
 			`UPDATE approval_policies
-			    SET name = coalesce($2::text, name), scope = coalesce($3::text, scope)
+			    SET name = coalesce($2::text, name)
 			  WHERE id = $1
-			  RETURNING id, name, scope`, policyID, name, scope,
-		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+			  RETURNING id, name, scope, position`, policyID, name,
+		).Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
 			return err
 		}
 
@@ -440,16 +634,34 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 			// using it. tenant_id is explicit: the column has no DEFAULT. sealed and is_active
 			// take their false DEFAULTs — publishing is its own seam.
 			err = tx.QueryRow(ctx,
-				`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
-				 SELECT $1::uuid, $2::uuid, coalesce(max(version), 0) + 1
-				   FROM approval_policy_versions
-				  WHERE policy_id = $2
+				`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, `+scopeColumns+`)
+				 SELECT $1::uuid, $2::uuid, coalesce(v.version, 0) + 1,
+				        coalesce(v.scope_document_types, '{}'), coalesce(v.scope_entity_ids, '{}'),
+				        coalesce(v.scope_workflow_role_ids, '{}'),
+				        v.scope_amount_lower, v.scope_amount_upper, v.scope_amount_currency
+				   FROM (SELECT 1) one
+				   LEFT JOIN approval_policy_versions v
+				     ON v.policy_id = $2
+				    AND v.version = (SELECT max(version) FROM approval_policy_versions WHERE policy_id = $2)
 				 RETURNING id, version`,
 				caller.TenantID, policyID,
 			).Scan(&versionID, &version)
 		}
 		if err != nil {
 			return err
+		}
+
+		if scopes != nil {
+			if _, err := tx.Exec(ctx,
+				`UPDATE approval_policy_versions
+				    SET scope_document_types = $2::text[], scope_entity_ids = $3::text[]::uuid[],
+				        scope_workflow_role_ids = $4::text[]::uuid[], scope_amount_lower = $5::numeric,
+				        scope_amount_upper = $6::numeric, scope_amount_currency = $7::text
+				  WHERE id = $1`,
+				versionID, row.DocumentTypes, row.EntityIDs, row.RoleIDs,
+				row.Lower, row.Upper, row.Currency); err != nil {
+				return err
+			}
 		}
 
 		// Whole-set delete then re-insert. The tuples this transaction deleted are already
@@ -473,9 +685,9 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		// GET of the same row.
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, policyID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, policyID)
 		if err != nil {
 			return err
 		}
@@ -501,6 +713,15 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 			return err
 		}
 		p.Steps = trees[versionID]
+		scopes, err := readPolicyScopes(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		p.Scopes = scopes[versionID]
+
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
 
 		// Last statement in the closure: a failing audit write rolls the whole rewrite back
 		// (TestPutDraft_AuditsInSameTx). version is the WRITTEN draft's, the forked max+1
@@ -516,12 +737,91 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 	return p, nil
 }
 
-// PublishPolicy seals a policy's open draft and makes it the tenant's active version.
+// scopedSQL is true for a version that carries any scope; v is the version alias.
+const scopedSQL = `(cardinality(v.scope_document_types) > 0 OR cardinality(v.scope_entity_ids) > 0
+	OR cardinality(v.scope_workflow_role_ids) > 0 OR v.scope_amount_currency IS NOT NULL)`
+
+// scopedLiveExistsSQL: a live policy has a scoped top or active version. The last-policy pin and
+// scopedPolicyLiveTx share it.
+const scopedLiveExistsSQL = `EXISTS (
+	SELECT 1
+	  FROM approval_policies q
+	  JOIN approval_policy_versions v ON v.policy_id = q.id
+	 WHERE q.deleted_at IS NULL
+	   AND (v.is_active OR v.version = (SELECT max(w.version) FROM approval_policy_versions w WHERE w.policy_id = q.id))
+	   AND ` + scopedSQL + `)`
+
+// requireCatchAllLastTx refuses a state where the last live policy (by top version) or
+// the last live policy in force (by active version) carries a scope. No row passes.
+func requireCatchAllLastTx(ctx context.Context, tx pgx.Tx) error {
+	for _, q := range []string{
+		`SELECT tv.scoped
+		   FROM approval_policies p
+		  CROSS JOIN LATERAL (
+		        SELECT ` + scopedSQL + ` AS scoped
+		          FROM approval_policy_versions v
+		         WHERE v.policy_id = p.id
+		         ORDER BY v.version DESC
+		         LIMIT 1) tv
+		  WHERE p.deleted_at IS NULL
+		  ORDER BY p.position DESC
+		  LIMIT 1`,
+		`SELECT ` + scopedSQL + `
+		   FROM approval_policies p
+		   JOIN approval_policy_versions v ON v.policy_id = p.id AND v.is_active
+		  WHERE p.deleted_at IS NULL
+		  ORDER BY p.position DESC
+		  LIMIT 1`,
+	} {
+		var scoped bool
+		err := tx.QueryRow(ctx, q).Scan(&scoped)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if scoped {
+			return ErrPolicyCatchAll
+		}
+	}
+	return nil
+}
+
+// requireDeletedNotLastTx: the just-stamped policy, at position, may not have
+// been the last live one while any live policy is scoped.
+func requireDeletedNotLastTx(ctx context.Context, tx pgx.Tx, position int) error {
+	var pinned bool
+	if err := tx.QueryRow(ctx,
+		`SELECT $1::int > coalesce(max(p.position), 0) AND `+scopedLiveExistsSQL+`
+		   FROM approval_policies p
+		  WHERE p.deleted_at IS NULL`, position).Scan(&pinned); err != nil {
+		return err
+	}
+	if pinned {
+		return ErrPolicyCatchAll
+	}
+	return nil
+}
+
+// scopedPolicyLiveTx reports whether any live policy has a scoped top or active version.
+func scopedPolicyLiveTx(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var scoped bool
+	err := tx.QueryRow(ctx, `SELECT `+scopedLiveExistsSQL).Scan(&scoped)
+	return scoped, err
+}
+
+// LockTenantPublishTx serialises one tenant's policy writes and backlog sweeps
+// until the transaction ends. Each statement after it sees the earlier holder's commits.
+func LockTenantPublishTx(ctx context.Context, tx pgx.Tx, tenantID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID)
+	return err
+}
+
+// PublishPolicy seals a policy's open draft and makes it the policy's active version.
 //
-// Publishing a NEW version that names a dead role is refused at the door; a role deleted
-// AFTER publish leaves the sealed version active and its step blocking.
-// TestPublish_RejectsDanglingRole and TestPublish_RoleDeletedAfterPublishLeavesVersionActive
-// are the pair.
+// Publishing a NEW version that names a dead role is refused at the door
+// (TestPublish_RejectsDanglingRole).
 //
 // No body is read at all: published_by is the caller's subject and published_at is now().
 // Statement order is the security property, as in PutDraft — the id is parsed ABOVE the
@@ -544,25 +844,28 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// THE lock, and the only one that matters. Publish writes approval_policy_versions
-		// and nothing else, so without this row lock a concurrent PutDraft holding it sails
-		// past, and its DELETE FROM approval_policy_steps then dies 23001 under the version
-		// this sealed. FOR UPDATE on the version row would not serialise them — PutDraft
-		// never locks that row. Must stay the first row-read, mirroring PutDraft above.
+		// Before any sweep read: two publishers of different policies would otherwise
+		// sweep the same invoices and arm two open runs (TestPublish_ConcurrentPublishesArmOneRun).
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		// Must stay the first row-read, mirroring PutDraft above. FOR UPDATE on the version
+		// row would not do: PutDraft never locks that row.
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, scope
+			`SELECT id, name, scope, position
 			   FROM approval_policies
 			  WHERE id = $1 AND deleted_at IS NULL
 			    FOR UPDATE`, u.String(),
-		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+		).Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrPolicyNotFound
 			}
 			return err
 		}
 
-		// NOT sealed, never "the active version": one_active spans the tenant, so a policy
-		// can hold sealed versions with no active one. one_draft caps this at one row.
+		// NOT sealed, never "the active version": a policy can hold sealed versions with
+		// no active one. one_draft caps this at one row.
 		var versionID string
 		var version int
 		if err := tx.QueryRow(ctx,
@@ -583,6 +886,11 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 		p.Steps = trees[versionID]
+		scopes, err := readPolicyScopes(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		p.Scopes = scopes[versionID]
 
 		// ListRoles' predicate. Collected here rather than taken from liveRoleKeys, which is
 		// a test-only superuser read-back returning []string.
@@ -610,13 +918,11 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Its own statement, and TENANT-wide: one_active is ON (tenant_id) WHERE is_active,
-		// so publishing this policy deactivates whichever policy held the slot. No policy
-		// predicate — RLS is the tenant scope. Deactivation is not un-publishing; sealed,
-		// published_at and published_by are untouched
-		// (TestPublish_DeactivatesTheTenantsOtherPolicy).
+		// Only this policy's previous version leaves; other policies stay active
+		// (TestPublish_LeavesTheTenantsOtherPolicyActive).
 		if _, err := tx.Exec(ctx,
-			`UPDATE approval_policy_versions SET is_active = false WHERE is_active`); err != nil {
+			`UPDATE approval_policy_versions SET is_active = false WHERE policy_id = $1 AND is_active`,
+			p.ID); err != nil {
 			return err
 		}
 
@@ -631,18 +937,22 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			`UPDATE approval_policy_versions
 			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
 			  WHERE id = $1`, versionID, caller.Subject); err != nil {
-			// A concurrent publish won the tenant's slot. By constraint name, so a 23505 on
-			// any other unique stays a 500, and never retried: a retry would publish a tree
-			// this caller did not re-validate.
+			// Backstop: every store writer of is_active holds the tenant publish lock, so only a
+			// writer outside it reaches this (TestPublish_LosingTheActiveSlotIsErrConflict).
+			// By constraint name, so a 23505 on any other unique stays a 500. Never retried: a
+			// retry would publish a tree this caller did not re-validate.
 			if uniqueViolationOn(err, "approval_policy_versions_one_active") {
 				return ErrConflict
 			}
 			return err
 		}
 
-		// AFTER the seal, and that ordering is load-bearing: ArmTx resolves the version by
-		// `WHERE is_active`, so a sweep placed any earlier arms the version this publish just
-		// replaced — or, on a tenant's first publish, nothing at all.
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
+
+		// AFTER the seal, and that ordering is load-bearing: a sweep placed any earlier arms
+		// without this publish's version.
 		if err := s.sweepValidatedBacklog(ctx, tx, caller.TenantID, caller.Subject); err != nil {
 			return err
 		}
@@ -653,9 +963,9 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		// is only ever minted as max+1 and sealing mints none.
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, p.ID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, p.ID)
 		if err != nil {
 			return err
 		}
@@ -690,9 +1000,8 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 
 // sweepValidatedBacklog arms one run per invoice sitting at `validated` with no live run,
 // inside PublishPolicy's transaction. This IS the backfill — there is no data migration
-// and no background pass — so when publish answers 200 the new version already governs the
-// whole backlog, not only invoices validated after it. A second publish arms zero: every
-// invoice the first sweep touched now carries a run the anti-join excludes.
+// and no background pass. Each invoice is armed with its own first match, not with the
+// published version; one no policy matches gets no run.
 //
 // RLS is the only tenant filter, as everywhere else in this store. tenantID is passed
 // through for the run row ArmTx stamps, not used as a predicate.
@@ -769,14 +1078,14 @@ func (s *Store) sweepValidatedBacklog(ctx context.Context, tx pgx.Tx, tenantID, 
 // DeletePolicy stamps deleted_at and, in the same transaction, deactivates the version the
 // policy was governing with: without that a soft-deleted policy keeps deciding every
 // invoice while being invisible to every read. Deactivation is not un-publishing —
-// seal_guard refuses only sealed -> unsealed, and published_at/by survive.
+// seal_guard refuses sealed -> unsealed and a scope change on a sealed row, and published_at/by survive.
 //
 // This deletes a POLICY, not an approval DECISION (Decision Q12): no version row is ever
 // removed. invoice_app holds no DELETE on approval_policy_versions, approval_decisions is
 // GRANT SELECT, INSERT only, and approval_runs -> approval_policy_versions is ON DELETE
 // RESTRICT.
 //
-// The returned Policy is inert: only ID, Name and Scope are carried through, so a policy
+// The returned Policy is inert: only ID, Name, Scope and Position are carried through (Scopes is the catch-all), so a policy
 // published at v3 still answers status "draft", version 0, steps [] and versions []
 // (the DeleteRole precedent, store.go:309-312).
 func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
@@ -796,10 +1105,12 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Must stay the first statement touching a policy row: the row-level exclusive lock it
-		// takes is what serialises this against PublishPolicy's FOR UPDATE, in that lock order
-		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite — the race spec passes
-		// against a later stamp too). deleted_at IS NULL is both the
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		// Must stay the first statement touching a policy row, as in PublishPolicy
+		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite). deleted_at IS NULL is both the
 		// existence predicate and the idempotency mechanism — under READ COMMITTED a second
 		// delete re-evaluates it, matches nothing, and is ErrPolicyNotFound rather than a
 		// re-stamp. now() is the transaction timestamp the audit row's created_at also takes.
@@ -807,16 +1118,15 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			`UPDATE approval_policies
 			    SET deleted_at = now()
 			  WHERE id = $1 AND deleted_at IS NULL
-			RETURNING id, name, scope`, u.String(),
-		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+			RETURNING id, name, scope, position`, u.String(),
+		).Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrPolicyNotFound
 			}
 			return err
 		}
 
-		// Policy-scoped, unlike publish's tenant-wide deactivation: this policy is the one
-		// leaving. No RowsAffected guard — 0 rows is the never-published case
+		// Same policy scope as publish: this policy is the one leaving. No RowsAffected guard — 0 rows is the never-published case
 		// (TestDeletePolicy_UnpublishedPolicyKeepsItsDraft).
 		if _, err := tx.Exec(ctx,
 			`UPDATE approval_policy_versions
@@ -834,6 +1144,13 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			   FROM approval_policy_versions
 			  WHERE policy_id = $1`, p.ID,
 		).Scan(&version); err != nil {
+			return err
+		}
+
+		if err := requireDeletedNotLastTx(ctx, tx, p.Position); err != nil {
+			return err
+		}
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
 			return err
 		}
 
@@ -949,4 +1266,114 @@ func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID strin
 		c.roleKeys, c.slaHours, c.condOps, c.condAmounts, c.notifyTargets, c.notifyChannels,
 	)
 	return err
+}
+
+// ReorderPolicies sets the live policies' order: the old positions, permuted. ids must
+// be exactly the live set (else ErrPolicyOrderStale). The same order writes nothing.
+func (s *Store) ReorderPolicies(ctx context.Context, ids []string) ([]Policy, error) {
+	// Parsed above the tx: a malformed id reaching SQL is a 22P02, unmappable.
+	canon := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		u, err := uuid.Parse(id)
+		if err != nil {
+			return nil, ErrValidation
+		}
+		c := u.String()
+		if seen[c] {
+			return nil, ErrValidation
+		}
+		seen[c] = true
+		canon = append(canon, c)
+	}
+
+	var out []Policy
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT id, position FROM approval_policies
+			  WHERE deleted_at IS NULL ORDER BY position FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		var oldIDs []string
+		var oldPos []int
+		for rows.Next() {
+			var id string
+			var pos int
+			if err := rows.Scan(&id, &pos); err != nil {
+				rows.Close()
+				return err
+			}
+			oldIDs = append(oldIDs, id)
+			oldPos = append(oldPos, pos)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if len(canon) != len(oldIDs) {
+			return ErrPolicyOrderStale
+		}
+		for _, id := range oldIDs {
+			if !seen[id] {
+				return ErrPolicyOrderStale
+			}
+		}
+
+		same := true
+		for i := range canon {
+			if canon[i] != oldIDs[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			out, err = listPoliciesTx(ctx, tx)
+			return err
+		}
+
+		// While any live policy is scoped, the last policy stays in place.
+		if canon[len(canon)-1] != oldIDs[len(oldIDs)-1] {
+			scoped, err := scopedPolicyLiveTx(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if scoped {
+				return ErrPolicyCatchAll
+			}
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_policies p
+			    SET position = u.pos
+			   FROM unnest($1::uuid[], $2::int[]) AS u(id, pos)
+			  WHERE p.id = u.id`, canon, oldPos); err != nil {
+			return err
+		}
+		if err := requireCatchAllLastTx(ctx, tx); err != nil {
+			return err
+		}
+		out, err = listPoliciesTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, caller.Subject, "approval_policy.reordered", map[string]any{
+			"from_order": oldIDs,
+			"to_order":   canon,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

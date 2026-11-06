@@ -22,8 +22,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -223,18 +225,9 @@ func (v *Validator) ValidateCustom(ctx context.Context, items []ValidateItem, se
 		return ValidateResult{}, fmt.Errorf("%w: marshal batch request: %v", ErrUpstream, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/validate/batch", bytes.NewReader(body))
+	resp, err := v.post(ctx, "/v1/validate/batch", "batch validate", body)
 	if err != nil {
-		return ValidateResult{}, fmt.Errorf("%w: build batch request: %v", ErrUpstream, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(headerS2SToken, v.s2sToken)
-
-	resp, err := v.hc.Do(req)
-	if err != nil {
-		// Transport: connection refused, closed connection, timeout, context
-		// cancellation. Never a verdict on the invoices. [AC#3]
-		return ValidateResult{}, fmt.Errorf("%w: post batch validate: %v", ErrUpstream, err)
+		return ValidateResult{}, err
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -364,15 +357,9 @@ func (v *Validator) CheckCustomRule(ctx context.Context, in customrule.CheckInpu
 	if err != nil {
 		return fmt.Errorf("%w: marshal custom rule check: %v", ErrUpstream, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/custom-rules/check", bytes.NewReader(body))
+	resp, err := v.post(ctx, "/v1/custom-rules/check", "custom rule check", body)
 	if err != nil {
-		return fmt.Errorf("%w: build custom rule check: %v", ErrUpstream, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(headerS2SToken, v.s2sToken)
-	resp, err := v.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("%w: post custom rule check: %v", ErrUpstream, err)
+		return err
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -393,4 +380,28 @@ func (v *Validator) CheckCustomRule(ctx context.Context, in customrule.CheckInpu
 		}
 	}
 	return fmt.Errorf("%w: validation service returned status %d", ErrUpstream, resp.StatusCode)
+}
+
+// post sends one S2S POST, retrying once after a transport error: a reused
+// keep-alive connection can be reset before the request lands. No retry on a
+// done ctx or a timeout (a retry would double the wait). Both endpoints are read-only.
+func (v *Validator) post(ctx context.Context, path, what string, body []byte) (*http.Response, error) {
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("%w: build %s: %v", ErrUpstream, what, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(headerS2SToken, v.s2sToken)
+
+		resp, err := v.hc.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		var ne net.Error
+		if attempt >= 2 || ctx.Err() != nil || (errors.As(err, &ne) && ne.Timeout()) {
+			// Never a verdict on the invoices. [AC#3]
+			return nil, fmt.Errorf("%w: post %s: %v", ErrUpstream, what, err)
+		}
+	}
 }

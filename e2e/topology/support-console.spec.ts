@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { apiBase, createEntity, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping, type AuditEvent, type StaffAccount } from '../api/client'
+import { apiBase, createEntity, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, registerFormAccount, signInSession, suggestMapping, type AuditEvent, type StaffAccount } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildOversizedCellCsv } from '../importFixtures'
 import { argosOn, shoot } from '../argos'
@@ -507,7 +507,6 @@ async function rectsOfFirst(page: Page, loc: Locator, cap: number, what: string)
 
 async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   const mn = mainOf(page)
-  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
   const house = tenantRow(page, HOUSE_TENANT_ID)
   const demo2222 = tenantRow(page, DEMO_2222_ID)
   await expect(house, 'the house tenant row has loaded').toBeVisible()
@@ -516,6 +515,12 @@ async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   const demoTag = (row: Locator): Locator => row.getByText('DEMO', { exact: true })
   await expect(demoTag(house)).toBeVisible()
   await expect(demoTag(demo2222)).toBeVisible()
+  // A parallel shard's tenant lands after the screen read, before the live read (BUG-110).
+  const forced = await registerFormAccount('bug110')
+  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
+  const forcedId = live.find((t) => t.name === forced.account.workspaceName)?.id
+  expect(forcedId, 'the forced tenant is in the live read').toBeDefined()
+  expect(live.find((t) => !t.demo)?.id, 'the forced tenant is the newest non-demo tenant').toBe(forcedId)
   const plain = live.find((t) => !t.demo)
   expect(plain, 'the live read holds a non-demo tenant').toBeDefined()
   const plainRow = tenantRow(page, plain!.id)

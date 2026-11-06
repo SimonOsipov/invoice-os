@@ -623,3 +623,27 @@ func TestPutDraft_RefusesAnUnknownRoleKeyEvenWithAStoredDeletedRole(t *testing.T
 		t.Errorf("updated audit rows = %d, want %d", n, auditBefore)
 	}
 }
+
+func TestPutDraft_RefusesADeletedRoleOnlyAnOlderVersionHeld(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04-01 older-version")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "old-role", "Old role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "P")
+	seedSealedActiveV1Scoped(t, super, tenantID, policyID, seedBusinessEntity(t, super, tenantID, "Client A"), roleID)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
+	softDeleteWorkflowRole(t, super, roleID)
+	store := NewStore(app, stubFingerprinter, nil)
+
+	// v2 drops the role, so the top version no longer holds it; v1 still does.
+	if _, err := store.PutDraft(c, policyID, nil, &scopeInput{DocumentTypes: []string{"debit_note"}}, approvalStep("engagement-partner")); err != nil {
+		t.Fatalf("fork without the role: %v", err)
+	}
+	_, err := store.PutDraft(c, policyID, nil, &scopeInput{WorkflowRoleKeys: []string{"old-role"}}, approvalStep("engagement-partner"))
+	if !errors.Is(err, ErrScopeRole) {
+		t.Fatalf("err = %v, want ErrScopeRole", err)
+	}
+	if stored := versionScopeColumns(t, super, openDraft(t, super, policyID).ID); len(stored.RoleIDs) != 0 {
+		t.Errorf("v2 role ids = %v, want none", stored.RoleIDs)
+	}
+}

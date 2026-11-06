@@ -1770,6 +1770,7 @@ describe('APSC-04-02: the builder renders no scope-not-routed note and no Applie
     const scoped: Policy = { ...policyWith('fin_mgr'), scopes: { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] } }
     const { unmount } = render(<WorkflowBuilder ctx={builderCtx()} policy={scoped} />)
     expect(screen.getByTestId('canvas-trigger-line').textContent).toBe('TRIGGER · CREDIT NOTES')
+    expect(screen.getByTestId('canvas-trigger-line').title).toBe('TRIGGER · CREDIT NOTES')
     unmount()
     render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
     expect(screen.getByTestId('canvas-trigger-line').textContent).toBe('TRIGGER · ALL INVOICES')
@@ -2863,6 +2864,44 @@ describe('APSC-04-03: the Applies card', () => {
     expect(opts).toEqual({ sendScopes: true })
   })
 
+  it('a client is added and saved as an entity id', async () => {
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(cellSelect('client'), { target: { value: 'e2' } })
+    expect(chipLabels(cell('client'))).toEqual(['Alpha Mills'])
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    expect((savePolicy.mock.calls[0] as unknown as [Policy])[0].scopes).toMatchObject({ entity_ids: ['e2'], document_types: [] })
+  })
+
+  it('the three band inputs each edit their own part of the band', async () => {
+    const p = scoped('p1', { amount_band: { lower: '10', upper: null, currency: 'NGN' } })
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+
+    fireEvent.change(screen.getByLabelText('Band to'), { target: { value: '99.5' } })
+    fireEvent.change(screen.getByLabelText('Band currency'), { target: { value: 'usd' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(savePolicy).toHaveBeenCalledTimes(1))
+    expect((savePolicy.mock.calls[0] as unknown as [Policy])[0].scopes.amount_band).toEqual({ lower: '10', upper: '99.5', currency: 'USD' })
+  })
+
+  it('a scope edit ends the Saved flash', async () => {
+    const p = scoped('p1')
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy: vi.fn(async (x: Policy) => x) })} policy={p} />)
+    fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+
+    fireEvent.change(cellSelect('doc'), { target: { value: 'credit_note' } })
+
+    expect(screen.queryByText('Saved')).toBeNull()
+  })
+
   it('clearing the band sends null', async () => {
     const p = scoped('p1', { amount_band: { lower: '10', upper: '20', currency: 'NGN' } })
     const savePolicy = vi.fn(async (x: Policy) => x)
@@ -2886,6 +2925,7 @@ describe('APSC-04-03: the Applies card', () => {
 
     await waitFor(() => expect(chipLabels(cell('role'))).toEqual(['Engagement Manager', 'Engagement Partner']))
     expect((savePolicy.mock.calls[0] as unknown[])[1]).toEqual({ sendScopes: true })
+    expect((savePolicy.mock.calls[0] as unknown as [Policy])[0].scopes).toMatchObject({ workflow_role_keys: ['fin_mgr'], entity_ids: [] })
   })
 
   it('a save with no scope edit sends no scopes', async () => {
@@ -3050,6 +3090,12 @@ describe('APSC-04-03: the Applies card', () => {
     fireEvent.click(saveButton())
 
     await waitFor(() => expect(screen.getByTestId('policy-save-error').textContent).toBe(sentence))
+  })
+
+  it('an idle entities fetch shows Loading', () => {
+    const p = scoped('p1')
+    render(<WorkflowBuilder ctx={editableCtx(p, { entitiesState: 'idle' })} policy={p} />)
+    expect(screen.queryByTestId('scope-card')).toBeNull()
   })
 
   it('an unlanded entities fetch shows Loading, an errored one ErrorState with retry', () => {

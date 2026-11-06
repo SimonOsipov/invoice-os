@@ -544,8 +544,26 @@ async function backToList(page: Page): Promise<void> {
   await expect(page.getByTestId('policies-list')).toBeVisible()
 }
 
+// Cut off with an ellipsis, not overflowing: the full text sits in `title` and the box stays inside its parent.
+async function assertTruncated(el: Locator, label: string): Promise<void> {
+  const m = await el.evaluate((n) => ({
+    scroll: n.scrollWidth,
+    client: n.clientWidth,
+    overflow: getComputedStyle(n).textOverflow,
+    title: n.getAttribute('title'),
+    text: n.textContent,
+    right: n.getBoundingClientRect().right,
+    parentRight: (n.parentElement as HTMLElement).getBoundingClientRect().right,
+  }))
+  expect(m.scroll, `${label}: the text is not cut off`).toBeGreaterThan(m.client)
+  expect(m.overflow, `${label}: text-overflow`).toBe('ellipsis')
+  expect(m.title, `${label}: title holds the full text`).toBe(m.text)
+  expect(m.right, `${label}: overflows its parent`).toBeLessThanOrEqual(m.parentRight + 1)
+}
+
 // Every chip inside its cell and the trigger line inside the trigger card, at each wide width.
-async function assertScopeFit(page: Page, label: string): Promise<void> {
+// `longLabel` is a chip label too long to fit at any wide width.
+async function assertScopeFit(page: Page, label: string, longLabel?: Locator): Promise<void> {
   const card = page.getByTestId('scope-card')
   const chips = card.locator('button.pf-chip')
   const entry = page.viewportSize()
@@ -559,6 +577,7 @@ async function assertScopeFit(page: Page, label: string): Promise<void> {
         const [c, cb] = [await chip.boundingBox(), await cell.boundingBox()]
         expect(c && cb && enclosesRect(cb, c, 1), `${label}: a chip leaves its cell at ${width}px`).toBe(true)
       }
+      if (longLabel) await assertTruncated(longLabel, `${label}: the long chip label at ${width}px`)
       const [line, trigger] = [await page.getByTestId('canvas-trigger-line').boundingBox(), await page.getByTestId('canvas-trigger').boundingBox()]
       expect(line && trigger && enclosesRect(trigger, line, 1), `${label}: the trigger line leaves the trigger card at ${width}px`).toBe(true)
     }
@@ -572,7 +591,7 @@ test('firm Workflows, scopes and order: two scoped policies above the catch-all 
   const account = await provisionRealAccount('apsc04-order', 'firm')
   const token = (await signInSession(account.email, account.password)).access_token
   await codeListsReady(token)
-  const entityName = `APSC04 client ${freshTin()} `.padEnd(80, 'x')
+  const entityName = `APSC04 client ${freshTin()} `.padEnd(300, 'x')
   const entity = await createEntity(token, { name: entityName, tin: freshTin() })
   const role = await createWorkflowRole(token, { title: freshRoleTitle() })
   const [nameA, nameB, nameC] = [freshPolicyName(), freshPolicyName(), freshPolicyName()]
@@ -612,7 +631,7 @@ test('firm Workflows, scopes and order: two scoped policies above the catch-all 
     const putA = page.waitForRequest((r) => r.method() === 'PUT' && DRAFT_PUT.test(new URL(r.url()).pathname))
     expect((await saveDraft(page)).ok()).toBe(true)
     expect((await putA).postDataJSON().scopes).toMatchObject({ document_types: ['credit_note'], entity_ids: [entity.id], workflow_role_keys: [], amount_band: null })
-    await assertScopeFit(page, 'A')
+    await assertScopeFit(page, 'A', card.getByTestId('scope-cell-client').locator('button.pf-chip span[title]'))
     await backToList(page)
 
     // B: the role and a band; an unknown currency is refused first.
@@ -638,6 +657,14 @@ test('firm Workflows, scopes and order: two scoped policies above the catch-all 
       'NGN 1,000–50,000 · Created by 1 role · 0 approvals',
       'All invoices · 0 approvals',
     ])
+    const narrow = page.viewportSize()
+    try {
+      await page.setViewportSize({ width: 860, height: 900 })
+      await expect.poll(async () => page.getByTestId('policy-summary').nth(1).evaluate((n) => n.scrollWidth > n.clientWidth), 'the row summary is cut off at 860px').toBe(true)
+      await assertTruncated(page.getByTestId('policy-summary').nth(1), 'row B summary at 860px')
+    } finally {
+      if (narrow) await page.setViewportSize(narrow)
+    }
     await expect(page.getByTestId('policy-catch-all-reason')).toBeVisible()
     await expect(page.getByRole('button', { name: `Delete ${nameC}`, exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: `Move ${nameC} up`, exact: true })).toBeDisabled()

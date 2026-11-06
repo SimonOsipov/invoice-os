@@ -1564,6 +1564,7 @@ function stubPolicyGateway(list: ReturnType<typeof policyWire>[], opts: PolicyGa
         if (method === 'PUT' && url.endsWith('/approval-policies/order')) {
           return opts.reorder ? opts.reorder() : okJson({ approval_policies: list })
         }
+        if (method === 'PUT' && url.endsWith('/draft')) return okJson(policyWire(url.split('/').slice(-2)[0], 'Saved'))
         if (method === 'POST') return okJson(policyWire(CREATED_POLICY_ID, 'Untitled policy'))
         if (method === 'DELETE') return okJson({})
         if (opts.holdList?.held) return opts.holdList.release.then(() => ({ ok: true, status: 200, json: () => Promise.resolve({ approval_policies: list }) }))
@@ -1728,6 +1729,36 @@ describe('APSC-04-02: the reorder and create verbs write the mirror from the ser
 
     expect((caught as { status?: number } | undefined)?.status, 'the refusal did not reject with the 409').toBe(409)
     expect(ids()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('reorderPolicies_takesTheAnswersOrderAndPositions', async () => {
+    const answer = [A, C, B].map((w, i) => ({ ...w, position: i }))
+    await bootAtWithPolicies('/workflows', [A, B, C], { reorder: () => okJson({ approval_policies: answer }) })
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b', 'c']))
+
+    await act(async () => {
+      await capturedCtx!.reorderPolicies(['b', 'a', 'c'])
+    })
+
+    expect(ids(), 'the mirror followed the order sent, not the answer').toEqual(['a', 'c', 'b'])
+    expect(requireCtx().policies.map((p) => p.position)).toEqual([0, 1, 2])
+  })
+
+  it('savePolicy_forwardsSendScopesToTheDraftPut', async () => {
+    await bootAtWithPolicies('/workflows', [A, B])
+    await waitFor(() => expect(ids(), 'the list never arrived').toEqual(['a', 'b']))
+    const draftBodies = () =>
+      (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+        .filter(([url, init]) => url.endsWith('/a/draft') && init?.method === 'PUT')
+        .map(([, init]) => Object.keys(JSON.parse(init?.body as string) as object).sort())
+    const policyA = requireCtx().policies[0]
+
+    await act(async () => {
+      await capturedCtx!.savePolicy(policyA, { sendScopes: true })
+      await capturedCtx!.savePolicy(policyA, { sendScopes: false })
+    })
+
+    expect(draftBodies()).toEqual([['name', 'scopes', 'steps'], ['name', 'steps']])
   })
 
   it('createPolicy_putsTheNewPolicyAboveTheLast', async () => {

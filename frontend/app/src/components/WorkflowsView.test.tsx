@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // WorkflowsView's oracle: the four-surface ladder and its gates, each row's two claims,
-// and the two write-error slots.
+// and the write-error slots.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'

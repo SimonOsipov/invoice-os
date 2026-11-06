@@ -66,7 +66,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
   // 'idle' arm (no gateway configured) renders the empty card, exactly as Members and Roles
   // already do on that build.
   const surface = membersSurface(ctx.policiesState)
-  // Two slots, never one. Create is a screen singleton so its reason is a bare string
+  // Create is a screen singleton so its reason is a bare string
   // (RoleModal.tsx:75); delete is row-scoped so its reason is keyed by id
   // (MembersView.tsx:78). One shared slot would let a create failure blank a row's reason.
   const [createError, setCreateError] = useState<string | null>(null)

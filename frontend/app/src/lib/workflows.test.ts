@@ -279,6 +279,12 @@ describe('scopeSummary and isCatchAll', () => {
     expect(scopeSummary({ ...CATCH_ALL_SCOPES, entity_ids: ['e1'], workflow_role_keys: ['a', 'b', 'c'] })).toBe('1 client · Created by 3 roles')
   })
 
+  it('isCatchAll is false for each single scope', () => {
+    const singles = [{ document_types: ['credit_note'] }, { entity_ids: ['e1'] }, { workflow_role_keys: ['r1'] }, { amount_band: band('1', null) }]
+    expect(singles).toHaveLength(4)
+    for (const one of singles) expect(isCatchAll({ ...CATCH_ALL_SCOPES, ...one }), JSON.stringify(one)).toBe(false)
+  })
+
   it('isCatchAll is false when only the band is set', () => {
     expect(isCatchAll({ ...CATCH_ALL_SCOPES, amount_band: band('1', null) })).toBe(false)
     expect(isCatchAll(CATCH_ALL_SCOPES)).toBe(true)
@@ -302,6 +308,7 @@ describe('moveOrder and listLock', () => {
     expect(moveOrder(list(4), 'a', 'up')).toBeNull()
     expect(moveOrder(list(4), 'd', 'down')).toBeNull()
     expect(moveOrder(list(4), 'zz', 'up')).toBeNull()
+    expect(moveOrder(list(4), 'zz', 'down')).toBeNull()
   })
 
   it('listLock pins the last row while any policy is scoped', () => {
@@ -325,6 +332,7 @@ describe('moveOrder and listLock', () => {
 
 describe('band inputs', () => {
   it('currencyText keeps three upper-case letters', () => {
+    expect(currencyText('abcd')).toBe('ABC')
     expect(currencyText('ngn1')).toBe('NGN')
     expect(currencyText('u s')).toBe('US')
   })
@@ -333,10 +341,12 @@ describe('band inputs', () => {
     expect(boundText('5,000,000.50.1')).toBe('5000000.50')
     expect(boundText('abc')).toBe('')
     expect(boundText('1.239')).toBe('1.23')
+    expect(boundText('1.2.3')).toBe('1.23')
   })
 
   it('boundText caps the integer part at 12 digits', () => {
     expect(boundText('1234567890123')).toBe('123456789012')
+    expect(boundText('1234567890123.5')).toBe('123456789012.5')
   })
 
   it('bandFrom is null when everything is empty, else a band with null for an empty bound', () => {

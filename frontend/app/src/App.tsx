@@ -1641,7 +1641,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // making the previous fetch's claim. Pinned by policiesWiring.test.ts, 'the two verbs
   // that change the list length refetch the status the ladder reads'.
 
-  // Creating opens the builder in the same step: a blank row appended to the list with
+  // Creating opens the builder in the same step: a blank row with
   // nothing else happening reads as a click that did nothing.
   async function createPolicy(): Promise<void> {
     const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')

@@ -43,6 +43,7 @@
 import { test, expect } from '@playwright/test'
 import { login, createEntity, apiBase, checkMapping, getSavedMapping, PERSONAS, suggestMapping } from './client'
 import { freshTin } from './fixtures'
+import { nightlyTarget } from '../targets'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { getInvoice, listInvoices, rawFetch } from './client'
 import { IMPORT_KEYS, PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
@@ -940,7 +941,7 @@ test.describe('check-mapping contract (API E2E, over the deployed gateway)', () 
 
   test('CHECK05-API-01: the check endpoint answers the documented body on the deployed stack', async () => {
     const plain = await uploadDocument(token, check05Csv(`INV-CHECK05API-P-${freshTin()}`, 'Notes'))
-    // A VAT column of free text is a real doubt; the JEVFAKE-DOUBT header makes the fake doubt it too. Unconfirmed on the real Jev.
+    // The fake doubts through the JEVFAKE-DOUBT header; the real Jev doubt of a free-text VAT column is unmeasured.
     const doubtRow = [`INV-CHECK05API-D-${freshTin()}`, '2026-01-15', '87654321-0002', 'CHECK-05 Buyer', 'NGN', '1000.00', 'Deliver to back gate', '1075.00', 'Item 1', '1', '100.00', '75.00', '']
     const doubt = await uploadDocument(token, `${IMPORT_HEADER},Tax Amount,Notes JEVFAKE-DOUBT\n${doubtRow.join(',')}\n`)
     const asked = { invoice_number: 'Invoice No', vat: 'VAT' }
@@ -948,7 +949,10 @@ test.describe('check-mapping contract (API E2E, over the deployed gateway)', () 
     const { doubted } = await checkMapping(token, { document_id: plain, mapping: asked })
     expect([...doubted], 'doubted is sorted').toEqual([...doubted].sort())
     for (const key of doubted) expect(Object.keys(asked), `doubted key ${key} was asked`).toContain(key)
-    expect(await checkMapping(token, { document_id: doubt, mapping: { vat: 'VAT' } }), 'free text claimed as vat is doubted').toEqual({ doubted: ['vat'] })
+    const doubtAnswer = await checkMapping(token, { document_id: doubt, mapping: { vat: 'VAT' } })
+    expect([...doubtAnswer.doubted], 'doubted is sorted').toEqual([...doubtAnswer.doubted].sort())
+    for (const key of doubtAnswer.doubted) expect(['vat'], `doubted key ${key} was asked`).toContain(key)
+    if (!nightlyTarget()) expect(doubtAnswer, 'free text claimed as vat is doubted').toEqual({ doubted: ['vat'] })
 
     const refused = await checkMapping(token, { document_id: plain, mapping: { supplier_tin: 'X' } }).catch((e: unknown) => e)
     expect(refused, 'a non-canonical key is refused').toMatchObject({ kind: 'http', status: 400 })

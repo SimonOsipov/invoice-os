@@ -2482,6 +2482,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       })
       const v = await validateInvoice(tok, inv.id)
       expect(v.violations.map((x) => x.rule_key), 'setup: the negative line fails its rule').toContain(RULE)
+      expect(v.violations.find((x) => x.rule_key === RULE && x.path === PATH)?.field, 'the violation names the judged field').toBe('unit_price')
       return inv
     }
 

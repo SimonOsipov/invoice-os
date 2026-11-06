@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent } from '../lib/audit'
 
@@ -155,21 +155,50 @@ describe('AuditRow', () => {
 })
 
 describe('AuditRow evidence affordance', () => {
-  it('auditRow_evidenceAffordanceIsInertNotFaked', () => {
-    // AUDIT-08 owns the drawer. The story permits the button in a disabled state and
-    // forbids faking the drawer, so the button carries a VISIBLE reason: a title= on a
-    // disabled button never fires in Chromium.
-    render(<AuditRow event={ev({ event: 'submission.accepted', payload: { id: 'inv-1', irn: 'NG-1' } })} expanded onToggle={() => {}} />)
+  it('auditRow_evidenceAffordanceOpensTheBundleForTheRowsCompanyAndDay', () => {
+    const onOpenEvidence = vi.fn()
+    const e = ev({ event: 'submission.accepted', payload: { invoice_id: 'inv-1' } })
+    render(<AuditRow event={e} expanded onToggle={() => {}} onOpenEvidence={onOpenEvidence} />)
     const btn = screen.getByTestId('audit-evidence-affordance')
-    expect(btn).toHaveProperty('disabled', true)
-    expect(screen.getByTestId('audit-evidence-blocked-reason').textContent).toBeTruthy()
+    expect(btn).toHaveProperty('disabled', false)
+    fireEvent.click(btn)
+    expect(onOpenEvidence).toHaveBeenCalledTimes(1)
+    expect(onOpenEvidence).toHaveBeenCalledWith(e, 'inv-1')
   })
 
   it('auditRow_evidenceAffordanceOnlyWhereEvidenceExists', () => {
-    // A policy edit has no transmission behind it; offering the link would claim a record
-    // that does not exist.
-    render(<AuditRow event={ev({ event: 'approval_policy.updated', payload: { id: 'pol-1' } })} expanded onToggle={() => {}} />)
-    expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+    const onOpenEvidence = vi.fn()
+    const sub = { event: 'submission.accepted', payload: { invoice_id: 'inv-1' } }
+    const cases: Array<[string, Partial<AuditEvent>, boolean]> = [
+      ['a policy edit has no transmission', { event: 'approval_policy.updated', payload: { id: 'pol-1' } }, true],
+      ['no invoice reference', { ...sub, payload: {} }, true],
+      ['workspace scope', { ...sub, company_scope: 'workspace', entity_id: null }, true],
+      ['unattributed scope', { ...sub, company_scope: 'unattributed', entity_id: null }, true],
+      ['deleted company', { ...sub, company_name: null }, true],
+      ['no onOpenEvidence', sub, false],
+    ]
+    for (const [why, over, pass] of cases) {
+      render(<AuditRow event={ev(over)} expanded onToggle={() => {}} onOpenEvidence={pass ? onOpenEvidence : undefined} />)
+      expect(screen.getByTestId('audit-expansion'), why).toBeTruthy()
+      expect(screen.queryByTestId('audit-evidence-affordance'), why).toBeNull()
+      expect(screen.queryByTestId('audit-evidence-blocked-reason'), why).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('auditRow_noEvidenceSentenceOnEitherVariant', () => {
+    const sub = { event: 'submission.accepted', payload: { invoice_id: 'inv-1' } }
+    for (const variant of VARIANTS) {
+      for (const over of [sub, { ...sub, company_scope: 'workspace' as const, entity_id: null }]) {
+        for (const busy of [false, true]) {
+          mount(variant, ev(over), true, { onOpenEvidence: vi.fn(), evidenceBusy: busy })
+          expect(document.body.textContent).not.toContain('not reachable')
+          expect(document.body.textContent).not.toContain('not available')
+          expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
+          cleanup()
+        }
+      }
+    }
   })
 })
 
@@ -212,10 +241,22 @@ function sv(el: Element, prop: string): string | null {
 type Variant = 'audit' | 'activity'
 const VARIANTS: Variant[] = ['audit', 'activity']
 
-function mount(variant: Variant | undefined, event: AuditEvent, expanded = false) {
+function mount(
+  variant: Variant | undefined,
+  event: AuditEvent,
+  expanded = false,
+  extra: { onOpenEvidence?: (e: AuditEvent, invoiceId: string) => void; evidenceBusy?: boolean; onToggle?: () => void } = {},
+) {
   render(
     <AuditTable variant={variant}>
-      <AuditRow event={event} expanded={expanded} onToggle={() => {}} variant={variant} />
+      <AuditRow
+        event={event}
+        expanded={expanded}
+        onToggle={extra.onToggle ?? (() => {})}
+        onOpenEvidence={extra.onOpenEvidence}
+        evidenceBusy={extra.evidenceBusy}
+        variant={variant}
+      />
     </AuditTable>,
   )
 }
@@ -373,52 +414,91 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     expect(screen.queryAllByTestId('audit-payload-field')).toHaveLength(0)
   })
 
-  it('auditRow_disabledEvidenceButtonKeepsItsPaintAndTheD3Recipe', () => {
-    mount('audit', ev({ event: 'submission.accepted', payload: { id: 'inv-1' } }), true)
+  it('auditRow_enabledEvidenceButtonPaint', () => {
+    const e = ev({ event: 'submission.accepted', payload: { invoice_id: 'inv-1' } })
+    const onOpenEvidence = vi.fn()
+    for (const [variant, size] of [['audit', '12px'], ['activity', '12.5px']] as const) {
+      mount(variant, e, true, { onOpenEvidence })
+      const btn = screen.getByTestId('audit-evidence-affordance')
+      expect(btn).toHaveProperty('disabled', false)
+      expect(btn.getAttribute('aria-describedby')).toBeNull()
+      expect(btn.getAttribute('aria-haspopup')).toBe('dialog')
+      expect(btn.className).toBe('v2-btn v2-btn-ghost pf-btn')
+      expect(sv(btn, 'height')).toBe('30px')
+      expect(sv(btn, 'font-size')).toBe(size)
+      for (const prop of ['opacity', 'cursor', 'filter', 'background']) expect(sv(btn, prop), prop).toBeNull()
+      if (variant === 'activity') {
+        const footer = screen.getByTestId('audit-event-identifier').parentElement as HTMLElement
+        expect(sv(footer, 'margin-top')).toBe('12px')
+        expect(sv(footer, 'padding-top')).toBe('10px')
+        expect(sv(footer, 'gap')).toBe('14px')
+      }
+      cleanup()
+    }
+  })
+
+  it('auditRow_busyEvidenceButtonPaint', () => {
+    const onOpenEvidence = vi.fn()
+    mount('audit', ev({ event: 'submission.accepted', payload: { invoice_id: 'inv-1' } }), true, { onOpenEvidence, evidenceBusy: true })
     const btn = screen.getByTestId('audit-evidence-affordance')
     expect(btn).toHaveProperty('disabled', true)
+    expect(btn.getAttribute('aria-busy')).toBe('true')
+    expect(btn.getAttribute('aria-describedby')).toBeNull()
     expect(sv(btn, 'opacity')).toBe('0.45')
     expect(sv(btn, 'cursor')).toBe('not-allowed')
     expect(sv(btn, 'filter')).toBe('none')
-    expect(sv(btn, 'color')).not.toBe('var(--fg-4)')
     expect(sv(btn, 'background')).toBe('transparent')
-    expect(btn.className).toBe('v2-btn v2-btn-ghost pf-btn')
-    expect(sv(btn, 'height')).toBe('30px')
-    expect(sv(btn, 'font-size')).toBe('12px')
-    cleanup()
-    mount('activity', ev({ event: 'submission.accepted', payload: { id: 'inv-1' } }), true)
-    expect(sv(screen.getByTestId('audit-evidence-affordance'), 'font-size')).toBe('12.5px')
-    const footer = screen.getByTestId('audit-event-identifier').parentElement as HTMLElement
-    expect(sv(footer, 'margin-top')).toBe('12px')
-    expect(sv(footer, 'padding-top')).toBe('10px')
-    expect(sv(footer, 'gap')).toBe('14px')
+    expect(btn.textContent).toBe('View transmission evidence →')
+    fireEvent.click(btn)
+    expect(onOpenEvidence).not.toHaveBeenCalled()
   })
 
-  it('auditRow_evidenceReasonSpacingFollowsTheVariant', () => {
-    const e = ev({ event: 'submission.accepted', payload: { id: 'inv-1' } })
-    mount('audit', e, true)
-    const wrap = screen.getByTestId('audit-evidence-affordance').parentElement as HTMLElement
-    expect(sv(wrap, 'display')).toBe('inline-flex')
-    expect(sv(wrap, 'gap')).toBe('10px')
-    expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('0px')
-    expect(sv(wrap.parentElement as HTMLElement, 'gap')).toBe('14px')
-    expect(sv(wrap.parentElement as HTMLElement, 'margin-top')).toBe('14px')
-    cleanup()
-    mount('activity', e, true)
-    expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('5px')
-    expect(sv(screen.getByTestId('audit-evidence-affordance').parentElement?.parentElement as HTMLElement, 'margin-top')).toBe('12px')
-    expect(screen.getByTestId('audit-evidence-affordance').getAttribute('aria-describedby')).toBe(screen.getByTestId('audit-evidence-blocked-reason').id)
+  it('auditRow_evidenceSitsInTheActionRow', () => {
+    const e = ev({ event: 'submission.accepted', payload: { invoice_id: 'inv-1' } })
+    for (const [variant, top] of [['audit', '14px'], ['activity', '12px']] as const) {
+      mount(variant, e, true, { onOpenEvidence: vi.fn() })
+      const row = screen.getByTestId('audit-evidence-affordance').parentElement as HTMLElement
+      expect(sv(row, 'display')).toBe('flex')
+      expect(sv(row, 'gap')).toBe('14px')
+      expect(sv(row, 'margin-top')).toBe(top)
+      cleanup()
+    }
+  })
+
+  it('auditRow_evidenceClickDoesNotToggleTheRow', () => {
+    const onToggle = vi.fn()
+    mount('audit', ev({ event: 'submission.accepted', payload: { invoice_id: 'inv-1' } }), true, { onOpenEvidence: vi.fn(), onToggle })
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('auditRow_everySubmissionEventOffersTheButton', () => {
+    const events: Array<[string, Record<string, unknown>]> = [
+      ['submission.accepted', {}],
+      ['submission.rejected', {}],
+      ['submission.failed', {}],
+      ['submission.job.redriven', { job_id: 'job-1', reason: 'retry' }],
+      ['submission.job.cancelled', { job_id: 'job-1', reason: 'stuck' }],
+    ]
+    for (const [name, extra] of events) {
+      const onOpenEvidence = vi.fn()
+      const e = ev({ event: name, payload: { invoice_id: 'inv-1', invoice_number: 'INV-1', ...extra } })
+      mount('audit', e, true, { onOpenEvidence })
+      fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+      expect(onOpenEvidence, name).toHaveBeenCalledWith(e, 'inv-1')
+      cleanup()
+    }
   })
 
   it('auditRow_linkAndEvidenceShareOneActionRowAndALinkOnlyRowStillRenders', () => {
     const open = () => {}
-    // Submission row with an invoice: link and disabled evidence sit in the same flex row.
-    render(<AuditRow event={ev({ payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} />)
+    // Submission row with an invoice: link and evidence sit in the same flex row.
+    render(<AuditRow event={ev({ payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} onOpenEvidence={open} />)
     const row = screen.getByTestId('audit-invoice-affordance').parentElement as HTMLElement
     expect(row.contains(screen.getByTestId('audit-evidence-affordance'))).toBe(true)
     cleanup()
     // Invoices-domain row: no evidence button, the link still gets the row.
-    render(<AuditRow event={ev({ event: 'invoice.updated', payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} />)
+    render(<AuditRow event={ev({ event: 'invoice.updated', payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} onOpenEvidence={open} />)
     expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
     const linkRow = screen.getByTestId('audit-invoice-affordance').parentElement as HTMLElement
     expect(sv(linkRow, 'display')).toBe('flex')

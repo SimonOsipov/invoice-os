@@ -121,6 +121,7 @@ function activityCtx(): ActivityCtx {
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
     entities: [],
+    getToken: () => 'tok',
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     openAuditForInvoice: vi.fn(),
   } as unknown as ActivityCtx
@@ -131,8 +132,9 @@ const INVOICE_NUMBER = 'INV-9'
 // `invoiceNumber` is not on the component's props until AUDIT-09-05 lands it; the cast is what
 // keeps tsc green on the RED commit and is a no-op once the prop exists.
 type CardProps = ComponentProps<typeof InvoiceActivityCard>
-function cardProps(ctx: ActivityCtx, invoiceId: string, invoiceNumber: string): CardProps {
-  return { ctx, invoiceId, invoiceNumber } as unknown as CardProps
+const INVOICE_CREATED_AT = '2026-08-17T22:00:00Z'
+function cardProps(ctx: ActivityCtx, invoiceId: string, invoiceNumber: string, invoiceCreatedAt: string = INVOICE_CREATED_AT): CardProps {
+  return { ctx, invoiceId, invoiceNumber, invoiceCreatedAt } as unknown as CardProps
 }
 
 function renderCard(invoiceId: string = INVOICE_ID, invoiceNumber: string = INVOICE_NUMBER, ctx: ActivityCtx = activityCtx()) {
@@ -533,6 +535,40 @@ describe('InvoiceActivityCard copy', () => {
 // AUDIT-09-04 QA, F-J. Reusing AuditRow drags a disabled "View transmission evidence ->"
 // onto the invoice page for the three submissions-domain types the invoice-scoped read can
 // return (submission.accepted/rejected/failed -- the generated column's second event list).
+// Evidence drawer stubs: the preview and the bundle download are told apart by path, as in
+// EvidenceBundleDrawer.test.tsx's routedFetch.
+const PREVIEW = {
+  entity: { id: 'ent-1', name: 'Honeywell Group', tin: '12345678-0001' },
+  period: { from: '2026-08-17T00:00:00Z', to: '2026-08-20T23:59:59Z', bounds: 'inclusive', basis: 'invoices.created_at' },
+  filename: 'ASComply_evidence_Honeywell_Group_20260817_20260820.zip',
+  counts: { invoices: 3, line_items: 4, status_transitions: 5, submissions: 6, exchange_attempts: 7, body_files: 8 },
+  over_limit: false,
+}
+
+function openDrawerFetch() {
+  const log = logResponse({ events: [auditEvent({ event: 'submission.failed', created_at: '2026-08-20T09:15:00Z', payload: { invoice_id: INVOICE_ID } })] })
+  const fetchMock = vi.fn((url: string) => {
+    const path = new URL(String(url)).pathname
+    if (path.endsWith('/evidence-bundle/preview')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(PREVIEW) })
+    if (path.endsWith('/evidence-bundle')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+        headers: { get: (n: string) => (n.toLowerCase() === 'content-disposition' ? `attachment; filename=${PREVIEW.filename}` : null) },
+        blob: () => Promise.resolve(new Blob([new Uint8Array(1024)], { type: 'application/zip' })),
+      })
+    }
+    return Promise.resolve(log)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function previewCalls(fetchMock: ReturnType<typeof openDrawerFetch>) {
+  return fetchMock.mock.calls.filter((c) => new URL(String(c[0])).pathname.endsWith('/evidence-bundle/preview'))
+}
+
 // It is not a defect, but it is NEW on this surface, so it gets an oracle here rather than
 // only in AuditRow's own suite: subtask 09's whole-surface diff must LIST it.
 describe('InvoiceActivityCard inherited controls (F-J)', () => {
@@ -542,30 +578,66 @@ describe('InvoiceActivityCard inherited controls (F-J)', () => {
     expect(auditEventView(SUBMISSION_EVENT).domain).toBe('submissions')
   })
 
-  it('invoiceActivity_inheritsTheDisabledEvidenceAffordance', async () => {
-    // submission.* takes payload.invoice_id, not payload.id (the generated column's second
-    // branch); invoiceRef reads invoice_id first, and a null ref hides the button entirely.
-    mockFetch(logResponse({ events: [auditEvent({ event: SUBMISSION_EVENT, payload: { invoice_id: INVOICE_ID, attempt: 3 } })] }))
+  it('invoiceActivity_evidenceOpensTheDrawerOnThisPage', async () => {
+    const fetchMock = openDrawerFetch()
     renderCard()
     await loaded()
     fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
 
-    const evidence = screen.getByTestId('audit-evidence-affordance')
-    expect(evidence, 'the control is present, not hidden').toBeTruthy()
-    expect(evidence).toHaveProperty('disabled', true)
-    // AUDIT-08: a title= on a disabled button never fires in Chromium.
-    expect(evidence.getAttribute('title')).toBeNull()
-    const reasonId = evidence.getAttribute('aria-describedby')
-    expect(reasonId, 'the block must be a text node the control names').toBeTruthy()
-    const reason = document.getElementById(reasonId!)
-    expect(reason, `aria-describedby="${reasonId}" points at nothing`).toBeTruthy()
-    expect(reason!.textContent!.length).toBeGreaterThan(0)
-    // Honest on THIS surface: the invoice page offers no evidence route at all, so the
-    // sentence must not promise one somewhere on this page.
-    expect(reason!.textContent).toContain('not reachable from this screen')
-    // The other inherited affordance stays off: this row is the only one where both could
-    // have appeared, since invoiceRef is non-null for exactly the same payloads.
+    expect(screen.getByTestId('evidence-bundle-drawer')).toBeTruthy()
+    expect(screen.getByTestId('evidence-company-trigger').textContent).toContain('Honeywell Group')
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    const q = new URL(String(previewCalls(fetchMock)[0]![0])).searchParams
+    expect(q.get('entity_id')).toBe('ent-1')
+    expect(q.get('from')).toBe('2026-08-17T00:00:00.000Z')
+    expect(q.get('to')).toBe('2026-08-20T23:59:59.999Z')
+    expect(fetchMock.mock.calls.some((c) => new URL(String(c[0])).pathname.includes('/invoices/'))).toBe(false)
+    expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
     expect(screen.queryByTestId('audit-invoice-affordance')).toBeNull()
+  })
+
+  it('invoiceActivity_closingTheDrawerKeepsTheRowExpanded', async () => {
+    openDrawerFetch()
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+    expect(screen.getByTestId('evidence-bundle-drawer')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('evidence-bundle-drawer')).toBeNull())
+    expect(screen.getByTestId('audit-expansion')).toBeTruthy()
+  })
+
+  it('invoiceActivity_drawerMountsOutsideTheCardAndSurvivesARerender', async () => {
+    openDrawerFetch()
+    const { ctx, rerender } = renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+    const drawer = screen.getByTestId('evidence-bundle-drawer')
+    expect(screen.getByTestId('invoice-activity').contains(drawer)).toBe(false)
+
+    rerender(<InvoiceActivityCard {...cardProps(ctx, INVOICE_ID, INVOICE_NUMBER)} />)
+    expect(screen.getByTestId('evidence-bundle-drawer')).toBe(drawer)
+    expect(document.body.contains(drawer)).toBe(true)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('evidence-bundle-drawer')).toBeNull())
+  })
+
+  it('invoiceActivity_downloadToastRendersOnThisPage', async () => {
+    openDrawerFetch()
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => 'blob:evidence')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+    await screen.findByTestId('evidence-confirm-block')
+    fireEvent.click(screen.getByTestId('evidence-bundle-prepare'))
+    fireEvent.click(await screen.findByTestId('evidence-ready-download'))
+    expect(await screen.findByTestId('evidence-bundle-toast')).toBeTruthy()
   })
 
   it('invoiceActivity_evidenceAffordanceIsScopedToSubmissionRows', async () => {
@@ -576,6 +648,15 @@ describe('InvoiceActivityCard inherited controls (F-J)', () => {
     await loaded()
     fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
 
+    expect(screen.getByTestId('audit-expansion')).toBeTruthy()
+    expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+    expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
+
+    cleanup()
+    mockFetch(logResponse({ events: [auditEvent({ event: SUBMISSION_EVENT, company_scope: 'unattributed', entity_id: null, company_name: null, payload: { invoice_id: INVOICE_ID } })] }))
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
     expect(screen.getByTestId('audit-expansion')).toBeTruthy()
     expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
     expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
@@ -724,6 +805,7 @@ describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () =>
     // Control needle: the slice must have captured the props, not an empty span.
     expect(tag, 'the slice missed the mount\'s props').toContain('invoiceId=')
     expect(tag, 'the card mount must pass the invoice number down').toContain('invoiceNumber={inv.invoice_number}')
+    expect(tag, 'the card mount must pass the invoice creation time down').toContain('invoiceCreatedAt={inv.created_at}')
   })
 })
 

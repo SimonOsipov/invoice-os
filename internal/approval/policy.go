@@ -498,9 +498,26 @@ func validateScopes(sc scopeInput) error {
 	return nil
 }
 
+// scopeRoleDeleted is publish's refusal for a scope that names deleted roles; it wraps
+// ErrPolicyStepRole and carries their titles, in scope order.
+type scopeRoleDeleted struct{ titles []string }
+
+func (e *scopeRoleDeleted) Error() string { return ErrPolicyStepRole.Error() }
+func (e *scopeRoleDeleted) Unwrap() error { return ErrPolicyStepRole }
+
+// quoteTitles wraps each title in curly quotes, unescaped.
+func quoteTitles(titles []string) string {
+	q := make([]string, len(titles))
+	for i, t := range titles {
+		q[i] = "\u201c" + t + "\u201d"
+	}
+	return strings.Join(q, ", ")
+}
+
 // policyStatusForErr is the policy seam's mapper. Messages are hand-written rather
 // than err.Error() so the "approval: " sentinel prefix never reaches the SPA.
 func policyStatusForErr(err error) (status int, msg string) {
+	var sr *scopeRoleDeleted
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
@@ -524,6 +541,12 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, "only an admin can change approval policies"
 	case errors.Is(err, ErrPolicyNotFound):
 		return http.StatusNotFound, "approval policy not found"
+	case errors.As(err, &sr):
+		remedy := "remove it"
+		if len(sr.titles) > 1 {
+			remedy = "remove them"
+		}
+		return http.StatusConflict, "a scope names a workflow role that was deleted: " + quoteTitles(sr.titles) + " — " + remedy + " from the scope, then publish"
 	case errors.Is(err, ErrPolicyStepRole):
 		return http.StatusConflict, "an approval step names a workflow role that no longer exists"
 	case errors.Is(err, ErrPolicyEmptyBranches):

@@ -101,6 +101,7 @@ describe('content', () => {
     expect(f.desc).toMatch(/first policy in the list that matches a document decides/)
     expect(f.desc).toMatch(/an admin sets the order/)
     expect(f.desc).toMatch(/sample amount/)
+    expect(f.desc).toMatch(/an amount band in one currency/)
     expect(COMING_SOON_IDS).not.toContain('workflow-builder')
   })
 
@@ -144,7 +145,7 @@ describe('content', () => {
     expect(text).not.toMatch(/approval path/i)
     expect(f.desc).toMatch(/follows the approval policy that matches it/)
     expect(f.desc).toMatch(/same checks as an invoice/)
-    expect(f.benefits[1]).toMatch(/approval policy that matches it/)
+    expect(f.benefits[1]).toMatch(/^Same checks as an invoice, then the approval policy that matches it$/)
   })
 
   it('content_sendAgainIsShippedOnInvoices', () => {

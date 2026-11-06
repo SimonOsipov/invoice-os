@@ -12,9 +12,12 @@ import { resolve } from 'node:path'
 import { ApiError } from '@invoice-os/api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { AuditEvent } from './audit'
 import type { AuditRange } from './auditFilters'
 import { SessionEndedError } from './renewal'
 import {
+  bundleCompanyFor,
+  bundlePrefillFor,
   bundleRequestFor,
   evidenceBundleUrl,
   fetchEvidenceBundle,
@@ -681,5 +684,87 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
     // stringified, so the gateway sees the literal `Bearer null` and answers 401. The lib
     // does not short-circuit -- subtask 06 must not read that 401 as "your session ended".
     expect((noToken.mock.calls[0][1] as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer null')
+  })
+})
+
+describe('bundlePrefill', () => {
+  const NOW = new Date('2026-08-24T12:00:00.000Z')
+  const ev = (over: Partial<AuditEvent> = {}) => ({
+    entity_id: 'ent-a' as string | null,
+    company_name: 'Alpha' as string | null,
+    company_scope: 'company' as AuditEvent['company_scope'],
+    created_at: '2026-08-20T09:15:00Z',
+    ...over,
+  })
+  const company = { id: 'ent-a', name: 'Alpha' }
+
+  it('bundlePrefill_sameDayInvoiceGivesTheEventDay', () => {
+    expect(bundlePrefillFor(ev(), '2026-08-20T08:00:00Z')).toEqual({
+      company,
+      range: { preset: 'custom', from: '2026-08-20', to: '2026-08-20' },
+    })
+  })
+
+  it('bundlePrefill_olderInvoiceStartsOnTheDayItWasAdded', () => {
+    expect(bundlePrefillFor(ev(), '2026-08-17T22:00:00Z')?.range).toEqual({
+      preset: 'custom',
+      from: '2026-08-17',
+      to: '2026-08-20',
+    })
+  })
+
+  it('bundlePrefill_invoiceAfterTheEventKeepsFromNotAfterTo', () => {
+    expect(bundlePrefillFor(ev(), '2026-08-21T01:00:00Z')?.range).toEqual({
+      preset: 'custom',
+      from: '2026-08-20',
+      to: '2026-08-20',
+    })
+  })
+
+  it('bundlePrefill_offsetsResolveToUtcDays', () => {
+    expect(
+      bundlePrefillFor(ev({ created_at: '2026-08-21T00:30:00+01:00' }), '2026-08-18T00:30:00+01:00')?.range,
+    ).toEqual({ preset: 'custom', from: '2026-08-17', to: '2026-08-20' })
+    expect(bundlePrefillFor(ev({ created_at: '2026-08-20T23:59:59.999Z' }), '2026-08-20T00:00:00Z')?.range.to).toBe(
+      '2026-08-20',
+    )
+  })
+
+  it('bundlePrefill_periodContainsTheInvoiceAndTheEvent', () => {
+    const times = ['00:00:00Z', '23:59:59.999Z', '09:15:00.123456Z', '00:30:00+01:00']
+    const days = ['2026-08-20', '2026-08-23']
+    for (const iDay of days)
+      for (const eDay of days)
+        for (const itime of times)
+          for (const et of times) {
+            const invoice = `${iDay}T${itime}`
+            const event = `${eDay}T${et}`
+            const p = bundlePrefillFor(ev({ created_at: event }), invoice)!
+            const r = bundleRequestFor(p.company.id, p.range, NOW)!
+            expect(Date.parse(r.from)).toBeLessThanOrEqual(Date.parse(invoice))
+            expect(Date.parse(r.from)).toBeLessThanOrEqual(Date.parse(event))
+            expect(Date.parse(event)).toBeLessThanOrEqual(Date.parse(r.to))
+            expect(Date.parse(r.from)).toBeLessThanOrEqual(Date.parse(r.to))
+          }
+  })
+
+  it('bundlePrefill_nullWithoutACompany', () => {
+    const cases = [
+      ev({ company_scope: 'workspace', entity_id: null }),
+      ev({ company_scope: 'unattributed', entity_id: null }),
+      ev({ company_name: null }),
+      ev({ company_scope: 'workspace' }),
+      ev({ company_scope: 'unattributed' }),
+      ev({ entity_id: null }),
+      ev({ company_name: '' }),
+    ]
+    for (const c of cases) {
+      expect(bundleCompanyFor(c)).toBeNull()
+      expect(bundlePrefillFor(c, '2026-08-20T08:00:00Z')).toBeNull()
+    }
+  })
+
+  it('bundleCompany_companyRowYieldsIdAndName', () => {
+    expect(bundleCompanyFor(ev())).toEqual(company)
   })
 })

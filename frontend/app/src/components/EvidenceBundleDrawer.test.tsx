@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import type { AuditRange } from '../lib/auditFilters'
 import { createAuthedFetch } from '../lib/authedFetch'
-import { bundleRequestFor, type EvidenceBundlePreview } from '../lib/evidenceBundle'
+import { bundleRequestFor, type BundlePrefill, type EvidenceBundlePreview } from '../lib/evidenceBundle'
 import {
   BUNDLE_INVOICE_LIMIT,
   EVIDENCE_COPY,
@@ -108,13 +108,14 @@ function renderDrawer(
     base?: string
     onClose?: () => void
     onToast?: (t: { kind: 'success' | 'error'; text: string }) => void
+    initial?: BundlePrefill
   } = {},
 ) {
   const onClose = opts.onClose ?? vi.fn()
   const onToast = opts.onToast ?? vi.fn()
   const ctx = opts.ctx ?? evidenceCtx()
   const base = opts.base ?? BASE
-  const utils = render(<EvidenceBundleDrawer ctx={ctx} base={base} onClose={onClose} onToast={onToast} />)
+  const utils = render(<EvidenceBundleDrawer ctx={ctx} base={base} onClose={onClose} onToast={onToast} initial={opts.initial} />)
   return { ...utils, onClose, onToast }
 }
 
@@ -1947,5 +1948,60 @@ describe('EvidenceBundleDrawer', () => {
       await waitFor(() => expect(prepare().disabled).toBe(false))
       expect([prepare().style.opacity, prepare().style.cursor, prepare().style.filter]).toEqual(['', '', ''])
     })
+  })
+})
+
+describe('EvidenceBundleDrawer initial prefill', () => {
+  const INITIAL: BundlePrefill = {
+    company: { id: 'ent-a', name: 'Alpha' },
+    range: { preset: 'custom', from: '2026-08-17', to: '2026-08-20' },
+  }
+
+  it('drawer_initialPrefillSelectsCompanyAndCustomRange', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', 'Alpha')]), initial: INITIAL })
+    expect(screen.getByTestId('evidence-company-trigger').textContent).toContain('Alpha')
+    expect(screen.getByTestId('evidence-period-custom').getAttribute('aria-pressed')).toBe('true')
+    expect((screen.getByTestId('evidence-period-from') as HTMLInputElement).value).toBe('2026-08-17')
+    expect((screen.getByTestId('evidence-period-to') as HTMLInputElement).value).toBe('2026-08-20')
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    expect(parseCall(previewCalls(fetchMock)[0])).toMatchObject({
+      entity_id: 'ent-a',
+      from: '2026-08-17T00:00:00.000Z',
+      to: '2026-08-20T23:59:59.999Z',
+    })
+  })
+
+  it('drawer_prefilledCompanyOutsideTheEntityListStillShows', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-b', 'Beta')]), initial: INITIAL })
+    expect(screen.getByTestId('evidence-company-trigger').textContent).toContain('Alpha')
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    expect(parseCall(previewCalls(fetchMock)[0]).entity_id).toBe('ent-a')
+  })
+
+  it('drawer_prefillStaysEditable', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', 'Alpha'), mkEntity('ent-b', 'Beta')]), initial: INITIAL })
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-b'))
+    fireEvent.click(screen.getByTestId('evidence-period-7d'))
+    const expected = bundleRequestFor('ent-b', { preset: '7d' }, new Date())
+    await waitFor(() => {
+      const calls = previewCalls(fetchMock)
+      const last = parseCall(calls[calls.length - 1])
+      expect(last.entity_id).toBe('ent-b')
+      expect(last.from).toBe(expected?.from)
+      expect(last.to).toBe(expected?.to)
+    })
+  })
+
+  it('drawer_withoutInitialStartsEmpty', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer()
+    expect(screen.getByTestId('evidence-company-trigger').textContent).toContain(EVIDENCE_COPY.companyPlaceholder)
+    expect(screen.getByTestId('evidence-period-30d').getAttribute('aria-pressed')).toBe('true')
+    expect(previewCalls(fetchMock)).toHaveLength(0)
   })
 })

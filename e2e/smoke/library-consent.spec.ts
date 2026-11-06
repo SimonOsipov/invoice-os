@@ -171,20 +171,33 @@ for (const width of WIDE_WIDTHS) {
     expect(h.y + h.height, `the band heading (bottom ${h.y + h.height}) sits under the notice (top ${n.y})`).toBeLessThanOrEqual(n.y + SLACK_PX)
   })
 
-  test(`library consent: Cookie choices sits in the sidebar footer (${width})`, async ({ page }) => {
+  test(`library consent: Cookie choices is a pinned row above the divider (${width})`, async ({ page }) => {
     await setWidth(page, width)
     await seedConsent(page, true)
     await openLibrary(page, '/', false)
     const aside = page.locator('aside')
     const control = aside.getByRole('button', { name: 'Cookie choices' })
+    await expect(aside.locator('nav').getByRole('button', { name: 'Cookie choices' }), 'the row is inside the scrolling nav').toHaveCount(0)
+    const nav = await rectOf(aside.locator('nav'), 'the nav')
     const c = await rectOf(control, 'Cookie choices')
     expect(enclosesRect(await rectOf(aside, 'the sidebar'), c, SLACK_PX), 'Cookie choices is outside the sidebar').toBe(true)
+    expect(c.y, 'Cookie choices starts above the nav bottom').toBeGreaterThanOrEqual(nav.y + nav.height - SLACK_PX)
+    expect(rectsOverlap(c, nav), 'Cookie choices overlaps the nav').toBe(false)
+
+    const first = await rectOf(aside.locator('nav').getByRole('button', { name: /^Overview/ }), 'Overview')
+    expect(Math.abs(c.x - first.x), 'the row left edge differs from Overview').toBeLessThanOrEqual(SLACK_PX)
+    expect(Math.abs(c.width - first.width), 'the row width differs from Overview').toBeLessThanOrEqual(SLACK_PX)
 
     const demo = aside.getByRole('link', { name: 'Book the Demo' })
     if ((await demo.count()) > 0) {
       const d = await rectOf(demo, 'Book the Demo')
-      expect(d.y + d.height, 'Book the Demo is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
+      const footer = await rectOf(demo.locator('xpath=..'), 'the sidebar footer')
+      expect(c.y + c.height, 'Cookie choices is below the footer top').toBeLessThanOrEqual(footer.y + SLACK_PX)
+      expect(d.y, 'Book the Demo is not below Cookie choices').toBeGreaterThanOrEqual(c.y + c.height - SLACK_PX)
       expect(rectsOverlap(d, c), 'Cookie choices overlaps Book the Demo').toBe(false)
+    } else {
+      const last = await control.evaluate((el) => el.parentElement === el.closest('aside')?.lastElementChild)
+      expect(last, 'with no demo link the row block is not the last block of the sidebar').toBe(true)
     }
 
     await control.click()
@@ -193,6 +206,25 @@ for (const width of WIDE_WIDTHS) {
     expect(rectsOverlap(c, n), 'the reopened notice covers Cookie choices').toBe(false)
   })
 }
+
+test('library consent: Enter on the Cookie choices row opens the notice', async ({ page }) => {
+  await setWidth(page, WIDE_WIDTHS[0])
+  await seedConsent(page, true)
+  await openLibrary(page, '/', false)
+  await page.locator('aside').getByRole('button', { name: 'Cookie choices' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(notice(page).locator('.cn-setting')).toBeVisible()
+})
+
+test('library consent: Cookie choices stays in view on a short viewport', async ({ page }) => {
+  const width = WIDE_WIDTHS[0]
+  await page.setViewportSize({ width, height: 600 })
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+  await seedConsent(page, true)
+  await openLibrary(page, '/', false)
+  const c = await rectOf(page.locator('aside').getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
+  expect(enclosesRect({ x: 0, y: 0, width, height: 600 }, c, SLACK_PX), 'Cookie choices leaves the 600px viewport').toBe(true)
+})
 
 // The phone card sits 12px above the viewport bottom; the band must reserve card plus inset.
 const PHONE_INSET_PX = 12

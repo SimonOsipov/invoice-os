@@ -611,6 +611,21 @@ describe('InvoiceActivityCard inherited controls (F-J)', () => {
     }
   })
 
+  it('invoiceActivity_rowButtonExpandedTracksItsDrawerAndFocusReturnsOnClose', async () => {
+    openDrawerFetch()
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    const btn = screen.getByTestId('audit-evidence-affordance')
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(btn)
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByTestId('evidence-bundle-close'))
+    await waitFor(() => expect(screen.queryByTestId('evidence-bundle-drawer')).toBeNull())
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(btn)
+  })
+
   it('invoiceActivity_drawerMountsOutsideTheCardAndSurvivesARerender', async () => {
     openDrawerFetch()
     const { ctx, rerender } = renderCard()

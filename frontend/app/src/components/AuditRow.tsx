@@ -8,6 +8,8 @@
 // REVIEW_GRID_COLUMNS precedent: the row owns the geometry and the header imports it, so
 // the two can never drift apart.
 
+import { useEffect, useRef } from 'react'
+
 import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
 import { auditEventView, TONE_TEXT } from '../lib/auditVocabulary'
@@ -64,10 +66,12 @@ export interface AuditRowProps {
   // Absent hides the evidence button, like onFilterToInvoice.
   onOpenEvidence?: (event: AuditEvent, invoiceId: string) => void
   evidenceBusy?: boolean
+  // This row's evidence drawer is open; focus returns to the button when it closes.
+  evidenceOpen?: boolean
   variant?: 'audit' | 'activity'
 }
 
-export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenEvidence, evidenceBusy = false, variant = 'audit' }: AuditRowProps) {
+export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenEvidence, evidenceBusy = false, evidenceOpen = false, variant = 'audit' }: AuditRowProps) {
   const audit = variant === 'audit'
   const view = auditEventView(event.event, event.payload)
   const inv = invoiceRef(event.payload)
@@ -75,6 +79,13 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenE
   const keys = payload ? Object.keys(payload) : []
   const showLink = inv != null && onFilterToInvoice != null
   const showEvidence = view.domain === 'submissions' && inv != null && bundleCompanyFor(event) != null && onOpenEvidence != null
+
+  const evidenceBtn = useRef<HTMLButtonElement>(null)
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (wasOpen.current && !evidenceOpen) evidenceBtn.current?.focus()
+    wasOpen.current = evidenceOpen
+  }, [evidenceOpen])
 
   const chevSpin = { transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }
 
@@ -135,9 +146,13 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenE
                 <button
                   type="button"
                   data-testid="audit-evidence-affordance"
+                  ref={evidenceBtn}
                   aria-haspopup="dialog"
-                  onClick={() => onOpenEvidence(event, inv.id)}
-                  {...(evidenceBusy ? { disabled: true, 'aria-busy': true } : null)}
+                  aria-expanded={evidenceOpen}
+                  onClick={() => {
+                    if (!evidenceBusy) onOpenEvidence(event, inv.id)
+                  }}
+                  {...(evidenceBusy ? { 'aria-disabled': true, 'aria-busy': true } : null)}
                   className="v2-btn v2-btn-ghost pf-btn"
                   style={{ height: 30, fontSize: audit ? 12 : 12.5, ...(evidenceBusy ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
                 >

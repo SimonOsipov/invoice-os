@@ -100,7 +100,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     null,
   )
   // Non-null while the drawer is open; `initial` is absent when the header opened it.
-  const [bundle, setBundle] = useState<{ initial?: BundlePrefill } | null>(null)
+  const [bundle, setBundle] = useState<{ initial?: BundlePrefill; rowId?: string } | null>(null)
   // The event whose invoice read is in flight.
   const [openingId, setOpeningId] = useState<string | null>(null)
   // Advanced by every open and close; a read that resolves under an older value does nothing.
@@ -114,6 +114,11 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     openSeq.current += 1
     setOpeningId(null)
     setBundle({})
+  }
+  // Drops a pending row read: the row it would open for is no longer the one on screen.
+  const cancelRowRead = () => {
+    openSeq.current += 1
+    setOpeningId(null)
   }
   const filtered = filterState.invoiceId != null
 
@@ -173,6 +178,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   useEffect(() => {
     const id = prefilter?.invoiceId ?? null
     if (id == null || id === filterState.invoiceId) return
+    cancelRowRead()
     // A moved atom means a DIFFERENT invoice's whole history, so the default date window
     // (which could exclude that invoice entirely) must reset, not carry over.
     setFilterState((s) => ({ ...s, range: { preset: 'custom' }, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
@@ -184,6 +190,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.
   const applyInvoiceFilter = (id: string, number: string | null) => {
+    cancelRowRead()
     if (id !== filterState.invoiceId) ctx.setAuditInvoiceFilter(id, number)
     setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: number }))
     setPage(auditPageResize(page.limit))
@@ -199,7 +206,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
       const inv = await getInvoice(ctx.authedFetch, base, invoiceId)
       if (seq !== openSeq.current) return
       setOpeningId(null)
-      setBundle({ initial: bundlePrefillFor(e, inv.created_at) ?? undefined })
+      setBundle({ initial: bundlePrefillFor(e, inv.created_at) ?? undefined, rowId: e.id })
     } catch (err) {
       if (seq !== openSeq.current) return
       setOpeningId(null)
@@ -208,6 +215,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   const handleFilterChange = (next: AuditFilterState) => {
+    cancelRowRead()
     // Only the invoice member is on the URL; writing it on every date or actor tweak would
     // replaceState 16 times over.
     if (next.invoiceId !== filterState.invoiceId) ctx.setAuditInvoiceFilter(next.invoiceId, next.invoiceNumber)
@@ -381,10 +389,14 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                 key={e.id}
                 event={e}
                 expanded={expandedId === e.id}
-                onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                onToggle={() => {
+                  cancelRowRead()
+                  setExpandedId(expandedId === e.id ? null : e.id)
+                }}
                 onFilterToInvoice={filtered ? undefined : applyInvoiceFilter}
                 onOpenEvidence={openRowEvidence}
                 evidenceBusy={openingId === e.id}
+                evidenceOpen={bundle?.rowId === e.id}
               />
             ))}
           </AuditTable>
@@ -397,9 +409,18 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
             canPrev={(shown?.page.stack.length ?? 0) > 0}
             canNext={shown?.res.page.has_more === true}
             busy={status === 'loading'}
-            onPrev={() => setPage(auditPagePrev(page))}
-            onNext={() => setPage(auditPageNext(page, shown?.res.page.next_cursor ?? null))}
-            onLimit={(limit) => setPage(auditPageResize(limit))}
+            onPrev={() => {
+              cancelRowRead()
+              setPage(auditPagePrev(page))
+            }}
+            onNext={() => {
+              cancelRowRead()
+              setPage(auditPageNext(page, shown?.res.page.next_cursor ?? null))
+            }}
+            onLimit={(limit) => {
+              cancelRowRead()
+              setPage(auditPageResize(limit))
+            }}
           />
         </>
       )}

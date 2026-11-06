@@ -45,11 +45,11 @@ export function InvoiceActivityCard({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [chip, setChip] = useState<ActivityChipKey>('all')
   const [showAll, setShowAll] = useState(false)
-  const [bundle, setBundle] = useState<{ initial?: BundlePrefill } | null>(null)
+  const [bundle, setBundle] = useState<{ initial?: BundlePrefill; rowId?: string } | null>(null)
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number; persist?: boolean } | null>(null)
   // Stable: the drawer's useDismiss re-registers on identity change.
   const closeBundle = useCallback(() => setBundle(null), [])
-  const openEvidence = (e: AuditEvent) => setBundle({ initial: bundlePrefillFor(e, invoiceCreatedAt) ?? undefined })
+  const openEvidence = (e: AuditEvent) => setBundle({ initial: bundlePrefillFor(e, invoiceCreatedAt) ?? undefined, rowId: e.id })
 
   // No from/to: an invoice's whole life belongs on its own page, and the 30-day default is
   // the Audit SCREEN's (auditFilters.ts), not the server's. `isEmpty: () => false` because
@@ -164,6 +164,7 @@ export function InvoiceActivityCard({
                 expanded={expandedId === e.id}
                 onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
                 onOpenEvidence={openEvidence}
+                evidenceOpen={bundle?.rowId === e.id}
               />
             ))}
           </AuditTable>

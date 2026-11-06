@@ -11,7 +11,7 @@
 // The `// Wire` section at the foot of this file adds five AuthedFetch wrappers over the
 // APPR-02 workflow-role endpoints, on lib/members.ts's live-wire shape.
 
-import type { AsyncStatus } from '@invoice-os/api-client'
+import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 
 import type { AccessRole, Member, MembersSurface } from './members'
 import type { AuthedFetch } from './portfolio'
@@ -332,25 +332,26 @@ export function canSaveRole(name: string): boolean {
   return name.trim() !== ''
 }
 
-/**
- * The inline delete-confirm sentence for a LANDED policies fetch, naming the role and its
- * usage; `deleteRoleConfirmUnknownUsage` below is the same question when it has not landed.
- * The blocking clause is dropped entirely on an unused role: nothing points at it, so nothing
- * can block.
- */
+// Mirrors the server's ErrRoleInUse rule (internal/approval/approval.go).
+const DELETE_REFUSED_IN_FORCE = 'The delete is refused while a policy in force names it in a scope or an approval step.'
+
+/** The delete-confirm sentence for a LANDED policies fetch: the role, its step usage, the server's refusal rule. */
 export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
-  const usage = roleUsage(roleSteps)
-  // NOT IN BRIEF: the unused half. The used half is the brief's sentence.
-  if (roleSteps.total === 0) return `Delete ${title}? It is ${usage}.`
-  return `Delete ${title}? ${usage}. Those steps will block until you point them somewhere else.`
+  if (roleSteps.total === 0) return `Delete ${title}? ${DELETE_REFUSED_IN_FORCE}`
+  return `Delete ${title}? ${roleUsage(roleSteps)}. ${DELETE_REFUSED_IN_FORCE} A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`
 }
 
-/**
- * The same question with the usage clause WITHHELD — for a policies fetch that has not landed,
- * where `steps` would read as "used nowhere". Claims no usage; the delete stays enabled.
- */
+/** The same sentence for a policies fetch that has not landed: claims no usage. */
 export function deleteRoleConfirmUnknownUsage(title: string): string {
-  return `Delete ${title}? Its policy usage could not be loaded, so any steps that name it will block until you point them somewhere else.`
+  return `Delete ${title}? Its policy usage could not be loaded. ${DELETE_REFUSED_IN_FORCE}`
+}
+
+/** Policy names off a 409 role-in-use body, in body order; `[]` for any other error. */
+export function inUsePolicyNames(err: unknown): string[] {
+  if (!(err instanceof ApiError) || err.kind !== 'http' || err.status !== 409) return []
+  const policies = (err.body as { policies?: unknown } | null | undefined)?.policies
+  if (!Array.isArray(policies)) return []
+  return policies.flatMap((p) => (typeof p?.name === 'string' ? [p.name] : []))
 }
 
 // NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.

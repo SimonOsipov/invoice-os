@@ -364,6 +364,7 @@ const MSG_SCOPE_CURRENCY = 'an amount band names a currency outside the NRS curr
 const MSG_SCOPE_ROLE = 'a scope names a workflow role that does not exist or was deleted' // ErrScopeRole
 const MSG_CATCH_ALL = 'a policy with no scopes must stay last while any policy has scopes' // ErrPolicyCatchAll
 const MSG_NOT_ADMIN = 'only an admin can change approval policies' // ErrNotPermitted
+const MSG_ROLE_IN_USE = 'this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first' // roleInUseMessage (ErrRoleInUse)
 const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'workflow_role_keys']
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
 const ORDER_PATH = '/api/invoice/v1/approval-policies/order' // the PUT route of ReorderPoliciesHandler
@@ -1109,5 +1110,54 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     const after = await getApprovalPolicy(t, s.id)
     expect(after.sealed, 'S stays unsealed').toBe(false)
     expect(after.versions.some((v) => v.is_active), 'S has no active version').toBe(false)
+  })
+
+  // The 409 carries a second key, so assertErrorEnvelope (exactly ['error']) cannot assert it.
+  async function deleteRoleRaw(t: string, key: string): Promise<RawResult> {
+    return rawFetch(`/api/invoice/v1/workflow-roles/${key}`, { method: 'DELETE', headers: authed(t) })
+  }
+  function assertRoleInUse(res: RawResult, policy: ApprovalPolicy, label: string): void {
+    expect(res.status, `${label}: expected HTTP 409`).toBe(409)
+    const body = res.body as Record<string, unknown>
+    expect(Object.keys(body).sort(), `${label}: the body is error and policies`).toEqual(['error', 'policies'])
+    expect(body.error, label).toBe(MSG_ROLE_IN_USE)
+    expect(String(body.error), `${label}: the message should carry no sentinel prefix`).not.toContain('approval: ')
+    expect(body.policies, `${label}: names the policy`).toEqual([{ id: policy.id, name: policy.name }])
+  }
+  const roleKeys = async (t: string) => (await listWorkflowRoles(t)).workflow_roles.map((r) => r.key)
+
+  test('409: deleting a role a policy in force names in a scope, then 200 once the policy is gone', async () => {
+    const t = await freshWorkspace()
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await publishApprovalPolicy(t, c.id)
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes: { workflow_role_keys: [role.key] } })
+    await publishApprovalPolicy(t, s.id)
+
+    assertRoleInUse(await deleteRoleRaw(t, role.key), s, 'deleting a role a scope names')
+    expect(await roleKeys(t), 'the refused role is still listed').toContain(role.key)
+
+    await deleteApprovalPolicy(t, s.id)
+    const res = await deleteRoleRaw(t, role.key)
+    expect(res.status, 'the delete answers 200 once the policy is gone').toBe(200)
+    expect(await roleKeys(t), 'the role leaves the list').not.toContain(role.key)
+  })
+
+  test('409: deleting a role a policy in force names in an approval step, until it is republished without it', async () => {
+    const t = await freshWorkspace()
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await putApprovalPolicyDraft(t, c.id, { steps: [{ kind: 'approval', workflow_role_key: role.key }] })
+    await publishApprovalPolicy(t, c.id)
+
+    assertRoleInUse(await deleteRoleRaw(t, role.key), c, 'deleting a role a step names')
+
+    await putApprovalPolicyDraft(t, c.id, { steps: [] })
+    assertRoleInUse(await deleteRoleRaw(t, role.key), c, 'an open draft without the role leaves the version in force')
+
+    await publishApprovalPolicy(t, c.id)
+    const res = await deleteRoleRaw(t, role.key)
+    expect(res.status, 'the delete answers 200 after the republish').toBe(200)
+    expect(await roleKeys(t), 'the role leaves the list').not.toContain(role.key)
   })
 })

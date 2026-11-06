@@ -134,7 +134,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
 
   it('BR-03 every static className token has a class rule', () => {
     const v2 = readV2Css()
-    const defining = [v2['utilities.css'], v2['tokens/hero-grid.css']]
+    const defining = [v2['utilities.css'], v2['tokens/hero-grid.css'], v2['mark.css']]
     expect(defining.every((c) => typeof c === 'string' && c.length > 0), 'v2 utilities.css and hero-grid.css exist').toBe(true)
 
     expect(classNameTokens("<i className={tone === 'dark' ? 'a b' : 'c'} />"), 'control: a === operand is not a class').toEqual(['a', 'b', 'c'])

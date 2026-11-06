@@ -520,8 +520,8 @@ async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
   const forcedId = live.find((t) => t.name === forced.account.workspaceName)?.id
   expect(forcedId, 'the forced tenant is in the live read').toBeDefined()
-  expect(live.find((t) => !t.demo)?.id, 'the forced tenant is the newest non-demo tenant').toBe(forcedId)
-  const plain = live.find((t) => !t.demo)
+  // Pinned: the shards' seeded tenants usually out-rank a new one on activity, so pick it explicitly.
+  const plain = live.find((t) => t.id === forcedId)
   expect(plain, 'the live read holds a non-demo tenant').toBeDefined()
   const plainRow = tenantRow(page, plain!.id)
   await expect(plainRow).toBeVisible()

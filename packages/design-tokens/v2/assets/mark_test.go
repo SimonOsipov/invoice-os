@@ -1,8 +1,11 @@
 package assets
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/png"
 	"math"
 	"os"
 	"strconv"
@@ -133,5 +136,69 @@ func TestMarkSVG_TransparentOutsideTheTile(t *testing.T) {
 	}
 	if v, _ := first.attr("fill"); strings.TrimSpace(v) == "" {
 		t.Error("tile rect has no fill")
+	}
+}
+
+func readMailMark(t *testing.T) image.Image {
+	t.Helper()
+	b, err := os.ReadFile("mail-mark.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("mail-mark.png: %v", err)
+	}
+	return img
+}
+
+func alphaAt(img image.Image, x, y int) uint32 {
+	_, _, _, a := img.At(x, y).RGBA()
+	return a >> 8
+}
+
+func TestMailMark_IsTheMasterWithoutMargin(t *testing.T) {
+	img := readMailMark(t)
+	if b := img.Bounds(); b.Dx() != 144 || b.Dy() != 144 {
+		t.Fatalf("size = %v, want 144x144", b)
+	}
+	for _, p := range [][2]int{{0, 0}, {143, 0}, {0, 143}, {143, 143}} {
+		if a := alphaAt(img, p[0], p[1]); a != 0 {
+			t.Errorf("alpha at %v = %d, want 0", p, a)
+		}
+	}
+}
+
+func TestMailMark_KeepsTheTransparentInset(t *testing.T) {
+	img := readMailMark(t)
+	for _, p := range [][2]int{{1, 72}, {142, 72}, {72, 1}, {72, 142}, {4, 72}, {72, 139}} {
+		if a := alphaAt(img, p[0], p[1]); a != 0 {
+			t.Errorf("inset pixel %v alpha = %d, want 0", p, a)
+		}
+	}
+	for _, p := range [][2]int{{12, 72}, {131, 72}, {72, 12}, {72, 131}} {
+		r, g, b, a := img.At(p[0], p[1]).RGBA()
+		if a>>8 != 255 {
+			t.Errorf("tile pixel %v alpha = %d, want 255", p, a>>8)
+		}
+		if mean := (r>>8 + g>>8 + b>>8) / 3; mean >= 128 {
+			t.Errorf("tile pixel %v mean RGB = %d, want < 128 (dark tile)", p, mean)
+		}
+	}
+}
+
+func TestMailMark_SharpAtThreeX(t *testing.T) {
+	if w := readMailMark(t).Bounds().Dx(); w < 108 {
+		t.Fatalf("width = %d, want >= 108 (3x the 36px draw)", w)
+	}
+}
+
+func TestMailMark_EmbedIsTheFile(t *testing.T) {
+	want, err := os.ReadFile("mail-mark.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(Mark) == 0 || !bytes.Equal(Mark, want) {
+		t.Fatalf("Mark is %d bytes, mail-mark.png is %d", len(Mark), len(want))
 	}
 }

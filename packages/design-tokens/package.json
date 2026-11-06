@@ -5,7 +5,6 @@
   "description": "Shared ASComply design-system CSS and brand assets. v2/ is vendored from Claude Design; v2/app-layer.css is the prototype project 6269a212-5677-4abd-b8a9-08aad10b1c65's ascomply-app-v2.css plus the app rules it drops. Two uses: ./v2/styles.css for the landing, and ./v2/styles.css plus ./v2/app-layer.css for the app and both consoles.",
   "exports": {
     "./v2/styles.css": "./v2/styles.css",
-    "./v2/assets/mark.png": "./v2/assets/mark.png",
     "./v2/assets/mark.svg": "./v2/assets/mark.svg",
     "./v2/mark.css": "./v2/mark.css",
     "./v2/app-layer.css": "./v2/app-layer.css"

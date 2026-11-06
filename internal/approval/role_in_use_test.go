@@ -167,6 +167,23 @@ func TestDeleteRole_DeletesARoleOnlyADeletedPolicyNamed(t *testing.T) {
 	assertRoleDeleted(t, super, tenantID, roleID)
 }
 
+func TestDeleteRole_IgnoresASoftDeletedPolicyWhoseVersionStaysActive(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-06 deleted policy active version")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	p, _ := seedActivePolicy(t, super, tenantID, "P", 1, nil, "tax-reviewer")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, p); err != nil {
+		t.Fatalf("soft-delete policy: %v", err)
+	}
+
+	if _, err := NewStore(app, stubFingerprinter, nil).DeleteRole(c, "tax-reviewer"); err != nil {
+		t.Fatalf("DeleteRole err = %v, want success", err)
+	}
+	assertRoleDeleted(t, super, tenantID, roleID)
+}
+
 func TestDeleteRole_IgnoresAKeyOnANonApprovalStep(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-06 notify key")

@@ -121,8 +121,8 @@ func v5ChangedKeys(t *testing.T, v4, v5 map[string]ruleRow) []string {
 
 func TestV5Rules_EachRuleFailsOnItsInvoice(t *testing.T) {
 	super, _ := dbTestPools(t)
-	seedV5Lists(t, super)
 	tx := v5ReappliedTx(t, super)
+	pinV5Lists(t, tx)
 	rs := v5LoadOn(t, tx, v5Start, 5)
 	keys := v5ChangedKeys(t, ruleRowsByKey(t, tx, 4), ruleRowsByKey(t, tx, 5))
 	if len(keys) != 52 {
@@ -158,8 +158,8 @@ func TestV5Rules_EachRuleFailsOnItsInvoice(t *testing.T) {
 // D10: matching is exact, on the payload side and on the listed side.
 func TestV5Rules_ListMatchIsExact(t *testing.T) {
 	super, _ := dbTestPools(t)
-	seedV5Lists(t, super)
 	tx := v5ReappliedTx(t, super)
+	pinV5Lists(t, tx)
 	ctx := context.Background()
 	rs := v5LoadOn(t, tx, v5Start, 5)
 

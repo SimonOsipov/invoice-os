@@ -96,9 +96,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // In-house has no business_entities row ([entity-picker] trap 1) so its one "client"
   // IS the tenant -- entity_id omitted entirely, same as before this param existed. A
   // null entityId in firm mode (entities still loading/errored) ALSO omits it -- the
-  // network call is a harmless tenant-wide fetch in that transient window,
-  // gateByActiveEntity is what keeps it from ever rendering (see its own doc comment).
+  // network call is a tenant-wide fetch in that window; `noEntity` keeps it off screen.
   const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
+  // Only while the entities list loads; a settled empty/errored list has no entity to wait for.
+  const noEntity = ctx.mode !== 'inhouse' && activeEntityId === undefined && ctx.entitiesState === 'loading'
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
   // re-runs the effect (and re-fetches) whenever the toggle flips, the page changes, OR
@@ -136,7 +137,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // undefined` correctly reads as fresh there. Read off `view`, so a held envelope from
   // the previous company can never reach a render branch.
   const view = list.data ?? held
-  const fresh = view != null && view.fetchedEntityId === activeEntityId
+  const fresh = !noEntity && view != null && view.fetchedEntityId === activeEntityId
   const holding = state === 'loading' && fresh
   const showRows = state === 'ready' || holding
 
@@ -424,7 +425,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'loading' && !holding && <Loading label="Loading invoices…" />}
+      {((state === 'loading' && !holding) || (state === 'empty' && noEntity)) && <Loading label="Loading invoices…" />}
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
@@ -435,7 +436,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           `needsAttention`, never the response: asyncReducer nulls `data` off the ready
           branch, so by render time the payload that would say so is gone. `idle` (no
           gateway) is deliberately unqualified -- it keeps one copy in either filter state. */}
-      {state === 'empty' && needsAttention && (
+      {state === 'empty' && !noEntity && needsAttention && (
         <div data-testid="invoices-empty-filtered">
           <EmptyState
             messageMaxWidth={360}
@@ -459,7 +460,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {(state === 'idle' || (state === 'empty' && !needsAttention)) && (
+      {(state === 'idle' || (state === 'empty' && !noEntity && !needsAttention)) && (
         <div data-testid="invoices-empty">
           <EmptyState
             messageMaxWidth={320}

@@ -970,6 +970,14 @@ describe('the Library shares the landing\'s choice', () => {
     expect(lis).toContain('each time an invoice is validated in the signed-in product')
   })
 
+  it('C-LAND08: the receives list names the confirmed email, the workspace and the added client', () => {
+    const lis = Array.from(html.slice(html.indexOf('>What Google receives</h2>')).split('</ul>')[0].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)).map((m) => text(m[1]))
+    const at = lis.indexOf('that you sent the form to create an account')
+    expect(lis[at + 1]).toBe('that you confirmed your email address')
+    expect(lis[at + 2]).toBe('that you created a workspace in the signed-in product')
+    expect(lis[at + 3]).toBe('each time a client, or your own company, is added in the signed-in product')
+  })
+
   it('C-LAND07: the never-receives paragraph says the app sends only the kind of page', () => {
     const at = html.indexOf('>What Google never receives</h2>')
     const para = text(html.slice(at, html.indexOf('</p>', at)))

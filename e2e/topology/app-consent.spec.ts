@@ -1,13 +1,15 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
-import { test, expect, type Page, type TestInfo } from '@playwright/test'
-import { createEntity, createInvoice } from '../api/client'
+import { randomUUID } from 'node:crypto'
+import { test, expect, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
 import { HUBSPOT_CHAT_DOMAINS, routeAppHost, watchStubLeaks } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
-import { approvalRun404Dropper, collectSourcedErrors } from './consoleGate'
+import { approvalRun404Dropper, collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 import { rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
+import { isConfirmPage, STATE_43 } from './verifyLink'
 
 const SHARD = shardTenants('app-consent.spec.ts')
 test.beforeAll(() => { expect(test.info().project.name, 'app-consent.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -127,27 +129,85 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
 
   const entry = page.viewportSize()
   const measured: unknown[] = []
+  const isEntities = (u: URL) => u.pathname === '/api/portfolio/v1/entities'
+  const isTenantListUrl = (u: URL) => u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
+  const isTenantList = (r: Response) => r.request().method() === 'GET' && isTenantListUrl(new URL(r.url()))
+  const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+  const scrollToEnd = async (width: number): Promise<void> => {
+    await settleAnimations(notice(page))
+    await page.evaluate((wide) => {
+      if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)
+      else window.scrollTo(0, 1e9)
+    }, width > 860)
+    await settleAnimations(notice(page))
+  }
+  const measure = async (at: string): Promise<void> => {
+    const read = await controlRects(page)
+    expect(read.notice, `${at}: the notice has no box`).not.toBeNull()
+    expect(read.controls.length, `${at}: no control was measured`).toBeGreaterThan(0)
+    const hit = read.controls.filter((c) => rectsOverlap(c.rect, read.notice!)).map((c) => c.label)
+    expect(hit, `${at}: controls under the notice`).toEqual([])
+    measured.push({ at, notice: read.notice, controls: read.controls.length })
+  }
+  const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
+    await scrollToEnd(width)
+    await measure(at)
+  }
+  // Holds a GET until its gate opens.
+  const holdUntil = (gate: Promise<void>) => async (r: Route): Promise<void> => {
+    if (r.request().method() !== 'GET') return r.fallback()
+    const res = await r.fetch()
+    await gate
+    await r.fulfill({ response: res }).catch(() => undefined)
+  }
   try {
     for (const { route, width, height } of cases) {
       const at = `${route} at ${width}x${height}`
-      await page.setViewportSize({ width, height })
-      await page.goto(`${APP_URL}${route}`)
-      await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
-      // CreateFlow draws no h1; its step label is the landmark.
-      const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
-      await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
-      await settleAnimations(notice(page))
-      await page.evaluate((wide) => {
-        if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)
-        else window.scrollTo(0, 1e9)
-      }, width > 860)
-      await settleAnimations(notice(page))
-      const read = await controlRects(page)
-      expect(read.notice, `${at}: the notice has no box`).not.toBeNull()
-      expect(read.controls.length, `${at}: no control was measured`).toBeGreaterThan(0)
-      const hit = read.controls.filter((c) => rectsOverlap(c.rect, read.notice!)).map((c) => c.label)
-      expect(hit, `${at}: controls under the notice`).toEqual([])
-      measured.push({ at, notice: read.notice, controls: read.controls.length })
+      // BUG-82: on /invoices hold both responses, scroll while the page is short, then let the tenant-wide list draw its empty page.
+      const list = route === '/invoices'
+      let releaseEntities = (): void => {}
+      let releaseList = (): void => {}
+      const entitiesGate = new Promise<void>((done) => { releaseEntities = done })
+      const listGate = new Promise<void>((done) => { releaseList = done })
+      const holdEntities = holdUntil(entitiesGate)
+      const holdList = holdUntil(listGate)
+      const listed = list ? page.waitForResponse(isTenantList, { timeout: 60_000 }) : undefined
+      listed?.catch(() => undefined)
+      if (list) {
+        await page.route(isEntities, holdEntities)
+        await page.route(isTenantListUrl, holdList)
+      }
+      try {
+        await page.setViewportSize({ width, height })
+        await page.goto(`${APP_URL}${route}`)
+        await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
+        // CreateFlow draws no h1; its step label is the landmark.
+        const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
+        await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
+        if (listed) {
+          await scrollToEnd(width)
+          releaseList()
+          const response = await listed.catch((e: Error) => { throw new Error(`${at}: the tenant-wide GET /api/invoice/v1/invoices never reached the page: ${e.message}`) })
+          await response.finished()
+          await framesPaint()
+          await settleAnimations(notice(page))
+          await measure(`${at} list held, scroll 0`)
+          releaseEntities()
+          const settled = page.getByTestId('invoices-list').or(page.getByTestId('invoices-empty')).or(page.getByTestId('invoices-empty-page')).first()
+          await expect(settled, `${at}: the list never settled after the entities response`).toBeVisible({ timeout: 30_000 })
+          await framesPaint()
+          await scrollAndMeasure(`${at} settled`, width)
+        } else {
+          await scrollAndMeasure(at, width)
+        }
+      } finally {
+        releaseEntities()
+        releaseList()
+        if (list) {
+          await page.unroute(isEntities, holdEntities)
+          await page.unroute(isTenantListUrl, holdList)
+        }
+      }
     }
   } finally {
     if (entry) await page.setViewportSize(entry)
@@ -299,6 +359,90 @@ test('AC-GA the routed production app loads the Google tag and sends events only
     expect((await layer()).length, 'an event was sent after Reject').toBe(held)
 
     // stub and console gates
+    await Promise.all(pending)
+    expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.unrouteAll({ behavior: 'ignoreErrors' })
+    await context.close()
+  }
+})
+
+test('AC-FUNNEL the routed production app holds email_verified, workspace_created and client_added until Accept', async ({ browser, request }) => {
+  test.setTimeout(300_000)
+  const id = randomUUID()
+  const email = `land08-${id}@example.com`
+  const password = id.slice(0, 16)
+  const workspaceName = `Funnel Ws ${id.slice(0, 8)}`
+  const displayName = `Funnel User ${id.slice(0, 8)}`
+  const clientName = `Funnel Client ${id.slice(0, 8)}`
+  const tin = freshTin()
+
+  const context = await browser.newContext()
+  try {
+    await routeAppHost(context, { app: APP_URL, gateway: GATEWAY_URL })
+    const app = await context.newPage()
+    // the first sign-in probes /me before it provisions: a 403 is expected
+    const errors = collectSourcedErrors(app, expectedStatusDropper(app, 403, /\/api\/tenancy\/v1\/me$/))
+    const { leaked, pending } = watchStubLeaks(app)
+    const gaRequests: string[] = []
+    app.on('request', (r) => {
+      if (hostMatches(new URL(r.url()).hostname.toLowerCase(), TAG_HOSTS)) gaRequests.push(r.url())
+    })
+    const layer = () => app.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+
+    // routing control: a mismatch means the routing failed, not the analytics
+    const served = await app.goto(`${PROD_APP}/build.txt`)
+    const direct = await request.get(`${APP_URL}/build.txt`)
+    expect(direct.ok(), `routing, not analytics: ${APP_URL}/build.txt did not answer 2xx`).toBeTruthy()
+    expect((await served?.text())?.trim(), `routing, not analytics: ${PROD_APP} does not serve the fork's build`).toBe((await direct.text()).trim())
+
+    // The registration answers ride the first sign-in. kind: 'firm' shows "Add your first client".
+    const registered = await rawFetch('/auth/register', { method: 'POST', body: { email, password, workspace_name: workspaceName, display_name: displayName, kind: 'firm' } })
+    expect(registered.status, JSON.stringify(registered.body)).toBe(202) // handler: internal/gateway/register.go
+
+    // The app holds the pending-verify marker, then opens the gateway confirm page with its state.
+    await app.goto(`${PROD_APP}/?auth=verify#token=bogus-${randomUUID()}`, { waitUntil: 'commit' })
+    await app.waitForURL((u) => isConfirmPage(u), { timeout: 30_000 })
+    const state = new URL(app.url()).searchParams.get('state') ?? ''
+    expect(state, 'the confirm page state').toMatch(STATE_43)
+    const code = await signInForCode(email, password, state)
+
+    await app.goto(`${PROD_APP}/?handoff=${code}`)
+    await expect(app.getByRole('heading', { level: 1, name: 'Add your first client', exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(notice(app)).toBeVisible()
+
+    // before Accept: all three events are held
+    await app.getByRole('button', { name: 'Add client', exact: true }).first().click()
+    const dialog = app.getByRole('dialog', { name: 'Add client' })
+    await dialog.getByRole('textbox').first().fill(clientName)
+    await dialog.getByPlaceholder('########-####').fill(tin)
+    const created = app.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/portfolio/v1/entities')
+    await dialog.getByRole('button', { name: 'Add client', exact: true }).click()
+    expect((await created).status()).toBe(201) // handler: internal/portfolio
+    await expect(dialog).toHaveCount(0)
+    expect(gaRequests, 'a GA request left before Accept').toEqual([])
+    expect(await app.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+    // after Accept
+    await accept(app).click()
+    await expect(notice(app)).toBeHidden()
+    await expect.poll(() => gaRequests.some((u) => new URL(u).hostname === 'www.googletagmanager.com'), 'the tag was never requested').toBe(true)
+    await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the routed app').toContain('config')
+    const sent = await layer()
+    const kinds = sent.map((e) => e[0])
+    expect(sent.slice(kinds.indexOf('config') + 1).filter((e) => e[0] === 'event')).toEqual([
+      ['event', 'email_verified', {}],
+      ['event', 'workspace_created', {}],
+      ['event', 'client_added', {}],
+    ])
+
+    // no identifier reaches the dataLayer
+    const serialized = JSON.stringify(sent)
+    for (const secret of ['user_id', email, workspaceName, displayName, clientName, tin]) {
+      expect(serialized, `${secret} reached the dataLayer`).not.toContain(secret)
+    }
+
     await Promise.all(pending)
     expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

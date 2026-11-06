@@ -1163,3 +1163,49 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     expect(await roleKeys(t), 'the role leaves the list').not.toContain(role.key)
   })
 })
+
+test.describe('approval-policy publish refuses a scope naming a deleted role (fresh workspace)', () => {
+  // internal/approval/policy.go policyStatusForErr (scopeRoleDeleted); title wrapped by quoteTitles in curly quotes.
+  const MSG_SCOPE_ROLE_DELETED = 'a scope names a workflow role that was deleted'
+
+  async function freshWorkspace(): Promise<string> {
+    const account = await provisionRealAccount('apsc-policy')
+    const { access_token } = await signInSession(account.email, account.password)
+    const listed = await listApprovalPolicies(access_token)
+    expect(listed.approval_policies, 'precondition: a fresh workspace has no policy').toEqual([])
+    return access_token
+  }
+
+  test('409 names the deleted role and leaves the draft alone, then publishes once the scope drops it', async () => {
+    const t = await freshWorkspace()
+    const headers = { Authorization: `Bearer ${t}` }
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await publishApprovalPolicy(t, c.id)
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const roleScopes = { document_types: ['credit_note'], workflow_role_keys: [role.key] }
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes: roleScopes })
+
+    // 200: only a policy in force blocks the delete, and S is still a draft.
+    await deleteWorkflowRole(t, role.key)
+
+    const res = await rawFetch(`/api/invoice/v1/approval-policies/${s.id}/publish`, { method: 'POST', headers })
+    expect(res.status, 'publishing a scope that names a deleted role').toBe(409)
+    const error = String((res.body as Record<string, unknown>).error)
+    expect(error).toContain(`“${role.title}”`)
+    expect(error).toContain(MSG_SCOPE_ROLE_DELETED)
+    expect(error).toContain('remove it from the scope, then publish')
+
+    const after = await getApprovalPolicy(t, s.id)
+    expect(after.sealed, 'S stays unsealed').toBe(false)
+    expect(after.versions.some((v) => v.is_active), 'S has no active version').toBe(false)
+    expect(after.scopes.workflow_role_keys, 'the refusal does not rewrite the scope').toEqual([role.key])
+
+    const kept = await putApprovalPolicyDraft(t, s.id, { steps: [], scopes: roleScopes })
+    expect(kept.scopes.workflow_role_keys, 'saving the draft still keeps the deleted key').toEqual([role.key])
+
+    await putApprovalPolicyDraft(t, s.id, { steps: [], scopes: { document_types: ['credit_note'] } })
+    const published = await publishApprovalPolicy(t, s.id)
+    expect(published.sealed, 'S publishes once the scope drops the role').toBe(true)
+    expect(published.versions.some((v) => v.is_active), 'and is in force').toBe(true)
+  })
+})

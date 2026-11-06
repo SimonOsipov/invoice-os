@@ -391,3 +391,29 @@ func TestDeleteRoleHandler_RealStoreRunRefusalHasEmptyPoliciesArray(t *testing.T
 		t.Errorf("error = %q, want roleInRunMessage", got)
 	}
 }
+
+func TestRoleInUse_ErrorIsCauseNeutral(t *testing.T) {
+	e := &roleInUse{invoices: []InvoiceRef{{ID: "i1", Number: "INV-1"}}, invoicesTotal: 1}
+	if strings.Contains(e.Error(), "policy") {
+		t.Errorf("Error() = %q, names a policy for a run-only refusal", e.Error())
+	}
+}
+
+func TestStatusForErr_RoleInUseComposesTheSentence(t *testing.T) {
+	pol := []PolicyRef{{ID: "p1", Name: "A"}}
+	inv := []InvoiceRef{{ID: "i1", Number: "INV-1"}}
+	cases := []struct {
+		name string
+		e    *roleInUse
+		want string
+	}{
+		{"run only", &roleInUse{invoices: inv, invoicesTotal: 1}, roleInRunMessage},
+		{"both", &roleInUse{policies: pol, invoices: inv, invoicesTotal: 1}, roleInUseMessage + "; " + roleInRunMessage},
+	}
+	for _, c := range cases {
+		status, msg := statusForErr(fmt.Errorf("wrapped: %w", c.e))
+		if status != http.StatusConflict || msg != c.want {
+			t.Errorf("%s: got %d %q, want 409 %q", c.name, status, msg, c.want)
+		}
+	}
+}

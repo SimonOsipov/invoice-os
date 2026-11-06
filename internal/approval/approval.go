@@ -35,10 +35,10 @@ var (
 	ErrNotFound     = errors.New("approval: workflow role not found")
 	ErrNotPermitted = errors.New("approval: not permitted")
 	ErrConflict     = errors.New("approval: conflict")
-	ErrRoleInUse    = errors.New("approval: workflow role is named by a policy in force")
+	ErrRoleInUse    = errors.New("approval: workflow role is in use")
 )
 
-// roleInUseMessage is the 409 sentence for ErrRoleInUse.
+// roleInUseMessage is the 409 sentence when a policy in force names the role.
 const roleInUseMessage = "this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first"
 
 // PolicyRef names one policy in the role-in-use refusal.
@@ -126,6 +126,10 @@ func statusForErr(err error) (status int, msg string) {
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict, "that role was just created — try again"
 	case errors.Is(err, ErrRoleInUse):
+		var inUse *roleInUse
+		if errors.As(err, &inUse) {
+			return http.StatusConflict, inUse.message()
+		}
 		return http.StatusConflict, roleInUseMessage
 	default:
 		return http.StatusInternalServerError, "internal server error"

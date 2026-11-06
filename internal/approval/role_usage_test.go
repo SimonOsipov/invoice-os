@@ -156,12 +156,15 @@ func TestRoleUsage_AnotherTenantsPolicyIsInvisible(t *testing.T) {
 	tenantA := policyTenant(t, super, "APSC-08 tenant A")
 	tenantB := policyTenant(t, super, "APSC-08 tenant B")
 	c, _ := activeAdmin(t, super, tenantA)
-	seedWorkflowRole(t, super, tenantA, "tax-reviewer", "Tax Reviewer")
+	roleA := seedWorkflowRole(t, super, tenantA, "tax-reviewer", "Tax Reviewer")
 	roleB := seedWorkflowRole(t, super, tenantB, "tax-reviewer", "Tax Reviewer")
+	pa, _ := seedActivePolicy(t, super, tenantA, "A policy", 1, []string{roleA}, "tax-reviewer")
 	seedActivePolicy(t, super, tenantB, "B policy", 1, []string{roleB}, "tax-reviewer")
+	seedActivePolicy(t, super, tenantB, "B other", 2, nil, "tax-reviewer")
 
-	if got := listUsage(t, app, c); len(got) != 0 {
-		t.Errorf("usage = %+v, want empty", got)
+	got := listUsage(t, app, c)
+	if len(got) != 1 || len(got["tax-reviewer"]) != 1 || got["tax-reviewer"][0].ID != pa {
+		t.Errorf("usage = %+v, want only tenant A's policy %s", got, pa)
 	}
 }
 
@@ -170,6 +173,7 @@ func TestRoleUsage_NamesNoDeletedRole(t *testing.T) {
 	tenantID := policyTenant(t, super, "APSC-08 deleted role")
 	c, _ := activeAdmin(t, super, tenantID)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	seedActivePolicy(t, super, tenantID, "Names it", 1, []string{roleID}, "tax-reviewer")
 	softDeleteWorkflowRole(t, super, roleID)
 
 	if got := listUsage(t, app, c); len(got) != 0 {

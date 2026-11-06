@@ -111,12 +111,11 @@ import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, TENANTS } from './targets'
 // unchanged.
 //
 // A card's USAGE line carries no literal here, and cannot: `roleUsage` is a function of the
-// tenant's policies in force (the roles fetch's `in_force`), which neither Test 1 nor Test 2 owns. internal/demopolicy seeds an
-// active policy onto both persona tenants, plus an unpublished draft on the IN-HOUSE one --
-// so per-seat USAGE now varies with tenant and draft counts (task-577 covers the deployed
-// shape). The shape is asserted instead of exact text; see USAGE_SHAPE below, whose second
-// alternative admits the seeded branch. Exact usage strings survive in exactly one place,
-// Test 3, over the policy Test 3 itself creates.
+// tenant's policies in force (the roles fetch's `in_force`), which neither Test 1 nor Test 2 owns.
+// internal/demopolicy seeds an active policy onto both persona tenants, so per-seat USAGE varies
+// with tenant (task-577 covers the deployed shape). The shape is asserted instead of exact text;
+// see USAGE_SHAPE below, whose second alternative admits the seeded branch. Exact usage strings
+// live in Test 3 and in the scope test at the end of the file, over policies they create.
 interface SeedRoleCard {
   /** role.key — names the drawer's pill toggle, `${idPrefix}-wfrole-${key}` (MemberParts.tsx). */
   key: string
@@ -841,8 +840,8 @@ const UNSAVED_POLICY_NAME = 'Untitled policy'
 // deactivates the governed version in the same transaction, which would drop
 // awaiting_approval to 0 mid-run with nothing red.
 // It also never clicked Save draft, which mattered more than the missing row: `applyEdit` is
-// local to the builder (WorkflowBuilder.tsx) while `roleUsage` reads `ctx.policies`, which
-// only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the usage line, the
+// local to the builder (WorkflowBuilder.tsx) while the delete confirm's draft warning reads
+// `ctx.policies`, which only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the
 // delete-confirm sentence and the blocked step below could not read what this test claims
 // they read. One Save draft is enough: the PUT sends name, scope and steps together
 // (lib/policies.ts).

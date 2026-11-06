@@ -119,6 +119,18 @@ describe('App: the in-force usage', () => {
     }
   })
 
+  it('a policy delete re-reads in-force usage too', async () => {
+    await boot([cfo], usage('before'))
+
+    await act(async () => void (await ctx().deletePolicy('p1')))
+
+    expect(roleGets.length, 'a policy delete did not re-read the usage').toBe(3)
+    expect(ctx().rolesInForce, 'an in-flight run must read as unknown').toBeNull()
+    await answer(2, { workflow_roles: [cfo], in_force: {} })
+    expect(ctx().rolesInForce).toEqual({})
+    expect(ctx().rolesState).toBe('ready')
+  })
+
   it('a failed re-read leaves null, not the stale count', async () => {
     await boot([cfo], usage('before'))
 

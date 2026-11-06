@@ -256,7 +256,6 @@ test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => 
     crumb: header.locator('> div').first(),
     search: header.locator('.pf-header-search'),
     'env-pill': page.getByTestId('env-pill'),
-    'new-invoice': header.getByRole('button', { name: 'New invoice' }),
   }
   const track = page.getByTestId('env-pill')
   const segments = track.locator('button')
@@ -565,6 +564,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
   const api = trackApi(page)
   const report: Record<string, unknown>[] = []
   let chipTotal = 0
+  let buttonTotal = 0
 
   for (const [persona, floor] of [['firm', 10], ['inhouse', 9]] as const) {
     await test.step(`${persona} nav sweep`, async () => {
@@ -591,7 +591,12 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
         expect(s.scanned, `${where}: scanned elements`).toBeGreaterThanOrEqual(20)
         expect(s.unresolved, `${where}: inline var() with no value`).toEqual([])
         expect(firstFamily(s.h1Family), `${where}: h1 family`).toBe('Manrope')
-        expect(s.buttons, `${where}: visible .pf-btn (the header's New invoice is one)`).toBeGreaterThanOrEqual(1)
+        buttonTotal += s.buttons
+        if (/^Invoices/.test(label)) {
+          await expect(page.getByTestId('invoices-new-invoice'), `${where}: the Invoices page New invoice button`).toBeVisible()
+        } else {
+          await expect(page.getByRole('button', { name: /New invoice/ }), `${where}: New invoice lives only on Invoices`).toHaveCount(0)
+        }
         expect(s.badButtons, `${where}: .pf-btn corners`).toEqual([])
         expect(s.badChips, `${where}: .pf-chip corners`).toEqual([])
         chipTotal += s.chips
@@ -630,6 +635,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
     })
   }
 
+  expect(buttonTotal, 'visible .pf-btn across the sweep, or the 7px read covers nothing').toBeGreaterThanOrEqual(1)
   expect(chipTotal, 'visible .pf-chip across the sweep, or the 4px read covers nothing').toBeGreaterThanOrEqual(1)
   await attachJson(testInfo, 'as-06-measurements', { chipTotal, screens: report })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

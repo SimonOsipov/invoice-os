@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type ExtractionReason, type Persona } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { signInAs } from '../personaSession'
+import { openNewInvoice, signInAs } from '../personaSession'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import type { Rect } from './layout'
 import { shardTenants } from './targets'
@@ -127,7 +127,7 @@ export async function extractOneDocument(
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })

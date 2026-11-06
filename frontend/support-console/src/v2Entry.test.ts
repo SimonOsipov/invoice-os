@@ -141,6 +141,7 @@ describe('v2 entry', () => {
 
     expect(at(`${DS}/v2/styles.css`), 'v2/styles.css imported').toBeGreaterThanOrEqual(0)
     expect(at(`${DS}/v2/app-layer.css`), 'v2/app-layer.css after v2/styles.css').toBeGreaterThan(at(`${DS}/v2/styles.css`))
+    expect(at(`${DS}/v2/mark.css`), 'mark.css after the layer').toBeGreaterThan(at(`${DS}/v2/app-layer.css`))
     expect(at('./styles/support.css'), 'support.css after the layer').toBeGreaterThan(at(`${DS}/v2/app-layer.css`))
     expect(specifiers).not.toContain(`${DS}/styles.css`)
     const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))

@@ -42,13 +42,14 @@ describe('main', () => {
     expect(h.bootChat).toHaveBeenCalledTimes(1)
     expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
     expect(h.boot.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
-    const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown; className?: unknown }> }> }>
+    const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown; className?: unknown; width?: unknown; height?: unknown }> }> }>
     expect(root.type).toBe(StrictMode)
     const boundary = root.props.children
     expect(boundary.type).toBe(CrashBoundary)
     expect(boundary.props.brand.type).toBe('img')
     expect(boundary.props.brand.props.src).toBe('mark-stub.svg')
     expect(boundary.props.brand.props.className).toBe('asc-mark')
+    expect([boundary.props.brand.props.width, boundary.props.brand.props.height]).toEqual([20, 20])
     // Imports evaluate in order: init must already have run when main.tsx's later imports load.
     expect(h.initsBeforeMark).toBe(1)
   })

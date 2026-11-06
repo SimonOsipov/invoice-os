@@ -119,6 +119,7 @@ describe('main', () => {
     const boundary = root.props.children
     expect(boundary.type).toBe(CrashBoundary)
     expect(isValidElement(boundary.props.brand) && boundary.props.brand.type).toBe(BrandMark)
+    expect((boundary.props.brand as ReactElement<{ size?: number }>).props.size, 'crash mark draws at 20').toBe(20)
     expect(boundary.props.children.type).toBe(App)
 
     expect(h.bootAnalytics).toHaveBeenCalledTimes(1)

@@ -294,7 +294,10 @@ test('SUP-01 shell: sidebar, header, env switch and sandbox banner', async ({ pa
   await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
-  expect(brandMarkProblems(await readBrandMark(brand)), 'brand mark rule').toEqual([])
+  await expect.poll(async () => {
+    await settle(page, side, brand)
+    return brandMarkProblems(await readBrandMark(brand))
+  }, { message: 'brand mark rule' }).toEqual([])
   await expectStyles(brand, 'brand image', { width: '26px', height: '26px' })
 
   await expectStyles(crossCard, 'cross-tenant card', { radius: '6px' })
@@ -333,9 +336,14 @@ test('SUP-01 shell: sidebar, header, env switch and sandbox banner', async ({ pa
     const asideRect = await side.boundingBox()
     if (!markRect || !asideRect) throw new Error('brand mark or aside has no box')
     const clear: Rect[] = []
-    if (await word.isVisible()) clear.push((await word.boundingBox()) as Rect)
+    const wordProblems: string[] = []
+    if (await word.isVisible()) {
+      const wordRect = await word.boundingBox()
+      if (wordRect) clear.push(wordRect)
+      else wordProblems.push('ASComply label is visible but has no box')
+    }
     const ring = ringWidth(reading)
-    return { problems: [...brandMarkProblems(reading), ...ringProblems(markRect, ring, asideRect, clear)], rects: { ...reading, ring, markRect, asideRect, clear } }
+    return { problems: [...wordProblems, ...brandMarkProblems(reading), ...ringProblems(markRect, ring, asideRect, clear)], rects: { ...reading, ring, markRect, asideRect, clear } }
   }, 10_000, [...WIDE_WIDTHS, 1024])
   expect(ringSweep.length, 'brand mark ring widths measured').toBeGreaterThan(0)
   await testInfo.attach('sup-01-brand-mark-ring.json', { body: JSON.stringify(ringSweep, null, 2), contentType: 'application/json' })

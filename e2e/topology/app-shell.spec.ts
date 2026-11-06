@@ -189,7 +189,10 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   const mark = aside(page).locator('img').first()
   const markReading = await styles(mark, ['width', 'height', 'border-top-left-radius', 'box-shadow'])
   expect(markReading, 'brand mark size, corner and ring').toEqual({ width: '28px', height: '28px', 'border-top-left-radius': '28.5%', 'box-shadow': MARK_RING })
-  expect(brandMarkProblems(await readBrandMark(mark)), 'brand mark rule').toEqual([])
+  await expect.poll(async () => {
+    await settle(page, aside(page), mark)
+    return brandMarkProblems(await readBrandMark(mark))
+  }, { message: 'brand mark rule' }).toEqual([])
 
   const fg1 = await resolveColor(aside(page), '--fg-1')
   const fg3 = await resolveColor(aside(page), '--fg-3')

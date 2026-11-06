@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { brandMarkProblems, MARK_RING, ringProblems, ringWidth, type BrandMarkReading } from './brandMark'
+import { brandMarkProblems, MARK_RING, MASTER_TILE_RX, MASTER_VIEWBOX, ringProblems, ringWidth, type BrandMarkReading } from './brandMark'
 
 const DARK = 'rgb(8, 47, 49)'
 const LIGHT = 'rgb(250, 248, 242)'
-const good: BrandMarkReading = { src: 'data:image/svg+xml,x', boxShadow: MARK_RING, radius: '28.5%', ground: DARK, box: 28, drawn: 24.89 }
+const MASTER = `data:image/svg+xml,${encodeURIComponent(`<svg viewBox="${MASTER_VIEWBOX}"><rect rx="${MASTER_TILE_RX}"/></svg>`)}`
+const good: BrandMarkReading = { src: MASTER, boxShadow: MARK_RING, radius: '28.5%', ground: DARK, box: 28, drawn: 24.89 }
 
 describe('brandMarkProblems', () => {
   it('a correct dark mark and a correct light mark are clean', () => {
@@ -28,6 +29,22 @@ describe('brandMarkProblems', () => {
     expect(brandMarkProblems({ ...good, ground: 'rgba(250, 248, 242, 0.95)', boxShadow: 'none' })).toEqual([])
   })
 
+  it('a translucent white over a dark ground is dark and needs the ring', () => {
+    const ground = 'rgba(255, 255, 255, 0.06) | rgb(8, 47, 49)'
+    expect(brandMarkProblems({ ...good, ground })).toEqual([])
+    expect(brandMarkProblems({ ...good, ground, boxShadow: 'none' })[0]).toContain('needs the ring')
+  })
+
+  it('a translucent dark over a light ground is light', () => {
+    const ground = 'rgba(0, 0, 0, 0.05) | rgb(250, 248, 242)'
+    expect(brandMarkProblems({ ...good, ground, boxShadow: 'none' })).toEqual([])
+  })
+
+  it('a fully transparent layer is skipped', () => {
+    expect(brandMarkProblems({ ...good, ground: 'rgba(0, 0, 0, 0) | rgb(8, 47, 49)' })).toEqual([])
+    expect(brandMarkProblems({ ...good, ground: 'rgba(0, 0, 0, 0)', boxShadow: 'none' })).toEqual([])
+  })
+
   it('a tile that fills the box is a problem', () => {
     const p = brandMarkProblems({ ...good, drawn: 28 })
     expect(p).toHaveLength(1)
@@ -37,7 +54,8 @@ describe('brandMarkProblems', () => {
   it('a raster source is a problem; a path or data URL master is not', () => {
     expect(brandMarkProblems({ ...good, src: '/assets/mark-UgrtOohT.png' })).toHaveLength(1)
     expect(brandMarkProblems({ ...good, src: 'https://x.test/blog/assets/mark-Ab1.svg' })).toEqual([])
-    expect(brandMarkProblems({ ...good, src: 'data:image/svg+xml,%3csvg' })).toEqual([])
+    expect(brandMarkProblems({ ...good, src: 'data:image/svg+xml,%3csvg%20viewBox%3D%220%200%2016%2016%22%3E%3C%2Fsvg%3E' })).toHaveLength(1)
+    expect(brandMarkProblems({ ...good, src: 'data:image/png;base64,iVBORw0KGgo=' })).toHaveLength(1)
   })
 
   it('a wrong corner radius is a problem', () => {

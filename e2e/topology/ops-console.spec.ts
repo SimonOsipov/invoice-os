@@ -321,9 +321,13 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   expect(ratio, 'org switcher text contrast against its own fill').toBeGreaterThanOrEqual(4.5)
 
   const mark = aside(page).locator('img').first()
-  const markReading = await readBrandMark(mark)
-  expect(brandMarkProblems(markReading), 'brand mark rule').toEqual([])
-  const src = markReading.src
+  let src = ''
+  await expect.poll(async () => {
+    await settle(page, aside(page), mark)
+    const reading = await readBrandMark(mark)
+    src = reading.src
+    return brandMarkProblems(reading)
+  }, { message: 'brand mark rule' }).toEqual([])
 
   await corners(navButton(page, /^Submissions/).locator('span.mono'), 'Submissions nav badge', R.sm)
   await corners(aside(page).getByText('AO', { exact: true }), 'avatar', R.circle)
@@ -403,9 +407,14 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
     const asideRect = await aside(page).boundingBox()
     if (!markRect || !asideRect) throw new Error('brand mark or aside has no box')
     const clear: Rect[] = []
-    if (await word.isVisible()) clear.push((await word.boundingBox()) as Rect)
+    const wordProblems: string[] = []
+    if (await word.isVisible()) {
+      const wordRect = await word.boundingBox()
+      if (wordRect) clear.push(wordRect)
+      else wordProblems.push('ASComply label is visible but has no box')
+    }
     const ring = ringWidth(reading)
-    return { problems: [...brandMarkProblems(reading), ...ringProblems(markRect, ring, asideRect, clear)], rects: { ...reading, ring, markRect, asideRect, clear } }
+    return { problems: [...wordProblems, ...brandMarkProblems(reading), ...ringProblems(markRect, ring, asideRect, clear)], rects: { ...reading, ring, markRect, asideRect, clear } }
   }, [...WIDE_WIDTHS, 1024])
   expect(ringSweep.length, 'brand mark ring widths measured').toBeGreaterThan(0)
 

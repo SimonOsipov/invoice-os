@@ -1,4 +1,4 @@
-// Reads a deployed brand mark and checks the LAND-09 rule: vector master, ring on a dark ground only.
+// Reads a deployed brand mark and checks the rule: vector master, ring on a dark ground only.
 import { expect, type Locator } from '@playwright/test'
 import { enclosesRect, inflateRect, rectsOverlap, type Rect } from './layout'
 
@@ -10,6 +10,9 @@ export const MARK_RADIUS = '28.5%'
 export const TILE_RATIO = 128 / 144
 
 const TILE_TOLERANCE = 0.01
+// Distinctive content of packages/design-tokens/v2/assets/mark.svg.
+export const MASTER_VIEWBOX = '0 0 128 128'
+export const MASTER_TILE_RX = '36.5'
 const SVG_PATH = /\/mark(-[\w-]+)?\.svg(\?.*)?$/
 
 export type BrandMarkReading = {
@@ -21,18 +24,19 @@ export type BrandMarkReading = {
   drawn: number
 }
 
-// First ancestor background that is not fully transparent, else the html colour, else the white canvas.
+// Ancestor backgrounds from the mark outwards, up to and including the first opaque one.
 export async function readBrandMark(mark: Locator): Promise<BrandMarkReading> {
   await expect.poll(() => mark.evaluate((el) => (el as HTMLImageElement).naturalWidth), { message: 'brand mark never loaded' }).toBeGreaterThan(0)
   const read = await mark.evaluate((el) => {
     const cs = getComputedStyle(el)
-    const clear = (c: string) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent'
-    let ground = ''
+    const layers: string[] = []
     for (let p = el.parentElement; p; p = p.parentElement) {
       const bg = getComputedStyle(p).backgroundColor
-      if (!clear(bg)) { ground = bg; break }
+      layers.push(bg)
+      const alpha = bg.match(/,\s*([\d.]+)\)$/)
+      if (bg !== 'transparent' && (!alpha || +alpha[1] >= 1)) break
     }
-    if (!ground) ground = 'rgb(255, 255, 255)'
+    const ground = layers.join(' | ')
     return { src: (el as HTMLImageElement).currentSrc, boxShadow: cs.boxShadow, radius: cs.borderTopLeftRadius, ground, box: parseFloat(cs.width) }
   })
   const drawn = (await mark.boundingBox())?.width
@@ -40,20 +44,44 @@ export async function readBrandMark(mark: Locator): Promise<BrandMarkReading> {
   return { ...read, drawn }
 }
 
-// WCAG relative luminance of an rgb()/rgba() colour; alpha is ignored.
-function luminance(color: string): number {
-  const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/)
+type Rgba = [number, number, number, number]
+
+function parseColor(color: string): Rgba {
+  const m = color.trim().match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/)
   if (!m) throw new Error(`cannot parse the ground colour ${JSON.stringify(color)}`)
+  const a = m[4] === undefined ? 1 : m[4].endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]
+  return [+m[1], +m[2], +m[3], a]
+}
+
+// Composites the layers (innermost first, ' | ' separated) over white; transparent layers add nothing.
+function effectiveGround(ground: string): [number, number, number] {
+  const layers = ground.split(' | ').map((l) => (l === 'transparent' ? 'rgba(0, 0, 0, 0)' : l)).map(parseColor)
+  let out: [number, number, number] = [255, 255, 255]
+  for (const [r, g, b, a] of layers.reverse()) out = [r * a + out[0] * (1 - a), g * a + out[1] * (1 - a), b * a + out[2] * (1 - a)]
+  return out
+}
+
+// WCAG relative luminance of the composited ground.
+function luminance(ground: string): number {
   const lin = (c: number): number => {
     const s = c / 255
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
   }
-  return 0.2126 * lin(+m[1]) + 0.7152 * lin(+m[2]) + 0.0722 * lin(+m[3])
+  const [r, g, b] = effectiveGround(ground)
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+function isMasterDataUri(src: string): boolean {
+  const m = src.match(/^data:image\/svg\+xml[;,]/)
+  if (!m) return false
+  let body = src.slice(src.indexOf(',') + 1)
+  try { body = decodeURIComponent(body) } catch { /* keep raw */ }
+  return body.includes(`viewBox="${MASTER_VIEWBOX}"`) && body.includes(`rx="${MASTER_TILE_RX}"`)
 }
 
 export function brandMarkProblems(r: BrandMarkReading): string[] {
   const problems: string[] = []
-  if (!/^data:image\/svg\+xml,/.test(r.src) && !SVG_PATH.test(r.src)) problems.push(`mark source is not the SVG master: ${r.src.slice(0, 80)}`)
+  if (!isMasterDataUri(r.src) && !SVG_PATH.test(r.src)) problems.push(`mark source is not the SVG master: ${r.src.slice(0, 80)}`)
   const dark = luminance(r.ground) < 0.5
   if (dark && r.boxShadow !== MARK_RING) problems.push(`mark on the dark ground ${r.ground} needs the ring ${MARK_RING}, has ${r.boxShadow}`)
   if (!dark && r.boxShadow !== 'none') problems.push(`mark on the light ground ${r.ground} has a ring: ${r.boxShadow}`)

@@ -213,6 +213,84 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(onFlash).not.toHaveBeenCalled()
   })
 
+  const S409 = 'this workflow role is named by a policy in force'
+  const conflict = (names: string[]) =>
+    new ApiError('http', S409, 409, { error: S409, policies: names.map((name, i) => ({ id: `p${i}`, name })) })
+
+  async function refuseDelete(deleteRole: ReturnType<typeof vi.fn>) {
+    fireEvent.click(screen.getByTestId('role-delete'))
+    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
+    await drain(deleteRole)
+  }
+
+  it('a 409 delete refusal lists the policies under the server sentence', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['Credit notes', 'Big invoices']))
+    const { onClose, onFlash } = renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    expect(screen.getByTestId('role-modal')).toBeTruthy()
+    expect(screen.getByTestId('role-modal-error').textContent?.startsWith(S409)).toBe(true)
+    const items = within(screen.getByTestId('role-modal-error-policies')).getAllByRole('listitem')
+    expect(items.map((li) => li.textContent)).toEqual(['Credit notes', 'Big invoices'])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onFlash).not.toHaveBeenCalled()
+  })
+
+  it('a 409 refusal with many policies renders every name as text', async () => {
+    const long = 'L'.repeat(120)
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['One', '<b>x</b>', long, 'Four']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    const list = screen.getByTestId('role-modal-error-policies')
+    const items = within(list).getAllByRole('listitem')
+    expect(items.map((li) => li.textContent)).toEqual(['One', '<b>x</b>', long, 'Four'])
+    expect(list.querySelector('b')).toBeNull()
+  })
+
+  it('a save attempt clears the policy list a delete refusal left', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['Credit notes']))
+    const renameRole = vi.fn().mockRejectedValue(new ApiError('http', 'only an admin can change workflow roles', 403))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole, renameRole })
+    await refuseDelete(deleteRole)
+    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('role-delete-cancel'))
+    fireEvent.change(screen.getByTestId('role-modal-desc'), { target: { value: 'D2' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    expect(screen.queryByTestId('role-modal-error-policies'), 'cleared while the save is in flight').toBeNull()
+    await drain(renameRole)
+
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
+  })
+
+  it('a 404 delete refusal renders no policy list', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' }))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
+  })
+
+  it('a second attempt clears the previous policy list', async () => {
+    const deleteRole = vi
+      .fn()
+      .mockRejectedValueOnce(conflict(['Credit notes']))
+      .mockRejectedValueOnce(new ApiError('http', 'workflow role not found', 404))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
+  })
+
   it('a successful delete does not close the modal before ctx.deleteRole resolves', () => {
     const deleteRole = vi.fn(() => new Promise<void>(() => {}))
     const { onClose } = renderModal({ mode: 'edit', role: role() }, { deleteRole })
@@ -391,11 +469,13 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
   // The over-widening guard (WorkflowBuilder.test.tsx:104's posture), green before the gate
   // landed and green after: it pins that the gate does not swallow a genuinely landed-empty
   // answer. Killed by gating on `policies.length` instead of on the status.
-  it('a landed-empty policy list still says the role is not used in any policy', () => {
+  it('a landed-empty policy list still states the in-force rule', () => {
     renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'empty' })
     fireEvent.click(screen.getByTestId('role-delete'))
 
-    expect(confirmText(), 'the guard swallowed a genuinely landed-empty answer').toContain('It is not used in any policy.')
+    expect(confirmText(), 'the guard swallowed a genuinely landed-empty answer').toContain(
+      'The delete is refused while a policy in force names it in a scope or an approval step.',
+    )
   })
 
   // ------------------------------------------------------------------------
@@ -410,7 +490,7 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
     fireEvent.click(screen.getByTestId('role-delete'))
 
     expect(confirmText()).toContain('1 approval step · 1 policy')
-    expect(confirmText()).toContain('Those steps will block until you point them somewhere else.')
+    expect(confirmText()).toContain('The delete is refused while a policy in force names it in a scope or an approval step.')
   })
 
   it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
@@ -420,7 +500,21 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
     renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'idle' })
     fireEvent.click(screen.getByTestId('role-delete'))
 
-    expect(confirmText()).toContain('It is not used in any policy.')
+    expect(confirmText()).toContain('The delete is refused while a policy in force names it')
+  })
+
+  it('a role only an active scope names: the confirm does not say "not used in any policy"', () => {
+    const scoped = policy({
+      status: 'published',
+      activeVersion: 1,
+      scopes: { ...CATCH_ALL_SCOPES, workflow_role_keys: ['cfo'] },
+      nodes: [],
+    })
+    renderModal({ mode: 'edit', role: role() }, { policies: [scoped], policiesState: 'ready' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    expect(confirmText()).not.toContain('not used in any policy')
+    expect(confirmText()).toContain('The delete is refused while a policy in force names it')
   })
 
   it('the claim appears the moment the fetch lands under an already-open confirm', () => {
@@ -429,7 +523,7 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
     // or that closed the confirm on the status change — would fail here.
     const { rerender } = renderModalRerenderable({ policies: [], policiesState: 'loading' })
     fireEvent.click(screen.getByTestId('role-delete'))
-    expect(confirmText(), 'the confirm did not open, so the flip below is vacuous').not.toContain('approval step')
+    expect(confirmText(), 'the confirm did not open, so the flip below is vacuous').not.toContain('1 approval step')
 
     rerender({ policies: [policy()], policiesState: 'ready' })
 

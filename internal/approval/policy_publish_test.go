@@ -622,13 +622,15 @@ func TestPublish_SecondPublishIsNothingToPublish(t *testing.T) {
 // TestPublish_RoleDeletedAfterPublishLeavesVersionActive is the other half of the door
 // distinction: the sealed version keeps its step and stays in force, and only the NEXT
 // publish of that same tree is refused. TestPublish_RejectsDanglingRole is the pair.
+// The store now refuses this delete (TestDeleteRole_RefusesARoleAnActiveStepNames), so
+// the superuser seed stands in for legacy data.
 func TestPublish_RoleDeletedAfterPublishLeavesVersionActive(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-role-deleted-after")
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID, stepID := seedApprovalDraftNamingRole(t, super, tenantID, policyID, "tax-reviewer")
 
@@ -637,9 +639,7 @@ func TestPublish_RoleDeletedAfterPublishLeavesVersionActive(t *testing.T) {
 	}
 	before := stepSnapshot(t, super, stepID)
 
-	if _, err := store.DeleteRole(c, "tax-reviewer"); err != nil {
-		t.Fatalf("DeleteRole: %v", err)
-	}
+	softDeleteWorkflowRole(t, super, roleID)
 
 	v := versionRow(t, super, versionID)
 	if !v.Sealed || !v.IsActive {

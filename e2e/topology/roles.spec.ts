@@ -1024,7 +1024,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await page.getByTestId('role-delete').click()
   // The confirm names the role AND its usage, so the consequence is stated before the click.
   await expect(page.getByTestId('role-delete-confirm')).toContainText(
-    `Delete ${title}? 1 approval step · 1 policy. Those steps will block until you point them somewhere else.`,
+    `Delete ${title}? 1 approval step · 1 policy. The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`,
   )
   await expect(page.getByTestId('role-delete-cancel')).toBeVisible()
   await page.getByTestId('role-delete-confirmed').click()

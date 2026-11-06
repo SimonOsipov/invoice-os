@@ -5,7 +5,8 @@ import { collectErrors, signInAs } from '../personaSession'
 import { seedConsent } from '../smoke/landingConsent'
 import { seedStaffSession } from '../staffSession'
 import { resolveTarget } from '../targets'
-import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import { brandMarkProblems, readBrandMark } from './brandMark'
+import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { shardTenants } from './targets'
 
 const SHARD = shardTenants('design-system.spec.ts')
@@ -905,6 +906,46 @@ test('landing footer: one Blog link with the baked URL', async ({ page }) => {
   const blog = page.getByRole('contentinfo').getByRole('link', { name: 'Blog', exact: true })
   await expect(blog, 'one footer "Blog" link (is landing.VITE_BLOG_URL set?)').toHaveCount(1)
   await expect(blog, 'the footer Blog href').toHaveAttribute('href', resolveTarget('BAKED_BLOG_URL'))
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing brand marks: nav, footer and Sign in dialog draw the vector master with no ring', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const measured: Record<string, unknown>[] = []
+
+  // Light grounds only (landing nav, footer, dialog), so a ring here is a problem.
+  const sweep = async (surface: string, width: number, mark: Locator): Promise<void> => {
+    await expect(mark, `${surface} @${width}: exactly one brand mark`).toHaveCount(1)
+    await settleAnimations(mark)
+    await expect.poll(async () => brandMarkProblems(await readBrandMark(mark)), { message: `${surface} @${width}`, timeout: 10_000 }).toEqual([])
+    measured.push({ surface, width, ...(await readBrandMark(mark)) })
+  }
+
+  for (const width of [...WIDE_WIDTHS, 390]) {
+    await settleFrame(page, { width, height: 900 })
+    await sweep('nav', width, page.getByRole('banner').locator('img.asc-mark'))
+  }
+
+  for (const width of [1440, 390]) {
+    await settleFrame(page, { width, height: 900 })
+    await sweep('footer', width, page.getByRole('contentinfo').locator('img.asc-mark'))
+
+    if (width > BURGER_MAX) {
+      await page.getByRole('banner').getByRole('button', { name: 'Sign in', exact: true }).click()
+    } else {
+      await page.getByRole('banner').getByRole('button', { name: 'Menu' }).click()
+      await page.getByRole('banner').locator('.a-menu').getByRole('button', { name: 'Sign in', exact: true }).click()
+    }
+    const dialog = page.getByRole('dialog', { name: 'Sign in', exact: true })
+    await expect(dialog, `dialog @${width}`).toBeVisible()
+    await sweep('dialog', width, dialog.locator('img.asc-mark'))
+    await page.keyboard.press('Escape')
+    await expect(dialog, `dialog closes @${width}`).toHaveCount(0)
+  }
+
+  expect(measured.length, 'brand mark readings').toBeGreaterThan(0)
+  await attachJson(testInfo, 'landing-brand-marks.json', measured)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

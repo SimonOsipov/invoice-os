@@ -100,6 +100,7 @@ describe('content', () => {
     expect(f.benefits[0]).toMatch(/document type, client, amount band or creator role/)
     expect(f.desc).toMatch(/first policy in the list that matches a document decides/)
     expect(f.desc).toMatch(/an admin sets the order/)
+    expect(f.desc).toMatch(/Once any policy has a scope, an "All invoices" policy sits last and applies to every document that no other policy matches/)
     expect(f.desc).toMatch(/sample amount/)
     expect(f.desc).toMatch(/an amount band in one currency/)
     expect(COMING_SOON_IDS).not.toContain('workflow-builder')

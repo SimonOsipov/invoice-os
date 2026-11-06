@@ -732,6 +732,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/extraction/anchor_store.go"},                                           // the learned-rule read, same shape as store.go: no request path reaches it
 	{file: "internal/importer/backfill.go"},                                                 // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
 	{file: "internal/invoice/revalidate.go"},                                                // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/approval/stranded.go", fn: "listStranded"},                             // the strandedruns operator job reads each tenant read-only with no caller identity; func-scoped because internal/approval serves HTTP
 	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                     // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/tenancy/staff_deletion.go", fn: "withinStaffTenant"},                   // staff write or read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; the request carries no tenant

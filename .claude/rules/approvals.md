@@ -52,6 +52,7 @@ paths:
 - List the policies in force per role as `in_force` on `GET /v1/workflow-roles`. It uses the predicate of the role delete refusal (`TestRoleUsage_AgreesWithDeleteRole`). Omit `in_force` when its read fails.
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.
 - Refuse a role staffing write with 409 while an open run has a pending approval step that names the role and the new set holds no active admin or reviewer. Use the body of the role delete refusal.
+- List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
 - Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.

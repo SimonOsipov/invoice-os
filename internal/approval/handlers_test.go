@@ -33,6 +33,7 @@ import (
 // deliberately wire is a failure rather than a silent zero-value call.
 type roleSeam struct {
 	list   RolesLister
+	usage  RoleUsageLister
 	create RoleCreator
 	update RoleUpdater
 	del    RoleDeleter
@@ -44,6 +45,10 @@ func failClosedSeam(t *testing.T) *roleSeam {
 	return &roleSeam{
 		list: func(context.Context) ([]Role, error) {
 			t.Fatal("lister must not run on a request the handler has to reject")
+			return nil, nil
+		},
+		usage: func(context.Context) (map[string][]RoleUse, error) {
+			t.Fatal("usage lister must not run on a request the handler has to reject")
 			return nil, nil
 		},
 		create: func(context.Context, string, string) (Role, error) {
@@ -69,6 +74,7 @@ func failClosedSeam(t *testing.T) *roleSeam {
 func errSeam(err error) *roleSeam {
 	return &roleSeam{
 		list:   func(context.Context) ([]Role, error) { return nil, err },
+		usage:  func(context.Context) (map[string][]RoleUse, error) { return nil, err },
 		create: func(context.Context, string, string) (Role, error) { return Role{}, err },
 		update: func(context.Context, string, *string, *string) (Role, error) { return Role{}, err },
 		del:    func(context.Context, string) (Role, error) { return Role{}, err },
@@ -80,6 +86,7 @@ func errSeam(err error) *roleSeam {
 func okSeam(role Role) *roleSeam {
 	return &roleSeam{
 		list:   func(context.Context) ([]Role, error) { return []Role{role}, nil },
+		usage:  func(context.Context) (map[string][]RoleUse, error) { return map[string][]RoleUse{}, nil },
 		create: func(context.Context, string, string) (Role, error) { return role, nil },
 		update: func(context.Context, string, *string, *string) (Role, error) { return role, nil },
 		del:    func(context.Context, string) (Role, error) { return role, nil },
@@ -93,7 +100,7 @@ func okSeam(role Role) *roleSeam {
 // file by TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain.
 func rolesMux(s *roleSeam, log *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/workflow-roles", ListRolesHandler(s.list, log))
+	mux.HandleFunc("GET /v1/workflow-roles", ListRolesHandler(s.list, s.usage, log))
 	mux.HandleFunc("POST /v1/workflow-roles", CreateRoleHandler(s.create, log))
 	mux.HandleFunc("PATCH /v1/workflow-roles/{key}", UpdateRoleHandler(s.update, log))
 	mux.HandleFunc("DELETE /v1/workflow-roles/{key}", DeleteRoleHandler(s.del, log))
@@ -561,12 +568,13 @@ func TestWorkflowRoleHandlers_ListSerializesEmptyMembersAsArray(t *testing.T) {
 		s.list = func(context.Context) ([]Role, error) {
 			return []Role{{Key: "tax-reviewer", Title: "T", Members: nil}}, nil
 		}
+		s.usage = func(context.Context) (map[string][]RoleUse, error) { return map[string][]RoleUse{}, nil }
 		rec := serveRole(t, s, nil, "GET", "/v1/workflow-roles", "", &id)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 		}
-		if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "workflow_roles" {
-			t.Errorf("envelope keys = %v, want exactly [workflow_roles]", got)
+		if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "in_force,workflow_roles" {
+			t.Errorf("envelope keys = %v, want exactly [in_force workflow_roles]", got)
 		}
 		var env struct {
 			Roles []json.RawMessage `json:"workflow_roles"`
@@ -586,6 +594,7 @@ func TestWorkflowRoleHandlers_ListSerializesEmptyMembersAsArray(t *testing.T) {
 		id := caller()
 		s := failClosedSeam(t)
 		s.list = func(context.Context) ([]Role, error) { return nil, nil }
+		s.usage = func(context.Context) (map[string][]RoleUse, error) { return nil, nil }
 		rec := serveRole(t, s, nil, "GET", "/v1/workflow-roles", "", &id)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
@@ -594,6 +603,90 @@ func TestWorkflowRoleHandlers_ListSerializesEmptyMembersAsArray(t *testing.T) {
 			t.Errorf("workflow_roles raw JSON = %s, want [] (never null)", got)
 		}
 	})
+}
+
+// --- in_force ---------------------------------------------------------------
+
+func listWithUsage(t *testing.T, usage RoleUsageLister, log *slog.Logger) *httptest.ResponseRecorder {
+	t.Helper()
+	id := caller()
+	s := failClosedSeam(t)
+	s.list = func(context.Context) ([]Role, error) { return []Role{{Key: "tax-reviewer", Title: "T"}}, nil }
+	s.usage = usage
+	return serveRole(t, s, log, "GET", "/v1/workflow-roles", "", &id)
+}
+
+func TestListRolesHandler_InForceIsAnObjectWhenEmpty(t *testing.T) {
+	rec := listWithUsage(t, func(context.Context) (map[string][]RoleUse, error) { return nil, nil }, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := rawField(t, rec.Body.Bytes(), "in_force"); got != "{}" {
+		t.Errorf("in_force raw JSON = %s, want {}", got)
+	}
+}
+
+func TestListRolesHandler_ReturnsInForceNextToTheRoles(t *testing.T) {
+	want := RoleUse{ID: "p1", Name: "Scoped", Steps: 2, Scope: true}
+	rec := listWithUsage(t, func(context.Context) (map[string][]RoleUse, error) {
+		return map[string][]RoleUse{"tax-reviewer": {want}}, nil
+	}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "in_force,workflow_roles" {
+		t.Errorf("envelope keys = %v, want [in_force workflow_roles]", got)
+	}
+	var env struct {
+		InForce map[string][]RoleUse `json:"in_force"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if got := env.InForce["tax-reviewer"]; len(got) != 1 || got[0] != want {
+		t.Errorf("in_force[tax-reviewer] = %+v, want [%+v]", got, want)
+	}
+}
+
+func TestListRolesHandler_UsageErrorKeepsTheRolesAndOmitsInForce(t *testing.T) {
+	var buf bytes.Buffer
+	rec := listWithUsage(t, func(context.Context) (map[string][]RoleUse, error) {
+		return nil, errors.New("usage boom")
+	}, slog.New(slog.NewJSONHandler(&buf, nil)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "workflow_roles" {
+		t.Errorf("envelope keys = %v, want exactly [workflow_roles]", got)
+	}
+	var entries []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var e map[string]any
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		entries = append(entries, e)
+	}
+	if len(entries) != 1 || entries[0]["level"] != "ERROR" {
+		t.Errorf("log entries = %v, want exactly one ERROR", entries)
+	}
+}
+
+func TestListRolesHandler_ListErrorSkipsUsage(t *testing.T) {
+	id := caller()
+	s := failClosedSeam(t)
+	s.list = func(context.Context) ([]Role, error) { return nil, ErrNotPermitted }
+	rec := serveRole(t, s, nil, "GET", "/v1/workflow-roles", "", &id)
+	if want, _ := statusForErr(ErrNotPermitted); rec.Code != want {
+		t.Errorf("status = %d, want %d", rec.Code, want)
+	}
+}
+
+func TestListRolesHandler_UnauthenticatedIs401BeforeEitherRead(t *testing.T) {
+	rec := serveRole(t, failClosedSeam(t), nil, "GET", "/v1/workflow-roles", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
 }
 
 func TestWorkflowRoleHandlers_WriteResponsesNeverSerialiseNullMembers(t *testing.T) {
@@ -987,6 +1080,7 @@ func TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 		receiver string
 		handler  string
 		arg0     string
+		arg1     string
 	}
 	found := map[string]reg{}
 	seen := 0
@@ -1017,6 +1111,9 @@ func TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 			if len(h.Args) > 0 {
 				r.arg0 = exprName(h.Args[0])
 			}
+			if len(h.Args) > 1 {
+				r.arg1 = exprName(h.Args[1])
+			}
 		}
 		found[pattern] = r
 		return true
@@ -1026,12 +1123,12 @@ func TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 		t.Fatal("no HandleFunc call found in cmd/invoice/main.go — the scan matched nothing, so every assertion is vacuous")
 	}
 
-	want := []struct{ pattern, handler, storeMethod string }{
-		{"GET /v1/workflow-roles", "approval.ListRolesHandler", "ListRoles"},
-		{"POST /v1/workflow-roles", "approval.CreateRoleHandler", "CreateRole"},
-		{"PATCH /v1/workflow-roles/{key}", "approval.UpdateRoleHandler", "UpdateRole"},
-		{"DELETE /v1/workflow-roles/{key}", "approval.DeleteRoleHandler", "DeleteRole"},
-		{"PUT /v1/workflow-roles/{key}/members", "approval.SetRoleMembersHandler", "SetRoleMembers"},
+	want := []struct{ pattern, handler, storeMethod, usageMethod string }{
+		{"GET /v1/workflow-roles", "approval.ListRolesHandler", "ListRoles", "ListRoleUsage"},
+		{"POST /v1/workflow-roles", "approval.CreateRoleHandler", "CreateRole", ""},
+		{"PATCH /v1/workflow-roles/{key}", "approval.UpdateRoleHandler", "UpdateRole", ""},
+		{"DELETE /v1/workflow-roles/{key}", "approval.DeleteRoleHandler", "DeleteRole", ""},
+		{"PUT /v1/workflow-roles/{key}/members", "approval.SetRoleMembersHandler", "SetRoleMembers", ""},
 	}
 	for _, w := range want {
 		got, ok := found[w.pattern]
@@ -1047,6 +1144,9 @@ func TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 		}
 		if !strings.HasSuffix(got.arg0, "."+w.storeMethod) {
 			t.Errorf("%q is wired to %q, want a .%s seam", w.pattern, got.arg0, w.storeMethod)
+		}
+		if w.usageMethod != "" && !strings.HasSuffix(got.arg1, "."+w.usageMethod) {
+			t.Errorf("%q passes %q as its second argument, want a .%s seam", w.pattern, got.arg1, w.usageMethod)
 		}
 	}
 	for pattern := range found {

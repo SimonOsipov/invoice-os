@@ -36,6 +36,7 @@ function listCtx(policies: Policy[], over: Record<string, unknown> = {}): Platfo
     policiesError: null,
     refetchPolicies: vi.fn(),
     refetchRoles: vi.fn(),
+    refetchRolesInForce: vi.fn(),
     entities: [],
     entitiesState: 'ready',
     refetchEntities: vi.fn(),

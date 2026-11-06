@@ -173,6 +173,14 @@ describe('App.tsx wiring', () => {
     expect(refetching.length, 'no publish call site is followed by a refetch').toBeGreaterThan(0)
   })
 
+  it('publishPolicy and deletePolicy re-run the in-force usage, never the roles fetch', () => {
+    for (const verb of ['publishPolicy', 'deletePolicy'] as const) {
+      const body = asyncFnBody(verb)
+      expect(body, `${verb} leaves the card counts stale`).toContain('inForceAsync.run()')
+      expect(body, `${verb} refetches roles and blanks the builder`).not.toContain('rolesAsync.run()')
+    }
+  })
+
   // APPR-09-04 (task-508) QA. WorkflowsView's ladder reads `policiesState`, and only a fetch
   // writes it — so a verb that patches the mirror alone leaves the screen stating the
   // PREVIOUS fetch's claim. The two readings that produces are modelled below; this pins

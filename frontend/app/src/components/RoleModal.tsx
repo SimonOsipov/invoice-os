@@ -19,6 +19,7 @@ import {
   deletedNotice,
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
+  draftSteps,
   inUseInvoices,
   inUsePolicyNames,
   EDIT_ROLE_SUBTITLE,
@@ -31,7 +32,7 @@ import {
   pickerMembers,
   pickerSelectionCount,
   savedNotice,
-  steps,
+  summary,
   type Role,
 } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
@@ -103,9 +104,8 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // has no row for, which `selected.length` above would otherwise count with no way to untick.
   const hiddenSelected = pickerHiddenAmongSelected(selected, ctx.members)
   const canSave = canSaveRole(name)
-  // `steps` off an unlanded policies fetch reads as "used nowhere" — the [D-BUILDER-GUARD]
-  // class of bug. `membersSurface`, not `rolesSurface`: that one takes two statuses and is
-  // shared by two views, so folding policies in would be a new predicate.
+  // Only the draft warning reads the policies fetch; an unlanded fetch claims no draft.
+  // `membersSurface`, not `rolesSurface`: that one takes two statuses and is shared by two views.
   const policiesSurface = membersSurface(ctx.policiesState)
   const policiesLanded = policiesSurface !== 'loading' && policiesSurface !== 'error'
 
@@ -158,6 +158,8 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
       setWriteError(toApiError(err).message)
       setWriteErrorPolicies(inUsePolicyNames(err))
       setWriteErrorInvoices(inUseInvoices(err))
+      // Only a refusal that names policies means the card's count is stale; an open-run refusal leaves in_force unchanged.
+      if (toApiError(err).status === 409 && inUsePolicyNames(err).length > 0) ctx.refetchRolesInForce()
     } finally {
       setSubmitting(false)
     }
@@ -330,7 +332,9 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               style={{ marginTop: 14, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
             >
               <p style={{ margin: '0 0 10px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>
-                {policiesLanded ? deleteRoleConfirm(role.title, steps(ctx.policies, role.key)) : deleteRoleConfirmUnknownUsage(role.title)}
+                {ctx.rolesInForce
+                  ? deleteRoleConfirm(role.title, summary(ctx.rolesInForce[role.key]), policiesLanded ? draftSteps(ctx.policies, role.key) : 0)
+                  : deleteRoleConfirmUnknownUsage(role.title)}
               </p>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button

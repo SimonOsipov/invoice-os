@@ -19,6 +19,8 @@ import (
 // rolesResponse is the GET /v1/workflow-roles body.
 type rolesResponse struct {
 	WorkflowRoles []Role `json:"workflow_roles"`
+	// InForce is omitted, not {}, when the usage read failed: {} would claim nothing is in force.
+	InForce *map[string][]RoleUse `json:"in_force,omitempty"`
 }
 
 // normalise fills a nil Members: a nil []T with no omitempty serialises as null, and
@@ -32,7 +34,7 @@ func normalise(r Role) Role {
 
 // ListRolesHandler returns GET /v1/workflow-roles. No access-role gate — any caller
 // the request seam admits may list, the same as GET /v1/memberships.
-func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
+func ListRolesHandler(list RolesLister, usage RoleUsageLister, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -55,7 +57,17 @@ func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
 		for _, role := range roles {
 			out = append(out, normalise(role))
 		}
-		writeJSON(w, http.StatusOK, rolesResponse{WorkflowRoles: out})
+		resp := rolesResponse{WorkflowRoles: out}
+		inForce, err := usage(r.Context())
+		if err != nil {
+			log.ErrorContext(r.Context(), "approval: list workflow role usage", slog.Any("err", err))
+		} else {
+			if inForce == nil {
+				inForce = map[string][]RoleUse{}
+			}
+			resp.InForce = &inForce
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

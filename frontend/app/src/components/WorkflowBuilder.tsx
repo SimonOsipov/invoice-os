@@ -75,6 +75,7 @@ const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as
 const CATCH_ALL_REASON = 'The last policy decides every document no other policy matches, so it takes no scopes. To scope this policy, move it up the list or create a new policy.'
 const CATCH_ALL_REASON_ID = 'scope-catch-all-reason-text'
 const DELETED_ROLE_NOTE = 'This role was deleted. Publish is refused while the scope names it — remove it first.'
+const DELETED_ROLE_ONLY_NOTE = `${DELETED_ROLE_NOTE} Removing it makes this scope match every creator.`
 const SCOPE_HINT = 'A document must match every scope you set. A scope left empty matches every document. Scope changes take effect when you publish.'
 
 /** The persistent-disable recipe the scope controls share; `WfSelect` takes the three props as is. */
@@ -435,6 +436,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const lock: ScopeLock = catchAll ? { disabled: true, title: CATCH_ALL_REASON, ariaDescribedBy: CATCH_ALL_REASON_ID } : { disabled: false }
   const editScopes = (patch: Partial<PolicyScopes>) => applyEdit(setScopes(working, { ...working.scopes, ...patch }))
   const hasDeletedRole = working.scopes.workflow_role_keys.some((k) => roleOf(ctx.roles, k).deleted)
+  const onlyDeletedRoles = working.scopes.workflow_role_keys.every((k) => roleOf(ctx.roles, k).deleted)
 
   return (
     <>
@@ -554,7 +556,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               note={
                 hasDeletedRole && (
                   <div data-testid="scope-deleted-role-note" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                    {DELETED_ROLE_NOTE}
+                    {onlyDeletedRoles ? DELETED_ROLE_ONLY_NOTE : DELETED_ROLE_NOTE}
                   </div>
                 )
               }

@@ -2996,7 +2996,7 @@ describe('APSC-04-03: the Applies card', () => {
     const NOTE = 'This role was deleted. Publish is refused while the scope names it — remove it first.'
     const p = scoped('p1', { workflow_role_keys: ['gone'] })
     const { unmount } = render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
-    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toBe(NOTE)
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toContain(NOTE)
     unmount()
     const mixed = scoped('p1', { workflow_role_keys: ['fin_mgr', 'gone'] })
     const { unmount: unmountMixed } = render(<WorkflowBuilder ctx={editableCtx(mixed)} policy={mixed} />)
@@ -3005,6 +3005,18 @@ describe('APSC-04-03: the Applies card', () => {
     const live = scoped('p1', { workflow_role_keys: ['fin_mgr'] })
     render(<WorkflowBuilder ctx={editableCtx(live)} policy={live} />)
     expect(screen.queryByTestId('scope-deleted-role-note')).toBeNull()
+  })
+
+  it('the note warns that removing the only deleted roles makes the scope match every creator', () => {
+    const p = scoped('p1', { workflow_role_keys: ['gone', 'gone2'] })
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).toContain('match every creator')
+  })
+
+  it('the note omits the match-every-creator warning while a live role remains', () => {
+    const p = scoped('p1', { workflow_role_keys: ['fin_mgr', 'gone'] })
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    expect(within(cell('role')).getByTestId('scope-deleted-role-note').textContent).not.toContain('match every creator')
   })
 
   // Sentence built in internal/approval/policy.go (policyStatusForErr, quoteTitles).

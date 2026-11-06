@@ -18,6 +18,7 @@ import {
   createWorkflowRole,
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
+  inUseInvoices,
   inUsePolicyNames,
   deleteWorkflowRole,
   drawerRoleHelper,
@@ -765,6 +766,39 @@ describe('inUsePolicyNames', () => {
   it('inUsePolicyNames skips an entry without a string name', () => {
     const err = conflict({ error: S, policies: [{ id: 'a' }, { id: 'b', name: 7 }, null, { id: 'c', name: 'Kept' }] })
     expect(inUsePolicyNames(err)).toEqual(['Kept'])
+  })
+})
+
+describe('inUseInvoices', () => {
+  const S = 'this workflow role is awaited by an open approval run'
+  const conflict = (body: unknown) => new ApiError('http', S, 409, body)
+
+  it("inUseInvoices returns the 409 body's invoice numbers in order with the total", () => {
+    const err = conflict({
+      error: S,
+      policies: [],
+      invoices: [{ id: 'a', invoice_number: 'INV-1' }, { id: 'b', invoice_number: 'INV-2' }],
+      invoices_total: 5,
+    })
+    expect(inUseInvoices(err)).toEqual({ numbers: ['INV-1', 'INV-2'], total: 5 })
+  })
+
+  it.each([
+    ['409 with no invoices', conflict({ error: S })],
+    ['409 policy-only', conflict({ error: S, policies: [{ id: 'a', name: 'N' }] })],
+    ['404 with error only', new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' })],
+    ['404 carrying invoices', new ApiError('http', 'x', 404, { invoices: [{ id: 'a', invoice_number: 'INV-1' }], invoices_total: 1 })],
+    ['network error', new ApiError('network', 'x')],
+    ['plain Error', new Error('x')],
+    ['undefined', undefined],
+  ])('inUseInvoices is empty for any other error: %s', (_label, err) => {
+    expect(inUseInvoices(err)).toEqual({ numbers: [], total: 0 })
+  })
+
+  it('inUseInvoices skips an entry without a string number and never reports a total below the list', () => {
+    const invoices = [{ id: 'a' }, { id: 'b', invoice_number: 7 }, null, { id: 'c', invoice_number: 'Kept' }]
+    expect(inUseInvoices(conflict({ error: S, invoices, invoices_total: 0 }))).toEqual({ numbers: ['Kept'], total: 1 })
+    expect(inUseInvoices(conflict({ error: S, invoices, invoices_total: '9' }))).toEqual({ numbers: ['Kept'], total: 1 })
   })
 })
 

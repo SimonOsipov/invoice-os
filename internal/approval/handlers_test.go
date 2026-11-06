@@ -631,6 +631,7 @@ func TestWorkflowRoleHandlers_StatusMatrix(t *testing.T) {
 		{"not found", ErrNotFound, http.StatusNotFound, "workflow role not found"},
 		{"not permitted", ErrNotPermitted, http.StatusForbidden, "only an admin can change workflow roles"},
 		{"conflict", ErrConflict, http.StatusConflict, "that role was just created — try again"},
+		{"role in use", ErrRoleInUse, http.StatusConflict, roleInUseMessage},
 		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, "unauthorized"},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, "internal server error"},
 	}
@@ -646,11 +647,54 @@ func TestWorkflowRoleHandlers_StatusMatrix(t *testing.T) {
 				if got := errorMessage(t, rec.Body.Bytes()); got != s.msg {
 					t.Errorf("error = %q, want %q", got, s.msg)
 				}
-				if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error" {
-					t.Errorf("error body keys = %v, want exactly [error]", got)
+				wantKeys := "error"
+				if rt.method == "DELETE" && s.err == ErrRoleInUse {
+					wantKeys = "error,policies"
+				}
+				if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != wantKeys {
+					t.Errorf("error body keys = %v, want exactly [%s]", got, wantKeys)
 				}
 			})
 		}
+	}
+}
+
+// --- the role-in-use 409 body ----------------------------------------------
+
+func deleteInUse(t *testing.T, err error) *httptest.ResponseRecorder {
+	t.Helper()
+	id := caller()
+	return serveRole(t, errSeam(err), slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		"DELETE", "/v1/workflow-roles/x", "", &id)
+}
+
+func TestDeleteRoleHandler_InUseIs409WithThePolicies(t *testing.T) {
+	want := []PolicyRef{{ID: "p1", Name: "Credit notes"}, {ID: "p2", Name: "Big invoices"}}
+	rec := deleteInUse(t, &roleInUse{policies: want})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error,policies" {
+		t.Errorf("body keys = %v, want exactly [error policies]", got)
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != roleInUseMessage {
+		t.Errorf("error = %q, want roleInUseMessage", got)
+	}
+	var body struct {
+		Policies []PolicyRef `json:"policies"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Policies) != len(want) || body.Policies[0] != want[0] || body.Policies[1] != want[1] {
+		t.Errorf("policies = %+v, want %+v in the stub's order", body.Policies, want)
+	}
+}
+
+func TestDeleteRoleHandler_BareErrRoleInUseCarriesAnEmptyPoliciesArray(t *testing.T) {
+	rec := deleteInUse(t, ErrRoleInUse)
+	if got := rawField(t, rec.Body.Bytes(), "policies"); got != "[]" {
+		t.Errorf("policies = %s, want []", got)
 	}
 }
 
@@ -667,6 +711,8 @@ func TestWorkflowRoleHandlers_ErrorsBelow500AreNotLoggedAtError(t *testing.T) {
 		{"not found", ErrNotFound, http.StatusNotFound, 0},
 		{"not permitted", ErrNotPermitted, http.StatusForbidden, 0},
 		{"conflict", ErrConflict, http.StatusConflict, 0},
+		{"role in use", ErrRoleInUse, http.StatusConflict, 0},
+		{"role in use with policies", &roleInUse{policies: []PolicyRef{{ID: "p1", Name: "N"}}}, http.StatusConflict, 0},
 		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, 0},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, 1},
 	}

@@ -12,6 +12,7 @@ import {
   policyStanding,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
+  reorderApprovalPolicies,
   stepInputsFromNodes,
   toPolicy,
   type PolicyStepWire,
@@ -20,7 +21,7 @@ import {
 } from './policies'
 import type { AuthedFetch } from './portfolio'
 import { seedPolicies } from './policies.fixture'
-import { newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
+import { CATCH_ALL_SCOPES, newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The wire helpers spell every one of the ten Step keys, because the server never omits
@@ -46,12 +47,15 @@ const ver = (version: number, sealed: boolean, isActive: boolean): PolicyVersion
   is_active: isActive,
   published_at: null,
   published_by: null,
+  scoped: false,
 })
 
 const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
   id: 'p1',
   name: 'Standard approval policy',
   scope: 'All invoices',
+  position: 1,
+  scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null },
   status: 'draft',
   version: 1,
   sealed: false,
@@ -65,7 +69,8 @@ const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
 const policy = (over: Partial<Policy> = {}): Policy => ({
   id: 'p1',
   name: 'Standard approval policy',
-  scope: 'All invoices',
+  position: 0,
+  scopes: CATCH_ALL_SCOPES,
   status: 'draft',
   version: 1,
   activeVersion: null,
@@ -194,7 +199,7 @@ describe('toPolicy (AC-2)', () => {
     expect(p.status).toBe('draft')
   })
 
-  it("reports a null active version when another policy holds the tenant's slot", () => {
+  it('reports a null active version when no version of the policy is active', () => {
     const p = toPolicy(wire({ version: 2, status: 'draft', versions: [ver(2, false, false), ver(1, true, false)] }))
     expect(p.activeVersion).toBeNull()
     expect(p.version).toBe(2)
@@ -211,7 +216,7 @@ describe('policyStanding / policyInForce (AC-2)', () => {
     expect(policyStanding(policy({ version: 2, activeVersion: null, status: 'draft' }))).toBe('Not in force')
   })
 
-  it('policyInForce finds the other policy holding the slot, and no policy finds itself', () => {
+  it('policyInForce finds the other policy in force, and no policy finds itself', () => {
     const a = policy({ id: 'polA', version: 2, activeVersion: null, status: 'draft' })
     const b = policy({ id: 'polB', version: 1, activeVersion: 1, status: 'published' })
     const list = [a, b]
@@ -219,8 +224,8 @@ describe('policyStanding / policyInForce (AC-2)', () => {
     expect(policyInForce(list, b.id)).toBeNull()
   })
 
-  // The tenant-wide unique index allows ONE active version per store; a seed with two would
-  // make policyInForce return the first of them and hide the bug it exists to catch.
+  // policyInForce returns the first policy in force; a seed with two would hide the bug it
+  // exists to catch.
   it('the seed store stays a tenant the server could actually produce', () => {
     const store = seedPolicies()
     for (const mode of ['firm', 'inhouse'] as const) {
@@ -239,19 +244,16 @@ describe('policyStanding / policyInForce (AC-2)', () => {
 // against a mutation that survived the original fourteen.
 
 describe('QA: toPolicy projects every wire field, not only the version pair', () => {
-  it('carries id, name, scope and the step tree straight through', () => {
+  it('carries id, name and the step tree straight through', () => {
     const p = toPolicy(
       wire({
         id: 'pol-7',
         name: 'Capex sign-off',
-        scope: 'Capex & fixed assets',
         steps: [step({ id: 's9', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 24 })],
       }),
     )
     expect(p.id).toBe('pol-7')
     expect(p.name).toBe('Capex sign-off')
-    // Carried verbatim: WF_SCOPE_OPTIONS is the EDITOR's list, not a filter on what may arrive.
-    expect(p.scope).toBe('Capex & fixed assets')
     expect(p.nodes).toHaveLength(1)
     expect((p.nodes[0] as ApprovalNode).role).toBe('cfo')
   })
@@ -389,7 +391,7 @@ describe('QA: policyStanding and policyInForce, without going through the seed',
     expect(policyStanding(policy({ version: 3, activeVersion: 3, status: 'published' }))).toBe('v3 in force')
   })
 
-  it('says Not in force for a version-1 policy that was published and lost the slot', () => {
+  it('says Not in force for a version-1 policy that was published and has no active version', () => {
     expect(policyStanding(policy({ version: 1, activeVersion: null, status: 'published' }))).toBe('Not in force')
   })
 
@@ -646,18 +648,62 @@ function mockFetchRejectingOnce(err: unknown) {
 }
 
 describe('QA: putApprovalPolicyDraft forwards what the caller holds, and projects what comes back', () => {
-  it("sends the policy's own scope, never a hardcoded default", async () => {
-    // scope is a *string on putDraftRequest (policy.go:104), so an absent key leaves the
-    // stored scope untouched while a present foreign one earns normalizeScope's 400. Both
-    // halves — presence AND the forwarded value — are the wrapper's job.
-    for (const scope of ['All invoices', 'Capex & fixed assets']) {
-      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
-      await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1', scope }))
-      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-      const sent = JSON.parse(init.body as string) as Record<string, unknown>
-      expect(Object.hasOwn(sent, 'scope'), scope).toBe(true)
-      expect(sent.scope, scope).toBe(scope)
+  it('putApprovalPolicyDraft sends scopes when asked, never the legacy scope', async () => {
+    const scopes = { document_types: ['credit_note', 'debit_note'], entity_ids: [], workflow_role_keys: [], amount_band: { lower: '1000.00', upper: null, currency: 'NGN' } }
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), { sendScopes: true })
+    const body = f.mock.calls[0][1].body as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual(['name', 'scopes', 'steps'])
+    expect(body.scopes).toEqual(scopes)
+  })
+
+  it('putApprovalPolicyDraft sends a bare-dot bound as no bound', async () => {
+    const scopes = { ...CATCH_ALL_SCOPES, amount_band: { lower: '.', upper: '.5', currency: 'NGN' } }
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), { sendScopes: true })
+    expect((f.mock.calls[0][1].body as { scopes: typeof scopes }).scopes.amount_band).toEqual({ lower: null, upper: '.5', currency: 'NGN' })
+  })
+
+  it('toPolicy marks activeScoped from the active version only', () => {
+    const scopedVer = { ...ver(1, true, true), scoped: true }
+    expect(toPolicy(wire({ version: 2, versions: [ver(2, false, false), scopedVer] })).activeScoped).toBe(true)
+    expect(toPolicy(wire({ version: 2, versions: [{ ...ver(2, false, false), scoped: true }, ver(1, true, true)] })).activeScoped).toBe(false)
+  })
+
+  it('putApprovalPolicyDraft omits scopes unless asked', async () => {
+    const scopes = { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] }
+    for (const opts of [undefined, { sendScopes: false }]) {
+      const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+      await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), opts)
+      expect(Object.keys(f.mock.calls[0][1].body as object).sort()).toEqual(['name', 'steps'])
     }
+  })
+
+  it('putApprovalPolicyDraft sends the catch-all as empty arrays and a null band', async () => {
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1' }), { sendScopes: true })
+    expect((f.mock.calls[0][1].body as { scopes: unknown }).scopes).toEqual({ document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null })
+  })
+
+  it('toPolicy carries position and scopes, and no scope', () => {
+    const scopes = { document_types: ['credit_note'], entity_ids: ['e1'], workflow_role_keys: ['r1'], amount_band: { lower: '1.00', upper: '2.00', currency: 'NGN' } }
+    const p = toPolicy(wire({ position: 7, scopes, scope: 'All invoices' }))
+    expect(p.position).toBe(7)
+    expect(p.scopes).toEqual(scopes)
+    expect(Object.hasOwn(p, 'scope')).toBe(false)
+  })
+
+  it('reorderApprovalPolicies puts the order and answers the server\'s list', async () => {
+    const f = vi.fn().mockResolvedValue({ approval_policies: ['b', 'a', 'c'].map((id) => wire({ id })) })
+    const out = await reorderApprovalPolicies(f as unknown as AuthedFetch, wireBase, ['b', 'a', 'c'])
+    expect(f).toHaveBeenCalledWith(`${wireBase}/api/invoice/v1/approval-policies/order`, { method: 'PUT', body: { policy_ids: ['b', 'a', 'c'] } })
+    expect(out.map((p) => p.id)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('reorderApprovalPolicies rejects with the ApiError unchanged', async () => {
+    const boom = new ApiError('http', 'the policy list changed — reload and try again', 409)
+    const f = vi.fn().mockRejectedValue(boom)
+    await expect(reorderApprovalPolicies(f as unknown as AuthedFetch, wireBase, ['a'])).rejects.toBe(boom)
   })
 
   it('projects the saved draft through toPolicy rather than handing back the raw wire', async () => {
@@ -816,7 +862,6 @@ describe('QA: the non-http failure kinds reach the caller unreshaped', () => {
 describe('AC-3 / AC-1 — the ctx write verbs', () => {
   async function harnessCreatePolicy(af: AuthedFetch, mirror: readonly Policy[], name: string) {
     const created = await createApprovalPolicy(af, wireBase, name)
-    // Append: the server answers ORDER BY created_at, id, so the new row belongs last.
     return { created, mirror: [...mirror, created] }
   }
 
@@ -887,43 +932,5 @@ describe('AC-3 / AC-1 — the ctx write verbs', () => {
     await expect(harnessSavePolicy(af, before, policy({ id: 'polA' }))).rejects.toBe(boom)
     await expect(harnessDeletePolicy(af, before, 'polA')).rejects.toBe(boom)
     expect(before.map((p) => p.id)).toEqual(['polA'])
-  })
-})
-
-describe('AC-2 — publishing is the one verb a single-row patch cannot mirror', () => {
-  // The active slot is TENANT-wide, so publishing B DEACTIVATES A. Publish's own response
-  // describes B alone: patching the mirror from it leaves A still claiming the slot on
-  // screen. Only a refetch of the whole list carries the second change.
-  it('publish’s response cannot report the deactivation it caused on another policy', async () => {
-    const a = policy({ id: 'polA', version: 1, activeVersion: 1, status: 'published' })
-    const b = policy({ id: 'polB', version: 1, activeVersion: null, status: 'draft' })
-    const mirror = [a, b]
-    expect(mirror.filter((p) => p.activeVersion !== null)).toHaveLength(1)
-
-    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] })) })
-    const published = await publishApprovalPolicy(authed(), wireBase, 'polB')
-    expect(published.activeVersion).toBe(1)
-
-    const patched = replacePolicy(mirror, published)
-    // Two policies in force: a tenant state the server's unique index cannot produce.
-    expect(patched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polA', 'polB'])
-
-    mockFetchOnce({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          approval_policies: [
-            wire({ id: 'polA', status: 'published', version: 1, versions: [ver(1, true, false)] }),
-            wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] }),
-          ],
-        }),
-    })
-    const refetched = await listApprovalPolicies(authed(), wireBase)
-
-    expect(refetched).toHaveLength(2)
-    expect(refetched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polB'])
-    expect(refetched[0].activeVersion).toBeNull()
-    expect(policyStanding(refetched[0])).toBe('Not in force')
   })
 })

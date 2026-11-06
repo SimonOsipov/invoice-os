@@ -14,6 +14,7 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE } from './authedFetch'
 import { CODE_LISTS } from './codeLists'
+import { SCOPE_DOCUMENT_TYPES } from './workflows'
 import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
 
 function repoFile(rel: string): string {
@@ -1578,6 +1579,21 @@ describe('the submit pair is declared once on the SPA invoice mirror (BUG-12)', 
   })
 })
 
+describe('wire mirror: PolicyVersion <-> the SPA and e2e legs', () => {
+  it('wire mirror: PolicyVersion <-> PolicyVersionWire <-> ApprovalPolicyVersion', () => {
+    const go = goStructKeys(repoFile('internal/approval/policy.go'), 'PolicyVersion')
+    const spaSource = repoFile('frontend/app/src/lib/policies.ts').replace(
+      'export type PolicyVersionWire =',
+      'export interface PolicyVersionWire',
+    )
+    const spa = tsInterfaceKeys(spaSource, 'PolicyVersionWire')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'ApprovalPolicyVersion')
+    for (const keys of [go, spa, e2e]) expect(keys).toContain('scoped')
+    expect(keySetDiff(go, spa), 'Go PolicyVersion vs the SPA').toEqual([])
+    expect(keySetDiff(go, e2e), 'Go PolicyVersion vs e2e').toEqual([])
+  })
+})
+
 describe('wire mirror: the code search <-> the SPA and e2e legs', () => {
   it('wire mirror: CodeEntry <-> CodeEntry <-> CodeEntry', () => {
     const go = goStructKeys(repoFile('internal/invoice/codes.go'), 'CodeEntry')
@@ -1594,5 +1610,15 @@ describe('wire mirror: the code search <-> the SPA and e2e legs', () => {
     const names = [...literal.matchAll(/"([^"]+)"/g)].map((m) => m[1])
     expect(names.length, 'extractor read no Go list names').toBeGreaterThanOrEqual(6)
     expect(keySetDiff(names, [...CODE_LISTS])).toEqual([])
+  })
+})
+
+describe('wire mirror: scopeDocumentTypes <-> SCOPE_DOCUMENT_TYPES', () => {
+  it('wire mirror: scopeDocumentTypes <-> SCOPE_DOCUMENT_TYPES', () => {
+    const src = stripComments(repoFile('internal/approval/policy.go'))
+    const literal = /var scopeDocumentTypes = map\[string\]bool\{([^}]*)\}/.exec(src)?.[1] ?? ''
+    const keys = [...literal.matchAll(/"([^"]+)":/g)].map((m) => m[1])
+    expect(keys.length, 'extractor read no Go map keys').toBeGreaterThanOrEqual(3)
+    expect(keySetDiff(keys, SCOPE_DOCUMENT_TYPES.map((t) => t.value))).toEqual([])
   })
 })

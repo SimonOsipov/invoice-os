@@ -142,8 +142,14 @@ func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
+// roleInUseResponse is the DELETE 409 body: the sentence plus the policies that name the role.
+type roleInUseResponse struct {
+	Error    string      `json:"error"`
+	Policies []PolicyRef `json:"policies"`
+}
+
 // DeleteRoleHandler returns DELETE /v1/workflow-roles/{key}: identity (401) -> path key
-// -> soft delete -> 200. No body is read at all. Its `members` is [] because a deleted
+// -> soft delete -> 200, or 409 with the policies that name the role. No body is read at all. Its `members` is [] because a deleted
 // role has no addressable holders — that reads as "unstaffed", not "not reported", which
 // is safe only while the SPA's removeRole drops the card without reading the body.
 func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
@@ -158,6 +164,15 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 
 		role, err := del(r.Context(), r.PathValue("key"))
 		if err != nil {
+			if errors.Is(err, ErrRoleInUse) {
+				policies := []PolicyRef{}
+				var inUse *roleInUse
+				if errors.As(err, &inUse) {
+					policies = inUse.policies
+				}
+				writeJSON(w, http.StatusConflict, roleInUseResponse{Error: roleInUseMessage, Policies: policies})
+				return
+			}
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "approval: delete workflow role", slog.Any("err", err))

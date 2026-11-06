@@ -7083,8 +7083,8 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
-test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+// The answer's 300-character unbroken token must wrap inside the table (D23).
+test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 
@@ -7098,12 +7098,12 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
   const inv = await createInvoice(token, {
     entity_id: entity.id,
     ...cleanInvoiceFields(`INV-ENGI17-${Date.now()}`),
-    subtotal: '100',
-    vat: '7.50',
-    total: '107.50',
+    subtotal: '110',
+    vat: '8.25',
+    total: '118.25',
     line_items: [
       { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
-      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '5.00' },
       { description: marker, quantity: '1', unit_price: '0.00', line_total: '0.00' },
     ],
   })
@@ -7125,9 +7125,13 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
 
   const panel = violations.getByTestId('explain-panel')
   await expect(panel.getByTestId('explain-text')).not.toBeEmpty()
-  const { fix } = (await (await explained).json()) as ExplainResult
-  // The steer marker makes the fake AI propose a fix; only the real AI may answer without one.
-  if (!nightlyTarget()) expect(fix, 'the PR lane steers a fix, so the explain answer must carry one').not.toBeNull()
+  const answer = (await (await explained).json()) as ExplainResult
+  await testInfo.attach('explain-answer.json', { body: JSON.stringify(answer, null, 2), contentType: 'application/json' })
+  // The line total fixes the unit price, so both AIs must propose it.
+  const fix = answer.fix
+  expect(fix, 'the explain answer must carry a fix').not.toBeNull()
+  expect(fix!.field, 'the fix is on unit_price').toBe('unit_price')
+  expect(fix!.line, 'the fix is on line 2').toBe(2)
   if (!nightlyTarget()) {
     await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
     await expect(panel.getByTestId('explain-fix')).toHaveText('Line 2 · Unit price: -5.00 → 5.00')
@@ -7155,37 +7159,35 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
     if (entry) await page.setViewportSize(entry)
   }
 
-  if (fix) {
-    expect(fix.line, 'a line violation proposes a line fix').not.toBeNull()
-    await panel.getByTestId('explain-accept').click()
-    await expect(page.getByTestId('stale-verdict')).toBeVisible()
+  expect(fix!.line, 'a line violation proposes a line fix').not.toBeNull()
+  await panel.getByTestId('explain-accept').click()
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
 
-    const cell = async () => (await getInvoice(token, inv.id)).line_items![fix.line! - 1] as unknown as Record<string, string | null>
-    const sameValue = (stored: string | null) =>
-      stored === fix.value || (stored !== null && Number.isFinite(Number(stored)) && Number(stored) === Number(fix.value))
+  const cell = async () => (await getInvoice(token, inv.id)).line_items![fix!.line! - 1] as unknown as Record<string, string | null>
+  const sameValue = (stored: string | null) =>
+    stored === fix!.value || (stored !== null && Number.isFinite(Number(stored)) && Number(stored) === Number(fix!.value))
+  await expect
+    .poll(async () => sameValue((await cell())[fix!.field]), { message: `line ${fix!.line} ${fix!.field} saved as ${fix!.value}` })
+    .toBe(true)
+  if (!nightlyTarget()) {
     await expect
-      .poll(async () => sameValue((await cell())[fix.field]), { message: `line ${fix.line} ${fix.field} saved as ${fix.value}` })
-      .toBe(true)
-    if (!nightlyTarget()) {
-      await expect
-        .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
-        .toMatch(/^5(\.0+)?$/)
-    }
-    const after = (await getInvoice(token, inv.id)).line_items!
-    expect(after, 'still three lines').toHaveLength(3)
-    // Edit re-inserts the lines, so row ids change; every other field must survive.
-    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
-    for (const i of [0, 1, 2].filter((i) => i !== fix.line! - 1)) {
-      expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
-    }
-
-    await page.getByTestId('revalidate').click()
-    await expect(page.getByTestId('stale-verdict')).toBeHidden()
-    await expect
-      .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
-      .not.toContain('line-cost-non-negative')
-    await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
+      .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+      .toMatch(/^5(\.0+)?$/)
   }
+  const after = (await getInvoice(token, inv.id)).line_items!
+  expect(after, 'still three lines').toHaveLength(3)
+  // Edit re-inserts the lines, so row ids change; every other field must survive.
+  const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+  for (const i of [0, 1, 2].filter((i) => i !== fix!.line! - 1)) {
+    expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
+  }
+
+  await page.getByTestId('revalidate').click()
+  await expect(page.getByTestId('stale-verdict')).toBeHidden()
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
+    .not.toContain('line-cost-non-negative')
+  await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

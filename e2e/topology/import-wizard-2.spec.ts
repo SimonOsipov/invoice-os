@@ -2001,7 +2001,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   expect(look1Url.searchParams.get('document_id')).toBe(documentId1)
   expect((await look1.json()).saved_mapping, "import 1 is this client's first import -- nothing saved yet").toBeNull()
 
-  await expect(chip, 'the Map step must settle before any placement').toBeVisible()
+  await expect(page.getByTestId('map-column'), 'the Map step must settle before any placement').toHaveCount(11)
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
 
@@ -3482,6 +3482,7 @@ async function settleOneDocument(
 }
 
 // The settled single document lands on a real destination under either AI, never the picker.
+// One document with one invoice routes to the extraction review (routeAfterRun 'extraction').
 async function expectSettledLanding(page: Page): Promise<void> {
   await expect
     .poll(
@@ -3489,9 +3490,10 @@ async function expectSettledLanding(page: Page): Promise<void> {
         if (await page.getByTestId('review-table').isVisible()) return 'landed'
         if (await page.getByText(/^BATCH /).first().isVisible()) return 'landed'
         if (await page.getByTestId('invoice-detail').isVisible()) return 'landed'
+        if (await page.getByTestId('extraction-review').isVisible()) return 'landed'
         return 'nothing yet'
       },
-      { message: 'the settled document must land on a review batch or its invoice', timeout: 120_000 },
+      { message: 'the settled document must land on a review batch, the extraction review or its invoice', timeout: 120_000 },
     )
     .toBe('landed')
 }

@@ -530,6 +530,8 @@ async function tenantsReads(page: Page, testInfo: TestInfo, armed?: unknown): Pr
   const plainRow = tenantRow(page, plain!.id)
   await expect(plainRow).toBeVisible()
   await expect(demoTag(plainRow)).toHaveCount(0)
+  expect(rendered.length, 'the rendered response holds tenants').toBeGreaterThan(0)
+  await expect(mn.locator('button[data-tenant-id]'), 'one row per tenant of the rendered response').toHaveCount(rendered.length)
 
   const row2222 = rendered.find((t) => t.id === DEMO_2222_ID)
   expect(row2222, 'the rendered response holds the 2222 tenant').toBeDefined()

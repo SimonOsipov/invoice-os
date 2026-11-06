@@ -100,6 +100,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
   // Only while the entities list loads; a settled empty/errored list has no entity to wait for.
   const noEntity = ctx.mode !== 'inhouse' && activeEntityId === undefined && ctx.entitiesState === 'loading'
+  // Creating before the entity resolves would open the flow with no company to attach to.
+  const entityPending = ctx.active.entityId === null && ctx.entitiesState === 'loading'
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
   // re-runs the effect (and re-fetches) whenever the toggle flips, the page changes, OR
@@ -360,12 +362,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      {/* No page-level "New invoice" here: the persistent header-bar CTA (Header.tsx) is
-          the single create affordance for the populated list. The UNFILTERED empty state
-          below keeps its own button (standard zero-state pattern); the filtered one
-          offers a way out of the filter instead. The "Needs attention" toggle sits
-          in the header row (not gated by async state) so it stays reachable even when the
-          filtered result set is itself empty. */}
+      {/* The page's create control; the app header has none. The unfiltered empty state keeps its own button, the filtered one offers a way out of the filter. The toggle sits outside the async gating so it stays reachable on an empty filtered set. */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 22 }}>
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
@@ -374,30 +371,35 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
         </div>
-        <button
-          onClick={() => {
-            setNeedsAttention((v) => !v)
-            setOffset(0)
-            setSelected([])
-            disarm()
-          }}
-          data-testid="needs-attention-toggle"
-          className="pf-chip"
-          style={{
-            flex: 'none',
-            height: 30,
-            padding: '0 12px',
-            borderRadius: 'var(--radius-sm)',
-            fontFamily: 'var(--font-sans)',
-            fontSize: 12.5,
-            fontWeight: 600,
-            border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
-            background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
-            color: needsAttention ? 'var(--primary-foreground)' : 'var(--fg-2)',
-          }}
-        >
-          Needs attention
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
+          <button
+            onClick={() => {
+              setNeedsAttention((v) => !v)
+              setOffset(0)
+              setSelected([])
+              disarm()
+            }}
+            data-testid="needs-attention-toggle"
+            className="pf-chip"
+            style={{
+              flex: 'none',
+              height: 30,
+              padding: '0 12px',
+              borderRadius: 'var(--radius-sm)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 12.5,
+              fontWeight: 600,
+              border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
+              background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
+              color: needsAttention ? 'var(--primary-foreground)' : 'var(--fg-2)',
+            }}
+          >
+            Needs attention
+          </button>
+          <button onClick={ctx.openCreate} disabled={entityPending} data-testid="invoices-new-invoice" className="v2-btn v2-btn-primary pf-btn">
+            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
+          </button>
+        </div>
       </div>
 
       {/* Rendered independent of both `selected.length > 0` (submit clears the
@@ -467,7 +469,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             title="No invoices yet"
             message="Create or import an invoice to start tracking compliance."
             action={
-              <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
+              <button onClick={ctx.openCreate} disabled={entityPending} className="v2-btn v2-btn-primary pf-btn">
                 <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
               </button>
             }

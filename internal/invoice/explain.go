@@ -119,7 +119,7 @@ func headerMBSPath(key string) string {
 }
 
 // explainTarget binds the fix to the violation path; a bare line path has no target.
-func explainTarget(path string, lineCount int, _ string) (field string, line int, ok bool) {
+func explainTarget(path string, lineCount int) (field string, line int, ok bool) {
 	if n, f, isLine := parseLinePath(path); isLine {
 		if n > lineCount || f == "" {
 			return "", 0, false
@@ -214,7 +214,7 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 	res := ExplainResult{Status: "ok", Explanation: &text}
 	lines, _ := payload["line_items"].([]any)
 	value, isStr := ans["fix_value"].(string)
-	field, line, ok := explainTarget(v.Path, len(lines), "")
+	field, line, ok := explainTarget(v.Path, len(lines))
 	if !ok || !isStr {
 		return res
 	}

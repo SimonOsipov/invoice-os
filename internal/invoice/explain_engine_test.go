@@ -50,10 +50,12 @@ func TestExplain_BareLineFixClearsTheRule(t *testing.T) {
 		answer     map[string]any
 		wantNoFix  bool
 		wantNoLine bool
+		stripField bool
 	}{
-		{"model answers line_total", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "line_total", "fix_value": "5.00"}, false, false},
-		{"model answers null field", map[string]any{"explanation": "Line 2 is negative.", "fix_field": nil, "fix_value": "5.00"}, false, false},
-		{"model repeats the value", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "-5.00"}, true, false},
+		{"model answers line_total", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "line_total", "fix_value": "5.00"}, false, false, false},
+		{"model answers null field", map[string]any{"explanation": "Line 2 is negative.", "fix_field": nil, "fix_value": "5.00"}, false, false, false},
+		{"model repeats the value", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "-5.00"}, true, false, false},
+		{"verdict stored before the field existed", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "5.00"}, true, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,6 +63,9 @@ func TestExplain_BareLineFixClearsTheRule(t *testing.T) {
 			vs := lineCostViolations(t, inv)
 			if len(vs) != 1 || vs[0].Path != "line_items[2]" {
 				t.Fatalf("verdict = %+v, want one violation at line_items[2]", vs)
+			}
+			if tc.stripField {
+				vs[0].Field = ""
 			}
 			raw, _ := json.Marshal(vs)
 			inv.Violations = raw

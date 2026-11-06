@@ -358,3 +358,11 @@ func TestCEL_HasOfOneFieldAndTestOfAnotherHasNoJudgedField(t *testing.T) {
 	wantPaths(t, vs, "line_items[1]")
 	wantFields(t, vs, "")
 }
+
+func TestCEL_NonLineRuleCarriesNoJudgedField(t *testing.T) {
+	vs := mustLines(t, Payload{"invoice": map[string]any{"vat": -1.0}}, celRule("k", "vat", "invoice.vat >= 0.0"))
+	if len(vs) != 1 {
+		t.Fatalf("violations = %+v, want one", vs)
+	}
+	wantFields(t, vs, "")
+}

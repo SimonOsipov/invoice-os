@@ -38,11 +38,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +59,7 @@ import (
 	// repoRootForValidatorTest's neighboring comment gives for NOT doing this
 	// is stale (predates that precedent) -- flagged for cleanup, not touched
 	// here (out of this subtask's scope).
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/validation"
 )
 
@@ -620,5 +623,233 @@ func TestValidate_NoStampAnywhereIsErrUpstream(t *testing.T) {
 		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`, 0))
 	if _, err := v.Validate(context.Background(), twoRefs); !errors.Is(err, ErrUpstream) {
 		t.Errorf("err = %v, want ErrUpstream", err)
+	}
+}
+
+// A reset on a pooled keep-alive connection must be retried: Go's transport
+// does not retry a POST that was already written (BUG-107).
+func TestValidatorRetriesResetOnReusedConnection(t *testing.T) {
+	body := fmt.Sprintf(`{"rule_set_version": %d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"results": [{"ref": "r1", "violations": [], "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`,
+		cannedRuleSetVersion)
+	var mu sync.Mutex
+	served := map[string]bool{} // conns that already answered one request
+	resets := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reused := served[r.RemoteAddr]
+		served[r.RemoteAddr] = true
+		doReset := reused && resets == 0
+		if doReset {
+			resets++
+		}
+		mu.Unlock()
+		if doReset {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.(*net.TCPConn).SetLinger(0) // close sends RST
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	v := NewValidator(srv.URL, "tok", nil)
+	items := []ValidateItem{{Ref: "r1", Invoice: map[string]any{}}}
+	if _, err := v.Validate(context.Background(), items); err != nil {
+		t.Fatalf("warm-up Validate: %v", err)
+	}
+	res, err := v.Validate(context.Background(), items)
+	mu.Lock()
+	gotResets := resets
+	mu.Unlock()
+	if gotResets != 1 {
+		t.Fatalf("setup: second call did not reuse the pooled connection (resets=%d, want 1)", gotResets)
+	}
+	if err != nil {
+		t.Fatalf("Validate after a reset on a reused connection: %v, want the result from a retry", err)
+	}
+	if _, ok := res.ByRef["r1"]; !ok {
+		t.Errorf("ByRef = %v, want key r1 from the retried response", res.ByRef)
+	}
+}
+
+// resetServer RSTs the first `resets` requests, then answers 200 with ok (or the
+// given status when status != 0). It records each request's body and S2S token.
+func resetServer(t *testing.T, resets, status int, ok string) (srv *httptest.Server, bodies, tokens func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var gotBodies, gotTokens []string
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotBodies = append(gotBodies, string(b))
+		gotTokens = append(gotTokens, r.Header.Get(headerS2SToken))
+		n := len(gotBodies)
+		mu.Unlock()
+		if n <= resets {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			_ = conn.(*net.TCPConn).SetLinger(0)
+			_ = conn.Close()
+			return
+		}
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ok))
+	}))
+	t.Cleanup(srv.Close)
+	snap := func(s *[]string) func() []string {
+		return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), *s...) }
+	}
+	return srv, snap(&gotBodies), snap(&gotTokens)
+}
+
+var retryOKBody = fmt.Sprintf(`{"rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+	"results": [{"ref": "r1", "violations": [], "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`, cannedRuleSetVersion)
+
+var retryItems = []ValidateItem{{Ref: "r1", Invoice: map[string]any{"number": "INV-7"}}}
+
+// BUG-107 AC-3: a persistent outage makes exactly two attempts and is never a result.
+func TestValidatorRetry_PersistentResetIsErrUpstreamAfterTwoAttempts(t *testing.T) {
+	srv, bodies, _ := resetServer(t, 1<<30, 0, "")
+	res, err := NewValidator(srv.URL, "tok", nil).Validate(context.Background(), retryItems)
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if n := len(bodies()); n != 2 {
+		t.Errorf("attempts = %d, want exactly 2", n)
+	}
+	if len(res.ByRef) != 0 || len(res.StampByRef) != 0 {
+		t.Errorf("a failure returned a result: %+v", res)
+	}
+}
+
+// BUG-107 AC-3: a non-2xx status is an answer, not a transport error.
+func TestValidatorRetry_StatusIsNotRetried(t *testing.T) {
+	for _, st := range []int{500, 502, 503, 401, 400} {
+		t.Run(fmt.Sprint(st), func(t *testing.T) {
+			srv, bodies, _ := resetServer(t, 0, st, "")
+			res, err := NewValidator(srv.URL, "tok", nil).Validate(context.Background(), retryItems)
+			if err == nil {
+				t.Fatal("err = nil, want an error")
+			}
+			if n := len(bodies()); n != 1 {
+				t.Errorf("requests = %d, want 1", n)
+			}
+			if len(res.ByRef) != 0 {
+				t.Errorf("a failure returned a result: %+v", res)
+			}
+		})
+	}
+}
+
+// The retried request carries the full body and the S2S token.
+func TestValidatorRetry_SecondAttemptCarriesBodyAndToken(t *testing.T) {
+	srv, bodies, tokens := resetServer(t, 1, 0, retryOKBody)
+	if _, err := NewValidator(srv.URL, "s2s-secret", nil).Validate(context.Background(), retryItems); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	b, tk := bodies(), tokens()
+	if len(b) != 2 || len(tk) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(b))
+	}
+	if b[0] == "" || !strings.Contains(b[1], "INV-7") || b[0] != b[1] {
+		t.Errorf("bodies differ or are empty: %q vs %q", b[0], b[1])
+	}
+	if tk[1] != "s2s-secret" {
+		t.Errorf("second attempt token = %q, want s2s-secret", tk[1])
+	}
+}
+
+type countingRT struct {
+	mu   sync.Mutex
+	n    int
+	next http.RoundTripper
+}
+
+func (c *countingRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.next.RoundTrip(r)
+}
+
+func (c *countingRT) calls() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
+
+type failRT struct{ err error }
+
+func (f failRT) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// A done ctx is not retried, even when the transport error does not mention it.
+func TestValidatorRetry_CancelledContextIsNotRetried(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt := &countingRT{next: failRT{io.ErrUnexpectedEOF}}
+	_, err := NewValidator("http://x.invalid", "tok", &http.Client{Transport: rt}).Validate(ctx, retryItems)
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if n := rt.calls(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+}
+
+// A client timeout is not retried: it would double the wait.
+func TestValidatorRetry_ClientTimeoutIsNotRetried(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	rt := &countingRT{next: http.DefaultTransport}
+	hc := &http.Client{Timeout: 50 * time.Millisecond, Transport: rt}
+	_, err := NewValidator(srv.URL, "tok", hc).Validate(context.Background(), retryItems)
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if n := rt.calls(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+}
+
+// CheckCustomRule shares the client and the fault: same single retry, same limits.
+func TestCheckCustomRule_RetriesOnceAfterReset(t *testing.T) {
+	srv, bodies, _ := resetServer(t, 1, http.StatusNoContent, "")
+	if err := NewValidator(srv.URL, "tok", nil).CheckCustomRule(context.Background(), customrule.CheckInput{Type: "required", Target: "number"}); err != nil {
+		t.Fatalf("CheckCustomRule after one reset: %v", err)
+	}
+	if n := len(bodies()); n != 2 {
+		t.Errorf("attempts = %d, want 2", n)
+	}
+}
+
+func TestCheckCustomRule_PersistentResetIsErrUpstreamAfterTwoAttempts(t *testing.T) {
+	srv, bodies, _ := resetServer(t, 1<<30, 0, "")
+	err := NewValidator(srv.URL, "tok", nil).CheckCustomRule(context.Background(), customrule.CheckInput{})
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if n := len(bodies()); n != 2 {
+		t.Errorf("attempts = %d, want 2", n)
+	}
+}
+
+func TestCheckCustomRule_StatusIsNotRetried(t *testing.T) {
+	srv, bodies, _ := resetServer(t, 0, http.StatusInternalServerError, "")
+	if err := NewValidator(srv.URL, "tok", nil).CheckCustomRule(context.Background(), customrule.CheckInput{}); !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if n := len(bodies()); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
 	}
 }

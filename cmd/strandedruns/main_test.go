@@ -94,7 +94,7 @@ func TestRun_MissingDatabaseURLFailsBeforeAnyConnection(t *testing.T) {
 }
 
 func TestRun_MissingReaderURLFailsBeforeAnyConnection(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:1/x")
+	t.Setenv("DATABASE_URL", "postgres://%zz")
 	t.Setenv("DATABASE_READER_URL", "")
 	err := run(context.Background(), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_READER_URL") {

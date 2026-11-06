@@ -37,14 +37,6 @@ func byInvoice(rows []StrandedRun) map[string]StrandedRun {
 	return m
 }
 
-// staffedRole seeds a live role held by an active admin.
-func staffedRole(t *testing.T, f runFixture, key, title string) string {
-	t.Helper()
-	id := seedWorkflowRole(t, f.super, f.tenantID, key, title)
-	staffWorkflowRole(t, f.super, f.tenantID, id, uuid.NewString(), 0)
-	return id
-}
-
 // staffWith staffs roleID with a fresh member of the given membership role and status.
 func staffWith(t *testing.T, f runFixture, roleID, role, status string) string {
 	t.Helper()
@@ -435,5 +427,30 @@ func TestListStranded_NamesTheTenantThatFails(t *testing.T) {
 	}
 	if rows != nil {
 		t.Errorf("rows = %+v, want nil", rows)
+	}
+}
+
+func TestStranded_ADeletedRoleWithNoMembersIsDeletedNotNoHolder(t *testing.T) {
+	f := newRunFixture(t, "Stranded deleted empty")
+	softDeleteWorkflowRole(t, f.super, seedWorkflowRole(t, f.super, f.tenantID, "gone", "Gone"))
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("gone"))
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedDeleted {
+		t.Fatalf("rows = %+v, want one run, reason deleted", rows)
+	}
+}
+
+func TestListStranded_ReadsATenantScheduledForDeletion(t *testing.T) {
+	f := newRunFixture(t, "Stranded scheduled")
+	seedWorkflowRole(t, f.super, f.tenantID, "x", "X")
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("x"))
+	if _, err := f.super.Exec(context.Background(), `UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = $2 WHERE id = $1`, f.tenantID, uuid.NewString()); err != nil {
+		t.Fatalf("schedule deletion: %v", err)
+	}
+
+	rows, err := ListStranded(context.Background(), f.app, []string{f.tenantID})
+	if err != nil || len(rows) != 1 || rows[0].InvoiceID != inv {
+		t.Fatalf("rows = %+v, err = %v, want the scheduled tenant's one run", rows, err)
 	}
 }

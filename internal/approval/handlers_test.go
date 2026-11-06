@@ -708,6 +708,7 @@ func TestWorkflowRoleHandlers_ErrorsBelow500AreNotLoggedAtError(t *testing.T) {
 		{"not permitted", ErrNotPermitted, http.StatusForbidden, 0},
 		{"conflict", ErrConflict, http.StatusConflict, 0},
 		{"role in use", ErrRoleInUse, http.StatusConflict, 0},
+		{"role in use with policies", &roleInUse{policies: []PolicyRef{{ID: "p1", Name: "N"}}}, http.StatusConflict, 0},
 		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, 0},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, 1},
 	}

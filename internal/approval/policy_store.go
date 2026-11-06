@@ -820,10 +820,8 @@ func LockTenantPublishTx(ctx context.Context, tx pgx.Tx, tenantID string) error 
 
 // PublishPolicy seals a policy's open draft and makes it the policy's active version.
 //
-// Publishing a NEW version that names a dead role is refused at the door; a role deleted
-// AFTER publish leaves the sealed version active and its step blocking.
-// TestPublish_RejectsDanglingRole and TestPublish_RoleDeletedAfterPublishLeavesVersionActive
-// are the pair.
+// Publishing a NEW version that names a dead role is refused at the door
+// (TestPublish_RejectsDanglingRole).
 //
 // No body is read at all: published_by is the caller's subject and published_at is now().
 // Statement order is the security property, as in PutDraft — the id is parsed ABOVE the

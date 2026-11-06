@@ -248,6 +248,35 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(list.querySelector('b')).toBeNull()
   })
 
+  it('a save attempt clears the policy list a delete refusal left', async () => {
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['Credit notes']))
+    const renameRole = vi.fn().mockRejectedValue(new ApiError('http', 'only an admin can change workflow roles', 403))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole, renameRole })
+    await refuseDelete(deleteRole)
+    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('role-delete-cancel'))
+    fireEvent.change(screen.getByTestId('role-modal-desc'), { target: { value: 'D2' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    expect(screen.queryByTestId('role-modal-error-policies'), 'cleared while the save is in flight').toBeNull()
+    await drain(renameRole)
+
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+    expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
+  })
+
+  it('a delete attempt clears the policy list while it is in flight', async () => {
+    const deleteRole = vi.fn().mockRejectedValueOnce(conflict(['Credit notes'])).mockReturnValueOnce(new Promise(() => {}))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole })
+    await refuseDelete(deleteRole)
+    expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
+
+    expect(deleteRole).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
+  })
+
   it('a 404 delete refusal renders no policy list', async () => {
     const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404, { error: 'workflow role not found' }))
     renderModal({ mode: 'edit', role: role() }, { deleteRole })

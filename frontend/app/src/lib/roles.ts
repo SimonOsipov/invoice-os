@@ -6,7 +6,7 @@
 // module back and the graph stays acyclic.
 //
 // Both edges are TYPE-ONLY: the picker's meta column moved to `accessRoleLabel` at its own
-// call site when the in-house department fork went, so this module imports no runtime value.
+// call site when the in-house department fork went.
 //
 // The `// Wire` section at the foot of this file adds five AuthedFetch wrappers over the
 // APPR-02 workflow-role endpoints, on lib/members.ts's live-wire shape.

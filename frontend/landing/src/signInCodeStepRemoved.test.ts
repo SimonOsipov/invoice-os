@@ -63,7 +63,7 @@ describe('the sign-in code step is gone from the landing build input', () => {
 
   it('T01-11: the positive control resolves a real file', () => {
     const files = landingBuildInput()
-    expect(files['components/Hero.tsx']).toContain('Africa moves.')
+    expect(files['components/Hero.tsx']).toContain('Nigeria moves.')
     expect(files['../index.html']).toBeDefined()
   })
 

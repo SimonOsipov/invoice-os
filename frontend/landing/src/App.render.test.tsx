@@ -76,7 +76,7 @@ describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   })
 
   it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
-    plant(['#solution', '#platform', '#coverage'])
+    plant(['#solution', '#platform', '#intelligence'])
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes).toHaveLength(3)
@@ -231,20 +231,18 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
   })
 })
 
-describe('R4-AN-2 the two sections render in v2 order', () => {
+describe('R4-AN-2 the intelligence section renders in v2 order', () => {
   const count = (html: string, id: string) => (html.match(new RegExp(`<section id="${id}"`, 'g')) ?? []).length
 
-  it('/ renders one #coverage then one #intelligence, /privacy neither', () => {
+  it('/ renders one #intelligence and no #coverage, /privacy neither', () => {
     const landing = renderAppAt('/')
     const privacy = renderAppAt('/privacy')
     expect(landing, 'control: the landing rendered its sections').toContain('<section id="platform"')
     expect(privacy, 'control: the privacy page rendered its footer').toContain('<footer')
-    expect(count(landing, 'coverage'), '#coverage on /').toBe(1)
     expect(count(landing, 'intelligence'), '#intelligence on /').toBe(1)
-    expect(landing).toContain('<section id="coverage" class="ds-section band-peach">')
     expect(landing).toContain('<section id="intelligence" class="ds-section band-dark2">')
-    expect(landing.indexOf('<section id="platform"'), '#platform comes before #coverage').toBeLessThan(landing.indexOf('<section id="coverage"'))
-    expect(landing.indexOf('<section id="coverage"'), '#coverage comes first').toBeLessThan(landing.indexOf('<section id="intelligence"'))
+    expect(count(landing, 'coverage'), '#coverage on /').toBe(0)
+    expect(landing.indexOf('<section id="platform"'), '#platform comes before #intelligence').toBeLessThan(landing.indexOf('<section id="intelligence"'))
     expect(count(privacy, 'coverage'), '#coverage on /privacy').toBe(0)
     expect(count(privacy, 'intelligence'), '#intelligence on /privacy').toBe(0)
   })
@@ -304,8 +302,8 @@ describe('R5-AN section order', () => {
         band: /^(?: id="[^"]*")? class="ds-section band-([a-z0-9]+)"/.exec(chunk)?.[1],
       }))
     expect(sections.length, 'control: the landing rendered its sections').toBeGreaterThan(5)
-    expect(sections.map((s) => s.id)).toEqual(['top', '[data-strip]', 'problem', 'solution', 'platform', 'coverage', 'intelligence', 'solutions', 'integrations', 'api', 'faq', '[data-closing]'])
-    expect(sections.map((s) => s.band)).toEqual(['dark', 'sage', 'cream', 'dark', 'cream', 'peach', 'dark2', 'cream', 'peach', 'dark', 'cream', 'cream'])
+    expect(sections.map((s) => s.id)).toEqual(['top', '[data-strip]', 'problem', 'solution', 'platform', 'intelligence', 'solutions', 'integrations', 'api', 'faq', '[data-closing]'])
+    expect(sections.map((s) => s.band)).toEqual(['dark', 'sage', 'cream', 'dark', 'cream', 'dark2', 'cream', 'peach', 'dark', 'cream', 'cream'])
     for (const id of ['compliance', 'pricing', 'accountants', 'developers', 'demo']) {
       expect(sections.map((s) => s.id), `no #${id} on /`).not.toContain(id)
     }

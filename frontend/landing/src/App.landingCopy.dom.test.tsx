@@ -55,3 +55,33 @@ describe('landing positioning copy, on the rendered tree', () => {
     expect(textOf(tagline[0])).toBe(FOOTER_TAGLINE)
   })
 })
+
+describe('landing names Nigeria only', () => {
+  const bodyText = () => textOf(mount().body)
+
+  it('no element on / links #coverage and #coverage is gone', () => {
+    const d = mount()
+    expect(d.querySelector('#coverage')).toBeNull()
+    expect(d.querySelectorAll('[href$="#coverage"]')).toHaveLength(0)
+    expect(d.querySelector('#intelligence'), 'control: #intelligence exists').not.toBeNull()
+    expect(d.querySelectorAll('footer a[href$="#intelligence"]'), 'control: the footer links #intelligence').toHaveLength(1)
+    expect(d.querySelectorAll('#intelligence button[aria-pressed]'), 'control: the four steps are pressed-state buttons').toHaveLength(4)
+    expect(d.querySelectorAll('#intelligence button[aria-pressed]:not([data-intel-step])')).toHaveLength(0)
+  })
+
+  it('the landing text names no other country and no expansion', () => {
+    const text = bodyText()
+    expect(text, 'control: the H1 reads Nigeria').toContain('Nigeria moves.')
+    for (const re of [/kenya/i, /south africa/i, /\bKRA\b/, /etims/i, /\bSARS\b/, /pan-african/i, /expansion/i, /across africa/i, /nigeria and africa/i, /africa moves/i]) {
+      expect(text, String(re)).not.toMatch(re)
+    }
+  })
+
+  it('every roadmap sentence on / is a kept sentence', () => {
+    const sentences = (bodyText().match(/[^.]*roadmap[^.]*\./gi) ?? []).map((s) => s.trim())
+    expect(sentences).toEqual([
+      'Our roadmap connects official updates, AI-assisted analysis and human review.',
+      'The systems shown on this page are roadmap targets, not confirmed partnerships or available connectors.',
+    ])
+  })
+})

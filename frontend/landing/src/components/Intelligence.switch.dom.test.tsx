@@ -1,25 +1,17 @@
 // @vitest-environment jsdom
-// Intelligence band (jsdom): header, chips, aside, steps, stacked panels, closing row, panel contrast.
+// Intelligence band (jsdom): header, aside, steps, stacked panels, closing row, panel contrast.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Fragment, createElement } from 'react'
+import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GLYPHS, type GlyphName } from '../icons'
 import { LANDING_SRC, customPropValues, readV2Css, resolveTextContrast, stripSource, type ContrastRow } from '../cssScan.test.util'
 import { click, mountView, show, spyConsoleError, unmountView, type View } from './ds/dsDom.test.util'
-import { Coverage } from './Coverage'
 import { Intelligence } from './Intelligence'
 
-type Id = 'NG' | 'KE' | 'ZA'
-const ORDER: readonly Id[] = ['NG', 'KE', 'ZA']
-
 // V796-798 INTEL, retyped.
-const V_INTEL: Record<Id, { name: string; authority: string; focus: string; href: string; tag: string; cardTitle: string; cardSub: string }> = {
-  NG: { name: 'Nigeria', authority: 'NRS · Merchant Buyer Solution', focus: 'MBS requirements & invoice validation', href: 'https://einvoice.nrs.gov.ng/', tag: 'First launch', cardTitle: "Nigeria's e-invoicing requirements", cardSub: 'Required invoice fields, validation rules and transmission readiness.' },
-  KE: { name: 'Kenya', authority: 'KRA · eTIMS', focus: 'eTIMS system requirements', href: 'https://www.kra.go.ke/', tag: 'Planned', cardTitle: "Kenya's eTIMS guidance", cardSub: 'Invoice data mapping, system requirements and exception handling.' },
-  ZA: { name: 'South Africa', authority: 'SARS · VAT modernisation', focus: 'VAT developments & proposed digital reporting', href: 'https://www.sars.gov.za/', tag: 'Planned', cardTitle: "South Africa's VAT modernisation proposals", cardSub: 'Proposed changes, their scope and implementation status.' },
-}
+const V_INTEL = { name: 'Nigeria', authority: 'NRS · Merchant Buyer Solution', focus: 'MBS requirements & invoice validation', href: 'https://einvoice.nrs.gov.ng/', cardTitle: "Nigeria's e-invoicing requirements", cardSub: 'Required invoice fields, validation rules and transmission readiness.' }
 
 // V803-806 STEPS, retyped.
 const V_STEPS: { n: string; label: string; icon: GlyphName; step: string; title: string; body: string; card: string; status: string }[] = [
@@ -30,12 +22,12 @@ const V_STEPS: { n: string; label: string; icon: GlyphName; step: string; title:
 ]
 
 // V300 and V336, retyped.
-const V_HEADER_PARAGRAPH = 'Our roadmap connects official updates, AI-assisted analysis and human review. A clearer way to follow regulatory change across Africa.'
+const V_HEADER_PARAGRAPH = 'Our roadmap connects official updates, AI-assisted analysis and human review.'
 const V_CLOSING = 'AI helps your team review. People approve the changes.'
 const V_FOOT = 'Source-linked. Human-reviewed.'
 
-// V748-750: the first rect's fill identifies each flag.
-const FLAG = { NG: { viewBox: '0 0 3 2', fill: '#008751' }, KE: { viewBox: '0 0 30 20', fill: '#006600' }, ZA: { viewBox: '0 0 30 20', fill: '#de3831' } } as const
+// V748-750: the first rect's fill identifies the flag.
+const FLAG = { viewBox: '0 0 3 2', fill: '#008751' } as const
 
 const v2 = readV2Css()
 const landingCss = (f: string) => stripSource(f, readFileSync(join(LANDING_SRC, 'styles', f), 'utf8'))
@@ -71,10 +63,6 @@ const panels = () => Array.from(view.container.querySelectorAll<HTMLElement>('[d
 const pressed = (els: Element[]) => els.map((e) => e.getAttribute('aria-pressed'))
 const only = (n: number, i: number) => Array.from({ length: n }, (_, k) => String(k === i))
 
-function chip(id: Id): HTMLButtonElement {
-  expect(chips(), 'three country chips').toHaveLength(3)
-  return chips()[ORDER.indexOf(id)]
-}
 function step(i: number): HTMLButtonElement {
   expect(steps(), 'four step buttons').toHaveLength(4)
   return steps()[i]
@@ -86,25 +74,25 @@ function workspace() {
   return { ws: ws[0], aside: ws[0].firstElementChild as HTMLElement, main: ws[0].lastElementChild as HTMLElement }
 }
 
-function expectAside(id: Id) {
-  const c = V_INTEL[id]
+function expectAside() {
+  const c = V_INTEL
   const { aside } = workspace()
-  expect(leafTexts(aside), `${id} aside, in order`).toEqual(['Regulatory workspace', c.name, c.authority, 'Monitoring focus', c.focus, 'View official source ↗', V_FOOT])
+  expect(leafTexts(aside), 'aside, in order').toEqual(['Regulatory workspace', c.name, c.authority, 'Monitoring focus', c.focus, 'View official source ↗', V_FOOT])
   const links = aside.querySelectorAll('a')
-  expect(links, `${id} aside holds exactly one link`).toHaveLength(1)
-  expect([links[0].getAttribute('href'), links[0].getAttribute('target'), links[0].getAttribute('rel')], `${id} official-source link`).toEqual([c.href, '_blank', 'noopener noreferrer'])
+  expect(links, 'aside holds exactly one link').toHaveLength(1)
+  expect([links[0].getAttribute('href'), links[0].getAttribute('target'), links[0].getAttribute('rel')], 'official-source link').toEqual([c.href, '_blank', 'noopener noreferrer'])
   const flag = aside.querySelector('svg[aria-hidden="true"]')
-  expect([flag?.getAttribute('width'), flag?.getAttribute('height'), flag?.getAttribute('viewBox'), flag?.querySelector('rect')?.getAttribute('fill')], `${id} aside flag`).toEqual(['30', '20', FLAG[id].viewBox, FLAG[id].fill])
+  expect([flag?.getAttribute('width'), flag?.getAttribute('height'), flag?.getAttribute('viewBox'), flag?.querySelector('rect')?.getAttribute('fill')], 'aside flag').toEqual(['30', '20', FLAG.viewBox, FLAG.fill])
 }
 
-function expectPanelCards(id: Id) {
-  const c = V_INTEL[id]
+function expectPanelCards() {
+  const c = V_INTEL
   expect(panels(), 'four panels').toHaveLength(4)
   panels().forEach((p, i) => {
     const card = p.querySelector('.card')
     expect(card, `panel ${i} card`).not.toBeNull()
     const [, title, sub] = leafTexts(card!)
-    expect([title, sub], `${id}: panel ${i} card title and sub`).toEqual([c.cardTitle, c.cardSub])
+    expect([title, sub], `panel ${i} card title and sub`).toEqual([c.cardTitle, c.cardSub])
   })
 }
 
@@ -134,6 +122,9 @@ describe('Intelligence band', () => {
     expect(paragraphs, 'the header paragraph outside the workspace').toHaveLength(1)
 
     const { ws } = workspace()
+    const headerRow = h2.parentElement!.parentElement!
+    expect(headerRow.contains(paragraphs[0]), 'the header row holds the heading and the paragraph').toBe(true)
+    expect(headerRow.nextElementSibling, 'the workspace is the header row’s next sibling').toBe(ws)
     expect(ws.className).toBe('split')
     const s = ws.style
     expect(
@@ -149,40 +140,11 @@ describe('Intelligence band', () => {
     })
   })
 
-  it('IN-02 NG is the first chip and fills the aside', () => {
-    const c = chips()
-    expect(c, 'three chips').toHaveLength(3)
-    expect(c.map((b) => b.type), 'chip types').toEqual(Array(3).fill('button'))
-    expect(c.map((b) => b.className), 'chip classes').toEqual(Array(3).fill('a-card-btn'))
-    expect(pressed(c)).toEqual(['true', 'false', 'false'])
+  it('IN-02 the aside shows Nigeria and the band holds no country chip', () => {
+    expect(chips(), 'no country chip').toHaveLength(0)
+    expect(view.container.querySelectorAll('#intelligence button[aria-pressed]'), 'control: the four steps are the only pressed-state buttons').toHaveLength(4)
 
-    c.forEach((b, i) => {
-      const id = ORDER[i]
-      const flag = b.firstElementChild
-      expect(b.firstChild, `${id} chip: the flag comes first`).toBe(flag)
-      expect([flag?.localName, flag?.getAttribute('aria-hidden')], `${id} chip flag`).toEqual(['svg', 'true'])
-      expect([flag!.getAttribute('width'), flag!.getAttribute('height'), flag!.getAttribute('viewBox'), flag!.querySelector('rect')?.getAttribute('fill')], `${id} chip flag`).toEqual(['22', '15', FLAG[id].viewBox, FLAG[id].fill])
-      const tag = b.lastElementChild as HTMLElement
-      expect(tag.localName, `${id} chip tag`).toBe('span')
-      expect([ownText(b), norm(tag.textContent)], `${id} chip name and tag`).toEqual([V_INTEL[id].name, V_INTEL[id].tag])
-      expect([tag.style.fontSize, tag.style.fontWeight, tag.style.opacity], `${id} tag style`).toEqual(['11px', '600', '0.85'])
-      expect([b.style.height, b.style.fontSize, b.style.fontWeight, b.style.borderRadius], `${id} V804 chip`).toEqual(['44px', '14px', '700', 'var(--radius-btn)'])
-    })
-
-    // V801: pressed and unpressed inline values.
-    const [on, off] = [c[0], c[1]]
-    expect({ background: on.style.background, color: on.style.color, border: on.style.border }).toEqual({
-      background: 'var(--accent)',
-      color: 'var(--accent-foreground)',
-      border: '1px solid var(--accent)',
-    })
-    expect({ background: off.style.background, color: off.style.color, border: off.style.border }).toEqual({
-      background: 'var(--on-dark-5)',
-      color: 'var(--surface-foreground)',
-      border: '1px solid var(--on-dark-10)',
-    })
-
-    expectAside('NG')
+    expectAside()
     const { aside } = workspace()
     expect([aside.style.background, aside.style.padding, aside.style.display, aside.style.flexDirection, aside.style.gap], 'V307 aside').toEqual(['var(--sage-panel)', '28px 24px', 'flex', 'column', '20px'])
     const link = aside.querySelector('a')!
@@ -194,21 +156,6 @@ describe('Intelligence band', () => {
     expect(glyph, 'the foot line holds a glyph').not.toBeNull()
     expect([glyph!.getAttribute('width'), paths(glyph)], 'V312 link glyph').toEqual(['15', GLYPHS.link])
     expect([foot[0].style.fontSize, foot[0].style.fontWeight, foot[0].style.color], 'V312 foot line').toEqual(['13px', '700', 'var(--step-label)'])
-  })
-
-  it('IN-03 each chip fills the aside and the panel cards', () => {
-    expectPanelCards('NG')
-    for (const id of ['KE', 'ZA', 'NG'] as const) {
-      click(chip(id))
-      expect(pressed(chips()), `after clicking ${id}`).toEqual(ORDER.map((o) => String(o === id)))
-      expectAside(id)
-      expectPanelCards(id)
-      const text = norm(root()!.textContent)
-      for (const other of ORDER.filter((o) => o !== id)) {
-        expect(text, `the ${id} view holds ${other}'s card title`).not.toContain(V_INTEL[other].cardTitle)
-        expect(text, `the ${id} view holds ${other}'s focus`).not.toContain(V_INTEL[other].focus)
-      }
-    }
   })
 
   it('IN-04 the four steps and step 01 first', () => {
@@ -297,24 +244,12 @@ describe('Intelligence band', () => {
         expect(card.querySelector('svg')!.getAttribute('width'), `panel ${i} card icon size`).toBe('15')
       })
     }
+    expectPanelCards()
     expectPanels(0)
     for (const at of [2, 3, 1, 0]) {
       click(step(at))
       expectPanels(at)
     }
-  })
-
-  it('IN-06 chips and steps are independent', () => {
-    click(step(2))
-    expect(pressed(steps())).toEqual(only(4, 2))
-    click(chip('KE'))
-    expect(pressed(chips()), 'Kenya is pressed').toEqual(only(3, 1))
-    expect(pressed(steps()), 'step 03 stays pressed').toEqual(only(4, 2))
-    expect(panels().map((x) => x.style.visibility), 'step 03 stays visible').toEqual(['hidden', 'hidden', 'visible', 'hidden'])
-    click(step(0))
-    expect(pressed(steps()), 'step 01 pressed').toEqual(only(4, 0))
-    expect(pressed(chips()), 'Kenya stays the pressed chip').toEqual(only(3, 1))
-    expectAside('KE')
   })
 
   it('IN-07 hidden panels hold nothing focusable', () => {
@@ -324,84 +259,44 @@ describe('Intelligence band', () => {
       expect(norm(x.textContent), `panel ${i} is not empty`).not.toBe('')
       expect(x.querySelectorAll('a[href], button, input, select, textarea, [tabindex]'), `panel ${i} focusables`).toHaveLength(0)
     })
-    // The whole band: three chips, the source link, four steps, the roadmap link, in DOM order.
+    // The whole band: the source link and the four steps, in DOM order.
     const stops = Array.from(root()!.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
     expect(stops.map((e) => leafTexts(e).join(' '))).toEqual([
-      'Nigeria First launch',
-      'Kenya Planned',
-      'South Africa Planned',
       'View official source ↗',
       'Monitor 01',
       'Understand 02',
       'Review 03',
       'Apply 04',
-      'Explore the roadmap →',
     ])
   })
 
-  it('IN-08 the closing line and the roadmap link', () => {
+  it('IN-08 the closing line stands alone in its row', () => {
     const r = root()!
     const lines = Array.from(r.querySelectorAll('p')).filter((p) => norm(p.textContent) === V_CLOSING)
     expect(lines, 'the closing paragraph').toHaveLength(1)
     expect(lines[0].closest('[data-intel-workspace]'), 'the closing row sits below the workspace').toBeNull()
     expect([lines[0].style.fontSize, lines[0].style.fontWeight, lines[0].style.color], 'V336 paragraph').toEqual(['16px', '700', 'var(--surface-foreground)'])
 
-    const links = Array.from(r.querySelectorAll('a')).filter((a) => norm(a.textContent) === 'Explore the roadmap →')
-    expect(links, 'the roadmap link').toHaveLength(1)
-    const a = links[0]
-    expect(a.localName).toBe('a')
-    expect(a.getAttribute('href')).toBe('#coverage')
-    expect(a.className).toBe('ds-btn ds-btn--text btn-on-dark')
-    expect(a.hasAttribute('target'), 'no target').toBe(false)
-    expect(a.parentElement, 'the paragraph and the link share one row').toBe(lines[0].parentElement)
+    const row = lines[0].parentElement!
+    expect(Array.from(row.children), 'the paragraph is alone in its row').toEqual([lines[0]])
+    expect(row.querySelectorAll('a'), 'no link in the closing row').toHaveLength(0)
+    const outside = Array.from(r.querySelectorAll('a')).filter((a) => !a.closest('aside'))
+    expect(outside, 'no link in #intelligence outside the aside').toHaveLength(0)
   })
 
-  it('IN-12 every chip and step pair resolves, and a repeat click keeps the selection', () => {
-    let prev = 0
-    for (const id of ORDER) {
-      for (let at = 0; at < 4; at++) {
-        click(chip(id))
-        expect(pressed(steps()), `${id}: the chip click leaves step ${prev + 1}`).toEqual(only(4, prev))
-        click(step(at))
-        prev = at
-        expect(pressed(chips()), `${id}/${at + 1} chips`).toEqual(ORDER.map((o) => String(o === id)))
-        expect(pressed(steps()), `${id}/${at + 1} steps`).toEqual(only(4, at))
-        expect(panels().map((x) => x.style.visibility), `${id}/${at + 1} panels`).toEqual(V_STEPS.map((_, i) => (i === at ? 'visible' : 'hidden')))
-        expectAside(id)
-        expectPanelCards(id)
-      }
+  it('IN-12 every step resolves, and a repeat click keeps the selection', () => {
+    for (let at = 0; at < 4; at++) {
+      click(step(at))
+      expect(pressed(steps()), `${at + 1} steps`).toEqual(only(4, at))
+      expect(panels().map((x) => x.style.visibility), `${at + 1} panels`).toEqual(V_STEPS.map((_, i) => (i === at ? 'visible' : 'hidden')))
+      expectAside()
+      expectPanelCards()
     }
-    // Repeat clicks and clicks on a child of the button: no toggle-off.
-    click(chip('ZA'))
-    expect(pressed(chips()), 'South Africa pressed').toEqual(only(3, 2))
-    click(chip('ZA'))
-    expect(pressed(chips()), 'a second click keeps South Africa').toEqual(only(3, 2))
-    click(chip('KE').lastElementChild as HTMLElement)
-    expect(pressed(chips()), 'a click on the tag span selects Kenya').toEqual(only(3, 1))
-    click(step(3))
-    expect(pressed(steps()), 'step 04 pressed').toEqual(only(4, 3))
     click(step(3))
     expect(pressed(steps()), 'a second click keeps step 04').toEqual(only(4, 3))
     expect(panels().map((x) => x.getAttribute('aria-hidden')), 'step 04 alone is exposed').toEqual(['true', 'true', 'true', null])
     click(step(1).querySelector('.ds-icontile') as HTMLElement)
     expect(pressed(steps()), 'a click on the tile selects step 02').toEqual(only(4, 1))
-  })
-
-  it('IN-10 Coverage’s selection does not reach Intelligence', async () => {
-    await show(view, createElement(Fragment, null, createElement(Coverage, { onBookDemo: () => undefined }), createElement(Intelligence)))
-    const tabs = () => Array.from(view.container.querySelectorAll<HTMLButtonElement>('#coverage button[aria-pressed]'))
-    expect(tabs(), 'three Coverage tabs').toHaveLength(3)
-    expect(chips(), 'three Intelligence chips').toHaveLength(3)
-    expect([pressed(tabs()), pressed(chips())], 'both start on Nigeria').toEqual([only(3, 0), only(3, 0)])
-
-    click(tabs()[1])
-    expect(pressed(tabs()), 'the Kenya tab is pressed').toEqual(only(3, 1))
-    expect(pressed(chips()), 'the Nigeria chip stays pressed').toEqual(only(3, 0))
-    expectAside('NG')
-
-    click(chip('ZA'))
-    expect(pressed(chips()), 'the South Africa chip is pressed').toEqual(only(3, 2))
-    expect(pressed(tabs()), 'the Kenya tab stays pressed').toEqual(only(3, 1))
   })
 })
 
@@ -433,33 +328,19 @@ describe('Intelligence panel contrast', () => {
     expect(failures(rows)).toEqual([])
   })
 
-  it('IN-11 the band text and the roadmap link resolve to their colours on the dark band', () => {
-    // jsdom's stylesheet cascade ignores !important and :hover, so only the colour (resolver) and the underline (order) are read.
-    const underline = (el: Element) => {
-      const st = document.createElement('style')
-      st.textContent = landingCss('ds.css') + landingCss('landing.css')
-      document.head.appendChild(st)
-      try {
-        return getComputedStyle(el).borderBottomColor
-      } finally {
-        st.remove()
-      }
-    }
+  it('IN-11 the band text resolves to its colours on the dark band', () => {
     const r = root()!
-    const band = resolveTextContrast(r, CSS).filter((x) => !x.el.closest('[data-intel-workspace]') && !x.el.closest('button[aria-pressed="false"]'))
-    expect(band.length, 'band text elements measured outside the workspace').toBeGreaterThanOrEqual(8)
+    const band = resolveTextContrast(r, CSS).filter((x) => !x.el.closest('[data-intel-workspace]'))
+    expect(band.length, 'band text elements measured outside the workspace').toBeGreaterThanOrEqual(5)
     const row = (text: string) => {
       const hits = band.filter((x) => x.text === text)
       expect(hits, `"${text}" is measured once`).toHaveLength(1)
       return hits[0]
     }
-    const cta = row('Explore the roadmap →')
-    expect([cta.fg, cta.ambiguous, cta.bg], 'the CTA is --accent on the band, not --link').toEqual([hex('--accent'), false, hex('--surface-2')])
-    expect(underline(cta.el), 'the CTA underline is --accent').toBe('var(--accent)')
     expect(row(V_HEADER_PARAGRAPH).fg, 'the header paragraph').toBe(hex('--surface-body'))
     expect(row(V_CLOSING).fg, 'the closing line').toBe(hex('--surface-foreground'))
     expect(row('Keep your next step clear.').fg, 'the highlighted H2 line').toBe(hex('--highlight-on-dark-2'))
-    expect(band.every((x) => x.bg === hex('--surface-2') || x.el.closest('button[aria-pressed="true"]')), 'band rows sit on --surface-2 or the pressed chip').toBe(true)
+    expect(band.every((x) => x.bg === hex('--surface-2')), 'every band row sits on --surface-2').toBe(true)
     expect(failures(band)).toEqual([])
   })
 })

@@ -52,7 +52,10 @@ export function Home({ data, onPost, onCategory, onSubscribe }: HomeProps) {
                 overflow: 'hidden',
               }}
             >
-              <div style={{ flex: '1 1 420px', minHeight: 300, position: 'relative', background: 'var(--muted)' }}>
+              <div
+                onClick={() => onPost(featured.post.id)}
+                style={{ flex: '1 1 420px', minHeight: 300, position: 'relative', background: 'var(--muted)', cursor: 'pointer' }}
+              >
                 <Cover post={featured.post} cat={catOf(data, featured.post.category_id)} />
               </div>
               <button

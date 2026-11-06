@@ -13,7 +13,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
-- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write and every role delete. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete and every role staffing write. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
@@ -51,6 +51,7 @@ paths:
 - Refuse a workflow role delete with 409 while the active version of a live policy names the role in a scope or an approval step. List those policies in the body.
 - List the policies in force per role as `in_force` on `GET /v1/workflow-roles`. It uses the predicate of the role delete refusal (`TestRoleUsage_AgreesWithDeleteRole`). Omit `in_force` when its read fails.
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.
+- Refuse a role staffing write with 409 while an open run has a pending approval step that names the role and the new set holds no active admin or reviewer. Use the body of the role delete refusal.
 - List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.

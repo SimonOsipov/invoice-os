@@ -94,6 +94,16 @@ describe('content', () => {
     expect(f.benefits).toHaveLength(3)
   })
 
+  it('content_workflowBuilderNamesTheScopesAndFirstMatch', () => {
+    const f = byId('workflow-builder')
+    for (const re of [/document type/, /client/, /amount band/, /creator's workflow role/]) expect(f.desc).toMatch(re)
+    expect(f.benefits[0]).toMatch(/document type, client, amount band or creator role/)
+    expect(f.desc).toMatch(/first policy in the list that matches a document decides/)
+    expect(f.desc).toMatch(/an admin sets the order/)
+    expect(f.desc).toMatch(/sample amount/)
+    expect(COMING_SOON_IDS).not.toContain('workflow-builder')
+  })
+
   it('content_marksTheOtherTwentySixShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
     expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',

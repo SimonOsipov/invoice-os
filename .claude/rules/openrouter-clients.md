@@ -59,6 +59,7 @@ paths:
 - Make the explain call only from `POST /v1/invoices/{id}/explain`. Never call it from validation or import.
 - Answer an off, failed, blank or dropped explain answer with 200 `status: "unavailable"`. Never 5xx.
 - Take the fix target from the violation path. For a bare line path, take the field from the violation's `field`. Propose no fix for a bare line path without `field`.
+- Drop the fix when the model names a `fix_field` other than the bound target field.
 - Search an AI fake marker in `Request.Text`, then in `Request.FakeHint`. Never scan `Request.System`.
 - Match fake markers case-sensitively with no word boundary. The first match in a field wins.
 - A scoped request matches only its own `AIFAKE-<SCOPE>-` spelling. It never falls back to an unscoped marker.

@@ -218,6 +218,10 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 	if !ok || !isStr {
 		return res
 	}
+	// A named field other than the bound target means the value is for another field.
+	if named, _ := ans["fix_field"].(string); named != "" && named != field && named != v.Path[strings.LastIndexByte(v.Path, '.')+1:] {
+		return res
+	}
 	f, _ := explainField(field, line > 0)
 	if explainPartyContact(f) || !explainValueOK(f.Type, value) {
 		return res

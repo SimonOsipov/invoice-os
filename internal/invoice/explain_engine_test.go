@@ -52,7 +52,8 @@ func TestExplain_BareLineFixClearsTheRule(t *testing.T) {
 		wantNoLine bool
 		stripField bool
 	}{
-		{"model answers line_total", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "line_total", "fix_value": "5.00"}, false, false, false},
+		{"model answers unit_price", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "5.00"}, false, false, false},
+		{"model answers another field", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "line_total", "fix_value": "50.00"}, true, false, false},
 		{"model answers null field", map[string]any{"explanation": "Line 2 is negative.", "fix_field": nil, "fix_value": "5.00"}, false, false, false},
 		{"model repeats the value", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "-5.00"}, true, false, false},
 		{"verdict stored before the field existed", map[string]any{"explanation": "Line 2 is negative.", "fix_field": "unit_price", "fix_value": "5.00"}, true, false, true},

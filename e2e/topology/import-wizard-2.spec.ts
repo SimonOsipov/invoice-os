@@ -60,6 +60,7 @@ import {
   buildMixedCsv,
   buildSingleInvoiceCsv,
   nullExtractHeaderKeys,
+  PERF_HEADER,
   PR_LANE_MAPPING,
 } from '../importFixtures'
 
@@ -2001,7 +2002,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   expect(look1Url.searchParams.get('document_id')).toBe(documentId1)
   expect((await look1.json()).saved_mapping, "import 1 is this client's first import -- nothing saved yet").toBeNull()
 
-  await expect(page.getByTestId('map-column'), 'the Map step must settle before any placement').toHaveCount(11)
+  await expect(page.getByTestId('map-column'), 'the Map step must settle before any placement').toHaveCount(PERF_HEADER.split(',').length)
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
 

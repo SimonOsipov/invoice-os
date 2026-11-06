@@ -241,12 +241,20 @@ func TestExplainPromptText_BareLineNamesTheJudgedField(t *testing.T) {
 	}
 }
 
-func TestGuardExplanation_JudgedFieldOverridesTheModelField(t *testing.T) {
+func TestGuardExplanation_JudgedFieldBindsTheFix(t *testing.T) {
 	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
-	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
 	if got.Fix == nil || got.Fix.Field != "unit_price" || got.Fix.Line == nil || *got.Fix.Line != 2 ||
 		got.Fix.Current == nil || *got.Fix.Current != "-5.00" || got.Fix.Value != "5.00" {
 		t.Errorf("fix = %+v, want unit_price on line 2, -5.00 -> 5.00", got.Fix)
+	}
+}
+
+func TestGuardExplanation_AnotherModelFieldDropsTheFix(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
 	}
 }
 

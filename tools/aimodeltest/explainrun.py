@@ -109,7 +109,7 @@ def schema_valid(a):
 def effective_path(violation):
     """Mirror explainSubject: a bare line path with a judged field becomes the field path."""
     path = violation.get("path", "")
-    if re.fullmatch(r"line_items\[\d+\]", path) and violation.get("field"):
+    if re.fullmatch(r"line_items\[[1-9][0-9]*\]", path) and violation.get("field"):
         return path + "." + violation["field"]
     return path
 
@@ -118,7 +118,7 @@ def field_allowed(path, field):
     """D6: the fix target comes from the path; a field the path does not allow is dropped by the server."""
     if field is None:
         return True
-    m = re.fullmatch(r"line_items\[\d+\](?:\.(\w+))?", path)
+    m = re.fullmatch(r"line_items\[[1-9][0-9]*\](?:\.([a-z][a-z0-9_]*))?", path)
     if m:
         return m.group(1) is not None and field == m.group(1)
     return path != "line_items" and field == path.rsplit(".", 1)[-1]

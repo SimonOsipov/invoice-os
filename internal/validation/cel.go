@@ -166,11 +166,11 @@ func celLineViolations(expr string, p Payload, r Rule) []Violation {
 func judgedField(e ast.Expr, v string) string {
 	names := map[string]bool{}
 	other := false
-	var walk func(ast.Expr, bool)
-	walk = func(e ast.Expr, selectOperand bool) {
+	var walk func(ast.Expr)
+	walk = func(e ast.Expr) {
 		switch e.Kind() {
 		case ast.IdentKind:
-			if e.AsIdent() == v && !selectOperand {
+			if e.AsIdent() == v {
 				other = true
 			}
 		case ast.SelectKind:
@@ -179,37 +179,37 @@ func judgedField(e ast.Expr, v string) string {
 				names[s.FieldName()] = true
 				return
 			}
-			walk(s.Operand(), false)
+			walk(s.Operand())
 		case ast.CallKind:
 			c := e.AsCall()
 			if c.IsMemberFunction() {
-				walk(c.Target(), false)
+				walk(c.Target())
 			}
 			for _, a := range c.Args() {
-				walk(a, false)
+				walk(a)
 			}
 		case ast.ListKind:
 			for _, x := range e.AsList().Elements() {
-				walk(x, false)
+				walk(x)
 			}
 		case ast.MapKind:
 			for _, en := range e.AsMap().Entries() {
 				me := en.AsMapEntry()
-				walk(me.Key(), false)
-				walk(me.Value(), false)
+				walk(me.Key())
+				walk(me.Value())
 			}
 		case ast.StructKind:
 			for _, f := range e.AsStruct().Fields() {
-				walk(f.AsStructField().Value(), false)
+				walk(f.AsStructField().Value())
 			}
 		case ast.ComprehensionKind:
 			c := e.AsComprehension()
 			for _, x := range []ast.Expr{c.IterRange(), c.AccuInit(), c.LoopCondition(), c.LoopStep(), c.Result()} {
-				walk(x, false)
+				walk(x)
 			}
 		}
 	}
-	walk(e, false)
+	walk(e)
 	if other || len(names) != 1 {
 		return ""
 	}

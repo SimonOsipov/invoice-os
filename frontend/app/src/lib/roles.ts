@@ -354,6 +354,16 @@ export function inUsePolicyNames(err: unknown): string[] {
   return policies.flatMap((p) => (typeof p?.name === 'string' ? [p.name] : []))
 }
 
+/** Invoice numbers off a 409 body (cap: Go `roleInRunListCap`) and the true count (`invoices_total`); empty for any other error. */
+export function inUseInvoices(err: unknown): { numbers: string[]; total: number } {
+  if (!(err instanceof ApiError) || err.status !== 409) return { numbers: [], total: 0 }
+  const body = err.body as { invoices?: unknown; invoices_total?: unknown } | null | undefined
+  if (!Array.isArray(body?.invoices)) return { numbers: [], total: 0 }
+  const numbers = body.invoices.flatMap((i) => (typeof i?.invoice_number === 'string' ? [i.invoice_number] : []))
+  const total = typeof body.invoices_total === 'number' && Number.isFinite(body.invoices_total) ? body.invoices_total : 0
+  return { numbers, total: Math.max(total, numbers.length) }
+}
+
 // NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.
 export const NEW_ROLE_SUBTITLE = 'Name the seat and say who fills it.'
 export const EDIT_ROLE_SUBTITLE = 'Rename the seat, or change who fills it.'

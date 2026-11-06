@@ -122,7 +122,7 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
     return role
   }
 
-  test('GET -> 200 {workflow_roles:[{desc,key,members,title}…]}, no pagination key', async () => {
+  test('GET -> 200 {workflow_roles:[{desc,key,members,title}…], in_force:{…}}, no pagination key', async () => {
     const probe = await createProbe()
 
     const res = await rawFetch('/api/invoice/v1/workflow-roles', {
@@ -131,7 +131,7 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
     expect(res.status, 'the list should return 200').toBe(200)
 
     const body = res.body as Record<string, unknown>
-    expect(Object.keys(body).sort(), 'expected exactly the workflow_roles key').toEqual(['workflow_roles'])
+    expect(Object.keys(body).sort(), 'expected exactly the workflow_roles and in_force keys').toEqual(['in_force', 'workflow_roles'])
     // A flat list — unlike portfolio's, it carries no pagination envelope.
     expect(body, 'the list should have no pagination key').not.toHaveProperty('pagination')
     expect(Array.isArray(body.workflow_roles), 'workflow_roles should be an array').toBe(true)
@@ -1288,5 +1288,63 @@ test.describe('approval-policy publish refuses a scope naming a deleted role (fr
     const published = await publishApprovalPolicy(t, s.id)
     expect(published.sealed, 'S publishes once the scope drops the role').toBe(true)
     expect(published.versions.some((v) => v.is_active), 'and is in force').toBe(true)
+  })
+})
+
+test.describe('workflow-roles in_force (fresh workspace per test)', () => {
+  async function freshWorkspace(): Promise<string> {
+    const account = await provisionRealAccount('apsc-inforce')
+    const { access_token } = await signInSession(account.email, account.password)
+    const listed = await listApprovalPolicies(access_token)
+    expect(listed.approval_policies, 'precondition: a fresh workspace has no policy').toEqual([])
+    return access_token
+  }
+  const inForce = async (t: string) => (await listWorkflowRoles(t)).in_force
+
+  test('in_force: a scope-only role is listed with steps 0, then gone once the policy is deleted', async () => {
+    const t = await freshWorkspace()
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await publishApprovalPolicy(t, c.id)
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes: { workflow_role_keys: [role.key] } })
+    await publishApprovalPolicy(t, s.id)
+
+    expect((await inForce(t))?.[role.key], 'the scope policy is listed').toEqual([
+      { id: s.id, name: s.name, steps: 0, scope: true },
+    ])
+
+    await deleteApprovalPolicy(t, s.id)
+    expect(await inForce(t), 'the role leaves in_force with its policy').not.toHaveProperty(role.key)
+  })
+
+  test('in_force: a step-only role is listed and an open draft that drops it does not hide it', async () => {
+    const t = await freshWorkspace()
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await putApprovalPolicyDraft(t, c.id, { steps: [{ kind: 'approval', workflow_role_key: role.key }] })
+    await publishApprovalPolicy(t, c.id)
+    const entry = { id: c.id, name: c.name, steps: 1, scope: false }
+
+    expect((await inForce(t))?.[role.key], 'the step policy is listed').toEqual([entry])
+
+    await putApprovalPolicyDraft(t, c.id, { steps: [] })
+    expect((await inForce(t))?.[role.key], 'an open draft without the role leaves the entry').toEqual([entry])
+
+    await publishApprovalPolicy(t, c.id)
+    expect(await inForce(t), 'the republish drops the role').not.toHaveProperty(role.key)
+  })
+
+  test('in_force: a draft-only role is not listed', async () => {
+    const t = await freshWorkspace()
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await putApprovalPolicyDraft(t, c.id, { steps: [{ kind: 'approval', workflow_role_key: role.key }] })
+
+    expect(await inForce(t), 'an unpublished draft is not in force').not.toHaveProperty(role.key)
+    const res = await rawFetch(`/api/invoice/v1/workflow-roles/${role.key}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${t}` },
+    })
+    expect(res.status, 'the delete answers 200').toBe(200)
   })
 })

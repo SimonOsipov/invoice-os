@@ -23,7 +23,7 @@ import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 import type { AccessRole, Member, PatchableStatus } from './lib/members'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
-import type { Role } from './lib/roles'
+import type { Role, RolesInForce } from './lib/roles'
 // Type-only, and benign for the reason the `Member` edge above spells out: `lib/route.ts`
 // type-imports `View`/`SettingsTab` from this file, so the loop is erased at compile.
 import type { RouteParams } from './lib/route'
@@ -358,6 +358,9 @@ export type PlatformCtx = {
   rolesState: AsyncStatus
   rolesError: ApiError | null
   refetchRoles: () => void
+  refetchRolesInForce: () => void
+  // Policies in force per role; null while loading, failed, or unknown (never read as unused).
+  rolesInForce: RolesInForce | null
 
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two

@@ -380,6 +380,15 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Tenant-scoped alongside `members`: listWorkflowRoles (lib/roles.ts:353) takes no params.',
   },
   {
+    binding: 'lastInForce',
+    name: 'lastInForce',
+    kind: 'useRef',
+    resetBySwitchClient: false,
+    routes: ['/settings/<tab>'],
+    verdict: 'correctly-reset',
+    note: 'Tenant-scoped alongside `roles`: listRolesInForce takes no params. Holds the last good usage across an inForceAsync re-run; null on error.',
+  },
+  {
     binding: 'entityId, setEntityId',
     name: 'entityId',
     kind: 'useState',

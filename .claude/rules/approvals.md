@@ -49,6 +49,7 @@ paths:
 - Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, an unknown workflow role, and a deleted workflow role the policy's top version does not already hold, with 400.
 - Refuse a publish with 409 while the draft's scopes name a deleted workflow role. Name the role in the sentence.
 - Refuse a workflow role delete with 409 while the active version of a live policy names the role in a scope or an approval step. List those policies in the body.
+- List the policies in force per role as `in_force` on `GET /v1/workflow-roles`. It uses the predicate of the role delete refusal (`TestRoleUsage_AgreesWithDeleteRole`). Omit `in_force` when its read fails.
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.
 - List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing.
 - Name a workflow role in a scope by its key on the wire. Store its id.

@@ -259,7 +259,7 @@ func TestGuardExplanation_AnotherModelFieldDropsTheFix(t *testing.T) {
 }
 
 func TestGuardExplanation_BareLineWithoutJudgedFieldHasNoFix(t *testing.T) {
-	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]"}, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]"}, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
 	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
 		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
 	}

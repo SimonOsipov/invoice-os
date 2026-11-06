@@ -27,7 +27,7 @@ import {
   type WfPending,
 } from './WorkflowParts'
 import type { Resolved, Role } from '../lib/roles'
-import { canDrop, parseLoc, type BranchNode, type ConditionNode, type Loc, type Policy, type RoleKey, type WfNode } from '../lib/workflows'
+import { canDrop, parseLoc, scopeSummary, type BranchNode, type ConditionNode, type Loc, type Policy, type RoleKey, type WfNode } from '../lib/workflows'
 
 export type CanvasProps = {
   policy: Policy
@@ -70,6 +70,7 @@ export function WorkflowCanvas(api: CanvasProps) {
   const { policy, pending } = api
   const nodes = policy.nodes
   const emptyIdle = nodes.length === 0 && pending === null
+  const triggerText = `TRIGGER · ${scopeSummary(policy.scopes).toUpperCase()}`
 
   return (
     <div
@@ -81,12 +82,12 @@ export function WorkflowCanvas(api: CanvasProps) {
       }}
     >
       <div style={{ width: '100%', maxWidth: 480, margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--slate-800)', color: 'var(--text-on-dark)', borderRadius: 'var(--radius-md)', padding: '13px 16px' }}>
+        <div data-testid="canvas-trigger" style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--slate-800)', color: 'var(--text-on-dark)', borderRadius: 'var(--radius-md)', padding: '13px 16px' }}>
           <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: 'var(--on-dark-10)', display: 'grid', placeItems: 'center' }}>{wfTriggerGlyph}</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>Invoice submitted</div>
-            <div className="mono" style={{ fontSize: 10, color: 'var(--on-dark-70)', letterSpacing: '0.05em' }}>
-              TRIGGER · {policy.scope.toUpperCase()}
+            <div className="mono" data-testid="canvas-trigger-line" title={triggerText} style={{ fontSize: 10, color: 'var(--on-dark-70)', letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {triggerText}
             </div>
           </div>
         </div>

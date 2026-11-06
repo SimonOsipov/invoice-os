@@ -1,7 +1,7 @@
 // The approval-policy wire and its pure mappers.
 
 import type { AuthedFetch } from './portfolio'
-import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './workflows'
+import type { BranchNode, CondOp, Policy, PolicyScopes, PolicyStatus, Sla, WfNode } from './workflows'
 
 // ---------------------------------------------------------------------------
 // Wire types, mirrored field-for-field from internal/approval/policy.go:17-93
@@ -37,15 +37,11 @@ export type PolicyVersionWire = {
   is_active: boolean
   published_at: string | null
   published_by: string | null
+  /** The version carries any scope; the catch-all lock reads it for the active version. */
+  scoped: boolean
 }
 
-export type PolicyScopesWire = {
-  document_types: string[]
-  entity_ids: string[]
-  workflow_role_keys: string[]
-  /** Bounds are numeric text, scale kept. */
-  amount_band: { lower: string | null; upper: string | null; currency: string } | null
-}
+export type PolicyScopesWire = PolicyScopes
 
 export type PolicyWire = {
   id: string
@@ -176,10 +172,12 @@ export function toPolicy(wire: PolicyWire): Policy {
   return {
     id: wire.id,
     name: wire.name,
-    scope: wire.scope,
+    position: wire.position,
+    scopes: wire.scopes,
     status: wire.status as PolicyStatus,
     version: wire.version,
     activeVersion: wire.versions.find((v) => v.is_active)?.version ?? null,
+    activeScoped: wire.versions.some((v) => v.is_active && v.scoped),
     nodes: nodesFromSteps(wire.steps),
   }
 }
@@ -226,13 +224,34 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
   return toPolicy(created)
 }
 
+/** A bound of only `.` is no bound: the server refuses it. */
+function wireScopes(s: PolicyScopes): PolicyScopes {
+  const b = s.amount_band
+  if (!b) return s
+  const bound = (v: string | null) => (v === '.' ? null : v)
+  return { ...s, amount_band: { ...b, lower: bound(b.lower), upper: bound(b.upper) } }
+}
+
 /** A whole-tree REPLACE: `steps` always rides along, empty included — the server 400s on an absent key. */
-export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
-  const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
-    method: 'PUT',
-    body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
-  })
+export async function putApprovalPolicyDraft(
+  f: AuthedFetch,
+  base: string,
+  id: string,
+  next: Policy,
+  opts?: { sendScopes?: boolean },
+): Promise<Policy> {
+  // An omitted `scopes` keeps the draft's scopes, so an unedited save never re-sends them.
+  const body = opts?.sendScopes
+    ? { name: next.name, scopes: wireScopes(next.scopes), steps: stepInputsFromNodes(next.nodes) }
+    : { name: next.name, steps: stepInputsFromNodes(next.nodes) }
+  const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, { method: 'PUT', body })
   return toPolicy(saved)
+}
+
+/** The whole new order; answers the server's list in its order. */
+export async function reorderApprovalPolicies(f: AuthedFetch, base: string, ids: string[]): Promise<Policy[]> {
+  const body = await f<PoliciesResponseWire>(`${base}/api/invoice/v1/approval-policies/order`, { method: 'PUT', body: { policy_ids: ids } })
+  return body.approval_policies.map((w) => toPolicy(w))
 }
 
 /** No body at all: the handler reads none, and `published_by` is taken from the caller's claim. */

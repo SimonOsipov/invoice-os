@@ -82,20 +82,122 @@ export type NodeType = WfNode['type']
 
 export type PolicyStatus = 'published' | 'draft'
 
+export type PolicyScopes = {
+  document_types: string[]
+  entity_ids: string[]
+  workflow_role_keys: string[]
+  /** Bounds are numeric text, scale kept. */
+  amount_band: { lower: string | null; upper: string | null; currency: string } | null
+}
+
 export type Policy = {
   id: string
   name: string
-  scope: string
+  /** The server's rank; gaps are possible after deletes. */
+  position: number
+  /** The TOP version's scopes; all empty = the catch-all. */
+  scopes: PolicyScopes
   status: PolicyStatus
   /** The version `nodes` belongs to — the HIGHEST version, not necessarily the live one. */
   version: number
   /** The version of this policy in force, or null when none is. Several policies may be in force. */
   activeVersion: number | null
+  /** The version in force carries a scope, whatever the top version says. */
+  activeScoped?: boolean
   nodes: WfNode[]
 }
 
-/** The one scope value the editor offers. */
-export const WF_SCOPE_OPTIONS: readonly string[] = ['All invoices']
+export const CATCH_ALL_SCOPES: PolicyScopes = { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null }
+
+export function isCatchAll(s: PolicyScopes): boolean {
+  return s.document_types.length === 0 && s.entity_ids.length === 0 && s.workflow_role_keys.length === 0 && s.amount_band === null
+}
+
+/** Mirrors Go `scopeDocumentTypes` (internal/approval/policy.go); wireMirrors.test.ts pins it. */
+export const SCOPE_DOCUMENT_TYPES: readonly { value: string; label: string }[] = [
+  { value: 'commercial_invoice', label: 'Commercial invoices' },
+  { value: 'credit_note', label: 'Credit notes' },
+  { value: 'debit_note', label: 'Debit notes' },
+]
+
+export function setScopes(policy: Policy, scopes: PolicyScopes): Policy {
+  return { ...policy, scopes }
+}
+
+// Integer part grouped with commas; the fraction is kept unless it is all zeros. No rounding.
+function boundLabel(text: string): string {
+  const [int, frac = ''] = text.split('.')
+  const grouped = (int || '0').replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return /^0*$/.test(frac) ? grouped : `${grouped}.${frac}`
+}
+
+/** One line: 'All invoices' for the catch-all, else the set parts in a fixed order. */
+export function scopeSummary(s: PolicyScopes): string {
+  if (isCatchAll(s)) return 'All invoices'
+  const parts: string[] = []
+  const types = SCOPE_DOCUMENT_TYPES.filter((t) => s.document_types.includes(t.value)).map((t) => t.label)
+  if (types.length > 0) parts.push(types.join(', '))
+  const clients = s.entity_ids.length
+  if (clients > 0) parts.push(`${clients} ${clients === 1 ? 'client' : 'clients'}`)
+  const band = s.amount_band
+  if (band) {
+    const { lower, upper, currency } = band
+    const range =
+      lower !== null && upper !== null ? `${boundLabel(lower)}–${boundLabel(upper)}`
+      : lower !== null ? `${boundLabel(lower)} and above`
+      : upper !== null ? `up to ${boundLabel(upper)}`
+      : ''
+    const text = [currency, range].filter(Boolean).join(' ')
+    if (text) parts.push(text)
+  }
+  const roles = s.workflow_role_keys.length
+  if (roles > 0) parts.push(`Created by ${roles} ${roles === 1 ? 'role' : 'roles'}`)
+  return parts.join(' · ')
+}
+
+/** Letters only, upper case, three at most. */
+export function currencyText(raw: string): string {
+  return raw.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 3)
+}
+
+/** Digits and one dot; 12 integer digits and 2 decimals at most (numeric(14,2)). A change past that keeps `prev`. */
+export function boundText(raw: string, prev: string): string {
+  const cleaned = raw.replace(/[^0-9.]/g, '')
+  return /^\d{0,12}(\.\d{0,2})?$/.test(cleaned) ? cleaned : prev
+}
+
+/** null when all three are empty; an empty bound is null. */
+export function bandFrom(currency: string, lower: string, upper: string): PolicyScopes['amount_band'] {
+  if (currency === '' && lower === '' && upper === '') return null
+  return { lower: lower === '' ? null : lower, upper: upper === '' ? null : upper, currency }
+}
+
+/** The new id order after moving `id` one place, or null at a boundary or for an unknown id. */
+export function moveOrder(list: readonly Policy[], id: string, dir: 'up' | 'down'): string[] | null {
+  const i = list.findIndex((p) => p.id === id)
+  const j = dir === 'up' ? i - 1 : i + 1
+  if (i === -1 || j < 0 || j >= list.length) return null
+  const ids = list.map((p) => p.id)
+  ;[ids[i], ids[j]] = [ids[j], ids[i]]
+  return ids
+}
+
+/** Which controls the catch-all lock disables: the last row stays last while any policy is scoped by its top or active version (the server's rule). */
+export function listLock(list: readonly Policy[]) {
+  const n = list.length
+  const anyScoped = list.some((p) => !isCatchAll(p.scopes) || p.activeScoped)
+  return {
+    anyScoped,
+    moveUp: (i: number) => i > 0 && !(i === n - 1 && anyScoped),
+    moveDown: (i: number) => i < n - 1 && !(i === n - 2 && anyScoped),
+    deletable: (i: number) => !(i === n - 1 && anyScoped),
+  }
+}
+
+/** A created policy lands before the last row (the catch-all), alone in an empty list. */
+export function insertAboveLast(list: readonly Policy[], created: Policy): Policy[] {
+  return list.length === 0 ? [created] : [...list.slice(0, -1), created, list[list.length - 1]]
+}
 
 // ---------------------------------------------------------------------------
 // Lanes
@@ -186,7 +288,7 @@ export function newNode(type: NodeType): WfNode {
 }
 
 export function newPolicy(): Policy {
-  return { id: newPolicyId(), name: 'Untitled policy', scope: 'All invoices', status: 'draft', version: 1, activeVersion: null, nodes: [] }
+  return { id: newPolicyId(), name: 'Untitled policy', position: 0, scopes: CATCH_ALL_SCOPES, status: 'draft', version: 1, activeVersion: null, activeScoped: false, nodes: [] }
 }
 
 export function insertNode(policy: Policy, laneKey: LaneKey, index: number, node: WfNode): Policy {
@@ -251,10 +353,6 @@ export function clearSteps(policy: Policy): Policy {
 
 export function renamePolicy(policy: Policy, name: string): Policy {
   return { ...policy, name }
-}
-
-export function rescopePolicy(policy: Policy, scope: string): Policy {
-  return { ...policy, scope }
 }
 
 export function replacePolicy(list: readonly Policy[], next: Policy): Policy[] {

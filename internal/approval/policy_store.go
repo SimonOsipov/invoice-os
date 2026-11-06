@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,14 +63,15 @@ func takeTopVersion(p *Policy, pv PolicyVersion) {
 
 // policyVersionColumns is the one column list both version reads use, so the scan below
 // serves each of them.
-const policyVersionColumns = `policy_id, id, version, sealed, is_active, published_at, published_by`
+const policyVersionColumns = `v.policy_id, v.id, v.version, v.sealed, v.is_active, v.published_at, v.published_by,
+	` + scopedSQL
 
 // scanPolicyVersionRow reads one version row: its policy id, its own id, and the wire
 // shape. published_at is formatted in Go rather than read as ::text — the column's text
 // form is not RFC3339, which is what every other timestamp on this API marshals to.
 func scanPolicyVersionRow(rows pgx.Rows) (policyID, versionID string, pv PolicyVersion, err error) {
 	var at *time.Time
-	if err := rows.Scan(&policyID, &versionID, &pv.Version, &pv.Sealed, &pv.IsActive, &at, &pv.PublishedBy); err != nil {
+	if err := rows.Scan(&policyID, &versionID, &pv.Version, &pv.Sealed, &pv.IsActive, &at, &pv.PublishedBy, &pv.Scoped); err != nil {
 		return "", "", PolicyVersion{}, err
 	}
 	if at != nil {
@@ -168,8 +170,9 @@ type scopeRow struct {
 }
 
 // resolveScopesTx checks the scopes against the database: entities visible under RLS, live
-// roles, a currency on the NRS list. Run after requireActiveAdmin.
-func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, error) {
+// roles, or a deleted role the top version already holds (keepRoleIDs), a currency on the NRS
+// list. Run after requireActiveAdmin.
+func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput, keepRoleIDs []string) (scopeRow, error) {
 	row := scopeRow{
 		DocumentTypes: append([]string{}, in.DocumentTypes...),
 		EntityIDs:     make([]string, 0, len(in.EntityIDs)),
@@ -191,7 +194,7 @@ func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, e
 	}
 	if len(in.WorkflowRoleKeys) > 0 {
 		rows, err := tx.Query(ctx,
-			`SELECT key, id FROM workflow_roles WHERE key = ANY($1) AND deleted_at IS NULL`,
+			`SELECT key, id, deleted_at IS NULL FROM workflow_roles WHERE key = ANY($1)`,
 			in.WorkflowRoleKeys)
 		if err != nil {
 			return scopeRow{}, err
@@ -199,11 +202,14 @@ func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, e
 		ids := map[string]string{}
 		for rows.Next() {
 			var k, id string
-			if err := rows.Scan(&k, &id); err != nil {
+			var live bool
+			if err := rows.Scan(&k, &id, &live); err != nil {
 				rows.Close()
 				return scopeRow{}, err
 			}
-			ids[k] = id
+			if live || slices.Contains(keepRoleIDs, id) {
+				ids[k] = id
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -284,8 +290,8 @@ func listPoliciesTx(ctx context.Context, tx pgx.Tx) ([]Policy, error) {
 	// absent from idx and dropped, so its steps are never even asked for.
 	versions, err := tx.Query(ctx,
 		`SELECT `+policyVersionColumns+`
-		   FROM approval_policy_versions
-		  ORDER BY policy_id, version DESC`)
+		   FROM approval_policy_versions v
+		  ORDER BY v.policy_id, v.version DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -359,9 +365,9 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, p.ID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, p.ID)
 		if err != nil {
 			return err
 		}
@@ -437,7 +443,7 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 			return err
 		}
 
-		row, err := resolveScopesTx(ctx, tx, in)
+		row, err := resolveScopesTx(ctx, tx, in, nil)
 		if err != nil {
 			return err
 		}
@@ -587,7 +593,18 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 
 		var row scopeRow
 		if scopes != nil {
-			r, err := resolveScopesTx(ctx, tx, *scopes)
+			// The top version is the open draft, or the sealed version a fork copies.
+			var keep []string
+			if len(scopes.WorkflowRoleKeys) > 0 {
+				if err := tx.QueryRow(ctx,
+					`SELECT scope_workflow_role_ids::text[]
+					   FROM approval_policy_versions
+					  WHERE policy_id = $1 ORDER BY version DESC LIMIT 1`, policyID,
+				).Scan(&keep); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
+			}
+			r, err := resolveScopesTx(ctx, tx, *scopes, keep)
 			if err != nil {
 				return err
 			}
@@ -668,9 +685,9 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 		// GET of the same row.
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, policyID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, policyID)
 		if err != nil {
 			return err
 		}
@@ -948,9 +965,9 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		// is only ever minted as max+1 and sealing mints none.
 		versions, err := tx.Query(ctx,
 			`SELECT `+policyVersionColumns+`
-			   FROM approval_policy_versions
-			  WHERE policy_id = $1
-			  ORDER BY version DESC`, p.ID)
+			   FROM approval_policy_versions v
+			  WHERE v.policy_id = $1
+			  ORDER BY v.version DESC`, p.ID)
 		if err != nil {
 			return err
 		}

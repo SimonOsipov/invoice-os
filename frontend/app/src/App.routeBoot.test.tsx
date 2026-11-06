@@ -992,7 +992,7 @@ const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
 const UNKNOWN_POLICY_ID = 'ffffffff-1111-4111-8111-00000000dead'
 
 function policyWire(id: string, name: string) {
-  return { id, name, scope: 'All invoices', status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
+  return { id, name, scope: 'All invoices', position: 0, scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null }, status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
 }
 
 function okJson(body: unknown) {

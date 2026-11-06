@@ -52,6 +52,8 @@ type PolicyVersion struct {
 	IsActive    bool    `json:"is_active"`
 	PublishedAt *string `json:"published_at"`
 	PublishedBy *string `json:"published_by"`
+	// Scoped: the version carries any scope. The SPA's catch-all lock reads it for the active version.
+	Scoped bool `json:"scoped"`
 }
 
 // AmountBand is a version's scope band; a nil bound is open-ended. Bounds are numeric

@@ -30,7 +30,7 @@ const TYPES = readFileSync(join(SRC, 'types.ts'), 'utf8')
 // typing against the real ctx keeps a rename — or an absent field — from silently passing.
 type PolicyCtx = Pick<
   PlatformCtx,
-  'policies' | 'policiesState' | 'policiesError' | 'refetchPolicies' | 'createPolicy' | 'deletePolicy' | 'savePolicy' | 'publishPolicy' | 'openPolicy' | 'closePolicy'
+  'policies' | 'policiesState' | 'policiesError' | 'refetchPolicies' | 'createPolicy' | 'deletePolicy' | 'reorderPolicies' | 'savePolicy' | 'publishPolicy' | 'openPolicy' | 'closePolicy'
 >
 
 const policyCtx = (over: Partial<PolicyCtx> = {}): PolicyCtx => ({
@@ -40,6 +40,7 @@ const policyCtx = (over: Partial<PolicyCtx> = {}): PolicyCtx => ({
   refetchPolicies: vi.fn(),
   createPolicy: vi.fn(async () => {}),
   deletePolicy: vi.fn(async (_id: string) => {}),
+  reorderPolicies: vi.fn(async (_ids: string[]) => {}),
   savePolicy: vi.fn(async (next: Policy) => next),
   publishPolicy: vi.fn(async (_id: string) => newPolicy()),
   openPolicy: vi.fn(),

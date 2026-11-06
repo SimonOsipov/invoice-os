@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { INVITE_ADMIN_ONLY, invitedMember, MEMBER_ADMIN_ONLY, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
-import type { Policy } from '../lib/workflows'
+import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { InitialsChip } from './MemberParts'
 import { MembersTable } from './MembersTable'
@@ -163,7 +163,8 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no blocked-steps s
   const NAMING_CFO: Policy = {
     id: 'p1',
     name: 'Test policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,

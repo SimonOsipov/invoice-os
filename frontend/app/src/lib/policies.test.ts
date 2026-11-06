@@ -12,6 +12,7 @@ import {
   policyStanding,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
+  reorderApprovalPolicies,
   stepInputsFromNodes,
   toPolicy,
   type PolicyStepWire,
@@ -20,7 +21,7 @@ import {
 } from './policies'
 import type { AuthedFetch } from './portfolio'
 import { seedPolicies } from './policies.fixture'
-import { newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
+import { CATCH_ALL_SCOPES, newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The wire helpers spell every one of the ten Step keys, because the server never omits
@@ -46,6 +47,7 @@ const ver = (version: number, sealed: boolean, isActive: boolean): PolicyVersion
   is_active: isActive,
   published_at: null,
   published_by: null,
+  scoped: false,
 })
 
 const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
@@ -67,7 +69,8 @@ const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
 const policy = (over: Partial<Policy> = {}): Policy => ({
   id: 'p1',
   name: 'Standard approval policy',
-  scope: 'All invoices',
+  position: 0,
+  scopes: CATCH_ALL_SCOPES,
   status: 'draft',
   version: 1,
   activeVersion: null,
@@ -241,19 +244,16 @@ describe('policyStanding / policyInForce (AC-2)', () => {
 // against a mutation that survived the original fourteen.
 
 describe('QA: toPolicy projects every wire field, not only the version pair', () => {
-  it('carries id, name, scope and the step tree straight through', () => {
+  it('carries id, name and the step tree straight through', () => {
     const p = toPolicy(
       wire({
         id: 'pol-7',
         name: 'Capex sign-off',
-        scope: 'Capex & fixed assets',
         steps: [step({ id: 's9', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 24 })],
       }),
     )
     expect(p.id).toBe('pol-7')
     expect(p.name).toBe('Capex sign-off')
-    // Carried verbatim: WF_SCOPE_OPTIONS is the EDITOR's list, not a filter on what may arrive.
-    expect(p.scope).toBe('Capex & fixed assets')
     expect(p.nodes).toHaveLength(1)
     expect((p.nodes[0] as ApprovalNode).role).toBe('cfo')
   })
@@ -648,15 +648,62 @@ function mockFetchRejectingOnce(err: unknown) {
 }
 
 describe('QA: putApprovalPolicyDraft forwards what the caller holds, and projects what comes back', () => {
-  it("sends the policy's own scope, never a hardcoded default", async () => {
-    for (const scope of ['All invoices', 'Capex & fixed assets']) {
-      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
-      await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1', scope }))
-      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-      const sent = JSON.parse(init.body as string) as Record<string, unknown>
-      expect(Object.hasOwn(sent, 'scope'), scope).toBe(true)
-      expect(sent.scope, scope).toBe(scope)
+  it('putApprovalPolicyDraft sends scopes when asked, never the legacy scope', async () => {
+    const scopes = { document_types: ['credit_note', 'debit_note'], entity_ids: [], workflow_role_keys: [], amount_band: { lower: '1000.00', upper: null, currency: 'NGN' } }
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), { sendScopes: true })
+    const body = f.mock.calls[0][1].body as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual(['name', 'scopes', 'steps'])
+    expect(body.scopes).toEqual(scopes)
+  })
+
+  it('putApprovalPolicyDraft sends a bare-dot bound as no bound', async () => {
+    const scopes = { ...CATCH_ALL_SCOPES, amount_band: { lower: '.', upper: '.5', currency: 'NGN' } }
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), { sendScopes: true })
+    expect((f.mock.calls[0][1].body as { scopes: typeof scopes }).scopes.amount_band).toEqual({ lower: null, upper: '.5', currency: 'NGN' })
+  })
+
+  it('toPolicy marks activeScoped from the active version only', () => {
+    const scopedVer = { ...ver(1, true, true), scoped: true }
+    expect(toPolicy(wire({ version: 2, versions: [ver(2, false, false), scopedVer] })).activeScoped).toBe(true)
+    expect(toPolicy(wire({ version: 2, versions: [{ ...ver(2, false, false), scoped: true }, ver(1, true, true)] })).activeScoped).toBe(false)
+  })
+
+  it('putApprovalPolicyDraft omits scopes unless asked', async () => {
+    const scopes = { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] }
+    for (const opts of [undefined, { sendScopes: false }]) {
+      const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+      await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), opts)
+      expect(Object.keys(f.mock.calls[0][1].body as object).sort()).toEqual(['name', 'steps'])
     }
+  })
+
+  it('putApprovalPolicyDraft sends the catch-all as empty arrays and a null band', async () => {
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1' }), { sendScopes: true })
+    expect((f.mock.calls[0][1].body as { scopes: unknown }).scopes).toEqual({ document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null })
+  })
+
+  it('toPolicy carries position and scopes, and no scope', () => {
+    const scopes = { document_types: ['credit_note'], entity_ids: ['e1'], workflow_role_keys: ['r1'], amount_band: { lower: '1.00', upper: '2.00', currency: 'NGN' } }
+    const p = toPolicy(wire({ position: 7, scopes, scope: 'All invoices' }))
+    expect(p.position).toBe(7)
+    expect(p.scopes).toEqual(scopes)
+    expect(Object.hasOwn(p, 'scope')).toBe(false)
+  })
+
+  it('reorderApprovalPolicies puts the order and answers the server\'s list', async () => {
+    const f = vi.fn().mockResolvedValue({ approval_policies: ['b', 'a', 'c'].map((id) => wire({ id })) })
+    const out = await reorderApprovalPolicies(f as unknown as AuthedFetch, wireBase, ['b', 'a', 'c'])
+    expect(f).toHaveBeenCalledWith(`${wireBase}/api/invoice/v1/approval-policies/order`, { method: 'PUT', body: { policy_ids: ['b', 'a', 'c'] } })
+    expect(out.map((p) => p.id)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('reorderApprovalPolicies rejects with the ApiError unchanged', async () => {
+    const boom = new ApiError('http', 'the policy list changed — reload and try again', 409)
+    const f = vi.fn().mockRejectedValue(boom)
+    await expect(reorderApprovalPolicies(f as unknown as AuthedFetch, wireBase, ['a'])).rejects.toBe(boom)
   })
 
   it('projects the saved draft through toPolicy rather than handing back the raw wire', async () => {

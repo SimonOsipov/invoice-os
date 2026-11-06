@@ -3146,7 +3146,7 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
   }
 
   // Each invoice GET stays pending until its resolver runs; log and preview answer at once.
-  function evidenceFetch(events: AuditEvent[], invoiceCreatedAt = '2026-08-17T22:00:00Z') {
+  function evidenceFetch(events: AuditEvent[], invoiceCreatedAt = '2026-08-17T22:00:00Z', page?: AuditResponse['page']) {
     const invoiceCalls: string[] = []
     const gates = new Map<string, (r: MockResponse) => void>()
     const fetchMock = vi.fn((url: string) => {
@@ -3159,7 +3159,7 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
       if (u.pathname.endsWith('/evidence-bundle/preview')) {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(previewBody) })
       }
-      return Promise.resolve(logResponse({ events, total: events.length }))
+      return Promise.resolve(logResponse({ events, total: events.length, ...(page ? { page } : {}) }))
     })
     vi.stubGlobal('fetch', fetchMock)
     const ok = (id: string, created_at = invoiceCreatedAt) =>
@@ -3233,6 +3233,9 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(btn.getAttribute('aria-busy')).toBe('true'))
     expect(document.activeElement).toBe(btn)
+    // jsdom keeps focus on a disabled button, so assert the attribute contract itself.
+    expect(btn.hasAttribute('disabled')).toBe(false)
+    expect(btn.getAttribute('aria-disabled')).toBe('true')
   })
 
   it('auditView_rowButtonExpandedTracksItsDrawerAndFocusReturnsOnClose', async () => {
@@ -3283,8 +3286,72 @@ describe('AuditView row evidence (AUDIT-16-03)', () => {
     await waitFor(() => expect(h.invoiceCalls).toEqual(['inv-1']))
     await expandRow(1)
     expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
+    expect(evButtons()[0].hasAttribute('aria-disabled')).toBe(false)
     await h.ok('inv-1')
     expect(drawer()).toBeNull()
+    expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it('auditView_prefilterChangeDropsAPendingRowRead', async () => {
+    const h = evidenceFetch([subEvent('evt-s', 'inv-1')])
+    const ctxWith = (invoiceId: string | null) =>
+      ({ ...auditCtx(), auditPrefilter: invoiceId ? { invoiceId, invoiceNumber: 'INV-X' } : null }) as unknown as PlatformCtx
+    const { rerender } = render(<AuditView ctx={ctxWith(null)} />)
+    await expandRow()
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls).toEqual(['inv-1']))
+    rerender(<AuditView ctx={ctxWith('inv-x')} />)
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
+    await expandRow()
+    expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it('auditView_filterPopoverChangeDropsAPendingRowRead', async () => {
+    const h = evidenceFetch([subEvent('evt-s', 'inv-1')])
+    render(<AuditView ctx={auditCtx()} />)
+    await expandRow()
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls).toEqual(['inv-1']))
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'narrowed' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(h.fetchMock.mock.calls.some((c) => String(c[0]).includes('q=narrowed'))).toBe(true))
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
+    await expandRow()
+    expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it('auditView_pagerNextDropsAPendingRowRead', async () => {
+    const h = evidenceFetch([subEvent('evt-s', 'inv-1')], undefined, { limit: 25, has_more: true, next_cursor: 'c1' })
+    render(<AuditView ctx={auditCtx()} />)
+    await expandRow()
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls).toEqual(['inv-1']))
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', false))
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
+    // A page change keeps the row expanded, so its button must be idle again.
+    expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it('auditView_pagerPrevDropsAPendingRowRead', async () => {
+    const h = evidenceFetch([subEvent('evt-s', 'inv-1')], undefined, { limit: 25, has_more: true, next_cursor: 'c1' })
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', false))
+    await expandRow()
+    fireEvent.click(evButtons()[0])
+    await waitFor(() => expect(h.invoiceCalls).toEqual(['inv-1']))
+    fireEvent.click(screen.getByTestId('audit-pager-prev'))
+    await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', true))
+    await h.ok('inv-1')
+    expect(drawer()).toBeNull()
+    // A page change keeps the row expanded, so its button must be idle again.
+    expect(evButtons()[0].hasAttribute('aria-busy')).toBe(false)
   })
 
   it('auditView_rowEvidenceFailureShowsAToastAndNoDrawer', async () => {

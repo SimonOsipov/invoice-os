@@ -38,6 +38,7 @@ function builderCtx(over: Record<string, unknown> = {}): PlatformCtx {
     rolesState: 'ready',
     rolesError: null,
     refetchRoles: vi.fn(),
+    refetchRolesInForce: vi.fn(),
     // The four policy fields the ctx gained in APPR-09-03. Present so a reader can never
     // see `undefined` — the double cast below disables property checking, so nothing else
     // would say they are missing.

@@ -1512,6 +1512,8 @@ export interface WorkflowRole {
 
 export interface WorkflowRolesResponse {
   workflow_roles: WorkflowRole[]
+  // Policies in force per role key; absent only when the server's usage read failed.
+  in_force?: Record<string, { id: string; name: string; steps: number; scope: boolean }[]>
 }
 
 export interface WorkflowRoleInput {

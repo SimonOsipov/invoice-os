@@ -49,7 +49,7 @@ paths:
 - `passFrontDoor` seeds a denied consent record on the app origin when none is stored. Pass `consent: 'none'` to see the app notice.
 - `ctl login` passes `consent: 'none'`. It writes no consent record.
 - Stub every HubSpot chat host in `isStubbedHost`. A routed spec never reaches HubSpot.
-- Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
+- Never publish a policy in a topology spec on a seeded tenant. A spec may publish in a workspace it provisions with `provisionRealAccount`. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Drive the approve and reject journey in a topology spec on the shard's restored firm policy. Staff the e2e member into the pending step's workflow role, and restore the seeded holders afterwards.
 - Treat the persona as an axis. Register personas, surfaces and coverage in `e2e/personas.ts`.
 - Grade coverage as `drives` or `nav-only`. Add no `pending` grade.

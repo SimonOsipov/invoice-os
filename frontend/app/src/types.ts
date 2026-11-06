@@ -358,6 +358,7 @@ export type PlatformCtx = {
   rolesState: AsyncStatus
   rolesError: ApiError | null
   refetchRoles: () => void
+  refetchRolesInForce: () => void
   // Policies in force per role; null while loading, failed, or unknown (never read as unused).
   rolesInForce: RolesInForce | null
 

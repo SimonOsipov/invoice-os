@@ -187,6 +187,7 @@ function Harness({
     rolesState: rolesState ?? 'ready',
     rolesError: rolesError ?? null,
     refetchRoles: refetchRoles ?? vi.fn(),
+    refetchRolesInForce: vi.fn(),
     authedFetch: authedFetch ?? noopFetch,
     saveMember: vi.fn(), // the verb the UNWIRED table/drawer still call -- deliberately inert
     dropMember: vi.fn(),

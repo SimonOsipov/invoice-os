@@ -108,7 +108,7 @@ describe('App: the in-force usage', () => {
     await publish()
 
     expect(roleGets.length, 'a publish did not re-read the usage').toBe(3)
-    expect(ctx().rolesInForce, 'an in-flight run must read as unknown, not as the stale count').toBeNull()
+    expect(ctx().rolesInForce, 'the count blanked while the re-run loaded').toEqual(usage('before'))
     await answer(2, { workflow_roles: [cfo], in_force: usage('after') })
 
     expect(ctx().rolesInForce).toEqual(usage('after'))
@@ -125,7 +125,7 @@ describe('App: the in-force usage', () => {
     await act(async () => void (await ctx().deletePolicy('p1')))
 
     expect(roleGets.length, 'a policy delete did not re-read the usage').toBe(3)
-    expect(ctx().rolesInForce, 'an in-flight run must read as unknown').toBeNull()
+    expect(ctx().rolesInForce, 'the count blanked while the re-run loaded').toEqual(usage('before'))
     await answer(2, { workflow_roles: [cfo], in_force: {} })
     expect(ctx().rolesInForce).toEqual({})
     expect(ctx().rolesState).toBe('ready')
@@ -153,6 +153,43 @@ describe('App: the in-force usage', () => {
     await answer(2, { workflow_roles: [cfo], in_force: usage('first') })
 
     expect(ctx().rolesInForce).toEqual(usage('second'))
+  })
+
+  it('the previous count survives every render of a reload, and is replaced by the new answer', async () => {
+    await boot([cfo], usage('before'))
+    seen = []
+
+    await publish()
+    expect(seen.length, 'nothing rendered during the reload, so the loop is vacuous').toBeGreaterThan(0)
+    for (const s of seen) expect(s.rolesInForce).toEqual(usage('before'))
+    await answer(2, { workflow_roles: [cfo], in_force: usage('after') })
+
+    expect(ctx().rolesInForce).toEqual(usage('after'))
+  })
+
+  it('a failed first read is null, and refetchRolesInForce then lands the count', async () => {
+    window.history.replaceState(null, '', '/')
+    const session: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
+    localStorage.setItem(SESSION_KEY, serializeSession(session))
+    stubGateway()
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    await act(async () => {
+      render(<App />)
+    })
+    await waitFor(() => expect(roleGets.length).toBe(2))
+    await act(async () => {
+      roleGets[0].resolve({ workflow_roles: [cfo] })
+      roleGets[1].reject(new Error('gateway down'))
+    })
+    expect(ctx().rolesInForce).toBeNull()
+
+    await act(async () => ctx().refetchRolesInForce())
+    expect(roleGets.length).toBe(3)
+    await answer(2, { workflow_roles: [cfo], in_force: usage('late') })
+
+    expect(ctx().rolesInForce).toEqual(usage('late'))
+    expect(ctx().rolesState).toBe('ready')
   })
 
   it('zero roles stay empty', async () => {

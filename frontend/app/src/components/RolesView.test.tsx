@@ -61,6 +61,7 @@ function Harness({
   membersError = null,
   refetchRoles,
   refetchMembers,
+  refetchRolesInForce,
   renameRole,
 }: {
   members?: Member[]
@@ -74,6 +75,7 @@ function Harness({
   membersError?: ApiError | null
   refetchRoles?: () => void
   refetchMembers?: () => void
+  refetchRolesInForce?: () => void
   renameRole?: () => Promise<void>
 }) {
   const ctx = {
@@ -88,6 +90,7 @@ function Harness({
     rolesState,
     rolesError,
     refetchRoles: refetchRoles ?? vi.fn(),
+    refetchRolesInForce: refetchRolesInForce ?? vi.fn(),
     membersState,
     membersError,
     refetchMembers: refetchMembers ?? vi.fn(),
@@ -190,6 +193,28 @@ describe('AC-2: ErrorState renders rolesError ?? membersError; retry calls the m
     fireEvent.click(screen.getByText('Retry'))
     expect(refetchRoles).toHaveBeenCalledOnce()
     expect(refetchMembers).toHaveBeenCalledOnce()
+  })
+})
+
+describe('APSC-08: a failed usage read is retried', () => {
+  it('the retry that re-runs a failed roles fetch also re-runs a null usage read', () => {
+    const refetchRolesInForce = vi.fn()
+    render(<Harness rolesState="error" rolesError={new ApiError('http', 'down', 503)} rolesInForce={null} refetchRolesInForce={refetchRolesInForce} />)
+    refetchRolesInForce.mockClear()
+
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchRolesInForce).toHaveBeenCalledOnce()
+  })
+
+  it('opening the tab re-runs a null usage read, and leaves a landed one alone', () => {
+    const failed = vi.fn()
+    render(<Harness roles={[role()]} rolesInForce={null} refetchRolesInForce={failed} />)
+    expect(failed).toHaveBeenCalledOnce()
+    cleanup()
+
+    const landed = vi.fn()
+    render(<Harness roles={[role()]} rolesInForce={{}} refetchRolesInForce={landed} />)
+    expect(landed).not.toHaveBeenCalled()
   })
 })
 

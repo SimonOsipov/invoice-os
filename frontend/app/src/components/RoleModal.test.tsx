@@ -49,6 +49,7 @@ function ctxWith(over: Record<string, unknown> = {}) {
     staffRole: vi.fn().mockResolvedValue(role()),
     deleteRole: vi.fn().mockResolvedValue(undefined),
     refetchRoles: vi.fn(),
+    refetchRolesInForce: vi.fn(),
     ...over,
   } as unknown as PlatformCtx
 }
@@ -235,6 +236,21 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(items.map((li) => li.textContent)).toEqual(['Credit notes', 'Big invoices'])
     expect(onClose).not.toHaveBeenCalled()
     expect(onFlash).not.toHaveBeenCalled()
+  })
+
+  it('a 409 refusal re-reads the usage; any other refusal does not', async () => {
+    const refetchRolesInForce = vi.fn()
+    const deleteRole = vi.fn().mockRejectedValue(conflict(['Credit notes']))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole, refetchRolesInForce })
+    await refuseDelete(deleteRole)
+    expect(refetchRolesInForce).toHaveBeenCalledOnce()
+    cleanup()
+
+    const other = vi.fn()
+    const notFound = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404))
+    renderModal({ mode: 'edit', role: role() }, { deleteRole: notFound, refetchRolesInForce: other })
+    await refuseDelete(notFound)
+    expect(other).not.toHaveBeenCalled()
   })
 
   it('a 409 refusal with many policies renders every name as text', async () => {

@@ -154,6 +154,8 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     } catch (err) {
       setWriteError(toApiError(err).message)
       setWriteErrorPolicies(inUsePolicyNames(err))
+      // The refusal means the card's count is stale.
+      if (toApiError(err).status === 409) ctx.refetchRolesInForce()
     } finally {
       setSubmitting(false)
     }

@@ -81,7 +81,13 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   const retry = useCallback(() => {
     if (ctx.rolesState === 'error') ctx.refetchRoles()
     if (ctx.membersState === 'error') ctx.refetchMembers()
-  }, [ctx.rolesState, ctx.membersState, ctx.refetchRoles, ctx.refetchMembers])
+    if (ctx.rolesInForce === null) ctx.refetchRolesInForce()
+  }, [ctx.rolesState, ctx.membersState, ctx.rolesInForce, ctx.refetchRoles, ctx.refetchMembers, ctx.refetchRolesInForce])
+  // The usage read has no error UI, so a failed one is retried on every visit to the tab.
+  useEffect(() => {
+    if (ctx.rolesInForce === null) ctx.refetchRolesInForce()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const unassigned = unassignedRoles(roles, members)
   const shown = filterRoles(roles, query)
   const searching = query.trim() !== ''

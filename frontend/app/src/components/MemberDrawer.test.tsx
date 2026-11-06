@@ -278,6 +278,7 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
           rolesState: 'error',
           rolesError: new ApiError('http', 'roles gateway is down', 503),
           refetchRoles: vi.fn(),
+          refetchRolesInForce: vi.fn(),
         })}
         memberId="u1"
         onClose={vi.fn()}

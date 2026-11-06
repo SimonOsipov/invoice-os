@@ -544,6 +544,12 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     () => (base ? listRolesInForce(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
   )
+  // useAsync clears data on every start; keep the last good usage across a re-run so the
+  // card line and an open delete confirm do not blank. A failed run reads null.
+  const lastInForce = useRef<RolesInForce | null>(null)
+  if (inForceAsync.status === 'ready') lastInForce.current = inForceAsync.data
+  else if (inForceAsync.status !== 'loading') lastInForce.current = null
+  const rolesInForce = lastInForce.current
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -1804,7 +1810,8 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     rolesState,
     rolesError: rolesAsync.error,
     refetchRoles: rolesAsync.run,
-    rolesInForce: inForceAsync.status === 'ready' ? inForceAsync.data : null,
+    refetchRolesInForce: inForceAsync.run,
+    rolesInForce,
     entityId,
     pickedFiles,
     // Derived, never its own state: resetImport clears the selection and the kind goes

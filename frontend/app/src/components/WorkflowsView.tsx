@@ -116,8 +116,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {/* Roster arm only: `0 POLICIES` beside a spinner or beside ErrorState is the same
-          "an errored fetch reads as an empty workspace" claim the ladder exists to kill. */}
+      {/* Roster arm only, so a loading or errored fetch never reads as 0 policies. */}
       {surface === 'roster' && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
           <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>

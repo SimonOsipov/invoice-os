@@ -211,8 +211,8 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 // setRoleMembersRequest is the PUT /v1/workflow-roles/{key}/members wire body — an
 // object, not a bare array, so the SPA can PUT a whole Role and only members is read.
 //
-// *[]string: {} and {"members":null} must be a 400, while {"members":[]} is a legal
-// unstaff. A plain []string collapses the first two into the third.
+// *[]string: {} and {"members":null} must be a 400, while {"members":[]} is a valid
+// body. A plain []string collapses the first two into the third.
 type setRoleMembersRequest struct {
 	Members *[]string `json:"members"`
 }

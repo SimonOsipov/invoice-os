@@ -510,8 +510,12 @@ describe('APSC-11: a refused staffing save', () => {
     const { staffRole } = await refuseSave({ err: refusal(['INV-1']) })
     expect(screen.getByTestId('role-modal-error-invoices')).toBeTruthy()
 
-    staffRole.mockRejectedValueOnce(new ApiError('http', 'workflow role not found', 404))
+    let failSecond: (e: unknown) => void = () => {}
+    staffRole.mockReturnValueOnce(new Promise((_, reject) => { failSecond = reject }))
     fireEvent.click(screen.getByTestId('role-modal-save'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByTestId('role-modal-error-invoices'), 'cleared as the next save starts').toBeNull()
+    failSecond(new ApiError('http', 'workflow role not found', 404))
     await new Promise((resolve) => setTimeout(resolve, 0))
     await new Promise((resolve) => setTimeout(resolve, 0))
 

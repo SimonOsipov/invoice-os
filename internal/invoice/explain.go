@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,9 +31,19 @@ Return a JSON object with exactly these keys.
 
 var explainSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["explanation","fix_field","fix_value"],"properties":{"explanation":{"type":["string","null"]},"fix_field":{"type":["string","null"]},"fix_value":{"type":["string","null"]}}}`)
 
+// explainSubject is the violation the model reads: a bare line path with a judged field becomes the field path.
+func explainSubject(v Violation) Violation {
+	if _, f, isLine := parseLinePath(v.Path); isLine && f == "" && v.Field != "" {
+		v.Path += "." + v.Field
+	}
+	v.Field = ""
+	return v
+}
+
 // explainPromptText is the user message of one Explain call.
 // ceiling: whole payload per call; send only the named line above ~200 lines
 func explainPromptText(v Violation, payload map[string]any) string {
+	v = explainSubject(v)
 	return explainViolationIntro + "\n" + explainJSON(v) + "\n\n" + explainInvoiceIntro + "\n" + explainJSON(payload)
 }
 
@@ -109,20 +118,11 @@ func headerMBSPath(key string) string {
 	return key
 }
 
-// explainBareLineFields are the five legacy line fields; Extract has grown past them.
-var explainBareLineFields = []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
-
-// explainTarget binds the fix to the violation path; the model only picks the field of a bare line path, from the five legacy line fields.
-func explainTarget(path string, lineCount int, modelField string) (field string, line int, ok bool) {
+// explainTarget binds the fix to the violation path; a bare line path has no target.
+func explainTarget(path string, lineCount int, _ string) (field string, line int, ok bool) {
 	if n, f, isLine := parseLinePath(path); isLine {
-		if n > lineCount {
+		if n > lineCount || f == "" {
 			return "", 0, false
-		}
-		if f == "" {
-			if !slices.Contains(explainBareLineFields, modelField) {
-				return "", 0, false
-			}
-			f = modelField
 		}
 		if _, ok := explainField(f, true); !ok {
 			return "", 0, false
@@ -205,6 +205,7 @@ func explainCurrent(payload map[string]any, field string, line int) *string {
 
 // guardExplanation keeps only the part of a model answer that is grounded, path-bound and typed.
 func guardExplanation(v Violation, payload map[string]any, ans map[string]any) ExplainResult {
+	v = explainSubject(v)
 	text, _ := ans["explanation"].(string)
 	if strings.TrimSpace(text) == "" || utf8.RuneCountInString(text) > explainMaxRunes ||
 		linkRe.MatchString(text) || !explainCitationOK(text, v.Message) {
@@ -212,9 +213,8 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 	}
 	res := ExplainResult{Status: "ok", Explanation: &text}
 	lines, _ := payload["line_items"].([]any)
-	modelField, _ := ans["fix_field"].(string)
 	value, isStr := ans["fix_value"].(string)
-	field, line, ok := explainTarget(v.Path, len(lines), modelField)
+	field, line, ok := explainTarget(v.Path, len(lines), "")
 	if !ok || !isStr {
 		return res
 	}

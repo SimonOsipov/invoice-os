@@ -13,7 +13,6 @@ MODELS = ["google/gemini-3.5-flash-lite"]
 COST_CAP = float(os.environ.get("COST_CAP", "0.5"))
 OUT = os.path.join(DATA, "explain_answers.jsonl")
 CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explain_cases.json")
-LINE_FIELDS = ["description", "quantity", "unit_price", "line_total", "line_tax"]
 CITATION = re.compile(r"\b(?:acts?|laws?|regulations?|sections?|schedule|circular|gazette|statutes?|decrees?|directives?|clauses?|penalty|penalties)\b", re.I)
 
 SYSTEM = """You explain one failed compliance rule on one Nigerian e-invoice to the person fixing it, and you may suggest one corrected value.
@@ -107,13 +106,21 @@ def schema_valid(a):
             and all(v is None or isinstance(v, str) for v in a.values()))
 
 
+def effective_path(violation):
+    """Mirror explainSubject: a bare line path with a judged field becomes the field path."""
+    path = violation.get("path", "")
+    if re.fullmatch(r"line_items\[\d+\]", path) and violation.get("field"):
+        return path + "." + violation["field"]
+    return path
+
+
 def field_allowed(path, field):
     """D6: the fix target comes from the path; a field the path does not allow is dropped by the server."""
     if field is None:
         return True
     m = re.fullmatch(r"line_items\[\d+\](?:\.(\w+))?", path)
     if m:
-        return field == m.group(1) if m.group(1) else field in LINE_FIELDS
+        return m.group(1) is not None and field == m.group(1)
     return path != "line_items" and field == path.rsplit(".", 1)[-1]
 
 
@@ -142,7 +149,7 @@ def score():
         hits = sorted({h.lower() for h in CITATION.findall(a.get("explanation") or "")
                        if not re.search(r"\b" + re.escape(h) + r"\b", c["violation"]["message"], re.I)}) if ok else []
         want_value = ("-" if "want_value" not in c else "yes" if same_value(value, c["want_value"]) else "NO")
-        print(f'{r["case"]:34} {r["run"]:>3} {"yes" if ok else "NO":6} {"yes" if field_allowed(c["violation"].get("path", ""), field) else "NO":5} '
+        print(f'{r["case"]:34} {r["run"]:>3} {"yes" if ok else "NO":6} {"yes" if field_allowed(effective_path(c["violation"]), field) else "NO":5} '
               f'{"yes" if field == c["want_field"] else "NO":10} {want_value:6} {",".join(hits) or "-"}')
 
 

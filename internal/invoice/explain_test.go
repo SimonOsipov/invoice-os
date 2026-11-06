@@ -214,14 +214,55 @@ func TestExplainTarget_LineFieldPath(t *testing.T) {
 	}
 }
 
-func TestExplainTarget_BareLineUsesModelField(t *testing.T) {
-	if f, n, ok := explainTarget("line_items[2]", 3, "unit_price"); !ok || f != "unit_price" || n != 2 {
-		t.Errorf("got (%q, %d, %v)", f, n, ok)
-	}
-	for _, model := range []string{"hsn_code", "tax_percent", "base_quantity", "", "buyer_tin"} {
+func TestExplainTarget_BareLineHasNoFix(t *testing.T) {
+	for _, model := range []string{"unit_price", "line_total", ""} {
 		if _, _, ok := explainTarget("line_items[2]", 3, model); ok {
 			t.Errorf("model field %q: want no target", model)
 		}
+	}
+}
+
+func TestExplainSubject_Shapes(t *testing.T) {
+	for _, tc := range []struct{ name, path, field, want string }{
+		{"bare with field", "line_items[2]", "unit_price", "line_items[2].unit_price"},
+		{"field path keeps its path", "line_items[2].line_total", "unit_price", "line_items[2].line_total"},
+		{"header path", "vat", "unit_price", "vat"},
+		{"bare without field", "line_items[2]", "", "line_items[2]"},
+	} {
+		got := explainSubject(Violation{Path: tc.path, Field: tc.field})
+		if got.Path != tc.want || got.Field != "" {
+			t.Errorf("%s: got (%q, %q), want (%q, \"\")", tc.name, got.Path, got.Field, tc.want)
+		}
+	}
+}
+
+func TestExplainPromptText_BareLineNamesTheJudgedField(t *testing.T) {
+	got := explainPromptText(Violation{RuleKey: "r", Message: "m", Path: "line_items[2]", Field: "unit_price"}, map[string]any{})
+	if !strings.Contains(got, `"path":"line_items[2].unit_price"`) || strings.Contains(got, `"field"`) {
+		t.Errorf("text = %s, want the field path and no field key", got)
+	}
+}
+
+func TestGuardExplanation_JudgedFieldOverridesTheModelField(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	if got.Fix == nil || got.Fix.Field != "unit_price" || got.Fix.Line == nil || *got.Fix.Line != 2 ||
+		got.Fix.Current == nil || *got.Fix.Current != "-5.00" || got.Fix.Value != "5.00" {
+		t.Errorf("fix = %+v, want unit_price on line 2, -5.00 -> 5.00", got.Fix)
+	}
+}
+
+func TestGuardExplanation_BareLineWithoutJudgedFieldHasNoFix(t *testing.T) {
+	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]"}, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
+	}
+}
+
+func TestGuardExplanation_JudgedFieldNotEditableIsNoFix(t *testing.T) {
+	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]", Field: "id"}, explainPayload(), explainAnswer("Why.", "id", "x"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
 	}
 }
 
@@ -350,7 +391,7 @@ func TestGuardExplanation_EqualValueIsNoFix(t *testing.T) {
 }
 
 func TestGuardExplanation_FixCarriesCurrentAndLabel(t *testing.T) {
-	v := Violation{Message: "m", Path: "line_items[2]"}
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
 	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
 	b, _ := json.Marshal(got.Fix)
 	want := `{"field":"unit_price","label":"Unit price","line":2,"current":"-5.00","value":"5.00"}`
@@ -505,7 +546,8 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 	var cases []struct {
 		ID        string `json:"id"`
 		Violation struct {
-			Path string `json:"path"`
+			Path  string `json:"path"`
+			Field string `json:"field"`
 		} `json:"violation"`
 		Invoice struct {
 			LineItems []json.RawMessage `json:"line_items"`
@@ -522,7 +564,7 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 		if c.WantField == nil {
 			continue
 		}
-		field, _, ok := explainTarget(c.Violation.Path, len(c.Invoice.LineItems), *c.WantField)
+		field, _, ok := explainTarget(explainSubject(Violation{Path: c.Violation.Path, Field: c.Violation.Field}).Path, len(c.Invoice.LineItems), *c.WantField)
 		// want_field is the name the model returns: the last path segment for a header path.
 		_, last, _ := strings.Cut(headerMBSPath(field), ".")
 		if last == "" {

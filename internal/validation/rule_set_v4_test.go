@@ -518,6 +518,11 @@ func TestV4_LineCostNamesTheLine(t *testing.T) {
 	if got, want := pathsOf(vs, "line-cost-non-negative"), []string{"line_items[1]", "line_items[3]"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("line-cost-non-negative paths = %q, want %q", got, want)
 	}
+	for _, v := range vs {
+		if v.RuleKey == "line-cost-non-negative" && v.Field != "unit_price" {
+			t.Errorf("line-cost-non-negative field = %q, want unit_price", v.Field)
+		}
+	}
 	if got, want := pathsOf(vs, "currency-allowed"), []string{"currency"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("currency-allowed paths = %q, want %q", got, want)
 	}

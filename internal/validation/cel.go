@@ -144,6 +144,7 @@ func celLineViolations(expr string, p Payload, r Rule) []Violation {
 	if !isList {
 		return nil
 	}
+	field := judgedField(a.NativeRep().Expr(), v)
 	var out []Violation
 	for i, el := range els {
 		res, _, err := prg.Eval(map[string]any{v: el})
@@ -153,9 +154,69 @@ func celLineViolations(expr string, p Payload, r Rule) []Violation {
 		if b, isBool := res.Value().(bool); isBool && !b {
 			out = append(out, *violation(r))
 			out[len(out)-1].Path = linePath(r.Target, i+1, "")
+			out[len(out)-1].Field = field
 		}
 	}
 	return out
+}
+
+// judgedField returns the one field name selected from v in e, or "" when v
+// is used any other way (bare, indexed, passed to a call) or zero or several
+// names are read.
+func judgedField(e ast.Expr, v string) string {
+	names := map[string]bool{}
+	other := false
+	var walk func(ast.Expr, bool)
+	walk = func(e ast.Expr, selectOperand bool) {
+		switch e.Kind() {
+		case ast.IdentKind:
+			if e.AsIdent() == v && !selectOperand {
+				other = true
+			}
+		case ast.SelectKind:
+			s := e.AsSelect()
+			if op := s.Operand(); op.Kind() == ast.IdentKind && op.AsIdent() == v {
+				names[s.FieldName()] = true
+				return
+			}
+			walk(s.Operand(), false)
+		case ast.CallKind:
+			c := e.AsCall()
+			if c.IsMemberFunction() {
+				walk(c.Target(), false)
+			}
+			for _, a := range c.Args() {
+				walk(a, false)
+			}
+		case ast.ListKind:
+			for _, x := range e.AsList().Elements() {
+				walk(x, false)
+			}
+		case ast.MapKind:
+			for _, en := range e.AsMap().Entries() {
+				me := en.AsMapEntry()
+				walk(me.Key(), false)
+				walk(me.Value(), false)
+			}
+		case ast.StructKind:
+			for _, f := range e.AsStruct().Fields() {
+				walk(f.AsStructField().Value(), false)
+			}
+		case ast.ComprehensionKind:
+			c := e.AsComprehension()
+			for _, x := range []ast.Expr{c.IterRange(), c.AccuInit(), c.LoopCondition(), c.LoopStep(), c.Result()} {
+				walk(x, false)
+			}
+		}
+	}
+	walk(e, false)
+	if other || len(names) != 1 {
+		return ""
+	}
+	for n := range names {
+		return n
+	}
+	return ""
 }
 
 // elementWiseBody matches `[!has(invoice.T) ||] invoice.T.all(v, body)` on a

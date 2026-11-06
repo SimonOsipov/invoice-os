@@ -109,8 +109,10 @@ type Violation struct {
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
 	Path     string   `json:"path,omitempty"` // target, or <list>[N] for a line
-	Expected *string  `json:"expected,omitempty"`
-	Actual   *string  `json:"actual,omitempty"`
+	// Field is the one field of the line a per-line cel rule judged; set only with a bare <list>[N] path.
+	Field    string  `json:"field,omitempty"`
+	Expected *string `json:"expected,omitempty"`
+	Actual   *string `json:"actual,omitempty"`
 }
 
 // Result is the validation response body: the rule-set version actually

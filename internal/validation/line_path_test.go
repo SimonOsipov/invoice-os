@@ -294,3 +294,67 @@ func TestCEL_EvalReturnsFirstLineViolation(t *testing.T) {
 		t.Fatalf("got %+v, %v", v, err)
 	}
 }
+
+func wantFields(t *testing.T, vs []Violation, want ...string) {
+	t.Helper()
+	got := []string{}
+	for _, v := range vs {
+		got = append(got, v.Field)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fields = %q, want %q", got, want)
+	}
+}
+
+func TestCEL_BareLineCarriesTheJudgedField(t *testing.T) {
+	vs := mustLines(t, linesPayload(price(-1.0), price(5.0), price(-2.0)), celRule("line-cost-non-negative", "line_items", lineCostExpr))
+	wantPaths(t, vs, "line_items[1]", "line_items[3]")
+	wantFields(t, vs, "unit_price", "unit_price")
+}
+
+func TestCEL_JudgedFieldCountsHas(t *testing.T) {
+	expr := "!has(invoice.line_items) || invoice.line_items.all(x, has(x.quantity) && type(x.quantity) == double && x.quantity > 0.0)"
+	vs := mustLines(t, linesPayload(map[string]any{"quantity": 1.0}, map[string]any{"quantity": 0.0}), celRule("k", "line_items", expr))
+	wantPaths(t, vs, "line_items[2]")
+	wantFields(t, vs, "quantity")
+}
+
+func TestCEL_TwoFieldBodyHasNoJudgedField(t *testing.T) {
+	expr := "invoice.line_items.all(x, (has(x.hsn_code) && x.hsn_code != '') || (has(x.isic_code) && x.isic_code != ''))"
+	vs := mustLines(t, linesPayload(map[string]any{}), celRule("k", "line_items", expr))
+	wantPaths(t, vs, "line_items[1]")
+	wantFields(t, vs, "")
+}
+
+func TestCEL_BareFallbackHasNoJudgedField(t *testing.T) {
+	r := celRule("k", "line_items", "invoice.line_items[0].unit_price >= 0.0")
+	vs := mustLines(t, linesPayload(price(-1.0), price(5.0)), r)
+	wantPaths(t, vs, "line_items")
+	wantFields(t, vs, "")
+}
+
+func TestViolation_EmptyFieldIsOmitted(t *testing.T) {
+	empty, _ := json.Marshal(Violation{RuleKey: "k"})
+	if strings.Contains(string(empty), `"field"`) {
+		t.Fatalf("empty field on the wire: %s", empty)
+	}
+	set, _ := json.Marshal(Violation{RuleKey: "k", Field: "unit_price"})
+	if !strings.Contains(string(set), `"field":"unit_price"`) {
+		t.Fatalf("field missing: %s", set)
+	}
+}
+
+func TestCEL_BareIterationVariableHasNoJudgedField(t *testing.T) {
+	for _, body := range []string{`x["unit_price"] >= 0.0`, `size(x) > 0 && x.unit_price >= 0.0`} {
+		vs := mustLines(t, linesPayload(price(-1.0)), celRule("k", "line_items", "invoice.line_items.all(x, "+body+")"))
+		wantPaths(t, vs, "line_items[1]")
+		wantFields(t, vs, "")
+	}
+}
+
+func TestCEL_HasOfOneFieldAndTestOfAnotherHasNoJudgedField(t *testing.T) {
+	expr := "invoice.line_items.all(x, !has(x.tax_category) || (has(x.tax_percent) && x.tax_percent >= 0.0))"
+	vs := mustLines(t, linesPayload(map[string]any{"tax_category": "S"}), celRule("k", "line_items", expr))
+	wantPaths(t, vs, "line_items[1]")
+	wantFields(t, vs, "")
+}

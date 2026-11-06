@@ -446,7 +446,7 @@ test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at ever
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Every value D14 names, read from one Cookie choices row.
+// Computed values of one Cookie choices row.
 async function readCookieRow(row: Locator) {
   const own = await row.evaluate((el) => {
     const cs = getComputedStyle(el)

@@ -230,7 +230,13 @@ test('blog consent: Cookie choices stays in view on a short viewport', async ({ 
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
   await seedConsent(page, true)
   await openBlog(page, '/', false)
-  const c = await rectOf(page.locator('aside').getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
+  const aside = page.locator('aside')
+  // Seeded nav may fit at 600px, so assert the structure that keeps the row pinned instead of overflow.
+  await expect(aside.locator('nav'), 'the sidebar has one nav').toHaveCount(1)
+  await expect(aside.locator('nav').getByRole('button', { name: 'Cookie choices' }), 'the row is inside the scrolling nav').toHaveCount(0)
+  const nav = await rectOf(aside.locator('nav'), 'the nav')
+  const c = await rectOf(aside.getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
+  expect(c.y, 'Cookie choices starts above the nav bottom').toBeGreaterThanOrEqual(nav.y + nav.height - SLACK_PX)
   expect(enclosesRect({ x: 0, y: 0, width, height: 600 }, c, SLACK_PX), 'Cookie choices leaves the 600px viewport').toBe(true)
 })
 

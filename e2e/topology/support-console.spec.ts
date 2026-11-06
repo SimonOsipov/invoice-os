@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { apiBase, createEntity, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping, type AuditEvent, type StaffAccount } from '../api/client'
+import { apiBase, createEntity, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, registerFormAccount, signInSession, suggestMapping, type AuditEvent, type StaffAccount } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildOversizedCellCsv } from '../importFixtures'
 import { argosOn, shoot } from '../argos'
@@ -505,9 +505,18 @@ async function rectsOfFirst(page: Page, loc: Locator, cap: number, what: string)
   return out
 }
 
-async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
+// Armed before the nav click: the screen is compared with the response it rendered, not a later live read.
+const armTenants = (page: Page): Promise<LiveTenant[]> =>
+  page
+    .waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_TENANTS, { timeout: 30_000 })
+    .then(async (res) => {
+      expect(res.status(), 'tenants read status').toBe(200)
+      return ((await res.json()) as { tenants: LiveTenant[] }).tenants
+    })
+
+async function tenantsReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
+  const rendered = await (armed as Promise<LiveTenant[]>)
   const mn = mainOf(page)
-  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
   const house = tenantRow(page, HOUSE_TENANT_ID)
   const demo2222 = tenantRow(page, DEMO_2222_ID)
   await expect(house, 'the house tenant row has loaded').toBeVisible()
@@ -516,16 +525,25 @@ async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   const demoTag = (row: Locator): Locator => row.getByText('DEMO', { exact: true })
   await expect(demoTag(house)).toBeVisible()
   await expect(demoTag(demo2222)).toBeVisible()
-  const plain = live.find((t) => !t.demo)
-  expect(plain, 'the live read holds a non-demo tenant').toBeDefined()
+  const plain = rendered.find((t) => !t.demo)
+  expect(plain, 'the rendered response holds a non-demo tenant').toBeDefined()
   const plainRow = tenantRow(page, plain!.id)
   await expect(plainRow).toBeVisible()
   await expect(demoTag(plainRow)).toHaveCount(0)
+  expect(rendered.length, 'the rendered response holds tenants').toBeGreaterThan(0)
+  await expect(mn.locator('button[data-tenant-id]'), 'one row per tenant of the rendered response').toHaveCount(rendered.length)
 
-  const row2222 = live.find((t) => t.id === DEMO_2222_ID)
-  expect(row2222, 'the live read holds the 2222 tenant').toBeDefined()
+  const row2222 = rendered.find((t) => t.id === DEMO_2222_ID)
+  expect(row2222, 'the rendered response holds the 2222 tenant').toBeDefined()
   const line = `${kindText(row2222!.kind)} · ${row2222!.active_members} active · ${row2222!.invoice_count} invoices`
   await expect(demo2222.getByText(line, { exact: true })).toBeVisible()
+
+  // A parallel shard's tenant lands after the screen read, before the live read (BUG-110): the list only grows.
+  const forced = await registerFormAccount('bug110')
+  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
+  expect(live.find((t) => t.name === forced.account.workspaceName), 'the forced tenant is in the live read').toBeDefined()
+  const liveIds = new Set(live.map((t) => t.id))
+  for (const t of rendered) expect(liveIds.has(t.id), `rendered tenant ${t.id} is in the live read`).toBe(true)
 
   const search = mn.getByLabel('Search tenants')
   await search.fill(HOUSE_NAME)
@@ -2112,6 +2130,7 @@ const SCREENS: Screen[] = [
     nav: 'Tenants',
     h1: 'Tenants',
     rowUp: 1,
+    arm: armTenants,
     reads: tenantsReads,
     layout: tenantsLayout,
     after: viewJobsLands,

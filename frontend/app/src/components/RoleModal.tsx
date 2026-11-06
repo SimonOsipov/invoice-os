@@ -19,6 +19,8 @@ import {
   deletedNotice,
   deleteRoleConfirm,
   deleteRoleConfirmUnknownUsage,
+  draftSteps,
+  inUseInvoices,
   inUsePolicyNames,
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
@@ -30,7 +32,7 @@ import {
   pickerMembers,
   pickerSelectionCount,
   savedNotice,
-  steps,
+  summary,
   type Role,
 } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
@@ -84,6 +86,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   const [submitting, setSubmitting] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
   const [writeErrorPolicies, setWriteErrorPolicies] = useState<string[]>([])
+  const [writeErrorInvoices, setWriteErrorInvoices] = useState<{ numbers: string[]; total: number }>({ numbers: [], total: 0 })
 
   // AC-7: a write in flight must not be closed out from under by any route, X or Escape included.
   const closeIfIdle = useCallback(() => {
@@ -101,9 +104,8 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // has no row for, which `selected.length` above would otherwise count with no way to untick.
   const hiddenSelected = pickerHiddenAmongSelected(selected, ctx.members)
   const canSave = canSaveRole(name)
-  // `steps` off an unlanded policies fetch reads as "used nowhere" — the [D-BUILDER-GUARD]
-  // class of bug. `membersSurface`, not `rolesSurface`: that one takes two statuses and is
-  // shared by two views, so folding policies in would be a new predicate.
+  // Only the draft warning reads the policies fetch; an unlanded fetch claims no draft.
+  // `membersSurface`, not `rolesSurface`: that one takes two statuses and is shared by two views.
   const policiesSurface = membersSurface(ctx.policiesState)
   const policiesLanded = policiesSurface !== 'loading' && policiesSurface !== 'error'
 
@@ -119,6 +121,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     setSubmitting(true)
     setWriteError(null)
     setWriteErrorPolicies([])
+    setWriteErrorInvoices({ numbers: [], total: 0 })
     try {
       if (role) {
         // Two independent verbs, fired only for what actually changed — a rename-only edit
@@ -154,6 +157,9 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     } catch (err) {
       setWriteError(toApiError(err).message)
       setWriteErrorPolicies(inUsePolicyNames(err))
+      setWriteErrorInvoices(inUseInvoices(err))
+      // Only a refusal that names policies means the card's count is stale; an open-run refusal leaves in_force unchanged.
+      if (toApiError(err).status === 409 && inUsePolicyNames(err).length > 0) ctx.refetchRolesInForce()
     } finally {
       setSubmitting(false)
     }
@@ -326,7 +332,9 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               style={{ marginTop: 14, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
             >
               <p style={{ margin: '0 0 10px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>
-                {policiesLanded ? deleteRoleConfirm(role.title, steps(ctx.policies, role.key)) : deleteRoleConfirmUnknownUsage(role.title)}
+                {ctx.rolesInForce
+                  ? deleteRoleConfirm(role.title, summary(ctx.rolesInForce[role.key]), policiesLanded ? draftSteps(ctx.policies, role.key) : 0)
+                  : deleteRoleConfirmUnknownUsage(role.title)}
               </p>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
@@ -368,6 +376,16 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                   {writeErrorPolicies.map((n, i) => (
                     <li key={i}>{n}</li>
                   ))}
+                </ul>
+              )}
+              {writeErrorInvoices.numbers.length > 0 && (
+                <ul data-testid="role-modal-error-invoices" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {writeErrorInvoices.numbers.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                  {writeErrorInvoices.total > writeErrorInvoices.numbers.length && (
+                    <li data-testid="role-modal-error-invoices-more">and {writeErrorInvoices.total - writeErrorInvoices.numbers.length} more</li>
+                  )}
                 </ul>
               )}
             </div>

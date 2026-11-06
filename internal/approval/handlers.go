@@ -19,6 +19,8 @@ import (
 // rolesResponse is the GET /v1/workflow-roles body.
 type rolesResponse struct {
 	WorkflowRoles []Role `json:"workflow_roles"`
+	// InForce is omitted, not {}, when the usage read failed: {} would claim nothing is in force.
+	InForce *map[string][]RoleUse `json:"in_force,omitempty"`
 }
 
 // normalise fills a nil Members: a nil []T with no omitempty serialises as null, and
@@ -32,7 +34,7 @@ func normalise(r Role) Role {
 
 // ListRolesHandler returns GET /v1/workflow-roles. No access-role gate — any caller
 // the request seam admits may list, the same as GET /v1/memberships.
-func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
+func ListRolesHandler(list RolesLister, usage RoleUsageLister, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -55,7 +57,17 @@ func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
 		for _, role := range roles {
 			out = append(out, normalise(role))
 		}
-		writeJSON(w, http.StatusOK, rolesResponse{WorkflowRoles: out})
+		resp := rolesResponse{WorkflowRoles: out}
+		inForce, err := usage(r.Context())
+		if err != nil {
+			log.ErrorContext(r.Context(), "approval: list workflow role usage", slog.Any("err", err))
+		} else {
+			if inForce == nil {
+				inForce = map[string][]RoleUse{}
+			}
+			resp.InForce = &inForce
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -142,14 +154,17 @@ func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// roleInUseResponse is the DELETE 409 body: the sentence plus the policies that name the role.
+// roleInUseResponse is the DELETE 409 body: the sentence, the policies that name the role,
+// and, when an open run waits on it, the invoices (capped) with their full count.
 type roleInUseResponse struct {
-	Error    string      `json:"error"`
-	Policies []PolicyRef `json:"policies"`
+	Error         string       `json:"error"`
+	Policies      []PolicyRef  `json:"policies"`
+	Invoices      []InvoiceRef `json:"invoices,omitempty"`
+	InvoicesTotal int          `json:"invoices_total,omitempty"`
 }
 
 // DeleteRoleHandler returns DELETE /v1/workflow-roles/{key}: identity (401) -> path key
-// -> soft delete -> 200, or 409 with the policies that name the role. No body is read at all. Its `members` is [] because a deleted
+// -> soft delete -> 200, or 409 with the policies and invoices that hold the role. No body is read at all. Its `members` is [] because a deleted
 // role has no addressable holders — that reads as "unstaffed", not "not reported", which
 // is safe only while the SPA's removeRole drops the card without reading the body.
 func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
@@ -165,12 +180,16 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 		role, err := del(r.Context(), r.PathValue("key"))
 		if err != nil {
 			if errors.Is(err, ErrRoleInUse) {
-				policies := []PolicyRef{}
+				resp := roleInUseResponse{Error: roleInUseMessage, Policies: []PolicyRef{}}
 				var inUse *roleInUse
 				if errors.As(err, &inUse) {
-					policies = inUse.policies
+					resp.Error = inUse.message()
+					resp.Invoices, resp.InvoicesTotal = inUse.invoices, inUse.invoicesTotal
+					if inUse.policies != nil {
+						resp.Policies = inUse.policies
+					}
 				}
-				writeJSON(w, http.StatusConflict, roleInUseResponse{Error: roleInUseMessage, Policies: policies})
+				writeJSON(w, http.StatusConflict, resp)
 				return
 			}
 			status, msg := statusForErr(err)

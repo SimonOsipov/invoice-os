@@ -268,7 +268,7 @@ func main() {
 	// compiles and fails only at the first publish/reject — TestMain_WiresTheStoreCollaborators
 	// guards it.
 	roleStore := approval.NewStore(pool, invoice.FingerprintTx, invoice.DemoteApprovalRejectedTx)
-	app.Mux.HandleFunc("GET /v1/workflow-roles", approval.ListRolesHandler(roleStore.ListRoles, app.Logger))
+	app.Mux.HandleFunc("GET /v1/workflow-roles", approval.ListRolesHandler(roleStore.ListRoles, roleStore.ListRoleUsage, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workflow-roles", approval.CreateRoleHandler(roleStore.CreateRole, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/workflow-roles/{key}", approval.UpdateRoleHandler(roleStore.UpdateRole, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/workflow-roles/{key}", approval.DeleteRoleHandler(roleStore.DeleteRole, app.Logger))

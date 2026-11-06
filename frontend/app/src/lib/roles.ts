@@ -33,6 +33,12 @@ export type Role = {
 /** The card, the canvas and the inspector all need the amber tone to travel WITH the string. */
 export type Resolved = { text: string; warn: boolean }
 
+/** One policy in force that names a role: `steps` approval steps in its active version, `scope` when its scope names it. */
+export type RoleUse = { id: string; name: string; steps: number; scope: boolean }
+
+/** Keyed by role key; a role no policy in force names has no key. */
+export type RolesInForce = Record<string, RoleUse[]>
+
 /** `stepsFor`'s shape with `name` renamed. Policies with a zero count are omitted. */
 export type RoleSteps = { total: number; policies: { policyName: string; count: number }[] }
 
@@ -203,11 +209,28 @@ export function intro(list: readonly Role[]): string {
 }
 
 /** Sentence case; the role card uppercases it in CSS. */
-export function roleUsage(roleSteps: RoleSteps): string {
-  if (roleSteps.total === 0) return 'not used in any policy'
-  const p = roleSteps.policies.length
+export function roleUsage({ steps: n, policies: p }: { steps: number; policies: number }): string {
+  if (p === 0) return 'not used in any policy'
   // NOT IN BRIEF: both singulars, each noun singularising independently.
-  return `${roleSteps.total} approval ${roleSteps.total === 1 ? 'step' : 'steps'} · ${p} ${p === 1 ? 'policy' : 'policies'}`
+  return `${n} approval ${n === 1 ? 'step' : 'steps'} · ${p} ${p === 1 ? 'policy' : 'policies'}`
+}
+
+/** Folds the server's per-role in-force rows; `undefined` (no entry) is all zeros. */
+export function summary(uses: readonly RoleUse[] | undefined): { steps: number; policies: number; scopes: number } {
+  const rows = uses ?? []
+  return {
+    steps: rows.reduce((n, u) => n + u.steps, 0),
+    policies: rows.length,
+    scopes: rows.filter((u) => u.scope).length,
+  }
+}
+
+/** Approval steps of unpublished draft top versions that name the role. */
+export function draftSteps(policies: readonly Policy[], key: string): number {
+  return steps(
+    policies.filter((p) => p.status === 'draft'),
+    key,
+  ).total
 }
 
 export function holderCount(n: number): string {
@@ -335,10 +358,18 @@ export function canSaveRole(name: string): boolean {
 // Mirrors the server's ErrRoleInUse rule (internal/approval/approval.go).
 const DELETE_REFUSED_IN_FORCE = 'The delete is refused while a policy in force names it in a scope or an approval step.'
 
-/** The delete-confirm sentence for a LANDED policies fetch: the role, its step usage, the server's refusal rule. */
-export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
-  if (roleSteps.total === 0) return `Delete ${title}? ${DELETE_REFUSED_IN_FORCE}`
-  return `Delete ${title}? ${roleUsage(roleSteps)}. ${DELETE_REFUSED_IN_FORCE} A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`
+const DRAFT_TAIL = 'A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.'
+
+/** The delete-confirm sentence for a known in-force usage: the count, the scope policies, the server's refusal rule. */
+export function deleteRoleConfirm(
+  title: string,
+  use: { steps: number; policies: number; scopes: number },
+  draftStepCount: number,
+): string {
+  const tail = draftStepCount > 0 ? ` ${DRAFT_TAIL}` : ''
+  if (use.policies === 0) return `Delete ${title}? ${DELETE_REFUSED_IN_FORCE}${tail}`
+  const scope = use.scopes > 0 ? ` ${use.scopes} ${use.scopes === 1 ? 'policy names' : 'policies name'} it in a creator scope.` : ''
+  return `Delete ${title}? In force: ${roleUsage(use)}.${scope} ${DELETE_REFUSED_IN_FORCE}${tail}`
 }
 
 /** The same sentence for a policies fetch that has not landed: claims no usage. */
@@ -352,6 +383,16 @@ export function inUsePolicyNames(err: unknown): string[] {
   const policies = (err.body as { policies?: unknown } | null | undefined)?.policies
   if (!Array.isArray(policies)) return []
   return policies.flatMap((p) => (typeof p?.name === 'string' ? [p.name] : []))
+}
+
+/** Invoice numbers off a 409 body (cap: Go `roleInRunListCap`) and the true count (`invoices_total`); empty for any other error. */
+export function inUseInvoices(err: unknown): { numbers: string[]; total: number } {
+  if (!(err instanceof ApiError) || err.status !== 409) return { numbers: [], total: 0 }
+  const body = err.body as { invoices?: unknown; invoices_total?: unknown } | null | undefined
+  if (!Array.isArray(body?.invoices)) return { numbers: [], total: 0 }
+  const numbers = body.invoices.flatMap((i) => (typeof i?.invoice_number === 'string' ? [i.invoice_number] : []))
+  const total = typeof body.invoices_total === 'number' && Number.isFinite(body.invoices_total) ? body.invoices_total : 0
+  return { numbers, total: Math.max(total, numbers.length) }
 }
 
 // NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.
@@ -379,6 +420,12 @@ export function deletedNotice(title: string): string {
 export async function listWorkflowRoles(f: AuthedFetch, base: string): Promise<Role[]> {
   const body = await f<{ workflow_roles: Role[] }>(`${base}/api/invoice/v1/workflow-roles`)
   return body.workflow_roles
+}
+
+/** `null` when the server omits `in_force` (its usage read failed): usage unknown, never "unused". */
+export async function listRolesInForce(f: AuthedFetch, base: string): Promise<RolesInForce | null> {
+  const body = await f<{ in_force?: RolesInForce }>(`${base}/api/invoice/v1/workflow-roles`)
+  return body.in_force ?? null
 }
 
 export async function createWorkflowRole(f: AuthedFetch, base: string, title: string, desc: string): Promise<Role> {

@@ -67,6 +67,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import {
   deleteApprovalPolicy,
+  createApprovalPolicy,
+  createWorkflowRole,
   deleteWorkflowRole,
   listApprovalPolicies,
   listEntities,
@@ -74,9 +76,13 @@ import {
   login,
   memberships,
   PERSONAS,
+  provisionRealAccount,
+  publishApprovalPolicy,
+  putApprovalPolicyDraft,
   rawFetch,
   registerFresh,
   setMemberClients,
+  signInSession,
 } from '../api/client'
 import { browserToken, collectErrors, signInAs, signInAtFrontDoor } from '../personaSession'
 import { E2E_MEMBER_ROLES, e2eMember, ensureMember } from '../realAccounts'
@@ -105,12 +111,11 @@ import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, TENANTS } from './targets'
 // unchanged.
 //
 // A card's USAGE line carries no literal here, and cannot: `roleUsage` is a function of the
-// tenant-wide POLICY list, which neither Test 1 nor Test 2 owns. internal/demopolicy seeds an
-// active policy onto both persona tenants, plus an unpublished draft on the IN-HOUSE one --
-// so per-seat USAGE now varies with tenant and draft counts (task-577 covers the deployed
-// shape). The shape is asserted instead of exact text; see USAGE_SHAPE below, whose second
-// alternative admits the seeded branch. Exact usage strings survive in exactly one place,
-// Test 3, over the policy Test 3 itself creates.
+// tenant's policies in force (the roles fetch's `in_force`), which neither Test 1 nor Test 2 owns.
+// internal/demopolicy seeds an active policy onto both persona tenants, so per-seat USAGE varies
+// with tenant (task-577 covers the deployed shape). The shape is asserted instead of exact text;
+// see USAGE_SHAPE below, whose second alternative admits the seeded branch. Exact usage strings
+// live in Test 3 and in the scope test at the end of the file, over policies they create.
 interface SeedRoleCard {
   /** role.key — names the drawer's pill toggle, `${idPrefix}-wfrole-${key}` (MemberParts.tsx). */
   key: string
@@ -129,8 +134,8 @@ interface SeedRoleCard {
 /**
  * `roleUsage`'s two arms, and the whole of its range — asserted as a SHAPE because the value
  * is not this test's to own (see above). This keeps APPR-09-06's gain rather than dropping it:
- * RolesView renders the EMPTY STRING on this line while the policies fetch is loading or has
- * errored, and '' matches neither alternative, so a card that claims nothing still fails.
+ * RolesView renders the EMPTY STRING on this line while the roles fetch's `in_force` is
+ * loading or has errored, and '' matches neither alternative, so a card that claims nothing still fails.
  * Case-insensitive because the card uppercases in CSS; anchored so no wider node can match.
  * The two nouns singularise INDEPENDENTLY, so all four combinations are legal and the pattern
  * does not try to pin which one is right — `roles.test.ts` owns the singularisation claim.
@@ -835,8 +840,8 @@ const UNSAVED_POLICY_NAME = 'Untitled policy'
 // deactivates the governed version in the same transaction, which would drop
 // awaiting_approval to 0 mid-run with nothing red.
 // It also never clicked Save draft, which mattered more than the missing row: `applyEdit` is
-// local to the builder (WorkflowBuilder.tsx) while `roleUsage` reads `ctx.policies`, which
-// only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the usage line, the
+// local to the builder (WorkflowBuilder.tsx) while the delete confirm's draft warning reads
+// `ctx.policies`, which only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the
 // delete-confirm sentence and the blocked step below could not read what this test claims
 // they read. One Save draft is enough: the PUT sends name, scope and steps together
 // (lib/policies.ts).
@@ -994,10 +999,9 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await expect(page.getByText(`${title} must approve`, { exact: true })).toBeVisible()
 
   // --- save it, ONCE -------------------------------------------------------------------------
-  // Load-bearing, not hygiene: `applyEdit` is local to the builder, and everything below reads
-  // `roleUsage`, which is computed off `ctx.policies` — a mirror only `savePolicy` patches. One
-  // PUT carries the name and the tree together (lib/policies.ts), so one click is the whole
-  // write. The settle is the blocked reason DISAPPEARING, never the 'Saved' flash: that flash
+  // One PUT carries the name and the tree together (lib/policies.ts), so one click is the whole
+  // write. The confirm's draft warning below reads `ctx.policies`, which only `savePolicy` patches.
+  // The settle is the blocked reason DISAPPEARING, never the 'Saved' flash: that flash
   // lives 1700ms and asserting inside it races a cold gateway, whereas the reason is gone
   // exactly when `dirty` is false, which is exactly when the write landed.
   await expect(page.getByTestId('publish-blocked-reason'), 'an unsaved tree is not publishable').toBeVisible()
@@ -1018,13 +1022,13 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await page.getByRole('button', { name: 'Manage roles', exact: true }).click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
   await expect(page, 'Manage roles carries the roles tab into the URL').toHaveURL(/\/settings\/roles$/)
-  // The usage line moved the moment the step was repointed: one step, one policy.
-  await expect(roleCard(page, title).getByText('1 approval step · 1 policy')).toBeVisible()
+  // A saved draft is not in force: the line stays unused.
+  await expect(roleCard(page, title).getByText('not used in any policy')).toBeVisible()
   await roleCard(page, title).getByTestId('role-card-edit').click()
   await page.getByTestId('role-delete').click()
-  // The confirm names the role AND its usage, so the consequence is stated before the click.
+  // The confirm states the rule and the draft warning (DELETE_REFUSED_IN_FORCE, DRAFT_TAIL in lib/roles.ts).
   await expect(page.getByTestId('role-delete-confirm')).toContainText(
-    `Delete ${title}? 1 approval step · 1 policy. The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`,
+    `Delete ${title}? The delete is refused while a policy in force names it in a scope or an approval step. A draft that names it keeps it, and those steps cannot publish until you point them somewhere else.`,
   )
   await expect(page.getByTestId('role-delete-cancel')).toBeVisible()
   await page.getByTestId('role-delete-confirmed').click()
@@ -1081,9 +1085,9 @@ test('in-house: a created role survives a reload, is selectable on a step this t
 // contract-approvals.spec.ts names its rows `Probe Policy <seed>-<n>` and workflows.spec.ts
 // its `APPR09 <stamp>`, and both run as tenant A.
 //
-// If even this sweep dies, the stray is a policy that was never published — Test 3 does not
-// publish at all — so it is never in force, and Test 1/2's usage
-// assertions are shape-matched (USAGE_SHAPE) precisely so a stray cannot turn them red.
+// If even this sweep dies, the stray is a policy that was never published. Test 3 does not
+// publish, so its stray is never in force; the new scope test publishes only in its own
+// provisioned workspace. Test 1/2's usage assertions are shape-matched (USAGE_SHAPE) precisely so a stray cannot turn them red.
 test.afterAll(async () => {
   const token = await login(PERSONAS.B)
 
@@ -1745,4 +1749,46 @@ test('firm Roles: a reviewer sees the write controls locked, still reads the tab
   } finally {
     await context.close()
   }
+})
+
+// A role only a scope in force names: the card, the draft case and the delete confirm all count it.
+// Its own workspace, so publishing here leaves the shared tenants' policies alone (.claude/rules/e2e.md).
+test('a role only a scope in force names reads 0 approval steps · 1 policy on its card', async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('role-scope-use')
+  const token = (await signInSession(account.email, account.password)).access_token
+  const title = `E2E scope ${randomUUID().slice(0, 8)}`
+  const role = await createWorkflowRole(token, { title })
+  const catchAll = await createApprovalPolicy(token, { name: `Scope catch-all ${randomUUID().slice(0, 8)}` })
+  await publishApprovalPolicy(token, catchAll.id)
+  const scoped = await createApprovalPolicy(token, {
+    name: `Scope policy ${randomUUID().slice(0, 8)}`,
+    scopes: { workflow_role_keys: [role.key] },
+  })
+  await publishApprovalPolicy(token, scoped.id)
+
+  const errors = collectErrors(page)
+  const IN_FORCE = '0 approval steps · 1 policy'
+  await signInAtFrontDoor(page, account, '/settings/roles')
+  await expect(page.getByTestId('roles-grid')).toBeVisible()
+  await expect(roleCard(page, title).getByText(IN_FORCE), 'the scope in force counts').toBeVisible()
+
+  // An open draft that drops the role leaves the active version, so the card must not move.
+  await putApprovalPolicyDraft(token, scoped.id, { scopes: { document_types: ['credit_note'] }, steps: [] })
+  await page.reload()
+  await expect(page.getByTestId('roles-grid')).toBeVisible()
+  await expect(roleCard(page, title).getByText(IN_FORCE), 'the draft does not change the card').toBeVisible()
+
+  await roleCard(page, title).getByTestId('role-card-edit').click()
+  await page.getByTestId('role-delete').click()
+  await expect(page.getByTestId('role-delete-confirm'), 'the confirm agrees with the card').toContainText(
+    `In force: ${IN_FORCE}. 1 policy names it in a creator scope.`,
+  )
+
+  await deleteApprovalPolicy(token, scoped.id)
+  await page.reload()
+  await expect(page.getByTestId('roles-grid')).toBeVisible()
+  await expect(roleCard(page, title).getByText('not used in any policy'), 'no policy in force names it').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

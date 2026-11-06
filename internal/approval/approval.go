@@ -47,11 +47,37 @@ type PolicyRef struct {
 	Name string `json:"name"`
 }
 
-// roleInUse is DeleteRole's refusal; it carries the policies so the handler can list them.
-type roleInUse struct{ policies []PolicyRef }
+// roleInRunMessage is the 409 sentence when only an open run waits on the role.
+const roleInRunMessage = "an open approval run is waiting on this workflow role — wait until it is decided, or edit its invoice to cancel it, first"
+
+// InvoiceRef names one invoice whose open run waits on the role.
+type InvoiceRef struct {
+	ID     string `json:"id"`
+	Number string `json:"invoice_number"`
+}
+
+// roleInUse is DeleteRole's refusal; it carries the policies and the waiting invoices
+// (at most roleInRunListCap of invoicesTotal) so the handler can list them.
+type roleInUse struct {
+	policies      []PolicyRef
+	invoices      []InvoiceRef
+	invoicesTotal int
+}
 
 func (e *roleInUse) Error() string { return ErrRoleInUse.Error() }
 func (e *roleInUse) Unwrap() error { return ErrRoleInUse }
+
+// message is the 409 sentence for the lists this refusal carries.
+func (e *roleInUse) message() string {
+	switch {
+	case len(e.invoices) > 0 && len(e.policies) > 0:
+		return roleInUseMessage + "; " + roleInRunMessage
+	case len(e.invoices) > 0:
+		return roleInRunMessage
+	default:
+		return roleInUseMessage
+	}
+}
 
 // Body caps applied before decode — the platform server sets no limit of its own.
 const (

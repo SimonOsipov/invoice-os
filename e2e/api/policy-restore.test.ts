@@ -106,7 +106,7 @@ const GOOD_TREE: ApprovalStep[] = [
 ]
 
 function version(v: number, isActive: boolean, sealed = true): ApprovalPolicyVersion {
-  return { version: v, sealed, is_active: isActive, published_at: '2026-01-01T00:00:00Z', published_by: 'system' }
+  return { version: v, sealed, is_active: isActive, published_at: '2026-01-01T00:00:00Z', published_by: 'system', scoped: false }
 }
 
 function policy(opts: {

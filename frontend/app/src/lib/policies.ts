@@ -37,6 +37,8 @@ export type PolicyVersionWire = {
   is_active: boolean
   published_at: string | null
   published_by: string | null
+  /** The version carries any scope; the catch-all lock reads it for the active version. */
+  scoped: boolean
 }
 
 export type PolicyScopesWire = PolicyScopes
@@ -175,6 +177,7 @@ export function toPolicy(wire: PolicyWire): Policy {
     status: wire.status as PolicyStatus,
     version: wire.version,
     activeVersion: wire.versions.find((v) => v.is_active)?.version ?? null,
+    activeScoped: wire.versions.some((v) => v.is_active && v.scoped),
     nodes: nodesFromSteps(wire.steps),
   }
 }
@@ -221,6 +224,14 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
   return toPolicy(created)
 }
 
+/** A bound of only `.` is no bound: the server refuses it. */
+function wireScopes(s: PolicyScopes): PolicyScopes {
+  const b = s.amount_band
+  if (!b) return s
+  const bound = (v: string | null) => (v === '.' ? null : v)
+  return { ...s, amount_band: { ...b, lower: bound(b.lower), upper: bound(b.upper) } }
+}
+
 /** A whole-tree REPLACE: `steps` always rides along, empty included — the server 400s on an absent key. */
 export async function putApprovalPolicyDraft(
   f: AuthedFetch,
@@ -231,7 +242,7 @@ export async function putApprovalPolicyDraft(
 ): Promise<Policy> {
   // An omitted `scopes` keeps the draft's scopes, so an unedited save never re-sends them.
   const body = opts?.sendScopes
-    ? { name: next.name, scopes: next.scopes, steps: stepInputsFromNodes(next.nodes) }
+    ? { name: next.name, scopes: wireScopes(next.scopes), steps: stepInputsFromNodes(next.nodes) }
     : { name: next.name, steps: stepInputsFromNodes(next.nodes) }
   const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, { method: 'PUT', body })
   return toPolicy(saved)

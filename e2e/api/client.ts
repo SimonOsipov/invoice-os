@@ -1563,7 +1563,7 @@ export function staffWorkflowRole(token: string, key: string, members: string[])
 // Step/PolicyVersion/Policy (:17-80). No omitempty on ANY field, and Step/Policy both
 // carry a value-receiver MarshalJSON substituting [] for a nil lane -- so `steps`,
 // `versions`, `then` and `else` are always arrays, and `published_at`/`published_by` are
-// an explicit null rather than absent. Key sets: Policy 10, Step 10, PolicyVersion 5. ----
+// an explicit null rather than absent. Key sets: Policy 10, Step 10, PolicyVersion 6. ----
 
 export interface ApprovalStep {
   // A server-minted uuid, re-minted on EVERY PUT draft (flattenSteps) -- never assert a value.
@@ -1587,6 +1587,7 @@ export interface ApprovalPolicyVersion {
   is_active: boolean
   published_at: string | null // RFC3339Nano, always Z-suffixed; null until published
   published_by: string | null // the publisher's subject uuid
+  scoped: boolean // the version carries any scope
 }
 
 // Mirrors internal/approval's AmountBand and Scopes; bounds are numeric text, scale kept.

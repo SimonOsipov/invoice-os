@@ -1754,10 +1754,6 @@ describe('APPR-09-05: the builder carries exactly two write controls', () => {
   })
 })
 
-// ----------------------------------------------------------------------------
-// APSC-04-02 — the Applies select and the not-routed note are gone; the trigger reads the scope
-// ----------------------------------------------------------------------------
-
 describe('APSC-04-02: the builder renders no scope-not-routed note and no Applies select', () => {
   it('has neither node', () => {
     render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
@@ -2778,10 +2774,6 @@ describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
   })
 })
 
-// ----------------------------------------------------------------------------
-// APSC-04-03 — the Applies card sets the four scopes
-// ----------------------------------------------------------------------------
-
 const CLIENT_A = { id: 'e1', name: 'Zenith Foods' }
 const CLIENT_B = { id: 'e2', name: 'Alpha Mills' }
 const ENTITIES = [CLIENT_A, CLIENT_B]
@@ -2862,6 +2854,31 @@ describe('APSC-04-03: the Applies card', () => {
     const [sent, opts] = savePolicy.mock.calls[0] as unknown as [Policy, { sendScopes: boolean }]
     expect(sent.scopes.amount_band).toEqual({ lower: '1000', upper: null, currency: 'NGN' })
     expect(opts).toEqual({ sendScopes: true })
+  })
+
+  it('a paste that would add a second dot or a third decimal leaves the field as it was', () => {
+    const p = scoped('p1')
+    render(<WorkflowBuilder ctx={editableCtx(p)} policy={p} />)
+    const from = () => screen.getByLabelText('Band from') as HTMLInputElement
+
+    fireEvent.change(from(), { target: { value: '1.2' } })
+    fireEvent.change(from(), { target: { value: '1.234.56' } })
+    expect(from().value).toBe('1.2')
+    fireEvent.change(from(), { target: { value: '1.239' } })
+    expect(from().value).toBe('1.2')
+  })
+
+  it('a bare dot and a leading-dot bound are kept in the field', async () => {
+    const p = scoped('p1')
+    const savePolicy = vi.fn(async (x: Policy) => x)
+    render(<WorkflowBuilder ctx={editableCtx(p, { savePolicy })} policy={p} />)
+    const from = () => screen.getByLabelText('Band from') as HTMLInputElement
+
+    fireEvent.change(screen.getByLabelText('Band currency'), { target: { value: 'NGN' } })
+    fireEvent.change(from(), { target: { value: '.' } })
+    expect(from().value).toBe('.')
+    fireEvent.change(from(), { target: { value: '.5' } })
+    expect(from().value).toBe('.5')
   })
 
   it('a client is added and saved as an entity id', async () => {

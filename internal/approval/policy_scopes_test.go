@@ -73,6 +73,42 @@ func TestPolicy_ListAndGetReadTheTopVersionsScopes(t *testing.T) {
 	}
 }
 
+// The SPA's catch-all lock needs the active version's scope under an unscoped draft.
+func TestPolicy_ListMarksAScopedActiveVersionUnderAnUnscopedDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-04 scoped-flag")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Scoped")
+	v1 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, v1, `scope_document_types = '{credit_note}'`)
+	activateApprovalPolicyVersion(t, super, v1)
+	seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
+
+	store := NewStore(app, stubFingerprinter, nil)
+	list, err := store.ListPolicies(c)
+	if err != nil {
+		t.Fatalf("ListPolicies: %v", err)
+	}
+	got, err := store.GetPolicy(c, policyID)
+	if err != nil {
+		t.Fatalf("GetPolicy: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListPolicies returned %d policies, want 1", len(list))
+	}
+	for name, p := range map[string]Policy{"list": list[0], "get": got} {
+		if len(p.Versions) != 2 {
+			t.Fatalf("%s versions = %d, want 2", name, len(p.Versions))
+		}
+		if v := p.Versions[0]; v.Version != 2 || v.Scoped {
+			t.Errorf("%s v2 = %+v, want the unscoped draft", name, v)
+		}
+		if v := p.Versions[1]; v.Version != 1 || !v.IsActive || !v.Scoped {
+			t.Errorf("%s v1 = %+v, want the active version marked scoped", name, v)
+		}
+	}
+}
+
 func TestPublish_AnswersTheSealedVersionsScopesAndPosition(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-02 publish-scopes")
@@ -154,8 +190,8 @@ func TestPolicy_ListReadsScopesInOneStatement(t *testing.T) {
 	if _, err := NewStore(traced, stubFingerprinter, nil).ListPolicies(c); err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
-	if sql := rec.mentioning("scope_document_types"); len(sql) != 1 {
-		t.Errorf("%d statements mention scope_document_types, want 1:\n%v", len(sql), sql)
+	if sql := rec.mentioning("scope_amount_lower"); len(sql) != 1 {
+		t.Errorf("%d statements mention scope_amount_lower, want 1:\n%v", len(sql), sql)
 	}
 }
 

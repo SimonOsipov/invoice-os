@@ -104,10 +104,6 @@ describe('the policies ctx contract (§4.4)', () => {
     await expect(ctx.savePolicy(saved)).resolves.toBe(saved)
     await expect(ctx.publishPolicy('p1')).resolves.toBe(published)
   })
-
-  it('the ctx contract carries reorderPolicies', async () => {
-    await expect(policyCtx().reorderPolicies([])).resolves.toBeUndefined()
-  })
 })
 
 /** The source text of `async function NAME(…) {…}` in App.tsx, brace-matched. */

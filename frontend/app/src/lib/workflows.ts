@@ -102,6 +102,8 @@ export type Policy = {
   version: number
   /** The version of this policy in force, or null when none is. Several policies may be in force. */
   activeVersion: number | null
+  /** The version in force carries a scope, whatever the top version says. */
+  activeScoped?: boolean
   nodes: WfNode[]
 }
 
@@ -158,12 +160,10 @@ export function currencyText(raw: string): string {
   return raw.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 3)
 }
 
-/** Digits and the first dot; 12 integer digits and 2 decimals at most (numeric(14,2)). */
-export function boundText(raw: string): string {
+/** Digits and one dot; 12 integer digits and 2 decimals at most (numeric(14,2)). A change past that keeps `prev`. */
+export function boundText(raw: string, prev: string): string {
   const cleaned = raw.replace(/[^0-9.]/g, '')
-  const dot = cleaned.indexOf('.')
-  if (dot === -1) return cleaned.slice(0, 12)
-  return `${cleaned.slice(0, dot).slice(0, 12)}.${cleaned.slice(dot + 1).replace(/\./g, '').slice(0, 2)}`
+  return /^\d{0,12}(\.\d{0,2})?$/.test(cleaned) ? cleaned : prev
 }
 
 /** null when all three are empty; an empty bound is null. */
@@ -182,10 +182,10 @@ export function moveOrder(list: readonly Policy[], id: string, dir: 'up' | 'down
   return ids
 }
 
-/** Which controls the catch-all lock disables: the last row stays last while any policy is scoped. */
+/** Which controls the catch-all lock disables: the last row stays last while any policy is scoped by its top or active version (the server's rule). */
 export function listLock(list: readonly Policy[]) {
   const n = list.length
-  const anyScoped = list.some((p) => !isCatchAll(p.scopes))
+  const anyScoped = list.some((p) => !isCatchAll(p.scopes) || p.activeScoped)
   return {
     anyScoped,
     moveUp: (i: number) => i > 0 && !(i === n - 1 && anyScoped),
@@ -288,7 +288,7 @@ export function newNode(type: NodeType): WfNode {
 }
 
 export function newPolicy(): Policy {
-  return { id: newPolicyId(), name: 'Untitled policy', position: 0, scopes: CATCH_ALL_SCOPES, status: 'draft', version: 1, activeVersion: null, nodes: [] }
+  return { id: newPolicyId(), name: 'Untitled policy', position: 0, scopes: CATCH_ALL_SCOPES, status: 'draft', version: 1, activeVersion: null, activeScoped: false, nodes: [] }
 }
 
 export function insertNode(policy: Policy, laneKey: LaneKey, index: number, node: WfNode): Policy {

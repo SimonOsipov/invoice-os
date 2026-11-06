@@ -337,7 +337,7 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // two nested shapes. No omitempty on any field, and Policy/Step both carry a value-receiver
 // MarshalJSON substituting [] for a nil lane, so every set is fixed whatever the content.
 const POLICY_KEYS = ['id', 'name', 'position', 'scope', 'scopes', 'sealed', 'status', 'steps', 'version', 'versions']
-const POLICY_VERSION_KEYS = ['is_active', 'published_at', 'published_by', 'sealed', 'version']
+const POLICY_VERSION_KEYS = ['is_active', 'published_at', 'published_by', 'scoped', 'sealed', 'version']
 const STEP_KEYS = [
   'cond_amount',
   'cond_op',
@@ -405,7 +405,7 @@ function expectPolicyShape(policy: unknown, label: string): Record<string, unkno
     const v = versions[i] as Record<string, unknown>
     expect(
       Object.keys(v).sort(),
-      `${label}.versions[${i}]: expected exactly the five PolicyVersion keys`,
+      `${label}.versions[${i}]: expected exactly the six PolicyVersion keys`,
     ).toEqual(POLICY_VERSION_KEYS)
   }
   return p

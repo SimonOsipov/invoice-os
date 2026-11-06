@@ -47,6 +47,7 @@ const ver = (version: number, sealed: boolean, isActive: boolean): PolicyVersion
   is_active: isActive,
   published_at: null,
   published_by: null,
+  scoped: false,
 })
 
 const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
@@ -654,6 +655,19 @@ describe('QA: putApprovalPolicyDraft forwards what the caller holds, and project
     const body = f.mock.calls[0][1].body as Record<string, unknown>
     expect(Object.keys(body).sort()).toEqual(['name', 'scopes', 'steps'])
     expect(body.scopes).toEqual(scopes)
+  })
+
+  it('putApprovalPolicyDraft sends a bare-dot bound as no bound', async () => {
+    const scopes = { ...CATCH_ALL_SCOPES, amount_band: { lower: '.', upper: '.5', currency: 'NGN' } }
+    const f = vi.fn().mockResolvedValue(wire({ id: 'p1' }))
+    await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', scopes }), { sendScopes: true })
+    expect((f.mock.calls[0][1].body as { scopes: typeof scopes }).scopes.amount_band).toEqual({ lower: null, upper: '.5', currency: 'NGN' })
+  })
+
+  it('toPolicy marks activeScoped from the active version only', () => {
+    const scopedVer = { ...ver(1, true, true), scoped: true }
+    expect(toPolicy(wire({ version: 2, versions: [ver(2, false, false), scopedVer] })).activeScoped).toBe(true)
+    expect(toPolicy(wire({ version: 2, versions: [{ ...ver(2, false, false), scoped: true }, ver(1, true, true)] })).activeScoped).toBe(false)
   })
 
   it('putApprovalPolicyDraft omits scopes unless asked', async () => {

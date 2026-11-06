@@ -152,8 +152,8 @@ function ScopeBand({ band, onChange, lock }: { band: PolicyScopes['amount_band']
       </span>
       <div style={{ display: 'grid', gridTemplateColumns: '96px minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}>
         {field('Band currency', 'Currency', cur, (v) => onChange(bandFrom(currencyText(v), lo, up)), { maxLength: 3 })}
-        {field('Band from', 'From', lo, (v) => onChange(bandFrom(cur, boundText(v), up)), { inputMode: 'decimal' })}
-        {field('Band to', 'To', up, (v) => onChange(bandFrom(cur, lo, boundText(v))), { inputMode: 'decimal' })}
+        {field('Band from', 'From', lo, (v) => onChange(bandFrom(cur, boundText(v, lo), up)), { inputMode: 'decimal' })}
+        {field('Band to', 'To', up, (v) => onChange(bandFrom(cur, lo, boundText(v, up))), { inputMode: 'decimal' })}
       </div>
     </div>
   )

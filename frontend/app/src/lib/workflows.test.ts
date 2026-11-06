@@ -318,6 +318,19 @@ describe('moveOrder and listLock', () => {
     expect(lock.anyScoped).toBe(true)
   })
 
+  it('listLock pins the last row when only a policy active version is scoped', () => {
+    // A: published v1 scoped (active) under a v2 draft with scopes cleared; C is the catch-all.
+    const policies = [
+      { ...newPolicy(), id: 'a', version: 2, activeVersion: 1, activeScoped: true },
+      { ...newPolicy(), id: 'b' },
+      { ...newPolicy(), id: 'c' },
+    ]
+    const lock = listLock(policies)
+    expect(lock.anyScoped).toBe(true)
+    expect([lock.moveUp(2), lock.moveDown(1), lock.deletable(2)]).toEqual([false, false, false])
+    expect([lock.moveUp(1), lock.moveDown(0), lock.deletable(1)]).toEqual([true, true, true])
+  })
+
   it('listLock frees the last row when no policy is scoped', () => {
     const lock = listLock(list(4))
     expect([lock.moveUp(3), lock.moveDown(2), lock.deletable(3)]).toEqual([true, true, true])
@@ -337,16 +350,24 @@ describe('band inputs', () => {
     expect(currencyText('u s')).toBe('US')
   })
 
-  it('boundText keeps digits, the first dot and two decimals', () => {
-    expect(boundText('5,000,000.50.1')).toBe('5000000.50')
-    expect(boundText('abc')).toBe('')
-    expect(boundText('1.239')).toBe('1.23')
-    expect(boundText('1.2.3')).toBe('1.23')
+  it('boundText strips separators and letters', () => {
+    expect(boundText('5,000,000.50', '')).toBe('5000000.50')
+    expect(boundText('abc', '')).toBe('')
   })
 
-  it('boundText caps the integer part at 12 digits', () => {
-    expect(boundText('1234567890123')).toBe('123456789012')
-    expect(boundText('1234567890123.5')).toBe('123456789012.5')
+  it('boundText refuses a change that would add a second dot or pass 12 integer / 2 fraction digits', () => {
+    expect(boundText('1.234.56', '1.2')).toBe('1.2')
+    expect(boundText('1.2.', '1.2')).toBe('1.2')
+    expect(boundText('1.239', '1.23')).toBe('1.23')
+    expect(boundText('1234567890123', '123456789012')).toBe('123456789012')
+    expect(boundText('1234567890123.5', '5')).toBe('5')
+  })
+
+  it('boundText accepts the limits, a bare dot and a leading dot', () => {
+    expect(boundText('123456789012.5', '')).toBe('123456789012.5')
+    expect(boundText('1.23', '1.2')).toBe('1.23')
+    expect(boundText('.', '')).toBe('.')
+    expect(boundText('.5', '.')).toBe('.5')
   })
 
   it('bandFrom is null when everything is empty, else a band with null for an empty bound', () => {

@@ -643,10 +643,6 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
   })
 })
 
-// ============================================================================
-// APSC-04-04 — rank, scope summary, Move up / down, the catch-all lock
-// ============================================================================
-
 describe('APSC-04-04: the ordered policy list', () => {
   const NO_SCOPES = CATCH_ALL_SCOPES
   const creditNotes = { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] }
@@ -715,6 +711,16 @@ describe('APSC-04-04: the ordered policy list', () => {
       expect(btn(name).getAttribute('aria-describedby'), name).toBe(reason.id)
       expect(btn(name).title, name).toBe(reason.textContent)
     }
+    for (const name of ['Move c up', 'Delete c', 'Move b down']) expect(btn(name).disabled, name).toBe(false)
+  })
+
+  it('a policy scoped only in its active version still pins the catch-all', () => {
+    const [a, b, c, d] = four()
+    const activeOnly = { ...a, version: 2, activeVersion: 1, activeScoped: true }
+    render(<WorkflowsView ctx={listCtx([activeOnly, b, c, d])} />)
+    const reason = screen.getByTestId('policy-catch-all-reason')
+    expect(rowOf('d').nextElementSibling).toBe(reason)
+    for (const name of ['Move d up', 'Delete d', 'Move c down']) expect(btn(name).disabled, name).toBe(true)
     for (const name of ['Move c up', 'Delete c', 'Move b down']) expect(btn(name).disabled, name).toBe(false)
   })
 

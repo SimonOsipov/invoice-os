@@ -10,12 +10,12 @@
 // filter state via a separate entry point -- together they're what makes empty-by-filter
 // reachable today.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 
 import { downloadGlyph, shieldGlyph15 } from '../glyphs'
-import { getAuditLog, type AuditResponse } from '../lib/audit'
+import { getAuditLog, type AuditEvent, type AuditResponse } from '../lib/audit'
 import { auditCsv, auditCsvFilename, auditExportToastCopy } from '../lib/auditCsv'
 import { collectExportRows, type AuditExportFetchPage } from '../lib/auditExport'
 import { AUDIT_FILTER_DEFAULT, auditFilterQuery, type AuditFilterState } from '../lib/auditFilters'
@@ -33,8 +33,9 @@ import {
   emptyByFilterCopy,
   type AuditPageState,
 } from '../lib/auditView'
+import { bundlePrefillFor, type BundlePrefill } from '../lib/evidenceBundle'
 import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
-import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
+import { getInvoice, invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { AuditPrefilter, PlatformCtx } from '../types'
 
 import { AuditExportToast } from './AuditExportToast'
@@ -98,10 +99,27 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number; persist?: boolean } | null>(
     null,
   )
-  // Drives the trigger's aria-expanded and the drawer mount below.
-  const [bundleOpen, setBundleOpen] = useState(false)
+  // Non-null while the drawer is open; `initial` is absent when the header opened it.
+  const [bundle, setBundle] = useState<{ initial?: BundlePrefill; rowId?: string } | null>(null)
+  // The event whose invoice read is in flight.
+  const [openingId, setOpeningId] = useState<string | null>(null)
+  // Advanced by every open and close; a read that resolves under an older value does nothing.
+  const openSeq = useRef(0)
   // MembersView.tsx:72's idiom: must be STABLE -- it is a useDismiss dependency.
-  const closeBundle = useCallback(() => setBundleOpen(false), [])
+  const closeBundle = useCallback(() => {
+    openSeq.current += 1
+    setBundle(null)
+  }, [])
+  const openEmptyBundle = () => {
+    openSeq.current += 1
+    setOpeningId(null)
+    setBundle({})
+  }
+  // Drops a pending row read: the row it would open for is no longer the one on screen.
+  const cancelRowRead = () => {
+    openSeq.current += 1
+    setOpeningId(null)
+  }
   const filtered = filterState.invoiceId != null
 
   // Recomputed only when the filter state itself changes, not on every render -- the date
@@ -160,6 +178,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   useEffect(() => {
     const id = prefilter?.invoiceId ?? null
     if (id == null || id === filterState.invoiceId) return
+    cancelRowRead()
     // A moved atom means a DIFFERENT invoice's whole history, so the default date window
     // (which could exclude that invoice entirely) must reset, not carry over.
     setFilterState((s) => ({ ...s, range: { preset: 'custom' }, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
@@ -171,13 +190,32 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.
   const applyInvoiceFilter = (id: string, number: string | null) => {
+    cancelRowRead()
     if (id !== filterState.invoiceId) ctx.setAuditInvoiceFilter(id, number)
     setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: number }))
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
 
+  // The event carries no invoice created_at, so the range start needs one read of the invoice.
+  const openRowEvidence = async (e: AuditEvent, invoiceId: string) => {
+    if (base == null) return
+    const seq = ++openSeq.current
+    setOpeningId(e.id)
+    try {
+      const inv = await getInvoice(ctx.authedFetch, base, invoiceId)
+      if (seq !== openSeq.current) return
+      setOpeningId(null)
+      setBundle({ initial: bundlePrefillFor(e, inv.created_at) ?? undefined, rowId: e.id })
+    } catch (err) {
+      if (seq !== openSeq.current) return
+      setOpeningId(null)
+      setExportToast({ kind: 'error', text: `Evidence bundle did not open: ${toApiError(err).message}.` })
+    }
+  }
+
   const handleFilterChange = (next: AuditFilterState) => {
+    cancelRowRead()
     // Only the invoice member is on the URL; writing it on every date or actor tweak would
     // replaceState 16 times over.
     if (next.invoiceId !== filterState.invoiceId) ctx.setAuditInvoiceFilter(next.invoiceId, next.invoiceNumber)
@@ -247,8 +285,8 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                 data-testid="audit-bundle-open"
                 className="v2-btn v2-btn-primary pf-btn"
                 aria-haspopup="dialog"
-                aria-expanded={bundleOpen}
-                onClick={() => setBundleOpen(true)}
+                aria-expanded={bundle != null}
+                onClick={openEmptyBundle}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -351,8 +389,14 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                 key={e.id}
                 event={e}
                 expanded={expandedId === e.id}
-                onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                onToggle={() => {
+                  cancelRowRead()
+                  setExpandedId(expandedId === e.id ? null : e.id)
+                }}
                 onFilterToInvoice={filtered ? undefined : applyInvoiceFilter}
+                onOpenEvidence={openRowEvidence}
+                evidenceBusy={openingId === e.id}
+                evidenceOpen={bundle?.rowId === e.id}
               />
             ))}
           </AuditTable>
@@ -365,9 +409,18 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
             canPrev={(shown?.page.stack.length ?? 0) > 0}
             canNext={shown?.res.page.has_more === true}
             busy={status === 'loading'}
-            onPrev={() => setPage(auditPagePrev(page))}
-            onNext={() => setPage(auditPageNext(page, shown?.res.page.next_cursor ?? null))}
-            onLimit={(limit) => setPage(auditPageResize(limit))}
+            onPrev={() => {
+              cancelRowRead()
+              setPage(auditPagePrev(page))
+            }}
+            onNext={() => {
+              cancelRowRead()
+              setPage(auditPageNext(page, shown?.res.page.next_cursor ?? null))
+            }}
+            onLimit={(limit) => {
+              cancelRowRead()
+              setPage(auditPageResize(limit))
+            }}
           />
         </>
       )}
@@ -383,8 +436,8 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         />
       )}
 
-      {bundleOpen && base != null && (
-        <EvidenceBundleDrawer ctx={ctx} base={base} onClose={closeBundle} onToast={setExportToast} />
+      {bundle != null && base != null && (
+        <EvidenceBundleDrawer ctx={ctx} base={base} initial={bundle.initial} onClose={closeBundle} onToast={setExportToast} />
       )}
     </div>
   )

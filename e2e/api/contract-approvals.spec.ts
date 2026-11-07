@@ -1260,7 +1260,9 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     const invite = (mine.body as { invitations: PendingInvite[] }).invitations[0]
     const accepted = await acceptById(session, invite.id, 'APSC-13 reviewer')
     expect(accepted.status, 'the invitee accepts').toBe(200)
-    return { userId: subjectOf(session), token: session }
+    // A fresh sign-in after the accept carries the workspace claim; the pre-accept session has none.
+    const token = (await signInSession(account.email, account.password)).access_token
+    return { userId: subjectOf(session), token }
   }
   // setMembershipStatus throws on non-2xx, so the refusals go through rawFetch.
   const patchStatusRaw = (t: string, userId: string, status: 'active' | 'suspended') =>

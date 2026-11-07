@@ -269,16 +269,27 @@ func TestStrandedAlert_ListsTheRolesOtherStrandedInvoices(t *testing.T) {
 }
 
 func TestStrandedAlert_AMemberOfAnAlreadyStrandedRoleSendsNothing(t *testing.T) {
-	w := newStrandWorld(t)
-	p := w.member(t, "preparer", "active", "Pat Preparer", joined(1))
-	seedRoleStaffedBy(t, w.super, w.tenant, "k3", p)
-	seedWaitingRun(t, w.super, w.tenant, "k3")
+	for _, tc := range []struct {
+		name, role string
+		inRole     bool
+	}{{"a preparer in the role", "preparer", true}, {"a reviewer in no role", "reviewer", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newStrandWorld(t)
+			m := w.member(t, tc.role, "active", "Pat Member", joined(1))
+			if tc.inRole {
+				seedRoleStaffedBy(t, w.super, w.tenant, "k3", m)
+			} else {
+				seedRoleStaffedBy(t, w.super, w.tenant, "k3")
+			}
+			seedWaitingRun(t, w.super, w.tenant, "k3")
 
-	a, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, "")
-	if err != nil {
-		t.Fatal(err)
+			a, err := w.store.DeleteMyAccount(w.as(m), OutcomeLeave, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireEmptyAlert(t, a)
+		})
 	}
-	requireEmptyAlert(t, a)
 }
 
 func TestStrandedAlert_ANamedDelegateIsJudged(t *testing.T) {
@@ -312,6 +323,24 @@ func TestStrandedAlert_ALimitedReviewerIsJudgedInReach(t *testing.T) {
 		t.Fatal(err)
 	}
 	sw.requireAlert(t, a, sw.ref(t, in))
+}
+
+func TestStrandedAlert_AStillSignableStepDoesNotAlertForAnOlderStrandedInvoice(t *testing.T) {
+	w := newStaffAccWorld(t) // a firm
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	r := lsReviewer(t, w.invWorld, "Rita Reviewer", []string{e1})
+	r2 := lsReviewer(t, w.invWorld, "Rosa Reviewer", []string{e1})
+	seedRoleStaffedBy(t, w.super, w.tenant, strandRole, r, r2)
+	seedWaitingRunOn(t, w.super, w.tenant, strandRole, e1, "")
+	seedWaitingRunOn(t, w.super, w.tenant, strandRole, e2, "") // nobody in the role reaches e2
+	sw := strandWorld{staffAccWorld: w, reviewer: r}
+
+	a, err := sw.staff() // staff reads every client, so the older invoice is in the judgement's sight
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw.requireDeleted(t)
+	requireEmptyAlert(t, a)
 }
 
 func TestStrandedAlert_RecipientsAfterAHandOn(t *testing.T) {
@@ -366,45 +395,51 @@ func TestStrandedAlert_NoAdminWithAnEmailLeavesNoRecipient(t *testing.T) {
 }
 
 func TestStrandedAlert_AFailedBeforeReadNeverBlocksTheDeletion(t *testing.T) {
-	w := newStrandWorld(t)
-	seedWaitingRun(t, w.super, w.tenant, strandRole)
-	st, _ := w.tracedStore(t, "-- SignedWaitingStepsTx")
+	requireFailedReadKeepsTheDeletion(t, "-- SignedWaitingStepsTx")
+}
 
-	a, err := st.DeleteMyAccount(w.as(w.reviewer), OutcomeLeave, "")
-	if err != nil {
-		t.Fatalf("DeleteMyAccount: %v, want the deletion to commit", err)
-	}
-	w.requireDeleted(t)
-	if a.Stranded.Total != 0 || a.err == nil {
-		t.Errorf("alert = %+v, want an empty alert with err set", a)
-	}
-	if got := w.deletionPayloadKeys(t, "self"); !slices.Equal(got, wantKeys("self")) {
-		t.Errorf("payload keys = %v, want %v", got, wantKeys("self"))
+// afterReads are statements only the judgement after endMembership runs; the unsignableReasonsTx read also runs before it.
+var afterReads = []string{"SELECT title FROM workflow_roles", "SELECT name FROM tenants"}
+
+func TestStrandedAlert_AFailedAfterReadNeverBlocksTheDeletion(t *testing.T) {
+	for _, cancel := range afterReads {
+		t.Run(cancel, func(t *testing.T) { requireFailedReadKeepsTheDeletion(t, cancel) })
 	}
 }
 
-func TestStrandedAlert_AFailedAfterReadNeverBlocksTheDeletion(t *testing.T) {
-	w := newStrandWorld(t)
-	seedWaitingRun(t, w.super, w.tenant, strandRole)
-	st, _ := w.tracedStore(t, "-- unsignableReasonsTx")
-
-	a, err := st.StaffDeleteAccount(w.ctx, w.tenant, w.reviewer, OutcomeLeave, "", staffAccReason)
-	if err != nil {
-		t.Fatalf("StaffDeleteAccount: %v, want the deletion to commit", err)
-	}
-	w.requireDeleted(t)
-	if a.Stranded.Total != 0 || a.err == nil {
-		t.Errorf("alert = %+v, want an empty alert with err set", a)
-	}
-	if got := w.deletionPayloadKeys(t, "staff"); !slices.Equal(got, wantKeys("staff")) {
-		t.Errorf("payload keys = %v, want %v", got, wantKeys("staff"))
+// requireFailedReadKeepsTheDeletion fails the statements matching cancel, then deletes on each path.
+func requireFailedReadKeepsTheDeletion(t *testing.T, cancel string) {
+	t.Helper()
+	for _, path := range []string{"self", "staff"} {
+		t.Run(path, func(t *testing.T) {
+			w := newStrandWorld(t)
+			seedWaitingRun(t, w.super, w.tenant, strandRole)
+			st, _ := w.tracedStore(t, cancel)
+			var a StrandedAlert
+			var err error
+			if path == "self" {
+				a, err = st.DeleteMyAccount(w.as(w.reviewer), OutcomeLeave, "")
+			} else {
+				a, err = st.StaffDeleteAccount(w.ctx, w.tenant, w.reviewer, OutcomeLeave, "", staffAccReason)
+			}
+			if err != nil {
+				t.Fatalf("%s deletion: %v, want the deletion to commit", path, err)
+			}
+			w.requireDeleted(t)
+			if a.Stranded.Total != 0 || a.err == nil {
+				t.Errorf("alert = %+v, want an empty alert with err set", a)
+			}
+			if got := w.deletionPayloadKeys(t, path); !slices.Equal(got, wantKeys(path)) {
+				t.Errorf("payload keys = %v, want %v", got, wantKeys(path))
+			}
+		})
 	}
 }
 
 func TestStrandedAlert_AJudgementErrorIsLogged(t *testing.T) {
 	w := newStrandWorld(t)
 	seedWaitingRun(t, w.super, w.tenant, strandRole)
-	st, _ := w.tracedStore(t, "-- unsignableReasonsTx")
+	st, _ := w.tracedStore(t, afterReads[1])
 	logs := &syncBuf{}
 	n := &DeletionNotifier{Store: st, Sender: &accountmail.Capture{}, Logger: slog.New(slog.NewTextHandler(logs, nil))}
 

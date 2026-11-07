@@ -732,10 +732,63 @@ func TestStrandedSteps_EmptyRunsNoStatement(t *testing.T) {
 }
 
 func TestStrandedSteps_ReadErrorIsReturned(t *testing.T) {
-	f := newLastHolderFixture(t, "APSC-16-01 read error")
-	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	// The collection runs on a healthy pool, so only StrandedStepsTx's own reads meet the failure.
+	for _, match := range []string{signMarker, "SELECT title FROM workflow_roles"} {
+		t.Run(match, func(t *testing.T) {
+			f := newLastHolderFixture(t, "APSC-16-01 read error")
+			r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+			var signed []SignedStep
+			if err := db.WithinTenantTx(context.Background(), f.app, f.tenantID, func(tx pgx.Tx) (err error) {
+				signed, err = SignedWaitingStepsTx(context.Background(), tx, r, nil)
+				return err
+			}); err != nil || len(signed) == 0 {
+				t.Fatalf("SignedWaitingStepsTx = %d steps, err %v, want one step", len(signed), err)
+			}
+			err := db.WithinTenantTx(context.Background(), failingAppPool(t, match), f.tenantID, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(context.Background(), `DELETE FROM workflow_role_members WHERE user_id = $1`, r); err != nil {
+					return err
+				}
+				_, err := StrandedStepsTx(context.Background(), tx, signed)
+				return err
+			})
+			if err == nil {
+				t.Fatalf("StrandedStepsTx err = nil, want the read error from %q", match)
+			}
+		})
+	}
+}
 
-	if _, err := f.strandedAfterLeave(t, failingAppPool(t, signMarker), r); err == nil {
-		t.Fatal("StrandedStepsTx err = nil, want the read error")
+func TestStrandedSteps_AStillSignableStepDoesNotTriggerAnOlderStrandedInvoice(t *testing.T) {
+	f := newRunFixture(t, "APSC-16-01 delta only")
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "k", "K")
+	other := seedBusinessEntity(t, f.super, f.tenantID, "Other Corp")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: roleID, limited: true, entityIDs: []string{f.entityID}})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: roleID, limited: true, entityIDs: []string{f.entityID}})
+	f.seedRunsOn(t, "k", "X", 1)
+	seedOpenRun(t, f.super, f.tenantID, other, "Y-00", f.versionID, pendingOn("k")) // out of both members' reach
+	// Control: Y is stranded before the leave.
+	if inUse := f.wantRefusedUnsigned(t, "k"); inUse.invoicesTotal != 1 {
+		t.Fatalf("control: stranded before the leave = %d, want 1 (Y)", inUse.invoicesTotal)
+	}
+
+	if got := f.wantStranded(t, r); got.Total != 0 || got.Invoices != nil || got.RoleKeys != nil {
+		t.Errorf("got %+v, want the zero value: X is still signable, so the older Y triggers nothing", got)
+	}
+}
+
+func TestStrandedSteps_AnInvoiceOnTwoRolesCountsOnce(t *testing.T) {
+	f := newRunFixture(t, "APSC-16-01 two roles one invoice")
+	r1 := seedWorkflowRole(t, f.super, f.tenantID, "r1", "R1")
+	r2 := seedWorkflowRole(t, f.super, f.tenantID, "r2", "R2")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: r1})
+	staffWorkflowRole(t, f.super, f.tenantID, r2, r, 0)
+	seedOpenRun(t, f.super, f.tenantID, f.entityID, "two-roles", f.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "pending", Key: ptr("r1")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("r2")})
+
+	got := f.wantStranded(t, r)
+
+	if len(got.Invoices) != 2 || got.Total != 1 || !slices.Equal(got.RoleKeys, []string{"r1", "r2"}) {
+		t.Errorf("got %+v, want 2 items, total 1 (distinct), keys [r1 r2]", got)
 	}
 }

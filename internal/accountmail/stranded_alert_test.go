@@ -1,6 +1,9 @@
 package accountmail
 
 import (
+	"html"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -32,6 +35,19 @@ func TestRenderStrandedAlert_NamesWorkspaceRolesAndInvoices(t *testing.T) {
 	checkRows(t, out, [][2]string{
 		{"Organisation", "Okafor & Co"}, {"Finance manager", "INV-1"}, {"CFO", "INV-2"}, {"Reviewer", "INV-3"},
 	})
+
+	// Two invoices on one role: checkRows reads the first row of a label, so list every row.
+	same := okaforStranded
+	same.Invoices = []StrandedInvoice{{"INV-1", "Finance manager"}, {"INV-2", "CFO"}, {"INV-3", "Finance manager"}}
+	_, out = renderStranded(t, same)
+	var got [][2]string
+	for _, m := range regexp.MustCompile(`<tr><td width="120"[^>]*>([^<]*)</td><td[^>]*>([^<]*)</td></tr>`).FindAllStringSubmatch(out, -1) {
+		got = append(got, [2]string{html.UnescapeString(m[1]), html.UnescapeString(m[2])})
+	}
+	wantRows := [][2]string{{"Organisation", "Okafor & Co"}, {"Finance manager", "INV-1"}, {"CFO", "INV-2"}, {"Finance manager", "INV-3"}}
+	if !reflect.DeepEqual(got, wantRows) {
+		t.Errorf("rows = %q, want %q", got, wantRows)
+	}
 }
 
 func TestRenderStrandedAlert_MoreRowOnlyWhenMore(t *testing.T) {

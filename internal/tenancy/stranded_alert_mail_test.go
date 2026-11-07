@@ -131,6 +131,27 @@ func TestStrandedAlertMail_EachActiveAdminGetsOneMail(t *testing.T) {
 	}
 }
 
+func TestStrandedAlertMail_ARoleWithNoTitleIsNamedByItsKey(t *testing.T) {
+	w := newAlertWorld(t)
+	seedWaitingRun(t, w.super, w.tenant, strandRole)
+	if _, err := w.super.Exec(context.Background(), `UPDATE workflow_roles SET title = '' WHERE tenant_id = $1 AND key = $2`, w.tenant, strandRole); err != nil {
+		t.Fatalf("blank the title: %v", err)
+	}
+	capture := &accountmail.Capture{}
+	n, _ := notifierFor(w.invWorld, capture)
+
+	if err := w.selfDelete(n, w.reviewer); err != nil {
+		t.Fatalf("notifier.DeleteMyAccount: %v", err)
+	}
+	msgs := capture.Messages()
+	requireMessages(t, msgs, 2)
+	for _, m := range msgs {
+		if !strings.Contains(m.HTML, ">"+strandRole+"<") {
+			t.Errorf("mail to %s does not name the role by its key %q", m.To, strandRole)
+		}
+	}
+}
+
 func TestStrandedAlertMail_StaffDeletionMailsTheAdmins(t *testing.T) {
 	w := newAlertWorld(t)
 	inv, _ := seedWaitingRun(t, w.super, w.tenant, strandRole)
@@ -221,6 +242,27 @@ func TestStrandedAlertMail_TheAlertRowLandsInTheDeletionsTenant(t *testing.T) {
 	if a, b := seen(w.tenant), seen(other); a != 2 || b != 0 {
 		t.Errorf("alert rows seen from the deletion's tenant = %d (want 2), from another tenant = %d (want 0)", a, b)
 	}
+
+	// Another tenant's session cannot write an alert row into the deletion's tenant; its own tenant it can (rolled back).
+	errRollback := errors.New("rollback")
+	insertAs := func(session, rowTenant string) error {
+		err := db.WithinTenantTx(context.Background(), w.app, session, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(context.Background(),
+				`INSERT INTO audit_log (tenant_id, actor, event, payload) VALUES ($1, 'system', $2, $3)`, rowTenant, evStrandedAlert,
+				`{"stranded_role_keys":["k"],"stranded_invoices_total":1,"admins":1,"delivery":"sent"}`); err != nil {
+				return err
+			}
+			return errRollback
+		})
+		return err
+	}
+	if err := insertAs(w.tenant, w.tenant); !errors.Is(err, errRollback) {
+		t.Fatalf("control: the deletion's own tenant writes the alert row, err = %v", err)
+	}
+	if err := insertAs(other, w.tenant); err == nil || errors.Is(err, errRollback) {
+		t.Errorf("tenant B wrote an alert row into the deletion's tenant, err = %v, want an RLS refusal", err)
+	}
+	requireAlertRows(t, w.super, w.tenant, 2)
 }
 
 func TestStrandedAlertMail_NothingStrandedSendsNothing(t *testing.T) {
@@ -281,29 +323,33 @@ func TestStrandedAlertMail_NoRecipientSendsNothing(t *testing.T) {
 }
 
 func TestStrandedAlertMail_AJudgementErrorSendsNothing(t *testing.T) {
-	w := newAlertWorld(t)
-	seedWaitingRun(t, w.super, w.tenant, strandRole)
-	r2, _ := w.soleSigner(t, "k2")
-	s := &apiSender{}
-	st, _ := w.tracedStore(t, "-- unsignableReasonsTx")
-	broken := &DeletionNotifier{Store: st, Sender: s, Logger: slog.New(slog.NewTextHandler(&syncBuf{}, nil))}
+	for _, cancel := range append([]string{"-- SignedWaitingStepsTx"}, afterReads...) {
+		t.Run(cancel, func(t *testing.T) {
+			w := newAlertWorld(t)
+			seedWaitingRun(t, w.super, w.tenant, strandRole)
+			r2, _ := w.soleSigner(t, "k2")
+			s := &apiSender{}
+			st, _ := w.tracedStore(t, cancel)
+			broken := &DeletionNotifier{Store: st, Sender: s, Logger: slog.New(slog.NewTextHandler(&syncBuf{}, nil))}
 
-	if err := broken.DeleteMyAccount(w.as(w.reviewer), OutcomeLeave, ""); err != nil {
-		t.Fatalf("notifier.DeleteMyAccount: %v", err)
-	}
-	w.requireDeleted(t)
-	if len(s.sent()) != 0 {
-		t.Errorf("Send called %d times after a failed judgement", len(s.sent()))
-	}
-	requireAlertRows(t, w.super, w.tenant, 0)
+			if err := broken.DeleteMyAccount(w.as(w.reviewer), OutcomeLeave, ""); err != nil {
+				t.Fatalf("notifier.DeleteMyAccount: %v", err)
+			}
+			w.requireDeleted(t)
+			if len(s.sent()) != 0 {
+				t.Errorf("Send called %d times after a failed judgement", len(s.sent()))
+			}
+			requireAlertRows(t, w.super, w.tenant, 0)
 
-	// Control: the same world on a healthy store alerts.
-	n, _ := notifierFor(w.invWorld, s)
-	if err := w.selfDelete(n, r2); err != nil {
-		t.Fatalf("notifier.DeleteMyAccount (control): %v", err)
+			// Control: the same world on a healthy store alerts.
+			n, _ := notifierFor(w.invWorld, s)
+			if err := w.selfDelete(n, r2); err != nil {
+				t.Fatalf("notifier.DeleteMyAccount (control): %v", err)
+			}
+			requireMessages(t, s.messages(), 2)
+			requireAlertRows(t, w.super, w.tenant, 1)
+		})
 	}
-	requireMessages(t, s.messages(), 2)
-	requireAlertRows(t, w.super, w.tenant, 1)
 }
 
 func TestStrandedAlertMail_AStoreErrorSendsNothing(t *testing.T) {

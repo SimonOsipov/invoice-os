@@ -832,6 +832,24 @@ func TestDecide_SignerReadErrorRollsBackTheDecision(t *testing.T) {
 	}
 }
 
+func TestApprovalRun_SignerReadErrorIsReturned(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14 QA GET read error")
+	w.role("wk-first", memberSpec{role: "reviewer"})
+	w.role("wk-second", memberSpec{role: "reviewer"})
+	inv, _ := armTwoSteps(t, w, "wk-first", "wk-second")
+	if got := w.panel(inv); len(got.Steps) != 2 {
+		t.Fatalf("len(Steps) = %d on the healthy pool, want 2 (the error row below is vacuous otherwise)", len(got.Steps))
+	}
+
+	run, err := NewStore(failingAppPool(t, signMarker), stubFingerprinter, nil).ApprovalRun(w.reader, inv)
+	if err == nil {
+		t.Fatal("ApprovalRun returned nil, want the signer read error and not a silent no-warning run")
+	}
+	if len(run.Steps) != 0 {
+		t.Errorf("run.Steps = %d on error, want a zero Run", len(run.Steps))
+	}
+}
+
 func TestApprovalRun_ADelegateStepIsNoWarning(t *testing.T) {
 	w := newWarnWorld(t, "APSC-14-07 delegate card")
 	ids := delegateWarnPage(w)

@@ -997,7 +997,9 @@ func TestClientAccess_ChangesThatKeepReachAreNotJudged(t *testing.T) {
 	c := lsReviewer(t, w, "Cleo Eze", []string{entB})
 	p := w.addMember(t, "preparer", "active", "Pia Preparer")
 	giveClients(t, super, w.tenant, p, entA)
-	seedRoleStaffedBy(t, super, w.tenant, approver, c, p)
+	sus := w.addMember(t, "reviewer", "suspended", "Sue Suspended") // signs nothing, so narrowing her is not judged
+	giveClients(t, super, w.tenant, sus, entA)
+	seedRoleStaffedBy(t, super, w.tenant, approver, c, p, sus)
 	seedWaitingRunOn(t, super, w.tenant, approver, entA, c) // stranded: out of reach, then creator only once C reaches A
 
 	for _, st := range []struct {
@@ -1008,6 +1010,7 @@ func TestClientAccess_ChangesThatKeepReachAreNotJudged(t *testing.T) {
 		{"widen C to [A, B]", c, setIDs(entA, entB)},
 		{"widen C to all", c, allClients},
 		{"narrow the preparer to []", p, setIDs()},
+		{"narrow the suspended reviewer to []", sus, setIDs()},
 	} {
 		if _, err := w.set(w.admin, st.who, st.access); err != nil {
 			t.Errorf("%s: %v, want nil (not judged)", st.name, err)

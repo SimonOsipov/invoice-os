@@ -95,7 +95,7 @@ func readPolicyTrees(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[s
 	rows, err := tx.Query(ctx,
 		`SELECT version_id, id, parent_step_id, branch, ord, kind,
 		        workflow_role_key, sla_hours, cond_op, cond_amount::text,
-		        notify_target, notify_channel
+		        notify_target, notify_channel, allow_delegation, delegate_user_id::text
 		   FROM approval_policy_steps
 		  WHERE version_id = ANY($1::uuid[])
 		  ORDER BY version_id, ord`, versionIDs)
@@ -110,7 +110,7 @@ func readPolicyTrees(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[s
 		var r stepRow
 		if err := rows.Scan(&versionID, &r.ID, &r.ParentStepID, &r.Branch, &r.Ord, &r.Kind,
 			&r.WorkflowRoleKey, &r.SLAHours, &r.CondOp, &r.CondAmount,
-			&r.NotifyTarget, &r.NotifyChannel); err != nil {
+			&r.NotifyTarget, &r.NotifyChannel, &r.AllowDelegation, &r.DelegateUserID); err != nil {
 			return nil, err
 		}
 		byVersion[versionID] = append(byVersion[versionID], r)
@@ -672,6 +672,9 @@ func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *s
 			return err
 		}
 		if err := insertPolicySteps(ctx, tx, caller.TenantID, versionID, rows); err != nil {
+			if fkViolationOn(err, "approval_policy_steps_tenant_delegate_fk") {
+				return ErrPolicyDelegateNotMember
+			}
 			return err
 		}
 
@@ -925,6 +928,10 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return &scopeRoleDeleted{titles: titles}
 		}
 
+		if err := ineligibleDelegateTx(ctx, tx, versionID, p.Steps); err != nil {
+			return err
+		}
+
 		// Only this policy's previous version leaves; other policies stay active
 		// (TestPublish_LeavesTheTenantsOtherPolicyActive).
 		if _, err := tx.Exec(ctx,
@@ -1174,7 +1181,7 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 	return p, nil
 }
 
-// stepArrays is the nine columns both INSERT batches share, one slice per column: unnest
+// stepArrays is the eleven columns both INSERT batches share, one slice per column: unnest
 // takes an array per column, never an array of rows. The nullable seven bind as []*string
 // and []*int, which is what carries a NULL through a batch that also holds values
 // (TestPutDraft_NullableColumnsRoundTripInOneBatch).
@@ -1188,6 +1195,8 @@ type stepArrays struct {
 	condAmounts    []*string
 	notifyTargets  []*string
 	notifyChannels []*string
+	allowDelegate  []bool
+	delegateIDs    []*string
 }
 
 func stepArraysOf(rows []stepRow) stepArrays {
@@ -1201,12 +1210,15 @@ func stepArraysOf(rows []stepRow) stepArrays {
 		condAmounts:    make([]*string, len(rows)),
 		notifyTargets:  make([]*string, len(rows)),
 		notifyChannels: make([]*string, len(rows)),
+		allowDelegate:  make([]bool, len(rows)),
+		delegateIDs:    make([]*string, len(rows)),
 	}
 	for i, r := range rows {
 		a.ids[i], a.ords[i], a.kinds[i] = r.ID, r.Ord, r.Kind
 		a.roleKeys[i], a.slaHours[i] = r.WorkflowRoleKey, r.SLAHours
 		a.condOps[i], a.condAmounts[i] = r.CondOp, r.CondAmount
 		a.notifyTargets[i], a.notifyChannels[i] = r.NotifyTarget, r.NotifyChannel
+		a.allowDelegate[i], a.delegateIDs[i] = r.AllowDelegation, r.DelegateUserID
 	}
 	return a
 }
@@ -1238,14 +1250,16 @@ func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID strin
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO approval_policy_steps
 		     (tenant_id, version_id, id, ord, kind, workflow_role_key, sla_hours,
-		      cond_op, cond_amount, notify_target, notify_channel)
+		      cond_op, cond_amount, notify_target, notify_channel, allow_delegation, delegate_user_id)
 		 SELECT $1::uuid, $2::uuid, s.id::uuid, s.ord, s.kind, s.role_key, s.sla,
-		        s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel
+		        s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel,
+		        s.allow_delegation, s.delegate::uuid
 		   FROM unnest($3::text[], $4::int[], $5::text[], $6::text[], $7::int[],
-		               $8::text[], $9::text[], $10::text[], $11::text[])
-		        AS s(id, ord, kind, role_key, sla, cond_op, cond_amount, notify_target, notify_channel)`,
+		               $8::text[], $9::text[], $10::text[], $11::text[], $12::bool[], $13::text[])
+		        AS s(id, ord, kind, role_key, sla, cond_op, cond_amount, notify_target, notify_channel,
+		             allow_delegation, delegate)`,
 		tenantID, versionID, r.ids, r.ords, r.kinds, r.roleKeys, r.slaHours,
-		r.condOps, r.condAmounts, r.notifyTargets, r.notifyChannels,
+		r.condOps, r.condAmounts, r.notifyTargets, r.notifyChannels, r.allowDelegate, r.delegateIDs,
 	); err != nil {
 		return err
 	}
@@ -1262,15 +1276,19 @@ func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID strin
 	_, err := tx.Exec(ctx,
 		`INSERT INTO approval_policy_steps
 		     (tenant_id, version_id, id, parent_step_id, branch, ord, kind,
-		      workflow_role_key, sla_hours, cond_op, cond_amount, notify_target, notify_channel)
+		      workflow_role_key, sla_hours, cond_op, cond_amount, notify_target, notify_channel,
+		      allow_delegation, delegate_user_id)
 		 SELECT $1::uuid, $2::uuid, s.id::uuid, s.parent::uuid, s.branch, s.ord, s.kind,
-		        s.role_key, s.sla, s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel
+		        s.role_key, s.sla, s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel,
+		        s.allow_delegation, s.delegate::uuid
 		   FROM unnest($3::text[], $4::text[], $5::text[], $6::int[], $7::text[],
-		               $8::text[], $9::int[], $10::text[], $11::text[], $12::text[], $13::text[])
+		               $8::text[], $9::int[], $10::text[], $11::text[], $12::text[], $13::text[],
+		               $14::bool[], $15::text[])
 		        AS s(id, parent, branch, ord, kind, role_key, sla, cond_op, cond_amount,
-		             notify_target, notify_channel)`,
+		             notify_target, notify_channel, allow_delegation, delegate)`,
 		tenantID, versionID, c.ids, parents, branches, c.ords, c.kinds,
 		c.roleKeys, c.slaHours, c.condOps, c.condAmounts, c.notifyTargets, c.notifyChannels,
+		c.allowDelegate, c.delegateIDs,
 	)
 	return err
 }
@@ -1409,4 +1427,57 @@ func deletedScopeRoleTitles(ctx context.Context, tx pgx.Tx, versionID string) ([
 		titles = append(titles, t)
 	}
 	return titles, rows.Err()
+}
+
+// ineligibleDelegateTx refuses a publish whose version names a delegate who is not an
+// active admin or reviewer. One RLS-scoped statement finds the offending steps; tree is
+// walked for the first, a condition's then-lane before its else-lane.
+func ineligibleDelegateTx(ctx context.Context, tx pgx.Tx, versionID string, tree []Step) error {
+	rows, err := tx.Query(ctx,
+		`SELECT s.id::text,
+		        coalesce(nullif(m.display_name, ''), nullif(m.email, ''), 'Deleted member'),
+		        coalesce(r.title, '')
+		   FROM approval_policy_steps s
+		   JOIN memberships m ON m.tenant_id = s.tenant_id AND m.user_id = s.delegate_user_id
+		   LEFT JOIN workflow_roles r ON r.key = s.workflow_role_key AND r.deleted_at IS NULL
+		  WHERE s.version_id = $1
+		    AND NOT (m.status = 'active' AND m.role IN ('admin', 'reviewer'))`, versionID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	bad := map[string]*delegateIneligible{}
+	for rows.Next() {
+		var id string
+		var d delegateIneligible
+		if err := rows.Scan(&id, &d.name, &d.step); err != nil {
+			return err
+		}
+		bad[id] = &d
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	var first func(lane []Step) *delegateIneligible
+	first = func(lane []Step) *delegateIneligible {
+		for _, st := range lane {
+			if d := bad[st.ID]; d != nil {
+				return d
+			}
+			if d := first(st.Then); d != nil {
+				return d
+			}
+			if d := first(st.Else); d != nil {
+				return d
+			}
+		}
+		return nil
+	}
+	if d := first(tree); d != nil {
+		return d
+	}
+	return nil
 }

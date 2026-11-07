@@ -38,7 +38,7 @@ const scopeAllInvoices = "All invoices"
 
 // stepWireKeys is Step's whole JSON key set, sorted.
 var stepWireKeys = []string{
-	"cond_amount", "cond_op", "else", "id", "kind",
+	"allow_delegation", "cond_amount", "cond_op", "delegate_user_id", "else", "id", "kind",
 	"notify_channel", "notify_target", "sla_hours", "then", "workflow_role_key",
 }
 
@@ -135,7 +135,7 @@ func polZeroIDs(steps []Step) {
 
 // --- AC-1: the wire shape ---------------------------------------------------
 
-func TestPolicy_StepMarshalsTenKeys(t *testing.T) {
+func TestPolicy_StepMarshalsTwelveKeys(t *testing.T) {
 	for _, kind := range stepKinds {
 		t.Run(kind, func(t *testing.T) {
 			// Nil lanes: the zero value is what a leaf kind carries.
@@ -1192,6 +1192,42 @@ func TestPolicy_NormalizeNameUnicode(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("normalizeName(%q) = %q (% x), want %q (% x)", tc.in, got, got, tc.want, tc.want)
+			}
+		})
+	}
+}
+
+func TestPolicy_ValidateTreeRefusesMisplacedDelegation(t *testing.T) {
+	uid := uuid.NewString()
+	approval := func(mut func(*stepInput)) stepInput {
+		s := legalStepOfKind("approval")
+		mut(&s)
+		return s
+	}
+	cases := []struct {
+		name string
+		step stepInput
+		bad  bool
+	}{
+		{"notify with delegation", func() stepInput { s := legalStepOfKind("notify"); s.AllowDelegation = true; return s }(), true},
+		{"condition with delegation", func() stepInput { s := legalStepOfKind("condition"); s.AllowDelegation = true; return s }(), true},
+		{"autoapprove with delegation", func() stepInput { s := legalStepOfKind("autoapprove"); s.AllowDelegation = true; return s }(), true},
+		{"notify with a delegate", func() stepInput { s := legalStepOfKind("notify"); s.DelegateUserID = ptr(uid); return s }(), true},
+		{"delegate with delegation off", approval(func(s *stepInput) { s.DelegateUserID = ptr(uid) }), true},
+		{"delegate not a uuid", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr("not-a-uuid") }), true},
+		{"delegate with a NUL", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr(uid + "\x00") }), true},
+		{"delegate in urn spelling", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr("urn:uuid:" + uid) }), true},
+		{"control: delegation on with a uuid", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr(uid) }), false},
+		{"control: delegation on for anyone", approval(func(s *stepInput) { s.AllowDelegation = true }), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTree([]stepInput{tc.step})
+			if tc.bad && !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+			if !tc.bad && err != nil {
+				t.Errorf("err = %v, want nil", err)
 			}
 		})
 	}

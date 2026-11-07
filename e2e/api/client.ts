@@ -1577,6 +1577,8 @@ export interface ApprovalStep {
   cond_amount: string | null // numeric(14,2) read via ::text, so the scale survives ('0.00', not '0')
   notify_target: string | null
   notify_channel: string | null
+  allow_delegation: boolean
+  delegate_user_id: string | null // null = anyone, when delegation is on
   then: ApprovalStep[] // [] never null
   else: ApprovalStep[] // [] never null
 }
@@ -1633,6 +1635,8 @@ export interface ApprovalStepInput {
   cond_amount?: string | null
   notify_target?: string | null
   notify_channel?: string | null
+  allow_delegation?: boolean
+  delegate_user_id?: string | null
   then?: ApprovalStepInput[]
   else?: ApprovalStepInput[]
 }

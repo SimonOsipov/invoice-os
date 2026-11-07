@@ -1081,3 +1081,98 @@ func TestPutDraft_MalformedIdIsNotFound(t *testing.T) {
 		t.Errorf("the live draft holds %v, want the one submitted approval step", steps)
 	}
 }
+
+// --- delegation ---------------------------------------------------------------
+
+// stepDelegateFixture is a tenant with an admin caller, a live "Finance Manager" role and
+// one policy. delegate seeds a membership of the tenant.
+type stepDelegateFixture struct {
+	t        *testing.T
+	super    *pgxpool.Pool
+	store    *Store
+	tenantID string
+	ctx      context.Context
+	policyID string
+}
+
+func newStepDelegateFixture(t *testing.T, label string) stepDelegateFixture {
+	t.Helper()
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, label)
+	c, _ := activeAdmin(t, super, tenantID)
+	seedWorkflowRole(t, super, tenantID, "finance-manager", "Finance Manager")
+	return stepDelegateFixture{t: t, super: super, store: NewStore(app, stubFingerprinter, nil),
+		tenantID: tenantID, ctx: c, policyID: seedApprovalPolicy(t, super, tenantID, "Sign-off")}
+}
+
+func (f stepDelegateFixture) delegate(role, status, displayName string) string {
+	f.t.Helper()
+	id := uuid.NewString()
+	seedMembership(f.t, f.super, f.tenantID, id, role, status)
+	if displayName != "" {
+		setMembershipDisplayName(f.t, f.super, id, displayName)
+	}
+	return id
+}
+
+func delegatedStep(delegate *string) stepInput {
+	return stepInput{Kind: "approval", WorkflowRoleKey: ptr("finance-manager"), AllowDelegation: true, DelegateUserID: delegate}
+}
+
+type delegation struct {
+	Allow bool
+	ID    *string
+}
+
+func delegationsOf(steps []Step) []delegation {
+	out := []delegation{}
+	for _, s := range steps {
+		out = append(out, delegation{s.AllowDelegation, s.DelegateUserID})
+	}
+	return out
+}
+
+func TestPutDraft_DelegationRoundTrips(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 roundtrip")
+	reviewer := f.delegate("reviewer", "active", "Ada Obi")
+	steps := []stepInput{
+		{Kind: "approval", WorkflowRoleKey: ptr("finance-manager")},
+		delegatedStep(nil),
+		delegatedStep(&reviewer),
+	}
+	want := []delegation{{false, nil}, {true, nil}, {true, &reviewer}}
+
+	put, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, steps)
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if got := delegationsOf(put.Steps); !reflect.DeepEqual(got, want) {
+		t.Errorf("PUT response delegations = %+v, want %+v", got, want)
+	}
+	got, err := f.store.GetPolicy(f.ctx, f.policyID)
+	if err != nil {
+		t.Fatalf("GetPolicy: %v", err)
+	}
+	if g := delegationsOf(got.Steps); !reflect.DeepEqual(g, want) {
+		t.Errorf("GET delegations = %+v, want %+v", g, want)
+	}
+}
+
+func TestPutDraft_AcceptsAnIneligibleMemberAsDelegate(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 ineligible save")
+	for name, id := range map[string]string{
+		"preparer":           f.delegate("preparer", "active", ""),
+		"suspended reviewer": f.delegate("reviewer", "suspended", ""),
+		"removed reviewer":   f.delegate("reviewer", "removed", ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			put, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&id)})
+			if err != nil {
+				t.Fatalf("PutDraft: %v, want 200", err)
+			}
+			if got := delegationsOf(put.Steps); len(got) != 1 || got[0].ID == nil || *got[0].ID != id {
+				t.Errorf("stored delegations = %+v, want the named member %s", got, id)
+			}
+		})
+	}
+}

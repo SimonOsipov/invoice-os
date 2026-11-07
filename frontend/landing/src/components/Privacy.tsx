@@ -199,8 +199,8 @@ export function Privacy() {
           <p style={P}>
             Our Feature Library at {PRODUCTION_HOSTNAMES[0]}{LIBRARY_BASE} follows this policy too. One analytics choice covers this
             site and the Library: whatever you choose on either applies to both, and the other does not ask you again.
-            Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on
-            either, and a change made there applies to both.
+            Cookie choices, at the foot of this site's pages and in the Library's sidebar menu, brings the notice back
+            on either, and a change made there applies to both.
           </p>
           <p style={P}>
             If you allow analytics there, Google Analytics measures the Library in the same way and under the same
@@ -223,7 +223,7 @@ export function Privacy() {
           <p style={P}>
             Our Blog at {PRODUCTION_HOSTNAMES[0]}{BLOG_BASE} follows this policy too. One analytics choice covers this site, the Feature
             Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot
-            of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If
+            of this site's pages and in the Library's and the Blog's sidebar menu, brings the notice back, and a change made there applies to all three. If
             you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and
             Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library.
             Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's

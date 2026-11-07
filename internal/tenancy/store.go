@@ -224,7 +224,7 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 // AND status = 'active' so a suspended admin cannot reactivate themselves
 // (TestMembership_SuspendedAdminCannotAdminister).
 //
-// The second statement locks the target AND the whole active-admin set in
+// lockTargetAndAdmins locks the target AND the whole active-admin set in
 // user_id order: the last-active-admin guard then runs over rows no concurrent
 // PATCH can move under it, and contention waits instead of deadlocking. A plain
 // count, or a lock on the target alone, would let two concurrent PATCHes strand

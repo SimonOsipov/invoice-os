@@ -381,6 +381,9 @@ func TestDeleteRoleHandler_RealStoreRunRefusalHasEmptyPoliciesArray(t *testing.T
 	if got := rawField(t, body, "policies"); got != "[]" {
 		t.Errorf("policies = %s, want []", got)
 	}
+	if got := rawField(t, body, "invoices"); got != fmt.Sprintf(`[{"id":%q,"invoice_number":"INV-1"}]`, inv) {
+		t.Errorf("invoices = %s, want items with only id and invoice_number", got)
+	}
 	var decoded struct {
 		Invoices []InvoiceRef `json:"invoices"`
 		Total    int          `json:"invoices_total"`

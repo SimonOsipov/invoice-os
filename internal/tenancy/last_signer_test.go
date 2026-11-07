@@ -554,6 +554,23 @@ func TestLastSigner_HandlerBodyCapsAtTwenty(t *testing.T) {
 	}
 }
 
+func TestLastSigner_AnotherTenantsWaitingRunDoesNotRefuse(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := lsWorld(t, super, app)
+	other := lsWorld(t, super, app)
+	r := w.addMember(t, "reviewer", "active", "Rita Eze")
+	q := w.addMember(t, "reviewer", "active", "Quin Eze")
+	seedRoleStaffedBy(t, super, w.tenant, approver, r)
+	seedRoleStaffedBy(t, super, w.tenant, "control", q)
+	seedWaitingRun(t, super, other.tenant, approver)
+	seedWaitingRun(t, super, w.tenant, "control")
+
+	if err := w.lsSetStatus(w.admin, r, "suspended"); err != nil {
+		t.Errorf("suspend R with only another tenant's run waiting: %v, want nil", err)
+	}
+	wantLastSigner(t, w.lsSetStatus(w.admin, q, "suspended")) // the same change with a run of this tenant refuses
+}
+
 func lsWaitForAdvisoryWaiter(t *testing.T, super *pgxpool.Pool, done <-chan error) {
 	t.Helper()
 	for range 500 {

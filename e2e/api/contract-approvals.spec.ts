@@ -1168,7 +1168,12 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     ).toEqual([['pending', role.key]])
     return { role, policy, invoice: created }
   }
-  function assertRoleInRun(res: RawResult, invoice: { id: string; invoice_number: string }, label: string): Record<string, unknown> {
+  function assertRoleInRun(
+    res: RawResult,
+    invoice: { id: string; invoice_number: string },
+    label: string,
+    items: Record<string, string>[] = [{ id: invoice.id, invoice_number: invoice.invoice_number }],
+  ): Record<string, unknown> {
     expect(res.status, `${label}: expected HTTP 409`).toBe(409)
     const body = res.body as Record<string, unknown>
     expect(Object.keys(body).sort(), `${label}: the body is error, invoices, invoices_total, policies`).toEqual([
@@ -1178,7 +1183,7 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
       'policies',
     ])
     expect(String(body.error), `${label}: the message should carry no sentinel prefix`).not.toContain('approval: ')
-    expect(body.invoices, `${label}: names the waiting invoice`).toEqual([{ id: invoice.id, invoice_number: invoice.invoice_number }])
+    expect(body.invoices, `${label}: names the waiting invoice`).toEqual(items)
     expect(body.invoices_total, `${label}: one waiting invoice`).toBe(1)
     return body
   }
@@ -1270,12 +1275,11 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
       ['demoting', await setMemberRole(t, userId, 'preparer')],
     ] as const
     for (const [label, res] of refused) {
-      const body = assertRoleInRun(res, invoice, `${label} the last signer`)
-      expect(body.error, `${label}: the member sentence`).toBe(MSG_MEMBER_LAST_SIGNER)
-      expect(body.policies, `${label}: names no policy`).toEqual([])
-      expect(body.invoices, `${label}: names the invoice and the role it waits on`).toEqual([
+      const body = assertRoleInRun(res, invoice, `${label} the last signer`, [
         { id: invoice.id, invoice_number: invoice.invoice_number, workflow_role_key: role.key, workflow_role_title: role.title },
       ])
+      expect(body.error, `${label}: the member sentence`).toBe(MSG_MEMBER_LAST_SIGNER)
+      expect(body.policies, `${label}: names no policy`).toEqual([])
     }
     const row = await rowOf(t, userId)
     expect([row?.status, row?.role], 'the refusals leave the reviewer active').toEqual(['active', 'reviewer'])

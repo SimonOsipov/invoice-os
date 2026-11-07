@@ -64,7 +64,7 @@ type InvoiceRef struct {
 	RoleTitle string `json:"workflow_role_title,omitempty"`
 }
 
-// roleInUse is DeleteRole's and SetRoleMembers' refusal; it carries the policies and the waiting invoices
+// roleInUse is a role-in-use refusal; it carries the policies and the waiting invoices
 // (at most roleInRunListCap of invoicesTotal) so the handler can list them.
 type roleInUse struct {
 	policies      []PolicyRef

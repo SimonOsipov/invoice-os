@@ -154,7 +154,7 @@ func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// roleInUseResponse is the role-in-use 409 body, DELETE and PUT members alike: the sentence, the policies that name the role,
+// roleInUseResponse is the role-in-use 409 body: the sentence, the policies that name the role,
 // and, when an open run waits on it, the invoices (capped) with their full count.
 type roleInUseResponse struct {
 	Error         string       `json:"error"`

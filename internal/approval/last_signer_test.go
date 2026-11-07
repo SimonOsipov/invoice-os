@@ -383,6 +383,11 @@ func TestRefuseUnsignedWaitingRoles_JudgesEachInvoice(t *testing.T) {
 		t.Errorf("invoices = %+v, total = %d, want %+v and 1 (role y has a signer for its invoice)", inUse.invoices, inUse.invoicesTotal, want)
 	}
 	f.wantPassedUnsigned(t, "y")
+
+	inUse = f.wantRefusedUnsigned(t, "y", "x") // a passing role first must not end the loop
+	if !slices.Equal(inUse.invoices, want) || inUse.invoicesTotal != 1 {
+		t.Errorf("keys [y x]: invoices = %+v, total = %d, want %+v and 1", inUse.invoices, inUse.invoicesTotal, want)
+	}
 }
 
 func TestRefuseUnsignedWaitingRoles_CreatorOnlyRefuses(t *testing.T) {

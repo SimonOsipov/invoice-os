@@ -76,7 +76,9 @@ function isMasterDataUri(src: string): boolean {
   if (!m) return false
   let body = src.slice(src.indexOf(',') + 1)
   try { body = decodeURIComponent(body) } catch { /* keep raw */ }
-  return body.includes(`viewBox="${MASTER_VIEWBOX}"`) && body.includes(`rx="${MASTER_TILE_RX}"`)
+  // Vite's inliner rewrites attribute quotes to single quotes.
+  const attr = (name: string, value: string) => body.includes(`${name}="${value}"`) || body.includes(`${name}='${value}'`)
+  return attr('viewBox', MASTER_VIEWBOX) && attr('rx', MASTER_TILE_RX)
 }
 
 export function brandMarkProblems(r: BrandMarkReading): string[] {

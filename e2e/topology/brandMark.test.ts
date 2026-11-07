@@ -56,6 +56,9 @@ describe('brandMarkProblems', () => {
     expect(brandMarkProblems({ ...good, src: 'https://x.test/blog/assets/mark-Ab1.svg' })).toEqual([])
     expect(brandMarkProblems({ ...good, src: 'data:image/svg+xml,%3csvg%20viewBox%3D%220%200%2016%2016%22%3E%3C%2Fsvg%3E' })).toHaveLength(1)
     expect(brandMarkProblems({ ...good, src: 'data:image/png;base64,iVBORw0KGgo=' })).toHaveLength(1)
+    // Vite's inliner: single quotes, lowercase escapes.
+    const viteInlined = "data:image/svg+xml,%3csvg%20viewBox='0%200%20128%20128'%3e%3crect%20rx='36.5'/%3e%3c/svg%3e"
+    expect(brandMarkProblems({ ...good, src: viteInlined })).toEqual([])
   })
 
   it('a wrong corner radius is a problem', () => {

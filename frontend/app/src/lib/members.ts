@@ -140,8 +140,16 @@ export function inhouseNotifyTargets(current: string): string[] {
  * `APPR-00 Q1 — the inline approver pair agrees with lib/roles.ts` catches it drifting from
  * its siblings, lib/roles.ts:415-417 (`isApprover`) and internal/approval/read_model.go:330-332.
  */
-export function delegateCandidates(list: readonly Member[]): string[] {
-  return list.filter((m) => m.status === 'active' && (m.role === 'admin' || m.role === 'reviewer')).map((m) => m.name)
+export function delegateCandidates(list: readonly Member[]): { id: string; name: string }[] {
+  return list.filter((m) => m.status === 'active' && (m.role === 'admin' || m.role === 'reviewer')).map((m) => ({ id: m.id, name: m.name }))
+}
+
+/** The server's publish-guard sentence for a named delegate who is not an active approver; null when fine. */
+export function ineligibleDelegateReason(list: readonly Member[], delegateId: string, stepTitle: string): string | null {
+  if (!delegateId) return null
+  const m = list.find((x) => x.id === delegateId)
+  if (m && m.status === 'active' && (m.role === 'admin' || m.role === 'reviewer')) return null
+  return `${m ? m.name : REMOVED_NAME} can no longer be a delegate on ${stepTitle}. Pick another delegate or switch delegation off.`
 }
 
 /** The §9 last-admin lock reads this: at length 1, that admin cannot be demoted or suspended. */

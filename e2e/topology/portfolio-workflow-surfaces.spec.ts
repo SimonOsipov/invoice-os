@@ -782,7 +782,8 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   const manage = (await styles(inspector.getByRole('button', { name: 'Manage roles', exact: true }), ['font-weight']))['font-weight']
   expect(manage, 'Manage roles weight').toBe('500')
   const delegationRow = inspector.getByText('Allow delegation', { exact: true }).locator('xpath=..')
-  expect((await styles(delegationRow, ['opacity'])).opacity, 'delegation row opacity').toBe('0.55')
+  const deadlineLabel = inspector.getByLabel('Deadline').locator('xpath=ancestor::label[1]')
+  expect((await styles(delegationRow, ['opacity'])).opacity, 'delegation row opacity matches the Deadline select').toBe((await styles(deadlineLabel, ['opacity'])).opacity)
   const track = inspector.getByRole('switch', { name: 'Allow delegation' })
   const trackBox = await track.boundingBox()
   const trackRadius = parseFloat((await styles(track, ['border-top-left-radius']))['border-top-left-radius'])

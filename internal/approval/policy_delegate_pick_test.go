@@ -20,6 +20,9 @@ func TestPickIneligibleDelegate(t *testing.T) {
 	if !errors.Is(got, ErrPolicyDelegateIneligible) {
 		t.Fatalf("unplaced offender must fail closed, got %v", got)
 	}
+	if got := pickIneligibleDelegate(map[string]*delegateIneligible{"s2": a, "unplaced": b}, b, tree); got != error(a) {
+		t.Fatalf("a placed offender wins over an unplaced first row, got %v", got)
+	}
 	var di *delegateIneligible
 	if !errors.As(got, &di) || di != b {
 		t.Fatalf("want first row names, got %v", di)

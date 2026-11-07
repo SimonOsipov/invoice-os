@@ -288,6 +288,8 @@ func TestRoleInUseMessage_ByCase(t *testing.T) {
 		{"empty", roleInUse{}, roleInUseMessage},
 		{"last holder, invoices only", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 		{"last holder, policies set", roleInUse{lastHolder: true, policies: pol, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
+		{"last signer, invoices", roleInUse{lastSigner: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
+		{"last signer beats last holder", roleInUse{lastSigner: true, lastHolder: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
 	}
 	for _, c := range cases {
 		if got := c.e.message(); got != c.want {

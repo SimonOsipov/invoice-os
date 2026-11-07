@@ -255,6 +255,14 @@ func TestRun_WildcardFreeGlobMatchesExactPathOnly(t *testing.T) {
 	if code, _, errs := do(dir); code != 0 {
 		t.Fatalf("exact file: code=%d err=%q", code, errs)
 	}
+	t.Run("question mark and bracket stay globs", func(t *testing.T) {
+		for _, g := range []string{"x.g?", "x.[g]o"} {
+			dir := repo(t, map[string]string{".claude/rules/a.md": rule(`"` + g + `"`), "x.go": ""})
+			if code, _, errs := do(dir); code != 0 {
+				t.Errorf("%s: code=%d err=%q", g, code, errs)
+			}
+		}
+	})
 }
 
 func TestRun_FenceTolerance(t *testing.T) {

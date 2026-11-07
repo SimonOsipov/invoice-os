@@ -1091,10 +1091,14 @@ func TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount(t *testing.T) 
 	others := rec.without(signMarker)
 	for _, table := range []string{
 		"FROM approval_runs", "FROM approval_run_steps", "FROM workflow_roles",
-		"FROM workflow_role_members", "FROM memberships",
 	} {
 		if got := len(filterContaining(others, table)); got != 1 {
 			t.Errorf("statements mentioning %q = %d, want exactly 1 (30 rows across four roles must not inflate this)", table, got)
+		}
+	}
+	for _, table := range []string{"FROM workflow_role_members", "FROM memberships"} {
+		if got := len(filterContaining(others, table)); got != 0 {
+			t.Errorf("statements mentioning %q = %d, want 0 (the row loads no holders)", table, got)
 		}
 	}
 }
@@ -1251,7 +1255,7 @@ func TestGateFile_NoTenantIdPredicate(t *testing.T) {
 	}
 }
 
-// --- APSC-14-03: the holder warning is judged per invoice ----------------------------
+// --- the holder warning is judged per invoice ----------------------------
 
 // warnWorld is a firm with clients A and B and one policy version that seedOpenRun hangs runs on.
 type warnWorld struct {
@@ -1492,6 +1496,27 @@ func TestRowFactsTx_ReasonMatchesThePanelStep(t *testing.T) {
 					h.Warn, reasonText(h.Reason))
 			}
 		})
+	}
+}
+
+// TestRowFactsTx_NilKeyLowestStepIsNotSkippedByThePanel: a NULL-key lowest pending step warns nowhere, whatever follows.
+func TestRowFactsTx_NilKeyLowestStepIsNotSkippedByThePanel(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 nil key first")
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	w.n++
+	inv, _ := seedOpenRun(t, w.super, w.tenantID, w.entA, fmt.Sprintf("warn-%d", w.n), w.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "pending"},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("wk-away")})
+	rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]
+	var warn bool
+	var reason *string
+	for _, st := range w.panel(inv).Steps {
+		if st.Holder != nil && st.Holder.Warn {
+			warn, reason = true, st.Holder.Reason
+		}
+	}
+	if rf.PendingHolderWarn || warn || reasonText(rf.PendingHolderReason) != reasonText(reason) {
+		t.Errorf("row warn = %t, panel warn = %t, want both false", rf.PendingHolderWarn, warn)
 	}
 }
 

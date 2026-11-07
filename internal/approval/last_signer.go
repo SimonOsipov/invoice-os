@@ -35,6 +35,15 @@ type SignedStep struct {
 	delegate                              *string
 }
 
+func (s SignedStep) probe() SignerProbe {
+	p := SignerProbe{InvoiceID: s.invoiceID, AllowDelegation: s.allow, DelegateUserID: s.delegate}
+	if s.roleKey != "" {
+		k := s.roleKey
+		p.RoleKey = &k
+	}
+	return p
+}
+
 // signedWaitingSQL lists the pending approval steps the target could sign by kind: a member of the live role
 // (a join, never EXISTS), or a delegate. Keys in $2 are judged by the role loop.
 const signedWaitingSQL = `-- SignedWaitingStepsTx
@@ -78,11 +87,7 @@ func SignedWaitingStepsTx(ctx context.Context, tx pgx.Tx, target string, keys []
 	}
 	probes := make([]SignerProbe, len(steps))
 	for i, st := range steps {
-		probes[i] = SignerProbe{InvoiceID: st.invoiceID, AllowDelegation: st.allow, DelegateUserID: st.delegate}
-		if st.roleKey != "" {
-			k := st.roleKey
-			probes[i].RoleKey = &k
-		}
+		probes[i] = st.probe()
 	}
 	_, signs, err := signerStandingTx(ctx, tx, probes, target)
 	if err != nil {
@@ -101,7 +106,7 @@ func SignedWaitingStepsTx(ctx context.Context, tx pgx.Tx, target string, keys []
 // and nobody can approve that invoice. Who can sign is judged by unsignableReasonsTx, via unsignedWaitingInvoicesTx.
 func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string, signed []SignedStep) error {
 	var invoices []InvoiceRef
-	var total int
+	distinct := map[string]bool{}
 	// ceiling: one unsignedWaitingInvoicesTx per staffed role; batch it above ~20 roles per member
 	for _, key := range keys {
 		var title string
@@ -113,25 +118,21 @@ func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string,
 		if err != nil {
 			return err
 		}
-		refs, n, err := unsignedWaitingInvoicesTx(ctx, tx, key)
+		refs, err := unsignedWaitingInvoicesTx(ctx, tx, key)
 		if err != nil {
 			return err
 		}
 		for _, ref := range refs {
+			distinct[ref.ID] = true
 			ref.RoleKey, ref.RoleTitle = key, title
 			invoices = append(invoices, ref)
 		}
-		total += n
 	}
 	// Steps the target could sign outside its roles: one item per invoice and role key.
 	if len(signed) > 0 {
 		probes := make([]SignerProbe, len(signed))
 		for i, st := range signed {
-			probes[i] = SignerProbe{InvoiceID: st.invoiceID, AllowDelegation: st.allow, DelegateUserID: st.delegate}
-			if st.roleKey != "" {
-				k := st.roleKey
-				probes[i].RoleKey = &k
-			}
+			probes[i] = st.probe()
 		}
 		reasons, err := unsignableReasonsTx(ctx, tx, probes)
 		if err != nil {
@@ -145,11 +146,11 @@ func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string,
 			}
 			seen[[2]string{st.invoiceID, st.roleKey}] = true
 			invoices = append(invoices, InvoiceRef{ID: st.invoiceID, Number: st.number, RoleKey: st.roleKey, RoleTitle: st.roleTitle})
-			total++
+			distinct[st.invoiceID] = true
 		}
 	}
-	if total == 0 {
+	if len(distinct) == 0 {
 		return nil
 	}
-	return &roleInUse{lastSigner: true, invoices: capInvoiceRefs(invoices), invoicesTotal: total}
+	return &roleInUse{lastSigner: true, invoices: capInvoiceRefs(invoices), invoicesTotal: len(distinct)}
 }

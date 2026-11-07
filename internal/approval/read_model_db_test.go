@@ -746,7 +746,7 @@ func TestApprovalRun_ClosedRunStillReadable(t *testing.T) {
 	}
 }
 
-// --- APSC-14-03: the pending step is judged per invoice -------------------------------
+// --- the pending step is judged per invoice -------------------------------
 
 // armTwoSteps arms an invoice on A with two approval steps, k0 then k1, on one active policy.
 func armTwoSteps(t *testing.T, w *warnWorld, k0, k1 string) (invoiceID, runID string) {

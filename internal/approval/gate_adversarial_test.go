@@ -140,10 +140,14 @@ func TestRowFactsTx_EmptyAndNilIDsAnswerEmptyAtConstantCost(t *testing.T) {
 			}
 			for _, table := range []string{
 				"FROM approval_runs", "FROM approval_run_steps", "FROM workflow_roles",
-				"FROM workflow_role_members", "FROM memberships",
 			} {
 				if got := len(rec.mentioning(table)); got != 1 {
 					t.Errorf("statements mentioning %q = %d, want exactly 1", table, got)
+				}
+			}
+			for _, table := range []string{"FROM workflow_role_members", "FROM memberships"} {
+				if got := len(rec.mentioning(table)); got != 0 {
+					t.Errorf("statements mentioning %q = %d, want 0", table, got)
 				}
 			}
 		})

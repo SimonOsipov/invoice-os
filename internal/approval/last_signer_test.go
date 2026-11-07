@@ -71,6 +71,18 @@ func (f runFixture) seedRunsOn(t *testing.T, key, prefix string, n int) []string
 	return ids
 }
 
+func TestRefuseUnsignedWaitingRolesTx_CountsAnInvoiceOnce(t *testing.T) {
+	f := newRunFixture(t, "APSC-13 total distinct")
+	seedWorkflowRole(t, f.super, f.tenantID, "r1", "R1")
+	seedWorkflowRole(t, f.super, f.tenantID, "r2", "R2")
+	seedOpenRun(t, f.super, f.tenantID, f.entityID, "two-roles", f.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "pending", Key: ptr("r1")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("r2")})
+	if got := f.wantRefusedUnsigned(t, "r1", "r2").invoicesTotal; got != 1 {
+		t.Errorf("invoicesTotal = %d, want 1", got)
+	}
+}
+
 func TestStaffedRoleKeysTx_ListsTheLiveRolesTheSubjectIsStaffedIn(t *testing.T) {
 	f := newRunFixture(t, "APSC-13 staffed keys")
 	roleB := seedWorkflowRole(t, f.super, f.tenantID, "b", "B")

@@ -278,7 +278,7 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		return nil, err
 	}
 
-	exists, titles, _, err := resolveRunRoles(ctx, tx, roleKeys)
+	exists, titles, _, err := resolveRunRoles(ctx, tx, roleKeys, false)
 	if err != nil {
 		return nil, err
 	}

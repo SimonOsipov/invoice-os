@@ -388,12 +388,12 @@ func capInvoiceRefs(refs []InvoiceRef) []InvoiceRef {
 }
 
 // unsignedWaitingInvoicesTx lists the invoices an open run holds on role key where some pending step nobody can
-// approve (unsignableReasonsTx), oldest run first, capped, with their full count.
-func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
+// approve (unsignableReasonsTx), oldest run first, uncapped.
+func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, error) {
 	// ceiling: reads every invoice waiting on the role; filter in SQL above ~1k waiting runs per role
 	waiting, err := waitingOnRoleTx(ctx, tx, key)
 	if err != nil || len(waiting) == 0 {
-		return nil, 0, err
+		return nil, err
 	}
 	probes := make([]SignerProbe, len(waiting))
 	for i, w := range waiting {
@@ -401,7 +401,7 @@ func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]In
 	}
 	reasons, err := unsignableReasonsTx(ctx, tx, probes)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	var unsigned []InvoiceRef
 	seen := map[string]bool{}
@@ -411,7 +411,7 @@ func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]In
 			unsigned = append(unsigned, waiting[i].InvoiceRef)
 		}
 	}
-	return capInvoiceRefs(unsigned), len(unsigned), nil
+	return unsigned, nil
 }
 
 // DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
@@ -600,12 +600,12 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 		}
 
 		// Judged on the stored new set, by unsignableReasonsTx.
-		invoices, total, err := unsignedWaitingInvoicesTx(ctx, tx, staffed.Key)
+		unsigned, err := unsignedWaitingInvoicesTx(ctx, tx, staffed.Key)
 		if err != nil {
 			return err
 		}
-		if len(invoices) > 0 {
-			return &roleInUse{lastHolder: true, invoices: invoices, invoicesTotal: total}
+		if len(unsigned) > 0 {
+			return &roleInUse{lastHolder: true, invoices: capInvoiceRefs(unsigned), invoicesTotal: len(unsigned)}
 		}
 
 		// Last statement in the closure (TestStaffing_AuditsInSameTx). The key is the locked

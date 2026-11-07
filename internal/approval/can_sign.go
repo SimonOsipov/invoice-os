@@ -18,7 +18,7 @@ func holderReason(reason string) *string {
 	switch reason {
 	case "":
 		return nil
-	case "deleted", "no holder":
+	case StrandedDeleted, StrandedNoHolder:
 		v = HolderReasonUnstaffed
 	default:
 		v = HolderReasonNobodyCanApprove

@@ -178,7 +178,7 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 		return err
 	}
 
-	exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys)
+	exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys, true)
 	if err != nil {
 		return err
 	}
@@ -201,8 +201,11 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 	// (TestRowFactsTx_ReasonMatchesThePanelStep). One signer statement; errors fail the read.
 	for i := range run.Steps {
 		st := run.Steps[i]
-		if st.Kind != "approval" || st.State != "pending" || st.WorkflowRoleKey == nil {
+		if st.Kind != "approval" || st.State != "pending" {
 			continue
+		}
+		if st.WorkflowRoleKey == nil {
+			break
 		}
 		reasons, err := unsignableReasonsTx(ctx, tx, []SignerProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey,
 			AllowDelegation: st.allowDelegation, DelegateUserID: st.delegateUserID}})
@@ -252,7 +255,8 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 // role keys: the roles, then their staffing, then those holders' memberships -- three
 // statements constant in the key count, the ListRoles/readPolicyTrees shape, never a
 // JOIN and never a tenant_id predicate (RLS is the only scope, store.go:27-30).
-func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string) (exists map[string]bool, titles map[string]string, holders map[string][]holderInput, err error) {
+// withHolders false skips the staffing reads and returns nil holders.
+func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string, withHolders bool) (exists map[string]bool, titles map[string]string, holders map[string][]holderInput, err error) {
 	exists = map[string]bool{}
 	titles = map[string]string{}
 	holders = map[string][]holderInput{}
@@ -278,6 +282,10 @@ func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string) (exists map[
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, nil, nil, err
+	}
+
+	if !withHolders {
+		return exists, titles, nil, nil
 	}
 
 	// Holders must return in workflow_role_members.ord order: resolveHolder distinguishes
@@ -433,10 +441,7 @@ func inspectorResolveHolder(roleExists bool, holders []holderInput) Resolved {
 	}
 }
 
-func unstaffedReason() *string {
-	v := HolderReasonUnstaffed
-	return &v
-}
+func unstaffedReason() *string { return holderReason(StrandedNoHolder) }
 
 // withExtra appends " +N" when other holders exist, roles.ts:122's shape (resolve only).
 func withExtra(primary string, extra int) string {

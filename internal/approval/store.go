@@ -332,6 +332,37 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 // roleInRunListCap bounds the invoices a role-in-use refusal lists.
 const roleInRunListCap = 20
 
+// openRunsOnRoleTx lists the invoices (at most roleInRunListCap, oldest run first) whose
+// open run has a pending approval step naming the live role, with their full count.
+func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
+	// ceiling: arm does not take the tenant lock, so a staffing or delete write racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
+	// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
+	runRows, err := tx.Query(ctx,
+		`SELECT i.id, i.invoice_number, count(*) OVER ()
+		   FROM approval_runs r
+		   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
+		  WHERE r.state = 'open'
+		    AND i.status = 'validated'
+		    AND EXISTS (SELECT 1 FROM workflow_roles w WHERE w.key = $1 AND w.deleted_at IS NULL)
+		    AND EXISTS (SELECT 1 FROM approval_run_steps s
+		                 WHERE s.run_id = r.id AND s.kind = 'approval'
+		                   AND s.state = 'pending' AND s.workflow_role_key = $1)
+		  ORDER BY r.opened_at, i.id
+		  LIMIT $2`, key, roleInRunListCap)
+	if err != nil {
+		return nil, 0, err
+	}
+	var total int
+	invoices, err := pgx.CollectRows(runRows, func(row pgx.CollectableRow) (InvoiceRef, error) {
+		var ref InvoiceRef
+		return ref, row.Scan(&ref.ID, &ref.Number, &total)
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return invoices, total, nil
+}
+
 // DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
 // roleInUse while a policy in force names the role or an open run waits on it, under the
 // tenant lock so a publish cannot race it. Nothing cascades: the staffing rows survive, inert, unreachable while
@@ -375,28 +406,7 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 			return err
 		}
 
-		// ceiling: arm does not take the tenant lock, so a delete racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
-		// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
-		runRows, err := tx.Query(ctx,
-			`SELECT i.id, i.invoice_number, count(*) OVER ()
-			   FROM approval_runs r
-			   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
-			  WHERE r.state = 'open'
-			    AND i.status = 'validated'
-			    AND EXISTS (SELECT 1 FROM workflow_roles w WHERE w.key = $1 AND w.deleted_at IS NULL)
-			    AND EXISTS (SELECT 1 FROM approval_run_steps s
-			                 WHERE s.run_id = r.id AND s.kind = 'approval'
-			                   AND s.state = 'pending' AND s.workflow_role_key = $1)
-			  ORDER BY r.opened_at, i.id
-			  LIMIT $2`, key, roleInRunListCap)
-		if err != nil {
-			return err
-		}
-		var invoicesTotal int
-		invoices, err := pgx.CollectRows(runRows, func(row pgx.CollectableRow) (InvoiceRef, error) {
-			var ref InvoiceRef
-			return ref, row.Scan(&ref.ID, &ref.Number, &invoicesTotal)
-		})
+		invoices, invoicesTotal, err := openRunsOnRoleTx(ctx, tx, key)
 		if err != nil {
 			return err
 		}
@@ -437,7 +447,8 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 
 // SetRoleMembers replaces a role's staffing wholesale: every existing row for the role
 // is deleted and the submitted list re-inserted, with `ord` the 0-based index of the
-// submitted array. An empty list is a legal unstaff, not an error.
+// submitted array. An empty list is a legal unstaff unless an open run waits on the role
+// and the new set holds no signer: then it refuses with roleInUse, under the tenant lock.
 //
 // NO access-role check is applied to the STAFFED SUBJECT (Decision Q2): a preparer, a
 // suspended member and an invited one are all legal targets, and the approver filter
@@ -472,6 +483,9 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 		caller, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 
@@ -532,6 +546,29 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 				return ErrValidation
 			}
 			return err
+		}
+
+		// Judged on the stored new set, so HeldRoleKeysTx is reused rather than restated.
+		invoices, total, err := openRunsOnRoleTx(ctx, tx, staffed.Key)
+		if err != nil {
+			return err
+		}
+		if len(invoices) > 0 {
+			held := false
+			// ceiling: one HeldRoleKeysTx round trip per member until one holds, batch it above ~100 members
+			for _, id := range ids {
+				keys, err := HeldRoleKeysTx(ctx, tx, []string{staffed.Key}, id)
+				if err != nil {
+					return err
+				}
+				if keys[staffed.Key] {
+					held = true
+					break
+				}
+			}
+			if !held {
+				return &roleInUse{lastHolder: true, invoices: invoices, invoicesTotal: total}
+			}
 		}
 
 		// Last statement in the closure (TestStaffing_AuditsInSameTx). The key is the locked

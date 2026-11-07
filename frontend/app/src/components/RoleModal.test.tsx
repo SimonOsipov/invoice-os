@@ -329,11 +329,8 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('role-delete-confirmed'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
+    await waitFor(() => expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found'))
     expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
   })
 
   const SRun = 'this workflow role is awaited by an open approval run'

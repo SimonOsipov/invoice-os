@@ -288,7 +288,7 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 	var probed []int
 	for i, p := range pending {
 		if p.roleKey != nil {
-			probes = append(probes, SignerProbe{InvoiceID: p.invoiceID, RoleKey: p.roleKey})
+			probes = append(probes, SignerProbe{InvoiceID: p.invoiceID, RoleKey: p.roleKey, AllowDelegation: p.allow, DelegateUserID: p.delegate})
 			probed = append(probed, i)
 		}
 	}

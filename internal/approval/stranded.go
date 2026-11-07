@@ -45,7 +45,7 @@ func requireReadOnly(ctx context.Context, tx pgx.Tx) error {
 const strandedStepsSQL = `
 SELECT r.id, t.id, t.name, i.id, i.invoice_number, s.ord, s.workflow_role_key,
        COALESCE(wr.title, ''), r.opened_at,
-       min(s.ord) OVER (PARTITION BY r.id)
+       min(s.ord) OVER (PARTITION BY r.id), s.allow_delegation, s.delegate_user_id::text
   FROM approval_runs r
   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
   JOIN tenants t ON t.id = r.tenant_id
@@ -76,16 +76,17 @@ func StrandedRunsTx(ctx context.Context, tx pgx.Tx) ([]StrandedRun, error) {
 	var probes []SignerProbe
 	for rows.Next() {
 		var s strandedStep
-		var key *string
+		var key, delegate *string
+		var allow bool
 		if err := rows.Scan(&s.runID, &s.run.WorkspaceID, &s.run.Workspace, &s.run.InvoiceID, &s.run.InvoiceNumber,
-			&s.ord, &key, &s.run.RoleTitle, &s.run.ArmedAt, &s.cur); err != nil {
+			&s.ord, &key, &s.run.RoleTitle, &s.run.ArmedAt, &s.cur, &allow, &delegate); err != nil {
 			return nil, err
 		}
 		if key != nil {
 			s.run.RoleKey = *key
 		}
 		steps = append(steps, s)
-		probes = append(probes, SignerProbe{InvoiceID: s.run.InvoiceID, RoleKey: key})
+		probes = append(probes, SignerProbe{InvoiceID: s.run.InvoiceID, RoleKey: key, AllowDelegation: allow, DelegateUserID: delegate})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

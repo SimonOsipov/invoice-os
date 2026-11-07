@@ -68,8 +68,12 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 		}
 
 		var keys []string
+		var signed []approval.SignedStep
 		if role == "preparer" {
 			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target.UserID); err != nil {
+				return err
+			}
+			if signed, err = approval.SignedWaitingStepsTx(ctx, tx, target.UserID, keys); err != nil {
 				return err
 			}
 		}
@@ -96,7 +100,7 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 			}
 		}
 
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, signed); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.role_changed", map[string]any{

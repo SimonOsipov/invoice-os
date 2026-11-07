@@ -167,9 +167,13 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 		}
 		// Only narrowing an active reviewer's reach is judged; widening and other roles are not.
 		var keys []string
+		var signed []approval.SignedStep
 		if role == "reviewer" && status == "active" && removesReach(wasAll, stored, access) {
 			var err error
 			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target); err != nil {
+				return err
+			}
+			if signed, err = approval.SignedWaitingStepsTx(ctx, tx, target, keys); err != nil {
 				return err
 			}
 		}
@@ -194,7 +198,7 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 				return err
 			}
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, signed); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.client_access_set", map[string]any{

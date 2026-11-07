@@ -38,6 +38,9 @@ type RunStep struct {
 	SatisfiedBy       *string    `json:"satisfied_by"`
 	NotifyTarget      *string    `json:"notify_target"`
 	NotifyChannel     *string    `json:"notify_channel"`
+
+	allowDelegation bool
+	delegateUserID  *string
 }
 
 // RunDecision is one approval_decisions row.
@@ -143,7 +146,8 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 
 	rows, err := tx.Query(ctx,
 		`SELECT id, ord, kind, workflow_role_key, sla_hours, due_at, state,
-		        satisfied_at, satisfied_by, notify_target, notify_channel
+		        satisfied_at, satisfied_by, notify_target, notify_channel,
+		        allow_delegation, delegate_user_id::text
 		   FROM approval_run_steps
 		  WHERE run_id = $1
 		  ORDER BY ord`, run.RunID)
@@ -154,7 +158,8 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 		var id string
 		var st RunStep
 		if err := rows.Scan(&id, &st.Ord, &st.Kind, &st.WorkflowRoleKey, &st.SLAHours, &st.DueAt,
-			&st.State, &st.SatisfiedAt, &st.SatisfiedBy, &st.NotifyTarget, &st.NotifyChannel); err != nil {
+			&st.State, &st.SatisfiedAt, &st.SatisfiedBy, &st.NotifyTarget, &st.NotifyChannel,
+			&st.allowDelegation, &st.delegateUserID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -199,7 +204,8 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 		if st.Kind != "approval" || st.State != "pending" || st.WorkflowRoleKey == nil {
 			continue
 		}
-		reasons, err := unsignableReasonsTx(ctx, tx, []SignerProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey}})
+		reasons, err := unsignableReasonsTx(ctx, tx, []SignerProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey,
+			AllowDelegation: st.allowDelegation, DelegateUserID: st.delegateUserID}})
 		if err != nil {
 			return err
 		}

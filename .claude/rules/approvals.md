@@ -43,9 +43,9 @@ paths:
 - Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
-- Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is a member of the live role who is an active admin or reviewer, reaches the invoice's client, and passes the creator rule (`TestCanSign_AgreesWithTheApprovePath`).
+- Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is an active admin or reviewer who is a member of the live role or the run step's delegate (`DelegateMayDecide`), reaches the invoice's client, and passes the creator rule (`TestCanSign_AgreesWithTheApprovePath`).
 - Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
-- Count role holders only in `strandedSQL`, the role staffing and delete refusals, `pending_holder_warn` and `CreatorStanding.OtherRoleHolder`. A delegate is not counted (`TestStranded_ADelegateDoesNotCountAsADecider`).
+- Count an eligible delegate as a signer (`TestStranded_AnEligibleDelegateCountsAsADecider`). The role delete refusal and `CreatorStanding.OtherRoleHolder` count role holders only (`TestDeleteRole_RefusesWhileOnlyADelegateCanDecide`).
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
 - Store a policy's scopes on its version (`approval_policy_versions`): document types, client companies (`business_entities` ids), an amount band with its currency, and workflow roles (`workflow_roles` ids). Each scope is optional.
 - Write a scope edit to the draft. It takes effect at publish.
@@ -60,6 +60,7 @@ paths:
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.
 - Refuse a role staffing write with 409 while an invoice that an open run waits on through the role has no signer on the new set. List only those invoices. Use the body of the role delete refusal.
 - Refuse a membership remove, suspension, demotion to preparer or client access change that removes reach with 409 when a live workflow role the member is staffed in leaves an invoice that an open run waits on through the role with no signer after the change. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
+- Before the write, also collect with `SignedWaitingStepsTx` every waiting step the member can sign as a role member, a named delegate or an "anyone" delegate. Judge those steps in the same refusal (`TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign`).
 - List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing. It reports the reason: `deleted`, `no holder`, `out of client reach` or `creator only`.
 - Raise `pending_holder_warn` and the pending step's `holder.warn` when `unsignableReasonsTx` gives the step a reason. Set `pending_holder_reason` and `holder.reason` with `holderReason`: `unstaffed` or `nobody_can_approve`.
 - Name a workflow role in a scope by its key on the wire. Store its id.

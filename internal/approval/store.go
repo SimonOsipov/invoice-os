@@ -332,37 +332,50 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 // roleInRunListCap bounds the invoices a role-in-use refusal lists.
 const roleInRunListCap = 20
 
-// waitingOnRoleTx lists, oldest run first, the invoices whose open run has a pending approval
-// step naming the live role.
-func waitingOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, error) {
+// waitingStep is one pending approval step an open run holds on a live role, with its delegation.
+type waitingStep struct {
+	InvoiceRef
+	allow    bool
+	delegate *string
+}
+
+// waitingOnRoleTx lists, oldest run first, one row per pending approval step naming the live role.
+func waitingOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]waitingStep, error) {
 	// ceiling: arm does not take the tenant lock, so a staffing or delete write racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
 	// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
 	rows, err := tx.Query(ctx,
-		`SELECT i.id, i.invoice_number
+		`SELECT i.id, i.invoice_number, s.allow_delegation, s.delegate_user_id::text
 		   FROM approval_runs r
 		   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
+		   JOIN approval_run_steps s ON s.run_id = r.id AND s.kind = 'approval'
+		        AND s.state = 'pending' AND s.workflow_role_key = $1
 		  WHERE r.state = 'open'
 		    AND i.status = 'validated'
 		    AND EXISTS (SELECT 1 FROM workflow_roles w WHERE w.key = $1 AND w.deleted_at IS NULL)
-		    AND EXISTS (SELECT 1 FROM approval_run_steps s
-		                 WHERE s.run_id = r.id AND s.kind = 'approval'
-		                   AND s.state = 'pending' AND s.workflow_role_key = $1)
-		  ORDER BY r.opened_at, i.id`, key)
+		  ORDER BY r.opened_at, i.id, s.ord`, key)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (InvoiceRef, error) {
-		var ref InvoiceRef
-		return ref, row.Scan(&ref.ID, &ref.Number)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (waitingStep, error) {
+		var w waitingStep
+		return w, row.Scan(&w.ID, &w.Number, &w.allow, &w.delegate)
 	})
 }
 
-// openRunsOnRoleTx is waitingOnRoleTx capped at roleInRunListCap, with the full count.
+// openRunsOnRoleTx is waitingOnRoleTx capped at roleInRunListCap, with the full count; each invoice counts once.
 func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
 	// ceiling: reads every invoice waiting on the role; filter in SQL above ~1k waiting runs per role
-	all, err := waitingOnRoleTx(ctx, tx, key)
+	steps, err := waitingOnRoleTx(ctx, tx, key)
 	if err != nil {
 		return nil, 0, err
+	}
+	var all []InvoiceRef
+	seen := map[string]bool{}
+	for _, w := range steps {
+		if !seen[w.ID] {
+			seen[w.ID] = true
+			all = append(all, w.InvoiceRef)
+		}
 	}
 	return capInvoiceRefs(all), len(all), nil
 }
@@ -374,7 +387,7 @@ func capInvoiceRefs(refs []InvoiceRef) []InvoiceRef {
 	return refs
 }
 
-// unsignedWaitingInvoicesTx lists the invoices an open run holds on role key that nobody can
+// unsignedWaitingInvoicesTx lists the invoices an open run holds on role key where some pending step nobody can
 // approve (unsignableReasonsTx), oldest run first, capped, with their full count.
 func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
 	// ceiling: reads every invoice waiting on the role; filter in SQL above ~1k waiting runs per role
@@ -384,16 +397,18 @@ func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]In
 	}
 	probes := make([]SignerProbe, len(waiting))
 	for i, w := range waiting {
-		probes[i] = SignerProbe{InvoiceID: w.ID, RoleKey: &key}
+		probes[i] = SignerProbe{InvoiceID: w.ID, RoleKey: &key, AllowDelegation: w.allow, DelegateUserID: w.delegate}
 	}
 	reasons, err := unsignableReasonsTx(ctx, tx, probes)
 	if err != nil {
 		return nil, 0, err
 	}
 	var unsigned []InvoiceRef
+	seen := map[string]bool{}
 	for i, r := range reasons {
-		if r != "" {
-			unsigned = append(unsigned, waiting[i])
+		if r != "" && !seen[waiting[i].ID] {
+			seen[waiting[i].ID] = true
+			unsigned = append(unsigned, waiting[i].InvoiceRef)
 		}
 	}
 	return capInvoiceRefs(unsigned), len(unsigned), nil

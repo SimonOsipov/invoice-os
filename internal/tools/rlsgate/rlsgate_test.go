@@ -628,3 +628,90 @@ func TestEvaluatePrintsPackageLevelOutputWhenNoTestRan(t *testing.T) {
 		t.Errorf("package-level output missing from render; buf=%q", buf.String())
 	}
 }
+
+// Streams below are real `go test -json` output (go1.26) from scratch modules.
+func TestEvaluatePackageLevelOutputOnlyForFailedPackages(t *testing.T) {
+	cases := []struct {
+		name, stream string
+		want, absent []string
+	}{
+		{"passing package prints no package output",
+			`{"Action":"start","Package":"ok"}
+{"Action":"run","Package":"ok","Test":"TestA"}
+{"Action":"output","Package":"ok","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"output","Package":"ok","Output":"PASS\n"}
+{"Action":"output","Package":"ok","Output":"ok  \tok\t0.380s\n"}
+{"Action":"pass","Package":"ok"}
+`, []string{"PASS  ok.TestA"}, []string{"ok  \tok", "PASS\n"}},
+		{"no-test-files skip prints nothing",
+			`{"Action":"start","Package":"n"}
+{"Action":"output","Package":"n","Output":"?   \tn\t[no test files]\n"}
+{"Action":"skip","Package":"n"}
+`, []string{"zero"}, []string{"no test files"}},
+		{"only the failing package's output is printed",
+			`{"Action":"output","Package":"good","Output":"GOOD NOISE\n"}
+{"Action":"output","Package":"bad","Output":"BAD REASON\n"}
+{"Action":"pass","Package":"good"}
+{"Action":"fail","Package":"bad"}
+`, []string{"BAD REASON"}, []string{"GOOD NOISE"}},
+		{"init panic output printed in order, interleaved with a test event",
+			`{"Action":"output","Package":"p","Output":"panic: INIT PANIC\n"}
+{"Action":"output","Package":"p","Output":"\n"}
+{"Action":"pass","Package":"q","Test":"TestQ"}
+{"Action":"output","Package":"p","Output":"goroutine 1 [running]:\n"}
+{"Action":"output","Package":"p","Output":"FAIL\tp\t0.445s\n"}
+{"Action":"fail","Package":"p","Elapsed":0.446}
+`, []string{"panic: INIT PANIC\n\ngoroutine 1 [running]:\nFAIL\tp\t0.445s\n"}, nil},
+		{"TestMain stderr exit(1)",
+			`{"Action":"output","Package":"scratch/tmain","Output":"SETUP BOOM stderr\n"}
+{"Action":"output","Package":"scratch/tmain","Output":"FAIL\tscratch/tmain\t0.443s\n"}
+{"Action":"fail","Package":"scratch/tmain","Elapsed":0.445}
+`, []string{"SETUP BOOM stderr"}, nil},
+		{"output not printed twice after a retried package",
+			`{"Action":"output","Package":"r","Output":"ATTEMPT1\n"}
+{"Action":"fail","Package":"r"}
+{"Action":"output","Package":"r","Output":"ok  \tr\n"}
+{"Action":"pass","Package":"r"}
+`, []string{"ATTEMPT1"}, []string{"ok  \tr"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			evaluate(strings.NewReader(c.stream), &buf)
+			got := buf.String()
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in %q", w, got)
+				}
+			}
+			for _, a := range c.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("unexpected %q in %q", a, got)
+				}
+			}
+			if strings.Count(got, "ATTEMPT1") > 1 {
+				t.Errorf("replayed twice: %q", got)
+			}
+		})
+	}
+}
+
+// Go >=1.24 reports a compile error as build-output events keyed by ImportPath
+// (no Package, no Test), then a package fail carrying FailedBuild.
+func TestEvaluatePrintsCompileErrorFromBuildOutputEvents(t *testing.T) {
+	stream := `{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-output","Output":"# scratch/cerr [scratch/cerr.test]\n"}
+{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-output","Output":"./x.go:2:23: cannot use \"s\" (untyped string constant) as int value in return statement\n"}
+{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-fail"}
+{"Action":"start","Package":"scratch/cerr"}
+{"Action":"output","Package":"scratch/cerr","Output":"FAIL\tscratch/cerr [build failed]\n"}
+{"Action":"fail","Package":"scratch/cerr","Elapsed":0,"FailedBuild":"scratch/cerr [scratch/cerr.test]"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(stream), &buf); code == 0 {
+		t.Fatalf("exit 0 on build failure; %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "cannot use") {
+		t.Errorf("compile error text missing from render; %q", buf.String())
+	}
+}

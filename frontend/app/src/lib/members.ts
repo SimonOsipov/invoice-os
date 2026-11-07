@@ -18,7 +18,7 @@
 // copies, so a spread is a full copy only because nothing mutates that array.
 
 import type { AuthedFetch, Entity } from './portfolio'
-import type { AsyncStatus } from '@invoice-os/api-client'
+import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import { initials } from './customers'
 
 // ---------------------------------------------------------------------------
@@ -849,4 +849,22 @@ export function inviteSentNotice(items: readonly PendingInvite[]): { tone: 'ok' 
     return { tone: 'failed', text }
   }
   return { tone: 'failed', text: `${failed} of ${n} invite emails did not go out. Resend them from the rows' ⋯ menus.` }
+}
+
+export type LastSignerInvoices = { items: { number: string; role: string }[]; total: number }
+
+export const NO_WAITING_INVOICES: LastSignerInvoices = { items: [], total: 0 }
+
+/** Invoices and roles off a last-signer 409 body (`invoices_total` is the true count); empty for any other error. */
+export function lastSignerInvoices(err: unknown): LastSignerInvoices {
+  if (!(err instanceof ApiError) || err.status !== 409) return NO_WAITING_INVOICES
+  const body = err.body as { invoices?: unknown; invoices_total?: unknown } | null | undefined
+  if (!Array.isArray(body?.invoices)) return NO_WAITING_INVOICES
+  const items = body.invoices.flatMap((i) =>
+    typeof i?.invoice_number === 'string'
+      ? [{ number: i.invoice_number, role: i.workflow_role_title || i.workflow_role_key || '' }]
+      : [],
+  )
+  const total = typeof body.invoices_total === 'number' && Number.isFinite(body.invoices_total) ? body.invoices_total : 0
+  return { items, total: Math.max(total, items.length) }
 }

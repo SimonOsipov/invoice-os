@@ -11,6 +11,7 @@ import type { AuthedFetch } from './portfolio'
 import * as membersModule from './members'
 import {
   ACCESS_ROLES,
+  lastSignerInvoices,
   accessRoleLabel,
   activeAdmins,
   removeMembership,
@@ -2573,5 +2574,48 @@ describe('ACCESS-01-04 — the role write and its copy', () => {
     expect(ROLE_CHANGE_CONFIRMED).toBe('Change role')
     expect(roleChangeQuestion('Ada', 'Reviewer', true)).toBe('Change your access role to Reviewer?')
     expect(roleChangeQuestion('Ada', 'Reviewer', false)).toBe("Change Ada's access role to Reviewer?")
+  })
+})
+
+// SENTENCE mirrors Go `memberLastSignerMessage` (internal/approval/approval.go); the list reads the 409 body's `invoices`.
+describe('lastSignerInvoices', () => {
+  const S = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+  const conflict = (body: unknown) => new ApiError('http', S, 409, body)
+
+  it('lastSignerInvoices reads items, roles and the total off a 409', () => {
+    const err = conflict({
+      error: S,
+      policies: [],
+      invoices: [
+        { id: 'a', invoice_number: 'INV-1', workflow_role_key: 'k', workflow_role_title: 'Tax' },
+        { id: 'b', invoice_number: 'INV-2', workflow_role_key: 'k2' },
+      ],
+      invoices_total: 3,
+    })
+    expect(lastSignerInvoices(err)).toEqual({
+      items: [
+        { number: 'INV-1', role: 'Tax' },
+        { number: 'INV-2', role: 'k2' },
+      ],
+      total: 3,
+    })
+  })
+
+  it.each([
+    ['403', new ApiError('http', 'x', 403, { error: 'x' })],
+    ['409 with no invoices (last admin)', conflict({ error: S })],
+    ['404 carrying invoices', new ApiError('http', 'x', 404, { invoices: [{ id: 'a', invoice_number: 'INV-1' }], invoices_total: 1 })],
+    ['network error', new ApiError('network', 'x')],
+    ['plain Error', new Error('x')],
+    ['undefined', undefined],
+  ])('lastSignerInvoices is empty for any other error: %s', (_label, err) => {
+    expect(lastSignerInvoices(err)).toEqual({ items: [], total: 0 })
+  })
+
+  it('lastSignerInvoices skips malformed items and never reports a total below the list', () => {
+    const invoices = [{ id: 'a' }, { id: 'b', invoice_number: 7 }, null, { id: 'c', invoice_number: 'Kept', workflow_role_title: 'Tax' }]
+    const want = { items: [{ number: 'Kept', role: 'Tax' }], total: 1 }
+    expect(lastSignerInvoices(conflict({ error: S, invoices, invoices_total: 0 }))).toEqual(want)
+    expect(lastSignerInvoices(conflict({ error: S, invoices, invoices_total: '9' }))).toEqual(want)
   })
 })

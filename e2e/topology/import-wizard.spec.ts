@@ -820,8 +820,10 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   await expect(columns, 'control: group 1 renders its thirteen columns').toHaveCount(13)
   await expect(page.locator('main div.mono'), 'the header cells are exactly the file headers').toHaveText(headersA)
   const groupA = await expectOpensAsChecked(docA!, 'group 1')
-  // Real Jev doubting a free-text VAT column is unconfirmed ([unconfirmed-jev]); a miss is a wrong read.
-  if (groupA.checked.vat === 'VAT') expect(groupA.doubted, 'a free-text VAT column is doubted').toContain('vat')
+  expect([...groupA.doubted], 'doubted is sorted').toEqual([...groupA.doubted].sort())
+  for (const key of groupA.doubted) expect(Object.keys(groupA.checked), `doubted key ${key} was checked`).toContain(key)
+  // The fake doubts through JEVFAKE-DOUBT; the real Jev doubt of a free-text VAT column is unmeasured.
+  if (!nightlyTarget() && groupA.checked.vat === 'VAT') expect(groupA.doubted, 'a free-text VAT column is doubted').toContain('vat')
 
   const continueBtn = page.locator('main button', { hasText: /^(Map invoice number to continue|Continue to next file|Import \d+ rows)$/ })
   await setExactMapping(page, { ...PR_LANE_MAPPING, vat: 'Tax Amount' })

@@ -542,6 +542,8 @@ export interface Violation {
   severity: string
   message: string
   path?: string
+  // internal/invoice/validator.go Violation.Field: the judged line field, set with a bare <list>[N] path.
+  field?: string
 }
 
 export interface EntityInput {

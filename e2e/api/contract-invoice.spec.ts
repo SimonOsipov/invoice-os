@@ -2482,6 +2482,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       })
       const v = await validateInvoice(tok, inv.id)
       expect(v.violations.map((x) => x.rule_key), 'setup: the negative line fails its rule').toContain(RULE)
+      expect(v.violations.find((x) => x.rule_key === RULE && x.path === PATH)?.field, 'the violation names the judged field').toBe('unit_price')
       return inv
     }
 
@@ -2501,8 +2502,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
       if (res.fix) {
         expect(res.fix, 'a fix names line 2 and its stored value').toMatchObject({ line: 2, current: '-5.00' })
-        // explainBareLineFields, internal/invoice/explain.go.
-        expect(['description', 'quantity', 'unit_price', 'line_total', 'line_tax']).toContain(res.fix.field)
+        // The server binds the fix field to the judged field (explainSubject, internal/invoice/explain.go).
+        expect(res.fix.field, 'the fix is on the judged field').toBe('unit_price')
       }
 
       const before = (await getInvoice(token, inv.id)).line_items!

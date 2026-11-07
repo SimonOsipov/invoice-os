@@ -165,6 +165,7 @@ test.describe('Audit screen', () => {
       // and nothing is expanded here, so reaching for it hangs until the test budget is
       // gone (found on the deploy gate, PR #180).
       const firstRowText = await page.getByTestId('audit-row').first().innerText()
+      const token = await login(PERSONAS.A)
       const requests: string[] = []
       page.on('request', (r) => {
         if (r.url().includes('/v1/audit-log')) requests.push(r.url())
@@ -186,15 +187,21 @@ test.describe('Audit screen', () => {
         })
         .toBe(true)
 
+      // A newer row lands before prev refetches page one, so a refetch (not a cached page) shows a different first row.
+      const entityName = `BUG-88 pager ${Date.now()}`
+      await createEntity(token, { name: entityName, tin: freshTin() })
+
       await prev.click({ timeout: 15_000 })
       await expect(prev).toBeDisabled()
-      // Back on page one, the client-held cursor stack returned the original rows.
+      // prev refetches page one live: the new row may sit on top, so assert containment.
       await expect
-        .poll(async () => (await page.getByTestId('audit-row').first().innerText()) === firstRowText, {
+        .poll(async () => (await page.getByTestId('audit-row').allInnerTexts()).includes(firstRowText), {
           message: 'prev must land back on the first page',
           timeout: 15_000,
         })
         .toBe(true)
+      // The new row on page one proves prev refetched live, not a cached page.
+      await expect(page.getByTestId('audit-row').filter({ hasText: entityName }), 'prev must refetch page one').toHaveCount(1)
     }
   })
 

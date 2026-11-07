@@ -406,6 +406,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
 7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see; each pinned surprise; each owed walk-through), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
    **PR body:** before the report, read the current PR body with `gh pr view`. Append a `## Needs you` section to it. Replace the section of an earlier run instead of adding a second one. Write the body with `gh pr edit` and keep every other section. List each pinned surprise from the Stage 4 replies, with the fields of the Stage 4 bullet. List each owed walk-through of Completion Rules rule 4, with its exact steps.
+   Throwaway line that conflicts with main.
    **Otherwise:** do not emit completion. Send the coordinator the open failures as one question.
 
 ### Phase 4: Worktree cleanup

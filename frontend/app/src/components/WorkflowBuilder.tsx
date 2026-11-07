@@ -16,7 +16,7 @@ import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
 import { DISABLED_GHOST, NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, wfBackGlyph, WfSelect, type WfOption, type WfPending, pendingNodeType } from './WorkflowParts'
-import { delegateCandidates, inhouseNotifyTargets } from '../lib/members'
+import { delegateCandidates, ineligibleDelegateReason, inhouseNotifyTargets, REMOVED_NAME } from '../lib/members'
 import { policyInForce } from '../lib/policies'
 import { inspectorResolve, resolve, roleOf } from '../lib/roles'
 import {
@@ -44,6 +44,7 @@ import {
   type PolicyScopes,
   type RoleKey,
   type SimContext,
+  type WfNode,
 } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
@@ -431,6 +432,16 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // step's, so moving off that step drops it again.
   const roleChoices = roleOptions(ctx.roles, selected?.type === 'approval' ? selected.role : '')
 
+  // Mirrors the server's publish guard so the editor marks the step before Publish refuses it.
+  // ctx.members is [] while the roster loads or errors, so no mark until it has loaded.
+  const delegateWarning = (n: WfNode): string | null =>
+    ctx.membersState === 'ready' && n.type === 'approval' && n.delegate && n.delegateTo ? ineligibleDelegateReason(ctx.members, n.delegateTo, roleOf(ctx.roles, n.role).title) : null
+  const selectedWarning = selected ? delegateWarning(selected) : null
+  const delegateOptions: WfOption[] = delegateCandidates(ctx.members).map((m) => ({ value: m.id, label: m.name }))
+  if (selectedWarning && selected?.type === 'approval' && selected.delegateTo) {
+    delegateOptions.push({ value: selected.delegateTo, label: ctx.members.find((m) => m.id === selected.delegateTo)?.name ?? REMOVED_NAME })
+  }
+
   // A stale list is backstopped by the server's 409 in the save slot.
   const catchAll = ctx.policies[ctx.policies.length - 1]?.id === working.id
   const lock: ScopeLock = catchAll ? { disabled: true, title: CATCH_ALL_REASON, ariaDescribedBy: CATCH_ALL_REASON_ID } : { disabled: false }
@@ -628,6 +639,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             onSlotDrop={onSlotDrop}
             onSlotClick={onSlotClick}
             resolve={line(resolve)}
+            delegateWarning={delegateWarning}
           />
         </fieldset>
 
@@ -640,7 +652,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               onPatch={patchNode}
               onRemove={removeNode}
               resolve={line(inspectorResolve)}
-              delegates={delegateCandidates(ctx.members)}
+              delegates={delegateOptions}
+              delegateWarning={selectedWarning}
               notifyOptions={notifyOptions}
               roleOptions={roleChoices}
               onManageRoles={() => ctx.nav('settings', { settingsTab: 'roles' })}

@@ -116,6 +116,12 @@ describe('auditCsv', () => {
     expect(line).not.toContain('self_approved')
   })
 
+  it('auditCsv_delegateLabel', () => {
+    const payload = { as_delegate: true, acted_for_role_title: 'Finance Manager' }
+    const line = auditCsv([makeEvent({ event: 'invoice.approval_approved', payload })]).split('\n')[1]!
+    expect(line).toContain('Approved by Ada Obi as delegate for Finance Manager,invoice.approval_approved,')
+  })
+
   it('auditCsv_whenIsAbsoluteIso: When is the created_at ISO string verbatim, never relative', () => {
     const event = makeEvent({ created_at: '2026-08-20T09:15:00Z' })
 

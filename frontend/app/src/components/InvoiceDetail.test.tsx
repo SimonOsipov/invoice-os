@@ -739,6 +739,7 @@ describe('InvoiceDetail approval state card', () => {
                 actor: APP_PERSONAS.firm.subject,
                 decided_at: '2026-08-02T00:00:00Z',
                 reason: REASON,
+                as_delegate: false,
               },
             ],
           }),

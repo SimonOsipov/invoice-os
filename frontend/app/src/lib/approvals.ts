@@ -349,6 +349,7 @@ export interface ApprovalRunDecision {
   actor: string
   decided_at: string
   reason: string | null
+  as_delegate: boolean
 }
 
 export interface ApprovalRun {

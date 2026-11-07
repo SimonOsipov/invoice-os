@@ -18,13 +18,14 @@ import {
   type PolicyStepWire,
   type PolicyVersionWire,
   type PolicyWire,
+  type StepInputWire,
 } from './policies'
 import type { AuthedFetch } from './portfolio'
 import { seedPolicies } from './policies.fixture'
 import { CATCH_ALL_SCOPES, newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
-// The wire helpers spell every one of the ten Step keys, because the server never omits
+// The wire helpers spell every one of the twelve Step keys, because the server never omits
 // one — a fixture that leaves a key off would test a response shape that cannot arrive.
 
 const step = (over: Partial<PolicyStepWire> = {}): PolicyStepWire => ({
@@ -32,6 +33,8 @@ const step = (over: Partial<PolicyStepWire> = {}): PolicyStepWire => ({
   kind: 'approval',
   workflow_role_key: null,
   sla_hours: null,
+  allow_delegation: false,
+  delegate_user_id: null,
   cond_op: null,
   cond_amount: null,
   notify_target: null,
@@ -170,24 +173,59 @@ describe('nodesFromSteps / stepInputsFromNodes (AC-2)', () => {
   })
 })
 
-describe('delegation never reaches the wire (AC-3)', () => {
-  it('never emits delegate or delegateTo on the wire', () => {
-    const node: ApprovalNode = { id: 'n1', type: 'approval', role: 'line_mgr', sla: '48', delegate: true, delegateTo: 'Tunde Adeyemi' }
-    const back = stepInputsFromNodes([node])
-    expect(back).toHaveLength(1)
-    expect(Object.hasOwn(back[0], 'delegate')).toBe(false)
-    expect(Object.hasOwn(back[0], 'delegateTo')).toBe(false)
-    // The fields that DO have a column still went out, so absence above is a filter, not a dropped step.
-    expect(back[0].kind).toBe('approval')
-    expect(back[0].workflow_role_key).toBe('line_mgr')
-    expect(back[0].sla_hours).toBe(48)
+describe('delegation round-trips on the wire (DELEG-01-05)', () => {
+  it('branchNode maps the three wire states', () => {
+    const [off, anyone, named] = nodesFromSteps([
+      step({ id: 'a', workflow_role_key: 'cfo' }),
+      step({ id: 'b', workflow_role_key: 'cfo', allow_delegation: true }),
+      step({ id: 'c', workflow_role_key: 'cfo', allow_delegation: true, delegate_user_id: 'u1' }),
+    ]) as ApprovalNode[]
+    expect(off.delegate).toBe(false)
+    expect(Object.hasOwn(off, 'delegateTo')).toBe(false)
+    expect([anyone.delegate, anyone.delegateTo]).toEqual([true, ''])
+    expect([named.delegate, named.delegateTo]).toEqual([true, 'u1'])
   })
 
-  it('leaves delegateTo ABSENT on a node built from the wire, not undefined', () => {
-    const nodes = nodesFromSteps([step({ kind: 'approval', workflow_role_key: 'cfo', sla_hours: 24 })])
-    expect(nodes).toHaveLength(1)
-    expect(Object.hasOwn(nodes[0], 'delegateTo')).toBe(false)
-    expect((nodes[0] as ApprovalNode).delegate).toBe(false)
+  it('stepInput sends delegation for approval nodes only', () => {
+    const base = { id: 'n', type: 'approval' as const, role: 'cfo', sla: '24' }
+    const sent = stepInputsFromNodes([
+      { ...base, delegate: false, delegateTo: 'stale' },
+      { ...base, delegate: true, delegateTo: '' },
+      { ...base, delegate: true, delegateTo: 'u1' },
+      { id: 'x', type: 'notify', target: 'Board', channel: 'Email' },
+    ])
+    expect(sent.slice(0, 3).map((s) => [s.allow_delegation, s.delegate_user_id])).toEqual([
+      [false, null],
+      [true, null],
+      [true, 'u1'],
+    ])
+    expect(Object.hasOwn(sent[3], 'allow_delegation')).toBe(false)
+    expect(Object.hasOwn(sent[3], 'delegate_user_id')).toBe(false)
+  })
+
+  it('a saved delegation round-trips through putApprovalPolicyDraft', async () => {
+    const nodes: ApprovalNode[] = [
+      { id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false },
+      { id: 'n2', type: 'approval', role: 'cfo', sla: '24', delegate: true, delegateTo: '' },
+      { id: 'n3', type: 'approval', role: 'cfo', sla: '24', delegate: true, delegateTo: 'u1' },
+    ]
+    // Echo the body as the server's wire: step inputs become steps with their ids.
+    const f = vi.fn(async (_url: string, init: { body: { steps: StepInputWire[] } }) =>
+      wire({
+        id: 'p1',
+        steps: init.body.steps.map((s, i) =>
+          step({
+            id: `n${i + 1}`,
+            workflow_role_key: s.workflow_role_key ?? null,
+            sla_hours: s.sla_hours ?? null,
+            allow_delegation: s.allow_delegation ?? false,
+            delegate_user_id: s.delegate_user_id ?? null,
+          }),
+        ),
+      }),
+    )
+    const out = await putApprovalPolicyDraft(f as unknown as AuthedFetch, wireBase, 'p1', policy({ id: 'p1', nodes }))
+    expect(out.nodes).toEqual(nodes)
   })
 })
 

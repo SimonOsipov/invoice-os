@@ -284,44 +284,38 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the dispatched drop placed a step').toBeVisible()
   await expect(page.getByText('Drop step here'), 'onSlotDrop ends the drag').toHaveCount(0)
 
-  // --- 11b. LAYOUT: the delegation reason shares the gutters of the control it explains -------
-  // APPR-10-04 AC-9. jsdom applies no stylesheet and runs no layout, so the unit suite can only
-  // hold what the component ASKS for; the rendered check is owed here. Two sentences and a
-  // picker land in a FIXED 320px column (WorkflowBuilder.tsx:490,
-  // `gridTemplateColumns: 'minmax(360px, 1fr) 320px'`), which is where a reason node that
-  // over-flows or gets inset would show.
-  //
-  // RELATIONSHIP, never a raw width — layout.ts's own header: a width assertion passes on the
-  // very bug it should catch. The reason node must share the inspector BODY's content gutters
-  // with the `Deadline` select above it, at every width, so the two sweeps are compared to each
-  // other rather than to a number.
-  //
-  // PLACEMENT is load-bearing. The drop above auto-selects the placed step (`place()` calls
-  // `setSelId`, WorkflowBuilder.tsx:299), so the inspector is already open — and `save()` clears
-  // the selection ([selection-clears-on-save], WorkflowBuilder.tsx:210), so this cannot move
-  // below step 12.
+  // --- 11b. LAYOUT: the "Delegate to" select shares the gutters of the Deadline select -------
+  // jsdom runs no layout, so the rendered check is owed here. RELATIONSHIP, never a raw width:
+  // the picker fills the inspector body with the same left and right gutters as the Deadline
+  // select at every WIDE_WIDTHS width (layout.ts). The drop above selects the placed step, and
+  // save() clears the selection, so this cannot move below step 12.
+  const delegation = page.getByRole('switch', { name: 'Allow delegation' })
+  await delegation.click()
+  await expect(delegation, 'switching delegation on opens the picker').toHaveAttribute('aria-checked', 'true')
   const inspectorBody = page.getByTestId('step-inspector-body')
-  const reasonFit = await assertFillsColumn(page, page.getByTestId('delegation-blocked-reason'), inspectorBody, 'the delegation reason')
+  const pickerFit = await assertFillsColumn(page, page.getByLabel('Delegate to').locator('xpath=ancestor::label[1]'), inspectorBody, 'the Delegate to select')
   const deadlineFit = await assertFillsColumn(
     page,
     page.getByLabel('Deadline').locator('xpath=ancestor::label[1]'),
     inspectorBody,
     'the Deadline select',
   )
-  expect(reasonFit.length, 'the reason sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  expect(pickerFit.length, 'the picker sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
   expect(deadlineFit.length, 'the control sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
-  for (const [i, fit] of reasonFit.entries()) {
+  for (const [i, fit] of pickerFit.entries()) {
     const ctrl = deadlineFit[i]
     expect(fit.width, 'the two sweeps measured different viewports').toBe(ctrl.width)
-    // 1px, not 0: sub-pixel rounding only. A reason node inset inside the control it explains —
-    // the defect this exists for — strands whole digits, nowhere near this bound.
-    expect(Math.abs(fit.left - ctrl.left), `the reason node's LEFT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
-    expect(Math.abs(fit.right - ctrl.right), `the reason node's RIGHT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+    // 1px, not 0: sub-pixel rounding only. A picker inset inside the column
+    // strands whole digits, nowhere near this bound.
+    expect(Math.abs(fit.left - ctrl.left), `the picker's LEFT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+    expect(Math.abs(fit.right - ctrl.right), `the picker's RIGHT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
   }
-  await testInfo.attach('delegation-reason-column-fit.json', {
-    body: JSON.stringify({ reason: reasonFit, deadline: deadlineFit }, null, 2),
+  await testInfo.attach('delegate-picker-column-fit.json', {
+    body: JSON.stringify({ picker: pickerFit, deadline: deadlineFit }, null, 2),
     contentType: 'application/json',
   })
+  // Back off, so step 12 saves the same step it always did.
+  await delegation.click()
 
   // --- 12. save the placed step -------------------------------------------------------------
   await expect(page.getByTestId('publish-blocked-reason'), 'placing a step makes the tree dirty again').toBeVisible()
@@ -442,6 +436,12 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await page.getByLabel('Deadline').selectOption({ label: 'Within 72 hours' })
   await expect(page.getByLabel('Deadline')).toHaveValue('72')
 
+  // Delegation on, naming the first listed approver (option 0 is "Anyone").
+  await page.getByRole('switch', { name: 'Allow delegation' }).click()
+  await page.getByLabel('Delegate to').selectOption({ index: 1 })
+  const pickedDelegate = await page.getByLabel('Delegate to').inputValue()
+  expect(pickedDelegate, 'a named approver was picked').not.toBe('')
+
   // The palette click selects the new condition; a second click on its card would deselect it.
   await conditionChip(page).click()
   const threshold = page.getByLabel('Threshold amount in naira')
@@ -461,11 +461,9 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Policy name'), 'the URL alone reopened the builder on this policy').toHaveValue(POLICY_NAME)
   await page.getByText(PLACED_STEP, { exact: true }).click()
   await expect(page.getByLabel('Deadline'), 'the deadline survived the reload').toHaveValue('72')
-  // Delegation is not stored (stepInput drops it), so this is a boundary, not a round-trip.
   const delegate = page.getByRole('switch', { name: 'Allow delegation' })
-  await expect(delegate, 'delegate: not storable, not a round-trip').toBeDisabled()
-  await expect(delegate, 'delegate: not storable, not a round-trip').toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByLabel('Delegate to'), 'delegate: not storable, not a round-trip').toBeDisabled()
+  await expect(delegate, 'delegation round-trips on').toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByLabel('Delegate to'), 'the picked delegate survived the reload').toHaveValue(pickedDelegate)
   const ruleCard = page.getByText('Amount greater than \u20a6250,000,000', { exact: true })
   await expect(ruleCard, 'the threshold survived the reload').toBeVisible()
   await ruleCard.click()
@@ -475,6 +473,8 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   expect(stored.scopes, 'scopes (fixture check)').toEqual({ document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null })
   expect(stored.steps[0].kind).toBe('approval')
   expect(stored.steps[0].sla_hours).toBe(72)
+  expect(stored.steps[0].allow_delegation).toBe(true)
+  expect(stored.steps[0].delegate_user_id).toBe(pickedDelegate)
   expect(stored.steps[1].kind).toBe('condition')
   expect(stored.steps[1].cond_op).toBe('>')
   expect(Number(stored.steps[1].cond_amount)).toBe(250000000)

@@ -159,7 +159,7 @@ func TestAuditNumberAdversarial_AJSONShapedNumberCannotRewriteTheApprovalIdKeys(
 		assertNumberStayedInItsValue(t, super,
 			approvalAuditRowForInvoice(t, super, "invoice.approval_approved", f.invoiceID),
 			"invoice.approval_approved", "invoice_id", f.invoiceID,
-			[]string{"invoice_id", "run_id", "step_ord", "reason", "approved_as"}, want)
+			[]string{"invoice_id", "run_id", "step_ord", "reason", "as_delegate", "approved_as"}, want)
 	})
 }
 

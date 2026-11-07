@@ -274,3 +274,30 @@ func TestReject_MultiByteReasonAtByteBoundarySucceeds(t *testing.T) {
 		t.Errorf("stored decision reason = %v, want the full 1000-byte reason preserved byte-for-byte", decisions[0].Reason)
 	}
 }
+
+func TestDecide_NamedDelegateRejects(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDelegateWorld(t, super, app, "DELEG-01-03 named-delegate-rejects", "reviewer")
+
+	var calls []demoterCall
+	c := auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: w.delegate, Role: "authenticated", TenantID: w.tenantID})
+	run, err := NewStore(app, stubFingerprinter, spyDemoter(&calls)).Decide(c, w.invoiceID, "rejected", ptr("wrong buyer"))
+	if err != nil {
+		t.Fatalf("Decide(rejected) as the named delegate outside the role: %v, want success", err)
+	}
+	if run.State != "rejected" {
+		t.Errorf("run.State = %q, want rejected", run.State)
+	}
+	if len(calls) != 1 || calls[0].subject != w.delegate {
+		t.Errorf("demoter calls = %+v, want exactly one, by the delegate %s", calls, w.delegate)
+	}
+	steps := runStepsOf(t, super, w.runID)
+	if len(steps) != 1 || steps[0].State != "rejected" {
+		t.Errorf("steps = %+v, want the one step rejected", steps)
+	}
+	ds := decisionsForRun(t, super, w.runID)
+	if len(ds) != 1 || ds[0].Actor != w.delegate || ds[0].Decision != "rejected" || !ds[0].AsDelegate {
+		t.Errorf("decisions = %+v, want one rejection by %s with as_delegate true", ds, w.delegate)
+	}
+}

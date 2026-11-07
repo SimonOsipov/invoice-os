@@ -560,3 +560,24 @@ func TestGetHandler_ApproveFlagsOnTheRealStore(t *testing.T) {
 		t.Errorf("want the literal \"can_submit\":false on an open run (body=%s)", body)
 	}
 }
+
+// TestApprovalGate_DelegateClearsTheRoleRung: a delegate who holds no role passes rung 5.
+func TestApprovalGate_DelegateClearsTheRoleRung(t *testing.T) {
+	f := liveRunFacts()
+	f.CallerHoldsRole = false
+	f.CallerIsDelegate = true
+	can, reason := approvalGate(StatusValidated, "reviewer", f)
+	assertApprovalGate(t, can, reason, true, "")
+
+	f.CallerIsDelegate = false
+	can, reason = approvalGate(StatusValidated, "reviewer", f)
+	assertApprovalGate(t, can, reason, false, wantApproveNotHolderReason)
+}
+
+func TestApprovalGate_PreparerOnAnAnyoneStepGetsRungOne(t *testing.T) {
+	f := liveRunFacts()
+	f.CallerHoldsRole = false
+	f.CallerIsDelegate = true
+	can, reason := approvalGate(StatusValidated, "preparer", f)
+	assertApprovalGate(t, can, reason, false, wantApproveRoleReason)
+}

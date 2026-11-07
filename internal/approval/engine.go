@@ -19,6 +19,8 @@ type runStep struct {
 	SLAHours        *int
 	NotifyTarget    *string
 	NotifyChannel   *string
+	AllowDelegation bool
+	DelegateUserID  *string
 }
 
 // materialise ports the SPA's simulate (frontend/app/src/lib/workflows.ts): one
@@ -49,6 +51,8 @@ func materialise(tree []Step, total *decimal.Decimal) (steps []runStep, auto boo
 				SLAHours:        n.SLAHours,
 				NotifyTarget:    n.NotifyTarget,
 				NotifyChannel:   n.NotifyChannel,
+				AllowDelegation: n.AllowDelegation,
+				DelegateUserID:  n.DelegateUserID,
 			})
 		}
 	}
@@ -183,6 +187,8 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	slaHours := make([]*int, len(steps))
 	notifyTargets := make([]*string, len(steps))
 	notifyChannels := make([]*string, len(steps))
+	allowDelegations := make([]bool, len(steps))
+	delegateUserIDs := make([]*string, len(steps))
 	states := make([]string, len(steps))
 	for i, s := range steps {
 		// notify is skipped always, and so is an approval that an autoapprove already
@@ -197,6 +203,7 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 		ords[i], kinds[i], states[i] = s.Ord, s.Kind, state
 		roleKeys[i], slaHours[i] = s.WorkflowRoleKey, s.SLAHours
 		notifyTargets[i], notifyChannels[i] = s.NotifyTarget, s.NotifyChannel
+		allowDelegations[i], delegateUserIDs[i] = s.AllowDelegation, s.DelegateUserID
 	}
 
 	// The closure predicate, over the states just decided: no approval step left pending
@@ -232,17 +239,20 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO approval_run_steps
 		        (tenant_id, run_id, ord, kind, workflow_role_key, sla_hours,
-		         notify_target, notify_channel, state, due_at, satisfied_at, satisfied_by)
+		         notify_target, notify_channel, allow_delegation, delegate_user_id,
+		         state, due_at, satisfied_at, satisfied_by)
 		 SELECT $1::uuid, $2::uuid,
-		        s.ord, s.kind, s.role_key, s.sla, s.notify_target, s.notify_channel, s.state,
+		        s.ord, s.kind, s.role_key, s.sla, s.notify_target, s.notify_channel, s.allow_delegation, s.delegate_user_id, s.state,
 		        CASE WHEN s.kind = 'approval' AND s.sla > 0
 		             THEN now() + s.sla * interval '1 hour' END,
 		        CASE WHEN s.state = 'satisfied' THEN now() END,
 		        CASE WHEN s.state = 'satisfied' THEN 'system' END
 		   FROM unnest($3::int[], $4::text[], $5::text[], $6::int[],
-		               $7::text[], $8::text[], $9::text[])
-		        AS s(ord, kind, role_key, sla, notify_target, notify_channel, state)`,
+		               $7::text[], $8::text[], $9::text[], $10::bool[], $11::uuid[])
+		        AS s(ord, kind, role_key, sla, notify_target, notify_channel, state,
+		             allow_delegation, delegate_user_id)`,
 		tenantID, runID, ords, kinds, roleKeys, slaHours, notifyTargets, notifyChannels, states,
+		allowDelegations, delegateUserIDs,
 	); err != nil {
 		return ArmResult{}, err
 	}

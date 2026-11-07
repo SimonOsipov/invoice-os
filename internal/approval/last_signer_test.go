@@ -145,6 +145,7 @@ func TestRefuseUnsignedWaitingRoles_AnotherSignerLetsItPass(t *testing.T) {
 }
 
 func TestRefuseUnsignedWaitingRoles_AgreesWithTheStaffingRefusal(t *testing.T) {
+	dbTestPools(t) // skip here, before the both-outcomes guard counts empty subtests
 	cases := []struct {
 		name    string
 		members []memberSpec

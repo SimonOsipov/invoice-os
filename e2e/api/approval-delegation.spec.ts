@@ -170,13 +170,24 @@ test.describe.serial('step delegation (API E2E, over the deployed gateway)', () 
       expect(row!.approve_blocked_reason, 'the list wire names the one sentence').toBe(CREATOR_REFUSED_REASON)
     }
 
+    // The run must close so a later member write is not refused for stranding it.
+    const closeRun = async (token: string, invoiceId: string) => {
+      const res = await decide(token, invoiceId, { decision: 'rejected', reason: 'Close the run' })
+      expect(res.status, JSON.stringify(res.body)).toBe(200)
+      expect((res.body as ApprovalRun).state).toBe('rejected')
+    }
+
     await putApprovalPolicyDraft(admin, policyId, { steps: delegateStep(null) })
     await publishApprovalPolicy(admin, policyId)
-    await expectOneSentence(await armedInvoice('C'))
+    const invoiceC = await armedInvoice('C')
+    await expectOneSentence(invoiceC)
+    await closeRun(r.token, invoiceC)
 
     await putApprovalPolicyDraft(admin, policyId, { steps: delegateStep(d.userId) })
     await publishApprovalPolicy(admin, policyId)
-    await expectOneSentence(await armedInvoice('D'))
+    const invoiceD = await armedInvoice('D')
+    await expectOneSentence(invoiceD)
+    await closeRun(d.token, invoiceD)
   })
 
   test('publish refuses a delegate who can no longer be one', async () => {

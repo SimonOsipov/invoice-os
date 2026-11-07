@@ -539,7 +539,8 @@ describe('Sidebar brand mark', () => {
     const mark = link.querySelector('img')!
     expect(mark.getAttribute('width')).toBe('28')
     expect(mark.getAttribute('height')).toBe('28')
-    expect(mark.style.borderRadius).toBe('var(--radius-md)')
+    expect(mark.classList.contains('asc-mark')).toBe(true)
+    expect(mark.style.borderRadius).toBe('')
     const word = within(link as HTMLElement).getByText('ASComply')
     expect(word.style.fontSize).toBe('16px')
     expect(word.style.fontFamily).toBe('var(--font-display)')

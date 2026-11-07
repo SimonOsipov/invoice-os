@@ -7,6 +7,7 @@ import { createEntity, getAuditLog, login } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
+import { brandMarkProblems, MARK_RING, readBrandMark, ringProblems, ringWidth } from './brandMark'
 import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
@@ -186,8 +187,12 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   const signOut = page.getByRole('button', { name: 'Sign out' })
   expect(await radii(signOut), 'Sign out corners').toEqual(Array(4).fill('4px'))
   const mark = aside(page).locator('img').first()
-  const markReading = await styles(mark, ['width', 'height', 'border-top-left-radius'])
-  expect(markReading, 'brand mark size and corner').toEqual({ width: '28px', height: '28px', 'border-top-left-radius': '6px' })
+  const markReading = await styles(mark, ['width', 'height', 'border-top-left-radius', 'box-shadow'])
+  expect(markReading, 'brand mark size, corner and ring').toEqual({ width: '28px', height: '28px', 'border-top-left-radius': '28.5%', 'box-shadow': MARK_RING })
+  await expect.poll(async () => {
+    await settle(page, aside(page), mark)
+    return brandMarkProblems(await readBrandMark(mark))
+  }, { message: 'brand mark rule' }).toEqual([])
 
   const fg1 = await resolveColor(aside(page), '--fg-1')
   const fg3 = await resolveColor(aside(page), '--fg-3')
@@ -363,7 +368,7 @@ test('AS-LIB the Company Blog and Feature library links sit between the nav and 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-const LOCKUP_MARK = ['width', 'height', 'border-top-left-radius']
+const LOCKUP_MARK = ['width', 'height', 'border-top-left-radius', 'box-shadow', 'scale']
 const LOCKUP_TEXT = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'text-transform', 'color']
 const LOCKUP_BADGE = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'color', 'border-top-width', 'border-top-style', 'border-top-color', 'border-top-left-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left']
 
@@ -420,6 +425,7 @@ test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at ever
       const eyebrow = brand.getByText('AFRICA', { exact: true })
       const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
         await settle(page, aside(page), brand, mark, badge, lockup, wordmark, eyebrow, switcher)
+        const ring = ringWidth(await readBrandMark(mark))
         const boxes = { aside: await aside(page).boundingBox(), brand: await brand.boundingBox(), mark: await mark.boundingBox(), badge: await badge.boundingBox(), lockup: await lockup.boundingBox(), wordmark: await wordmark.boundingBox(), eyebrow: await eyebrow.boundingBox(), switcher: await switcher.boundingBox() }
         const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
         if (problems.length) return { problems, rects: {} }
@@ -433,6 +439,7 @@ test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at ever
         const badgeMid = r.badge.y + r.badge.height / 2
         if (Math.abs(markMid - badgeMid) > 1) problems.push(`mark and badge centres differ by ${Math.abs(markMid - badgeMid)}px`)
         if (r.brand.y + r.brand.height > r.switcher.y + 1) problems.push('brand row ends below the company switcher top')
+        problems.push(...ringProblems(r.mark, ring, r.aside, [r.wordmark, r.eyebrow, r.badge]))
         return { problems, rects: r }
       }
       await expect.poll(async () => (await read()).problems, { message: `brand row at ${width}px`, timeout: 10_000 }).toEqual([])

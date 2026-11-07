@@ -8,10 +8,12 @@ import { describe, expect, it } from 'vitest'
 
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
+import markSvg from '@invoice-os/design-tokens/v2/assets/mark.svg'
 import { BrandMark } from './icons'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOKENS = join(HERE, '../../../packages/design-tokens')
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
 const read = (p: string) => readFileSync(p, 'utf8')
 
 const MAIN = read(join(HERE, 'main.tsx'))
@@ -66,7 +68,7 @@ describe('v2 entry', () => {
     const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))
     expect(designTokens.length).toBeGreaterThan(0)
     for (const s of designTokens) expect(s, 'only v2 entries').toContain('/v2/')
-    expect(designTokens, 'no other design-tokens stylesheet').toEqual([`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`])
+    expect(designTokens, 'no other design-tokens stylesheet').toEqual([`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`, `${DS}/v2/mark.css`])
   })
 
   it('VE-02 every design-tokens specifier is exported (error row)', () => {
@@ -104,7 +106,7 @@ describe('v2 entry', () => {
     expect(preconnects.sort()).toEqual(['https://fonts.googleapis.com', 'https://fonts.gstatic.com'])
   })
 
-  it('VE-04 BrandMark renders the v2 mark at 22 with no radius', () => {
+  it('VE-04 BrandMark renders the vector master at 22', () => {
     const imgOf = (props: { size?: number } | null) => {
       const html = renderToStaticMarkup(createElement(BrandMark, props))
       const img = html.match(/<img\b[^>]*>/)?.[0]
@@ -113,15 +115,18 @@ describe('v2 entry', () => {
     }
 
     const attr = imgOf(null)
-    expect.soft(attr('src')).toMatch(/\/v2\/assets\/mark\.png(\?.*)?$/)
+    expect(markSvg).toMatch(/^data:image\/svg\+xml,|\/mark\.svg(\?.*)?$/)
+    expect.soft(attr('src')).toBe(escHtml(markSvg))
+    expect.soft(attr('class')).toBe('asc-mark')
     expect.soft(attr('width')).toBe('22')
     expect.soft(attr('height')).toBe('22')
-    expect.soft(attr('style')).toContain('display:block')
-    expect.soft(attr('style')).not.toContain('border-radius')
+    expect.soft(attr('style')).toBeUndefined()
 
     const sized = imgOf({ size: 20 })
     expect(sized('width'), 'the size prop still wins').toBe('20')
     expect(sized('height'), 'the size prop sets the height too').toBe('20')
+    expect(sized('src')).toBe(escHtml(markSvg))
+    expect(sized('class')).toBe('asc-mark')
   })
 
   it('VE-05 ops.css and Overview.tsx drop the bar-grow animation', () => {

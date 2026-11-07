@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createElement, type ComponentType, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import markSvg from '@invoice-os/design-tokens/v2/assets/mark.svg'
 import { LANDING_SRC, parseRules, selectorParts, stripSource } from '../../cssScan.test.util'
 import { GLYPHS } from '../../icons'
 
@@ -280,14 +281,16 @@ describe('ChecklistItem', () => {
 })
 
 describe('Logo', () => {
-  it('DS-13 Logo renders the v2 mark and the live wordmark', async () => {
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
+  it('DS-13 Logo renders the vector master and the live wordmark', async () => {
     const html = await render('Logo', 'Logo')
     expect(tagsOf(html).some((t) => t.name === 'span' && t.attrs.class === 'ds-logo'), `no span.ds-logo in ${html}`).toBe(true)
     const img = html.match(/<img\b[^>]*>/)?.[0]
     expect(img, `no <img> in ${html}`).toBeDefined()
     const { attrs } = tagsOf(img as string)[0]
-    expect(attrs.class).toBe('ds-logo-mark')
-    expect(attrs.src).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
+    expect(markSvg).toMatch(/^data:image\/svg\+xml,|\/mark\.svg(\?.*)?$/)
+    expect(attrs.class).toBe('ds-logo-mark asc-mark')
+    expect(attrs.src).toBe(escHtml(markSvg))
     expect(attrs.alt).toBe('')
     expect(attrs['aria-hidden']).toBe('true')
     expect(attrs.width).toBe('32')
@@ -304,11 +307,16 @@ describe('Logo', () => {
     expect(leaf(small, 'ds-logo-region').attrs.style).toBe('font-size:8px')
     const smallImg = tagsOf(small.match(/<img\b[^>]*>/)?.[0] as string)[0].attrs
     expect([smallImg.width, smallImg.height], 'the mark follows size').toEqual(['28', '28'])
+    expect([smallImg.class, smallImg.src]).toEqual(['ds-logo-mark asc-mark', escHtml(markSvg)])
 
     const below = await render('Logo', 'Logo', { size: 31 })
     expect(leaf(below, 'ds-logo-name').attrs.style, '17.98 rounds up').toBe('font-size:18px')
     expect(leaf(below, 'ds-logo-region').attrs.style, 'AFRICA drops to 8px under 32').toBe('font-size:8px')
     const large = await render('Logo', 'Logo', { size: 50 })
+    for (const html of [below, large]) {
+      const a = tagsOf(html.match(/<img\b[^>]*>/)?.[0] as string)[0].attrs
+      expect([a.class, a.src]).toEqual(['ds-logo-mark asc-mark', escHtml(markSvg)])
+    }
     expect(leaf(large, 'ds-logo-name').attrs.style).toBe('font-size:29px')
     expect(leaf(large, 'ds-logo-region').attrs.style, 'AFRICA stays 9px above 32').toBe('font-size:9px')
   })

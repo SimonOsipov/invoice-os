@@ -6,10 +6,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import markSvg from '@invoice-os/design-tokens/v2/assets/mark.svg'
 import { BrandMark } from './icons'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOKENS = join(HERE, '../../../packages/design-tokens')
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
 const read = (p: string) => readFileSync(p, 'utf8')
 
 const MAIN = read(join(HERE, 'main.tsx'))
@@ -27,6 +29,7 @@ describe('v2 entry', () => {
 
     expect(at(`${DS}/v2/styles.css`), 'v2/styles.css imported').toBeGreaterThanOrEqual(0)
     expect(at(`${DS}/v2/app-layer.css`), 'v2/app-layer.css imported').toBeGreaterThan(at(`${DS}/v2/styles.css`))
+    expect(at(`${DS}/v2/mark.css`), 'mark.css after the layer').toBeGreaterThan(at(`${DS}/v2/app-layer.css`))
     expect(at('./styles/platform.css'), 'platform.css after the layer').toBeGreaterThan(at(`${DS}/v2/app-layer.css`))
     expect(specifiers).not.toContain(`${DS}/styles.css`)
     const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))
@@ -65,18 +68,19 @@ describe('v2 entry', () => {
     }
   })
 
-  it('VE-06 BrandMark renders the v2 mark with its corner', () => {
+  it('VE-06 BrandMark renders the vector master with the mark class', () => {
     const html = renderToStaticMarkup(createElement(BrandMark, { size: 20 }))
     const img = html.match(/<img\b[^>]*>/)?.[0]
     expect(img, `no <img> in ${html}`).toBeDefined()
     const attr = (name: string) => img!.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
 
-    expect.soft(attr('src')).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
+    expect(markSvg).toMatch(/^data:image\/svg\+xml,|\/mark\.svg(\?.*)?$/)
+    expect.soft(attr('src')).toBe(escHtml(markSvg))
+    expect.soft(attr('class')).toBe('asc-mark')
     expect.soft(attr('width')).toBe('20')
     expect.soft(attr('height')).toBe('20')
     expect.soft(attr('alt')).toBe('')
     expect.soft(attr('aria-hidden')).toBe('true')
-    expect.soft(attr('style')).toContain('display:block')
-    expect.soft(attr('style')).toContain('border-radius:var(--radius-sm)')
+    expect.soft(attr('style')).toBeUndefined()
   })
 })

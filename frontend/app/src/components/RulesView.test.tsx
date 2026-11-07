@@ -576,6 +576,7 @@ describe('RulesView, reskin pins', () => {
     expect(row.style.flexWrap).toBe('wrap')
     expect(row.style.gap).toBe('20px')
     expect(h1.parentElement!.style.minWidth).toBe('0')
+    expect(h1.parentElement!.style.flex).toContain('1')
     const btn = row.lastElementChild as HTMLElement
     expect(btn).toBe(screen.getByTestId('rules-new'))
     expect(btn.style.flex).toBe('0 0 auto')

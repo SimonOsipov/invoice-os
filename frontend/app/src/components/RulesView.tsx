@@ -219,7 +219,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 22 }}>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 7 }}>
             VALIDATION ENGINE
           </div>

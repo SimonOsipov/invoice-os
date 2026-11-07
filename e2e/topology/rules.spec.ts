@@ -363,14 +363,14 @@ test("New rule is wholly visible and at the header's right edge at every width",
     return null
   }
 
-  await atEachWidth(page, 'New rule inside its clipping ancestor', async () => {
+  const placed = async () => {
     const [b, h] = await Promise.all([box(btn), box(header)])
     if (!b || !h) return 'an element has no box'
     if (Math.abs(b.x + b.width - (h.x + h.width)) > 1) return 'New rule is not at the right edge of the header row'
     return contained()
-  })
-  // The header wraps here and the button drops left, so only containment holds.
-  await atEachWidth(page, 'New rule inside its clipping ancestor when the header wraps', contained, [860])
+  }
+  await atEachWidth(page, 'New rule inside its clipping ancestor', placed)
+  await atEachWidth(page, 'New rule inside its clipping ancestor at the narrow width', placed, [860])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

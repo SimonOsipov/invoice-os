@@ -77,7 +77,11 @@ func explainGet(inv Invoice) func(context.Context, string) (Invoice, error) {
 }
 
 func lineViolation(path string) Violation {
-	return Violation{RuleKey: "line-cost-non-negative", Severity: "error", Message: explainTestMessage, Path: path}
+	v := Violation{RuleKey: "line-cost-non-negative", Severity: "error", Message: explainTestMessage, Path: path}
+	if !strings.Contains(path, ".") {
+		v.Field = "unit_price"
+	}
+	return v
 }
 
 func explainFakeClient(t *testing.T, logger *slog.Logger) *ai.Client {

@@ -510,6 +510,7 @@ test.describe('library sidebar links', () => {
     const errors = collectErrors(page)
     await prepare(page)
     await visit(page, '/')
+    await page.evaluate(() => document.fonts.ready.then(() => true))
     const measured: Record<string, unknown>[] = []
     for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
       await resize(page, width, 1080)

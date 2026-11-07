@@ -3,7 +3,7 @@ package assets
 
 import _ "embed"
 
-// Mark is the brand mark, served to mail clients at /emails/mark.png.
+// Mark is the master's raster for mail clients, served at /emails/mark.png.
 //
-//go:embed mark.png
+//go:embed mail-mark.png
 var Mark []byte

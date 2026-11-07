@@ -104,7 +104,8 @@ describe('library shell primitives', () => {
     const ts = render(createElement(Logo))
     const img = only(ts, 'img')
     expect(['width', 'height', 'alt', 'aria-hidden'].map((a) => attr(img, a))).toEqual(['28', '28', '', 'true'])
-    expect(style(img)['border-radius']).toBe('var(--radius-md)')
+    expect(attr(img, 'class')?.split(/\s+/)).toContain('asc-mark')
+    expect(style(img)['border-radius']).toBeUndefined()
     expect(style(withText(ts, 'ASComply'))).toMatchObject({
       'font-size': '16px',
       color: 'var(--surface-foreground)',
@@ -308,41 +309,52 @@ describe('library shell primitives', () => {
     const none = sidebar(home, null)
     expect(none.some((t) => t.text === 'Book the Demo')).toBe(false)
     expect(none.some((t) => t.name === 'a')).toBe(false)
-    expect(none.filter((t) => style(t)['border-top'] === '1px solid var(--line-1)')).toHaveLength(1)
-    expect(withText(none, 'Cookie choices').name).toBe('button')
+    expect(none.filter((t) => style(t)['border-top'] === '1px solid var(--line-1)'), 'no demo link means no footer').toHaveLength(0)
+    expect(none.find((t) => attr(t, 'class') === 'lib-cookie-choices')?.name).toBe('button')
+    expect(withText(none, 'Cookie choices').name).toBe('span')
   })
 
-  it('SH-20 the footer holds Cookie choices whether or not Book the Demo shows', () => {
-    const footerOf = (ts: Tag[]) => {
-      const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
-      expect(i, 'the footer block').toBeGreaterThan(-1)
-      return ts.slice(i + 1)
-    }
-    const withDemo = footerOf(sidebar(home, 'https://l.example/?demo'))
-    const kids = withDemo.filter((t) => t.name === 'a' || t.name === 'button')
-    expect(kids.map((t) => t.text)).toEqual(['Book the Demo', 'Cookie choices'])
-    const cc = kids[1]
-    expect(cc.name).toBe('button')
-    expect(attr(cc, 'class')).toBe('lib-cookie-choices')
-    expect(style(cc)).toMatchObject({ 'font-size': '13px', color: 'var(--fg-3)' })
+  it('SH-20 the footer holds only Book the Demo; the cookie row is a pinned row with the glyph', () => {
+    const ts = sidebar(home, 'https://l.example/?demo')
+    const f = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
+    expect(f, 'the footer block').toBeGreaterThan(-1)
+    expect(ts.slice(f + 1).filter((t) => t.name === 'a' || t.name === 'button').map((t) => t.text)).toEqual(['Book the Demo'])
 
-    const bare = footerOf(sidebar(home, null)).filter((t) => t.name === 'a' || t.name === 'button')
-    expect(bare.map((t) => t.text)).toEqual(['Cookie choices'])
-    expect(attr(bare[0], 'class')).toBe('lib-cookie-choices')
+    const c = ts.findIndex((t) => attr(t, 'class') === 'lib-cookie-choices')
+    expect(c, 'the cookie row').toBeGreaterThan(-1)
+    expect(c).toBeLessThan(f)
+    expect(ts[c].name).toBe('button')
+    expect(ts[c + 1].name, 'the glyph column').toBe('span')
+    expect(ts[c + 2].name).toBe('svg')
+    expect(attr(ts[c], 'aria-current')).toBeUndefined()
+  })
+
+  it('Sidebar_cookieRowIsOutsideTheNavInEveryCombination', () => {
+    for (const route of [home, parseLibraryPath('/recognition/review-fields')]) {
+      for (const d of ['https://l.example/?demo', null]) {
+        const html = renderToStaticMarkup(
+          createElement(Sidebar, { route, demoHref: d, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop }),
+        )
+        const row = html.indexOf('lib-cookie-choices')
+        expect(row, `${route.view} ${d}`).toBeGreaterThan(html.indexOf('</nav>'))
+        const after = html.slice(row)
+        expect(after.includes('border-top:1px solid var(--line-1)'), `${route.view} ${d}`).toBe(d !== null)
+        if (d === null) expect(after.endsWith('</button></div></aside>'), `${route.view} nothing follows the row`).toBe(true)
+      }
+    }
   })
 
   it('Sidebar_marginsHoldInEveryCombination', () => {
     const demo = 'https://l.example/?demo'
     const cases: [string | null, string[]][] = [
-      [demo, ['Book the Demo', 'Cookie choices']],
-      [null, ['Cookie choices']],
+      [demo, ['Book the Demo']],
+      [null, []],
     ]
     for (const [d, order] of cases) {
       const ts = sidebar(home, d)
       const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
-      const kids = ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button')
+      const kids = i < 0 ? [] : ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button')
       expect(kids.map((t) => t.text), `${d}`).toEqual(order)
-      expect(style(withText(ts, 'Cookie choices'))['margin-top'], `${d}`).toBe(d === null ? '0' : '12px')
     }
   })
 

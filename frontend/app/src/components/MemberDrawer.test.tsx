@@ -14,6 +14,7 @@ import {
   CLIENTS_UNREADABLE,
   MEMBER_ADMIN_ONLY,
   MEMBER_CLIENTS_ADMIN_ONLY,
+  NO_WAITING_INVOICES,
   WFROLE_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
   REMOVE_EXPLANATION,
@@ -430,7 +431,7 @@ describe('the drawer status-error strip', () => {
         memberId="u1"
         onClose={vi.fn()}
         onStatus={vi.fn()}
-        statusError={{ id: 'u1', message: 'the last active admin cannot be suspended' }}
+        statusError={{ id: 'u1', message: 'the last active admin cannot be suspended', waiting: NO_WAITING_INVOICES }}
       />,
     )
 
@@ -599,7 +600,7 @@ describe('the drawer shell and bands', () => {
 
   it('a status error for another member renders no strip here', () => {
     render(
-      <MemberDrawer ctx={drawerCtx()} memberId="u1" onClose={vi.fn()} onStatus={vi.fn()} statusError={{ id: 'u2', message: 'refused' }} />,
+      <MemberDrawer ctx={drawerCtx()} memberId="u1" onClose={vi.fn()} onStatus={vi.fn()} statusError={{ id: 'u2', message: 'refused', waiting: NO_WAITING_INVOICES }} />,
     )
 
     expect(screen.getByTestId('member-danger-zone'), 'the footer is the floor under the absence').toBeTruthy()
@@ -925,6 +926,35 @@ describe('ACCESS-01: the drawer saves the access role', () => {
     await waitFor(() => expect(text('member-drawer-access-error')).toBe(REFUSED))
     expect(card('preparer').checked).toBe(true)
     expect(card('reviewer').checked).toBe(false)
+  })
+
+  it('a refused role change lists the waiting invoices and keeps the stored role', async () => {
+    const S = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+    const items = [
+      { id: 'a', invoice_number: 'INV-1', workflow_role_key: 'tax', workflow_role_title: 'Tax' },
+      { id: 'b', invoice_number: 'INV-2', workflow_role_key: 'audit' },
+    ]
+    mount({ setMemberRole: vi.fn().mockRejectedValue(new ApiError('http', S, 409, { error: S, policies: [], invoices: items, invoices_total: 2 })) })
+
+    pick('reviewer')
+    await waitFor(() => expect(text('member-drawer-access-error')?.startsWith(S)).toBe(true))
+    const lis = Array.from(screen.getByTestId('member-drawer-access-error-invoices').querySelectorAll('li')).map((li) => li.textContent)
+    expect(lis).toEqual(['INV-1 — Tax', 'INV-2 — audit'])
+    expect(card('preparer').checked).toBe(true)
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([false, false, false])
+
+    pick('admin')
+    await waitFor(() => expect(screen.queryByTestId('member-drawer-access-error-invoices')).toBeNull())
+  })
+
+  it('an invoice number and a role title render as text', async () => {
+    const items = [{ id: 'a', invoice_number: '<b>x</b>', workflow_role_key: 'k', workflow_role_title: '<i>y</i>' }]
+    mount({ setMemberRole: vi.fn().mockRejectedValue(new ApiError('http', 'refused', 409, { error: 'refused', invoices: items, invoices_total: 1 })) })
+
+    pick('reviewer')
+    const list = await screen.findByTestId('member-drawer-access-error-invoices')
+    expect(list.textContent).toBe('<b>x</b> — <i>y</i>')
+    expect(list.querySelector('b, i')).toBeNull()
   })
 
   it("ACCESS-01: the sole active admin's cards are locked with the protected note", () => {

@@ -51,6 +51,7 @@ import {
   type ApprovalPolicy,
 } from './client'
 import { createInvoice, editInvoice, getInvoiceApproval, validateInvoice } from './client'
+import { acceptById, inviteWithToken, listMine, memberships, registerFresh, removeMember, setMemberRole, subjectOf, type PendingInvite } from './client'
 import { assertErrorEnvelope, codeListsReady, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 import { freshPolicyName, freshRoleTitle, freshTin } from './fixtures'
 
@@ -376,6 +377,7 @@ const MSG_CATCH_ALL = 'a policy with no scopes must stay last while any policy h
 const MSG_NOT_ADMIN = 'only an admin can change approval policies' // ErrNotPermitted
 const MSG_ROLE_IN_USE = 'this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first' // roleInUseMessage (ErrRoleInUse)
 const MSG_ROLE_LAST_HOLDER = 'an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first' // roleLastHolderMessage (ErrRoleInUse)
+const MSG_MEMBER_LAST_SIGNER = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first' // memberLastSignerMessage (ErrRoleInUse)
 const MSG_ROLE_IN_RUN = 'an open approval run is waiting on this workflow role — wait until it is decided, or edit its invoice to cancel it, first' // roleInRunMessage (ErrRoleInUse)
 const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'workflow_role_keys']
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
@@ -1168,7 +1170,12 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     ).toEqual([['pending', role.key]])
     return { role, policy, invoice: created }
   }
-  function assertRoleInRun(res: RawResult, invoice: { id: string; invoice_number: string }, label: string): Record<string, unknown> {
+  function assertRoleInRun(
+    res: RawResult,
+    invoice: { id: string; invoice_number: string },
+    label: string,
+    items: Record<string, string>[] = [{ id: invoice.id, invoice_number: invoice.invoice_number }],
+  ): Record<string, unknown> {
     expect(res.status, `${label}: expected HTTP 409`).toBe(409)
     const body = res.body as Record<string, unknown>
     expect(Object.keys(body).sort(), `${label}: the body is error, invoices, invoices_total, policies`).toEqual([
@@ -1178,7 +1185,7 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
       'policies',
     ])
     expect(String(body.error), `${label}: the message should carry no sentinel prefix`).not.toContain('approval: ')
-    expect(body.invoices, `${label}: names the waiting invoice`).toEqual([{ id: invoice.id, invoice_number: invoice.invoice_number }])
+    expect(body.invoices, `${label}: names the waiting invoice`).toEqual(items)
     expect(body.invoices_total, `${label}: one waiting invoice`).toBe(1)
     return body
   }
@@ -1238,6 +1245,54 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     const res = await staffRoleRaw(t, role.key, [])
     expect(res.status, 'the empty set saves once the run is cancelled').toBe(200)
     expect(await membersOf(t, role.key), 'the role lists no members').toEqual([])
+  })
+
+  // Joins a second account to the workspace as an active reviewer through the invite flow.
+  async function joinReviewer(t: string): Promise<{ userId: string }> {
+    const account = await registerFresh('apsc13')
+    await inviteWithToken(t, (await me(t)).tenant.id, account.email, 'reviewer')
+    const session = (await signInSession(account.email, account.password)).access_token
+    const mine = await listMine(session)
+    expect(mine.status, 'the invitee lists the invite').toBe(200)
+    const invite = (mine.body as { invitations: PendingInvite[] }).invitations[0]
+    const accepted = await acceptById(session, invite.id, 'APSC-13 reviewer')
+    expect(accepted.status, 'the invitee accepts').toBe(200)
+    return { userId: subjectOf(session) }
+  }
+  // setMembershipStatus throws on non-2xx, so the refusals go through rawFetch.
+  const patchStatusRaw = (t: string, userId: string, status: 'active' | 'suspended') =>
+    rawFetch(`/api/tenancy/v1/memberships/${userId}`, { method: 'PATCH', headers: authed(t), body: { status } })
+  const rowOf = async (t: string, userId: string) => (await memberships(t)).memberships.find((m) => m.user_id === userId)
+
+  test('409: removing, suspending or demoting a waiting role\'s last signer, then 200 once an edit cancels the run', async () => {
+    test.setTimeout(120_000)
+    const t = await freshWorkspace()
+    const { role, invoice } = await armRunOnRole(t)
+    const { userId } = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [userId])).status, 'a set that holds a signer saves').toBe(200)
+
+    const refused = [
+      ['removing', await removeMember(t, userId)],
+      ['suspending', await patchStatusRaw(t, userId, 'suspended')],
+      ['demoting', await setMemberRole(t, userId, 'preparer')],
+    ] as const
+    for (const [label, res] of refused) {
+      const body = assertRoleInRun(res, invoice, `${label} the last signer`, [
+        { id: invoice.id, invoice_number: invoice.invoice_number, workflow_role_key: role.key, workflow_role_title: role.title },
+      ])
+      expect(body.error, `${label}: the member sentence`).toBe(MSG_MEMBER_LAST_SIGNER)
+      expect(body.policies, `${label}: names no policy`).toEqual([])
+    }
+    const row = await rowOf(t, userId)
+    expect([row?.status, row?.role], 'the refusals leave the reviewer active').toEqual(['active', 'reviewer'])
+    expect(await membersOf(t, role.key), 'the role still lists the reviewer').toEqual([userId])
+
+    await editInvoice(t, invoice.id, { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] })
+    expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
+    expect((await setMemberRole(t, userId, 'preparer')).status, 'demoting answers 200 once the run is cancelled').toBe(200)
+    expect((await patchStatusRaw(t, userId, 'suspended')).status, 'suspending answers 200').toBe(200)
+    expect((await removeMember(t, userId)).status, 'removing answers 200').toBe(200)
+    expect((await rowOf(t, userId))?.status, 'the roster shows the member removed').toBe('removed')
   })
 
   test('409: deleting a role a policy in force names in a scope, then 200 once the policy is gone', async () => {

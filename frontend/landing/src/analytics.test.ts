@@ -11,6 +11,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES, isScrollable, scrollDepthPercent } from './analytics'
 
 afterEach(() => {
@@ -23,7 +24,7 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Solutions.tsx', 'Integrations.tsx', 'Api.tsx', 'Faq.tsx', 'ClosingCta.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Solutions.tsx', 'Integrations.tsx', 'Api.tsx', 'Faq.tsx', 'ClosingCta.tsx', 'Footer.tsx']
 const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
@@ -244,9 +245,8 @@ describe('App.tsx CTA bindings (AC-3)', () => {
 
     const bound = Array.from(APP_SRC.matchAll(/book\('([a-z_]+)'\)/g)).map((m) => m[1])
     expect(bound.length).toBe(DEMO_CTA_SOURCES.length)
-    expect(bound.length).toBe(10)
+    expect(bound.length).toBe(9)
     expect(bound).toContain('platform')
-    expect(bound.filter((s) => s === 'coverage'), "book('coverage') is bound once").toHaveLength(1)
     expect(new Set(bound).size).toBe(bound.length)
     expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
     expect(bound, 'bindings follow the page order DEMO_CTA_SOURCES lists').toEqual([...DEMO_CTA_SOURCES])
@@ -429,8 +429,8 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
 })
 
 describe('CTA components untouched (AC-3), gap-fill', () => {
-  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds ten entries', () => {
-    expect(CTA_COMPONENTS.length).toBe(10)
+  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds nine entries', () => {
+    expect(CTA_COMPONENTS.length).toBe(9)
     expect(CTA_COMPONENTS).not.toContain('Pricing.tsx')
     expect(CTA_COMPONENTS).not.toContain('DemoCta.tsx')
   })
@@ -438,11 +438,20 @@ describe('CTA components untouched (AC-3), gap-fill', () => {
 
 // N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan.
 describe('DEMO_CTA_SOURCES (AC #7, gap)', () => {
-  it('N3: the ten sources in page order, no pricing or demo_cta', () => {
-    expect(DEMO_CTA_SOURCES.length).toBe(10)
-    expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
+  it('N3: the nine sources in page order, no pricing or demo_cta', () => {
+    expect(DEMO_CTA_SOURCES.length).toBe(9)
+    expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
     expect(DEMO_CTA_SOURCES).not.toContain('pricing')
     expect(ANALYTICS_SRC, 'Pricing left analytics.ts').not.toMatch(/pricing/i)
     expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
+  })
+
+  // Source scan: a union member no value lists is invisible at runtime and to tsc.
+  it('N3b: the DemoCtaSource union lists exactly the DEMO_CTA_SOURCES values', () => {
+    const decl = /export type DemoCtaSource =([^\n]+)/.exec(stripComments(ANALYTICS_SRC))
+    expect(decl, 'control: the union declaration is found').not.toBeNull()
+    const members = Array.from(decl![1].matchAll(/'([A-Za-z_]+)'/g)).map((m) => m[1])
+    expect(members.length, 'floor: the union has members').toBeGreaterThan(5)
+    expect([...members].sort()).toEqual([...DEMO_CTA_SOURCES].sort())
   })
 })

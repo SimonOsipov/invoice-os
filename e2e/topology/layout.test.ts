@@ -10,6 +10,7 @@ import {
   assertSameHeight,
   enclosesRect,
   gaps,
+  inflateRect,
   settleAnimations,
   WIDE_WIDTHS,
   type Box,
@@ -236,6 +237,12 @@ describe('overlapOf', () => {
     // exists — gaps() reports the card as 8px outside the container on the left and
     // 764px clear on the right, and says nothing at all about whether they overlap.
     expect(gaps(CARD, CONTAINER)).toEqual({ left: -8, right: 764 })
+  })
+})
+
+describe('inflateRect', () => {
+  it('inflateRect grows every side', () => {
+    expect(inflateRect({ x: 10, y: 10, width: 20, height: 20 }, 2)).toEqual({ x: 8, y: 8, width: 24, height: 24 })
   })
 })
 

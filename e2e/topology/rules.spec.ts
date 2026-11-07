@@ -109,10 +109,10 @@ async function box(l: Locator): Promise<Rect | null> {
 }
 
 // Runs `probe` at each WIDE_WIDTHS entry; the probe returns null when the relation holds, else a description.
-async function atEachWidth(page: Page, label: string, probe: () => Promise<string | null>): Promise<void> {
+async function atEachWidth(page: Page, label: string, probe: () => Promise<string | null>, widths: readonly number[] = WIDE_WIDTHS): Promise<void> {
   const entry = page.viewportSize()
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: 1080 })
       await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
       await expect
@@ -334,14 +334,14 @@ test('a client rule shows on its own client and not on another, across client sw
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Core AC 2: New rule is never clipped by a scrolling ancestor and never overlaps its neighbours.
-test('New rule is wholly visible at every width', async ({ page }) => {
+// Core AC 2: New rule is never clipped, never overlaps the title, and sits at the header's right edge.
+test("New rule is wholly visible and at the header's right edge at every width", async ({ page }) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openRules(page)
   const btn = newButton(page)
-  const count = page.getByText(/^\d+ RULES$/).first()
   const title = page.getByRole('heading', { name: 'Rules', exact: true })
+  const header = title.locator('xpath=../..')
 
   // Visible box of the nearest ancestor that clips horizontally; the viewport when none does.
   const clipBox = () =>
@@ -355,14 +355,22 @@ test('New rule is wholly visible at every width', async ({ page }) => {
       return { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight }
     })
 
-  await atEachWidth(page, 'New rule inside its clipping ancestor', async () => {
-    const [clip, b, c, t] = await Promise.all([clipBox(), box(btn), box(count), box(title)])
-    if (!b || !c || !t) return 'an element has no box'
+  const contained = async () => {
+    const [clip, b, t] = await Promise.all([clipBox(), box(btn), box(title)])
+    if (!b || !t) return 'an element has no box'
     if (!enclosesRect({ ...clip, y: b.y, height: b.height }, b, 0.5)) return `New rule ${JSON.stringify(b)} is clipped by ${JSON.stringify(clip)}`
-    if (rectsOverlap(b, c)) return 'New rule overlaps the count'
     if (rectsOverlap(b, t)) return 'New rule overlaps the title'
     return null
-  })
+  }
+
+  const placed = async () => {
+    const [b, h] = await Promise.all([box(btn), box(header)])
+    if (!b || !h) return 'an element has no box'
+    if (Math.abs(b.x + b.width - (h.x + h.width)) > 1) return 'New rule is not at the right edge of the header row'
+    return contained()
+  }
+  await atEachWidth(page, 'New rule inside its clipping ancestor', placed)
+  await atEachWidth(page, 'New rule inside its clipping ancestor at the narrow width', placed, [860])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

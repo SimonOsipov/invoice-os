@@ -92,7 +92,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
-import { signInAs } from '../personaSession'
+import { openNewInvoice, signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
@@ -229,7 +229,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // reached the switcher, e.g. no gateway configured).
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
 
@@ -429,7 +429,7 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -501,7 +501,7 @@ test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, a
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -558,7 +558,7 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -623,7 +623,7 @@ test("AIR07-E2E-04: an oversized cell opens exactly today's Map step", async ({ 
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -662,7 +662,7 @@ async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
   const entity = await createEntity(token, { name: `${label} ${freshTin()}`, tin: freshTin() })
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const csv = buildAir07UnsteeredCsv(`INV-ENGI07-${freshTin()}`)
   await page.locator('input[type="file"]#pf-import-file').setInputFiles({ name: 'engi07.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
@@ -765,7 +765,7 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   // File A first, so it is group 1.
   await page.locator('input[type="file"]#pf-import-file').setInputFiles([
@@ -870,7 +870,7 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
   // switcher defaults to (see selectEntity's own doc comment).
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   // [import-upload-unify] no more in-page entity <select> -- selectEntity() above
   // (workspace switcher) already made `entity` the active selection CreateUpload's
@@ -1061,7 +1061,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   // Run 1: stores INV-UI-MIX-VIOLATE and INV-UI-MIX-CLEAN, quarantines
   // INV-UI-MIX-STRUCT structurally -- E2E-04 already proves this split in detail; this
   // run exists only to seed the store for run 2's collisions.
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'ui-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1088,7 +1088,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
 
   // Run 2 re-imports the same header into the same entity, so it opens RESTORED, not blank.
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'ui-mixed-2.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1243,7 +1243,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   // Leg 1 -- createStep 'upload' is NOT in TYPED_ONLY_STEPS (EXTR-09-06), so IMPORT_STEPS
   // (Import/Map/Review) renders; the typed-path-only 'Enter' label is absent.
@@ -1278,8 +1278,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
 
   // Not just the strip: the Enter step's BODY rendered underneath it. A resolver
   // that returned the right labels over a blank step router would otherwise pass.
-  // Same smallest-match text idiom as :465/:529's 'Import invoices ·'; the header
-  // CTA's name is exactly 'New invoice' with no '·', so there is no collision.
+  // Same smallest-match text idiom as :465/:529's 'Import invoices ·'.
   await expect(page.getByText('New invoice ·', { exact: false }), 'the Enter step body rendered').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1301,7 +1300,7 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   // The unified card is the only import surface in LIVE. Entity is now static header
   // text, not a <select> -- this doubles as the assertion that it still renders.
@@ -1374,7 +1373,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('aside.pf-sidebar')).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
@@ -1448,9 +1447,9 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await shoot(page, 'app', 'inhouse-detail', { mask: [sourceName, page.getByTestId('invoice-detail').locator('tbody'), page.getByTestId('status-strip'), page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list')] })
 
   // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
-  // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back
+  // (:725-729). Re-opens the wizard fresh from the Invoices page rather than navigating back
   // through the just-filed import's state.
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
 
   // The hand-off form starts blank: its primary names the missing number, not the entity refusal.
@@ -1534,7 +1533,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-loop.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1683,7 +1682,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
   await selectEntity(page, entity.name)
 
   const invoiceNumber = `INV-E2E-SINGLE-${Date.now()}`
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'single.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
@@ -1724,7 +1723,7 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'header-only.csv', mimeType: 'text/csv', buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8') })
@@ -1779,7 +1778,7 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-deep-link.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1849,7 +1848,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-keep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1958,7 +1957,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   const fileInput = page.locator('input[type="file"]#pf-import-file')
   const fileRow = (name: string) => page.locator('ul li').filter({ hasText: name })
@@ -2073,7 +2072,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   await page.locator('input[type="file"]#pf-import-file').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL])
 
@@ -2150,7 +2149,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   await page.locator('input[type="file"]#pf-import-file').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE])
 
@@ -2253,7 +2252,7 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc-wire.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(`INV-E2E-DOC-${Date.now()}`), 'utf8') })
@@ -2395,7 +2394,7 @@ test('EXTR09-E2E-01 / EXTR32-E2E-01: a PDF forks to the document path, extracts,
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'native_invoice.pdf', mimeType: 'application/pdf', buffer: uniquePdfBytes() })
@@ -2544,7 +2543,7 @@ test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', as
   await selectEntity(page, entity.name)
 
   const invoiceNumber = `INV-E2E-EXTR0908-${Date.now()}`
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'unchanged.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
@@ -2602,7 +2601,7 @@ test('EXTR09-E2E-03 (AC-3): a mixed selection is refused in the browser, picked 
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
 
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -2671,7 +2670,7 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
 
   // One drop, three files, so a single addFiles call sets the run kind from the FIRST
@@ -2810,7 +2809,7 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
 
   const fileInput = page.locator('input[type="file"]#pf-import-file')
@@ -2871,7 +2870,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
   await selectEntity(page, entity.name)
 
   const fileNames = ['progress-a.pdf', 'progress-b.pdf']
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(
     fileNames.map((name) => ({ name, mimeType: 'application/pdf', buffer: uniquePdfBytes() })),
   )
@@ -3035,7 +3034,7 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
     await route.continue()
   })
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.locator('input[type="file"]#pf-import-file').setInputFiles([
     { name: goodName, mimeType: 'application/pdf', buffer: uniquePdfBytes() },
     { name: badName, mimeType: 'application/pdf', buffer: uniqueGarbageBytes() },

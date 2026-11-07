@@ -4,6 +4,7 @@ import { test, expect, type Locator, type Page, type TestInfo } from '@playwrigh
 import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { GATEWAY_URL } from './targets'
+import { brandMarkProblems, readBrandMark, ringProblems, ringWidth } from './brandMark'
 import {
   assertFillsColumn,
   enclosesRect,
@@ -135,6 +136,36 @@ test.describe('blog layout at wide widths', () => {
     const fits = await assertFillsColumn(page, header(page), main(page), 'blog header')
     await attachJson(testInfo, 'blog-header-fills-main', fits)
     expect(fits, 'no width was measured').toHaveLength(WIDE_WIDTHS.length)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog brand mark: vector master, ring on the dark sidebar, ring inside the aside and clear of the lockup text', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visit(page)
+    const mark = aside(page).locator('img.asc-mark')
+    await expect(mark, 'exactly one brand mark in the sidebar').toHaveCount(1)
+    const text = [aside(page).getByText('ASComply', { exact: true }), aside(page).getByText('AFRICA', { exact: true }), aside(page).getByText('BLOG', { exact: true })]
+    for (const t of text) await expect(t, 'lockup text never drew').toBeVisible()
+    const measured: Record<string, unknown>[] = []
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS, 390]) {
+      await resize(page, width, 1080)
+      const read = async (): Promise<{ problems: string[]; reading: unknown }> => {
+        await settleAnimations(aside(page), mark)
+        const reading = await readBrandMark(mark)
+        const markRect = await rectOf(mark, 'brand mark')
+        const within = await rectOf(aside(page), 'aside')
+        const clear: Rect[] = []
+        for (const t of text) clear.push(await rectOf(t, 'lockup text'))
+        const ring = ringWidth(reading)
+        return { problems: [...brandMarkProblems(reading), ...ringProblems(markRect, ring, within, clear)], reading: { ...reading, ring, markRect, within, clear } }
+      }
+      await expect.poll(async () => (await read()).problems, { message: `brand mark at ${width}px`, timeout: 10_000 }).toEqual([])
+      measured.push({ width, ...((await read()).reading as object) })
+    }
+    expect(measured.length, 'brand mark readings').toBeGreaterThan(0)
+    await attachJson(testInfo, 'blog-brand-mark', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })
@@ -706,6 +737,10 @@ test.describe('blog crawler HTML', () => {
       await new Promise((r) => setTimeout(r, JS_DELAY_MS))
       await route.continue()
     })
+    // Stub Google Fonts so a slow CDN cannot stretch the frame window past the script delay.
+    await page.route(/^https:\/\/fonts\.g(oogleapis|static)\.com\//, (route) =>
+      route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+    )
     await page.addInitScript(() => {
       const stats = { frames: 0, present: 0, boxed: 0 }
       ;(window as unknown as { __crawl: typeof stats }).__crawl = stats
@@ -796,7 +831,7 @@ test.describe('blog demo at wide widths', () => {
 
 type ApiCategory = { id: string; name: string; icon: string; post_count: number }
 type ApiBlock = { text?: string; title?: string; items?: string[] }
-type ApiPost = { title: string; summary: string; category_id: string; body: ApiBlock[] }
+type ApiPost = { id: string; title: string; summary: string; category_id: string; body: ApiBlock[] }
 
 // Loads `/` and returns the two gateway responses that this page load received. Other specs
 // (blog-editor) write categories and posts on the same preview, so a test never reads them separately.
@@ -972,6 +1007,43 @@ test.describe('blog journeys', () => {
     await expect(failure, 'the failure heading stayed').toHaveCount(0)
     await expect(main(page).locator('h1'), 'the home h1 never showed').toBeVisible()
     await expect(aside(page).locator('nav button.blog-nav:nth-of-type(n+2)').first(), 'no sidebar category after recovery').toBeVisible()
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: clicking a cover opens the post', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const live = (await (await fetch(`${GATEWAY_URL}/blog/posts`)).json()) as { posts: ApiPost[] }
+    const clickCover = async (box: Locator, title: string) => {
+      const id = live.posts.find((p) => p.title === title)?.id
+      expect(id, `control: no API post titled ${title}`).toBeTruthy()
+      await expect(box, 'cover box cursor').toHaveCSS('cursor', 'pointer')
+      await expect(box.locator(':scope > *').first(), 'cover child cursor').toHaveCSS('cursor', 'pointer')
+      await box.click()
+      await expect(main(page).locator('article h1')).toHaveText(title)
+      await expect(page).toHaveURL(new RegExp(`/${id}$`))
+    }
+
+    await visit(page)
+    const text = main(page).locator('section').first().getByRole('button', { name: /Read the post/ })
+    await expect(text, 'control: no featured card').toBeVisible()
+    const featured = (await text.locator(':scope > span').nth(1).textContent()) ?? ''
+    await clickCover(text.locator('..').locator(':scope > div').first(), featured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+
+    await visit(page)
+    const band = main(page).locator(`section ${GRID}`).first().locator(':scope > div').first()
+    await expect(band.locator('button'), 'control: no band card').toBeVisible()
+    const bandTitle = (await band.locator('button > span:nth-child(2)').textContent()) ?? ''
+    await clickCover(band.locator(':scope > div').first(), bandTitle)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+
+    await visit(page, '/category/regulation')
+    const card = main(page).locator(`section ${GRID}`).first().locator(':scope > div').first()
+    await expect(card.locator('button'), 'control: no category card').toBeVisible()
+    const cardTitle = (await card.locator('button > span:nth-child(2)').textContent()) ?? ''
+    await clickCover(card.locator(':scope > div').first(), cardTitle)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

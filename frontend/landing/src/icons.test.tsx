@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import markSvg from '@invoice-os/design-tokens/v2/assets/mark.svg'
 import * as iconsModule from './icons'
 import { BrandMark, Icon } from './icons'
 import { LANDING_SRC } from './cssScan.test.util'
@@ -116,9 +117,10 @@ describe('landing dependencies', () => {
 })
 
 describe('BrandMark', () => {
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
   const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
 
-  it('IC-09 BrandMark renders the v2 DS mark as rounded decoration', () => {
+  it('IC-09 BrandMark renders the vector master with the mark class', () => {
     const imgOf = (props: { size?: number }) => {
       const html = renderToStaticMarkup(createElement(BrandMark, props))
       const img = html.match(/<img\b[^>]*>/)?.[0]
@@ -126,13 +128,14 @@ describe('BrandMark', () => {
       return img as string
     }
     const img = imgOf({ size: 19 })
-    expect.soft(attr(img, 'src')).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
+    expect(markSvg).toMatch(/^data:image\/svg\+xml,|\/mark\.svg(\?.*)?$/)
+    expect.soft(attr(img, 'src')).toBe(escHtml(markSvg))
+    expect.soft(attr(img, 'class')).toBe('asc-mark')
     expect.soft(attr(img, 'alt')).toBe('')
     expect.soft(attr(img, 'aria-hidden')).toBe('true')
     expect.soft(attr(img, 'width')).toBe('19')
     expect.soft(attr(img, 'height')).toBe('19')
-    expect.soft(attr(img, 'style')).toContain('border-radius:var(--radius-md)')
-    expect.soft(attr(img, 'style')).toContain('display:block')
+    expect.soft(attr(img, 'style')).toBeUndefined()
     // the default size is 22 (Nav)
     expect.soft(attr(imgOf({}), 'width')).toBe('22')
     expect.soft(attr(imgOf({}), 'height')).toBe('22')

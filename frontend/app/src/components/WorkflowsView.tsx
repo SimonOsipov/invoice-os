@@ -17,9 +17,6 @@ import { policyStanding } from '../lib/policies'
 import { listLock, moveOrder, policySummary, scopeSummary, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
-const INTRO =
-  'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice.'
-
 // Two nodes, not one: the shipped sentence splits at its em dash.
 const EMPTY_TITLE = 'No approval policies yet'
 const EMPTY_MESSAGE = 'Every invoice transmits as soon as it validates. Create one to require sign-off first.'
@@ -119,16 +116,14 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, marginBottom: 14 }}>
-        <p style={{ fontSize: 13.5, color: 'var(--fg-2)', maxWidth: 620, lineHeight: 1.55, margin: 0 }}>{INTRO}</p>
-        {/* Roster arm only: `0 POLICIES` beside a spinner or beside ErrorState is the same
-            "an errored fetch reads as an empty workspace" claim the ladder exists to kill. */}
-        {surface === 'roster' && (
+      {/* Roster arm only, so a loading or errored fetch never reads as 0 policies. */}
+      {surface === 'roster' && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
           <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
             {policies.length} POLICIES
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {surface === 'loading' && <Loading label="Loading approval policies…" />}
 

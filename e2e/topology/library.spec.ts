@@ -5,6 +5,7 @@
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { shoot } from '../argos'
 import { resolveTarget } from '../targets'
+import { brandMarkProblems, readBrandMark, ringProblems, ringWidth } from './brandMark'
 import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 const LIBRARY_URL = resolveTarget('LIBRARY_URL')
@@ -426,10 +427,40 @@ test.describe('library layout at wide widths', () => {
     await attachJson(testInfo, 'library-links', { ...measured, BAKED_APP_URL, BAKED_LANDING_URL })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('library brand mark: vector master, ring on the dark sidebar, ring inside the aside and clear of the lockup text', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visit(page, '/')
+    const mark = aside(page).locator('img.asc-mark')
+    await expect(mark, 'exactly one brand mark in the sidebar').toHaveCount(1)
+    const text = [aside(page).getByText('ASComply', { exact: true }), aside(page).getByText('AFRICA', { exact: true }), aside(page).getByText('LIBRARY', { exact: true })]
+    for (const t of text) await expect(t, 'lockup text never drew').toBeVisible()
+    const measured: Record<string, unknown>[] = []
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS, 390]) {
+      await resize(page, width, 1080)
+      const read = async (): Promise<{ problems: string[]; reading: unknown }> => {
+        await settleAnimations(aside(page), mark)
+        const reading = await readBrandMark(mark)
+        const markRect = await rectOf(mark, 'brand mark')
+        const within = await rectOf(aside(page), 'aside')
+        const clear: Rect[] = []
+        for (const t of text) clear.push(await rectOf(t, 'lockup text'))
+        const ring = ringWidth(reading)
+        return { problems: [...brandMarkProblems(reading), ...ringProblems(markRect, ring, within, clear)], reading: { ...reading, ring, markRect, within, clear } }
+      }
+      await expect.poll(async () => (await read()).problems, { message: `brand mark at ${width}px`, timeout: 10_000 }).toEqual([])
+      measured.push({ width, ...((await read()).reading as object) })
+    }
+    expect(measured.length, 'brand mark readings').toBeGreaterThan(0)
+    await attachJson(testInfo, 'library-brand-mark', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
 })
 
 test.describe('library sidebar links', () => {
-  test('library sidebar: no Blog link; Book the Demo sits above Cookie choices', async ({ page }, testInfo) => {
+  test('library sidebar: no Blog link; Cookie choices sits above Book the Demo', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = collectErrors(page)
     await prepare(page)
@@ -439,14 +470,17 @@ test.describe('library sidebar links', () => {
       await resize(page, width, 1080)
       await settleAnimations(aside(page), main(page))
       const side = await rectOf(aside(page), 'aside')
+      const nav = await rectOf(aside(page).locator('nav'), 'nav')
       const demo = await rectOf(aside(page).getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
       const cookie = await rectOf(aside(page).getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
-      measured.push({ width, aside: side, demo, cookie })
+      measured.push({ width, aside: side, nav, demo, cookie })
       const at = `@${width}`
       await expect(aside(page).getByRole('link', { name: 'Blog' }), `${at}: the sidebar has no Blog link`).toHaveCount(0)
       expect.soft(enclosesRect(side, demo, 0.5), `${at}: Book the Demo is outside the sidebar`).toBe(true)
       expect.soft(enclosesRect(side, cookie, 0.5), `${at}: Cookie choices is outside the sidebar`).toBe(true)
-      expect.soft(demo.y + demo.height, `${at}: Book the Demo is not above Cookie choices`).toBeLessThanOrEqual(cookie.y + 1)
+      await expect(aside(page).locator('nav').getByRole('button', { name: 'Cookie choices' }), `${at}: the row is inside the nav`).toHaveCount(0)
+      expect.soft(cookie.y, `${at}: Cookie choices is not below the nav`).toBeGreaterThanOrEqual(nav.y + nav.height - 1)
+      expect.soft(demo.y, `${at}: Book the Demo is not below Cookie choices`).toBeGreaterThanOrEqual(cookie.y + cookie.height - 1)
       expect.soft(rectsOverlap(demo, cookie), `${at}: Book the Demo overlaps Cookie choices`).toBe(false)
     }
     await attachJson(testInfo, 'library-sidebar-links', measured)

@@ -53,19 +53,25 @@ const roleInRunMessage = "an open approval run is waiting on this workflow role 
 // roleLastHolderMessage is the 409 sentence when a staffing write leaves no signer on a role an open run waits on.
 const roleLastHolderMessage = "an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first"
 
+// memberLastSignerMessage is the 409 sentence when a membership change leaves a waited-on role with no signer.
+const memberLastSignerMessage = "this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first"
+
 // InvoiceRef names one invoice whose open run waits on the role.
 type InvoiceRef struct {
-	ID     string `json:"id"`
-	Number string `json:"invoice_number"`
+	ID        string `json:"id"`
+	Number    string `json:"invoice_number"`
+	RoleKey   string `json:"workflow_role_key,omitempty"`
+	RoleTitle string `json:"workflow_role_title,omitempty"`
 }
 
-// roleInUse is DeleteRole's and SetRoleMembers' refusal; it carries the policies and the waiting invoices
+// roleInUse is a role-in-use refusal; it carries the policies and the waiting invoices
 // (at most roleInRunListCap of invoicesTotal) so the handler can list them.
 type roleInUse struct {
 	policies      []PolicyRef
 	invoices      []InvoiceRef
 	invoicesTotal int
 	lastHolder    bool // a staffing write left no signer; policies stay empty
+	lastSigner    bool // a membership change left a waited-on role with no signer
 }
 
 func (e *roleInUse) Error() string { return ErrRoleInUse.Error() }
@@ -74,6 +80,8 @@ func (e *roleInUse) Unwrap() error { return ErrRoleInUse }
 // message is the 409 sentence for the lists this refusal carries.
 func (e *roleInUse) message() string {
 	switch {
+	case e.lastSigner:
+		return memberLastSignerMessage
 	case e.lastHolder:
 		return roleLastHolderMessage
 	case len(e.invoices) > 0 && len(e.policies) > 0:

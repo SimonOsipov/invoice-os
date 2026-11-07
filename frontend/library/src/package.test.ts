@@ -15,7 +15,7 @@ const dsImports = (src: string) => sideEffectImports(src).filter((s) => s.starts
 
 describe('library package', () => {
   it('main_importsV2TokensInTheSupportConsoleOrder', () => {
-    const want = [`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`]
+    const want = [`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`, `${DS}/v2/mark.css`]
     const control = dsImports(read(join(HERE, '../../support-console/src/main.tsx')))
     expect(control).toEqual(want)
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Settings shows empty states, not the demo tenant. ctx-cast idiom of Sidebar.test.tsx.
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
 import { initialConnectors } from '../lib/connectors'
@@ -132,7 +132,7 @@ describe('Settings > shell', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
     expect(screen.getByRole('heading', { name: 'Settings' }).style.fontWeight).toBe('')
     const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
-    expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates', 'Workspace'])
+    expect(tabs.map((t) => t.textContent)).toEqual(['01Members', '02Roles', '03ERP connectors', '04API & webhooks', '05Signing & certificates', '06Workspace'])
   })
 
   it('the workspace tab renders the deletion card', () => {
@@ -143,13 +143,224 @@ describe('Settings > shell', () => {
   it('in-house tab strip lists Company first', () => {
     render(<SettingsView ctx={inhouse()} />)
     const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
-    expect(tabs.map((t) => t.textContent)).toEqual(['Company', 'Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates', 'Workspace'])
+    expect(tabs.map((t) => t.textContent)).toEqual(['01Company', '02Members', '03Roles', '04ERP connectors', '05API & webhooks', '06Signing & certificates', '07Workspace'])
   })
 
   it.each(['connectors', 'api', 'signing'] as const)('%s: no 99 or 999 radius anywhere', (tab) => {
     const { container } = render(<SettingsView ctx={settingsCtx(tab, false)} />)
     expect(radii(container).length).toBeGreaterThan(5)
     expect(radii(container).filter((r) => /^(99|999)(px)?$/.test(r))).toHaveLength(0)
+  })
+})
+
+const USER = { name: 'Ada', initials: 'A', tenantName: 'Okafor & Co', verified: true }
+const FIRM_TAB_IDS = ['members', 'roles', 'connectors', 'api', 'signing', 'workspace'] as const
+const stripButtons = () => screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
+const tabByLabel = (label: string) => screen.getByRole('button', { name: label })
+
+describe('Settings > tab strip paint', () => {
+  it('active tab carries the blog paint', () => {
+    render(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    const s = tabByLabel('Roles').style
+    expect(s.background).toBe('var(--sage-panel)')
+    expect(s.color).toBe('var(--tab-active-text)')
+    expect(s.borderBottom).toBe('2px solid var(--tab-active-border)')
+    expect(s.marginBottom).toBe('')
+    expect(s.borderRadius).toBe('6px 6px 0 0')
+    expect(s.fontSize).toBe('13.5px')
+    expect(s.fontWeight).toBe('700')
+    expect(s.padding).toBe('10px 16px')
+    expect(s.gap).toBe('8px')
+    expect(s.whiteSpace).toBe('nowrap')
+    expect(s.outlineOffset).toBe('-2px')
+  })
+
+  it('inactive tab is transparent with a transparent underline', () => {
+    render(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    const s = tabByLabel('Members').style
+    expect(s.background).toBe('transparent')
+    expect(s.color).toBe('var(--fg-3)')
+    expect(s.borderBottom).toBe('2px solid transparent')
+    expect(s.borderRadius).toBe('6px 6px 0 0')
+    expect(s.padding).toBe('10px 16px')
+    expect(s.fontSize).toBe('13.5px')
+    expect(s.fontWeight).toBe('700')
+  })
+
+  it('strip has no gap, a 2px tab-border rule and scrolls sideways', () => {
+    render(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    const s = tabByLabel('Members').parentElement!.style
+    expect(s.gap).toBe('0')
+    expect(s.boxShadow).toBe('inset 0 -2px 0 var(--tab-border)')
+    expect(s.overflowX).toBe('auto')
+    expect(s.overflowY).toBe('hidden')
+    expect(s.borderBottom).toBe('')
+  })
+
+  it('tab class stays pf-tab alone (radius survives .pf-btn !important)', () => {
+    render(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    const tabs = stripButtons()
+    expect(tabs).toHaveLength(6)
+    for (const b of tabs) {
+      expect(b.className).toBe('pf-tab')
+      expect(b.className).not.toContain('pf-btn')
+    }
+  })
+
+  it('number span is mono, 10px, 0.7, hidden; label is the second and last child', () => {
+    render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const first = stripButtons()[0]
+    const num = first.children[0] as HTMLElement
+    expect(first.children).toHaveLength(2)
+    expect(num.className).toBe('mono')
+    expect(num.style.fontSize).toBe('10px')
+    expect(num.style.opacity).toBe('0.7')
+    expect(num.getAttribute('aria-hidden')).toBe('true')
+    expect(first.children[1].textContent).toBe('Members')
+  })
+
+  it('in-house: Company is numbered 01 and carries the active paint', () => {
+    render(<SettingsView ctx={inhouse()} />)
+    const company = stripButtons()[0]
+    expect(company.textContent).toBe('01Company')
+    expect(company.style.background).toBe('var(--sage-panel)')
+  })
+
+  it('clicking a tab selects it', () => {
+    const ctx = settingsCtx('members', false, { user: USER, roles: [] })
+    render(<SettingsView ctx={ctx} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Roles' }))
+    expect(ctx.setSettingsTab).toHaveBeenCalledTimes(1)
+    expect(ctx.setSettingsTab).toHaveBeenCalledWith('roles')
+  })
+
+  it('accessible name equals the label', () => {
+    render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    expect(screen.getByRole('button', { name: 'API & webhooks' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Signing & certificates' })).toBeTruthy()
+  })
+
+  it.each(FIRM_TAB_IDS)('only the %s tab is active', (id) => {
+    render(<SettingsView ctx={settingsCtx(id, false, { user: USER, roles: [] })} />)
+    const active = stripButtons().filter((b) => b.style.background === 'var(--sage-panel)')
+    expect(active).toHaveLength(1)
+    expect(active[0]).toBe(stripButtons()[FIRM_TAB_IDS.indexOf(id)])
+  })
+})
+
+describe('Settings > active tab scrolled into the strip', () => {
+  let scrollIntoView: ReturnType<typeof vi.fn>
+  let original: unknown
+  beforeEach(() => {
+    original = Element.prototype.scrollIntoView
+    scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof Element.prototype.scrollIntoView
+  })
+  afterEach(() => {
+    if (original === undefined) delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    else Element.prototype.scrollIntoView = original as typeof Element.prototype.scrollIntoView
+    vi.restoreAllMocks()
+  })
+
+  // jsdom does no layout: stub rects per tab label and give the strip a backed scrollLeft.
+  function stub(rects: Record<string, [number, number]>) {
+    let scrollLeft = 0
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      let l = 0
+      let r = 0
+      if (this.style.overflowX === 'auto') r = 300
+      else if (this.tagName === 'BUTTON') [l, r] = rects[this.children[1]?.textContent ?? ''] ?? [0, 0]
+      return { left: l, right: r, top: 0, bottom: 0, width: r - l, height: 0, x: l, y: 0, toJSON() {} } as DOMRect
+    })
+    return (strip: HTMLElement) => {
+      Object.defineProperty(strip, 'scrollLeft', { get: () => scrollLeft, set: (v: number) => { scrollLeft = v }, configurable: true })
+    }
+  }
+
+  it('on mount', () => {
+    let scrollLeft = 0
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const [l, r] = this.style.overflowX === 'auto' ? [0, 300] : this.tagName === 'BUTTON' && this.children[1]?.textContent === 'Workspace' ? [700, 900] : [0, 100]
+      return { left: l, right: r } as DOMRect
+    })
+    Object.defineProperty(HTMLElement.prototype, 'scrollLeft', { get: () => scrollLeft, set: (v: number) => { scrollLeft = v }, configurable: true })
+    try {
+      const { container } = render(<SettingsView ctx={settingsCtx('workspace', false, { user: USER, roles: [] })} />)
+      expect((container.querySelector('.pf-tab')!.parentElement as HTMLElement).scrollLeft).toBe(600)
+      expect(scrollIntoView).not.toHaveBeenCalled()
+    } finally {
+      delete (HTMLElement.prototype as { scrollLeft?: number }).scrollLeft
+    }
+  })
+
+  it('on selection change, moving only scrollLeft', () => {
+    const rects: Record<string, [number, number]> = { Members: [0, 150], Workspace: [700, 900] }
+    const back = stub(rects)
+    const { container, rerender } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+    back(strip)
+    expect(strip.scrollLeft).toBe(0)
+    rerender(<SettingsView ctx={settingsCtx('workspace', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(600)
+    rects.Members = [-400, -250]
+    rerender(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(200)
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('a tab already inside the strip leaves scrollLeft alone, edges included', () => {
+    const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [100, 250] }
+    const back = stub(rects)
+    const { container, rerender } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+    back(strip)
+    rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(0)
+  })
+
+  it('a tab clipped on the right scrolls by the overhang only', () => {
+    const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [200, 350] }
+    const back = stub(rects)
+    const { container, rerender } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+    back(strip)
+    rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(50)
+  })
+
+  it('re-reveals the active tab when the observed sizes change', () => {
+    const callbacks: Array<() => void> = []
+    const disconnect = vi.fn()
+    const observed: Element[] = []
+    class RO {
+      constructor(cb: () => void) {
+        callbacks.push(cb)
+      }
+      observe(el: Element) {
+        observed.push(el)
+      }
+      unobserve() {}
+      disconnect = disconnect
+    }
+    vi.stubGlobal('ResizeObserver', RO)
+    try {
+      const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [100, 250] }
+      const back = stub(rects)
+      const { container, rerender, unmount } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+      const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+      back(strip)
+      expect(observed).toContain(strip)
+      rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+      expect(strip.scrollLeft).toBe(0)
+      rects.Roles = [200, 400]
+      callbacks[callbacks.length - 1]()
+      expect(strip.scrollLeft).toBe(100)
+      expect(scrollIntoView).not.toHaveBeenCalled()
+      unmount()
+      expect(disconnect).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

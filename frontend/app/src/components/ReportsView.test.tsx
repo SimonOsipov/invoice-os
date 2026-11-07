@@ -1029,6 +1029,8 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
     const title = await screen.findByText('No data to report yet')
     expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
     expect(title.style.fontWeight).toBe('700')
+    expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
+    expect(screen.getByText('Reports populate once Acme has validated invoices in the period.').style.margin).toBe('0px')
   })
 
   it('RP-09 the report carries no v1 vocabulary (boundary)', async () => {

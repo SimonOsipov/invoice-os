@@ -2170,3 +2170,106 @@ describe('the Client users placeholder', () => {
     expect(order(notice, toolbar), 'notice, then toolbar').toBe(true)
   })
 })
+
+describe('APSC-13-03: a last-signer refusal lists the waiting invoices', () => {
+  // Mirrors Go `memberLastSignerMessage` (internal/approval/approval.go).
+  const SENTENCE = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+  const ITEMS = [
+    { id: 'a', invoice_number: 'INV-1', workflow_role_key: 'tax', workflow_role_title: 'Tax' },
+    { id: 'b', invoice_number: 'INV-2', workflow_role_key: 'audit', workflow_role_title: 'Audit' },
+  ]
+  const refusal = (total = 2) => new ApiError('http', SENTENCE, 409, { error: SENTENCE, policies: [], invoices: ITEMS, invoices_total: total })
+  const rows = () => [adminViewer(), member({ role: 'preparer' }), otherMember()]
+  const items = (id: string) => Array.from(screen.getByTestId(id).querySelectorAll('li')).map((li) => li.textContent)
+
+  it('a refused remove lists the waiting invoices and their roles', async () => {
+    mockedRemoveMembership.mockRejectedValue(refusal())
+
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    fireEvent.click(screen.getByTestId('member-remove'))
+    fireEvent.click(screen.getByTestId('member-remove-confirmed'))
+
+    const box = await screen.findByTestId('member-drawer-status-error')
+    expect(box.textContent?.startsWith(SENTENCE)).toBe(true)
+    expect(items('member-drawer-status-error-invoices')).toEqual(['INV-1 — Tax', 'INV-2 — Audit'])
+    expect(screen.getByTestId('member-drawer')).toBeTruthy()
+  })
+
+  it('a refused suspend in the drawer lists the waiting invoices', async () => {
+    mockedSetMembershipStatus.mockRejectedValue(refusal())
+
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+
+    await screen.findByTestId('member-drawer-status-error-invoices')
+    expect(items('member-drawer-status-error-invoices')).toEqual(['INV-1 — Tax', 'INV-2 — Audit'])
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+  })
+
+  it('a refused suspend from the row menu lists the waiting invoices under the row', async () => {
+    mockedSetMembershipStatus.mockRejectedValue(refusal())
+
+    render(<Harness initial={rows()} />)
+    suspendFromRowMenu(rowFor('Ada Person'))
+
+    await screen.findByTestId('member-status-error-invoices')
+    expect(items('member-status-error-invoices')).toEqual(['INV-1 — Tax', 'INV-2 — Audit'])
+  })
+
+  it('a refusal says how many more the server did not list', async () => {
+    mockedSetMembershipStatus.mockRejectedValue(refusal(5))
+
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+
+    expect((await screen.findByTestId('member-drawer-status-error-invoices-more')).textContent).toBe('and 3 more')
+
+    cleanup()
+    mockedSetMembershipStatus.mockRejectedValue(refusal(2))
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+    await screen.findByTestId('member-drawer-status-error-invoices')
+    expect(screen.queryByTestId('member-drawer-status-error-invoices-more')).toBeNull()
+  })
+
+  it('other failures render the sentence and no list', async () => {
+    mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', 'only an admin can change a count', 403, { error: 'x' }))
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+    expect((await screen.findByTestId('member-drawer-status-error')).textContent).toBe('only an admin can change a count')
+    expect(screen.queryByTestId('member-drawer-status-error-invoices')).toBeNull()
+
+    cleanup()
+    mockedRemoveMembership.mockRejectedValue(new ApiError('http', REASON, 409, { error: REASON }))
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    fireEvent.click(screen.getByTestId('member-remove'))
+    fireEvent.click(screen.getByTestId('member-remove-confirmed'))
+    expect((await screen.findByTestId('member-drawer-status-error')).textContent).toBe(REASON)
+    expect(screen.queryByTestId('member-drawer-status-error-invoices')).toBeNull()
+  })
+
+  it('the next action clears the previous list', async () => {
+    mockedSetMembershipStatus
+      .mockRejectedValueOnce(refusal())
+      .mockRejectedValueOnce(new ApiError('http', 'forbidden now', 403, { error: 'forbidden now' }))
+      .mockResolvedValueOnce(wireFor(member({ role: 'preparer' }), 'suspended'))
+
+    render(<Harness initial={rows()} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+    await screen.findByTestId('member-drawer-status-error-invoices')
+
+    clickSuspend()
+    await waitFor(() => expect(screen.getByTestId('member-drawer-status-error').textContent).toBe('forbidden now'))
+    expect(screen.queryByTestId('member-drawer-status-error-invoices')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('member-suspend'))
+    await waitFor(() => expect(screen.queryByTestId('member-drawer-status-error')).toBeNull())
+  })
+})

@@ -6,6 +6,26 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Wire values of pending_holder_reason and holder.reason.
+const (
+	HolderReasonUnstaffed        = "unstaffed"
+	HolderReasonNobodyCanApprove = "nobody_can_approve"
+)
+
+// holderReason maps a ladder reason to its wire value; nil when someone can approve.
+func holderReason(reason string) *string {
+	var v string
+	switch reason {
+	case "":
+		return nil
+	case "deleted", "no holder":
+		v = HolderReasonUnstaffed
+	default:
+		v = HolderReasonNobodyCanApprove
+	}
+	return &v
+}
+
 // unsignableReasonsTx returns one reason per probe, "" when someone can approve it. decideTx is the spec:
 // TestCanSign_AgreesWithTheApprovePath. Callers pass invoices they can see; RLS is the tenant scope.
 func unsignableReasonsTx(ctx context.Context, tx pgx.Tx, probes []CreatorProbe) ([]string, error) {

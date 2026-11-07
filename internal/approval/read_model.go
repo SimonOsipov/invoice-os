@@ -17,8 +17,9 @@ import (
 // Resolved is the card/canvas/inspector shared shape -- amber warning travels
 // with the text (roles.ts:34).
 type Resolved struct {
-	Text string `json:"text"`
-	Warn bool   `json:"warn"`
+	Text   string  `json:"text"`
+	Warn   bool    `json:"warn"`
+	Reason *string `json:"reason"`
 }
 
 // RunStep is one approval_run_steps row. No omitempty: the key set stays
@@ -116,7 +117,7 @@ func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) 
 			return err
 		}
 
-		return assembleRunStepsAndDecisions(ctx, tx, &run)
+		return assembleRunStepsAndDecisions(ctx, tx, u.String(), &run)
 	})
 	if err != nil {
 		return Run{}, err
@@ -127,10 +128,9 @@ func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) 
 // assembleRunStepsAndDecisions fills run.Steps and run.Decisions for an already-resolved
 // run.RunID -- the tx-scoped half ApprovalRun and decideTx both call (defect finding,
 // item 3), so POST's response body matches the same run's fresh GET rather than
-// duplicating this assembly. Five statements (steps, three role-resolution queries,
-// decisions); ApprovalRun's own run-header lookup above is the sixth
-// (TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount).
-func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, run *Run) error {
+// duplicating this assembly. The statement count is constant in step and role count
+// (TestApprovalRun_ConstantStatementsRegardlessOfStepAndRoleCount).
+func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID string, run *Run) error {
 	run.Steps = []RunStep{}
 	run.Decisions = []RunDecision{}
 
@@ -189,6 +189,22 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, run *Run) erro
 		run.Steps[i].WorkflowRoleTitle = &title
 		holder := resolveHolder(exists[*key], holders[*key])
 		run.Steps[i].Holder = &holder
+	}
+
+	// The lowest-ord pending approval step is judged per invoice, as the list row is
+	// (TestRowFactsTx_ReasonMatchesThePanelStep). One signer statement; errors fail the read.
+	for i := range run.Steps {
+		st := run.Steps[i]
+		if st.Kind != "approval" || st.State != "pending" || st.WorkflowRoleKey == nil {
+			continue
+		}
+		reasons, err := unsignableReasonsTx(ctx, tx, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey}})
+		if err != nil {
+			return err
+		}
+		st.Holder.Reason = holderReason(reasons[0])
+		st.Holder.Warn = st.Holder.Reason != nil
+		break
 	}
 
 	drows, err := tx.Query(ctx,
@@ -383,11 +399,11 @@ func resolveHolder(roleExists bool, holders []holderInput) Resolved {
 	res := resolution(roleExists, holders)
 	switch res.kind {
 	case resMissing:
-		return Resolved{Text: "Role no longer exists", Warn: true}
+		return Resolved{Text: "Role no longer exists", Warn: true, Reason: unstaffedReason()}
 	case resNone:
-		return Resolved{Text: "Nobody assigned", Warn: true}
+		return Resolved{Text: "Nobody assigned", Warn: true, Reason: unstaffedReason()}
 	case resBlocked:
-		return Resolved{Text: withExtra(res.primary, res.extra), Warn: true}
+		return Resolved{Text: withExtra(res.primary, res.extra), Warn: true, Reason: unstaffedReason()}
 	default: // resOK
 		return Resolved{Text: withExtra(res.primary, res.extra), Warn: false}
 	}
@@ -400,14 +416,19 @@ func inspectorResolveHolder(roleExists bool, holders []holderInput) Resolved {
 	res := resolution(roleExists, holders)
 	switch res.kind {
 	case resMissing:
-		return Resolved{Text: "Role no longer exists", Warn: true}
+		return Resolved{Text: "Role no longer exists", Warn: true, Reason: unstaffedReason()}
 	case resNone:
-		return Resolved{Text: "Nobody holds this role — this step will block", Warn: true}
+		return Resolved{Text: "Nobody holds this role — this step will block", Warn: true, Reason: unstaffedReason()}
 	case resBlocked:
-		return Resolved{Text: "Currently: " + res.primary + " — this step will block", Warn: true}
+		return Resolved{Text: "Currently: " + res.primary + " — this step will block", Warn: true, Reason: unstaffedReason()}
 	default: // resOK
 		return Resolved{Text: "Currently: " + res.primary, Warn: false}
 	}
+}
+
+func unstaffedReason() *string {
+	v := HolderReasonUnstaffed
+	return &v
 }
 
 // withExtra appends " +N" when other holders exist, roles.ts:122's shape (resolve only).

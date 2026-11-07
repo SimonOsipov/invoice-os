@@ -155,9 +155,10 @@ func armedRowFacts() approval.RowFacts {
 	ord := 0
 	title := "Finance Lead"
 	due := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	reason := approval.HolderReasonNobodyCanApprove
 	return approval.RowFacts{
 		RunState: "open", PendingOrd: &ord, PendingRoleTitle: &title,
-		PendingHolderWarn: true, DueAt: &due, Overdue: true,
+		PendingHolderWarn: true, PendingHolderReason: &reason, DueAt: &due, Overdue: true,
 	}
 }
 
@@ -374,12 +375,12 @@ func TestListItem_SubmitFlagsCarryNoOmitempty(t *testing.T) {
 	}
 }
 
-// TestListItem_ApprovalObjectHasExactlySixKeys closes the leak hole APPR-12-09 opens.
+// TestListItem_ApprovalObjectKeySetIsExact closes the leak hole APPR-12-09 opens.
 //
 // approval.RowFacts gains an INTERNAL PendingRoleKey field, tagged json:"-" so the list's
 // gate can resolve the pending step's workflow-role key without publishing it. Nothing in
 // this repo asserted the approval object's key SET before this spec: both existing checks
-// (row_approval_envelope_adversarial_test.go's six-key loop and gate_adversarial_test.go's)
+// (row_approval_envelope_adversarial_test.go's key loop and gate_adversarial_test.go's)
 // are PRESENCE-only, so a PendingRoleKey that shipped without its tag would put
 // `pending_role_key` on the public wire with no Go test failing.
 //
@@ -387,7 +388,7 @@ func TestListItem_SubmitFlagsCarryNoOmitempty(t *testing.T) {
 // TestListHandler_ApprovalObjectCarriesTheArmedStanding also reds on an untagged field, but
 // only because its decoded expectation (wantArmedRowFactsOnTheWire) was split out for this
 // change -- a reshaped expectation there would silently take that second oracle away again.
-func TestListItem_ApprovalObjectHasExactlySixKeys(t *testing.T) {
+func TestListItem_ApprovalObjectKeySetIsExact(t *testing.T) {
 	facts := armedRowFacts()
 	wrapped, err := json.Marshal(listItem{Invoice: populatedInvoice(t, uuid.NewString()), Approval: &facts})
 	if err != nil {
@@ -411,7 +412,7 @@ func TestListItem_ApprovalObjectHasExactlySixKeys(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"due_at", "overdue", "pending_holder_warn", "pending_ord", "pending_role_title", "run_state"}
+	want := []string{"due_at", "overdue", "pending_holder_reason", "pending_holder_warn", "pending_ord", "pending_role_title", "run_state"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the approval object's keys = %v,\nwant exactly %v\n-- a field added to approval.RowFacts without json:\"-\" leaks onto the public wire; PendingRoleKey (APPR-12-09) is internal to the gate", got, want)
 	}

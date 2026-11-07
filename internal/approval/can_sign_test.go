@@ -444,3 +444,18 @@ func TestCanSign_ReadErrorIsReturned(t *testing.T) {
 		t.Errorf("a failed signer read returned reasons %q, want nil", got)
 	}
 }
+
+func TestHolderReason_MapsEachLadderReason(t *testing.T) {
+	for reason, want := range map[string]string{
+		"": "", "deleted": HolderReasonUnstaffed, "no holder": HolderReasonUnstaffed,
+		"out of client reach": HolderReasonNobodyCanApprove, "creator only": HolderReasonNobodyCanApprove,
+	} {
+		got := holderReason(reason)
+		switch {
+		case want == "" && got != nil:
+			t.Errorf("holderReason(%q) = %q, want nil", reason, *got)
+		case want != "" && (got == nil || *got != want):
+			t.Errorf("holderReason(%q) = %v, want %q", reason, got, want)
+		}
+	}
+}

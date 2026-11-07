@@ -57,6 +57,7 @@ paths:
 - Refuse a role staffing write with 409 while an invoice that an open run waits on through the role has no signer on the new set. List only those invoices. Use the body of the role delete refusal.
 - Refuse a membership remove, suspension, demotion to preparer or client access change that removes reach with 409 when a live workflow role the member is staffed in leaves an invoice that an open run waits on through the role with no signer after the change. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
 - List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing.
+- Raise `pending_holder_warn` and the pending step's `holder.warn` when `unsignableReasonsTx` gives the step a reason. Set `pending_holder_reason` and `holder.reason` with `holderReason`: `unstaffed` or `nobody_can_approve`.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
 - Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.

@@ -368,7 +368,7 @@ func TestRowFacts_JSONTagsCarryNoOmitempty(t *testing.T) {
 	}
 	for _, key := range []string{
 		`"run_state"`, `"pending_ord"`, `"pending_role_title"`,
-		`"pending_holder_warn"`, `"due_at"`, `"overdue"`,
+		`"pending_holder_warn"`, `"pending_holder_reason"`, `"due_at"`, `"overdue"`,
 	} {
 		if !strings.Contains(string(blob), key) {
 			t.Errorf("the zero RowFacts omits %s -- an omitempty tag crept in", key)

@@ -1705,7 +1705,8 @@ test.describe('Customers screen and company fields', () => {
         expect(await page.evaluate(() => window.scrollY), `${persona} window scrolled`).toBe(0)
         expect(await main(page).locator('.pf-scroll').evaluate((el) => el.scrollTop), `${persona} .pf-scroll scrolled`).toBe(0)
         const first = bootStrip.getByRole('button').first()
-        await first.click()
+        // DOM click: Playwright's click() scrolls the target into view first, hiding the app's own effect.
+        await first.evaluate((el) => (el as HTMLElement).click())
         await expect(first).toBeVisible()
         await expect.poll(async () => {
           const rs = await boxes({ strip: bootStrip, first })

@@ -226,7 +226,6 @@ describe('the landing loads only v2', () => {
     expect(planted['styles/r5-planted.css'], 'control: a CSS pill counts in any case, a comment does not').toBe(1)
 
     expect(perFile(files)).toEqual({
-      'components/Coverage.tsx': 1,
       'components/DemoLeadForm.tsx': 1,
       'components/Hero.tsx': 1,
       'components/Intelligence.tsx': 1,

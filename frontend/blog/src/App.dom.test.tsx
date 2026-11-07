@@ -154,3 +154,42 @@ describe('shell', () => {
     mount('/')
   })
 })
+
+describe('sidebar cookie row', () => {
+  const row = () => byText('aside button', 'Cookie choices')
+  const remount = () => {
+    act(() => root.unmount())
+    container.remove()
+  }
+
+  it('Sidebar_cookieRowIsAPinnedRowWithTheGlyph', () => {
+    mount('/')
+    expect(row().className).toBe('blog-cookie-choices')
+    expect(row().firstElementChild!.querySelector('svg')).not.toBeNull()
+    expect(row().closest('nav')).toBeNull()
+  })
+
+  it('Sidebar_cookieRowIsNeverActive', () => {
+    for (const path of ['/', '/category/x']) {
+      mount(path)
+      expect(row().hasAttribute('aria-current'), path).toBe(false)
+      remount()
+    }
+    mount('/')
+  })
+
+  it('Sidebar_cookieRowSitsBetweenNavAndFooter', async () => {
+    for (const ready of [true, false]) {
+      if (ready) await mountReady('/')
+      else mount('/')
+      const block = q('aside nav').nextElementSibling!
+      expect(block.contains(row()), `ready=${ready}`).toBe(true)
+      const footer = block.nextElementSibling!
+      expect(footer.textContent).toBe('Book the Demo')
+      expect(footer.querySelector('button')).toBeNull()
+      expect(footer.nextElementSibling).toBeNull()
+      remount()
+    }
+    mount('/')
+  })
+})

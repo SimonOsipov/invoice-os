@@ -14,6 +14,7 @@ import {
   bundleRequestFor,
   fetchEvidenceBundle,
   getEvidenceBundlePreview,
+  type BundlePrefill,
   type BundleRequest,
   type EvidenceBundlePreview,
 } from '../lib/evidenceBundle'
@@ -43,6 +44,7 @@ export interface EvidenceBundleDrawerProps {
   base: string
   onClose: () => void
   onToast: (t: { kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number }) => void
+  initial?: BundlePrefill
 }
 
 // One capture per build. Holding (req, preview) in the phase -- not re-reading them at
@@ -54,14 +56,14 @@ type BuildPhase =
   | { kind: 'ready'; req: BundleRequest; preview: EvidenceBundlePreview; blob: Blob; filename: string }
   | { kind: 'failed'; req: BundleRequest; preview: EvidenceBundlePreview; error: ApiError }
 
-export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBundleDrawerProps) {
+export function EvidenceBundleDrawer({ ctx, base, onClose, onToast, initial }: EvidenceBundleDrawerProps) {
   const [companyOpen, setCompanyOpen] = useState(false)
   const openCompany = useCallback(() => setCompanyOpen(true), [])
   const closeCompany = useCallback(() => setCompanyOpen(false), [])
   // {id, name}, not just the id: ctx.entities comes from a useAsync whose data goes null on
   // refetch, so a name looked up by id later would blank mid-session.
-  const [company, setCompany] = useState<{ id: string; name: string } | null>(null)
-  const [range, setRange] = useState<AuditRange>(AUDIT_FILTER_DEFAULT.range)
+  const [company, setCompany] = useState<{ id: string; name: string } | null>(initial?.company ?? null)
+  const [range, setRange] = useState<AuditRange>(initial?.range ?? AUDIT_FILTER_DEFAULT.range)
 
   const [phase, setPhase] = useState<BuildPhase>({ kind: 'form' })
 

@@ -95,7 +95,7 @@ describe('Footer hrefPrefix contract with a populated Platform column', () => {
   const saved = [...PLATFORM_LINKS]
   const PLANTED = [
     { label: 'Invoice workflows', href: '#platform' },
-    { label: 'Country roadmap', href: '#coverage' },
+    { label: 'AI-supported intelligence', href: '#intelligence' },
   ]
   afterEach(() => void PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...saved))
 

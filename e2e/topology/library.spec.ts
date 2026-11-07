@@ -460,7 +460,7 @@ test.describe('library layout at wide widths', () => {
 })
 
 test.describe('library sidebar links', () => {
-  test('library sidebar: no Blog link; Book the Demo sits above Cookie choices', async ({ page }, testInfo) => {
+  test('library sidebar: no Blog link; Cookie choices sits above Book the Demo', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = collectErrors(page)
     await prepare(page)
@@ -470,14 +470,17 @@ test.describe('library sidebar links', () => {
       await resize(page, width, 1080)
       await settleAnimations(aside(page), main(page))
       const side = await rectOf(aside(page), 'aside')
+      const nav = await rectOf(aside(page).locator('nav'), 'nav')
       const demo = await rectOf(aside(page).getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
       const cookie = await rectOf(aside(page).getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
-      measured.push({ width, aside: side, demo, cookie })
+      measured.push({ width, aside: side, nav, demo, cookie })
       const at = `@${width}`
       await expect(aside(page).getByRole('link', { name: 'Blog' }), `${at}: the sidebar has no Blog link`).toHaveCount(0)
       expect.soft(enclosesRect(side, demo, 0.5), `${at}: Book the Demo is outside the sidebar`).toBe(true)
       expect.soft(enclosesRect(side, cookie, 0.5), `${at}: Cookie choices is outside the sidebar`).toBe(true)
-      expect.soft(demo.y + demo.height, `${at}: Book the Demo is not above Cookie choices`).toBeLessThanOrEqual(cookie.y + 1)
+      await expect(aside(page).locator('nav').getByRole('button', { name: 'Cookie choices' }), `${at}: the row is inside the nav`).toHaveCount(0)
+      expect.soft(cookie.y, `${at}: Cookie choices is not below the nav`).toBeGreaterThanOrEqual(nav.y + nav.height - 1)
+      expect.soft(demo.y, `${at}: Book the Demo is not below Cookie choices`).toBeGreaterThanOrEqual(cookie.y + cookie.height - 1)
       expect.soft(rectsOverlap(demo, cookie), `${at}: Book the Demo overlaps Cookie choices`).toBe(false)
     }
     await attachJson(testInfo, 'library-sidebar-links', measured)

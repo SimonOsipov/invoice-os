@@ -27,7 +27,7 @@ const hubspotNames = async (page: Page): Promise<string[]> =>
 
 async function openWww(page: Page): Promise<void> {
   await page.goto(`${WWW}/`)
-  await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Nigeria moves. Compliance keeps up.' })).toBeVisible()
 }
 
 const routedTest = base.extend<{ routed: Page }>({

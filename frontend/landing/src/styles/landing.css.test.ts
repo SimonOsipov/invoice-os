@@ -376,16 +376,15 @@ describe('PL-08 the capability grid and the narrow tab strip', () => {
   })
 })
 
-// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring and hover dim are declared.
-describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
-  it('landing.css draws the ring on .a-card-btn:focus-visible and dims .a-tab-pill on hover', () => {
+// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring is declared.
+describe('CV-10 the card buttons keep their focus ring', () => {
+  it('landing.css draws the ring on .a-card-btn:focus-visible', () => {
     const rules = parseRules(LANDING_CSS)
     const root = (a: string[]) => a.length === 0
     expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
     expect(declared(rules, '.a-link:focus-visible', 'outline', root), 'control: a sibling resolves').toBe('2px solid var(--ring)')
     expect(declared(rules, '.a-card-btn:focus-visible', 'outline', root)).toBe('2px solid var(--ring)')
     expect(declared(rules, '.a-card-btn:focus-visible', 'outline-offset', root)).toBe('2px')
-    expect(declared(rules, '.a-tab-pill:hover', 'filter', root)).toBe('brightness(0.97)')
   })
 
   it('landing.css insets the Intelligence step ring, which sits inside an overflow scroller', () => {
@@ -394,18 +393,24 @@ describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
   })
 })
 
-// Source scan: jsdom applies no media queries, so only the rule text shows the roadmap collapse at 900px and the
-// .btn-on-peach underline. Intelligence.switch.dom.test.tsx IN-11 observes .btn-on-dark.
-describe('CV-13 the roadmap collapses at 900px and the peach button overrides the DS colour', () => {
+// Source scan: jsdom applies no media queries, so only the rule text shows the .cols3 collapse at 900px and the
+// .btn-on-peach underline.
+describe('CV-13 .cols3 collapses at 900px and the peach button overrides the DS colour', () => {
   const rules = parseRules(LANDING_CSS)
 
-  it('.cols3 is one column and .rm-chev is hidden at max-width 900px, both !important', () => {
+  it('.cols3 is one column at max-width 900px, !important', () => {
     expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
     expect(declared(rules, '.split', 'grid-template-columns', maxWidth900), 'control: a sibling collapses in the same block').toBe('minmax(0, 1fr) !important')
     expect(declared(rules, '.cols3', 'grid-template-columns', maxWidth900)).toBe('minmax(0, 1fr) !important')
-    expect(declared(rules, '.rm-chev', 'display', maxWidth900)).toBe('none !important')
     expect(declared(rules, '.cols3', 'grid-template-columns', noAt), '.cols3 keeps its three-column base outside the media block').toBe('repeat(3, minmax(0, 1fr))')
-    expect(declared(rules, '.rm-chev', 'display', noAt), '.rm-chev sets no display outside the media block').toBeUndefined()
+  })
+
+  it('no Coverage-only rule remains', () => {
+    const selectors = rules.flatMap(selectorParts)
+    expect(selectors.some((s) => s.includes('.btn-on-peach')), 'control: .btn-on-peach is still declared').toBe(true)
+    for (const dead of ['.a-tab-pill', '.cov-marker', '.rm-chev', '.btn-on-dark']) {
+      expect(selectors.filter((s) => s.includes(dead)), `a ${dead} rule outlived its last consumer`).toEqual([])
+    }
   })
 
   it('.btn-on-peach is --primary, colour and underline, !important', () => {

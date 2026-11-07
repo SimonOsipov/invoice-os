@@ -9,7 +9,6 @@ import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
 import { Platform } from './components/Platform'
-import { Coverage } from './components/Coverage'
 import { Intelligence } from './components/Intelligence'
 import { Solutions } from './components/Solutions'
 import { Integrations } from './components/Integrations'
@@ -217,7 +216,6 @@ export default function App({ notFound = false }: { notFound?: boolean }) {
           <Problem />
           <Modules />
           <Platform onBookDemo={book('platform')} />
-          <Coverage onBookDemo={book('coverage')} />
           <Intelligence />
           <Solutions onBookDemo={book('audience')} />
           <Integrations onBookDemo={book('integrations')} />

@@ -53,10 +53,15 @@ const roleInRunMessage = "an open approval run is waiting on this workflow role 
 // roleLastHolderMessage is the 409 sentence when a staffing write leaves no signer on a role an open run waits on.
 const roleLastHolderMessage = "an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first"
 
+// memberLastSignerMessage is the 409 sentence when a membership change leaves a waited-on role with no signer.
+const memberLastSignerMessage = "this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first"
+
 // InvoiceRef names one invoice whose open run waits on the role.
 type InvoiceRef struct {
-	ID     string `json:"id"`
-	Number string `json:"invoice_number"`
+	ID        string `json:"id"`
+	Number    string `json:"invoice_number"`
+	RoleKey   string `json:"workflow_role_key,omitempty"`
+	RoleTitle string `json:"workflow_role_title,omitempty"`
 }
 
 // roleInUse is DeleteRole's and SetRoleMembers' refusal; it carries the policies and the waiting invoices
@@ -66,6 +71,7 @@ type roleInUse struct {
 	invoices      []InvoiceRef
 	invoicesTotal int
 	lastHolder    bool // a staffing write left no signer; policies stay empty
+	lastSigner    bool // stub field for the red tests
 }
 
 func (e *roleInUse) Error() string { return ErrRoleInUse.Error() }

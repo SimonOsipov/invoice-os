@@ -171,14 +171,15 @@ func TestRun_NoPathsKeyPasses(t *testing.T) {
 
 func TestRun_ShapeErrorsFail(t *testing.T) {
 	rows := map[string]struct{ body, reason string }{
-		"no items":   {"---\npaths:\n---\n", "paths list is empty"},
-		"empty flow": {"---\npaths: []\n---\n", "paths list is empty"},
-		"scalar":     {"---\npaths: \"x\"\n---\n", "paths is a scalar or flow list"},
-		"flow list":  {"---\npaths: [\"a/**\", \"b/*.go\"]\n---\n", "paths is a scalar or flow list"},
-		"unquoted":   {"---\npaths:\n  - x.go\n---\n", `item "- x.go" is not a quoted string`},
-		"braces":     {"---\npaths:\n  - \"a/{b,c}\"\n---\n", `glob "a/{b,c}" holds a brace group`},
-		"empty glob": {"---\npaths:\n  - \"\"\n---\n", "a glob is empty"},
-		"unclosed":   {"---\npaths:\n  - \"x.go\"\n", "front matter never closes"},
+		"no items":      {"---\npaths:\n---\n", "paths list is empty"},
+		"empty flow":    {"---\npaths: []\n---\n", "paths list is empty"},
+		"scalar":        {"---\npaths: \"x\"\n---\n", "paths is a scalar or flow list"},
+		"flow list":     {"---\npaths: [\"a/**\", \"b/*.go\"]\n---\n", "paths is a scalar or flow list"},
+		"unquoted":      {"---\npaths:\n  - x.go\n---\n", `item "- x.go" is not a quoted string`},
+		"braces":        {"---\npaths:\n  - \"a/{b,c}\"\n---\n", `glob "a/{b,c}" holds a brace group`},
+		"empty glob":    {"---\npaths:\n  - \"\"\n---\n", "a glob is empty"},
+		"only comments": {"---\npaths:\n  # x\n---\n", "paths list is empty"},
+		"unclosed":      {"---\npaths:\n  - \"x.go\"\n", "front matter never closes"},
 	}
 	for name, r := range rows {
 		t.Run(name, func(t *testing.T) {
@@ -213,5 +214,33 @@ func TestRun_NoRuleFilesIsExit2(t *testing.T) {
 func TestRun_NotAGitRepoIsExit2(t *testing.T) {
 	if code, _, _ := do(t.TempDir()); code != 2 {
 		t.Fatalf("code=%d", code)
+	}
+}
+
+func TestRun_UnreadableRuleFileIsExit2(t *testing.T) {
+	dir := repo(t, map[string]string{".claude/rules/a.md": rule(`"x.go"`), "x.go": ""})
+	if err := os.Remove(filepath.Join(dir, ".claude/rules/a.md")); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := do(dir); code != 2 || out != "" {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+}
+
+func TestRun_GitFailureOnAGlobIsExit2(t *testing.T) {
+	dir := repo(t, map[string]string{".claude/rules/a.md": rule(`"../outside"`)})
+	if code, out, errs := do(dir); code != 2 || out != "" || !strings.Contains(errs, "../outside") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestRun_ShapeAndDeadGlobReportedTogether(t *testing.T) {
+	dir := repo(t, map[string]string{
+		".claude/rules/a.md": "---\npaths: []\n---\n",
+		".claude/rules/b.md": rule(`"gone"`),
+	})
+	code, _, errs := do(dir)
+	if code != 1 || !strings.Contains(errs, shape(".claude/rules/a.md", "paths list is empty")) || !strings.Contains(errs, dead(".claude/rules/b.md", "gone")) {
+		t.Fatalf("code=%d err=%q", code, errs)
 	}
 }

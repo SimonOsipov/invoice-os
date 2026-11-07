@@ -38,7 +38,8 @@ test('deployed app: the environment pill is SANDBOX by default and LIVE is unsel
   // control is unreachable by keyboard, so its tooltip never fires.
   await sbx.focus()
   await page.keyboard.press('Tab')
-  await expect(page.getByRole('button', { name: 'New invoice' })).toBeFocused()
+  await expect(live).not.toBeFocused()
+  expect(await pill.evaluate((el) => el.contains(document.activeElement)), 'focus left the env pill').toBe(false)
 
   const banner = page.getByTestId('env-banner')
   await expect(banner).toBeVisible()

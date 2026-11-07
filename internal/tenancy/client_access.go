@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -138,6 +139,9 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 			}
 			return err
 		}
+		if err := approval.LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
+			return err
+		}
 		var kind string
 		if err := tx.QueryRow(ctx, `SELECT kind FROM tenants`).Scan(&kind); err != nil {
 			return err
@@ -145,10 +149,14 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 		if kind != "firm" {
 			return ErrClientAccessNotFirm
 		}
-		var role, target string
+		var role, target, status string
+		var wasAll bool
+		var stored []string
 		if err := tx.QueryRow(ctx,
-			`SELECT user_id::text, role FROM memberships WHERE user_id = $1 AND status <> 'removed' FOR UPDATE`, userID,
-		).Scan(&target, &role); err != nil {
+			`SELECT m.user_id::text, m.role, m.status, m.all_clients,
+			        coalesce((SELECT array_agg(c.entity_id::text) FROM membership_clients c WHERE c.user_id = m.user_id), '{}')
+			   FROM memberships m WHERE m.user_id = $1 AND m.status <> 'removed' FOR UPDATE OF m`, userID,
+		).Scan(&target, &role, &status, &wasAll, &stored); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrMembershipNotFound
 			}
@@ -156,6 +164,14 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 		}
 		if role == "admin" {
 			return ErrClientAccessAdmin
+		}
+		// Only narrowing an active reviewer's reach is judged; widening and other roles are not.
+		var keys []string
+		if role == "reviewer" && status == "active" && removesReach(wasAll, stored, access) {
+			var err error
+			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE memberships SET all_clients = $2 WHERE user_id = $1`, target, access.All); err != nil {
 			return err
@@ -178,6 +194,9 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 				return err
 			}
 		}
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+			return err
+		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.client_access_set", map[string]any{
 			"user_id": target, "all_clients": access.All, "client_ids": ids,
 		}); err != nil {
@@ -194,6 +213,14 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 		return MemberAccess{}, err
 	}
 	return out, nil
+}
+
+// removesReach reports whether access drops "all" or a stored client id.
+func removesReach(wasAll bool, stored []string, access ClientAccess) bool {
+	if access.All {
+		return false
+	}
+	return wasAll || slices.ContainsFunc(stored, func(id string) bool { return !slices.Contains(access.IDs, id) })
 }
 
 // MemberClientsSetter replaces one member's client access; Store.SetMemberClients is the production one.
@@ -243,6 +270,10 @@ func SetMemberClientsHandler(set MemberClientsSetter, log *slog.Logger) http.Han
 		}
 		row, err := set(r.Context(), userID.String(), access)
 		if err != nil {
+			if errors.Is(err, approval.ErrRoleInUse) {
+				approval.WriteRoleInUse(w, err)
+				return
+			}
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "tenancy: set member clients", slog.Any("err", err))

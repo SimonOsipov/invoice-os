@@ -332,13 +332,13 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 // roleInRunListCap bounds the invoices a role-in-use refusal lists.
 const roleInRunListCap = 20
 
-// openRunsOnRoleTx lists the invoices (at most roleInRunListCap, oldest run first) whose
-// open run has a pending approval step naming the live role, with their full count.
-func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
+// waitingOnRoleTx lists, oldest run first, the invoices whose open run has a pending approval
+// step naming the live role.
+func waitingOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, error) {
 	// ceiling: arm does not take the tenant lock, so a staffing or delete write racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
 	// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
-	runRows, err := tx.Query(ctx,
-		`SELECT i.id, i.invoice_number, count(*) OVER ()
+	rows, err := tx.Query(ctx,
+		`SELECT i.id, i.invoice_number
 		   FROM approval_runs r
 		   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
 		  WHERE r.state = 'open'
@@ -347,40 +347,56 @@ func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef,
 		    AND EXISTS (SELECT 1 FROM approval_run_steps s
 		                 WHERE s.run_id = r.id AND s.kind = 'approval'
 		                   AND s.state = 'pending' AND s.workflow_role_key = $1)
-		  ORDER BY r.opened_at, i.id
-		  LIMIT $2`, key, roleInRunListCap)
+		  ORDER BY r.opened_at, i.id`, key)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	var total int
-	invoices, err := pgx.CollectRows(runRows, func(row pgx.CollectableRow) (InvoiceRef, error) {
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (InvoiceRef, error) {
 		var ref InvoiceRef
-		return ref, row.Scan(&ref.ID, &ref.Number, &total)
+		return ref, row.Scan(&ref.ID, &ref.Number)
 	})
-	if err != nil {
-		return nil, 0, err
-	}
-	return invoices, total, nil
 }
 
-// unsignedWaitingInvoicesTx lists the invoices an open run holds on role key when none of
-// candidates signs it, else nothing. The one "no signer while a run waits" definition.
-func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string, candidates []string) ([]InvoiceRef, int, error) {
-	invoices, total, err := openRunsOnRoleTx(ctx, tx, key)
-	if err != nil || len(invoices) == 0 {
+// openRunsOnRoleTx is waitingOnRoleTx capped at roleInRunListCap, with the full count.
+func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
+	// ceiling: reads every invoice waiting on the role; filter in SQL above ~1k waiting runs per role
+	all, err := waitingOnRoleTx(ctx, tx, key)
+	if err != nil {
 		return nil, 0, err
 	}
-	// ceiling: one HeldRoleKeysTx round trip per member until one holds, batch it above ~100 members
-	for _, id := range candidates {
-		keys, err := HeldRoleKeysTx(ctx, tx, []string{key}, id)
-		if err != nil {
-			return nil, 0, err
-		}
-		if keys[key] {
-			return nil, 0, nil
+	return capInvoiceRefs(all), len(all), nil
+}
+
+func capInvoiceRefs(refs []InvoiceRef) []InvoiceRef {
+	if len(refs) > roleInRunListCap {
+		return refs[:roleInRunListCap]
+	}
+	return refs
+}
+
+// unsignedWaitingInvoicesTx lists the invoices an open run holds on role key that nobody can
+// approve (unsignableReasonsTx), oldest run first, capped, with their full count.
+func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef, int, error) {
+	// ceiling: reads every invoice waiting on the role; filter in SQL above ~1k waiting runs per role
+	waiting, err := waitingOnRoleTx(ctx, tx, key)
+	if err != nil || len(waiting) == 0 {
+		return nil, 0, err
+	}
+	probes := make([]CreatorProbe, len(waiting))
+	for i, w := range waiting {
+		probes[i] = CreatorProbe{InvoiceID: w.ID, RoleKey: &key}
+	}
+	reasons, err := unsignableReasonsTx(ctx, tx, probes)
+	if err != nil {
+		return nil, 0, err
+	}
+	var unsigned []InvoiceRef
+	for i, r := range reasons {
+		if r != "" {
+			unsigned = append(unsigned, waiting[i])
 		}
 	}
-	return invoices, total, nil
+	return capInvoiceRefs(unsigned), len(unsigned), nil
 }
 
 // DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
@@ -568,8 +584,8 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 			return err
 		}
 
-		// Judged on the stored new set, so HeldRoleKeysTx is reused rather than restated.
-		invoices, total, err := unsignedWaitingInvoicesTx(ctx, tx, staffed.Key, ids)
+		// Judged on the stored new set, by unsignableReasonsTx.
+		invoices, total, err := unsignedWaitingInvoicesTx(ctx, tx, staffed.Key)
 		if err != nil {
 			return err
 		}

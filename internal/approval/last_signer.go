@@ -28,8 +28,8 @@ func StaffedRoleKeysTx(ctx context.Context, tx pgx.Tx, subject string) ([]string
 	return keys, nil
 }
 
-// RefuseUnsignedWaitingRolesTx returns a lastSigner *roleInUse when a live role in keys has no signer
-// while an open run waits on it. The signer definition lives in unsignedWaitingInvoicesTx.
+// RefuseUnsignedWaitingRolesTx returns a lastSigner *roleInUse when an open run waits on a live role in keys
+// and nobody can approve that invoice. Who can sign is judged by unsignableReasonsTx, via unsignedWaitingInvoicesTx.
 func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string) error {
 	var invoices []InvoiceRef
 	var total int
@@ -44,20 +44,7 @@ func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string)
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx,
-			`SELECT m.user_id::text
-			   FROM workflow_role_members m
-			   JOIN workflow_roles w ON w.id = m.workflow_role_id
-			  WHERE w.key = $1 AND w.deleted_at IS NULL
-			  ORDER BY m.ord`, key)
-		if err != nil {
-			return err
-		}
-		members, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		refs, n, err := unsignedWaitingInvoicesTx(ctx, tx, key, members)
+		refs, n, err := unsignedWaitingInvoicesTx(ctx, tx, key)
 		if err != nil {
 			return err
 		}
@@ -70,8 +57,5 @@ func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string)
 	if total == 0 {
 		return nil
 	}
-	if len(invoices) > roleInRunListCap {
-		invoices = invoices[:roleInRunListCap]
-	}
-	return &roleInUse{lastSigner: true, invoices: invoices, invoicesTotal: total}
+	return &roleInUse{lastSigner: true, invoices: capInvoiceRefs(invoices), invoicesTotal: total}
 }

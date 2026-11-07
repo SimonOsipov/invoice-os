@@ -50,11 +50,11 @@ type PolicyRef struct {
 // roleInRunMessage is the 409 sentence when only an open run waits on the role.
 const roleInRunMessage = "an open approval run is waiting on this workflow role — wait until it is decided, or edit its invoice to cancel it, first"
 
-// roleLastHolderMessage is the 409 sentence when a staffing write leaves no signer on a role an open run waits on.
-const roleLastHolderMessage = "an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first"
+// roleLastHolderMessage is the 409 sentence when a staffing write leaves an invoice an open run waits on with no signer.
+const roleLastHolderMessage = "an open approval run is waiting on this workflow role — keep someone on it who can approve each listed invoice until the run is decided, or edit its invoice to cancel it, first"
 
-// memberLastSignerMessage is the 409 sentence when a membership change leaves a waited-on role with no signer.
-const memberLastSignerMessage = "this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first"
+// memberLastSignerMessage is the 409 sentence when a membership change leaves an invoice an open run waits on with no signer.
+const memberLastSignerMessage = "this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it — add someone to the role who can approve it, or decide the run or edit its invoice to cancel it, first"
 
 // InvoiceRef names one invoice whose open run waits on the role.
 type InvoiceRef struct {

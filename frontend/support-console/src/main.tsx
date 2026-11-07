@@ -8,6 +8,7 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 // v2 tokens, then the .asc-app layer, then local overrides.
 import '@invoice-os/design-tokens/v2/styles.css'
 import '@invoice-os/design-tokens/v2/app-layer.css'
+import '@invoice-os/design-tokens/v2/mark.css'
 import './styles/support.css'
 
 import App from './App'

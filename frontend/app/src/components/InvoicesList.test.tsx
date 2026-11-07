@@ -122,6 +122,7 @@ function listCtx(entityId: string | null = 'ent-1', invoiceQuery = '', entitiesS
   const ctx = {
     mode: 'firm',
     active: { entityId },
+    activeEntity: entityId === null ? null : { id: entityId },
     entitiesState,
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
@@ -2362,7 +2363,7 @@ describe('InvoicesList: the needs-attention filter changes the rows, and nothing
 
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-OFF-1')
-    const titleBlock = () => screen.getByTestId('needs-attention-toggle').parentElement as HTMLElement
+    const titleBlock = () => screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
     const off = titleBlock().style.marginBottom
     expect(off, 'an unset margin on both reads would make the equality below vacuous').not.toBe('')
 
@@ -2395,7 +2396,7 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
     expect(within(filtered).getByTestId('clear-needs-attention').textContent, 'the way back must say where it goes -- S2 clicks it by testid and would not notice a rename').toBe('Show all invoices')
     expect(screen.queryByTestId('invoices-empty'), 'the generic copy must be REPLACED, not joined -- two empty states at once is the same lie twice').toBeNull()
     expect(screen.queryByText('No invoices yet'), 'a workspace that has invoices must never be told it has none').toBeNull()
-    expect(screen.queryByText(/New invoice/), 'create is not the way out of a filter').toBeNull()
+    expect(within(filtered).queryByText(/New invoice/), 'create is not the way out of a filter').toBeNull()
   })
 
   it('the filtered empty state offers the way back to the full register', async () => {
@@ -2940,7 +2941,7 @@ describe('IL-LOOK: register checkboxes and the bulk bar take the v2 look (D-11, 
     await screen.findByText('INV-OFF')
 
     const toggle = screen.getByTestId('needs-attention-toggle')
-    expect((toggle.parentElement as HTMLElement).getAttribute('style') ?? '').toContain('gap: 20px')
+    expect((screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement).getAttribute('style') ?? '').toContain('gap: 20px')
     const h1Style = screen.getByRole('heading', { level: 1 }).getAttribute('style') ?? ''
     expect(h1Style, 'the h1 must carry its own style, or the absence below is vacuous').toContain('font-size: 26px')
     expect(h1Style).not.toContain('font-weight')
@@ -3034,5 +3035,140 @@ describe('CRDDBTNOTE-04-04: the list shows the document type and the signed amou
       row({ id: 'a-4', invoice_number: 'CN-B', document_type: 'credit_note', total: null }),
     ])
     expect(rows.map((r) => within(r).getByTestId('invoice-amount').textContent)).toEqual(['-₦323', '₦54', '₦1,075', '—'])
+  })
+})
+
+describe('InvoicesList: New invoice in the page header', () => {
+  const newInvoice = () => screen.getByTestId('invoices-new-invoice') as HTMLButtonElement
+  const headerRow = () => screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
+
+  it('IL-NEW-01 the page header offers New invoice and it opens the create flow', async () => {
+    mockFetchSequence([listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 })])
+    const openCreate = vi.fn()
+    render(<InvoicesList ctx={{ ...listCtx(), openCreate } as PlatformCtx} />)
+    await screen.findByText('INV-A1')
+
+    expect(screen.getAllByTestId('invoices-new-invoice')).toHaveLength(1)
+    expect(newInvoice().textContent?.trim()).toBe('New invoice')
+    for (const c of ['v2-btn', 'v2-btn-primary', 'pf-btn']) expect(newInvoice().className).toContain(c)
+    expect(newInvoice().getAttribute('style')).toBeNull()
+    fireEvent.click(newInvoice())
+    expect(openCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('IL-NEW-02 New invoice renders enabled in every list state once the entity is known', async () => {
+    // loading
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    render(<InvoicesList ctx={listCtx()} />)
+    expect(screen.getByText('Loading invoices…')).toBeTruthy()
+    expect(newInvoice().disabled, 'loading').toBe(false)
+    cleanup()
+
+    // error
+    mockFetchSequence([{ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }])
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(screen.queryByText('Loading invoices…')).toBeNull())
+    expect(newInvoice().disabled, 'error').toBe(false)
+    cleanup()
+
+    // empty
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByTestId('invoices-empty')
+    expect(newInvoice().disabled, 'empty').toBe(false)
+    cleanup()
+
+    // filtered empty
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+    ])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByTestId('invoices-empty-filtered')
+    expect(newInvoice().disabled, 'filtered empty').toBe(false)
+  })
+
+  it('IL-NEW-05 a settled entities list enables New invoice with no entity', () => {
+    for (const s of ['ready', 'empty', 'error', 'idle']) {
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+      render(<InvoicesList ctx={listCtx(null, '', s)} />)
+      expect(newInvoice().disabled, s).toBe(false)
+      cleanup()
+    }
+  })
+
+  it('IL-NEW-06 New invoice waits for the active entity in both modes', () => {
+    const cases: [string, PlatformCtx][] = [
+      ['firm', listCtx(null)],
+      ['inhouse', { ...listCtx(null), mode: 'inhouse' } as PlatformCtx],
+    ]
+    for (const [name, base] of cases) {
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+      const openCreate = vi.fn()
+      render(<InvoicesList ctx={{ ...base, openCreate } as PlatformCtx} />)
+      expect(newInvoice().disabled, name).toBe(true)
+      fireEvent.click(newInvoice())
+      expect(openCreate, name).not.toHaveBeenCalled()
+      cleanup()
+    }
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    render(<InvoicesList ctx={listCtx('ent-1')} />)
+    expect(newInvoice().disabled, 'control: entity known').toBe(false)
+  })
+
+  it('IL-NEW-08 New invoice waits for the resolved entity when a restored entityId is set', () => {
+    for (const mode of ['firm', 'inhouse']) {
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+      const openCreate = vi.fn()
+      const ctx = { ...listCtx('ent-1'), mode, activeEntity: null, openCreate } as unknown as PlatformCtx
+      render(<InvoicesList ctx={ctx} />)
+      expect(newInvoice().disabled, mode).toBe(true)
+      fireEvent.click(newInvoice())
+      expect(openCreate, mode).not.toHaveBeenCalled()
+      cleanup()
+    }
+  })
+
+  it('IL-NEW-09 the empty card New invoice waits for the resolved entity when entityId is set', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    const openCreate = vi.fn()
+    render(<InvoicesList ctx={{ ...listCtx('ent-1'), activeEntity: null, openCreate } as unknown as PlatformCtx} />)
+    const empty = await screen.findByTestId('invoices-empty')
+    const card = within(empty).getByRole('button', { name: /New invoice/ }) as HTMLButtonElement
+    expect(card.disabled).toBe(true)
+    fireEvent.click(card)
+    expect(openCreate).not.toHaveBeenCalled()
+  })
+
+  it("IL-NEW-07 the in-house empty card's New invoice waits for the entity", async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    render(<InvoicesList ctx={{ ...listCtx(null), mode: 'inhouse' } as PlatformCtx} />)
+    const empty = await screen.findByTestId('invoices-empty')
+    expect((within(empty).getByRole('button', { name: /New invoice/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('IL-NEW-03 the empty list draws two create controls, one in the card', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    const empty = await screen.findByTestId('invoices-empty')
+
+    const buttons = screen.getAllByRole('button', { name: /New invoice/ })
+    expect(buttons).toHaveLength(2)
+    expect(buttons.filter((b) => empty.contains(b))).toHaveLength(1)
+    expect(buttons.filter((b) => !empty.contains(b))).toEqual([newInvoice()])
+  })
+
+  it('IL-NEW-04 the toggle and New invoice share one group, toggle first', async () => {
+    mockFetchSequence([listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    const toggle = screen.getByTestId('needs-attention-toggle')
+    const group = newInvoice().parentElement as HTMLElement
+    expect(group).toBe(toggle.parentElement)
+    expect(Array.from(group.children)).toEqual([toggle, newInvoice()])
+    expect(group).not.toBe(headerRow())
   })
 })

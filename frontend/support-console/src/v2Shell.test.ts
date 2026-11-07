@@ -280,7 +280,8 @@ describe('v2 shell', () => {
     expect(imgs, 'one brand <img').toHaveLength(1)
     expect.soft(attr(imgs[0], 'width'), 'mark width').toBe('26')
     expect.soft(attr(imgs[0], 'height'), 'mark height').toBe('26')
-    expect.soft(style(imgs[0])['border-radius'], 'mark corner').toBe('var(--radius-md)')
+    expect.soft(classes(imgs[0]), 'mark class').toContain('asc-mark')
+    expect.soft(style(imgs[0])['border-radius'], 'mark corner').toBeUndefined()
 
     const out = buttonsOf(html).filter((b) => attr(b, 'aria-label') === 'Sign out')
     expect(out, 'one Sign out button').toHaveLength(1)

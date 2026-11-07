@@ -1,16 +1,16 @@
-import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
+import markUrl from '@invoice-os/design-tokens/v2/assets/mark.svg'
 
 // Dark lockup of the DS Logo. The wordmark is live text, so the mark is decorative.
 export function Logo() {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
       <img
+        className="asc-mark"
         src={markUrl}
         alt=""
         aria-hidden="true"
         width={28}
         height={28}
-        style={{ display: 'block', borderRadius: 'var(--radius-md)' }}
       />
       <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3 }}>
         <span

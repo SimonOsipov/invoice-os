@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 import { login, createEntity, createImportBatchFromCsv, listInvoices } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { PERF_HEADER, PERF_MAPPING } from '../importFixtures'
-import { signInAs } from '../personaSession'
+import { openNewInvoice, signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import { collectErrors, extractOneDocument, openExtractionReview, selectEntity, shardPersonas, uniqueHonestReceiptPdfBytes } from './importWizardShared'
 
@@ -87,7 +87,7 @@ test.describe('the wizard on the real AI', () => {
 
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entity.name)
-    await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+    await openNewInvoice(page)
 
     const csvFile = (name: string, header: string, n: number) => ({
       name,
@@ -175,7 +175,7 @@ test.describe('the wizard on the real AI', () => {
 
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entity.name)
-    await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+    await openNewInvoice(page)
     await page.locator('input[type="file"]#pf-import-file').setInputFiles({
       name: 'ai-suggest.csv',
       mimeType: 'text/csv',

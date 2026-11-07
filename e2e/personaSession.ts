@@ -183,6 +183,13 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
   return labels.map((t) => t.replace(/\d+$/, '').trim())
 }
 
+// The create form opens from the Invoices page only.
+export async function openNewInvoice(page: Page): Promise<void> {
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
+  await expect(page, 'the Invoices nav did not land on /invoices').toHaveURL(/\/invoices(\?.*)?$/)
+  await page.getByTestId('invoices-new-invoice').click()
+}
+
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
 export function collectErrors(page: Page): string[] {

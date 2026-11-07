@@ -74,7 +74,7 @@ describe('HB-02 the dark eyebrow', () => {
     const eyebrows = top.querySelectorAll('.t-eyebrow')
     expect(eyebrows.length).toBe(1)
     expect(eyebrows[0].classList.contains('ds-eyebrow--dark')).toBe(true)
-    expect(textOf(eyebrows[0])).toBe('E-INVOICING SOLUTION FOR NIGERIA AND AFRICA')
+    expect(textOf(eyebrows[0])).toBe('E-INVOICING SOLUTION FOR NIGERIA')
   })
 })
 
@@ -85,7 +85,7 @@ describe('HB-03 the h1 and its highlighted line', () => {
     expect(h1s.length).toBe(1)
     const h1 = h1s[0]
     expect(h1.classList.contains('t-h1')).toBe(true)
-    expect(textOf(h1)).toBe('Africa moves. Compliance keeps up.')
+    expect(textOf(h1)).toBe('Nigeria moves. Compliance keeps up.')
 
     const hl = h1.querySelectorAll('span.t-hl')
     expect(hl.length).toBe(1)
@@ -94,7 +94,7 @@ describe('HB-03 the h1 and its highlighted line', () => {
 
     // D-16: the collapsing textOf cannot see a missing space after a <br />.
     expect(h1.querySelectorAll('br').length).toBe(2)
-    expect(h1.textContent).toBe('Africa moves. Compliance keeps up.')
+    expect(h1.textContent).toBe('Nigeria moves. Compliance keeps up.')
   })
 })
 
@@ -169,7 +169,7 @@ describe('HB-09 the bottom strip', () => {
     expect(container, 'expected #top .container').not.toBeNull()
     const strip = container!.lastElementChild!
     expect(strip, 'the strip follows the split').not.toBe(container!.firstElementChild)
-    expect(textOf(strip.querySelector('span'))).toBe('Local expertise. Pan-African ambition.')
+    expect(textOf(strip.querySelector('span'))).toBe('Local expertise.')
     const anchor = strip.querySelector('a[href="#platform"]')
     expect(anchor, 'expected the strip anchor').not.toBeNull()
     expect(textOf(anchor)).toBe('Explore the platform ↓')
@@ -180,9 +180,9 @@ describe('HB-10 the timeline and the floating tag are gone', () => {
   it('#top text holds none of the retired strings, and does hold the v2 headline', async () => {
     const top = await mountHero()
     const text = textOf(top)
-    const RETIRED = ['Large taxpayers', 'Medium taxpayers', 'Small / SME', 'NRS REFERENCE', 'CSID · pending transmit']
+    const RETIRED = ['Large taxpayers', 'Medium taxpayers', 'Small / SME', 'NRS REFERENCE', 'CSID · pending transmit', 'Pan-African', 'AND AFRICA', 'Africa moves']
     expect(RETIRED.filter((s) => text.includes(s))).toEqual([])
-    expect(text).toContain('Africa moves.')
+    expect(text).toContain('Nigeria moves.')
   })
 })
 

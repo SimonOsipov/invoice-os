@@ -127,6 +127,7 @@ describe('v2 shell', () => {
     const marks = find(html, (t) => t.startsWith('<img'))
     expect(marks).toHaveLength(1)
     expect([attr(marks[0], 'width'), attr(marks[0], 'height')]).toEqual(['22', '22'])
+    expect(classes(marks[0])).toContain('asc-mark')
     expect(css(marks[0])['border-radius']).toBeUndefined()
 
     const avatars = find(html, (t) => css(t).width === '30px' && css(t).height === '30px')

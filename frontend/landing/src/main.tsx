@@ -10,6 +10,7 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 // v2 design-system entry (tokens, utilities), then the landing-local bridge that maps
 // the old app-layer names onto it. Never import the v1 entry here.
 import '@invoice-os/design-tokens/v2/styles.css'
+import '@invoice-os/design-tokens/v2/mark.css'
 import './styles/bridge.css'
 import './styles/ds.css'
 // Local page styles ported from the prototype's inline <style> (keyframes + hovers).

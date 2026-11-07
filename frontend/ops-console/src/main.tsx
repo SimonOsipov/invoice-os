@@ -8,6 +8,7 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 // v2 design tokens, then the v2 .asc-app product layer.
 import '@invoice-os/design-tokens/v2/styles.css'
 import '@invoice-os/design-tokens/v2/app-layer.css'
+import '@invoice-os/design-tokens/v2/mark.css'
 // Local app-shell styles ported from the prototype's inline <style> (keyframes + hovers).
 import './styles/ops.css'
 

@@ -892,3 +892,91 @@ func TestApprove_ReasonAtByteBoundarySucceeds(t *testing.T) {
 		t.Errorf("stored decision reason mismatch, want the full 1000-byte reason written through unchanged")
 	}
 }
+
+// wantNotHolder asserts caller's approve is refused with ErrNotRoleHolder and today's 403 sentence, writing nothing.
+func wantNotHolder(t *testing.T, super, app *pgxpool.Pool, w delegateWorld, caller string) {
+	t.Helper()
+	_, err := approve(t, app, w.tenantID, caller, w.invoiceID, nil)
+	if !errors.Is(err, ErrNotRoleHolder) {
+		t.Fatalf("Decide(approved) as %s: err = %v, want ErrNotRoleHolder", caller, err)
+	}
+	if status, msg := decisionStatusForErr(err); status != 403 || msg != "you do not hold the workflow role this step is waiting on" {
+		t.Errorf("wire = %d %q, want 403 with today's role-holder sentence", status, msg)
+	}
+	assertNothingWritten(t, super, w.approveFixture)
+}
+
+// R is an active reviewer, so only the role-or-delegate clause can refuse. Each refusal is paired with a
+// caller the same step lets through, so "refuse everyone" fails here too.
+func TestDecide_NonDelegateReviewerGetsTodaysRefusal(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("delegation off", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 refusal-off", "reviewer")
+		setStepDelegation(t, super, w.stepID, false, nil)
+		r := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+		wantNotHolder(t, super, app, w, r)
+		wantNotHolder(t, super, app, w, w.delegate)
+		if _, err := approve(t, app, w.tenantID, w.holder, w.invoiceID, nil); err != nil {
+			t.Fatalf("role holder after the refusals: %v, want success", err)
+		}
+	})
+	t.Run("names someone else", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 refusal-named", "reviewer")
+		r := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+		wantNotHolder(t, super, app, w, r)
+		if _, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil); err != nil {
+			t.Fatalf("the named delegate after R's refusal: %v, want success", err)
+		}
+	})
+}
+
+func TestDecide_IneligibleNamedDelegateIsRefusedAtAxisOne(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("control: an eligible delegate decides", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 axis1-control", "reviewer")
+		if _, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil); err != nil {
+			t.Fatalf("Decide(approved) as the eligible named delegate: %v, want success", err)
+		}
+	})
+	t.Run("demoted to preparer", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 axis1-preparer", "reviewer")
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET role = 'preparer' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, w.delegate); err != nil {
+			t.Fatalf("demote delegate: %v", err)
+		}
+		_, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+		if !errors.Is(err, ErrNotPermitted) {
+			t.Fatalf("Decide(approved) as a delegate demoted to preparer: err = %v, want ErrNotPermitted", err)
+		}
+		if status, msg := decisionStatusForErr(err); status != 403 || msg != "only an approver can decide an approval step" {
+			t.Errorf("wire = %d %q, want 403 only an approver can decide an approval step", status, msg)
+		}
+		assertNothingWritten(t, super, w.approveFixture)
+		if _, err := approve(t, app, w.tenantID, w.holder, w.invoiceID, nil); err != nil {
+			t.Fatalf("role holder after the refusal: %v, want success", err)
+		}
+		if ds := decisionsForRun(t, super, w.runID); len(ds) != 1 || ds[0].AsDelegate {
+			t.Errorf("decisions = %+v, want the holder's one, as_delegate false", ds)
+		}
+	})
+	t.Run("suspended", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 axis1-suspended", "reviewer")
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, w.delegate); err != nil {
+			t.Fatalf("suspend delegate: %v", err)
+		}
+		_, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+		if !errors.Is(err, db.ErrNotActiveMember) {
+			t.Fatalf("Decide(approved) as a suspended delegate: err = %v, want db.ErrNotActiveMember", err)
+		}
+		if status, msg := decisionStatusForErr(err); status != 403 || msg != db.NotActiveMemberMessage {
+			t.Errorf("wire = %d %q, want 403 %q", status, msg, db.NotActiveMemberMessage)
+		}
+		assertNothingWritten(t, super, w.approveFixture)
+		if _, err := approve(t, app, w.tenantID, w.holder, w.invoiceID, nil); err != nil {
+			t.Fatalf("role holder after the refusal: %v, want success", err)
+		}
+	})
+}

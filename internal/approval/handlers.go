@@ -154,7 +154,7 @@ func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// roleInUseResponse is the role-in-use 409 body, DELETE and PUT members alike: the sentence, the policies that name the role,
+// roleInUseResponse is the role-in-use 409 body: the sentence, the policies that name the role,
 // and, when an open run waits on it, the invoices (capped) with their full count.
 type roleInUseResponse struct {
 	Error         string       `json:"error"`
@@ -163,8 +163,8 @@ type roleInUseResponse struct {
 	InvoicesTotal int          `json:"invoices_total,omitempty"`
 }
 
-// writeRoleInUse writes the role-in-use 409 for an error that wraps ErrRoleInUse.
-func writeRoleInUse(w http.ResponseWriter, err error) {
+// WriteRoleInUse writes the role-in-use 409 for an error that wraps ErrRoleInUse.
+func WriteRoleInUse(w http.ResponseWriter, err error) {
 	resp := roleInUseResponse{Error: roleInUseMessage, Policies: []PolicyRef{}}
 	var inUse *roleInUse
 	if errors.As(err, &inUse) {
@@ -178,7 +178,7 @@ func writeRoleInUse(w http.ResponseWriter, err error) {
 }
 
 // DeleteRoleHandler returns DELETE /v1/workflow-roles/{key}: identity (401) -> path key
-// -> soft delete -> 200, or 409 (writeRoleInUse) with the policies and invoices that hold the role. No body is read at all. Its `members` is [] because a deleted
+// -> soft delete -> 200, or 409 (WriteRoleInUse) with the policies and invoices that hold the role. No body is read at all. Its `members` is [] because a deleted
 // role has no addressable holders — that reads as "unstaffed", not "not reported", which
 // is safe only while the SPA's removeRole drops the card without reading the body.
 func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
@@ -194,7 +194,7 @@ func DeleteRoleHandler(del RoleDeleter, log *slog.Logger) http.HandlerFunc {
 		role, err := del(r.Context(), r.PathValue("key"))
 		if err != nil {
 			if errors.Is(err, ErrRoleInUse) {
-				writeRoleInUse(w, err)
+				WriteRoleInUse(w, err)
 				return
 			}
 			status, msg := statusForErr(err)
@@ -219,7 +219,7 @@ type setRoleMembersRequest struct {
 
 // SetRoleMembersHandler returns PUT /v1/workflow-roles/{key}/members: identity (401)
 // -> capped decode (400) -> members presence (400) -> path key -> whole-set replace, or 409
-// (writeRoleInUse) when it would leave a role an open run waits on with no signer.
+// (WriteRoleInUse) when it would leave a role an open run waits on with no signer.
 //
 // The presence check is this layer's ONE semantic 400 and it must exist: a nil slice
 // at the store means unstaff, so without it {} would silently wipe a role's staffing.
@@ -247,7 +247,7 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 		role, err := staff(r.Context(), r.PathValue("key"), *req.Members)
 		if err != nil {
 			if errors.Is(err, ErrRoleInUse) {
-				writeRoleInUse(w, err)
+				WriteRoleInUse(w, err)
 				return
 			}
 			status, msg := statusForErr(err)

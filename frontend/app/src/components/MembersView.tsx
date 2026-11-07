@@ -30,10 +30,13 @@ import {
   rosterWithInvites,
   sendInvitations,
   toPendingInvite,
+  lastSignerInvoices,
+  NO_WAITING_INVOICES,
   upsertInvites,
   viewerIsAdmin,
   type AccessRole,
   type InvitationWire,
+  type LastSignerInvoices,
   type PatchableStatus,
   type PendingInvite,
 } from '../lib/members'
@@ -139,14 +142,16 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // state, so it lives here rather than on ctx — and here rather than in either child, because
   // the table's `⋯` menu closes on select and the drawer can be shut before the promise
   // settles, so neither control is guaranteed to exist when the answer arrives.
-  const [statusError, setStatusError] = useState<{ id: string; message: string } | null>(null)
+  const [statusError, setStatusError] = useState<{ id: string; message: string; waiting: LastSignerInvoices } | null>(null)
   const changeStatus = useCallback(
     (id: string, status: PatchableStatus) => {
       setStatusError(null)
       // `toApiError(err).message` IS the gateway's own sentence (api-client's client.ts parses
       // the `{"error": …}` envelope into it). Rendered verbatim — a generic substitution here
       // would tell the user the write failed but never why.
-      return setMemberStatus(id, status).catch((err: unknown) => setStatusError({ id, message: toApiError(err).message }))
+      return setMemberStatus(id, status).catch((err: unknown) =>
+        setStatusError({ id, message: toApiError(err).message, waiting: lastSignerInvoices(err) }),
+      )
     },
     [setMemberStatus],
   )
@@ -156,7 +161,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       setStatusError(null)
       return removeMember(id).then(
         () => setDrawerId((cur) => (cur === id ? null : cur)),
-        (err: unknown) => setStatusError({ id, message: toApiError(err).message }),
+        (err: unknown) => setStatusError({ id, message: toApiError(err).message, waiting: lastSignerInvoices(err) }),
       )
     },
     [removeMember],
@@ -177,7 +182,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         list.run()
         ctx.refetchMembers()
       } else {
-        setStatusError({ id, message: e.message })
+        setStatusError({ id, message: e.message, waiting: NO_WAITING_INVOICES })
       }
     } finally {
       setResending((cur) => {
@@ -198,7 +203,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       setInvites((cur) => removeInvite(cur, id))
     } catch (err) {
       const e = toApiError(err)
-      setStatusError({ id, message: e.message })
+      setStatusError({ id, message: e.message, waiting: NO_WAITING_INVOICES })
       if (e.status === 404 || e.status === 409) ctx.refetchMembers()
     } finally {
       setRevoking((cur) => {

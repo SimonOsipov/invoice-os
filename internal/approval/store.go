@@ -363,6 +363,26 @@ func openRunsOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]InvoiceRef,
 	return invoices, total, nil
 }
 
+// unsignedWaitingInvoicesTx lists the invoices an open run holds on role key when none of
+// candidates signs it, else nothing. The one "no signer while a run waits" definition.
+func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string, candidates []string) ([]InvoiceRef, int, error) {
+	invoices, total, err := openRunsOnRoleTx(ctx, tx, key)
+	if err != nil || len(invoices) == 0 {
+		return nil, 0, err
+	}
+	// ceiling: one HeldRoleKeysTx round trip per member until one holds, batch it above ~100 members
+	for _, id := range candidates {
+		keys, err := HeldRoleKeysTx(ctx, tx, []string{key}, id)
+		if err != nil {
+			return nil, 0, err
+		}
+		if keys[key] {
+			return nil, 0, nil
+		}
+	}
+	return invoices, total, nil
+}
+
 // DeleteRole soft-deletes a role and audits it in the same transaction. It refuses with
 // roleInUse while a policy in force names the role or an open run waits on it, under the
 // tenant lock so a publish cannot race it. Nothing cascades: the staffing rows survive, inert, unreachable while
@@ -549,26 +569,12 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 		}
 
 		// Judged on the stored new set, so HeldRoleKeysTx is reused rather than restated.
-		invoices, total, err := openRunsOnRoleTx(ctx, tx, staffed.Key)
+		invoices, total, err := unsignedWaitingInvoicesTx(ctx, tx, staffed.Key, ids)
 		if err != nil {
 			return err
 		}
 		if len(invoices) > 0 {
-			held := false
-			// ceiling: one HeldRoleKeysTx round trip per member until one holds, batch it above ~100 members
-			for _, id := range ids {
-				keys, err := HeldRoleKeysTx(ctx, tx, []string{staffed.Key}, id)
-				if err != nil {
-					return err
-				}
-				if keys[staffed.Key] {
-					held = true
-					break
-				}
-			}
-			if !held {
-				return &roleInUse{lastHolder: true, invoices: invoices, invoicesTotal: total}
-			}
+			return &roleInUse{lastHolder: true, invoices: invoices, invoicesTotal: total}
 		}
 
 		// Last statement in the closure (TestStaffing_AuditsInSameTx). The key is the locked

@@ -24,6 +24,8 @@ import {
   ADMIN_ALL_CLIENTS,
   CLIENTS_UNREADABLE,
   emailLabel,
+  lastSignerInvoices,
+  NO_WAITING_INVOICES,
   accessRoleLabel,
   clientPickerLock,
   memberActionsLock,
@@ -40,6 +42,7 @@ import {
   SELF_DEMOTION_WARNING,
   SUSPEND_EXPLANATION,
   type AccessRole,
+  type LastSignerInvoices,
   type PatchableStatus,
 } from '../lib/members'
 import {
@@ -54,7 +57,7 @@ import {
   SUSPENDED_STEPS_NOTE,
 } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
-import { AmberNote, ClientAccessPicker, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
+import { AmberNote, ClientAccessPicker, InitialsChip, MemberStatusPill, RoleCards, WaitingInvoiceList, WorkflowRolePills } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
 // §4 names this as the affordance, not as prose, so it stays a component constant rather
@@ -102,7 +105,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   /** The remove write. Never rejects; MembersView closes the drawer on a 200. */
   onRemove?: (id: string) => void
   /** The last failed write's server reason, and the row it happened on. */
-  statusError: { id: string; message: string } | null
+  statusError: { id: string; message: string; waiting: LastSignerInvoices } | null
 }) {
   const noteId = useId()
   const roleNoteId = useId()
@@ -134,6 +137,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   // Access-role write; `confirmRole` is the pending change awaiting the warning strip.
   const [accessPending, setAccessPending] = useState(false)
   const [accessError, setAccessError] = useState<string | null>(null)
+  const [accessWaiting, setAccessWaiting] = useState<LastSignerInvoices>(NO_WAITING_INVOICES)
   const [confirmRole, setConfirmRole] = useState<AccessRole | null>(null)
   const keepRoleRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -221,11 +225,13 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   async function changeRole(next: AccessRole) {
     if (accessPending) return
     setAccessError(null)
+    setAccessWaiting(NO_WAITING_INVOICES)
     setAccessPending(true)
     try {
       await ctx.setMemberRole(memberId, next)
     } catch (err: unknown) {
       setAccessError(toApiError(err).message)
+      setAccessWaiting(lastSignerInvoices(err))
     } finally {
       setAccessPending(false)
       setConfirmRole(null)
@@ -395,6 +401,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
               }}
             >
               {accessError}
+              <WaitingInvoiceList testId="member-drawer-access-error-invoices" waiting={accessWaiting} />
             </div>
           )}
 
@@ -581,6 +588,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
               }}
             >
               {statusError.message}
+              <WaitingInvoiceList testId="member-drawer-status-error-invoices" waiting={statusError.waiting} />
             </div>
           )}
 

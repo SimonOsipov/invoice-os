@@ -244,3 +244,54 @@ func TestRun_ShapeAndDeadGlobReportedTogether(t *testing.T) {
 		t.Fatalf("code=%d err=%q", code, errs)
 	}
 }
+
+func TestRun_WildcardFreeGlobMatchesExactPathOnly(t *testing.T) {
+	dir := repo(t, map[string]string{".claude/rules/a.md": rule(`"docs"`), "docs/x.md": ""})
+	code, _, errs := do(dir)
+	if code != 1 || errs != dead(".claude/rules/a.md", "docs")+"\n" {
+		t.Fatalf("folder prefix: code=%d err=%q", code, errs)
+	}
+	dir = repo(t, map[string]string{".claude/rules/a.md": rule(`"Dockerfile"`), "Dockerfile": ""})
+	if code, _, errs := do(dir); code != 0 {
+		t.Fatalf("exact file: code=%d err=%q", code, errs)
+	}
+}
+
+func TestRun_FenceTolerance(t *testing.T) {
+	rows := map[string]struct {
+		body string
+		code int
+	}{
+		"opening trailing space": {"--- \npaths:\n  - \"gone/**\"\n---\n", 1},
+		"opening trailing tab":   {"---\t\npaths:\n  - \"gone/**\"\n---\n", 1},
+		"bom":                    {"\xef\xbb\xbf---\npaths:\n  - \"gone/**\"\n---\n", 1},
+		"closing trailing space": {"---\npaths:\n  - \"x.go\"\n--- \n", 0},
+	}
+	for name, r := range rows {
+		t.Run(name, func(t *testing.T) {
+			dir := repo(t, map[string]string{".claude/rules/a.md": r.body, "x.go": ""})
+			code, _, errs := do(dir)
+			if code != r.code || (r.code == 1 && !strings.Contains(errs, dead(".claude/rules/a.md", "gone/**"))) {
+				t.Fatalf("code=%d err=%q", code, errs)
+			}
+		})
+	}
+}
+
+func TestRun_CommentAfterPathsKeyPasses(t *testing.T) {
+	dir := repo(t, map[string]string{".claude/rules/a.md": "---\npaths: # note\n  - \"x.go\"\n---\n", "x.go": ""})
+	if code, out, errs := do(dir); code != 0 || !strings.Contains(out, "1 globs in 1 rule files") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestRun_GitFailureKeepsEarlierProblems(t *testing.T) {
+	dir := repo(t, map[string]string{
+		".claude/rules/a.md": rule(`"gone/**"`),
+		".claude/rules/b.md": rule(`"../x"`),
+	})
+	code, _, errs := do(dir)
+	if code != 2 || !strings.Contains(errs, dead(".claude/rules/a.md", "gone/**")) || !strings.Contains(errs, "../x") {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}

@@ -22,15 +22,18 @@ type shapeError string
 
 func (e shapeError) Error() string { return string(e) }
 
+func fence(l string) bool { return strings.TrimRight(l, " \t") == "---" }
+
 // parseGlobs returns the paths globs of a rule file; none for an always-loaded file.
 func parseGlobs(data []byte) ([]string, error) {
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r", ""), "\n")
-	if lines[0] != "---" {
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	if !fence(lines[0]) {
 		return nil, nil
 	}
 	end := -1
 	for i := 1; i < len(lines); i++ {
-		if lines[i] == "---" {
+		if fence(lines[i]) {
 			end = i
 			break
 		}
@@ -43,7 +46,11 @@ func parseGlobs(data []byte) ([]string, error) {
 		if !strings.HasPrefix(l, "paths:") {
 			continue
 		}
-		if v := strings.TrimSpace(strings.TrimPrefix(l, "paths:")); v != "" {
+		v := strings.TrimSpace(strings.TrimPrefix(l, "paths:"))
+		if strings.HasPrefix(v, "#") {
+			v = ""
+		}
+		if v != "" {
 			if v == "[]" {
 				return nil, shapeError("paths list is empty")
 			}
@@ -79,11 +86,21 @@ func parseGlobs(data []byte) ([]string, error) {
 	return nil, nil
 }
 
-// tracked lists the tracked files git matches for one glob.
+// tracked lists the tracked files git matches for one glob. git treats a
+// wildcard-free glob as a folder prefix, so only an exact path counts there.
 func tracked(dir, glob string) (int, []byte, error) {
 	cmd := exec.Command("git", "ls-files", "-z", "--", ":(glob)"+glob)
 	cmd.Dir = dir
 	out, err := cmd.Output()
+	if !strings.ContainsAny(glob, "*?[") {
+		n := 0
+		for _, p := range bytes.Split(out, []byte{0}) {
+			if string(p) == glob {
+				n++
+			}
+		}
+		return n, out, err
+	}
 	return bytes.Count(out, []byte{0}), out, err
 }
 
@@ -104,6 +121,7 @@ func run(dir string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var problems []string
+	gitFailed := false
 	total := 0
 	for _, f := range files {
 		data, err := os.ReadFile(filepath.Join(dir, f))
@@ -120,8 +138,9 @@ func run(dir string, stdout, stderr io.Writer) int {
 			total++
 			n, _, err := tracked(dir, g)
 			if err != nil {
-				fmt.Fprintf(stderr, "ruleglobs: git ls-files %q: %v\n", g, err)
-				return 2
+				problems = append(problems, fmt.Sprintf("ruleglobs: git ls-files %q: %v", g, err))
+				gitFailed = true
+				continue
 			}
 			if n == 0 {
 				problems = append(problems, fmt.Sprintf("%s: glob %q matches no tracked file — fix or remove it, or the rule never loads.", f, g))
@@ -130,6 +149,9 @@ func run(dir string, stdout, stderr io.Writer) int {
 	}
 	if len(problems) > 0 {
 		fmt.Fprintln(stderr, strings.Join(problems, "\n"))
+		if gitFailed {
+			return 2
+		}
 		return 1
 	}
 	fmt.Fprintf(stdout, "ruleglobs: %d globs in %d rule files all match a tracked file\n", total, len(files))

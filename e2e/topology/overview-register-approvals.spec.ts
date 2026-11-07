@@ -914,6 +914,33 @@ test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk b
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('IN-03 invoices header: on a phone the title keeps its line and New invoice drops below it; wide keeps one row', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await openNav(page, navButton(page, /^Invoices/))
+  await expectVisibleRows(page.getByTestId('invoice-row'), 'the firm register must hold at least one invoice on the PR environment (the seed holds firm invoices, D-14)')
+  const newInvoice = page.getByTestId('invoices-new-invoice')
+  const read = (phone: boolean) => async (): Promise<Read> => {
+    const b = await boxes(page, { title: heading(page).locator('xpath=..'), h1: heading(page), newInvoice })
+    const h1 = await heading(page).evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, fontSize: parseFloat(getComputedStyle(el).fontSize) }))
+    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, vw: window.innerWidth }))
+    const problems: string[] = []
+    if (h1.scrollWidth > b.h1.width + 1) problems.push(`h1 clipped: scrollWidth ${h1.scrollWidth} vs box ${b.h1.width}`)
+    if (b.title.width < h1.scrollWidth - 1) problems.push(`title block ${b.title.width} narrower than the h1 text ${h1.scrollWidth}`)
+    if (b.h1.height > 2 * h1.fontSize) problems.push(`h1 wraps: height ${b.h1.height}`)
+    if (b.newInvoice.x + b.newInvoice.width > doc.vw + 1) problems.push(`New invoice right edge ${b.newInvoice.x + b.newInvoice.width} beyond viewport ${doc.vw}`)
+    if (doc.scrollWidth > doc.clientWidth) problems.push(`document scrolls sideways: ${doc.scrollWidth} vs ${doc.clientWidth}`)
+    if (!phone && b.newInvoice.y >= b.title.y + b.title.height) problems.push('New invoice not on the title row')
+    return { problems, rects: { ...b, h1: h1 } }
+  }
+  const phone = await atWidths(page, 'invoices header on a phone', read(true), [375, 414])
+  const wide = await atWidths(page, 'invoices header wide', read(false), [1280])
+  await attachJson(testInfo, 'in-03-measurements', { phone, wide })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('IN-02 invoices states: loading, error, empty, filtered empty, empty page', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/invoice\/v1\/invoices/)])

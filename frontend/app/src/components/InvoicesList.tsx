@@ -363,7 +363,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       {/* The page's create control; the app header has none. The unfiltered empty state keeps its own button, the filtered one offers a way out of the filter. The toggle sits outside the async gating so it stays reachable on an empty filtered set. */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20, marginBottom: 22 }}>
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             INVOICE REGISTER

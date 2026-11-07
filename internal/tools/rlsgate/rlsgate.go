@@ -46,12 +46,21 @@ type summarizer struct {
 	// human reading CI logs sees why without re-running.
 	pending map[string][]string
 
-	// pkgPending buffers package-level Output per Package, replayed only
-	// when the package itself fails.
+	// pkgPending buffers package-level Output per Package and build-output
+	// per full ImportPath, replayed only when the package fails.
+	// pkgOrder lists its keys by first arrival, for the EOF flush.
 	pkgPending map[string][]string
+	pkgOrder   []string
 }
 
 type skipKey struct{ key, name string }
+
+func (s *summarizer) buffer(k, o string) {
+	if _, ok := s.pkgPending[k]; !ok {
+		s.pkgOrder = append(s.pkgOrder, k)
+	}
+	s.pkgPending[k] = append(s.pkgPending[k], o)
+}
 
 // consume decodes one input line and folds it into the running summary. A
 // non-JSON / malformed line is silently ignored (never panics, never
@@ -66,14 +75,18 @@ func (s *summarizer) consume(line string) {
 	if e.Test == "" {
 		switch e.Action {
 		case "output":
-			s.pkgPending[e.Package] = append(s.pkgPending[e.Package], e.Output)
+			s.buffer(e.Package, e.Output)
 		case "build-output":
-			// Compile errors carry ImportPath "pkg [pkg.test]", no Package.
-			k, _, _ := strings.Cut(e.ImportPath, " ")
-			s.pkgPending[k] = append(s.pkgPending[k], e.Output)
+			// FailedBuild repeats this ImportPath exactly ("pkg [pkg.test]" incl.).
+			s.buffer(e.ImportPath, e.Output)
+		case "pass", "skip":
+			delete(s.pkgPending, e.Package)
 		case "fail":
-			built, _, _ := strings.Cut(e.FailedBuild, " ")
-			for _, k := range []string{built, e.Package} {
+			keys := []string{e.Package}
+			if e.FailedBuild != "" {
+				keys = []string{e.FailedBuild, e.Package}
+			}
+			for _, k := range keys {
 				for _, o := range s.pkgPending[k] {
 					io.WriteString(s.out, o)
 				}
@@ -152,6 +165,15 @@ func evaluate(r io.Reader, out io.Writer) (exitCode int) {
 		}
 	}
 	total := passed + skipped + failed
+	if total == 0 {
+		// Stream cut before any package verdict: still show go test's output.
+		for _, k := range s.pkgOrder {
+			for _, o := range s.pkgPending[k] {
+				io.WriteString(out, o)
+			}
+			delete(s.pkgPending, k)
+		}
+	}
 	fmt.Fprintf(out, "rlsgate: %d passed, %d skipped, %d failed (%d test-level results)\n",
 		passed, skipped, failed, total)
 

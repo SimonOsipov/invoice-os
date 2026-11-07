@@ -1241,3 +1241,28 @@ func TestGateFile_NoTenantIdPredicate(t *testing.T) {
 		t.Errorf("gate.go mentions tenant_id -- RLS is the only tenant scope (store.go:27-30)")
 	}
 }
+
+func TestDelegateMayDecide(t *testing.T) {
+	d, e := "user-d", "user-e"
+	cases := []struct {
+		name     string
+		allow    bool
+		delegate *string
+		subject  string
+		want     bool
+	}{
+		{"off, no delegate", false, nil, d, false},
+		{"off, delegate named", false, &d, d, false},
+		{"on, anyone: any subject", true, nil, e, true},
+		{"on, anyone: another subject", true, nil, d, true},
+		{"on, named D, subject D", true, &d, d, true},
+		{"on, named D, subject E", true, &d, e, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DelegateMayDecide(tc.allow, tc.delegate, tc.subject); got != tc.want {
+				t.Errorf("DelegateMayDecide(%v, %v, %q) = %v, want %v", tc.allow, tc.delegate, tc.subject, got, tc.want)
+			}
+		})
+	}
+}

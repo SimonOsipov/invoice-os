@@ -158,13 +158,14 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 
 	var stepID string
 	var stepOrd int
-	var roleKey *string
+	var roleKey, delegateUserID *string
+	var allowDelegation bool
 	if err := tx.QueryRow(ctx,
-		`SELECT id, ord, workflow_role_key
+		`SELECT id, ord, workflow_role_key, allow_delegation, delegate_user_id::text
 		   FROM approval_run_steps
 		  WHERE run_id = $1 AND kind = 'approval' AND state = 'pending'
 		  ORDER BY ord LIMIT 1 FOR UPDATE`, runID,
-	).Scan(&stepID, &stepOrd, &roleKey); err != nil {
+	).Scan(&stepID, &stepOrd, &roleKey, &allowDelegation, &delegateUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Run{}, ErrRunClosed
 		}
@@ -196,11 +197,13 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		}
 		holds = held[*roleKey]
 	}
-	if !holds {
+	// A holder who is also the delegate decides as a holder.
+	asDelegate := !holds && DelegateMayDecide(allowDelegation, delegateUserID, caller.Subject)
+	if !holds && !asDelegate {
 		return Run{}, ErrNotRoleHolder
 	}
 
-	if _, err := commitDecisionTx(ctx, tx, invoiceID, invoiceNumber, caller.TenantID, runID, stepID, stepOrd, decision, caller.Subject, reason, selfApproved, demoter); err != nil {
+	if _, err := commitDecisionTx(ctx, tx, invoiceID, invoiceNumber, caller.TenantID, runID, stepID, stepOrd, roleKey, asDelegate, decision, caller.Subject, reason, selfApproved, demoter); err != nil {
 		return Run{}, err
 	}
 
@@ -230,7 +233,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 // UPDATE, which makes "the UPDATE affects 0 rows" unreachable through the full
 // Decide seam under normal concurrency (the resolving SELECT would simply find no
 // pending row instead) -- this lets the guard be driven directly as its own unit.
-func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, tenantID, runID, stepID string, stepOrd int, decision, actor string, reason *string, selfApproved bool, demoter Demoter) (satisfied bool, err error) {
+func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, tenantID, runID, stepID string, stepOrd int, roleKey *string, asDelegate bool, decision, actor string, reason *string, selfApproved bool, demoter Demoter) (satisfied bool, err error) {
 	// approval_decisions holds only SELECT+INSERT for invoice_app (migrations/
 	// 20260809232011_approval_runs.sql:114) -- the UPDATE must claim the row FIRST,
 	// or a 0-row UPDATE would leave an unremovable phantom decision. Rejected is not
@@ -264,11 +267,24 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 	// transaction-local GUC -- the RLS policy's own expression verbatim
 	// (migrations/20260809232011_approval_runs.sql:106).
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor, reason)
-		 VALUES (nullif(current_setting('app.current_tenant', true), '')::uuid, $1, $2, $3, $4, $5)`,
-		runID, stepID, decision, actor, reason,
+		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor, reason, as_delegate)
+		 VALUES (nullif(current_setting('app.current_tenant', true), '')::uuid, $1, $2, $3, $4, $5, $6)`,
+		runID, stepID, decision, actor, reason, asDelegate,
 	); err != nil {
 		return false, err
+	}
+
+	var actedKey, actedTitle string
+	if asDelegate && roleKey != nil {
+		// A deleted role keeps its key; roleTitle gives the "Deleted role" fallback.
+		var liveTitle string
+		err := tx.QueryRow(ctx,
+			`SELECT title FROM workflow_roles WHERE key = $1 AND deleted_at IS NULL`, *roleKey,
+		).Scan(&liveTitle)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
+		}
+		actedKey, actedTitle = *roleKey, roleTitle(err == nil, liveTitle)
 	}
 
 	// Close-or-advance and audit: approve only closes once no approval step remains
@@ -297,14 +313,31 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 		if selfApproved {
 			approvedAs = "self_approved"
 		}
-		if err := audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
-			"invoice_id":     invoiceID,
-			"run_id":         runID,
-			"step_ord":       stepOrd,
-			"reason":         reason,
-			"invoice_number": invoiceNumber,
-			"approved_as":    approvedAs,
-		}); err != nil {
+		// Two literals, not a merge helper: the audit-number scan reads an inline literal only.
+		if actedKey == "" {
+			err = audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
+				"invoice_id":     invoiceID,
+				"run_id":         runID,
+				"step_ord":       stepOrd,
+				"reason":         reason,
+				"invoice_number": invoiceNumber,
+				"as_delegate":    asDelegate,
+				"approved_as":    approvedAs,
+			})
+		} else {
+			err = audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
+				"invoice_id":           invoiceID,
+				"run_id":               runID,
+				"step_ord":             stepOrd,
+				"reason":               reason,
+				"invoice_number":       invoiceNumber,
+				"as_delegate":          asDelegate,
+				"approved_as":          approvedAs,
+				"acted_for_role_key":   actedKey,
+				"acted_for_role_title": actedTitle,
+			})
+		}
+		if err != nil {
 			return false, err
 		}
 	} else if decision == "rejected" {
@@ -327,13 +360,29 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 			return false, err
 		}
 
-		if err := audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
-			"invoice_id":     invoiceID,
-			"run_id":         runID,
-			"step_ord":       stepOrd,
-			"reason":         reason,
-			"invoice_number": invoiceNumber,
-		}); err != nil {
+		// Two literals, not a merge helper: the audit-number scan reads an inline literal only.
+		if actedKey == "" {
+			err = audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
+				"invoice_id":     invoiceID,
+				"run_id":         runID,
+				"step_ord":       stepOrd,
+				"reason":         reason,
+				"invoice_number": invoiceNumber,
+				"as_delegate":    asDelegate,
+			})
+		} else {
+			err = audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
+				"invoice_id":           invoiceID,
+				"run_id":               runID,
+				"step_ord":             stepOrd,
+				"reason":               reason,
+				"invoice_number":       invoiceNumber,
+				"as_delegate":          asDelegate,
+				"acted_for_role_key":   actedKey,
+				"acted_for_role_title": actedTitle,
+			})
+		}
+		if err != nil {
 			return false, err
 		}
 	}

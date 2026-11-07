@@ -291,3 +291,8 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 	}
 	return facts, nil
 }
+
+// DelegateMayDecide: the step's delegate test; AXIS 1 is the caller's.
+func DelegateMayDecide(allow bool, delegateUserID *string, subject string) bool {
+	return allow && (delegateUserID == nil || *delegateUserID == subject)
+}

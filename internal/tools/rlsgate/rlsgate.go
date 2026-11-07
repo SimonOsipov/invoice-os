@@ -5,7 +5,8 @@
 //
 // A "test-level result" is a JSON event whose Test field is non-empty and
 // whose Action is one of pass/fail/skip; package-level events (no Test
-// field, e.g. a bare "no test files" skip) are never counted. The verdict
+// field, e.g. a bare "no test files" skip) are never counted; their output
+// is printed only when the package fails. The verdict
 // must be driven only by the structured Action/Test fields, never by
 // grepping the human-readable Output text.
 package main
@@ -42,6 +43,10 @@ type summarizer struct {
 	// Package\tTest), replayed only if that test ultimately fails so a
 	// human reading CI logs sees why without re-running.
 	pending map[string][]string
+
+	// pkgPending buffers package-level Output per Package, replayed only
+	// when the package itself fails.
+	pkgPending map[string][]string
 }
 
 type skipKey struct{ key, name string }
@@ -49,13 +54,23 @@ type skipKey struct{ key, name string }
 // consume decodes one input line and folds it into the running summary. A
 // non-JSON / malformed line is silently ignored (never panics, never
 // counted), which feeds the zero-ran verdict. Package-level events (empty
-// Test) are never treated as test-level results.
+// Test) are never treated as test-level results; their output is printed
+// only if the package fails, so a pre-test failure shows go test's error.
 func (s *summarizer) consume(line string) {
 	var e event
 	if err := json.Unmarshal([]byte(line), &e); err != nil {
 		return
 	}
 	if e.Test == "" {
+		switch e.Action {
+		case "output":
+			s.pkgPending[e.Package] = append(s.pkgPending[e.Package], e.Output)
+		case "fail":
+			for _, o := range s.pkgPending[e.Package] {
+				io.WriteString(s.out, o)
+			}
+			delete(s.pkgPending, e.Package)
+		}
 		return
 	}
 	key := e.Package + "\t" + e.Test
@@ -95,7 +110,7 @@ func (s *summarizer) consume(line string) {
 // zero-ran → fail. The skip branch names the skipped tests so CI surfaces
 // which DB-backed suites lost their env.
 func evaluate(r io.Reader, out io.Writer) (exitCode int) {
-	s := &summarizer{out: out, pending: make(map[string][]string), last: make(map[string]string)}
+	s := &summarizer{out: out, pending: make(map[string][]string), pkgPending: make(map[string][]string), last: make(map[string]string)}
 
 	// bufio.Reader.ReadString avoids Scanner's token-size limit, so an
 	// arbitrarily long Output line can never truncate or error the stream.

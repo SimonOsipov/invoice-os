@@ -6,6 +6,7 @@ import { provisionStaffAccount, type StaffAccount } from '../api/client'
 import { shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
+import { brandMarkProblems, readBrandMark, ringProblems, ringWidth } from './brandMark'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.beforeAll(() => { expect(test.info().project.name, 'ops-console.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -144,11 +145,11 @@ const allApart = (rs: Rect[], what: string): string[] => rs.flatMap((a, i) => rs
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
-async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
+async function atWidths(page: Page, label: string, read: () => Promise<Read>, widths: readonly number[] = WIDE_WIDTHS): Promise<unknown[]> {
   const entry = page.viewportSize()
   const out: unknown[] = []
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: 1080 })
       let rects: unknown
       await expect
@@ -320,11 +321,13 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   expect(ratio, 'org switcher text contrast against its own fill').toBeGreaterThanOrEqual(4.5)
 
   const mark = aside(page).locator('img').first()
-  await expect.poll(() => mark.evaluate((el) => (el as HTMLImageElement).naturalWidth), { message: 'brand mark never loaded' }).toBeGreaterThan(0)
-  const src = await mark.evaluate((el) => (el as HTMLImageElement).currentSrc)
-  expect(src, 'brand mark is the v2 mark').toMatch(/\/mark(-[\w-]+)?\.png/)
-  expect(src, 'brand mark is not the v1 logo-mark').not.toContain('logo-mark')
-  await corners(mark, 'brand mark', '0px') // the raster carries its own corners
+  let src = ''
+  await expect.poll(async () => {
+    await settle(page, aside(page), mark)
+    const reading = await readBrandMark(mark)
+    src = reading.src
+    return brandMarkProblems(reading)
+  }, { message: 'brand mark rule' }).toEqual([])
 
   await corners(navButton(page, /^Submissions/).locator('span.mono'), 'Submissions nav badge', R.sm)
   await corners(aside(page).getByText('AO', { exact: true }), 'avatar', R.circle)
@@ -394,7 +397,28 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
     return { problems, rects: { ...r, navs } }
   })
 
-  await attachJson(testInfo, 'ops-01-measurements', { ...measured, switcher: { ...sw, ratio }, src, widths })
+
+  // Ring clearance on the 72px rail (1024) and the wide widths; the ASComply label is hidden on the rail.
+  const word = aside(page).getByText('ASComply', { exact: true })
+  const ringSweep = await atWidths(page, 'OPS-01 brand mark ring', async () => {
+    await settle(page, aside(page), mark)
+    const reading = await readBrandMark(mark)
+    const markRect = await mark.boundingBox()
+    const asideRect = await aside(page).boundingBox()
+    if (!markRect || !asideRect) throw new Error('brand mark or aside has no box')
+    const clear: Rect[] = []
+    const wordProblems: string[] = []
+    if (await word.isVisible()) {
+      const wordRect = await word.boundingBox()
+      if (wordRect) clear.push(wordRect)
+      else wordProblems.push('ASComply label is visible but has no box')
+    }
+    const ring = ringWidth(reading)
+    return { problems: [...wordProblems, ...brandMarkProblems(reading), ...ringProblems(markRect, ring, asideRect, clear)], rects: { ...reading, ring, markRect, asideRect, clear } }
+  }, [...WIDE_WIDTHS, 1024])
+  expect(ringSweep.length, 'brand mark ring widths measured').toBeGreaterThan(0)
+
+  await attachJson(testInfo, 'ops-01-measurements', { ...measured, switcher: { ...sw, ratio }, src, widths, ringSweep })
   await attachShot(page, testInfo, 'overview')
   expect(errors, errorsOf(errors)).toEqual([])
 })

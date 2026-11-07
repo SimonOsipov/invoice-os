@@ -919,7 +919,8 @@ describe('CustomersView: the status chips', () => {
 
     fireEvent.click(chip('All'))
     expect(await screen.findByText('No customers yet')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'New invoice' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add customer' }), 'control: the header action stays').toBeTruthy()
     expect(probeCalls(customerCalls()), 'no probe on Archived or All').toHaveLength(0)
   })
 
@@ -932,7 +933,7 @@ describe('CustomersView: the status chips', () => {
 
     expect(await screen.findByText('No active customers')).toBeTruthy()
     expect(screen.getByText('Archived customers are under the Archived filter.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'New invoice' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
     expect(screen.queryByText('No customers yet')).toBeNull()
     const probe = probeCalls(customerCalls())
     expect(probe).toHaveLength(1)
@@ -1148,6 +1149,7 @@ describe('CustomersView: the v2 register', () => {
     const title = await screen.findByText('No customers yet')
     expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
     expect(title.style.fontWeight).toBe('700')
+    expect(screen.getByText('Customers are added when you save an invoice with a buyer TIN.').style.margin).toBe('0px')
   })
 
   it('CU-06 the pill and TIN colour follow FILEABLE_TIN', async () => {

@@ -849,7 +849,7 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header and pager relations', async ({ page }, testInfo) => {
+test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk bar, header and pager relations', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
@@ -874,11 +874,19 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
   await attachShot(page, testInfo, 'invoices-default')
 
   const header = async (): Promise<Read> => {
-    const b = await boxes(page, { header: heading(page).locator('xpath=../..'), title: heading(page).locator('xpath=..'), toggle })
-    return {
-      problems: [...within(b.header, b.title, 'title block in the header'), ...within(b.header, b.toggle, 'toggle in the header'), ...apart(b.title, b.toggle, 'title block vs toggle')],
-      rects: { header: b.header, title: b.title, toggle: b.toggle },
-    }
+    const b = await boxes(page, { header: heading(page).locator('xpath=../..'), title: heading(page).locator('xpath=..'), toggle, newInvoice: page.getByTestId('invoices-new-invoice') })
+    const problems = [
+      ...within(b.header, b.title, 'title block in the header'),
+      ...within(b.header, b.toggle, 'toggle in the header'),
+      ...within(b.header, b.newInvoice, 'New invoice in the header'),
+      ...apart(b.title, b.toggle, 'title block vs toggle'),
+      ...apart(b.title, b.newInvoice, 'title block vs New invoice'),
+      ...apart(b.toggle, b.newInvoice, 'toggle vs New invoice'),
+      ...leftOf(b.toggle, b.newInvoice, 'toggle vs New invoice'),
+    ]
+    if (Math.abs(centreY(b.toggle) - centreY(b.newInvoice)) > 1) problems.push('toggle and New invoice centres differ')
+    if (Math.abs(b.title.y + b.title.height - (b.newInvoice.y + b.newInvoice.height)) > 1) problems.push('New invoice bottom vs title block bottom')
+    return { problems, rects: { header: b.header, title: b.title, toggle: b.toggle, newInvoice: b.newInvoice } }
   }
   const bulk = await bulkFlow(
     page,
@@ -903,6 +911,33 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
 
   expectNoWrites(gateway)
   await attachJson(testInfo, 'in-01-measurements', { h1, listCard, dot, off, on, bulk })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('IN-03 invoices header: on a phone the title keeps its line and New invoice drops below it; wide keeps one row', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await openNav(page, navButton(page, /^Invoices/))
+  await expectVisibleRows(page.getByTestId('invoice-row'), 'the firm register must hold at least one invoice on the PR environment (the seed holds firm invoices, D-14)')
+  const newInvoice = page.getByTestId('invoices-new-invoice')
+  const read = (phone: boolean) => async (): Promise<Read> => {
+    const b = await boxes(page, { title: heading(page).locator('xpath=..'), h1: heading(page), newInvoice })
+    const h1 = await heading(page).evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, fontSize: parseFloat(getComputedStyle(el).fontSize) }))
+    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, vw: window.innerWidth }))
+    const problems: string[] = []
+    if (h1.scrollWidth > b.h1.width + 1) problems.push(`h1 clipped: scrollWidth ${h1.scrollWidth} vs box ${b.h1.width}`)
+    if (b.title.width < h1.scrollWidth - 1) problems.push(`title block ${b.title.width} narrower than the h1 text ${h1.scrollWidth}`)
+    if (b.h1.height > 2 * h1.fontSize) problems.push(`h1 wraps: height ${b.h1.height}`)
+    if (b.newInvoice.x + b.newInvoice.width > doc.vw + 1) problems.push(`New invoice right edge ${b.newInvoice.x + b.newInvoice.width} beyond viewport ${doc.vw}`)
+    if (doc.scrollWidth > doc.clientWidth) problems.push(`document scrolls sideways: ${doc.scrollWidth} vs ${doc.clientWidth}`)
+    if (!phone && b.newInvoice.y >= b.title.y + b.title.height) problems.push('New invoice not on the title row')
+    return { problems, rects: { ...b, h1: h1 } }
+  }
+  const phone = await atWidths(page, 'invoices header on a phone', read(true), [375, 414])
+  const wide = await atWidths(page, 'invoices header wide', read(false), [1280])
+  await attachJson(testInfo, 'in-03-measurements', { phone, wide })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

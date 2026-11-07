@@ -34,7 +34,7 @@ import { aggregateCustomers, customerName } from '../lib/customers'
 import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
 import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, signedAmount, type AllInvoices } from '../lib/invoices'
 import { fetchInvoiceRegister, previousMonthPeriod, registerErrorLine, registerPeriodValid } from '../lib/invoiceRegister'
-import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
+import { crossGlyph, docGlyph, downloadGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 // Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
@@ -235,10 +235,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>No data to report yet</div>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 340 }}>Reports populate once {active.short} has validated invoices in the period.</p>
-          <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
-            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
-          </button>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, maxWidth: 340 }}>Reports populate once {active.short} has validated invoices in the period.</p>
         </div>
       )}
 

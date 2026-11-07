@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="asc-mark-tile" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="128" y2="128">
+      <stop offset="0" stop-color="#004045"/>
+      <stop offset="1" stop-color="#00252C"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="36.5" fill="url(#asc-mark-tile)"/>
+  <path d="M36 95.7 61.2 33.6h5.6L92 95.7" fill="none" stroke="#FFFFFF" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46.2 72.9 59.6 85 82.3 59.2" fill="none" stroke="#F29425" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

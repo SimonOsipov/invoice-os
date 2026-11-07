@@ -7,7 +7,7 @@ import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMemb
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertFillsColumn, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFillsColumn, assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { selectEntity } from './importWizardShared'
 import { APP_URL } from './targets'
 
@@ -1619,7 +1619,7 @@ test.describe('Customers screen and company fields', () => {
   })
 
   test('ST-16 the settings tab strip encloses every tab at every wide width', async ({ page }, testInfo) => {
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     const errors = gatedErrors(page, [])
     const measured: Record<string, unknown> = {}
     for (const [persona, account] of [['firm', firm], ['inhouse', inhouse]] as const) {
@@ -1630,18 +1630,93 @@ test.describe('Customers screen and company fields', () => {
       const count = await tabs.count()
       expect(count, `${persona} strip holds the Members tab and at least one other`).toBeGreaterThanOrEqual(2)
       await settle(page, main(page))
+
+      // Token values the cascade must resolve: --sage-panel, --tab-active-text, --tab-active-border, --tab-border, --fg-3.
+      const active = await styles(settingsTab(page, 'Members'), ['background-color', 'color', 'border-bottom-color', 'border-top-left-radius', 'border-bottom-left-radius'])
+      expect(active, `${persona} active tab paint`).toEqual({
+        'background-color': 'rgb(223, 232, 217)',
+        color: 'rgb(13, 94, 80)',
+        'border-bottom-color': 'rgb(18, 108, 94)',
+        'border-top-left-radius': '6px',
+        'border-bottom-left-radius': '0px',
+      })
+      expect((await styles(strip, ['box-shadow']))['box-shadow'], `${persona} strip rule`).toContain('rgb(212, 222, 206)')
+      expect((await styles(tabs.nth(count - 1), ['color'])).color, `${persona} inactive tab colour`).toBe(FG_3)
+
+      const named = (): Named => {
+        const n: Named = { strip, main: main(page) }
+        for (let i = 0; i < count; i++) n[`tab${i}`] = tabs.nth(i)
+        return n
+      }
+      const names = Array.from({ length: count }, (_, i) => `tab${i}`)
+
       measured[persona] = await sweep(page, `${persona} settings tab strip`, async () => {
-        const named: Named = { strip }
-        const names: string[] = []
-        for (let i = 0; i < count; i++) {
-          names.push(`tab${i}`)
-          named[`tab${i}`] = tabs.nth(i)
-        }
-        const { rects, problems } = await boxes(named)
+        const { rects, problems } = await boxes({ ...named(), num: tabs.first().locator('span').first(), label: tabs.first().locator('span').last() })
         insideX(rects, 'strip', names, problems)
         noOverlap(rects, names, problems)
+        const overflow = await strip.evaluate((el) => el.scrollWidth - el.clientWidth)
+        if (overflow > 1) problems.push(`strip needs ${overflow}px of scrolling`)
+        for (const n of names) if (rects.strip && rects[n] && Math.abs(rects[n].y + rects[n].height - (rects.strip.y + rects.strip.height)) > 1) problems.push(`${n} bottom is off the strip bottom`)
+        if (rects.num && rects.label) {
+          const gap = rects.label.x - (rects.num.x + rects.num.width)
+          if (Math.abs(gap - 8) > 1) problems.push(`number sits ${gap}px before the label, want 8`)
+        }
         return { problems, rects }
       })
+
+      const NARROW_WIDTHS = [1100, 900, ...PHONE_WIDTHS]
+      measured[`${persona}Narrow`] = await sweep(
+        page,
+        `${persona} settings tab strip, narrow`,
+        async () => {
+          const problems: string[] = []
+          const overflowX = (await styles(strip, ['overflow-x']))['overflow-x']
+          if (overflowX !== 'auto') problems.push(`strip overflow-x is ${overflowX}, want auto`)
+          await strip.evaluate((el) => (el.scrollLeft = 0))
+          const start = await boxes(named())
+          problems.push(...start.problems)
+          insideX(start.rects, 'main', ['strip'], problems)
+          if (start.rects.strip && start.rects.tab0 && Math.abs(start.rects.tab0.x - start.rects.strip.x) > 1) problems.push('first tab is not at the strip left edge')
+          await strip.evaluate((el) => (el.scrollLeft = el.scrollWidth))
+          const end = await boxes(named())
+          const last = end.rects[`tab${count - 1}`]
+          if (end.rects.strip && last && Math.abs(last.x + last.width - (end.rects.strip.x + end.rects.strip.width)) > 1) problems.push('last tab is not at the strip right edge')
+          return { problems, rects: { start: start.rects, end: end.rects } }
+        },
+        NARROW_WIDTHS,
+      )
+
+      // Boot on the last tab (Workspace, both personas) at phone width: the strip scrolls, the page does not.
+      const entry = page.viewportSize()
+      try {
+        // The landing header hides Sign in at phone width: sign in wide, then boot narrow.
+        await signInAtFrontDoor(page, account, '/settings/workspace')
+        await page.setViewportSize({ width: 375, height: 900 })
+        await page.reload()
+        const bootStrip = settingsTab(page, 'Members').locator('xpath=..')
+        const workspace = settingsTab(page, 'Workspace')
+        await expect(workspace, `${persona} has no Workspace tab`).toBeVisible()
+        await settle(page, main(page))
+        await expect.poll(() => bootStrip.evaluate((el) => el.scrollLeft), { message: `${persona} strip scrolled to the selected tab` }).toBeGreaterThan(0)
+        const inStrip = async (tab: Locator, label: string) => {
+          const rs = await boxes({ strip: bootStrip, tab })
+          expect(rs.problems, `${persona} ${label}`).toEqual([])
+          expect(enclosesRect(rs.rects.strip, rs.rects.tab, 1), `${persona} ${label} lies inside the strip box`).toBe(true)
+        }
+        await inStrip(workspace, 'Workspace tab')
+        expect(await page.evaluate(() => window.scrollY), `${persona} window scrolled`).toBe(0)
+        expect(await main(page).locator('.pf-scroll').evaluate((el) => el.scrollTop), `${persona} .pf-scroll scrolled`).toBe(0)
+        const first = bootStrip.getByRole('button').first()
+        // DOM click: Playwright's click() scrolls the target into view first, hiding the app's own effect.
+        await first.evaluate((el) => (el as HTMLElement).click())
+        await expect(first).toBeVisible()
+        await expect.poll(async () => {
+          const rs = await boxes({ strip: bootStrip, first })
+          return rs.rects.strip && rs.rects.first ? enclosesRect(rs.rects.strip, rs.rects.first, 1) : false
+        }, { message: `${persona} first tab in view after selecting it` }).toBe(true)
+      } finally {
+        if (entry) await page.setViewportSize(entry)
+      }
     }
     await attachJson(testInfo, 'st-16-measurements', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

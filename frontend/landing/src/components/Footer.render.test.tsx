@@ -22,7 +22,6 @@ type Link = { label: string; href: string }
 // The v2 file's footer Platform list (V470), retyped.
 const V2_PLATFORM: Link[] = [
   { label: 'Invoice workflows', href: '#platform' },
-  { label: 'Country roadmap', href: '#coverage' },
   { label: 'AI-supported intelligence', href: '#intelligence' },
   { label: 'Solutions for partners', href: '#solutions' },
 ]
@@ -156,12 +155,12 @@ describe('FT-02 the Platform column is an in-order subsequence of V470', () => {
     expect(
       isOrderedSubsequence(
         [
-          { label: 'Country roadmap', href: '#coverage' },
+          { label: 'AI-supported intelligence', href: '#intelligence' },
           { label: 'Invoice workflows', href: '#platform' },
         ],
         V2_PLATFORM,
       ),
-      'control: [Country roadmap, Invoice workflows] is out of order',
+      'control: [AI-supported intelligence, Invoice workflows] is out of order',
     ).toBe(false)
 
     expect(
@@ -191,23 +190,19 @@ describe('NV-02 the footer links Invoice workflows', () => {
   })
 })
 
-describe('R4-FT-2 the Platform column links its three sections in V470 order', () => {
+describe('R4-FT-2 the Platform column links intelligence, then solutions', () => {
   it.each([
-    ['', '#coverage', '#intelligence', '#solutions'],
-    ['/', '/#coverage', '/#intelligence', '/#solutions'],
-  ])(
-    'with hrefPrefix %j "Country roadmap" %s comes before "AI-supported intelligence" %s, then "Solutions for partners" %s',
-    (hrefPrefix, coverage, intelligence, solutions) => {
-      const controls = controlsOf(platformSlice(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix }))))
-      const mine = controls.filter((c) => ['Country roadmap', 'AI-supported intelligence', 'Solutions for partners'].includes(c.label))
-      expect(mine.map((c) => ({ tag: c.tag, label: c.label, class: c.attrs.class, href: c.attrs.href }))).toEqual([
-        { tag: 'a', label: 'Country roadmap', class: 'a-link', href: coverage },
-        { tag: 'a', label: 'AI-supported intelligence', class: 'a-link', href: intelligence },
-        { tag: 'a', label: 'Solutions for partners', class: 'a-link', href: solutions },
-      ])
-      expect(controls.at(-1)?.label, 'the Platform column ends with Solutions for partners').toBe('Solutions for partners')
-    },
-  )
+    ['', '#intelligence', '#solutions'],
+    ['/', '/#intelligence', '/#solutions'],
+  ])('with hrefPrefix %j "AI-supported intelligence" %s comes before "Solutions for partners" %s', (hrefPrefix, intelligence, solutions) => {
+    const controls = controlsOf(platformSlice(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix }))))
+    const mine = controls.filter((c) => ['AI-supported intelligence', 'Solutions for partners'].includes(c.label))
+    expect(mine.map((c) => ({ tag: c.tag, label: c.label, class: c.attrs.class, href: c.attrs.href }))).toEqual([
+      { tag: 'a', label: 'AI-supported intelligence', class: 'a-link', href: intelligence },
+      { tag: 'a', label: 'Solutions for partners', class: 'a-link', href: solutions },
+    ])
+    expect(controls.at(-1)?.label, 'the Platform column ends with Solutions for partners').toBe('Solutions for partners')
+  })
 })
 
 describe('FT-02b the Platform column renders PLATFORM_LINKS, whatever it holds', () => {

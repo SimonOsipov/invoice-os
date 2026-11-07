@@ -42,7 +42,7 @@
 .ds-checklist-icon { display: inline-flex; flex: none; margin-top: 2px; color: var(--teal); }
 
 .ds-logo { display: inline-flex; align-items: center; gap: 10px; }
-.ds-logo-mark { display: block; border-radius: var(--radius-md); }
+.ds-logo-mark { display: block; }
 .ds-logo-word { display: inline-flex; flex-direction: column; gap: 3px; }
 .ds-logo-name { font-family: var(--font-display); font-weight: var(--fw-bold); line-height: 1; letter-spacing: -0.02em; color: var(--ink); }
 .ds-logo-region { font-family: var(--font-sans); font-weight: var(--fw-bold); line-height: 1; letter-spacing: var(--tracking-brand); text-transform: uppercase; color: var(--step-label); }

@@ -21,7 +21,7 @@ const srcFiles = () =>
 
 describe('blog package', () => {
   it('main_importsV2TokensInTheSupportConsoleOrder', () => {
-    const want = [`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`]
+    const want = [`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`, `${DS}/v2/mark.css`]
     const ds = (f: string) => sideEffectImports(read(f)).filter((s) => s.startsWith(DS))
     expect(ds(join(HERE, '../../support-console/src/main.tsx'))).toEqual(want)
     expect(ds(join(HERE, 'main.tsx'))).toEqual(want)

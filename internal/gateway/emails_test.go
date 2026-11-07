@@ -100,12 +100,12 @@ func TestMailTemplate_UnknownMailIsAnError(t *testing.T) {
 }
 
 func TestMailLogo_ServesTheDesignTokensMark(t *testing.T) {
-	want, err := os.ReadFile("../../packages/design-tokens/v2/assets/mark.png")
+	want, err := os.ReadFile("../../packages/design-tokens/v2/assets/mail-mark.png")
 	if err != nil {
-		t.Fatalf("read mark.png: %v", err)
+		t.Fatalf("read mail-mark.png: %v", err)
 	}
 	if len(want) == 0 {
-		t.Fatal("mark.png on disk is empty; the comparison below would pass vacuously")
+		t.Fatal("mail-mark.png on disk is empty; the comparison below would pass vacuously")
 	}
 
 	rec := serveMail(emailsMux(t), http.MethodGet, "/emails/mark.png")
@@ -116,7 +116,7 @@ func TestMailLogo_ServesTheDesignTokensMark(t *testing.T) {
 		t.Errorf("Content-Type = %q, want image/png", got)
 	}
 	if !bytes.Equal(rec.Body.Bytes(), want) {
-		t.Errorf("body = %d bytes, want the %d bytes of mark.png", rec.Body.Len(), len(want))
+		t.Errorf("body = %d bytes, want the %d bytes of mail-mark.png", rec.Body.Len(), len(want))
 	}
 	if !bytes.HasPrefix(rec.Body.Bytes(), pngSignature) {
 		t.Errorf("body starts % x, want the PNG signature", rec.Body.Bytes()[:min(8, rec.Body.Len())])

@@ -231,30 +231,41 @@ export function Sidebar({
           )
         })}
       </nav>
-      <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
-        {demoHref !== null && (
-          <Button variant="outlineDark" size="sm" href={demoHref} onClick={trackLibraryDemoOpen} style={{ width: '100%' }}>
-            Book the Demo
-          </Button>
-        )}
+      <div style={{ flex: '0 0 auto', padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
         <button
           type="button"
           className="lib-cookie-choices"
           onClick={onCookieChoices}
           style={{
-            display: 'block',
-            marginTop: demoHref !== null ? 12 : 0,
-            background: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 11,
+            width: '100%',
             border: 0,
-            padding: 0,
             cursor: 'pointer',
-            fontSize: 13,
-            color: 'var(--fg-3)',
+            borderRadius: 'var(--radius-md)',
+            padding: '9px 10px',
+            textAlign: 'left',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 14,
+            fontWeight: 500,
+            background: 'transparent',
+            color: 'var(--fg-2)',
           }}
         >
-          Cookie choices
+          <span style={{ flex: 'none', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', width: 18, height: 18, color: 'var(--fg-3)' }}>
+            <Icon name="cookie" size={17} strokeWidth={1.6} />
+          </span>
+          <span style={{ flex: 1 }}>Cookie choices</span>
         </button>
       </div>
+      {demoHref !== null && (
+        <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
+          <Button variant="outlineDark" size="sm" href={demoHref} onClick={trackLibraryDemoOpen} style={{ width: '100%' }}>
+            Book the Demo
+          </Button>
+        </div>
+      )}
     </aside>
   )
 }

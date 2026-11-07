@@ -1,9 +1,9 @@
-// Top header bar: crumb, invoice search, Sandbox/Live switch, "New invoice" CTA.
+// Top header bar: crumb, invoice search, Sandbox/Live switch.
 // The switch is the ops-console two-segment control, not the prototype's single pill.
 
 import { useEffect, useState } from 'react'
 
-import { crossGlyph, plusGlyph, searchGlyph } from '../glyphs'
+import { crossGlyph, searchGlyph } from '../glyphs'
 import { clampFilterText } from '../lib/invoices'
 import type { PlatformCtx, View } from '../types'
 
@@ -103,7 +103,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
           )}
         </form>
         {/* Sandbox / Live switch: 28px segments + 3px padding + 1px border = 36px, centred
-            against the 34px search box and "New invoice". */}
+            against the 34px search box. */}
         <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--sage)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-btn)', padding: 3, gap: 2 }}>
           <button
             type="button"
@@ -130,9 +130,6 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             LIVE
           </button>
         </div>
-        <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn" style={{ height: 34, padding: '0 14px' }}>
-          <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
-        </button>
       </div>
     </header>
   )

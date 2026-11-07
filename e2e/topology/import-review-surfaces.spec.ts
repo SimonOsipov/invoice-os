@@ -12,7 +12,7 @@ import { shoot as argosShoot } from '../argos'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
-import { signInAs } from '../personaSession'
+import { openNewInvoice, signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, PR_LANE_MAPPING, steerExplainMarker } from '../importFixtures'
 import { approveOpenRunsForEntity, setExactMapping } from './importWizardShared'
@@ -263,7 +263,7 @@ async function startWizard(page: Page, label: string): Promise<{ token: string; 
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   return { token, entityId: entity.id }
 }
 
@@ -328,7 +328,7 @@ async function extractOneDocument(
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
@@ -535,7 +535,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
     )
 
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-    await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+    await openNewInvoice(page)
     await expect(page.getByText('Add a client before you file', { exact: true }), 'the no-company panel renders').toBeVisible({ timeout: 30_000 })
     expect(stubbed, 'the entity-list stub answered at least once').toBeGreaterThan(0)
 
@@ -909,7 +909,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
     await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
 
     // Run 2: the same text opens with the restored mapping, and every invoice collides.
-    await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+    await openNewInvoice(page)
     await pickAndRead(page, 'rk-05-second.csv', buildMixedCsv())
     const notice = page.getByTestId('map-restored-notice')
     await expect(notice, 'the second import of the same text opens with a restored mapping').toBeVisible({ timeout: 30_000 })

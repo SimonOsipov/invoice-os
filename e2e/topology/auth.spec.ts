@@ -3,7 +3,7 @@ import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { setExactMapping, shardPersonas } from './importWizardShared'
 import { shoot } from '../argos'
 import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
-import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
+import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, openNewInvoice, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
 import {
@@ -545,9 +545,7 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
         `${path} did not render its "${heading}" landmark`,
       ).toBeVisible()
     } else {
-      // CreateForm's own title span reads "New invoice · <client>" (a middle dot); the
-      // header bar's persistent CTA button is bare "New invoice" with no dot, so this
-      // substring is discriminating between the two.
+      // CreateForm's own title span reads "New invoice · <client>" (a middle dot).
       await expect(page.getByText('New invoice ·'), `${path} did not render its CreateForm title`).toBeVisible()
     }
   }
@@ -1173,7 +1171,7 @@ function sidebarNav(page: Page) {
 
 // New invoice → pick a one-row CSV → Read columns, stopping on the Map step.
 async function openMapStep(page: Page, tag: string, amber: { title: string; shown: boolean }): Promise<void> {
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   // Control: the upload step is on screen, so an absent panel is not an unrendered step.
   await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
   await expect(page.getByText(amber.title, { exact: true })).toHaveCount(amber.shown ? 1 : 0)
@@ -1219,7 +1217,7 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
   await signInAtFrontDoor(page, account, '/')
   await expectAddCompanyTask(page, 'Add your company')
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.getByText('Add your company before you file', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Add your company →' }).click()
   await expect(page).toHaveURL(/\/settings\/company$/)
@@ -1381,7 +1379,7 @@ test('deployed app: a new firm lands on Add your first client, and the import st
   await expect(page.getByText('No custom rules yet — the golden ruleset alone is running.', { exact: true })).toBeVisible()
   await expect(page.getByText('Derived from')).toHaveCount(0)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByText('New invoice ·', { exact: false })).toBeVisible()
   // Input values are not text: toHaveValue, never getByText.
@@ -1436,7 +1434,7 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   await signInAtFrontDoor(page, member, '/')
   await expectWaitingOverview(page)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
   await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add a client →' })).toHaveCount(0)
@@ -1487,7 +1485,7 @@ test('deployed app: an in-house Reviewer of a workspace with no company sees no 
   await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add company' })).toHaveCount(0)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
   await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add your company →' })).toHaveCount(0)

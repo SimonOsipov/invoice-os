@@ -31,7 +31,7 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
-import { signInAs } from '../personaSession'
+import { openNewInvoice, signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import {
   boxOf,
@@ -198,7 +198,7 @@ async function extractHeldNote(
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
@@ -1855,7 +1855,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   await selectEntity(page, entity.name)
 
   // --- import 1: the mixed fixture, whose rows quarantine structurally (E2E-04's own flow) --
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'extr15-sweep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -1909,7 +1909,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
 
   // --- import 2: a header-only file, the one fixture reaching RejectedFile (INVCR-E2E-4's) --
   await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.locator('input[type="file"]#pf-import-file').setInputFiles({
     name: 'extr15-header-only.csv',
     mimeType: 'text/csv',
@@ -1981,7 +1981,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   const blockedBtn = page.getByRole('button', { name: 'Map invoice number to continue' })
 
   // --- import 1: nothing saved yet for this client -- the lookup answers null -------------
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'extr37-1.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
@@ -2024,7 +2024,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await expect(page.getByTestId('invoice-detail'), 'N=1 routes to the real detail').toBeVisible({ timeout: 30_000 })
 
   // --- import 2: the identical bytes -- the lookup must answer the saved mapping ----------
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'extr37-2.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
@@ -2160,7 +2160,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
 
   // --- import 3, under an intercepted lookup: the Map step must return to today's seed ----
   await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'extr37-3.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
@@ -2270,7 +2270,7 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
 
   // Registered before the pick, same reason as EXTR09-E2E-01's own waiter: the upload can
   // resolve before an awaited setInputFiles returns. AC-5 below compares the filed invoice's
@@ -2549,7 +2549,7 @@ async function runDocumentsIn(
     'an earlier run on this page has not routed yet',
   ).toHaveCount(0, { timeout: 60_000 })
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
   await page.getByRole('button', { name: 'Extract invoices' }).click()
 
@@ -3447,7 +3447,7 @@ async function settleOneDocument(
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   // Registered before the pick, same reason as EXTR09-E2E-01's own waiter: the upload can
   // resolve before an awaited setInputFiles returns.
   const documentPost = page.waitForResponse(

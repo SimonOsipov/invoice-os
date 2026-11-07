@@ -22,7 +22,7 @@ afterEach(cleanup)
 // nav is NOT called, which needs a real spy on a real field to be worth anything.
 type HeaderCtx = Pick<
   PlatformCtx,
-  'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav' | 'setInvoiceQuery' | 'searchInvoices' | 'invoiceQuery'
+  'view' | 'sandbox' | 'setSandbox' | 'nav' | 'setInvoiceQuery' | 'searchInvoices' | 'invoiceQuery'
 > & {
   active: Pick<PlatformCtx['active'], 'initials'>
 }
@@ -30,7 +30,6 @@ type HeaderCtx = Pick<
 function headerCtx(over: {
   sandbox: boolean
   setSandbox?: () => void
-  openCreate?: () => void
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
   searchInvoices?: (q: string) => void
@@ -42,7 +41,6 @@ function headerCtx(over: {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
     view: over.view ?? 'dashboard',
-    openCreate: over.openCreate ?? (() => {}),
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
     nav: over.nav ?? vi.fn(),
@@ -56,7 +54,6 @@ function headerCtx(over: {
 // Same accessible names the Playwright spec locates by. RTL matches `name` as an exact
 // full string where Playwright matches a substring, so green here means green there.
 const sandboxSeg = () => screen.getByRole('button', { name: 'SANDBOX' })
-const newInvoiceBtn = () => screen.getByRole('button', { name: 'New invoice' })
 const liveSeg = () => screen.getByTestId('env-pill-live')
 
 describe('Header environment pill', () => {
@@ -100,14 +97,14 @@ describe('Header environment pill', () => {
     expect(document.activeElement).not.toBe(live)
   })
 
-  it('Tab from SANDBOX skips LIVE and lands on New invoice', async () => {
+  it('Tab from SANDBOX skips LIVE and leaves the switch', async () => {
     render(<Header ctx={headerCtx({ sandbox: true })} />)
     sandboxSeg().focus()
 
     await userEvent.setup().tab()
 
     expect(document.activeElement).not.toBe(liveSeg())
-    expect(document.activeElement).toBe(newInvoiceBtn())
+    expect(screen.getByTestId('env-pill').contains(document.activeElement)).toBe(false)
   })
 
   it('aria-pressed tracks the mode on both segments', () => {
@@ -579,7 +576,7 @@ describe('HD-07 the environment colour appears only on the track border and the 
   })
 })
 
-describe('HD-08 the switch and the CTA behave as before', () => {
+describe('HD-08 the switch behaves as before; the header has no create control', () => {
   it('clicking SANDBOX in live mode selects sandbox exactly once', async () => {
     const setSandbox = vi.fn()
     render(<Header ctx={headerCtx({ sandbox: false, setSandbox })} />)
@@ -590,21 +587,27 @@ describe('HD-08 the switch and the CTA behave as before', () => {
     expect(setSandbox).toHaveBeenCalledWith(true)
   })
 
-  it('New invoice opens the create flow and keeps the v2 primary button classes with no inline fill or filter', async () => {
-    const openCreate = vi.fn()
-    const { container } = render(<Header ctx={headerCtx({ sandbox: true, openCreate })} />)
+  it('header_noViewDrawsANewInvoiceButton', () => {
+    const views = viewMembers(readSrc('src/types.ts'))
+    expect(views.length).toBeGreaterThan(0)
+    for (const view of views) {
+      const { unmount } = render(<Header ctx={headerCtx({ sandbox: true, view: view as View })} />)
+      expect(screen.getByRole('button', { name: 'SANDBOX' }), `control: ${view} renders the switch`).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /New invoice/ }), view).toBeNull()
+      unmount()
+    }
+  })
 
-    await userEvent.setup().click(newInvoiceBtn())
+  it('header_ssrMarkupHasNoPrimaryButton', () => {
+    const host = ssr(true)
+    expect(host.querySelectorAll('.v2-btn-primary')).toHaveLength(0)
+    expect(host.querySelectorAll('[data-testid="env-pill"] .pf-btn')).toHaveLength(0)
+    expect(host.querySelectorAll('[data-testid="env-pill"] button'), 'control: both segments render').toHaveLength(2)
+  })
 
-    expect(openCreate).toHaveBeenCalledTimes(1)
-    const cls = newInvoiceBtn().className.split(/\s+/)
-    expect(cls).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-primary', 'pf-btn']))
-    // An inline fill or filter would beat `.asc-app .v2-btn-primary:hover` (cascade).
-    const cta = Array.from(ssr(true).querySelectorAll('button')).find((b) => b.textContent?.includes('New invoice'))
-    const d = decls(cta ?? null)
-    expect(d.get('height'), 'control: the inline declarations are read').toBe('34px')
-    expect(d.has('background')).toBe(false)
-    expect(d.has('filter')).toBe(false)
-    expect(container.querySelectorAll('[data-testid="env-pill"] .pf-btn')).toHaveLength(0)
+  it('header_createViewKeepsTheNewInvoiceCrumb', () => {
+    const { container } = render(<Header ctx={headerCtx({ sandbox: true, view: 'create' })} />)
+    expect(crumbText(container)).toBe('New invoice')
+    expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
   })
 })

@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	StrandedDeleted  = "deleted"
-	StrandedNoHolder = "no holder"
-	BlocksNow        = "now"
-	BlocksLater      = "later"
+	StrandedDeleted     = "deleted"
+	StrandedNoHolder    = "no holder"
+	StrandedOutOfReach  = "out of client reach"
+	StrandedCreatorOnly = "creator only"
+	BlocksNow           = "now"
+	BlocksLater         = "later"
 )
 
 // StrandedRun is an open run on a validated invoice with a pending approval step nobody can decide.

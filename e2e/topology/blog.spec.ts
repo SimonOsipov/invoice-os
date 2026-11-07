@@ -706,11 +706,10 @@ test.describe('blog crawler HTML', () => {
       await new Promise((r) => setTimeout(r, JS_DELAY_MS))
       await route.continue()
     })
-    // A slow outside CDN: the shell's render-blocking font stylesheets outlast the script delay.
-    await page.route('https://fonts.googleapis.com/**', async (route) => {
-      await new Promise((r) => setTimeout(r, 2 * JS_DELAY_MS))
-      await route.continue()
-    })
+    // Stub Google Fonts so a slow CDN cannot stretch the frame window past the script delay.
+    await page.route(/^https:\/\/fonts\.g(oogleapis|static)\.com\//, (route) =>
+      route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+    )
     await page.addInitScript(() => {
       const stats = { frames: 0, present: 0, boxed: 0 }
       ;(window as unknown as { __crawl: typeof stats }).__crawl = stats

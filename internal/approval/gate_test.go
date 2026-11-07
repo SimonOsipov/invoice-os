@@ -1289,3 +1289,29 @@ func TestGateFactsTx_NamedDelegateIsCallerIsDelegate(t *testing.T) {
 		}
 	}
 }
+
+func TestGateFactsTx_CarriesThePendingStepDelegation(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "BUG-118 gate-delegation", "bug118-gate-role")
+	delegate := activeApprover(t, super, f.tenantID)
+	for _, c := range []struct {
+		name     string
+		allow    bool
+		delegate *string
+	}{{"anyone", true, nil}, {"named", true, &delegate}, {"off", false, nil}} {
+		setStepDelegation(t, super, f.stepID, c.allow, c.delegate)
+		gf, err := gateFacts(t, app, f.tenantID, f.invoiceID, delegate)
+		if err != nil {
+			t.Fatalf("%s: GateFactsTx: %v", c.name, err)
+		}
+		if gf.PendingAllowDelegation != c.allow || (gf.PendingDelegateUserID == nil) != (c.delegate == nil) ||
+			(c.delegate != nil && *gf.PendingDelegateUserID != *c.delegate) {
+			t.Errorf("%s: pending delegation = %t, %v, want %t, %v", c.name, gf.PendingAllowDelegation, gf.PendingDelegateUserID, c.allow, c.delegate)
+		}
+	}
+	unarmed := seedInvoice(t, super, f.tenantID, f.entityID, "bug118-no-run")
+	gf, err := gateFacts(t, app, f.tenantID, unarmed, delegate)
+	if err != nil || gf.PendingAllowDelegation || gf.PendingDelegateUserID != nil {
+		t.Errorf("no pending step: %+v, %v, want zero delegation", gf, err)
+	}
+}

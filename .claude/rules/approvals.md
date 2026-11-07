@@ -42,6 +42,7 @@ paths:
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role or is the run step's delegate (`DelegateMayDecide`).
 - Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
+- Add the creator refusal's second sentence only when no other role holder and no other delegate who can decide exist (`CreatorStanding.OtherDelegate`).
 - Let the creator reject on the two axes.
 - Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
 - Count role holders only in `strandedSQL`, the role staffing and delete refusals, `pending_holder_warn` and `CreatorStanding.OtherRoleHolder`. A delegate is not counted (`TestStranded_ADelegateDoesNotCountAsADecider`).

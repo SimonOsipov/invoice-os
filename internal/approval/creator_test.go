@@ -67,33 +67,66 @@ func TestCreatorStanding_WhoCounts(t *testing.T) {
 		{"invited reviewer holding the role", memberSpec{role: "reviewer", status: "invited"}, true, false, false, false, false},
 		{"nobody but the caller", memberSpec{}, false, false, false, false, false},
 	}
+	// How the step delegates: who it names (none, the member, a different member, the creator).
+	delegations := []struct {
+		name     string
+		allow    bool
+		delegate string // "", "member", "different", "creator"
+	}{
+		{"anyone", true, ""},
+		{"names the member", true, "member"},
+		{"names a different member", true, "different"},
+		{"off, names the member", false, "member"},
+		{"names the creator", true, "creator"},
+	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			w := newStandingWorld(t, super, "APPR-17 who-counts")
-			if c.spec.role != "" {
-				spec := c.spec
-				if c.holds {
-					spec.roleID = w.roleID
+		for _, d := range delegations {
+			t.Run(c.name+"/"+d.name, func(t *testing.T) {
+				w := newStandingWorld(t, super, "APPR-17 who-counts")
+				member := ""
+				if c.spec.role != "" {
+					spec := c.spec
+					if c.holds {
+						spec.roleID = w.roleID
+					}
+					if c.limitToA {
+						spec.entityIDs = []string{w.entA}
+					}
+					if c.limitToB {
+						spec.entityIDs = []string{w.entB}
+					}
+					member = seedMemberOf(t, super, w.tenantID, spec)
 				}
-				if c.limitToA {
-					spec.entityIDs = []string{w.entA}
+				probe := w.probe()
+				probe.AllowDelegation = d.allow
+				switch d.delegate {
+				case "member":
+					if member == "" {
+						t.Skip("no member to name")
+					}
+					probe.DelegateUserID = ptr(member)
+				case "different":
+					probe.DelegateUserID = ptr(seedMemberOf(t, super, w.tenantID, memberSpec{role: "preparer"}))
+				case "creator":
+					probe.DelegateUserID = ptr(w.creator)
 				}
-				if c.limitToB {
-					spec.entityIDs = []string{w.entB}
+				// The member counts as a delegate only when it is an other approver and the step lets it decide.
+				wantDelegate := c.wantOther && DelegateMayDecide(d.allow, probe.DelegateUserID, member)
+				got := readStanding(t, app, w.tenantID, w.creator, probe)[w.invoice]
+				if !got.IsCreator {
+					t.Fatalf("IsCreator = false, want true: the first history row's actor is the caller")
 				}
-				seedMemberOf(t, super, w.tenantID, spec)
-			}
-			got := readStanding(t, app, w.tenantID, w.creator, w.probe())[w.invoice]
-			if !got.IsCreator {
-				t.Fatalf("IsCreator = false, want true: the first history row's actor is the caller")
-			}
-			if got.OtherApprover != c.wantOther {
-				t.Errorf("OtherApprover = %t, want %t", got.OtherApprover, c.wantOther)
-			}
-			if got.OtherRoleHolder != c.wantHolds {
-				t.Errorf("OtherRoleHolder = %t, want %t", got.OtherRoleHolder, c.wantHolds)
-			}
-		})
+				if got.OtherApprover != c.wantOther {
+					t.Errorf("OtherApprover = %t, want %t", got.OtherApprover, c.wantOther)
+				}
+				if got.OtherRoleHolder != c.wantHolds {
+					t.Errorf("OtherRoleHolder = %t, want %t", got.OtherRoleHolder, c.wantHolds)
+				}
+				if got.OtherDelegate != wantDelegate {
+					t.Errorf("OtherDelegate = %t, want %t", got.OtherDelegate, wantDelegate)
+				}
+			})
+		}
 	}
 }
 
@@ -174,7 +207,7 @@ func TestCreatorStanding_NonCreatorStopsAfterOneStatement(t *testing.T) {
 	seedHistory(t, super, w.tenantID, bySystem, nil, "system")
 	noRow := seedInvoice(t, super, w.tenantID, w.entA, "one-stmt-no-row")
 	key := ptr("standing-role")
-	page := []CreatorProbe{{byOther, key}, {bySystem, key}, {noRow, key}}
+	page := []CreatorProbe{{InvoiceID: byOther, RoleKey: key}, {InvoiceID: bySystem, RoleKey: key}, {InvoiceID: noRow, RoleKey: key}}
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
@@ -208,7 +241,7 @@ func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
 	super, app := dbTestPools(t)
 	w := newStandingWorld(t, super, "APPR-17 page-scope")
 	seedWorkflowRole(t, super, w.tenantID, "unheld-role", "Unheld role")
-	seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entA}, roleID: w.roleID})
+	limited := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entA}, roleID: w.roleID})
 
 	other := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
 	byOther := seedInvoice(t, super, w.tenantID, w.entA, "page-by-other")
@@ -217,6 +250,10 @@ func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
 	seedHistory(t, super, w.tenantID, unheldOnA, nil, w.creator)
 	onB := seedInvoice(t, super, w.tenantID, w.entB, "page-on-b")
 	seedHistory(t, super, w.tenantID, onB, nil, w.creator)
+	namedOnA := seedInvoice(t, super, w.tenantID, w.entA, "page-named-on-a")
+	seedHistory(t, super, w.tenantID, namedOnA, nil, w.creator)
+	namedSuspended := seedInvoice(t, super, w.tenantID, w.entA, "page-named-suspended")
+	seedHistory(t, super, w.tenantID, namedSuspended, nil, w.creator)
 	// The all-clients reviewer `other` reaches B, so drop it from the count by suspending it.
 	if _, err := super.Exec(context.Background(),
 		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, other); err != nil {
@@ -225,9 +262,13 @@ func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
 
 	held, unheld := ptr("standing-role"), ptr("unheld-role")
 	got := readStanding(t, app, w.tenantID, w.creator,
-		CreatorProbe{byOther, unheld}, CreatorProbe{w.invoice, held}, CreatorProbe{unheldOnA, unheld}, CreatorProbe{onB, held})
-	if len(got) != 3 {
-		t.Fatalf("standings = %d, want 3 (the creator's invoices only): %+v", len(got), got)
+		CreatorProbe{InvoiceID: byOther, RoleKey: unheld}, CreatorProbe{InvoiceID: w.invoice, RoleKey: held},
+		CreatorProbe{InvoiceID: unheldOnA, RoleKey: unheld, AllowDelegation: true},
+		CreatorProbe{InvoiceID: onB, RoleKey: held, AllowDelegation: true},
+		CreatorProbe{InvoiceID: namedOnA, RoleKey: unheld, AllowDelegation: true, DelegateUserID: &limited},
+		CreatorProbe{InvoiceID: namedSuspended, RoleKey: unheld, AllowDelegation: true, DelegateUserID: &other})
+	if len(got) != 5 {
+		t.Fatalf("standings = %d, want 5 (the creator's invoices only): %+v", len(got), got)
 	}
 	if got[byOther].IsCreator {
 		t.Error("an invoice created by someone else reads IsCreator")
@@ -235,11 +276,57 @@ func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
 	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}); got[w.invoice] != want {
 		t.Errorf("client A, key held by the limited reviewer = %+v, want %+v", got[w.invoice], want)
 	}
-	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: false}); got[unheldOnA] != want {
-		t.Errorf("client A, key nobody holds = %+v, want %+v", got[unheldOnA], want)
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: false, OtherDelegate: true}); got[unheldOnA] != want {
+		t.Errorf("client A, key nobody holds, step open to anyone = %+v, want %+v", got[unheldOnA], want)
 	}
 	if want := (CreatorStanding{IsCreator: true}); got[onB] != want {
 		t.Errorf("client B, only a reviewer limited to A = %+v, want %+v", got[onB], want)
+	}
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}); got[namedOnA] != want {
+		t.Errorf("client A, step names the limited reviewer = %+v, want %+v", got[namedOnA], want)
+	}
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true}); got[namedSuspended] != want {
+		t.Errorf("client A, step names a suspended reviewer = %+v, want %+v", got[namedSuspended], want)
+	}
+}
+
+func TestCreatorStanding_DelegateAgreesWithDelegateMayDecide(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newStandingWorld(t, super, "BUG-118 agrees")
+	other := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+	stranger := uuid.NewString()
+	for _, allow := range []bool{false, true} {
+		for _, delegate := range []*string{nil, &other, &stranger, &w.creator} {
+			p := w.probe()
+			p.AllowDelegation, p.DelegateUserID = allow, delegate
+			got := readStanding(t, app, w.tenantID, w.creator, p)[w.invoice]
+			if want := DelegateMayDecide(allow, delegate, other); got.OtherDelegate != want {
+				t.Errorf("allow=%t delegate=%v: OtherDelegate = %t, DelegateMayDecide = %t", allow, delegate, got.OtherDelegate, want)
+			}
+		}
+	}
+}
+
+func TestCreatorStanding_Refusal(t *testing.T) {
+	both := CreatorRefusedReason + " " + CreatorNoRoleHolderReason
+	for _, c := range []struct {
+		name        string
+		s           CreatorStanding
+		want        string
+		wantRefused bool
+	}{
+		{"not the creator", CreatorStanding{OtherApprover: true}, "", false},
+		{"creator, no other approver", CreatorStanding{IsCreator: true}, "", false},
+		{"holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, CreatorRefusedReason, true},
+		{"delegate only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}, CreatorRefusedReason, true},
+		{"neither", CreatorStanding{IsCreator: true, OtherApprover: true}, both, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, refused := c.s.Refusal()
+			if got != c.want || refused != c.wantRefused {
+				t.Errorf("Refusal() = %q, %t, want %q, %t", got, refused, c.want, c.wantRefused)
+			}
+		})
 	}
 }
 
@@ -254,7 +341,7 @@ func TestCreatorStanding_AnotherTenantsApproversAndInvoicesStayInvisible(t *test
 	foreign := seedInvoice(t, super, o.tenantID, o.entA, "xt-foreign")
 	seedHistory(t, super, o.tenantID, foreign, nil, w.creator)
 
-	got := readStanding(t, app, w.tenantID, w.creator, w.probe(), CreatorProbe{foreign, ptr("standing-role")})
+	got := readStanding(t, app, w.tenantID, w.creator, w.probe(), CreatorProbe{InvoiceID: foreign, RoleKey: ptr("standing-role")})
 	if !got[w.invoice].IsCreator {
 		t.Fatalf("home invoice standing = %+v, want IsCreator", got[w.invoice])
 	}

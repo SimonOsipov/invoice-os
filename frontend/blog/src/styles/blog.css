@@ -34,7 +34,6 @@ input::placeholder { color: var(--muted-foreground); }
 .blog-row:hover { background: var(--card) !important; }
 .blog-chip:hover { background: var(--muted) !important; }
 .blog-clear:hover { color: var(--ink) !important; }
-.blog-cookie-choices:hover { color: var(--action) !important; }
 .blog-field:focus { border-color: var(--ring) !important; box-shadow: 0 0 0 2px var(--ring); }
 
 @media (max-width: 767px) {

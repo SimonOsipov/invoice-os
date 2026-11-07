@@ -234,12 +234,16 @@ export function scanBuildInput(files: Readonly<Record<string, string>>, needles:
   return hits
 }
 
-/** Every v2 stylesheet the landing loads (the relative `@import`s of `v2/styles.css`), comment-stripped, keyed relative to the v2 dir. */
+/** Every v2 stylesheet the landing loads (the relative `@import`s of `v2/styles.css` and the v2 sheets `main.tsx` imports), comment-stripped, keyed relative to the v2 dir. */
 export function readV2Css(): Record<string, string> {
   const out: Record<string, string> = { 'styles.css': stripSource('styles.css', readFileSync(join(V2_DIR, 'styles.css'), 'utf8')) }
   for (const m of out['styles.css'].matchAll(/@import\s+url\(\s*['"]?(\.?\/?[^'")]+\.css)['"]?\s*\)/g)) {
     const key = normalize(m[1]).split('\\').join('/')
     out[key] = stripSource(key, readFileSync(join(V2_DIR, key), 'utf8'))
+  }
+  const main = readFileSync(join(LANDING_SRC, 'main.tsx'), 'utf8')
+  for (const m of main.matchAll(/^import\s+'@invoice-os\/design-tokens\/v2\/([\w./-]+\.css)'/gm)) {
+    if (m[1] !== 'styles.css') out[m[1]] = stripSource(m[1], readFileSync(join(V2_DIR, m[1]), 'utf8'))
   }
   return out
 }

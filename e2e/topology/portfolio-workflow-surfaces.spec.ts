@@ -602,7 +602,7 @@ test('PW-06 Workflows list at 1440: heading, policy row, pill, standing, buttons
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-07 Workflows list row and intro fit at every wide width and at 860px', async ({ page }, testInfo) => {
+test('PW-07 Workflows list row and count fit at every wide width and at 860px', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openWorkflows(page)
@@ -617,7 +617,8 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
     edit: row.getByRole('button', { name: 'Edit', exact: true }),
     delete: row.getByRole('button', { name: /^Delete / }),
     count: screen(page).getByText(/^\d+ POLICIES$/),
-    intro: screen(page).getByText(/^Each policy decides who signs off/),
+    header: h1Of(page, 'Approval policies').locator('xpath=../..'),
+    newPolicy: screen(page).getByRole('button', { name: 'New policy' }),
   }
   const parts = ['position', 'summary', 'standing', 'moveUp', 'moveDown', 'edit', 'delete']
   const read = async () => {
@@ -630,8 +631,9 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
   }
   const measured = await sweepWide(page, 'Workflows list', async () => {
     const { rects, problems } = await read()
-    noOverlap(rects, ['count', 'intro'], problems)
-    if (rects.count && rects.intro && Math.abs(centreY(rects.count) - centreY(rects.intro)) > 1) problems.push('the count and the intro do not share a vertical centre')
+    const { count, header, newPolicy } = rects
+    if (count && header && count.y < header.y + header.height - 1) problems.push('the count starts above the header row')
+    if (count && newPolicy && Math.abs(count.x + count.width - (newPolicy.x + newPolicy.width)) > 1) problems.push('the count and New policy differ in right edge')
     return { problems, rects }
   })
   const entry = page.viewportSize()
@@ -641,6 +643,10 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
     await expect
       .poll(async () => {
         const { rects, problems } = await read()
+        for (const k of ['count', 'newPolicy']) {
+          const r = rects[k]
+          if (r && (r.x < 0 || r.x + r.width > 860)) problems.push(`${k} is outside the 860px viewport`)
+        }
         narrow = rects
         return problems
       }, { message: 'Workflows list row at 860px', timeout: 10_000 })
@@ -956,9 +962,11 @@ const STATE_CASES: StateCase[] = [
   { name: 'Clients empty', screen: 'Clients', kind: 'empty', match: 'clients', copy: 'No entities yet', reshape: (b) => ({ ...withTotal(b, 0), entities: [] }) },
   { name: 'Customers loading', screen: 'Customers', kind: 'loading', match: 'customers', copy: 'Loading customers…' },
   { name: 'Customers error', screen: 'Customers', kind: 'error', match: 'customers', copy: 'Something went wrong' },
+  { name: 'Customers empty', screen: 'Customers', kind: 'empty', match: 'customers', copy: /^No (customers yet|active customers)$/, reshape: (b) => ({ ...withTotal(b, 0), customers: [] }) },
   { name: 'Customers truncated', screen: 'Customers', kind: 'truncated', match: 'workspaceInvoices', copy: CUSTOMERS_TRUNCATED_COPY, copyTestId: 'customers-truncated-notice', reshape: (b) => withTotal(b, TRUNCATING_TOTAL) },
   { name: 'Reports loading', screen: 'Reports', kind: 'loading', match: 'invoices', copy: 'Loading reports…' },
   { name: 'Reports error', screen: 'Reports', kind: 'error', match: 'invoices', copy: 'Something went wrong' },
+  { name: 'Reports empty', screen: 'Reports', kind: 'empty', match: 'invoices', copy: 'No data to report yet', reshape: (b) => ({ ...withTotal(b, 0), invoices: [] }) },
   { name: 'Reports truncated', screen: 'Reports', kind: 'truncated', match: 'invoices', copy: TRUNCATED_COPY, copyTestId: 'reports-truncated-notice', reshape: (b) => withTotal(b, TRUNCATING_TOTAL) },
   { name: 'Reports rollup loading', screen: 'Reports', kind: 'loading', match: 'rollup', copy: 'Loading validation summary…' },
   { name: 'Reports rollup error', screen: 'Reports', kind: 'error', match: 'rollup', copy: 'Something went wrong' },
@@ -1061,6 +1069,26 @@ async function readWorkflowsEmpty(page: Page): Promise<Record<string, unknown>> 
   return { maxWidth, rects }
 }
 
+// (fixture check) The Customers and Reports empty cards carry no button, and the message clears the card bottom as far as the icon clears the top.
+async function readButtonlessEmpty(page: Page, copy: string | RegExp): Promise<Record<string, unknown>> {
+  const title = page.getByText(copy, typeof copy === 'string' ? { exact: true } : undefined)
+  const card = title.locator('xpath=..')
+  const icon = card.locator('> span').first()
+  const message = card.locator('> p')
+  expect(await card.getByRole('button').count(), 'the empty card holds no button').toBe(0)
+  expect(await main(page).getByRole('button', { name: /New invoice/ }).count(), 'the page has no New invoice button').toBe(0)
+  return { sweep: await sweepWide(page, 'buttonless empty card', async () => {
+    const { rects, problems } = await boxes({ card, icon, message })
+    inside(rects, 'card', ['message'], problems)
+    if (rects.card && rects.icon && rects.message) {
+      const top = rects.icon.y - rects.card.y
+      const bottom = rects.card.y + rects.card.height - (rects.message.y + rects.message.height)
+      if (Math.abs(top - bottom) > 1) problems.push(`the message clears the card bottom by ${bottom}px, the icon clears the top by ${top}px`)
+    }
+    return { problems, rects }
+  }) }
+}
+
 for (const c of STATE_CASES) {
   test(`PW-10 ${c.name}`, async ({ page }, testInfo) => {
     test.setTimeout(90_000)
@@ -1108,7 +1136,9 @@ for (const c of STATE_CASES) {
           ? await readRollupState(page, c.kind)
           : c.screen === 'Workflows' && c.kind === 'empty'
             ? await readWorkflowsEmpty(page)
-            : {}
+            : c.kind === 'empty' && (c.screen === 'Customers' || c.screen === 'Reports')
+              ? await readButtonlessEmpty(page, c.copy)
+              : {}
     if (c.screen !== 'Workflows') {
       await expect(page.getByTestId('company-switcher'), `${c.name}: the stub reached the shell, so the switcher lost the entity`).toContainText(entity.name)
     }

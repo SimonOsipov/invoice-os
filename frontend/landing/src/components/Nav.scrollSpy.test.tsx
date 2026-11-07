@@ -29,7 +29,7 @@ const SECTIONS: { id: string; top: number }[] = [
   { id: 'problem', top: 10 }, // last section crossed at threshold 87 — the expected winner
   { id: 'solution', top: 500 },
   { id: 'platform', top: 900 },
-  { id: 'coverage', top: 1300 },
+  { id: 'intelligence', top: 1300 },
   { id: 'solutions', top: 1700 },
   { id: 'integrations', top: 2100 },
   { id: 'api', top: 2500 },
@@ -124,7 +124,7 @@ describe('Nav scroll-spy follows --header-h across the breakpoint', () => {
 
 describe('NV-11 the scroll-spy marks each of the five nav sections current, and clears in an unlinked one', () => {
   // Page order; the last section whose top has crossed the header is the one the spy reports.
-  const ORDER = ['top', 'problem', 'solution', 'platform', 'coverage', 'solutions', 'integrations', 'api']
+  const ORDER = ['top', 'problem', 'solution', 'platform', 'intelligence', 'solutions', 'integrations', 'api']
   const crossed = (id: string) => Object.fromEntries(ORDER.map((s, i) => [s, (i - ORDER.indexOf(id)) * 900 + (s === id ? 10 : 0)]))
   // A null href marks a section the nav does not link: no link is current there.
   const cases: [string, string, string | null][] = [
@@ -133,7 +133,7 @@ describe('NV-11 the scroll-spy marks each of the five nav sections current, and 
     ['Platform', 'platform', '#platform'],
     ['Solutions', 'solutions', '#solutions'],
     ['Integrations', 'integrations', '#integrations'],
-    ['Coverage', 'coverage', null],
+    ['Intelligence', 'intelligence', null],
     ['API', 'api', null],
   ]
 

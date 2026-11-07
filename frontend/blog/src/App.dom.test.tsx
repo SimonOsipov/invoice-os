@@ -53,6 +53,11 @@ describe('shell', () => {
     const aside = q('aside')
     expect(aside.textContent).toContain('BLOG')
     expect(aside.textContent).toContain('CATEGORIES')
+    const marks = aside.querySelectorAll('img')
+    expect(marks.length, 'one brand mark in the sidebar').toBe(1)
+    expect(aside.classList.contains('asc-dark'), 'the ring rule needs the dark band').toBe(true)
+    expect(marks[0].classList.contains('asc-mark')).toBe(true)
+    expect([marks[0].getAttribute('width'), marks[0].getAttribute('height'), marks[0].style.borderRadius]).toEqual(['28', '28', ''])
     expect(byText('aside button', 'Subscribe')).toBeDefined()
     expect(byText('aside button', 'All posts')).toBeDefined()
     expect(byText('aside a', 'Book the Demo')).toBeDefined()
@@ -145,6 +150,45 @@ describe('shell', () => {
       expect(allPosts().style.background, path).toBe('transparent')
       act(() => root.unmount())
       container.remove()
+    }
+    mount('/')
+  })
+})
+
+describe('sidebar cookie row', () => {
+  const row = () => byText('aside button', 'Cookie choices')
+  const remount = () => {
+    act(() => root.unmount())
+    container.remove()
+  }
+
+  it('Sidebar_cookieRowIsAPinnedRowWithTheGlyph', () => {
+    mount('/')
+    expect(row().className).toBe('blog-cookie-choices')
+    expect(row().firstElementChild!.querySelector('svg')).not.toBeNull()
+    expect(row().closest('nav')).toBeNull()
+  })
+
+  it('Sidebar_cookieRowIsNeverActive', () => {
+    for (const path of ['/', '/category/x']) {
+      mount(path)
+      expect(row().hasAttribute('aria-current'), path).toBe(false)
+      remount()
+    }
+    mount('/')
+  })
+
+  it('Sidebar_cookieRowSitsBetweenNavAndFooter', async () => {
+    for (const ready of [true, false]) {
+      if (ready) await mountReady('/')
+      else mount('/')
+      const block = q('aside nav').nextElementSibling!
+      expect(block.contains(row()), `ready=${ready}`).toBe(true)
+      const footer = block.nextElementSibling!
+      expect(footer.textContent).toBe('Book the Demo')
+      expect(footer.querySelector('button')).toBeNull()
+      expect(footer.nextElementSibling).toBeNull()
+      remount()
     }
     mount('/')
   })

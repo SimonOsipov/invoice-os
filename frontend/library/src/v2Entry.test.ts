@@ -66,11 +66,13 @@ const keyframes = (css: string) =>
   )
 
 describe('library entry', () => {
-  it('VE-01 the glyph set is the 21 glyphs the prototype draws', () => {
+  it('VE-01 the glyph set is the 22 glyphs (21 from the prototype plus cookie)', () => {
     expect(Object.keys(GLYPHS).sort()).toEqual(
-      ('archive arrow-right bell building-2 chart-column chevron-left chevron-right circle-check file-search ' +
+      ('archive arrow-right bell building-2 chart-column chevron-left chevron-right circle-check cookie file-search ' +
         'file-text layout-dashboard pen-tool play plug rotate-cw send shield-check triangle-alert users workflow x').split(' '),
     )
+    expect(GLYPHS.cookie).toHaveLength(6)
+    for (const d of GLYPHS.cookie) expect(d.length).toBeGreaterThan(0)
   })
 
   it('VE-02 every group icon is a glyph', () => {
@@ -159,6 +161,7 @@ describe('library entry', () => {
       './instrument',
       '@invoice-os/design-tokens/v2/styles.css',
       '@invoice-os/design-tokens/v2/app-layer.css',
+      '@invoice-os/design-tokens/v2/mark.css',
       './styles/library.css',
     ])
     expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<CrashBoundary\b[^>]*>[\s\S]*?<\/CrashBoundary>\s*<\/StrictMode>/)

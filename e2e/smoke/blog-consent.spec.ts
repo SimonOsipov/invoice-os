@@ -45,10 +45,10 @@ async function rectOf(locator: Locator, label: string): Promise<Rect> {
   return box!
 }
 
-// The footer is the Cookie choices button's parent; the link must fill its content box.
+// The footer is the Book the Demo link's parent; the link must fill its content box.
 async function expectDemoFillsFooter(aside: Locator): Promise<void> {
   const demo = aside.getByRole('link', { name: 'Book the Demo' })
-  const footer = aside.getByRole('button', { name: 'Cookie choices' }).locator('xpath=..')
+  const footer = demo.locator('xpath=..')
   const d = await rectOf(demo, 'Book the Demo')
   const f = await rectOf(footer, 'the sidebar footer')
   const pad = await footer.evaluate((el) => {
@@ -184,18 +184,28 @@ for (const width of WIDE_WIDTHS) {
     expect(h.y + h.height, `the band heading (bottom ${h.y + h.height}) sits under the notice (top ${n.y})`).toBeLessThanOrEqual(n.y + SLACK_PX)
   })
 
-  test(`blog consent: Cookie choices sits in the sidebar footer (${width})`, async ({ page }) => {
+  test(`blog consent: Cookie choices is a pinned row above the divider (${width})`, async ({ page }) => {
     await setWidth(page, width)
     await seedConsent(page, true)
     await openBlog(page, '/', false)
     const aside = page.locator('aside')
     const control = aside.getByRole('button', { name: 'Cookie choices' })
+    await expect(aside.locator('nav').getByRole('button', { name: 'Cookie choices' }), 'the row is inside the scrolling nav').toHaveCount(0)
+    const nav = await rectOf(aside.locator('nav'), 'the nav')
     const c = await rectOf(control, 'Cookie choices')
     expect(enclosesRect(await rectOf(aside, 'the sidebar'), c, SLACK_PX), 'Cookie choices is outside the sidebar').toBe(true)
+    expect(c.y, 'Cookie choices starts above the nav bottom').toBeGreaterThanOrEqual(nav.y + nav.height - SLACK_PX)
+    expect(rectsOverlap(c, nav), 'Cookie choices overlaps the nav').toBe(false)
 
-    const home = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
-    expect(home.y + home.height, 'Book the Demo is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
-    expect(rectsOverlap(home, c), 'Cookie choices overlaps Book the Demo').toBe(false)
+    const first = await rectOf(aside.locator('nav').getByRole('button', { name: /^All posts/ }), 'All posts')
+    expect(Math.abs(c.x - first.x), 'the row left edge differs from All posts').toBeLessThanOrEqual(SLACK_PX)
+    expect(Math.abs(c.width - first.width), 'the row width differs from All posts').toBeLessThanOrEqual(SLACK_PX)
+
+    const demo = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
+    const footer = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }).locator('xpath=..'), 'the sidebar footer')
+    expect(c.y + c.height, 'Cookie choices is below the footer top').toBeLessThanOrEqual(footer.y + SLACK_PX)
+    expect(demo.y, 'Book the Demo is not below Cookie choices').toBeGreaterThanOrEqual(c.y + c.height - SLACK_PX)
+    expect(rectsOverlap(demo, c), 'Cookie choices overlaps Book the Demo').toBe(false)
     await expectDemoFillsFooter(aside)
 
     await control.click()
@@ -205,18 +215,46 @@ for (const width of WIDE_WIDTHS) {
   })
 }
 
+test('blog consent: Enter on the Cookie choices row opens the notice', async ({ page }) => {
+  await setWidth(page, WIDE_WIDTHS[0])
+  await seedConsent(page, true)
+  await openBlog(page, '/', false)
+  await page.locator('aside').getByRole('button', { name: 'Cookie choices' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(notice(page).locator('.cn-setting')).toBeVisible()
+})
+
+test('blog consent: Cookie choices stays in view on a short viewport', async ({ page }) => {
+  const width = WIDE_WIDTHS[0]
+  await page.setViewportSize({ width, height: 600 })
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+  await seedConsent(page, true)
+  await openBlog(page, '/', false)
+  const aside = page.locator('aside')
+  // Seeded nav may fit at 600px, so assert the structure that keeps the row pinned instead of overflow.
+  await expect(aside.locator('nav'), 'the sidebar has one nav').toHaveCount(1)
+  await expect(aside.locator('nav').getByRole('button', { name: 'Cookie choices' }), 'the row is inside the scrolling nav').toHaveCount(0)
+  const nav = await rectOf(aside.locator('nav'), 'the nav')
+  const c = await rectOf(aside.getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
+  expect(c.y, 'Cookie choices starts above the nav bottom').toBeGreaterThanOrEqual(nav.y + nav.height - SLACK_PX)
+  expect(enclosesRect({ x: 0, y: 0, width, height: 600 }, c, SLACK_PX), 'Cookie choices leaves the 600px viewport').toBe(true)
+})
+
 for (const width of PHONE_WIDTHS) {
-  test(`blog consent: Book the Demo sits in the stacked sidebar footer (${width})`, async ({ page }) => {
+  test(`blog consent: Cookie choices sits below the nav strip and Book the Demo below it (${width})`, async ({ page }) => {
     await setWidth(page, width)
     await seedConsent(page, true)
     await openBlog(page, '/', false)
     const aside = page.locator('aside')
+    await expect(aside.locator('nav').getByRole('button', { name: 'Cookie choices' }), 'the row is inside the nav strip').toHaveCount(0)
     const sidebar = await rectOf(aside, 'the sidebar')
+    const nav = await rectOf(aside.locator('nav'), 'the nav')
     const demo = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
     const c = await rectOf(aside.getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
     expect(enclosesRect(sidebar, demo, SLACK_PX), 'Book the Demo is outside the sidebar').toBe(true)
     expect(enclosesRect(sidebar, c, SLACK_PX), 'Cookie choices is outside the sidebar').toBe(true)
-    expect(demo.y + demo.height, 'Book the Demo is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
+    expect(c.y, 'Cookie choices starts above the nav bottom').toBeGreaterThanOrEqual(nav.y + nav.height - SLACK_PX)
+    expect(demo.y, 'Book the Demo is not below Cookie choices').toBeGreaterThanOrEqual(c.y + c.height - SLACK_PX)
     expect(rectsOverlap(demo, c), 'Cookie choices overlaps Book the Demo').toBe(false)
     await expectDemoFillsFooter(aside)
   })
@@ -263,7 +301,7 @@ async function consentCookies(page: Page) {
 
 async function openWww(page: Page): Promise<void> {
   await page.goto(`${WWW}/`)
-  await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Nigeria moves. Compliance keeps up.' })).toBeVisible()
 }
 
 async function openRoutedBlog(page: Page): Promise<void> {

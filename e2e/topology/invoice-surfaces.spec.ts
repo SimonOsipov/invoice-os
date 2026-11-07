@@ -62,7 +62,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
-import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
+import { browserToken, openNewInvoice, signInAs, signInAtFrontDoor } from '../personaSession'
 import { e2eMember, ensureMember } from '../realAccounts'
 import { nightlyTarget } from '../targets'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
@@ -104,8 +104,8 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
 
 // goToInvoices()/openInvoiceRow(): the two navigation seams every scenario
 // below shares. The sidebar's "Invoices" nav button (glyphs.tsx's
-// NAV_INVOICES) is matched with a case-sensitive /Invoices/ so the header's
-// lowercase "New invoice" CTA can never collide, and is scoped to the sidebar
+// NAV_INVOICES) is matched with a case-sensitive /Invoices/ so the Invoices page's
+// lowercase "New invoice" button can never collide, and is scoped to the sidebar
 // <nav> (personaSession.ts:69's own selector) so CreateFlow.tsx's review-step
 // `← Invoices` exit cannot either -- a caller arriving straight off an import
 // has both on screen. Substring, not exact: the nav button's accessible name
@@ -1264,8 +1264,7 @@ test('register empty state: a filter that matches nothing says so, and offers th
   // The unfiltered zero-state must not be what rendered: it owns "No invoices yet" and its
   // own page-level create button (InvoicesList.tsx:442-446), and neither is true here.
   await expect(page.getByTestId('invoices-empty'), 'the unfiltered zero-state is false here -- this register is not empty').toHaveCount(0)
-  // Scoped, never page-wide: Header.tsx:136 renders a PERSISTENT create CTA on every screen,
-  // so a page-wide absence claim is false against correct product behaviour.
+  // Scoped, never page-wide: the Invoices page header always draws its own New invoice.
   await expect(emptyFiltered).not.toContainText('New invoice')
 
   // Core AC-6's way back.
@@ -1590,7 +1589,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // 1. Import the mixed batch for the fresh entity -- import-wizard.spec.ts's own proven
   // E2E-04 recipe (select the fresh entity, Read columns, click-map invoice_number +
   // subtotal, Import), reused verbatim rather than re-derived.
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   // [import-upload-unify] no more in-page entity <select> -- selectEntity() above
   // (workspace switcher) already made `entity` the active selection CreateUpload's
   // entityId mirrors, so there is nothing left to pick here.
@@ -2733,7 +2732,7 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the hand-off form starts blank').toBeDisabled()
 
@@ -3239,7 +3238,7 @@ test("invoice detail: the source-document card states the real range, and the mo
 
   // import-wizard.spec.ts's own proven E2E-04 recipe, reused verbatim (this file's own
   // Day-60 test above drives the identical steps).
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc02-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -3358,7 +3357,7 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc02-window.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
@@ -7267,7 +7266,7 @@ async function nrsFixture(label: string): Promise<NrsFixture> {
 async function openCreateForm(page: Page, entityName: string): Promise<void> {
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entityName)
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await openNewInvoice(page)
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByPlaceholder('INV-0000-00000')).toBeVisible()
 }

@@ -30,6 +30,7 @@ export type GlyphName =
   | 'play'
   | 'rotate-cw'
   | 'x'
+  | 'cookie'
 
 // lucide-static@1.8.0 path data for the shell glyphs; the category and article glyphs are
 // lucide-static@0.428.0 (rotate-cw, x from frontend/library/src/icons.tsx).
@@ -170,11 +171,20 @@ export const GLYPHS: Record<GlyphName, readonly string[]> = {
     'M18 6 6 18',
     'm6 6 12 12',
   ],
+  // cookie: copied from frontend/app/src/glyphs.tsx
+  'cookie': [
+    'M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5',
+    'M8.5 8.5v.01',
+    'M16 15.5v.01',
+    'M12 12v.01',
+    'M11 17v.01',
+    'M7 14v.01',
+  ],
 }
 
-type IconProps = { name: GlyphName; size?: number }
+type IconProps = { name: GlyphName; size?: number; strokeWidth?: number }
 
-export function Icon({ name, size = 16 }: IconProps) {
+export function Icon({ name, size = 16, strokeWidth = 2 }: IconProps) {
   return (
     <svg
       width={size}
@@ -182,7 +192,7 @@ export function Icon({ name, size = 16 }: IconProps) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

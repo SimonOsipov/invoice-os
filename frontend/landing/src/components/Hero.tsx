@@ -18,9 +18,9 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
     <Section tone="dark" id="top" paddingBlock="clamp(48px, 6vw, 80px) 0">
       <div className="split" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.05fr)', gap: 64, alignItems: 'start' }}>
         <div style={{ display: 'grid', gap: 28, justifyItems: 'start' }}>
-          <Eyebrow tone="dark">E-INVOICING SOLUTION FOR NIGERIA AND AFRICA</Eyebrow>
+          <Eyebrow tone="dark">E-INVOICING SOLUTION FOR NIGERIA</Eyebrow>
           <h1 className="t-h1" style={{ margin: 0, color: 'var(--surface-foreground)' }}>
-            Africa moves.
+            Nigeria moves.
             <br /> Compliance
             <br /> <span className="t-hl">keeps up.</span>
           </h1>
@@ -156,7 +156,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
           color: 'var(--eyebrow-on-dark)',
         }}
       >
-        <span>Local expertise. Pan-African ambition.</span>
+        <span>Local expertise.</span>
         <a href="#platform" style={{ color: 'var(--eyebrow-on-dark)' }}>
           Explore the platform ↓
         </a>

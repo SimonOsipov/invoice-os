@@ -256,7 +256,6 @@ test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => 
     crumb: header.locator('> div').first(),
     search: header.locator('.pf-header-search'),
     'env-pill': page.getByTestId('env-pill'),
-    'new-invoice': header.getByRole('button', { name: 'New invoice' }),
   }
   const track = page.getByTestId('env-pill')
   const segments = track.locator('button')
@@ -446,6 +445,55 @@ test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at ever
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Computed values of one Cookie choices row.
+async function readCookieRow(row: Locator) {
+  const own = await row.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const col = el.firstElementChild as HTMLElement
+    const colCs = getComputedStyle(col)
+    const label = el.lastElementChild as HTMLElement
+    const svg = col.querySelector('svg') as SVGElement
+    const r = el.getBoundingClientRect()
+    const a = el.closest('aside')!.getBoundingClientRect()
+    return {
+      fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontFamily: cs.fontFamily.split(',')[0].replace(/["']/g, '').trim(),
+      color: cs.color, paddingTop: cs.paddingTop, paddingRight: cs.paddingRight, paddingBottom: cs.paddingBottom, paddingLeft: cs.paddingLeft,
+      columnGap: cs.columnGap, borderRadius: cs.borderRadius, background: cs.backgroundColor,
+      height: r.height, colWidth: colCs.width, colHeight: colCs.height, strokeWidth: getComputedStyle(svg).strokeWidth,
+      labelOffset: label.getBoundingClientRect().left - r.left, insetLeft: r.left - a.left, insetRight: a.right - r.right,
+    }
+  })
+  await row.hover()
+  const hover = await row.evaluate((el) => getComputedStyle(el).backgroundColor)
+  return { ...own, hoverBackground: hover }
+}
+
+test('AS-COOKIE the Cookie choices row measures the same in the app, the blog and the library', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('asc_consent', JSON.stringify({ analytics: false, ts: '2026-01-01T00:00:00Z', v: 1 }))
+  })
+  const readSite = async (url: string) => {
+    await page.goto(url)
+    const row = page.locator('aside').getByRole('button', { name: 'Cookie choices' })
+    await expect(row, `no Cookie choices row at ${url}`).toBeVisible()
+    await settle(page, page.locator('aside'), row)
+    return readCookieRow(row)
+  }
+  const blog = await readSite(resolveTarget('BLOG_URL'))
+  const library = await readSite(resolveTarget('LIBRARY_URL'))
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  const appRow = aside(page).getByRole('button', { name: 'Cookie choices' })
+  await settle(page, aside(page), appRow)
+  const app = await readCookieRow(appRow)
+
+  expect(blog, 'the blog row equals the app row').toEqual(app)
+  expect(library, 'the library row equals the app row').toEqual(app)
+  await attachJson(testInfo, 'as-cookie-measurements', { app, blog, library })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('AS-04 environment banner: sandbox rendered, live by probe', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
@@ -565,6 +613,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
   const api = trackApi(page)
   const report: Record<string, unknown>[] = []
   let chipTotal = 0
+  let buttonTotal = 0
 
   for (const [persona, floor] of [['firm', 10], ['inhouse', 9]] as const) {
     await test.step(`${persona} nav sweep`, async () => {
@@ -591,7 +640,12 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
         expect(s.scanned, `${where}: scanned elements`).toBeGreaterThanOrEqual(20)
         expect(s.unresolved, `${where}: inline var() with no value`).toEqual([])
         expect(firstFamily(s.h1Family), `${where}: h1 family`).toBe('Manrope')
-        expect(s.buttons, `${where}: visible .pf-btn (the header's New invoice is one)`).toBeGreaterThanOrEqual(1)
+        buttonTotal += s.buttons
+        if (/^Invoices/.test(label)) {
+          await expect(page.getByTestId('invoices-new-invoice'), `${where}: the Invoices page New invoice button`).toBeVisible()
+        } else {
+          await expect(page.getByRole('button', { name: /New invoice/ }), `${where}: New invoice lives only on Invoices`).toHaveCount(0)
+        }
         expect(s.badButtons, `${where}: .pf-btn corners`).toEqual([])
         expect(s.badChips, `${where}: .pf-chip corners`).toEqual([])
         chipTotal += s.chips
@@ -630,6 +684,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
     })
   }
 
+  expect(buttonTotal, 'visible .pf-btn across the sweep, or the 7px read covers nothing').toBeGreaterThanOrEqual(1)
   expect(chipTotal, 'visible .pf-chip across the sweep, or the 4px read covers nothing').toBeGreaterThanOrEqual(1)
   await attachJson(testInfo, 'as-06-measurements', { chipTotal, screens: report })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

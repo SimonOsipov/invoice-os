@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { COUNTRY_ORDER, INTEL, INTEL_STEPS, type CountryId } from '../countries'
+import { INTEL as cty, INTEL_STEPS } from '../countries'
 import { GLYPHS, Icon } from '../icons'
 import { Button } from './ds/Button'
 import { Eyebrow } from './ds/Eyebrow'
@@ -8,9 +8,7 @@ import { Section } from './ds/Section'
 import { Flag } from './Flag'
 
 export function Intelligence() {
-  const [country, setCountry] = useState<CountryId>('NG')
   const [step, setStep] = useState(0)
-  const cty = INTEL[country]
   return (
     <Section tone="dark2" id="intelligence">
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-end', gap: '24px 48px', marginBottom: 40 }}>
@@ -23,41 +21,9 @@ export function Intelligence() {
         </div>
         <div style={{ maxWidth: 320, display: 'grid', gap: 14, justifyItems: 'start' }}>
           <p className="t-body" style={{ margin: 0, color: 'var(--surface-body)' }}>
-            Our roadmap connects official updates, AI-assisted analysis and human review. A clearer way to follow regulatory change across Africa.
+            Our roadmap connects official updates, AI-assisted analysis and human review.
           </p>
         </div>
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
-        {COUNTRY_ORDER.map((id) => {
-          const on = id === country
-          return (
-            <button
-              key={id}
-              type="button"
-              className="a-card-btn"
-              aria-pressed={on}
-              onClick={() => setCountry(id)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 10,
-                height: 44,
-                padding: '0 16px',
-                borderRadius: 'var(--radius-btn)',
-                cursor: 'pointer',
-                fontSize: 14,
-                fontWeight: 700,
-                background: on ? 'var(--accent)' : 'var(--on-dark-5)',
-                color: on ? 'var(--accent-foreground)' : 'var(--surface-foreground)',
-                border: `1px solid ${on ? 'var(--accent)' : 'var(--on-dark-10)'}`,
-              }}
-            >
-              <Flag id={id} width={22} height={15} />
-              {INTEL[id].name}
-              <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.85 }}>{INTEL[id].tag}</span>
-            </button>
-          )
-        })}
       </div>
       <div
         className="split"
@@ -74,7 +40,7 @@ export function Intelligence() {
         <aside style={{ background: 'var(--sage-panel)', padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
           <span className="t-step">Regulatory workspace</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Flag id={country} width={30} height={20} />
+            <Flag width={30} height={20} />
             <div>
               <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em' }}>{cty.name}</div>
               <div className="t-caption">{cty.authority}</div>
@@ -202,9 +168,6 @@ export function Intelligence() {
       </div>
       <div style={{ marginTop: 32, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px 24px' }}>
         <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--surface-foreground)' }}>AI helps your team review. People approve the changes.</p>
-        <Button variant="text" className="btn-on-dark" href="#coverage">
-          Explore the roadmap →
-        </Button>
       </div>
     </Section>
   )

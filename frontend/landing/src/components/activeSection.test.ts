@@ -6,13 +6,12 @@ import { describe, expect, it } from 'vitest'
 
 import { activeNavHref } from './activeSection'
 
-// Only #top, #coverage, #intelligence, #api and #faq have no nav link.
+// Only #top, #intelligence, #api and #faq have no nav link.
 const SECTIONS = [
   { id: 'top', top: 0 },
   { id: 'problem', top: 400 },
   { id: 'solution', top: 900 },
   { id: 'platform', top: 1400 },
-  { id: 'coverage', top: 1900 },
   { id: 'intelligence', top: 2400 },
   { id: 'solutions', top: 2900 },
   { id: 'integrations', top: 3400 },
@@ -53,7 +52,7 @@ describe('activeNavHref', () => {
     const sections = [
       { id: 'top', top: -900 },
       { id: 'problem', top: -400 },
-      { id: 'coverage', top: 10 },
+      { id: 'intelligence', top: 10 },
     ]
     expect(activeNavHref(sections, NAV_HREFS, THRESHOLD)).toBeNull()
   })

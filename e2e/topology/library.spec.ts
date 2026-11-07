@@ -107,6 +107,33 @@ const aside = (page: Page) => page.locator('aside')
 const main = (page: Page) => page.locator('#lib-main')
 const tourButton = (page: Page) => page.getByRole('button', { name: 'Take the tour' })
 
+// afterHomeRead is test-only plumbing: it runs between the home and library button reads.
+async function notFoundPageLayout(page: Page, testInfo: TestInfo, afterHomeRead?: (width: number) => Promise<void>): Promise<void> {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  await prepare(page)
+  const measured: Record<string, unknown>[] = []
+  await page.goto(`${LIBRARY_URL}/nope-${crypto.randomUUID()}`)
+  const h1 = page.getByRole('heading', { level: 1, name: 'Page not found' })
+  await expect(h1).toBeVisible()
+  for (const width of WIDE_WIDTHS) {
+    await resize(page, width, 1080)
+    const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')
+    const heading = await rectOf(h1, 'not-found h1')
+    const home = await rectOf(page.getByRole('link', { name: 'Back to home' }), 'home button')
+    if (afterHomeRead) await afterHomeRead(width)
+    const library = await rectOf(page.getByRole('link', { name: 'Browse the library' }), 'library button')
+    const section = await rectOf(page.locator('section').filter({ has: h1 }), 'not-found section')
+    const footer = await rectOf(page.getByRole('contentinfo'), 'footer')
+    measured.push({ width, logo, heading, home, library, section, footer })
+    expect.soft(Math.abs(heading.x - logo.x), `@${width}: h1 aligns with the Nav logo`).toBeLessThanOrEqual(1)
+    expect.soft(rectsOverlap(home, library), `@${width}: the two buttons do not overlap`).toBe(false)
+    expect.soft(section.y + section.height, `@${width}: the section ends above the footer`).toBeLessThanOrEqual(footer.y)
+  }
+  await attachJson(testInfo, 'library-not-found-page', measured)
+  expect(pageErrors, `page errors:\n${pageErrors.join('\n')}`).toEqual([])
+}
+
 test.describe('library layout at wide widths', () => {
   test('library shell: the sidebar and main sit side by side and fill the viewport', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
@@ -258,28 +285,42 @@ test.describe('library layout at wide widths', () => {
 
   test('library not-found page: the heading aligns with the logo, the buttons and the footer stay apart', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
-    const pageErrors: string[] = []
-    page.on('pageerror', (err) => pageErrors.push(err.message))
-    await prepare(page)
-    const measured: Record<string, unknown>[] = []
-    await page.goto(`${LIBRARY_URL}/nope-${crypto.randomUUID()}`)
-    const h1 = page.getByRole('heading', { level: 1, name: 'Page not found' })
-    await expect(h1).toBeVisible()
-    for (const width of WIDE_WIDTHS) {
-      await resize(page, width, 1080)
-      const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')
-      const heading = await rectOf(h1, 'not-found h1')
-      const home = await rectOf(page.getByRole('link', { name: 'Back to home' }), 'home button')
-      const library = await rectOf(page.getByRole('link', { name: 'Browse the library' }), 'library button')
-      const section = await rectOf(page.locator('section').filter({ has: h1 }), 'not-found section')
-      const footer = await rectOf(page.getByRole('contentinfo'), 'footer')
-      measured.push({ width, logo, heading, home, library, section, footer })
-      expect.soft(Math.abs(heading.x - logo.x), `@${width}: h1 aligns with the Nav logo`).toBeLessThanOrEqual(1)
-      expect.soft(rectsOverlap(home, library), `@${width}: the two buttons do not overlap`).toBe(false)
-      expect.soft(section.y + section.height, `@${width}: the section ends above the footer`).toBeLessThanOrEqual(footer.y)
+    await notFoundPageLayout(page, testInfo)
+  })
+
+  test('library not-found page: a Manrope swap between the two button reads still leaves the buttons apart', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    let release = (): void => {}
+    const released = new Promise<void>((done) => (release = done))
+    // Fallback timer: a spec that awaits fonts.ready before the loop would otherwise wait on the held font forever.
+    const timer = setTimeout(release, 5_000)
+    let held = 0
+    await page.route(/fonts\.gstatic\.com/, async (route) => {
+      held++
+      await released
+      await route.continue().catch(() => {})
+    })
+    // CI's fallback font is wider than Manrope; this stand-in makes that true on any OS.
+    await page.addInitScript(() => {
+      const style = document.createElement('style')
+      style.textContent =
+        "@font-face{font-family:'WideFallback';src:local('Arial'),local('Helvetica');size-adjust:150%}" +
+        "html:root{--font-sans:'Manrope','WideFallback',sans-serif}"
+      window.addEventListener('load', () => document.head.append(style))
+    })
+    let swapped = false
+    try {
+      await notFoundPageLayout(page, testInfo, async () => {
+        if (swapped) return
+        swapped = true
+        release()
+        await page.waitForFunction(() => document.fonts.status === 'loaded' && document.fonts.check('600 16px Manrope'), undefined, { timeout: 10_000 })
+        await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+      })
+    } finally {
+      clearTimeout(timer)
     }
-    await attachJson(testInfo, 'library-not-found-page', measured)
-    expect(pageErrors, `page errors:\n${pageErrors.join('\n')}`).toEqual([])
+    expect(held, 'the Manrope request went through the fonts.gstatic.com route').toBeGreaterThan(0)
   })
 
   test('library player scene stays inside its 350px box at every step', async ({ page }, testInfo) => {

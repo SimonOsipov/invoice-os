@@ -108,7 +108,7 @@ const main = (page: Page) => page.locator('#lib-main')
 const tourButton = (page: Page) => page.getByRole('button', { name: 'Take the tour' })
 
 // afterHomeRead is test-only plumbing: it runs between the home and library button reads.
-async function notFoundPageLayout(page: Page, testInfo: TestInfo, afterHomeRead?: (width: number) => Promise<void>): Promise<void> {
+async function notFoundPageLayout(page: Page, testInfo: TestInfo, afterHomeRead?: (viewport: number, homeWidth: number) => Promise<void>): Promise<void> {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await prepare(page)
@@ -121,7 +121,7 @@ async function notFoundPageLayout(page: Page, testInfo: TestInfo, afterHomeRead?
     const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')
     const heading = await rectOf(h1, 'not-found h1')
     const home = await rectOf(page.getByRole('link', { name: 'Back to home' }), 'home button')
-    if (afterHomeRead) await afterHomeRead(width)
+    if (afterHomeRead) await afterHomeRead(width, home.width)
     const library = await rectOf(page.getByRole('link', { name: 'Browse the library' }), 'library button')
     const section = await rectOf(page.locator('section').filter({ has: h1 }), 'not-found section')
     const footer = await rectOf(page.getByRole('contentinfo'), 'footer')
@@ -304,18 +304,21 @@ test.describe('library layout at wide widths', () => {
     await page.addInitScript(() => {
       const style = document.createElement('style')
       style.textContent =
-        "@font-face{font-family:'WideFallback';src:local('Arial'),local('Helvetica');size-adjust:150%}" +
+        "@font-face{font-family:'WideFallback';src:local('Arial'),local('Helvetica'),local('Liberation Sans'),local('LiberationSans'),local('FreeSans'),local('DejaVu Sans');size-adjust:150%}" +
         "html:root{--font-sans:'Manrope','WideFallback',sans-serif}"
       window.addEventListener('load', () => document.head.append(style))
     })
     let swapped = false
     try {
-      await notFoundPageLayout(page, testInfo, async () => {
+      await notFoundPageLayout(page, testInfo, async (_viewport, staleHomeWidth) => {
         if (swapped) return
         swapped = true
+        const stale = !(await page.evaluate(() => document.fonts.check('600 16px Manrope')))
         release()
         await page.waitForFunction(() => document.fonts.status === 'loaded' && document.fonts.check('600 16px Manrope'), undefined, { timeout: 10_000 })
         await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+        const manropeWidth = (await page.getByRole('link', { name: 'Back to home' }).boundingBox())?.width ?? 0
+        if (stale) expect(staleHomeWidth, 'precondition: the fallback-font home button is wider than the Manrope one').toBeGreaterThan(manropeWidth)
       })
     } finally {
       clearTimeout(timer)

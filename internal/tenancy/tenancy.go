@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -274,7 +275,8 @@ type setMembershipStatusRequest struct {
 // SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
 // (401, before anything else) -> capped decode (400 on any decode error) ->
 // status vocabulary (400) -> path user_id -> set -> 200 with the updated
-// membership in the same six-key shape as a list element.
+// membership in the same six-key shape as a list element, or 409 (approval.WriteRoleInUse)
+// when a suspension leaves a waiting role with no signer.
 //
 // The body is validated before the path id so a malformed request reads as 400
 // rather than 404 (TestMembership_InvalidStatusRejected). Admin-only-ness and
@@ -314,6 +316,10 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 
 		membership, err := set(r.Context(), userID.String(), req.Status)
 		if err != nil {
+			if errors.Is(err, approval.ErrRoleInUse) {
+				approval.WriteRoleInUse(w, err)
+				return
+			}
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "tenancy: set membership status", slog.Any("err", err))
@@ -326,8 +332,8 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 }
 
 // RemoveMemberHandler returns POST /v1/memberships/{user_id}/remove: identity
-// (401) -> path uuid (404) -> remove -> 200 with the member row. Only err is
-// logged on a 500, never a name or an email.
+// (401) -> path uuid (404) -> remove -> 200 with the member row, 409 (approval.WriteRoleInUse)
+// when the change leaves a waiting role with no signer. Only err is logged on a 500, never a name or an email.
 func RemoveMemberHandler(remove func(ctx context.Context, userID string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -344,6 +350,10 @@ func RemoveMemberHandler(remove func(ctx context.Context, userID string) (Member
 		}
 		membership, err := remove(r.Context(), userID.String())
 		if err != nil {
+			if errors.Is(err, approval.ErrRoleInUse) {
+				approval.WriteRoleInUse(w, err)
+				return
+			}
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "tenancy: remove member", slog.Any("err", err))

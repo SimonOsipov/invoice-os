@@ -23,6 +23,7 @@ import {
   NO_CLIENTS_IN_WORKSPACE,
   NO_CLIENTS_NOTE,
   type AccessRole,
+  type LastSignerInvoices,
   type MemberStatus,
 } from '../lib/members'
 import type { Role } from '../lib/roles'
@@ -626,5 +627,22 @@ export function SearchBox({ value, onChange, placeholder, label, testId }: {
         style={{ flex: 1, minWidth: 0, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)' }}
       />
     </div>
+  )
+}
+
+/** The invoices a refused change would strand, `<number> — <role>`, inside the refusal box. */
+export function WaitingInvoiceList({ testId, waiting }: { testId: string; waiting: LastSignerInvoices }) {
+  if (waiting.items.length === 0) return null
+  return (
+    <ul data-testid={testId} style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+      {waiting.items.map((i, n) => (
+        <li key={n}>
+          {i.number} — {i.role}
+        </li>
+      ))}
+      {waiting.total > waiting.items.length && (
+        <li data-testid={`${testId}-more`}>and {waiting.total - waiting.items.length} more</li>
+      )}
+    </ul>
   )
 }

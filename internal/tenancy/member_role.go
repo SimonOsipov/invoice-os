@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -21,7 +22,8 @@ var (
 )
 
 // SetMemberRole changes one member's role and audits it in the same transaction.
-// Guards: caller admin -> target found -> invited -> removed -> same role (no-op) -> last active admin.
+// Guards: caller admin -> tenant lock -> target found -> invited -> removed -> same role (no-op) -> last active admin.
+// A demotion to preparer that leaves a waiting role with no signer is refused with approval.ErrRoleInUse.
 func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberAccess, error) {
 	if role != "admin" && role != "preparer" && role != "reviewer" {
 		return MemberAccess{}, ErrInvalidRole
@@ -31,6 +33,9 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
 		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrRoleChangeNotPermitted); err != nil {
+			return err
+		}
+		if err := approval.LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
@@ -62,6 +67,12 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 			}
 		}
 
+		var keys []string
+		if role == "preparer" {
+			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target.UserID); err != nil {
+				return err
+			}
+		}
 		var id string
 		if err := tx.QueryRow(ctx,
 			`UPDATE memberships SET role = $2 WHERE user_id = $1 RETURNING user_id::text`, userID, role,
@@ -85,6 +96,9 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 			}
 		}
 
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+			return err
+		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.role_changed", map[string]any{
 			"user_id": id,
 			"from":    target.Role,
@@ -101,7 +115,8 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 }
 
 // SetMemberRoleHandler returns PATCH /v1/memberships/{user_id}/role: identity (401) -> capped
-// decode (400) -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row.
+// decode (400) -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row,
+// 409 (approval.WriteRoleInUse) when the change leaves a waiting role with no signer.
 // A 500 logs err only, never a name or an email.
 func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -132,6 +147,10 @@ func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (Me
 		}
 		row, err := set(r.Context(), userID.String(), req.Role)
 		if err != nil {
+			if errors.Is(err, approval.ErrRoleInUse) {
+				approval.WriteRoleInUse(w, err)
+				return
+			}
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "tenancy: set member role", slog.Any("err", err))

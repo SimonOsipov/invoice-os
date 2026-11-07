@@ -12,7 +12,7 @@ import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { INVITE_ADMIN_ONLY, invitedMember, MEMBER_ADMIN_ONLY, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
+import { INVITE_ADMIN_ONLY, invitedMember, MEMBER_ADMIN_ONLY, NO_WAITING_INVOICES, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
 import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -501,7 +501,7 @@ describe('the status-error strip', () => {
         roles={[]}
         onOpen={vi.fn()}
         onStatus={vi.fn()}
-        statusError={{ id: 'u2', message: 'refused' }}
+        statusError={{ id: 'u2', message: 'refused', waiting: NO_WAITING_INVOICES }}
       />,
     )
 

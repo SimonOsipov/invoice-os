@@ -116,6 +116,7 @@ async function notFoundPageLayout(page: Page, testInfo: TestInfo, afterHomeRead?
   await page.goto(`${LIBRARY_URL}/nope-${crypto.randomUUID()}`)
   const h1 = page.getByRole('heading', { level: 1, name: 'Page not found' })
   await expect(h1).toBeVisible()
+  await page.evaluate(() => document.fonts.ready.then(() => true))
   for (const width of WIDE_WIDTHS) {
     await resize(page, width, 1080)
     const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')

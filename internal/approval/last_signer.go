@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -105,8 +106,28 @@ func SignedWaitingStepsTx(ctx context.Context, tx pgx.Tx, target string, keys []
 // RefuseUnsignedWaitingRolesTx returns a lastSigner *roleInUse when an open run waits on a live role in keys
 // and nobody can approve that invoice. Who can sign is judged by unsignableReasonsTx, via unsignedWaitingInvoicesTx.
 func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string, signed []SignedStep) error {
-	var invoices []InvoiceRef
+	invoices, err := unsignedRolesTx(ctx, tx, keys)
+	if err != nil {
+		return err
+	}
+	more, err := unsignedSignedStepsTx(ctx, tx, signed)
+	if err != nil {
+		return err
+	}
+	invoices = append(invoices, more...)
 	distinct := map[string]bool{}
+	for _, ref := range invoices {
+		distinct[ref.ID] = true
+	}
+	if len(distinct) == 0 {
+		return nil
+	}
+	return &roleInUse{lastSigner: true, invoices: capInvoiceRefs(invoices), invoicesTotal: len(distinct)}
+}
+
+// unsignedRolesTx lists, per live role in keys order, the invoices an open run waits on that nobody can approve. Uncapped.
+func unsignedRolesTx(ctx context.Context, tx pgx.Tx, keys []string) ([]InvoiceRef, error) {
+	var invoices []InvoiceRef
 	// ceiling: one unsignedWaitingInvoicesTx per staffed role; batch it above ~20 roles per member
 	for _, key := range keys {
 		var title string
@@ -116,41 +137,80 @@ func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string,
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		refs, err := unsignedWaitingInvoicesTx(ctx, tx, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, ref := range refs {
-			distinct[ref.ID] = true
 			ref.RoleKey, ref.RoleTitle = key, title
 			invoices = append(invoices, ref)
 		}
 	}
-	// Steps the target could sign outside its roles: one item per invoice and role key.
-	if len(signed) > 0 {
-		probes := make([]SignerProbe, len(signed))
-		for i, st := range signed {
-			probes[i] = st.probe()
+	return invoices, nil
+}
+
+// unsignedSignedStepsTx lists the steps in signed that nobody can approve: one item per invoice and role key. Uncapped.
+func unsignedSignedStepsTx(ctx context.Context, tx pgx.Tx, signed []SignedStep) ([]InvoiceRef, error) {
+	if len(signed) == 0 {
+		return nil, nil
+	}
+	probes := make([]SignerProbe, len(signed))
+	for i, st := range signed {
+		probes[i] = st.probe()
+	}
+	reasons, err := unsignableReasonsTx(ctx, tx, probes)
+	if err != nil {
+		return nil, err
+	}
+	var invoices []InvoiceRef
+	seen := map[[2]string]bool{}
+	for i, r := range reasons {
+		st := signed[i]
+		if r == "" || seen[[2]string{st.invoiceID, st.roleKey}] {
+			continue
 		}
-		reasons, err := unsignableReasonsTx(ctx, tx, probes)
-		if err != nil {
-			return err
-		}
-		seen := map[[2]string]bool{}
-		for i, r := range reasons {
-			st := signed[i]
-			if r == "" || seen[[2]string{st.invoiceID, st.roleKey}] {
-				continue
-			}
-			seen[[2]string{st.invoiceID, st.roleKey}] = true
-			invoices = append(invoices, InvoiceRef{ID: st.invoiceID, Number: st.number, RoleKey: st.roleKey, RoleTitle: st.roleTitle})
-			distinct[st.invoiceID] = true
+		seen[[2]string{st.invoiceID, st.roleKey}] = true
+		invoices = append(invoices, InvoiceRef{ID: st.invoiceID, Number: st.number, RoleKey: st.roleKey, RoleTitle: st.roleTitle})
+	}
+	return invoices, nil
+}
+
+// Stranded is the invoices a deletion left with nobody to approve; Invoices is capped, Total is not.
+type Stranded struct {
+	Invoices []InvoiceRef
+	Total    int
+	RoleKeys []string
+}
+
+// StrandedStepsTx judges, after a deletion's endMembership, the steps collected before it: a role that lost a
+// signer lists every invoice nobody can approve on it.
+func StrandedStepsTx(ctx context.Context, tx pgx.Tx, signed []SignedStep) (Stranded, error) {
+	delta, err := unsignedSignedStepsTx(ctx, tx, signed)
+	if err != nil || len(delta) == 0 {
+		return Stranded{}, err
+	}
+	trigger := map[string]bool{}
+	var keys []string
+	for _, ref := range delta {
+		if ref.RoleKey != "" && !trigger[ref.RoleKey] {
+			trigger[ref.RoleKey] = true
+			keys = append(keys, ref.RoleKey)
 		}
 	}
-	if len(distinct) == 0 {
-		return nil
+	sort.Strings(keys)
+	refs, err := unsignedRolesTx(ctx, tx, keys)
+	if err != nil || len(refs) == 0 {
+		return Stranded{}, err
 	}
-	return &roleInUse{lastSigner: true, invoices: capInvoiceRefs(invoices), invoicesTotal: len(distinct)}
+	distinct := map[string]bool{}
+	var roleKeys []string
+	for _, ref := range refs {
+		distinct[ref.ID] = true
+		if len(roleKeys) == 0 || roleKeys[len(roleKeys)-1] != ref.RoleKey {
+			roleKeys = append(roleKeys, ref.RoleKey)
+		}
+	}
+	return Stranded{Invoices: capInvoiceRefs(refs), Total: len(distinct), RoleKeys: roleKeys}, nil
 }

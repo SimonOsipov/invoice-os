@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -570,4 +571,171 @@ func TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign(t *testing.T) {
 			t.Errorf("RefuseUnsignedWaitingRolesTx = %v, want nil: not D's invoice (Q18)", err)
 		}
 	})
+}
+
+// strandedAfterLeave reads R's signable steps, ends R's membership and judges, all in one transaction.
+func (f runFixture) strandedAfterLeave(t *testing.T, pool *pgxpool.Pool, user string) (Stranded, error) {
+	t.Helper()
+	var got Stranded
+	err := db.WithinTenantTx(context.Background(), pool, f.tenantID, func(tx pgx.Tx) error {
+		ctx := context.Background()
+		signed, err := SignedWaitingStepsTx(ctx, tx, user, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM workflow_role_members WHERE user_id = $1`, user); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE memberships SET status = 'removed' WHERE user_id = $1`, user); err != nil {
+			return err
+		}
+		got, err = StrandedStepsTx(ctx, tx, signed)
+		return err
+	})
+	return got, err
+}
+
+func (f runFixture) wantStranded(t *testing.T, user string) Stranded {
+	t.Helper()
+	got, err := f.strandedAfterLeave(t, f.app, user)
+	if err != nil {
+		t.Fatalf("StrandedStepsTx: %v", err)
+	}
+	return got
+}
+
+func TestStrandedSteps_ListsAStepTheLeaverWasTheLastSignerOf(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 last signer")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+
+	got := f.wantStranded(t, r)
+
+	want := []InvoiceRef{{ID: f.invoiceID, Number: "INV-1", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"}}
+	if !slices.Equal(got.Invoices, want) || got.Total != 1 || !slices.Equal(got.RoleKeys, []string{"tax-reviewer"}) {
+		t.Errorf("got %+v, want invoices %+v, total 1, keys [tax-reviewer]", got, want)
+	}
+}
+
+func TestStrandedSteps_ListsTheWholeRoleOnceTriggered(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 whole role")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	y, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Y", f.versionID, pendingOn("tax-reviewer"))
+	seedHistory(t, f.super, f.tenantID, y, nil, r) // the admin reaches the client, so R cannot sign Y: creator only
+
+	got := f.wantStranded(t, r)
+
+	want := []InvoiceRef{
+		{ID: f.invoiceID, Number: "INV-1", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"},
+		{ID: y, Number: "INV-Y", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"},
+	}
+	if !slices.Equal(got.Invoices, want) || got.Total != 2 || !slices.Equal(got.RoleKeys, []string{"tax-reviewer"}) {
+		t.Errorf("got %+v, want invoices %+v, total 2", got, want)
+	}
+}
+
+func TestStrandedSteps_AnotherSignerLeftListsNothing(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 another signer")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+
+	if got := f.wantStranded(t, r); got.Total != 0 || got.Invoices != nil || got.RoleKeys != nil {
+		t.Errorf("got %+v, want the zero value", got)
+	}
+}
+
+func TestStrandedSteps_AnAlreadyStrandedRoleAloneTriggersNothing(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 already stranded")
+	p := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "preparer", roleID: f.roleID})
+
+	if got := f.wantStranded(t, p); got.Total != 0 || got.Invoices != nil || got.RoleKeys != nil {
+		t.Errorf("got %+v, want the zero value", got)
+	}
+}
+
+func TestStrandedSteps_ANamedDelegateIsJudged(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 named delegate")
+	d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, f.runID, 0), true, &d)
+
+	got := f.wantStranded(t, d)
+
+	want := []InvoiceRef{{ID: f.invoiceID, Number: "INV-1", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"}}
+	if !slices.Equal(got.Invoices, want) || got.Total != 1 {
+		t.Errorf("got %+v, want invoices %+v, total 1", got, want)
+	}
+}
+
+func TestStrandedSteps_ADeletedRoleStepIsNotListed(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 deleted role")
+	d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, f.runID, 0), true, &d)
+	softDeleteWorkflowRole(t, f.super, f.roleID)
+
+	if got := f.wantStranded(t, d); got.Total != 0 || got.Invoices != nil || got.RoleKeys != nil {
+		t.Errorf("got %+v, want the zero value", got)
+	}
+}
+
+func TestStrandedSteps_CapsAtTwentyAndCountsAll(t *testing.T) {
+	f := newRunFixture(t, "APSC-16-01 cap")
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "k", "K")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: roleID})
+	f.seedRunsOn(t, "k", "K", 21)
+
+	got := f.wantStranded(t, r)
+
+	if len(got.Invoices) != 20 || got.Total != 21 {
+		t.Errorf("listed = %d, total = %d, want 20 and 21", len(got.Invoices), got.Total)
+	}
+}
+
+func TestStrandedSteps_GroupsByRoleThenOldestFirst(t *testing.T) {
+	f := newRunFixture(t, "APSC-16-01 grouping")
+	k1 := seedWorkflowRole(t, f.super, f.tenantID, "k1", "K1")
+	k2 := seedWorkflowRole(t, f.super, f.tenantID, "k2", "K2")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: k1})
+	staffWorkflowRole(t, f.super, f.tenantID, k2, r, 0)
+	b0 := f.seedRunsOn(t, "k2", "B0", 1)[0] // oldest, on the later key
+	a0 := f.seedRunsOn(t, "k1", "A0", 1)[0]
+	b1 := f.seedRunsOn(t, "k2", "B1", 1)[0]
+
+	got := f.wantStranded(t, r)
+
+	want := []InvoiceRef{
+		{ID: a0, Number: "A0-00", RoleKey: "k1", RoleTitle: "K1"},
+		{ID: b0, Number: "B0-00", RoleKey: "k2", RoleTitle: "K2"},
+		{ID: b1, Number: "B1-00", RoleKey: "k2", RoleTitle: "K2"},
+	}
+	if !slices.Equal(got.Invoices, want) || got.Total != 3 || !slices.Equal(got.RoleKeys, []string{"k1", "k2"}) {
+		t.Errorf("got %+v, want invoices %+v, total 3, keys [k1 k2]", got, want)
+	}
+}
+
+func TestStrandedSteps_EmptyRunsNoStatement(t *testing.T) {
+	f := newRunFixture(t, "APSC-16-01 empty")
+	pool, rec := tracedAppPool(t)
+	var got Stranded
+	var stmts []string
+	err := db.WithinTenantTx(context.Background(), pool, f.tenantID, func(tx pgx.Tx) error {
+		rec.reset()
+		var err error
+		got, err = StrandedStepsTx(context.Background(), tx, nil)
+		stmts = rec.mentioning("")
+		return err
+	})
+	if err != nil || got.Total != 0 || got.Invoices != nil || got.RoleKeys != nil {
+		t.Fatalf("got %+v, err %v, want the zero value and nil", got, err)
+	}
+	if len(stmts) != 0 {
+		t.Errorf("statements = %q, want none", stmts)
+	}
+}
+
+func TestStrandedSteps_ReadErrorIsReturned(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-16-01 read error")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+
+	if _, err := f.strandedAfterLeave(t, failingAppPool(t, signMarker), r); err == nil {
+		t.Fatal("StrandedStepsTx err = nil, want the read error")
+	}
 }

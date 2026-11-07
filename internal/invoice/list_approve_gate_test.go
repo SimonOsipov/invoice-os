@@ -62,16 +62,17 @@ const (
 // and NOTHING else in this file moves. The two fields are already populated per spec; they
 // have nowhere to go on today's signature, which is exactly why every spec here is RED.
 type listGateInputs struct {
-	facts            map[string]approval.RowFacts
-	callerRole       string
-	holdsPendingRole map[string]bool
-	creator          map[string]approval.CreatorStanding
-	creatorErr       error
+	facts             map[string]approval.RowFacts
+	callerRole        string
+	holdsPendingRole  map[string]bool
+	creator           map[string]approval.CreatorStanding
+	creatorErr        error
+	delegateOfPending map[string]bool
 }
 
 func gateStub(in listGateInputs) func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	return func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
-		return in.facts, ListGateFacts{CallerRole: in.callerRole, HoldsPendingRole: in.holdsPendingRole, Creator: in.creator, CreatorErr: in.creatorErr}, nil
+		return in.facts, ListGateFacts{CallerRole: in.callerRole, HoldsPendingRole: in.holdsPendingRole, Creator: in.creator, CreatorErr: in.creatorErr, DelegateOfPending: in.delegateOfPending}, nil
 	}
 }
 
@@ -318,20 +319,22 @@ func TestListHandler_ApproveReasonsAreHandlersGoOwnCopy(t *testing.T) {
 // file and fails here on the first rung whose wording or order drifted (AC-2).
 func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		status  Status
-		role    string
-		facts   approval.RowFacts
-		holds   bool
-		creator approval.CreatorStanding
+		name     string
+		status   Status
+		role     string
+		facts    approval.RowFacts
+		holds    bool
+		creator  approval.CreatorStanding
+		delegate bool
 	}{
-		{"allowed", StatusValidated, "reviewer", openRunFacts(0), true, approval.CreatorStanding{}},
-		{"refused creator", StatusValidated, "admin", openRunFacts(0), true, refusedCreator},
-		{"not an approver", StatusValidated, "preparer", openRunFacts(0), true, approval.CreatorStanding{}},
-		{"not validated", StatusDraft, "admin", openRunFacts(0), true, approval.CreatorStanding{}},
-		{"no run", StatusValidated, "admin", approval.RowFacts{}, false, approval.CreatorStanding{}},
-		{"run closed", StatusValidated, "admin", approval.RowFacts{RunState: "approved"}, false, approval.CreatorStanding{}},
-		{"not the role holder", StatusValidated, "admin", openRunFacts(1), false, approval.CreatorStanding{}},
+		{"allowed", StatusValidated, "reviewer", openRunFacts(0), true, approval.CreatorStanding{}, false},
+		{"refused creator", StatusValidated, "admin", openRunFacts(0), true, refusedCreator, false},
+		{"not an approver", StatusValidated, "preparer", openRunFacts(0), true, approval.CreatorStanding{}, false},
+		{"not validated", StatusDraft, "admin", openRunFacts(0), true, approval.CreatorStanding{}, false},
+		{"no run", StatusValidated, "admin", approval.RowFacts{}, false, approval.CreatorStanding{}, false},
+		{"run closed", StatusValidated, "admin", approval.RowFacts{RunState: "approved"}, false, approval.CreatorStanding{}, false},
+		{"not the role holder", StatusValidated, "admin", openRunFacts(1), false, approval.CreatorStanding{}, false},
+		{"step delegate", StatusValidated, "reviewer", openRunFacts(0), false, approval.CreatorStanding{}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			id := listIdentity()
@@ -343,11 +346,12 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 			callerRole := func(ctx context.Context) (string, error) { return c.role, nil }
 			detailFacts := func(ctx context.Context, gotID string) (ApprovalFacts, error) {
 				return ApprovalFacts{
-					TransmitClear:   true,
-					RunState:        c.facts.RunState,
-					PendingStepOrd:  c.facts.PendingOrd,
-					CallerHoldsRole: c.holds,
-					Creator:         c.creator,
+					TransmitClear:    true,
+					RunState:         c.facts.RunState,
+					PendingStepOrd:   c.facts.PendingOrd,
+					CallerHoldsRole:  c.holds,
+					CallerIsDelegate: c.delegate,
+					Creator:          c.creator,
 				}, nil
 			}
 
@@ -369,10 +373,11 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 				return []Invoice{inv}, 1, nil
 			}
 			listFacts := gateStub(listGateInputs{
-				facts:            map[string]approval.RowFacts{invID: c.facts},
-				callerRole:       c.role,
-				holdsPendingRole: map[string]bool{invID: c.holds},
-				creator:          map[string]approval.CreatorStanding{invID: c.creator},
+				facts:             map[string]approval.RowFacts{invID: c.facts},
+				callerRole:        c.role,
+				holdsPendingRole:  map[string]bool{invID: c.holds},
+				delegateOfPending: map[string]bool{invID: c.delegate},
+				creator:           map[string]approval.CreatorStanding{invID: c.creator},
 			})
 			listRec := doInvoiceListWithFacts(t, list, listFacts, &id, "")
 			if listRec.Code != http.StatusOK {
@@ -398,10 +403,10 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 			}
 			// The both-sides-empty vacuity guard: a pair of absent keys would have
 			// Fataled in approveFlagsOf, but a pair of nulls would not.
-			if c.name == "allowed" && listCan != "true" {
+			if (c.name == "allowed" || c.name == "step delegate") && listCan != "true" {
 				t.Errorf("can_approve on the allowed case = %s, want true -- an agreement of two falses proves nothing", listCan)
 			}
-			if c.name != "allowed" && listReason == "null" {
+			if c.name != "allowed" && c.name != "step delegate" && listReason == "null" {
 				t.Errorf("approve_blocked_reason on the %q case = null, want a sentence -- agreement must not be two nulls", c.name)
 			}
 		})

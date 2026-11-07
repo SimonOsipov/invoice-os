@@ -1266,3 +1266,26 @@ func TestDelegateMayDecide(t *testing.T) {
 		})
 	}
 }
+
+func TestGateFactsTx_NamedDelegateIsCallerIsDelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "DELEG-01-04 named-delegate", "deleg-named-role")
+	delegate := activeApprover(t, super, f.tenantID)
+	other := activeApprover(t, super, f.tenantID)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_run_steps SET allow_delegation = true, delegate_user_id = $2 WHERE id = $1`, f.stepID, delegate); err != nil {
+		t.Fatalf("name the delegate: %v", err)
+	}
+	for _, c := range []struct {
+		name, subject string
+		want          bool
+	}{{"delegate", delegate, true}, {"other reviewer", other, false}} {
+		gf, err := gateFacts(t, app, f.tenantID, f.invoiceID, c.subject)
+		if err != nil {
+			t.Fatalf("GateFactsTx as %s: %v", c.name, err)
+		}
+		if gf.CallerIsDelegate != c.want || gf.CallerHoldsRole {
+			t.Errorf("%s: CallerIsDelegate = %t (want %t), CallerHoldsRole = %t (want false)", c.name, gf.CallerIsDelegate, c.want, gf.CallerHoldsRole)
+		}
+	}
+}

@@ -174,7 +174,7 @@ var readerFirmWideEvents = []string{
 	"workspace.deletion_scheduled", "workspace.deletion_cancelled",
 	"workspace.exported", "workspace.export_failed",
 	"membership.account_deleted", "membership.admin_handed_on",
-	"membership.role_changed",
+	"membership.role_changed", "membership.stranded_alert",
 }
 
 // readerDocumentEvents are the three document.* names the SQL resolver also leaves
@@ -361,8 +361,8 @@ func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 // (TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace pins that fallback).
 func TestAuditScopeOf_MatchesTheEventsTheTriggerLeavesNull(t *testing.T) {
 	ruleD := triggerRuleDPayloads(uuid.NewString())
-	if len(ruleD) != 36 {
-		t.Fatalf("rule-D payload map holds %d events, want 36", len(ruleD))
+	if len(ruleD) != 37 {
+		t.Fatalf("rule-D payload map holds %d events, want 37", len(ruleD))
 	}
 
 	// The rule-D names ScopeOf must call unattributed rather than workspace.
@@ -421,13 +421,13 @@ func TestAuditScopeOf_RuleSetsAreDisjointAndSumToTheTotal(t *testing.T) {
 		}
 		all[e] = "D"
 	}
-	if len(all) != 61 {
-		t.Fatalf("rule sets total %d events, want 61", len(all))
+	if len(all) != 62 {
+		t.Fatalf("rule sets total %d events, want 62", len(all))
 	}
 }
 
 // AC #4: ScopeOf answers workspace for exactly the firm-wide names and for no
-// other event in the shipped 61-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
+// other event in the shipped 62-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
 // checks the names one at a time; this is the closed half, and it is the one assertion
 // here that a fallback cannot satisfy — reaching ScopeWorkspace needs a real entry in
 // reader.go's firmWideEvents. It fails if either extraction event is ever filed as
@@ -444,16 +444,16 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheFirmWideNames(t *testing.T) {
 	}
 	// Population floor: a shrunk vocabulary would make the set equality below a claim
 	// about whatever happened to survive.
-	if len(vocabulary) != 61 {
-		t.Fatalf("the rule sets name %d events, want 61", len(vocabulary))
+	if len(vocabulary) != 62 {
+		t.Fatalf("the rule sets name %d events, want 62", len(vocabulary))
 	}
 
 	want := map[string]bool{}
 	for _, e := range readerFirmWideEvents {
 		want[e] = true
 	}
-	if len(want) != 34 {
-		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 34", len(want))
+	if len(want) != 35 {
+		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 35", len(want))
 	}
 
 	got := map[string]bool{}

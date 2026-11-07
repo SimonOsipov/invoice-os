@@ -294,6 +294,7 @@ func TestCreatorStanding_DelegateAgreesWithDelegateMayDecide(t *testing.T) {
 	super, app := dbTestPools(t)
 	w := newStandingWorld(t, super, "BUG-118 agrees")
 	other := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+	seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"}) // a second approver a named step does not allow
 	stranger := uuid.NewString()
 	for _, allow := range []bool{false, true} {
 		for _, delegate := range []*string{nil, &other, &stranger, &w.creator} {

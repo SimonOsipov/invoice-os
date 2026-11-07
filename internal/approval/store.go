@@ -382,9 +382,9 @@ func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]In
 	if err != nil || len(waiting) == 0 {
 		return nil, 0, err
 	}
-	probes := make([]CreatorProbe, len(waiting))
+	probes := make([]SignerProbe, len(waiting))
 	for i, w := range waiting {
-		probes[i] = CreatorProbe{InvoiceID: w.ID, RoleKey: &key}
+		probes[i] = SignerProbe{InvoiceID: w.ID, RoleKey: &key}
 	}
 	reasons, err := unsignableReasonsTx(ctx, tx, probes)
 	if err != nil {

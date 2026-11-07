@@ -284,11 +284,11 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 	}
 
 	// One signer statement for the page; a read error fails the read (never degrades to no warning).
-	var probes []CreatorProbe
+	var probes []SignerProbe
 	var probed []int
 	for i, p := range pending {
 		if p.roleKey != nil {
-			probes = append(probes, CreatorProbe{InvoiceID: p.invoiceID, RoleKey: p.roleKey})
+			probes = append(probes, SignerProbe{InvoiceID: p.invoiceID, RoleKey: p.roleKey})
 			probed = append(probed, i)
 		}
 	}

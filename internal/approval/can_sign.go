@@ -26,9 +26,26 @@ func holderReason(reason string) *string {
 	return &v
 }
 
+// SignerProbe is one invoice's pending approval step: its role key and its delegation.
+type SignerProbe struct {
+	InvoiceID       string
+	RoleKey         *string
+	AllowDelegation bool
+	DelegateUserID  *string
+}
+
+// signerStandingTx is the stub of the subject-aware read: it returns the reasons and no subject signs.
+func signerStandingTx(ctx context.Context, tx pgx.Tx, probes []SignerProbe, _ string) ([]string, []bool, error) {
+	reasons, err := unsignableReasonsTx(ctx, tx, probes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reasons, make([]bool, len(reasons)), nil
+}
+
 // unsignableReasonsTx returns one reason per probe, "" when someone can approve it. decideTx is the spec:
 // TestCanSign_AgreesWithTheApprovePath. Callers pass invoices they can see; RLS is the tenant scope.
-func unsignableReasonsTx(ctx context.Context, tx pgx.Tx, probes []CreatorProbe) ([]string, error) {
+func unsignableReasonsTx(ctx context.Context, tx pgx.Tx, probes []SignerProbe) ([]string, error) {
 	out := make([]string, 0, len(probes))
 	if len(probes) == 0 {
 		return out, nil

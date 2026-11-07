@@ -28,9 +28,21 @@ func StaffedRoleKeysTx(ctx context.Context, tx pgx.Tx, subject string) ([]string
 	return keys, nil
 }
 
+// SignedStep is one waiting invoice step the target could sign before a member write.
+type SignedStep struct {
+	invoiceID, number, roleKey, roleTitle string
+	allow                                 bool
+	delegate                              *string
+}
+
+// SignedWaitingStepsTx is a stub: it collects nothing yet.
+func SignedWaitingStepsTx(_ context.Context, _ pgx.Tx, _ string, _ []string) ([]SignedStep, error) {
+	return nil, nil
+}
+
 // RefuseUnsignedWaitingRolesTx returns a lastSigner *roleInUse when an open run waits on a live role in keys
 // and nobody can approve that invoice. Who can sign is judged by unsignableReasonsTx, via unsignedWaitingInvoicesTx.
-func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string) error {
+func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string, _ []SignedStep) error {
 	var invoices []InvoiceRef
 	var total int
 	// ceiling: one unsignedWaitingInvoicesTx per staffed role; batch it above ~20 roles per member

@@ -300,7 +300,7 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		).Scan(&updated.UserID, &updated.Role, &updated.Status, &updated.DisplayName, &updated.Email); err != nil {
 			return err
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
 			return err
 		}
 
@@ -421,7 +421,7 @@ func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, 
 		if err := endMembership(ctx, tx, target.UserID); err != nil {
 			return err
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{

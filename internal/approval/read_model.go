@@ -199,7 +199,7 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 		if st.Kind != "approval" || st.State != "pending" || st.WorkflowRoleKey == nil {
 			continue
 		}
-		reasons, err := unsignableReasonsTx(ctx, tx, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey}})
+		reasons, err := unsignableReasonsTx(ctx, tx, []SignerProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey}})
 		if err != nil {
 			return err
 		}

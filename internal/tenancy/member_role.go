@@ -96,7 +96,7 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 			}
 		}
 
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.role_changed", map[string]any{

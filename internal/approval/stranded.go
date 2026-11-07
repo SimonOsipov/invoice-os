@@ -73,7 +73,7 @@ func StrandedRunsTx(ctx context.Context, tx pgx.Tx) ([]StrandedRun, error) {
 	}
 	defer rows.Close()
 	var steps []strandedStep
-	var probes []CreatorProbe
+	var probes []SignerProbe
 	for rows.Next() {
 		var s strandedStep
 		var key *string
@@ -85,7 +85,7 @@ func StrandedRunsTx(ctx context.Context, tx pgx.Tx) ([]StrandedRun, error) {
 			s.run.RoleKey = *key
 		}
 		steps = append(steps, s)
-		probes = append(probes, CreatorProbe{InvoiceID: s.run.InvoiceID, RoleKey: key})
+		probes = append(probes, SignerProbe{InvoiceID: s.run.InvoiceID, RoleKey: key})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

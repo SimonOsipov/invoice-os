@@ -194,7 +194,7 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 				return err
 			}
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, nil); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.client_access_set", map[string]any{

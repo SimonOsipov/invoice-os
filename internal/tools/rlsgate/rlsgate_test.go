@@ -605,3 +605,26 @@ func TestEvaluate_SkipTwiceCountsOnce(t *testing.T) {
 		t.Errorf("skip name should print once; out=%q", out)
 	}
 }
+
+// TestEvaluatePrintsPackageLevelOutputWhenNoTestRan: a package that fails
+// before any test runs must show go test's own output, not only the
+// zero-results verdict.
+func TestEvaluatePrintsPackageLevelOutputWhenNoTestRan(t *testing.T) {
+	fixture := `{"Action":"start","Package":"x"}
+{"Action":"output","Package":"x","Output":"rls suite setup failed: dial tcp: connection refused\n"}
+{"Action":"output","Package":"x","Output":"FAIL\tx\t0.4s\n"}
+{"Action":"fail","Package":"x","Elapsed":0.49}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code == 0 {
+		t.Fatalf("evaluate() exit code = 0, want non-zero when no test ran; buf=%q", buf.String())
+	}
+	if !mentionsZeroResults(buf.String()) {
+		t.Errorf("evaluate() output does not mention zero test-level results; buf=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "rls suite setup failed: dial tcp: connection refused") {
+		t.Errorf("package-level output missing from render; buf=%q", buf.String())
+	}
+}

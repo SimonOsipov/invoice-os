@@ -5,13 +5,18 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -267,4 +272,163 @@ func TestStoreApprovalFacts_UppercaseIdReadsTheSameRow(t *testing.T) {
 	if got.RunState != "open" {
 		t.Errorf("RunState = %q, want %q -- the uuid comparison is by value, not by text", got.RunState, "open")
 	}
+}
+
+// armWithDelegation arms a new invoice and sets its pending step's delegation.
+func (fx *approvalFactsFixture) armWithDelegation(t *testing.T, super, app *pgxpool.Pool, number string, allow bool, delegate *string) string {
+	t.Helper()
+	fx.armInvoice(t, super, app, number)
+	mustExec(t, super, `UPDATE approval_run_steps SET allow_delegation = $2, delegate_user_id = $3
+		WHERE run_id IN (SELECT id FROM approval_runs WHERE invoice_id = $1)`, fx.invID, allow, delegate)
+	return fx.invID
+}
+
+// creatorFixture is a staffed admin who created the invoice, plus one other reviewer
+// who does not hold the step's role. It returns the reviewer's id.
+func creatorFixture(t *testing.T, super *pgxpool.Pool, label string) (approvalFactsFixture, string) {
+	t.Helper()
+	fx := seedApprovalFactsFixture(t, super, label, true)
+	other := uuid.NewString()
+	seedMembership(t, super, fx.tenantID, other, "reviewer")
+	return fx, other
+}
+
+// creatorDoors reads the creator's refusal sentence ("" when not refused) from the
+// detail wire, the list wire and the POST approve 403 body.
+func creatorDoors(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture, id string) (detail, list, decide string) {
+	t.Helper()
+	store := NewStore(app)
+	facts, err := store.ApprovalFacts(fx.ctx, id)
+	if err != nil || facts.CreatorErr != nil {
+		t.Fatalf("ApprovalFacts: %v, %v", err, facts.CreatorErr)
+	}
+	detail, _ = facts.Creator.Refusal()
+	_, gate, err := store.RowFacts(fx.ctx, []string{id})
+	if err != nil || gate.CreatorErr != nil {
+		t.Fatalf("RowFacts: %v, %v", err, gate.CreatorErr)
+	}
+	st := gate.Creator[id]
+	list, _ = st.Refusal()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(approvalStoreFor(app).DecideSeam, nil))
+	req := httptest.NewRequest("POST", "/v1/invoices/"+id+"/approvals", strings.NewReader(`{"decision":"approved"}`)).WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	switch rec.Code {
+	case http.StatusOK:
+	case http.StatusForbidden:
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %q: %v", rec.Body.String(), err)
+		}
+		decide = body["error"]
+	default:
+		t.Fatalf("approve status = %d: %s", rec.Code, rec.Body.String())
+	}
+	return detail, list, decide
+}
+
+func TestStoreApprovalFacts_CreatorStandingCountsTheStepDelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx, other := creatorFixture(t, super, "BUG-118-02-DETAIL")
+	both := approval.CreatorRefusedReason + " " + approval.CreatorNoRoleHolderReason
+	for _, c := range []struct {
+		name     string
+		allow    bool
+		delegate *string
+		other    bool
+		want     string
+	}{
+		{"anyone", true, nil, true, approval.CreatorRefusedReason},
+		{"named eligible", true, &other, true, approval.CreatorRefusedReason},
+		{"delegation off", false, nil, false, both},
+	} {
+		id := fx.armWithDelegation(t, super, app, "bug118-detail-"+strings.ReplaceAll(c.name, " ", "-"), c.allow, c.delegate)
+		got, err := NewStore(app).ApprovalFacts(fx.ctx, id)
+		if err != nil || got.CreatorErr != nil {
+			t.Fatalf("%s: ApprovalFacts: %v, %v", c.name, err, got.CreatorErr)
+		}
+		if got.Creator.OtherDelegate != c.other {
+			t.Errorf("%s: OtherDelegate = %t, want %t", c.name, got.Creator.OtherDelegate, c.other)
+		}
+		if reason, _ := got.Creator.Refusal(); reason != c.want {
+			t.Errorf("%s: Refusal = %q, want %q", c.name, reason, c.want)
+		}
+	}
+}
+
+func TestCreatorRefusal_DetailListAndDecideAgree(t *testing.T) {
+	super, app := dbTestPools(t)
+	both := approval.CreatorRefusedReason + " " + approval.CreatorNoRoleHolderReason
+	for _, c := range []struct {
+		name  string
+		allow bool
+		named bool
+		want  string
+	}{
+		{"anyone", true, false, approval.CreatorRefusedReason},
+		{"named eligible", true, true, approval.CreatorRefusedReason},
+		{"no delegation", false, false, both},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fx, other := creatorFixture(t, super, "BUG-118-02-AGREE-"+strings.ReplaceAll(strings.ToUpper(c.name), " ", "-"))
+			var delegate *string
+			if c.named {
+				delegate = &other
+			}
+			id := fx.armWithDelegation(t, super, app, "bug118-agree", c.allow, delegate)
+			detail, list, decide := creatorDoors(t, app, fx, id)
+			if detail != c.want || list != c.want || decide != c.want {
+				t.Errorf("detail %q, list %q, decide %q, want all %q", detail, list, decide, c.want)
+			}
+		})
+	}
+}
+
+func TestCreatorRefusal_NoOtherDeciderKeepsBothSentencesOnAllThreeDoors(t *testing.T) {
+	super, app := dbTestPools(t)
+	both := approval.CreatorRefusedReason + " " + approval.CreatorNoRoleHolderReason
+
+	t.Run("named delegate suspended", func(t *testing.T) {
+		fx, _ := creatorFixture(t, super, "BUG-118-02-NOOTHER-NAMED")
+		gone := uuid.NewString()
+		seedMembershipWithStatus(t, super, fx.tenantID, gone, "reviewer", "suspended")
+		id := fx.armWithDelegation(t, super, app, "bug118-named-suspended", true, &gone)
+		detail, list, decide := creatorDoors(t, app, fx, id)
+		if detail != both || list != both || decide != both {
+			t.Errorf("detail %q, list %q, decide %q, want all %q", detail, list, decide, both)
+		}
+	})
+
+	// With an anyone step, every other active approver is a delegate, so the creator is
+	// refused with one sentence or, with none left, not refused at all.
+	t.Run("anyone step, only other approver suspended", func(t *testing.T) {
+		fx, other := creatorFixture(t, super, "BUG-118-02-NOOTHER-ANYONE")
+		mustExec(t, super, `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, fx.tenantID, other)
+		id := fx.armWithDelegation(t, super, app, "bug118-anyone-suspended", true, nil)
+		detail, list, decide := creatorDoors(t, app, fx, id)
+		if detail != "" || list != "" || decide != "" {
+			t.Errorf("detail %q, list %q, decide %q, want none refused", detail, list, decide)
+		}
+	})
+
+	// The DB check forbids a delegate with delegation off, so only the probe is built here.
+	t.Run("delegation off, eligible delegate on the probe", func(t *testing.T) {
+		fx, other := creatorFixture(t, super, "BUG-118-02-NOOTHER-OFF")
+		id := fx.armWithDelegation(t, super, app, "bug118-off", false, nil)
+		key := "finance-lead"
+		var got map[string]approval.CreatorStanding
+		err := db.WithinRequestTenantTx(fx.ctx, app, func(tx pgx.Tx) error {
+			var err error
+			got, err = approval.CreatorStandingTx(fx.ctx, tx, fx.subject, []approval.CreatorProbe{{InvoiceID: id, RoleKey: &key, DelegateUserID: &other}})
+			return err
+		})
+		if err != nil {
+			t.Fatalf("CreatorStandingTx: %v", err)
+		}
+		if reason, _ := got[id].Refusal(); reason != both {
+			t.Errorf("Refusal = %q, want %q", reason, both)
+		}
+	})
 }

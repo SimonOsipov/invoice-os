@@ -799,10 +799,10 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
     expect(stripTabs.map(tabLabel), 'every firm settings tab must render, none unmatched').toEqual(
       FIRM_TAB_LABELS,
     )
-    const underlined = stripTabs.filter((el) => (el as HTMLElement).style.background === 'var(--sage-panel)')
+    const active = stripTabs.filter((el) => (el as HTMLElement).style.background === 'var(--sage-panel)')
     expect(
-      underlined.map(tabLabel),
-      'exactly the Members tab may be underlined -- the empty-strip symptom is no tab matching',
+      active.map(tabLabel),
+      'exactly the Members tab may be active -- the empty-strip symptom is no tab matching',
     ).toEqual(['Members'])
   })
 })

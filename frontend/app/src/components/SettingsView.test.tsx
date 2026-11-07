@@ -257,7 +257,8 @@ describe('Settings > active tab scrolled into the strip', () => {
     Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof Element.prototype.scrollIntoView
   })
   afterEach(() => {
-    Element.prototype.scrollIntoView = original as typeof Element.prototype.scrollIntoView
+    if (original === undefined) delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    else Element.prototype.scrollIntoView = original as typeof Element.prototype.scrollIntoView
     vi.restoreAllMocks()
   })
 
@@ -325,6 +326,37 @@ describe('Settings > active tab scrolled into the strip', () => {
     back(strip)
     rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
     expect(strip.scrollLeft).toBe(50)
+  })
+
+  it('re-reveals the active tab when the observed sizes change', () => {
+    const callbacks: Array<() => void> = []
+    const disconnect = vi.fn()
+    class RO {
+      constructor(cb: () => void) {
+        callbacks.push(cb)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect = disconnect
+    }
+    vi.stubGlobal('ResizeObserver', RO)
+    try {
+      const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [100, 250] }
+      const back = stub(rects)
+      const { container, rerender, unmount } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+      const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+      back(strip)
+      rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+      expect(strip.scrollLeft).toBe(0)
+      rects.Roles = [200, 400]
+      callbacks[callbacks.length - 1]()
+      expect(strip.scrollLeft).toBe(100)
+      expect(scrollIntoView).not.toHaveBeenCalled()
+      unmount()
+      expect(disconnect).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

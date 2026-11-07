@@ -69,15 +69,25 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
   const stripRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef<HTMLButtonElement>(null)
-  // Scroll only the strip (not scrollIntoView, which can scroll the page too).
+  // Scroll only the strip (not scrollIntoView, which can scroll the page too). Re-run on
+  // resize: a font swap, window resize or rotation changes tab widths after the first paint.
   useLayoutEffect(() => {
     const s = stripRef.current
     const b = activeRef.current
     if (!s || !b) return
-    const sr = s.getBoundingClientRect()
-    const br = b.getBoundingClientRect()
-    if (br.left < sr.left) s.scrollLeft += br.left - sr.left
-    else if (br.right > sr.right) s.scrollLeft += br.right - sr.right
+    const reveal = () => {
+      const sr = s.getBoundingClientRect()
+      const br = b.getBoundingClientRect()
+      if (br.left < sr.left) s.scrollLeft += br.left - sr.left
+      else if (br.right > sr.right) s.scrollLeft += br.right - sr.right
+    }
+    reveal()
+    // jsdom has no ResizeObserver.
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(reveal)
+    ro.observe(s)
+    for (const tab of Array.from(s.children)) ro.observe(tab)
+    return () => ro.disconnect()
   }, [settingsTab, tabs.length])
 
   function goList() {

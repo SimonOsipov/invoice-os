@@ -570,7 +570,7 @@ test('firm Settings: the live member directory, the live role grid, and every co
 
   // Roles is a TAB, and where it sits is the claim: reading the strip in order is what pins
   // "directly after Members" — a presence check would pass on a tab appended at the end.
-  await expect(tabStrip(page).locator('button')).toHaveText(FIRM_SETTINGS_TABS)
+  await expect(tabStrip(page).locator('button > span:last-child')).toHaveText(FIRM_SETTINGS_TABS)
 
   // --- the roster is the SERVER's ----------------------------------------------------------
   // Members is the default tab, so this renders without a click. Six rows, each carrying an
@@ -727,7 +727,7 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
   await goTo(page, 'Settings')
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
-  await expect(tabStrip(page).locator('button')).toHaveText(INHOUSE_SETTINGS_TABS)
+  await expect(tabStrip(page).locator('button > span:last-child')).toHaveText(INHOUSE_SETTINGS_TABS)
 
   // --- a DIFFERENT roster, from the same endpoint --------------------------------------------
   // Seven rows, none of them the firm's. The two tenants sharing one memberships table while

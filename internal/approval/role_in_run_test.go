@@ -274,6 +274,9 @@ func TestDeleteRole_RefusalCarriesPoliciesAndInvoicesTogether(t *testing.T) {
 	}
 }
 
+// The staffing sentence restated on purpose: the oracle for roleLastHolderMessage.
+const roleLastHolderSentence = "an open approval run is waiting on this workflow role — keep someone on it who can approve each listed invoice until the run is decided, or edit its invoice to cancel it, first"
+
 func TestRoleInUseMessage_ByCase(t *testing.T) {
 	pol := []PolicyRef{{ID: "p1", Name: "A"}}
 	inv := []InvoiceRef{{ID: "i1", Number: "INV-1"}}
@@ -287,6 +290,7 @@ func TestRoleInUseMessage_ByCase(t *testing.T) {
 		{"both", roleInUse{policies: pol, invoices: inv, invoicesTotal: 1}, roleInUseMessage + "; " + roleInRunMessage},
 		{"empty", roleInUse{}, roleInUseMessage},
 		{"last holder, invoices only", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
+		{"last holder sentence", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderSentence},
 		{"last holder, policies set", roleInUse{lastHolder: true, policies: pol, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 		{"last signer, invoices", roleInUse{lastSigner: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
 		{"last signer beats last holder", roleInUse{lastSigner: true, lastHolder: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
@@ -424,4 +428,17 @@ func TestStatusForErr_RoleInUseComposesTheSentence(t *testing.T) {
 			t.Errorf("%s: got %d %q, want 409 %q", c.name, status, msg, c.want)
 		}
 	}
+}
+
+func TestDeleteRole_RefusesWhileOnlyADelegateCanDecide(t *testing.T) {
+	f := newRunFixture(t, "APSC-14-07 delete delegate") // the fixture admin is active
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
+	inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("tax-reviewer"))
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 0), true, nil)
+
+	inUse := f.wantInUse(t, "tax-reviewer")
+	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != inv || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want [%s] and 1", inUse.invoices, inUse.invoicesTotal, inv)
+	}
+	assertRoleUntouched(t, f.super, f.tenantID, roleID)
 }

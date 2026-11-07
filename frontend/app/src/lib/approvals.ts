@@ -56,6 +56,7 @@ export interface ApprovalRowView {
   stepLabel: string
   roleLabel: string
   pendingHolderWarn: boolean
+  pendingHolderLabel: string | null
   dueAt: string | null
   overdue: boolean
   blockedReason: string | null
@@ -148,6 +149,12 @@ export function approvalRowView(
     stepLabel: pendingOrd == null ? '—' : `Step ${pendingOrd + 1}`,
     roleLabel: approval?.pending_role_title ?? '—',
     pendingHolderWarn: approval?.pending_holder_warn === true,
+    pendingHolderLabel:
+      approval?.pending_holder_warn !== true
+        ? null
+        : approval.pending_holder_reason === 'nobody_can_approve'
+          ? APPROVALS_COPY.nobodyCanApprove
+          : APPROVALS_COPY.unstaffedSeat,
     dueAt: approval?.due_at ?? null,
     overdue: approval?.overdue === true,
     blockedReason: row.approve_blocked_reason,
@@ -310,6 +317,7 @@ export const APPROVALS_COPY = {
   emptyPageTitle: 'No approvals on this page',
   emptyPageMessage: 'Go back to see the rest of the queue.',
   unstaffedSeat: 'Unstaffed seat',
+  nobodyCanApprove: 'Nobody here can approve this invoice',
   overdue: 'Overdue',
   blockedReasonLabel: "Why you can't approve this invoice",
 } as const
@@ -324,6 +332,7 @@ export const APPROVALS_COPY = {
 export interface ApprovalResolved {
   text: string
   warn: boolean
+  reason: 'unstaffed' | 'nobody_can_approve' | null
 }
 
 export interface ApprovalRunStep {
@@ -423,6 +432,7 @@ export interface ApprovalPendingView {
   roleTitle: string
   holderText: string | null
   holderWarn: boolean
+  holderWarnLabel: string | null
   dueLabel: string | null
   overdue: boolean
 }
@@ -475,6 +485,12 @@ export function approvalStateView(run: ApprovalRun): ApprovalStateView {
             roleTitle: step.workflow_role_title ?? '—',
             holderText: step.holder?.text ?? null,
             holderWarn: step.holder?.warn ?? false,
+            holderWarnLabel:
+              step.holder?.warn !== true
+                ? null
+                : step.holder.reason === 'nobody_can_approve'
+                  ? APPROVAL_CARD_COPY.nobodyCanApprove
+                  : APPROVAL_CARD_COPY.unstaffedSeat,
             dueLabel,
             overdue: step.overdue,
           },
@@ -507,6 +523,7 @@ export const APPROVAL_CARD_COPY = {
   // Same string as APPROVALS_COPY.unstaffedSeat -- deliberate duplication, not aliased: one
   // edit here never silently changes the queue screen's wording too.
   unstaffedSeat: 'Unstaffed seat',
+  nobodyCanApprove: 'Nobody here can approve this invoice',
   // Same string as APPROVALS_COPY.overdue -- see unstaffedSeat above.
   overdue: 'Overdue',
   stateOpen: 'In progress',

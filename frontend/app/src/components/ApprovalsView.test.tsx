@@ -85,7 +85,7 @@ function approvalRow(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
       run_state: 'open',
       pending_ord: 0,
       pending_role_title: 'Reviewer',
-      pending_holder_warn: false,
+      pending_holder_warn: false, pending_holder_reason: null,
       due_at: null,
       overdue: false,
     },
@@ -169,7 +169,7 @@ describe('A03-2: the queue renders what the fetch returned (rows map to wire fie
         invoice_number: 'INV-2001',
         buyer_name: 'Beta Traders Ltd',
         total,
-        approval: { run_state: 'open', pending_ord: 2, pending_role_title: 'Finance Lead', pending_holder_warn: false, due_at: '2020-01-01T00:00:00Z', overdue: true },
+        approval: { run_state: 'open', pending_ord: 2, pending_role_title: 'Finance Lead', pending_holder_warn: false, pending_holder_reason: null, due_at: '2020-01-01T00:00:00Z', overdue: true },
       }),
     ]
     mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 1 })])
@@ -275,12 +275,12 @@ describe('A03-6: the unstaffed seat is surfaced (pending_holder_warn)', () => {
     const warned = approvalRow({
       id: 'inv-warn',
       invoice_number: 'INV-WARN',
-      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, pending_holder_reason: 'unstaffed', due_at: null, overdue: false },
     })
     const clear = approvalRow({
       id: 'inv-clear',
       invoice_number: 'INV-CLEAR',
-      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: false, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: false, pending_holder_reason: null, due_at: null, overdue: false },
     })
     mockFetchSequence([listResponse([warned, clear], { limit: 50, offset: 0, total: 2 })])
 
@@ -293,6 +293,32 @@ describe('A03-6: the unstaffed seat is surfaced (pending_holder_warn)', () => {
     expect(clearRow, 'the row wrapper testid is missing').not.toBeNull()
     expect(warnedRow!.querySelector('[data-testid="approval-unstaffed-warning"]'), 'the unstaffed-seat warning must render on the flagged row').not.toBeNull()
     expect(clearRow!.querySelector('[data-testid="approval-unstaffed-warning"]'), 'a fully-staffed row must not show the warning').toBeNull()
+  })
+})
+
+describe('A03-6: the warning copy follows pending_holder_reason', () => {
+  it('unstaffed and nobody_can_approve rows carry their own copy in text and title; a calm row has none', async () => {
+    const mk = (id: string, warn: boolean, reason: 'unstaffed' | 'nobody_can_approve' | null) =>
+      approvalRow({
+        id,
+        invoice_number: id.toUpperCase(),
+        approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: warn, pending_holder_reason: reason, due_at: null, overdue: false },
+      })
+    mockFetchSequence([listResponse([mk('inv-un', true, 'unstaffed'), mk('inv-no', true, 'nobody_can_approve'), mk('inv-ok', false, null)], { limit: 50, offset: 0, total: 3 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-UN')
+
+    const tag = (n: string) => screen.getByText(n).closest('[data-testid="approval-row"]')!.querySelector('[data-testid="approval-unstaffed-warning"]')
+    const un = tag('INV-UN')!
+    const no = tag('INV-NO')!
+    expect(un.textContent).toBe('Unstaffed seat')
+    expect(un.getAttribute('title')).toBe('Unstaffed seat')
+    expect(no.textContent).toBe('Nobody here can approve this invoice')
+    expect(no.getAttribute('title')).toBe('Nobody here can approve this invoice')
+    expect(tag('INV-OK')).toBeNull()
+    expect(no.getAttribute('style')).toBe(un.getAttribute('style'))
+    expect(no.className).toBe(un.className)
   })
 })
 
@@ -730,12 +756,12 @@ describe('A04-7: row badges after settle come from the refetch only', () => {
     const before = approvalRow({
       id: 'inv-a',
       invoice_number: 'INV-A',
-      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: false, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: false, pending_holder_reason: null, due_at: null, overdue: false },
     })
     const after = approvalRow({
       id: 'inv-a',
       invoice_number: 'INV-A',
-      approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Finance Lead', pending_holder_warn: false, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Finance Lead', pending_holder_warn: false, pending_holder_reason: null, due_at: null, overdue: false },
     })
     const { approvalCalls } = mockBulkFetch([listResponse([before], { limit: 50, offset: 0, total: 1 }), listResponse([after], { limit: 50, offset: 0, total: 1 })])
 
@@ -1627,14 +1653,14 @@ describe('B17-D6: every cell outside the checkbox cell and the reason icon opens
       const ok = approvalRow({
         id: 'inv-ok',
         invoice_number: 'INV-OK',
-        approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, due_at: null, overdue: true },
+        approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, pending_holder_reason: 'unstaffed', due_at: null, overdue: true },
       })
       const blocked = approvalRow({
         id: 'inv-bl',
         invoice_number: 'INV-BL',
         can_approve: false,
         approve_blocked_reason: reason,
-        approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Controller', pending_holder_warn: false, due_at: '2026-07-10T00:00:00Z', overdue: false },
+        approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Controller', pending_holder_warn: false, pending_holder_reason: null, due_at: '2026-07-10T00:00:00Z', overdue: false },
       })
       mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
 
@@ -1712,7 +1738,7 @@ describe('AP-LOOK: the v2 table, bar and icon values', () => {
     const warned = approvalRow({
       id: 'inv-warn',
       invoice_number: 'INV-WARN',
-      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, pending_holder_reason: 'unstaffed', due_at: null, overdue: false },
     })
     const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
     mockBulkFetch([listResponse([warned, blocked], { limit: 50, offset: 0, total: 2 })])
@@ -1748,7 +1774,7 @@ describe('AP-LOOK: header, checkboxes, bar and pager follow § Design > Approval
     const ok = approvalRow({
       id: 'inv-ok',
       invoice_number: 'INV-OK',
-      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, due_at: null, overdue: false },
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, pending_holder_reason: 'unstaffed', due_at: null, overdue: false },
     })
     const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
     mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])

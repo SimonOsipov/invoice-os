@@ -370,6 +370,19 @@ func (r *sqlRecorder) tenantTxCount() int {
 	return len(filterContaining(r.sql, needle)) + len(filterContaining(r.batched, needle))
 }
 
+// without returns the recorded statements that do not contain substr.
+func (r *sqlRecorder) without(substr string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, s := range r.sql {
+		if !strings.Contains(s, substr) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func filterContaining(stmts []string, substr string) []string {
 	var out []string
 	for _, s := range stmts {

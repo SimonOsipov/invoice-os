@@ -207,7 +207,7 @@ const OPEN_RUN: InvoiceApproval = {
   run_state: 'open',
   pending_ord: 1,
   pending_role_title: 'Reviewer',
-  pending_holder_warn: false,
+  pending_holder_warn: false, pending_holder_reason: null,
   due_at: null,
   overdue: false,
 }
@@ -216,7 +216,7 @@ const APPROVED_RUN: InvoiceApproval = {
   run_state: 'approved',
   pending_ord: null,
   pending_role_title: null,
-  pending_holder_warn: false,
+  pending_holder_warn: false, pending_holder_reason: null,
   due_at: null,
   overdue: false,
 }
@@ -871,12 +871,12 @@ const rowWithoutApproval = (): InvoiceRecord => {
   return clone as unknown as InvoiceRecord
 }
 
-// fullApproval mirrors approval.RowFacts' six keys, all well-formed.
+// fullApproval mirrors approval.RowFacts' wire keys, all well-formed.
 const fullApproval: InvoiceApproval = {
   run_state: 'open',
   pending_ord: 0,
   pending_role_title: 'Finance Lead',
-  pending_holder_warn: false,
+  pending_holder_warn: false, pending_holder_reason: null,
   due_at: '2026-08-20T09:00:00Z',
   overdue: false,
 }
@@ -911,6 +911,13 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
     )
     expect(genuine.approval?.pending_holder_warn).toBe(true)
     expect(genuine.approval?.overdue).toBe(true)
+  })
+
+  it('ROW-2: pending_holder_reason is a string or null', () => {
+    const reasonOf = (v: unknown) =>
+      normaliseInvoiceRow(wireRow({ approval: { ...fullApproval, pending_holder_reason: v } as never })).approval?.pending_holder_reason
+    expect(reasonOf('nobody_can_approve')).toBe('nobody_can_approve')
+    for (const bad of [1, true, {}, undefined]) expect(reasonOf(bad)).toBeNull()
   })
 
   it('ROW-3: pending_role_title passes through byte-identically -- no SPA-authored fallback', () => {

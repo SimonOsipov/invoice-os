@@ -429,3 +429,16 @@ func TestStatusForErr_RoleInUseComposesTheSentence(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteRole_RefusesWhileOnlyADelegateCanDecide(t *testing.T) {
+	f := newRunFixture(t, "APSC-14-07 delete delegate") // the fixture admin is active
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
+	inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("tax-reviewer"))
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 0), true, nil)
+
+	inUse := f.wantInUse(t, "tax-reviewer")
+	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != inv || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want [%s] and 1", inUse.invoices, inUse.invoicesTotal, inv)
+	}
+	assertRoleUntouched(t, f.super, f.tenantID, roleID)
+}

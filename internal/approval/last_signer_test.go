@@ -36,7 +36,7 @@ func (f runFixture) staffedRoleKeys(t *testing.T, subject string) []string {
 
 func (f runFixture) refuseUnsigned(keys ...string) error {
 	return db.WithinTenantTx(context.Background(), f.app, f.tenantID, func(tx pgx.Tx) error {
-		return RefuseUnsignedWaitingRolesTx(context.Background(), tx, keys)
+		return RefuseUnsignedWaitingRolesTx(context.Background(), tx, keys, nil)
 	})
 }
 
@@ -431,4 +431,131 @@ func TestRefuseUnsignedWaitingRoles_CapsAtTwentyAcrossRolesAndSumsTheTotal(t *te
 	if !slices.Equal(got, want) || inUse.invoicesTotal != 25 {
 		t.Errorf("listed ids = %v, total = %d, want X's 15 then Y's 5 oldest (%v) and 25", got, inUse.invoicesTotal, want)
 	}
+}
+
+func TestRefuseUnsignedWaitingRoles_ADelegateCountsAsASigner(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-14-07 delegate signer")
+	r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // in no role
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, f.runID, 0), true, &d)
+
+	setMembershipStatus(t, f.super, f.tenantID, r, "suspended")
+	f.wantPassedUnsigned(t, "tax-reviewer") // D still signs
+
+	setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+	inUse := f.wantRefusedUnsigned(t, "tax-reviewer")
+	want := InvoiceRef{ID: f.invoiceID, Number: "INV-1", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"}
+	if len(inUse.invoices) != 1 || inUse.invoices[0] != want || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want [%+v] and 1", inUse.invoices, inUse.invoicesTotal, want)
+	}
+}
+
+func (f runFixture) signedSteps(t *testing.T, target string, keys []string) []SignedStep {
+	t.Helper()
+	var got []SignedStep
+	if err := db.WithinTenantTx(context.Background(), f.app, f.tenantID, func(tx pgx.Tx) error {
+		var err error
+		got, err = SignedWaitingStepsTx(context.Background(), tx, target, keys)
+		return err
+	}); err != nil {
+		t.Fatalf("SignedWaitingStepsTx: %v", err)
+	}
+	return got
+}
+
+func (f runFixture) refuseSigned(keys []string, signed []SignedStep) error {
+	return db.WithinTenantTx(context.Background(), f.app, f.tenantID, func(tx pgx.Tx) error {
+		return RefuseUnsignedWaitingRolesTx(context.Background(), tx, keys, signed)
+	})
+}
+
+func (f runFixture) wantRefusedSigned(t *testing.T, keys []string, signed []SignedStep) *roleInUse {
+	t.Helper()
+	err := f.refuseSigned(keys, signed)
+	var inUse *roleInUse
+	if !errors.Is(err, ErrRoleInUse) || !errors.As(err, &inUse) || !inUse.lastSigner {
+		t.Fatalf("RefuseUnsignedWaitingRolesTx(%v, %d signed) err = %v, want a lastSigner refusal", keys, len(signed), err)
+	}
+	return inUse
+}
+
+// suspendAdmins leaves the workspace with no active admin: through the writers one always remains (P26).
+func (f runFixture) suspendAdmins(t *testing.T) {
+	t.Helper()
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND role = 'admin'`, f.tenantID); err != nil {
+		t.Fatalf("suspend the admins: %v", err)
+	}
+}
+
+func TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign(t *testing.T) {
+	t.Run("named", func(t *testing.T) {
+		f := newRunFixture(t, "APSC-14-07 signed named")
+		d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+		x := seedWorkflowRole(t, f.super, f.tenantID, "x", "X")
+		staffWorkflowRole(t, f.super, f.tenantID, x, d, 0)
+		seedWorkflowRole(t, f.super, f.tenantID, "y", "Y")
+		xInv, xRun := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-X", f.versionID, pendingOn("x"))
+		yInv, yRun := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Y", f.versionID, pendingOn("y"))
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, xRun, 0), true, &d)
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, yRun, 0), true, &d)
+
+		signed := f.signedSteps(t, d, []string{"x"}) // X is the role loop's; Y's step is D's alone
+		if len(signed) != 1 {
+			t.Fatalf("SignedWaitingStepsTx returned %d steps, want Y's step only", len(signed))
+		}
+
+		setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+		inUse := f.wantRefusedSigned(t, []string{"x"}, signed)
+		want := []InvoiceRef{{ID: xInv, Number: "INV-X", RoleKey: "x", RoleTitle: "X"}, {ID: yInv, Number: "INV-Y", RoleKey: "y", RoleTitle: "Y"}}
+		if !slices.Equal(inUse.invoices, want) || inUse.invoicesTotal != 2 {
+			t.Errorf("invoices = %+v, total = %d, want %+v and 2", inUse.invoices, inUse.invoicesTotal, want)
+		}
+	})
+
+	t.Run("anyone", func(t *testing.T) {
+		f := newRunFixture(t, "APSC-14-07 signed anyone")
+		f.suspendAdmins(t)
+		d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+		seedWorkflowRole(t, f.super, f.tenantID, "z", "Z")
+		zInv, zRun := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Z", f.versionID, pendingOn("z"))
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, zRun, 0), true, nil)
+
+		signed := f.signedSteps(t, d, nil)
+		if len(signed) != 1 {
+			t.Fatalf("SignedWaitingStepsTx returned %d steps, want Z's step", len(signed))
+		}
+
+		setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+		inUse := f.wantRefusedSigned(t, nil, signed)
+		want := InvoiceRef{ID: zInv, Number: "INV-Z", RoleKey: "z", RoleTitle: "Z"}
+		if len(inUse.invoices) != 1 || inUse.invoices[0] != want || inUse.invoicesTotal != 1 {
+			t.Errorf("invoices = %+v, total = %d, want [%+v] and 1", inUse.invoices, inUse.invoicesTotal, want)
+		}
+
+		seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // E reaches A and signs
+		if err := f.refuseSigned(nil, signed); err != nil {
+			t.Errorf("RefuseUnsignedWaitingRolesTx with E signing: %v, want nil", err)
+		}
+	})
+
+	t.Run("out of reach", func(t *testing.T) {
+		f := newRunFixture(t, "APSC-14-07 signed out of reach")
+		f.suspendAdmins(t)
+		entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14-07 signed out of reach B")
+		d := seedMemberOf(t, f.super, f.tenantID, limitedTo(entB))
+		seedWorkflowRole(t, f.super, f.tenantID, "z", "Z")
+		_, zRun := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Z", f.versionID, pendingOn("z"))
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, zRun, 0), true, nil)
+
+		signed := f.signedSteps(t, d, nil)
+		if len(signed) != 0 {
+			t.Fatalf("SignedWaitingStepsTx returned %d steps, want none: D cannot reach the invoice", len(signed))
+		}
+
+		setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+		if err := f.refuseSigned(nil, signed); err != nil {
+			t.Errorf("RefuseUnsignedWaitingRolesTx = %v, want nil: not D's invoice (Q18)", err)
+		}
+	})
 }

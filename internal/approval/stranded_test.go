@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -244,13 +245,21 @@ func TestStranded_AgreesWithUnsignableReasons(t *testing.T) {
 	add("reach", limitedTo(entB))
 	creatorID := add("creator")
 	creator := memberIn(t, f, creatorID, memberSpec{role: "reviewer"})
+	add("deleg") // empty: its step names an active reviewer outside every role
+	add("deleg-off")
+	delegate := memberIn(t, f, "", memberSpec{role: "reviewer"})
 
 	invByKey := map[string]string{}
-	var probes []CreatorProbe
+	var probes []SignerProbe
 	for _, k := range keys {
-		inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+k, f.versionID, pendingOn(k))
+		inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+k, f.versionID, pendingOn(k))
 		invByKey[k] = inv
-		probes = append(probes, CreatorProbe{InvoiceID: inv, RoleKey: ptr(k)})
+		p := SignerProbe{InvoiceID: inv, RoleKey: ptr(k)}
+		if k == "deleg" {
+			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 0), true, &delegate)
+			p.AllowDelegation, p.DelegateUserID = true, &delegate
+		}
+		probes = append(probes, p)
 	}
 	seedHistory(t, f.super, f.tenantID, invByKey["creator"], nil, creator)
 
@@ -263,6 +272,16 @@ func TestStranded_AgreesWithUnsignableReasons(t *testing.T) {
 		if isListed != (reasons[i] != "") || row.Reason != reasons[i] {
 			t.Errorf("role %s: listed = %v with %q, unsignableReasonsTx = %q", k, isListed, row.Reason, reasons[i])
 		}
+	}
+	idx := func(k string) int { return slices.Index(keys, k) }
+	if reasons[idx("deleg")] != "" {
+		t.Errorf("role deleg: unsignableReasonsTx = %q, want \"\" (an eligible delegate decides)", reasons[idx("deleg")])
+	}
+	if _, isListed := listed[invByKey["deleg"]]; isListed {
+		t.Errorf("role deleg: listed as stranded, but an eligible delegate can decide it")
+	}
+	if r := listed[invByKey["deleg-off"]]; r.Reason != StrandedNoHolder || reasons[idx("deleg-off")] != StrandedNoHolder {
+		t.Errorf("role deleg-off: listed %+v, reason %q, want no holder from both", r, reasons[idx("deleg-off")])
 	}
 	for _, want := range []string{"", StrandedDeleted, StrandedNoHolder, StrandedOutOfReach, StrandedCreatorOnly} {
 		if !seen[want] {
@@ -590,28 +609,40 @@ func TestListStranded_ReadsATenantScheduledForDeletion(t *testing.T) {
 	}
 }
 
-// Pins today's holder-only count: APSC-14 flips this test when it counts a delegate.
-func TestStranded_ADelegateDoesNotCountAsADecider(t *testing.T) {
-	for _, named := range []bool{true, false} {
-		name := "anyone"
-		if named {
-			name = "named"
-		}
-		t.Run(name, func(t *testing.T) {
-			f := newRunFixture(t, "DELEG-01-03 stranded "+name)
+// A delegate who could approve the step counts as someone who can decide it (DELEG-01 hand-off).
+func TestStranded_AnEligibleDelegateCountsAsADecider(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		delegate func(t *testing.T, f runFixture) *string
+		want     string // "" = not listed
+	}{
+		{"named", func(t *testing.T, f runFixture) *string {
+			d := uuid.NewString()
+			seedMembership(t, f.super, f.tenantID, d, "reviewer", "active")
+			return &d
+		}, ""},
+		{"anyone", func(*testing.T, runFixture) *string { return nil }, ""},
+		{"named ineligible", func(t *testing.T, f runFixture) *string {
+			d := uuid.NewString()
+			seedMembership(t, f.super, f.tenantID, d, "reviewer", "suspended")
+			return &d
+		}, StrandedNoHolder},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRunFixture(t, "APSC-14-07 stranded "+c.name)
 			staffWith(t, f, seedWorkflowRole(t, f.super, f.tenantID, "susp", "Suspended"), "reviewer", "suspended")
-			inv, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+name, f.versionID, pendingOn("susp"))
-			var delegate *string
-			if named {
-				d := uuid.NewString()
-				seedMembership(t, f.super, f.tenantID, d, "reviewer", "active")
-				delegate = &d
-			}
-			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, runID, 0), true, delegate)
+			inv, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+c.name, f.versionID, pendingOn("susp"))
+			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, runID, 0), true, c.delegate(t, f))
 
 			rows := strandedFor(t, f.app, f.tenantID)
-			if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedNoHolder {
-				t.Fatalf("rows = %+v, want the run listed once with reason no holder", rows)
+			if c.want == "" {
+				if len(rows) != 0 {
+					t.Fatalf("rows = %+v, want none: an eligible delegate decides the step", rows)
+				}
+				return
+			}
+			if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != c.want {
+				t.Fatalf("rows = %+v, want the run listed once with reason %q", rows, c.want)
 			}
 		})
 	}

@@ -1558,3 +1558,39 @@ func TestGateFactsTx_NamedDelegateIsCallerIsDelegate(t *testing.T) {
 		}
 	}
 }
+
+// delegateWarnPage seeds the page of the delegate warning rows: three invoices on client A waiting on one
+// empty role. I1 names an active reviewer outside the role, I2 is "anyone" (an admin is active),
+// I3 names a suspended reviewer.
+func delegateWarnPage(w *warnWorld) []string {
+	w.role("wk-dlg")
+	named := seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "reviewer"})
+	gone := seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "reviewer", status: "suspended"})
+	seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "admin"})
+	ids := []string{w.waiting(w.entA, ptr("wk-dlg")), w.waiting(w.entA, ptr("wk-dlg")), w.waiting(w.entA, ptr("wk-dlg"))}
+	for i, d := range []*string{&named, nil, &gone} {
+		var step string
+		if err := w.super.QueryRow(context.Background(),
+			`SELECT s.id FROM approval_run_steps s JOIN approval_runs r ON r.id = s.run_id WHERE r.invoice_id = $1`, ids[i]).Scan(&step); err != nil {
+			w.t.Fatalf("read the run step of invoice %d: %v", i+1, err)
+		}
+		setStepDelegation(w.t, w.super, step, true, d)
+	}
+	return ids
+}
+
+func TestRowFactsTx_ADelegateStepIsNoWarning(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-07 delegate row")
+	ids := delegateWarnPage(w)
+
+	facts := facts2(rowFacts(t, w.app, w.tenantID, ids), ids)
+	un := HolderReasonUnstaffed
+	wantWarn := []bool{false, false, true}
+	wantReason := []*string{nil, nil, &un}
+	for i, rf := range facts {
+		if rf.PendingHolderWarn != wantWarn[i] || reasonText(rf.PendingHolderReason) != reasonText(wantReason[i]) {
+			t.Errorf("invoice %d: warn = %t reason = %s, want warn = %t reason = %s", i+1,
+				rf.PendingHolderWarn, reasonText(rf.PendingHolderReason), wantWarn[i], reasonText(wantReason[i]))
+		}
+	}
+}

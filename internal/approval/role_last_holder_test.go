@@ -500,3 +500,55 @@ func TestSetRoleMembers_SignerReadErrorWritesNothing(t *testing.T) {
 		t.Errorf("workflow_role.staffed rows = %d, want 0", n)
 	}
 }
+
+func TestSetRoleMembers_AnEligibleDelegateLetsTheRoleEmpty(t *testing.T) {
+	t.Run("anyone", func(t *testing.T) {
+		f := newLastHolderFixture(t, "APSC-14-07 empty with anyone") // the fixture admin is active
+		seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, f.runID, 0), true, nil)
+
+		f.wantSaved(t)
+		if got := staffingRows(t, f.super, f.roleID); len(got) != 0 {
+			t.Errorf("members = %v, want none after the save", userIDs(got))
+		}
+	})
+
+	t.Run("named delegate suspended", func(t *testing.T) {
+		f := newLastHolderFixture(t, "APSC-14-07 empty with a suspended delegate")
+		r := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+		d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", status: "suspended"})
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, f.runID, 0), true, &d)
+
+		inUse := f.wantRefused(t)
+		if len(inUse.invoices) != 1 || inUse.invoices[0].ID != f.invoiceID || inUse.invoicesTotal != 1 {
+			t.Errorf("invoices = %+v, total = %d, want [%s] and 1", inUse.invoices, inUse.invoicesTotal, f.invoiceID)
+		}
+		if got := userIDs(staffingRows(t, f.super, f.roleID)); len(got) != 1 || got[0] != r {
+			t.Errorf("members = %v, want [%s] unchanged", got, r)
+		}
+	})
+}
+
+func TestSetRoleMembers_JudgesEveryPendingStepOnTheRole(t *testing.T) {
+	f := newRunFixture(t, "APSC-14-07 every step")
+	seedWorkflowRole(t, f.super, f.tenantID, "k", "K")
+	two := func(number string) (invoiceID, runID string) {
+		return seedOpenRun(t, f.super, f.tenantID, f.entityID, number, f.versionID,
+			pendingOn("k"), runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("k")})
+	}
+	stuck, stuckRun := two("INV-stuck") // step 0 can be decided by anyone, step 1 by nobody
+	setStepDelegation(t, f.super, oneApprovalStep(t, f.super, stuckRun, 0), true, nil)
+	_, freeRun := two("INV-free") // both steps can be decided by anyone
+	for _, ord := range []int{0, 1} {
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, freeRun, ord), true, nil)
+	}
+
+	_, err := f.store.SetRoleMembers(f.admin, "k", []string{})
+	var inUse *roleInUse
+	if !errors.As(err, &inUse) || !inUse.lastHolder {
+		t.Fatalf("SetRoleMembers err = %v, want a lastHolder refusal", err)
+	}
+	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != stuck || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want [%s] once and 1", inUse.invoices, inUse.invoicesTotal, stuck)
+	}
+}

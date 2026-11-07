@@ -70,6 +70,16 @@ func seedWaitingRunOn(t *testing.T, super *pgxpool.Pool, tenant, roleKey, entity
 	return invoiceID, runID
 }
 
+// lsDelegate sets the delegation of the run's one step: allow with a nil user is "anyone".
+func lsDelegate(t *testing.T, super *pgxpool.Pool, runID string, allow bool, delegate *string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_run_steps SET allow_delegation = $2, delegate_user_id = $3 WHERE run_id = $1`,
+		runID, allow, delegate); err != nil {
+		t.Fatalf("set step delegation: %v", err)
+	}
+}
+
 func cancelRun(t *testing.T, super *pgxpool.Pool, runID string) {
 	t.Helper()
 	if _, err := super.Exec(context.Background(),
@@ -922,6 +932,19 @@ func TestLastSigner_JudgedPerInvoice(t *testing.T) {
 			t.Errorf("remove P once R can approve the invoice: %v, want nil", err)
 		}
 	})
+
+	t.Run("delegate", func(t *testing.T) {
+		w := lsWorld(t, super, app)
+		r := lsReviewer(t, w, "Rita Eze", nil)
+		d := lsReviewer(t, w, "Dee Eze", nil) // in no role
+		seedRoleStaffedBy(t, super, w.tenant, approver, r)
+		_, runID := seedWaitingRun(t, super, w.tenant, approver)
+		lsDelegate(t, super, runID, true, &d)
+
+		if err := w.lsSetStatus(w.admin, r, "suspended"); err != nil {
+			t.Errorf("suspend R while the step's delegate D signs: %v, want nil", err)
+		}
+	})
 }
 
 func TestLastSigner_HandlersAnswerTheNewSentence(t *testing.T) {
@@ -1004,4 +1027,90 @@ func TestClientAccess_HandlerAnswersTheRoleInUseBody(t *testing.T) {
 	rec := w.lsHTTP(lsMux(w.store, nil), w.admin, "PUT", "/v1/memberships/"+r+"/clients", fmt.Sprintf(`{"client_access":[%q]}`, entB))
 
 	wantItemNames(t, wantRefusalBody(t, rec), 1, invoice)
+
+	x := newLSDelegateWorld(t, super, app) // the refused narrowing of a named delegate
+	rec = x.lsHTTP(lsMux(x.store, nil), x.admin, "PUT", "/v1/memberships/"+x.d+"/clients", fmt.Sprintf(`{"client_access":[%q]}`, x.entB))
+	wantItemNames(t, wantRefusalBody(t, rec), 1, x.invoice)
+}
+
+// lsDelegateWorld is a firm world with an empty role, a run on client A whose step names D (an active reviewer, all clients, in no role).
+type lsDelegateWorld struct {
+	invWorld
+	entA, entB, d, invoice, roleID string
+}
+
+func newLSDelegateWorld(t *testing.T, super, app *pgxpool.Pool) lsDelegateWorld {
+	t.Helper()
+	w := lsFirmWorld(t, super, app)
+	x := lsDelegateWorld{invWorld: w, entA: seedEntity(t, super, w.tenant), entB: seedEntity(t, super, w.tenant)}
+	x.d = lsReviewer(t, w, "Dee Eze", nil)
+	x.roleID = seedRoleStaffedBy(t, super, w.tenant, approver)
+	var runID string
+	x.invoice, runID = seedWaitingRunOn(t, super, w.tenant, approver, x.entA, "")
+	lsDelegate(t, super, runID, true, &x.d)
+	return x
+}
+
+var lsFourWrites = []struct {
+	name string
+	do   func(x lsDelegateWorld) error
+}{
+	{"remove", func(x lsDelegateWorld) error { return x.lsRemove(x.admin, x.d) }},
+	{"suspend", func(x lsDelegateWorld) error { return x.lsSetStatus(x.admin, x.d, "suspended") }},
+	{"demote to preparer", func(x lsDelegateWorld) error { return x.lsSetRole(x.admin, x.d, "preparer") }},
+	{"narrow to B", func(x lsDelegateWorld) error { _, err := x.set(x.admin, x.d, setIDs(x.entB)); return err }},
+}
+
+func TestLastSigner_ANamedDelegateIsJudged(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("refused when nobody else can approve", func(t *testing.T) {
+		x := newLSDelegateWorld(t, super, app)
+		before := x.lsState(t, x.d)
+		for _, c := range lsFourWrites {
+			body := wantLastSigner(t, c.do(x))
+			if len(body.Items) != 1 || body.Items[0]["id"] != x.invoice || body.Items[0]["workflow_role_key"] != approver ||
+				body.Items[0]["workflow_role_title"] != approver || body.Total != 1 {
+				t.Errorf("%s: items = %v total %d, want the invoice on %s", c.name, body.Items, body.Total, approver)
+			}
+			if after := x.lsState(t, x.d); after != before {
+				t.Errorf("%s: a refusal wrote:\nbefore %s\nafter  %s", c.name, before, after)
+			}
+		}
+	})
+
+	for _, c := range lsFourWrites {
+		t.Run("signer kept: "+c.name, func(t *testing.T) {
+			x := newLSDelegateWorld(t, super, app)
+			lsStaff(t, super, x.tenant, x.roleID, lsReviewer(t, x.invWorld, "Rita Eze", nil), 0)
+			if err := c.do(x); err != nil {
+				t.Errorf("%s while R in the role signs: %v, want nil", c.name, err)
+			}
+		})
+	}
+
+	t.Run("deleted role", func(t *testing.T) {
+		x := newLSDelegateWorld(t, super, app)
+		if _, err := super.Exec(context.Background(), `UPDATE workflow_roles SET deleted_at = now() WHERE id = $1`, x.roleID); err != nil {
+			t.Fatalf("soft delete the role: %v", err)
+		}
+		body := wantLastSigner(t, x.lsSetStatus(x.admin, x.d, "suspended"))
+		wantItemNames(t, body, 1, x.invoice)
+	})
+}
+
+func TestLastSigner_AnAnyoneStepKeepsTheAdmin(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, c := range lsFourWrites {
+		t.Run(c.name, func(t *testing.T) {
+			x := newLSDelegateWorld(t, super, app)
+			if _, err := super.Exec(context.Background(),
+				`UPDATE approval_run_steps SET delegate_user_id = NULL WHERE tenant_id = $1`, x.tenant); err != nil {
+				t.Fatalf("make the step anyone: %v", err)
+			}
+			if err := c.do(x); err != nil {
+				t.Errorf("%s on an anyone step: %v, want nil (w.admin reaches A and signs)", c.name, err)
+			}
+		})
+	}
 }

@@ -831,3 +831,23 @@ func TestDecide_SignerReadErrorRollsBackTheDecision(t *testing.T) {
 		t.Errorf("approval_decisions rows = %d, want 0", n)
 	}
 }
+
+func TestApprovalRun_ADelegateStepIsNoWarning(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-07 delegate card")
+	ids := delegateWarnPage(w)
+
+	for i, wantWarn := range []bool{false, false, true} {
+		h := w.panel(ids[i]).Steps[0].Holder
+		rf := rowFacts(t, w.app, w.tenantID, []string{ids[i]})[ids[i]]
+		if h.Text != "Nobody assigned" {
+			t.Errorf("invoice %d: holder.text = %q, want the role-level Nobody assigned", i+1, h.Text)
+		}
+		if h.Warn != wantWarn || (h.Reason != nil) != wantWarn {
+			t.Errorf("invoice %d: holder warn = %t reason = %s, want warn = %t", i+1, h.Warn, reasonText(h.Reason), wantWarn)
+		}
+		if h.Warn != rf.PendingHolderWarn || reasonText(h.Reason) != reasonText(rf.PendingHolderReason) {
+			t.Errorf("invoice %d: card warn/reason = %t/%s, row = %t/%s, want equal", i+1,
+				h.Warn, reasonText(h.Reason), rf.PendingHolderWarn, reasonText(rf.PendingHolderReason))
+		}
+	}
+}

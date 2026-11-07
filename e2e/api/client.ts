@@ -781,15 +781,16 @@ export interface InvoiceListItem extends Invoice {
   demotion: Demotion | null
 }
 
-// Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
+// Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its WIRE keys.
 // RowFacts also carries PendingRoleKey, tagged json:"-" because it is the list gate's
 // input and not wire copy (APPR-12-09), so it has no member here
-// (TestListItem_ApprovalObjectHasExactlySixKeys).
+// (TestListItem_ApprovalObjectKeySetIsExact).
 export interface InvoiceApproval {
   run_state: string
   pending_ord: number | null
   pending_role_title: string | null
   pending_holder_warn: boolean
+  pending_holder_reason?: 'unstaffed' | 'nobody_can_approve' | null
   due_at: string | null
   overdue: boolean
 }
@@ -1711,6 +1712,7 @@ export function deleteApprovalPolicy(token: string, id: string): Promise<Approva
 export interface ApprovalResolved {
   text: string
   warn: boolean
+  reason?: 'unstaffed' | 'nobody_can_approve' | null
 }
 
 export interface ApprovalRunStep {

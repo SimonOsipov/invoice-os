@@ -324,6 +324,7 @@ export const APPROVALS_COPY = {
 export interface ApprovalResolved {
   text: string
   warn: boolean
+  reason?: 'unstaffed' | 'nobody_can_approve' | null
 }
 
 export interface ApprovalRunStep {

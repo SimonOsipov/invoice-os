@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -223,7 +224,7 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 // AND status = 'active' so a suspended admin cannot reactivate themselves
 // (TestMembership_SuspendedAdminCannotAdminister).
 //
-// The second statement locks the target AND the whole active-admin set in
+// lockTargetAndAdmins locks the target AND the whole active-admin set in
 // user_id order: the last-active-admin guard then runs over rows no concurrent
 // PATCH can move under it, and contention waits instead of deadlocking. A plain
 // count, or a lock on the target alone, would let two concurrent PATCHes strand
@@ -235,6 +236,9 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 // requested status (200 no-op, no UPDATE, no audit) -> last active admin. The
 // no-op must precede the last-admin guard, or re-suspending an already-suspended
 // sole admin would 409 a request that changes nothing.
+//
+// approval.LockTenantPublishTx is taken right after the admin check, before any row lock. A suspension
+// that leaves a waiting role with no signer is refused with approval.ErrRoleInUse after the UPDATE, before the audit row.
 func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) (MemberAccess, error) {
 	// Re-validated here, not only in the handler, so a direct caller fails
 	// closed rather than writing an out-of-vocabulary status.
@@ -248,6 +252,9 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		caller, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrNotPermitted); err != nil {
+			return err
+		}
+		if err := approval.LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
@@ -280,11 +287,20 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			}
 		}
 
+		var keys []string
+		if status == "suspended" {
+			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target.UserID); err != nil {
+				return err
+			}
+		}
 		from := target.Status
 		if err := tx.QueryRow(ctx,
 			`UPDATE memberships SET status = $2 WHERE user_id = $1
 			 RETURNING user_id, role, status, display_name, email`, userID, status,
 		).Scan(&updated.UserID, &updated.Role, &updated.Status, &updated.DisplayName, &updated.Email); err != nil {
+			return err
+		}
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
 			return err
 		}
 
@@ -364,12 +380,16 @@ func lockTargetAndAdmins(ctx context.Context, tx pgx.Tx, userID string) (locked 
 }
 
 // RemoveMember ends a member's access: active-admin caller, target exists, already removed
-// (idempotent), last admin; then endMembership and a membership.removed audit row in one transaction.
+// (idempotent), last admin; then endMembership, approval.ErrRoleInUse when a waiting role is left with no signer,
+// and a membership.removed audit row in one transaction. The tenant lock is taken right after the admin check.
 func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
 	var removed MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
 		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrRemoveNotPermitted); err != nil {
+			return err
+		}
+		if err := approval.LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
@@ -394,7 +414,14 @@ func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, 
 				return ErrLastActiveAdmin
 			}
 		}
+		keys, err := approval.StaffedRoleKeysTx(ctx, tx, target.UserID)
+		if err != nil {
+			return err
+		}
 		if err := endMembership(ctx, tx, target.UserID); err != nil {
+			return err
+		}
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{

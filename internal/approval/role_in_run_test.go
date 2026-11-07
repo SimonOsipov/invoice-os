@@ -288,6 +288,8 @@ func TestRoleInUseMessage_ByCase(t *testing.T) {
 		{"empty", roleInUse{}, roleInUseMessage},
 		{"last holder, invoices only", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 		{"last holder, policies set", roleInUse{lastHolder: true, policies: pol, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
+		{"last signer, invoices", roleInUse{lastSigner: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
+		{"last signer beats last holder", roleInUse{lastSigner: true, lastHolder: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
 	}
 	for _, c := range cases {
 		if got := c.e.message(); got != c.want {
@@ -378,6 +380,9 @@ func TestDeleteRoleHandler_RealStoreRunRefusalHasEmptyPoliciesArray(t *testing.T
 	}
 	if got := rawField(t, body, "policies"); got != "[]" {
 		t.Errorf("policies = %s, want []", got)
+	}
+	if got := rawField(t, body, "invoices"); got != fmt.Sprintf(`[{"id":%q,"invoice_number":"INV-1"}]`, inv) {
+		t.Errorf("invoices = %s, want items with only id and invoice_number", got)
 	}
 	var decoded struct {
 		Invoices []InvoiceRef `json:"invoices"`

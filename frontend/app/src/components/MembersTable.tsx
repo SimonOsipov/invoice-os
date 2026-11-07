@@ -29,6 +29,7 @@ import {
   REVOKE_CONFIRM,
   REVOKE_CONFIRMED,
   REVOKE_KEEP,
+  type LastSignerInvoices,
   type Member,
   type PatchableStatus,
   type PendingInvite,
@@ -36,7 +37,7 @@ import {
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
 import type { Policy } from '../lib/workflows'
-import { InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
+import { InitialsChip, MemberStatusPill, MoreMenu, WaitingInvoiceList, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
 // Gap 12, head '11px 16px' and row '12px 16px' sit in the head and row styles below.
@@ -86,7 +87,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
   /** The remove write. Never rejects; MembersView renders a refusal in `statusError`. */
   onRemove?: (id: string) => void
   /** The last failed write's server reason, and the row it happened on. */
-  statusError: { id: string; message: string } | null
+  statusError: { id: string; message: string; waiting: LastSignerInvoices } | null
   /** Pending invitations, matched to an `invited` row by `Member.id`. */
   invites?: readonly PendingInvite[]
   onResend?: (id: string) => void
@@ -425,6 +426,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
                   }}
                 >
                   {statusError.message}
+                  <WaitingInvoiceList testId="member-status-error-invoices" waiting={statusError.waiting} />
                 </div>
               )}
 

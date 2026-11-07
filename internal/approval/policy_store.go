@@ -1447,6 +1447,7 @@ func ineligibleDelegateTx(ctx context.Context, tx pgx.Tx, versionID string, tree
 	}
 	defer rows.Close()
 	bad := map[string]*delegateIneligible{}
+	var firstRow *delegateIneligible
 	for rows.Next() {
 		var id string
 		var d delegateIneligible
@@ -1454,10 +1455,19 @@ func ineligibleDelegateTx(ctx context.Context, tx pgx.Tx, versionID string, tree
 			return err
 		}
 		bad[id] = &d
+		if firstRow == nil {
+			firstRow = &d
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	return pickIneligibleDelegate(bad, firstRow, tree)
+}
+
+// pickIneligibleDelegate returns the first offending step in tree order, a condition's
+// then-lane before its else-lane. Offenders the walk cannot place fail closed on firstRow.
+func pickIneligibleDelegate(bad map[string]*delegateIneligible, firstRow *delegateIneligible, tree []Step) error {
 	if len(bad) == 0 {
 		return nil
 	}
@@ -1479,5 +1489,5 @@ func ineligibleDelegateTx(ctx context.Context, tx pgx.Tx, versionID string, tree
 	if d := first(tree); d != nil {
 		return d
 	}
-	return nil
+	return firstRow
 }

@@ -313,7 +313,7 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 		if selfApproved {
 			approvedAs = "self_approved"
 		}
-		// Two literals, not a merge helper: the audit-number scan reads an inline literal only.
+		// Inline literals on purpose: TestRLS_AuditNumberExemptionTablesMatchExactly (internal/platform/db).
 		if actedKey == "" {
 			err = audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
 				"invoice_id":     invoiceID,
@@ -360,7 +360,7 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 			return false, err
 		}
 
-		// Two literals, not a merge helper: the audit-number scan reads an inline literal only.
+		// Inline literals on purpose: TestRLS_AuditNumberExemptionTablesMatchExactly (internal/platform/db).
 		if actedKey == "" {
 			err = audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
 				"invoice_id":     invoiceID,

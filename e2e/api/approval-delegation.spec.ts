@@ -1,4 +1,4 @@
-// A step delegate decides a published step, over the deployed gateway (DELEG-01). One workspace, serial tests.
+// A step delegate decides a published step, over the deployed gateway. One workspace, serial tests.
 import { test, expect } from '@playwright/test'
 import {
   acceptById,

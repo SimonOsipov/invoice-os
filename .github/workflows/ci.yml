@@ -1382,6 +1382,19 @@ jobs:
       - name: No tracked file holds a production id
         run: go run ./internal/tools/prodidgate
 
+  rule-globs:
+    name: Rule-file globs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Prove the guard fires
+        run: go test ./internal/tools/ruleglobs/ -count=1
+      - name: Every rule-file glob matches a tracked file
+        run: go run ./internal/tools/ruleglobs
+
   # goose refuses a migration numbered below the database's current version.
   # Per-PR environments migrate a fresh database, so only production sees it.
   # Unconditional for the stale-refs reason: a skip reads like a clean check.
@@ -1543,7 +1556,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: ${{ github.event_name == 'workflow_dispatch' && 'CI (nightly)' || 'CI' }}
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, prod-ids, rls, idp, queue, audit, stale-refs, migration-order, contract-step, cite-refs, history-rewrite, govulncheck, advisories]
+    needs: [changes, go, frontend, library, blog, rule-globs, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, prod-ids, rls, idp, queue, audit, stale-refs, migration-order, contract-step, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1556,6 +1569,7 @@ jobs:
           echo "docling-canary: ${{ needs.docling-canary.result }}"
           echo "docling-test:  ${{ needs.docling-test.result }}"
           echo "prod-ids:      ${{ needs.prod-ids.result }}"
+          echo "rule-globs:    ${{ needs.rule-globs.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
           echo "idp:           ${{ needs.idp.result }}"
@@ -1626,6 +1640,9 @@ jobs:
           fi
           if [ "${{ needs.prod-ids.result }}" != "success" ]; then
             echo "::error::Production id scan failed"; exit 1
+          fi
+          if [ "${{ needs.rule-globs.result }}" != "success" ]; then
+            echo "::error::A rule-file glob matches no tracked file, or the check could not run"; exit 1
           fi
           if [ "${{ needs.migration-order.result }}" != "success" ]; then
             echo "::error::A new migration sorts before one already on the base branch, or a migration is deleted without a deliberate mark"; exit 1

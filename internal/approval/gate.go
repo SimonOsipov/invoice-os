@@ -27,16 +27,17 @@ type GateFacts struct {
 // RowFacts is one invoice row's approval standing, for the list.
 //
 // PendingRoleKey is the list gate's input, never wire copy: json:"-" keeps the six
-// public keys unchanged (TestListItem_ApprovalObjectHasExactlySixKeys). The delegation
+// public key set unchanged (TestListItem_ApprovalObjectKeySetIsExact). The delegation
 // fields are gate input only, with the same tag.
 type RowFacts struct {
-	RunState          string     `json:"run_state"`
-	PendingOrd        *int       `json:"pending_ord"`
-	PendingRoleTitle  *string    `json:"pending_role_title"`
-	PendingHolderWarn bool       `json:"pending_holder_warn"`
-	DueAt             *time.Time `json:"due_at"`
-	Overdue           bool       `json:"overdue"`
-	PendingRoleKey    *string    `json:"-"`
+	RunState            string     `json:"run_state"`
+	PendingOrd          *int       `json:"pending_ord"`
+	PendingRoleTitle    *string    `json:"pending_role_title"`
+	PendingHolderWarn   bool       `json:"pending_holder_warn"`
+	PendingHolderReason *string    `json:"pending_holder_reason"`
+	DueAt               *time.Time `json:"due_at"`
+	Overdue             bool       `json:"overdue"`
+	PendingRoleKey      *string    `json:"-"`
 
 	PendingAllowDelegation bool    `json:"-"`
 	PendingDelegateUserID  *string `json:"-"`
@@ -204,8 +205,8 @@ func HeldRoleKeysTx(ctx context.Context, tx pgx.Tx, keys []string, subject strin
 }
 
 // RowFactsTx reads the list-row approval standing of a set of invoice ids. An id with no
-// run gets no entry (TestRowFactsTx_InvoiceWithNoRunIsAbsentFromTheMap). Five statements
-// whatever the row and role count (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount).
+// run gets no entry (TestRowFactsTx_InvoiceWithNoRunIsAbsentFromTheMap). The statement count
+// is constant in row and role count (TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount).
 func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFacts, error) {
 	facts := make(map[string]RowFacts, len(ids))
 	invoiceOfRun := map[string]string{}
@@ -277,11 +278,29 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		return nil, err
 	}
 
-	exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys)
+	exists, titles, _, err := resolveRunRoles(ctx, tx, roleKeys, false)
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range pending {
+
+	// One signer statement for the page; a read error fails the read (never degrades to no warning).
+	var probes []SignerProbe
+	var probed []int
+	for i, p := range pending {
+		if p.roleKey != nil {
+			probes = append(probes, SignerProbe{InvoiceID: p.invoiceID, RoleKey: p.roleKey, AllowDelegation: p.allow, DelegateUserID: p.delegate})
+			probed = append(probed, i)
+		}
+	}
+	reasons, err := unsignableReasonsTx(ctx, tx, probes)
+	if err != nil {
+		return nil, err
+	}
+	reasonOf := make(map[int]string, len(probed))
+	for j, i := range probed {
+		reasonOf[i] = reasons[j]
+	}
+	for i, p := range pending {
 		rf := facts[p.invoiceID]
 		ord := p.ord
 		rf.PendingOrd = &ord
@@ -297,7 +316,8 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 			rf.PendingRoleKey = p.roleKey
 			title := roleTitle(exists[*p.roleKey], titles[*p.roleKey])
 			rf.PendingRoleTitle = &title
-			rf.PendingHolderWarn = resolveHolder(exists[*p.roleKey], holders[*p.roleKey]).Warn
+			rf.PendingHolderReason = holderReason(reasonOf[i])
+			rf.PendingHolderWarn = rf.PendingHolderReason != nil
 		}
 		facts[p.invoiceID] = rf
 	}

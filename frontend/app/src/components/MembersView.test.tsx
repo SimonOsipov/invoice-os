@@ -2173,7 +2173,7 @@ describe('the Client users placeholder', () => {
 
 describe('APSC-13-03: a last-signer refusal lists the waiting invoices', () => {
   // Mirrors Go `memberLastSignerMessage` (internal/approval/approval.go).
-  const SENTENCE = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+  const SENTENCE = 'this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it'
   const ITEMS = [
     { id: 'a', invoice_number: 'INV-1', workflow_role_key: 'tax', workflow_role_title: 'Tax' },
     { id: 'b', invoice_number: 'INV-2', workflow_role_key: 'audit', workflow_role_title: 'Audit' },

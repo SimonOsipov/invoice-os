@@ -45,7 +45,7 @@ function WaitingOn({ pending }: { pending: NonNullable<ApprovalStateView['pendin
           {pending.holderText}
           {pending.holderWarn && (
             <span data-testid="approval-holder-warn" className="mono" style={{ marginLeft: 6, fontSize: 10, color: 'var(--status-amber-text)' }}>
-              {APPROVAL_CARD_COPY.unstaffedSeat}
+              {pending.holderWarnLabel}
             </span>
           )}
         </div>

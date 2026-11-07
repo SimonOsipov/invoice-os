@@ -50,8 +50,8 @@ import {
   PERSONAS,
   type ApprovalPolicy,
 } from './client'
-import { createInvoice, editInvoice, getInvoiceApproval, validateInvoice } from './client'
-import { acceptById, inviteWithToken, listMine, memberships, registerFresh, removeMember, setMemberRole, subjectOf, type PendingInvite } from './client'
+import { createInvoice, editInvoice, getInvoiceApproval, listInvoices, validateInvoice } from './client'
+import { acceptById, inviteWithToken, listMine, memberships, registerFresh, removeMember, setMemberClients, setMemberRole, subjectOf, type ClientAccess, type PendingInvite } from './client'
 import { assertErrorEnvelope, codeListsReady, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 import { freshPolicyName, freshRoleTitle, freshTin } from './fixtures'
 
@@ -376,8 +376,8 @@ const MSG_SCOPE_ROLE = 'a scope names a workflow role that does not exist or was
 const MSG_CATCH_ALL = 'a policy with no scopes must stay last while any policy has scopes' // ErrPolicyCatchAll
 const MSG_NOT_ADMIN = 'only an admin can change approval policies' // ErrNotPermitted
 const MSG_ROLE_IN_USE = 'this workflow role is named by a policy in force — publish each policy without the role, or delete the policy, first' // roleInUseMessage (ErrRoleInUse)
-const MSG_ROLE_LAST_HOLDER = 'an open approval run is waiting on this workflow role — keep at least one admin or reviewer on it until the run is decided, or edit its invoice to cancel it, first' // roleLastHolderMessage (ErrRoleInUse)
-const MSG_MEMBER_LAST_SIGNER = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first' // memberLastSignerMessage (ErrRoleInUse)
+const MSG_ROLE_LAST_HOLDER = 'an open approval run is waiting on this workflow role — keep someone on it who can approve each listed invoice until the run is decided, or edit its invoice to cancel it, first' // roleLastHolderMessage (ErrRoleInUse)
+const MSG_MEMBER_LAST_SIGNER = 'this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it — add someone to the role who can approve it, or decide the run or edit its invoice to cancel it, first' // memberLastSignerMessage (ErrRoleInUse)
 const MSG_ROLE_IN_RUN = 'an open approval run is waiting on this workflow role — wait until it is decided, or edit its invoice to cancel it, first' // roleInRunMessage (ErrRoleInUse)
 const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'workflow_role_keys']
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
@@ -1248,9 +1248,9 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
   })
 
   // Joins a second account to the workspace as an active reviewer through the invite flow.
-  async function joinReviewer(t: string): Promise<{ userId: string }> {
+  async function joinReviewer(t: string, access: ClientAccess = 'all'): Promise<{ userId: string }> {
     const account = await registerFresh('apsc13')
-    await inviteWithToken(t, (await me(t)).tenant.id, account.email, 'reviewer')
+    await inviteWithToken(t, (await me(t)).tenant.id, account.email, 'reviewer', access)
     const session = (await signInSession(account.email, account.password)).access_token
     const mine = await listMine(session)
     expect(mine.status, 'the invitee lists the invite').toBe(200)
@@ -1293,6 +1293,121 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     expect((await patchStatusRaw(t, userId, 'suspended')).status, 'suspending answers 200').toBe(200)
     expect((await removeMember(t, userId)).status, 'removing answers 200').toBe(200)
     expect((await rowOf(t, userId))?.status, 'the roster shows the member removed').toBe('removed')
+  })
+
+  // The list row and the invoice card each judge the pending step's holder on their own read.
+  async function warnings(t: string, invoice: { id: string; entity_id: string }) {
+    const row = (await listInvoices(t, { entity_id: invoice.entity_id })).invoices.find((i) => i.id === invoice.id)
+    const holder = (await getInvoiceApproval(t, invoice.id)).steps.find((s) => s.state === 'pending')?.holder
+    return {
+      list: row?.approval?.pending_holder_warn,
+      card: holder?.warn,
+      listReason: row?.approval?.pending_holder_reason,
+      cardReason: holder?.reason,
+    }
+  }
+  const NOBODY = { list: true, card: true, listReason: 'nobody_can_approve', cardReason: 'nobody_can_approve' }
+  const CLEAR = { list: false, card: false, listReason: null, cardReason: null }
+  const changeLines = { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] }
+  const memberItem = (invoice: { id: string; invoice_number: string }, role: { key: string; title: string }) => [
+    { id: invoice.id, invoice_number: invoice.invoice_number, workflow_role_key: role.key, workflow_role_title: role.title },
+  ]
+
+  test('409 and the holder warning when the role\'s only member created the invoice and another approver reaches its client', async () => {
+    test.setTimeout(180_000)
+    const t = await freshWorkspace()
+    const owner = (await me(t)).user.id
+    const { role, invoice } = await armRunOnRole(t)
+    expect((await staffRoleRaw(t, role.key, [owner])).status, 'the creator alone saves').toBe(200)
+    expect(await warnings(t, invoice), 'the creator may self-approve while no other approver exists').toEqual(CLEAR)
+
+    await joinReviewer(t)
+    expect(await warnings(t, invoice), 'a second approver makes the creator no signer').toEqual(NOBODY)
+    expect(await membersOf(t, role.key), 'the role still lists the creator').toEqual([owner])
+
+    const { userId: r } = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [owner, r])).status, 'staffing a signer saves').toBe(200)
+    expect(await warnings(t, invoice), 'a member who can approve clears the warning').toEqual(CLEAR)
+
+    const body = assertRoleInRun(await staffRoleRaw(t, role.key, [owner]), invoice, 'dropping the only signer')
+    expect(body.error, 'the last-holder sentence').toBe(MSG_ROLE_LAST_HOLDER) // roleLastHolderMessage
+    expect(await membersOf(t, role.key), 'the refused save changes nothing').toEqual([owner, r])
+
+    const suspended = assertRoleInRun(await patchStatusRaw(t, r, 'suspended'), invoice, 'suspending the only signer', memberItem(invoice, role))
+    expect(suspended.error, 'the member sentence').toBe(MSG_MEMBER_LAST_SIGNER) // memberLastSignerMessage
+    expect((await rowOf(t, r))?.status, 'the refusal leaves the reviewer active').toBe('active')
+
+    await editInvoice(t, invoice.id, changeLines)
+    expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
+    expect((await patchStatusRaw(t, r, 'suspended')).status, 'suspending answers 200 once the run is cancelled').toBe(200)
+  })
+
+  test('409 and the holder warning when no member of the role reaches the invoice\'s client', async () => {
+    test.setTimeout(180_000)
+    const t = await freshWorkspace()
+    const other = await createEntity(t, { name: `APSC entity ${freshPolicyName()}`, tin: freshTin() })
+    const { userId: r } = await joinReviewer(t, [other.id])
+    const { role, policy, invoice } = await armRunOnRole(t)
+    expect(await warnings(t, invoice), 'an empty role is unstaffed').toEqual({ list: true, card: true, listReason: 'unstaffed', cardReason: 'unstaffed' })
+
+    const refusedSave = assertRoleInRun(await staffRoleRaw(t, role.key, [r]), invoice, 'staffing a reviewer who cannot reach the client')
+    expect(refusedSave.error, 'the last-holder sentence').toBe(MSG_ROLE_LAST_HOLDER) // roleLastHolderMessage
+    expect(await membersOf(t, role.key), 'the refused save leaves the role empty').toEqual([])
+
+    const { userId: s } = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [r, s])).status, 'a set that holds an in-reach signer saves').toBe(200)
+    expect(await warnings(t, invoice), 'an in-reach member clears the warning').toEqual(CLEAR)
+
+    const removed = assertRoleInRun(await removeMember(t, s), invoice, 'removing the only in-reach member', memberItem(invoice, role))
+    expect(removed.error, 'the member sentence').toBe(MSG_MEMBER_LAST_SIGNER) // memberLastSignerMessage
+    expect((await rowOf(t, s))?.status, 'the refusal leaves the member active').toBe('active')
+    expect(await membersOf(t, role.key), 'the role still lists both').toEqual([r, s])
+
+    const deleted = assertRoleInRun(await deleteRoleRaw(t, role.key), invoice, 'deleting a role a policy and a run name')
+    expect(deleted.error, 'the composed sentence').toBe(`${MSG_ROLE_IN_USE}; ${MSG_ROLE_IN_RUN}`)
+    expect(deleted.policies, 'names the policy').toEqual([{ id: policy.id, name: policy.name }])
+
+    await editInvoice(t, invoice.id, changeLines)
+    expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
+    expect((await setMemberClients(t, s, [other.id])).status, 'narrowing answers 200 once no run waits').toBe(200)
+
+    // Arming is never refused: the second invoice waits on a role nobody in reach staffs.
+    const second = await createInvoice(t, { entity_id: invoice.entity_id, ...cleanInvoiceFields(`INV-APSC14-${freshTin()}`) })
+    expect((await validateInvoice(t, second.id)).status, 'the clean fixture arms a run').toBe('validated')
+    const run = await getInvoiceApproval(t, second.id)
+    expect([run.state, run.steps.map((st) => [st.state, st.workflow_role_key])], 'the run is open on the role').toEqual([
+      'open',
+      [['pending', role.key]],
+    ])
+    expect(await warnings(t, second), 'neither member reaches the client').toEqual(NOBODY)
+    expect(await membersOf(t, role.key), 'the role still lists both').toEqual([r, s])
+
+    await editInvoice(t, second.id, changeLines)
+    expect((await getInvoiceApproval(t, second.id)).state, 'the edit cancels the second run').toBe('cancelled')
+    expect((await removeMember(t, s)).status, 'removing answers 200 once no run waits').toBe(200)
+  })
+
+  test('409: narrowing the last signer\'s client access lists the invoice, then 200 once an edit cancels the run', async () => {
+    test.setTimeout(180_000)
+    const t = await freshWorkspace()
+    const other = await createEntity(t, { name: `APSC entity ${freshPolicyName()}`, tin: freshTin() })
+    const { role, invoice } = await armRunOnRole(t)
+    const { userId: s } = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [s])).status, 'the all-clients reviewer staffs the role').toBe(200)
+
+    const body = assertRoleInRun(await setMemberClients(t, s, [other.id]), invoice, 'narrowing the last signer', memberItem(invoice, role))
+    expect(body.invoices_total, 'one waiting invoice').toBe(1)
+    expect(body.error, 'the member sentence').toBe(MSG_MEMBER_LAST_SIGNER) // memberLastSignerMessage
+    expect(body.policies, 'names no policy').toEqual([])
+    expect((await rowOf(t, s))?.client_access, 'the refusal leaves the access').toBe('all')
+    expect(await membersOf(t, role.key), 'the role still lists the reviewer').toEqual([s])
+
+    expect((await setMemberClients(t, s, 'all')).status, 'a change that keeps reach is not judged').toBe(200)
+
+    await editInvoice(t, invoice.id, changeLines)
+    expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
+    expect((await setMemberClients(t, s, [other.id])).status, 'narrowing answers 200 once the run is cancelled').toBe(200)
+    expect((await rowOf(t, s))?.client_access, 'the access is narrowed').toEqual([other.id])
   })
 
   test('409: deleting a role a policy in force names in a scope, then 200 once the policy is gone', async () => {

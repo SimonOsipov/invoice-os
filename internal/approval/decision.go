@@ -216,7 +216,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 	).Scan(&run.State, &run.OpenedAt, &run.ClosedAt, &run.ClosedBy); err != nil {
 		return Run{}, err
 	}
-	if err := assembleRunStepsAndDecisions(ctx, tx, &run); err != nil {
+	if err := assembleRunStepsAndDecisions(ctx, tx, invoiceID, &run); err != nil {
 		return Run{}, err
 	}
 	return run, nil

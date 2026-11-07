@@ -1215,8 +1215,8 @@ func TestPolicy_ValidateTreeRefusesMisplacedDelegation(t *testing.T) {
 		{"notify with a delegate", func() stepInput { s := legalStepOfKind("notify"); s.DelegateUserID = ptr(uid); return s }(), true},
 		{"delegate with delegation off", approval(func(s *stepInput) { s.DelegateUserID = ptr(uid) }), true},
 		{"delegate not a uuid", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr("not-a-uuid") }), true},
-		{"delegate with a NUL", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr(uid + "\x00") }), true},
-		{"delegate in urn spelling", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr("urn:uuid:" + uid) }), true},
+		{"delegate with a NUL", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr(uid+"\x00") }), true},
+		{"delegate in urn spelling", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr("urn:uuid:"+uid) }), true},
 		{"control: delegation on with a uuid", approval(func(s *stepInput) { s.AllowDelegation, s.DelegateUserID = true, ptr(uid) }), false},
 		{"control: delegation on for anyone", approval(func(s *stepInput) { s.AllowDelegation = true }), false},
 	}

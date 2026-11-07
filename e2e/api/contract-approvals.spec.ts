@@ -31,6 +31,9 @@ import {
   createApprovalPolicy,
   createEntity,
   createWorkflowRole,
+  deleteMyAccount,
+  getAuditLog,
+  provisionStaffAccount,
   deleteApprovalPolicy,
   deleteWorkflowRole,
   getApprovalPolicy,
@@ -1248,7 +1251,7 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
   })
 
   // Joins a second account to the workspace as an active reviewer through the invite flow.
-  async function joinReviewer(t: string, access: ClientAccess = 'all'): Promise<{ userId: string }> {
+  async function joinReviewer(t: string, access: ClientAccess = 'all'): Promise<{ userId: string; token: string }> {
     const account = await registerFresh('apsc13')
     await inviteWithToken(t, (await me(t)).tenant.id, account.email, 'reviewer', access)
     const session = (await signInSession(account.email, account.password)).access_token
@@ -1257,7 +1260,7 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     const invite = (mine.body as { invitations: PendingInvite[] }).invitations[0]
     const accepted = await acceptById(session, invite.id, 'APSC-13 reviewer')
     expect(accepted.status, 'the invitee accepts').toBe(200)
-    return { userId: subjectOf(session) }
+    return { userId: subjectOf(session), token: session }
   }
   // setMembershipStatus throws on non-2xx, so the refusals go through rawFetch.
   const patchStatusRaw = (t: string, userId: string, status: 'active' | 'suspended') =>
@@ -1308,6 +1311,11 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
   }
   const NOBODY = { list: true, card: true, listReason: 'nobody_can_approve', cardReason: 'nobody_can_approve' }
   const CLEAR = { list: false, card: false, listReason: null, cardReason: null }
+  const UNSTAFFED = { list: true, card: true, listReason: 'unstaffed', cardReason: 'unstaffed' }
+  // internal/tenancy/account_deletion.go audit.Record event name.
+  const EVENT_ACCOUNT_DELETED = 'membership.account_deleted'
+  // internal/tenancy/stranded_alert.go recordStrandedAlert event name.
+  const EVENT_STRANDED_ALERT = 'membership.stranded_alert'
   const changeLines = { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] }
   const memberItem = (invoice: { id: string; invoice_number: string }, role: { key: string; title: string }) => [
     { id: invoice.id, invoice_number: invoice.invoice_number, workflow_role_key: role.key, workflow_role_title: role.title },
@@ -1408,6 +1416,56 @@ test.describe('approval-policy scopes and order (fresh workspace per test)', () 
     expect((await getInvoiceApproval(t, invoice.id)).state, 'the edit cancels the run').toBe('cancelled')
     expect((await setMemberClients(t, s, [other.id])).status, 'narrowing answers 200 once the run is cancelled').toBe(200)
     expect((await rowOf(t, s))?.client_access, 'the access is narrowed').toEqual([other.id])
+  })
+
+  test("a self-deletion and a staff deletion that strand a run go through and record the admins' alert", async () => {
+    test.setTimeout(240_000)
+    const t = await freshWorkspace()
+    const tenantId = (await me(t)).tenant.id
+    const { role, invoice } = await armRunOnRole(t)
+    const rowsOf = async (event: string) => (await getAuditLog(t, { event: [event], limit: 100 })).events
+    const deletedRow = async (userId: string) =>
+      (await rowsOf(EVENT_ACCOUNT_DELETED)).find((e) => (e.payload as { user_id?: string }).user_id === userId)
+    const alertRows = () => rowsOf(EVENT_STRANDED_ALERT)
+    const ALERT = { stranded_role_keys: [role.key], stranded_invoices_total: 1, admins: 1, delivery: 'sent' } // stranded_alert.go
+
+    // A reviewer in no role strands nothing.
+    const q = await joinReviewer(t)
+    const quiet = await deleteMyAccount(q.token, { outcome: 'leave' })
+    expect([quiet.status, quiet.body], 'a no-role reviewer leaves').toEqual([200, { outcome: 'leave' }])
+    expect(Object.keys((await deletedRow(q.userId))?.payload as object).sort(), 'the deletion row keeps its keys').toEqual(['role', 'user_id'])
+    expect(await alertRows(), 'no alert for a deletion that strands nothing').toHaveLength(0)
+
+    // Self half.
+    const s = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [s.userId])).status, 'S staffs the role').toBe(200)
+    expect(await warnings(t, invoice), 'S holds the step').toEqual(CLEAR)
+    const self = await deleteMyAccount(s.token, { outcome: 'leave' })
+    expect([self.status, self.body], 'S leaves while the run waits').toEqual([200, { outcome: 'leave' }])
+    expect(Object.keys((await deletedRow(s.userId))?.payload as object).sort()).toEqual(['role', 'user_id'])
+    await expect.poll(async () => (await alertRows()).length, { timeout: 30_000 }).toBe(1)
+    const first = (await alertRows())[0]
+    expect(first.actor_kind, 'the alert is a system row').toBe('system')
+    expect(first.payload).toEqual(ALERT)
+    expect(await warnings(t, invoice), 'the step is unstaffed after S').toEqual(UNSTAFFED)
+
+    // Staff half.
+    const b = await joinReviewer(t)
+    expect((await staffRoleRaw(t, role.key, [b.userId])).status, 'B staffs the role').toBe(200)
+    expect(await warnings(t, invoice), 'B holds the step').toEqual(CLEAR)
+    const granted = await provisionStaffAccount('staff-strand')
+    const staff = (await signInSession(granted.email, granted.password)).access_token
+    // internal/tenancy/staff_account_deletion.go route.
+    const res = await rawFetch(`/api/tenancy/v1/staff/tenants/${tenantId}/members/${b.userId}/deletion`, {
+      method: 'POST',
+      headers: authed(staff),
+      body: { outcome: 'leave', reason: 'e2e strand' },
+    })
+    expect([res.status, res.body], 'staff delete B while the run waits').toEqual([200, { outcome: 'leave' }])
+    expect(Object.keys((await deletedRow(b.userId))?.payload as object).sort()).toEqual(['reason', 'role', 'user_id'])
+    await expect.poll(async () => (await alertRows()).length, { timeout: 30_000 }).toBe(2)
+    expect((await alertRows())[0].payload).toEqual(ALERT)
+    expect(await warnings(t, invoice), 'the step is unstaffed after B').toEqual(UNSTAFFED)
   })
 
   test('409: deleting a role a policy in force names in a scope, then 200 once the policy is gone', async () => {

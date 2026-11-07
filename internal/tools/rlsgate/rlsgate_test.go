@@ -736,6 +736,9 @@ func TestEvaluateBuildOutputReplayedOncePerBrokenBuild(t *testing.T) {
 	own := `{"ImportPath":"p [p.test]","Action":"build-output","Output":"OWNERR\n"}
 {"Action":"fail","Package":"p","FailedBuild":"p [p.test]"}
 `
+	xtest := `{"ImportPath":"xt_test [xt.test]","Action":"build-output","Output":"XTESTERR\n"}
+{"Action":"fail","Package":"xt","FailedBuild":"xt_test [xt.test]"}
+`
 	shared := `{"ImportPath":"dep/sub","Action":"build-output","Output":"SHAREDERR\n"}
 {"Action":"fail","Package":"a","FailedBuild":"dep/sub"}
 {"Action":"fail","Package":"b","FailedBuild":"dep/sub"}
@@ -744,6 +747,7 @@ func TestEvaluateBuildOutputReplayedOncePerBrokenBuild(t *testing.T) {
 		{"dependency compile error", dep, "DEPERR"},
 		{"vet failure", vet, "VETERR"},
 		{"FailedBuild equals Package", own, "OWNERR"},
+		{"external _test package compile error", xtest, "XTESTERR"},
 		{"two packages share a broken dependency", shared, "SHAREDERR"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

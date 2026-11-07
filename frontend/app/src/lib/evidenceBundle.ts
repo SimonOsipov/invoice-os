@@ -1,6 +1,7 @@
 // Hand-maintained mirror of internal/archive/preview.go's Preview and manifest.go's
 // manifestEntity / manifestPeriod / manifestCounts. EB-01-1's tag scan catches drift.
 
+import type { AuditEvent } from './audit'
 import type { AuditRange } from './auditFilters'
 import { fetchAttachment } from './fetchAttachment'
 import type { AuthedFetch } from './portfolio'
@@ -63,6 +64,33 @@ export function bundleRequestFor(entityId: string | null, range: AuditRange, now
     from: new Date(now.getTime() - PRESET_DAYS[range.preset] * DAY_MS).toISOString(),
     to: now.toISOString(),
   }
+}
+
+export interface BundlePrefill {
+  company: { id: string; name: string }
+  range: AuditRange
+}
+
+type BundleEventCompany = Pick<AuditEvent, 'entity_id' | 'company_name' | 'company_scope'>
+
+// A deleted company has no name; the drawer's list cannot show it and the bundle would refuse it.
+export function bundleCompanyFor(e: BundleEventCompany): { id: string; name: string } | null {
+  if (e.company_scope !== 'company' || !e.entity_id || !e.company_name) return null
+  return { id: e.entity_id, name: e.company_name }
+}
+
+const utcDay = (iso: string) => new Date(iso).toISOString().slice(0, 10)
+
+// The bundle selects invoices by created_at, so the range starts on the invoice's day (min keeps from <= to).
+export function bundlePrefillFor(
+  e: BundleEventCompany & Pick<AuditEvent, 'created_at'>,
+  invoiceCreatedAt: string,
+): BundlePrefill | null {
+  const company = bundleCompanyFor(e)
+  if (!company) return null
+  const to = utcDay(e.created_at)
+  const from = utcDay(invoiceCreatedAt)
+  return { company, range: { preset: 'custom', from: from < to ? from : to, to } }
 }
 
 function bundleParams(r: BundleRequest): URLSearchParams {

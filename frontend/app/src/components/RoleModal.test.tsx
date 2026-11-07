@@ -10,6 +10,15 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+// React's scheduler captures setImmediate at load, so wrap it before the imports below run.
+const commit = vi.hoisted(() => {
+  const real = globalThis.setImmediate
+  const hold = { ms: 0 }
+  globalThis.setImmediate = ((fn: (...a: unknown[]) => void, ...args: unknown[]) =>
+    hold.ms ? real(() => setTimeout(fn, hold.ms, ...args)) : real(fn, ...args)) as typeof setImmediate
+  return hold
+})
+
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
@@ -100,7 +109,13 @@ function renderModalRerenderable(ctxOver: Record<string, unknown> = {}) {
   return { rerender: (next: Record<string, unknown>) => view.rerender(el(next)) }
 }
 
-afterEach(cleanup)
+afterEach(async () => {
+  // Let a held commit land before unmount, or it leaks into the next test.
+  if (commit.ms) await new Promise((resolve) => setTimeout(resolve, commit.ms + 10))
+  commit.ms = 0
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  cleanup()
+})
 
 describe('AC-5: RoleModal.save() calls the server-minted-key create verb, arguments only', () => {
   it('TestRoleModal_UsesServerMintedKey', () => {
@@ -201,7 +216,11 @@ describe('the delete confirm', () => {
 })
 
 describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejection', () => {
-  it('a rejected delete keeps the modal open and shows the reason', async () => {
+  // A loaded CI box lands React's commit later than one tick; held 25ms here to force that deterministically.
+  it.each([0, 25])('a rejected delete keeps the modal open and shows the reason (commit held %ims)', async (heldMs) => {
+    // The scheduler skips setImmediate while a message loop is already pending, so let it go idle first.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    commit.ms = heldMs
     const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404))
     const { onClose, onFlash } = renderModal({ mode: 'edit', role: role() }, { deleteRole })
 

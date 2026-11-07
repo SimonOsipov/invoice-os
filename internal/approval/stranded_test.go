@@ -443,8 +443,8 @@ func TestStranded_AnotherTenantsRoleDoesNotStaffThisRun(t *testing.T) {
 		t.Fatalf("rows = %+v, want A's run as deleted", rows)
 	}
 
-	// RLS hides B's roles from A's transaction, so the step read's tenant pin is only visible without RLS:
-	// A's held role must not be judged by B's empty role of the same key. The signer statement relies on RLS alone.
+	// RLS hides B's roles from A's transaction, so the join's tenant pin is only visible without RLS:
+	// A's held role must not be judged by B's empty role of the same key.
 	staffedByActiveReviewer(t, a, "held", "Held")
 	seedWorkflowRole(t, b.super, b.tenantID, "held", "Held")
 	heldInv, _ := seedOpenRun(t, a.super, a.tenantID, a.entityID, "A-held", a.versionID, pendingOn("held"))
@@ -460,6 +460,9 @@ func TestStranded_AnotherTenantsRoleDoesNotStaffThisRun(t *testing.T) {
 	got := byInvoice(all)
 	if _, listed := got[heldInv]; listed {
 		t.Errorf("A's run on its staffed role was listed because B's role of the same key is empty")
+	}
+	if _, listed := got[inv]; !listed {
+		t.Errorf("A's run on its deleted role is missing")
 	}
 }
 

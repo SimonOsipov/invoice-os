@@ -58,9 +58,10 @@ func unsignableReasonsTx(ctx context.Context, tx pgx.Tx, probes []CreatorProbe) 
 	return out, nil
 }
 
+// The tenant pins keep the statement correct on a read that bypasses RLS (TestStranded_AnotherTenantsRoleDoesNotStaffThisRun).
 const unsignableReasonsSQL = `-- unsignableReasonsTx
 WITH p AS (
-  SELECT o.ord, i.id AS inv_id, o.role_key, i.entity_id, h.actor
+  SELECT o.ord, i.id AS inv_id, i.tenant_id AS tid, o.role_key, i.entity_id, h.actor
     FROM unnest($1::uuid[], $2::text[]) WITH ORDINALITY AS o(invoice_id, role_key, ord)
     LEFT JOIN invoices i ON i.id = o.invoice_id
     LEFT JOIN LATERAL (
@@ -69,9 +70,9 @@ WITH p AS (
 ), reach AS (
   SELECT p.ord, m.user_id, (t.kind <> 'firm' OR m.role = 'admin' OR m.all_clients OR mc.user_id IS NOT NULL) AS reaches
     FROM p
-    JOIN memberships m ON m.status = 'active' AND m.role IN ('admin', 'reviewer')
+    JOIN memberships m ON m.tenant_id = p.tid AND m.status = 'active' AND m.role IN ('admin', 'reviewer')
     JOIN tenants t ON t.id = m.tenant_id
-    LEFT JOIN membership_clients mc ON mc.user_id = m.user_id AND mc.entity_id = p.entity_id
+    LEFT JOIN membership_clients mc ON mc.tenant_id = m.tenant_id AND mc.user_id = m.user_id AND mc.entity_id = p.entity_id
 ), others AS (
   SELECT r.ord, count(*) AS n
     FROM reach r JOIN p ON p.ord = r.ord
@@ -80,8 +81,8 @@ WITH p AS (
 ), mem AS (
   SELECT p.ord, wrm.user_id, r.reaches
     FROM p
-    JOIN workflow_roles wr ON wr.key = p.role_key AND wr.deleted_at IS NULL
-    JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id
+    JOIN workflow_roles wr ON wr.key = p.role_key AND wr.tenant_id = p.tid AND wr.deleted_at IS NULL
+    JOIN workflow_role_members wrm ON wrm.tenant_id = wr.tenant_id AND wrm.workflow_role_id = wr.id
     JOIN reach r ON r.ord = p.ord AND r.user_id = wrm.user_id
 )
 SELECT CASE WHEN p.inv_id IS NULL THEN ''
@@ -92,8 +93,8 @@ SELECT CASE WHEN p.inv_id IS NULL THEN ''
                    AND (mem.user_id::text IS DISTINCT FROM p.actor OR coalesce(o.n, 0) = 0)) = 0 THEN 'creator only'
             ELSE '' END
   FROM p
-  LEFT JOIN workflow_roles wr ON wr.key = p.role_key AND wr.deleted_at IS NULL
+  LEFT JOIN workflow_roles wr ON wr.key = p.role_key AND wr.tenant_id = p.tid AND wr.deleted_at IS NULL
   LEFT JOIN mem ON mem.ord = p.ord
   LEFT JOIN others o ON o.ord = p.ord
- GROUP BY p.ord, p.inv_id, p.actor, wr.id, o.n
+ GROUP BY p.ord, p.inv_id, p.tid, p.actor, wr.id, o.n
  ORDER BY p.ord`

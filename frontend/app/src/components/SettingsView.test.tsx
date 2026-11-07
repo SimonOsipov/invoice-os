@@ -331,11 +331,14 @@ describe('Settings > active tab scrolled into the strip', () => {
   it('re-reveals the active tab when the observed sizes change', () => {
     const callbacks: Array<() => void> = []
     const disconnect = vi.fn()
+    const observed: Element[] = []
     class RO {
       constructor(cb: () => void) {
         callbacks.push(cb)
       }
-      observe() {}
+      observe(el: Element) {
+        observed.push(el)
+      }
       unobserve() {}
       disconnect = disconnect
     }
@@ -346,6 +349,7 @@ describe('Settings > active tab scrolled into the strip', () => {
       const { container, rerender, unmount } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
       const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
       back(strip)
+      expect(observed).toContain(strip)
       rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
       expect(strip.scrollLeft).toBe(0)
       rects.Roles = [200, 400]

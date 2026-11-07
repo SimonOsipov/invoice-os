@@ -441,12 +441,11 @@ func TestApprovalRun_HolderResolutionUsesStaffingOrdNotPhysicalInsertOrder(t *te
 
 // --- AC-8: statement count really is constant, not just claimed in prose -------------
 
-// TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount (AC-8): five approval steps
+// TestApprovalRun_ConstantStatementsRegardlessOfStepAndRoleCount (AC-8): five approval steps
 // across three distinct roles, each staffed with two holders, plus one decision -- a
-// per-step or per-role query (an N+1) would inflate the count past the six the
-// implementation notes claim. Uses tracedAppPool/sqlRecorder (workflow_roles_test.go),
-// the only way to see an N+1 whose RESULTS are identical to the batched form.
-func TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
+// per-step or per-role query (an N+1) would inflate the per-table counts below.
+// Uses tracedAppPool/sqlRecorder (workflow_roles_test.go), the only way to see an N+1 whose RESULTS are identical to the batched form.
+func TestApprovalRun_ConstantStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-07 statement-count")
 	entityID := seedBusinessEntity(t, super, tenantID, "Statement Count Corp")
@@ -488,18 +487,22 @@ func TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
 		t.Fatalf("len(run.Steps) = %d, want 5", len(run.Steps))
 	}
 
+	if got := len(rec.mentioning(signMarker)); got != 1 {
+		t.Errorf("statements marked %q = %d, want exactly 1", signMarker, got)
+	}
+	others := rec.without(signMarker)
 	for _, table := range []string{
 		"FROM approval_runs", "FROM approval_run_steps", "FROM workflow_roles",
 		"FROM workflow_role_members", "FROM memberships", "FROM approval_decisions",
 	} {
-		if got := len(rec.mentioning(table)); got != 1 {
+		if got := len(filterContaining(others, table)); got != 1 {
 			t.Errorf("statements mentioning %q = %d, want exactly 1 (five steps across three roles must not inflate this)", table, got)
 		}
 	}
-	// Counted apart so the six above stay the STORE's budget: the request seam's
+	// Counted apart so the counts above stay the STORE's budget: the request seam's
 	// batched gate adds one more memberships read (db.WithinRequestTenantTxOpts).
 	if got := len(rec.seamMentioning("FROM memberships")); got != 1 {
-		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the six counts above are scoped, not blind", got)
+		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the counts above are scoped, not blind", got)
 	}
 }
 

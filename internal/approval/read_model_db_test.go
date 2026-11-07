@@ -12,12 +12,15 @@ package approval
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -394,8 +397,8 @@ func TestApprovalRun_DeletedRoleTitleAndHolderFallback(t *testing.T) {
 	if step.WorkflowRoleTitle == nil || *step.WorkflowRoleTitle != "Deleted role" {
 		t.Errorf("WorkflowRoleTitle = %v, want \"Deleted role\"", step.WorkflowRoleTitle)
 	}
-	want := Resolved{Text: "Role no longer exists", Warn: true}
-	if step.Holder == nil || *step.Holder != want {
+	want := Resolved{Text: "Role no longer exists", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if step.Holder == nil || !reflect.DeepEqual(*step.Holder, want) {
 		t.Errorf("Holder = %v, want %+v", step.Holder, want)
 	}
 }
@@ -433,8 +436,8 @@ func TestApprovalRun_UnstaffedRoleReadsNobodyAssigned(t *testing.T) {
 	if step.WorkflowRoleTitle == nil || *step.WorkflowRoleTitle != "Unstaffed Role" {
 		t.Errorf("WorkflowRoleTitle = %v, want \"Unstaffed Role\"", step.WorkflowRoleTitle)
 	}
-	want := Resolved{Text: "Nobody assigned", Warn: true}
-	if step.Holder == nil || *step.Holder != want {
+	want := Resolved{Text: "Nobody assigned", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if step.Holder == nil || !reflect.DeepEqual(*step.Holder, want) {
 		t.Errorf("Holder = %v, want %+v", step.Holder, want)
 	}
 }
@@ -740,5 +743,129 @@ func TestApprovalRun_ClosedRunStillReadable(t *testing.T) {
 	}
 	if run.ClosedBy == nil || *run.ClosedBy != "system" {
 		t.Errorf("run.ClosedBy = %v, want \"system\"", run.ClosedBy)
+	}
+}
+
+// --- the pending step is judged per invoice -------------------------------
+
+// armTwoSteps arms an invoice on A with two approval steps, k0 then k1, on one active policy.
+func armTwoSteps(t *testing.T, w *warnWorld, k0, k1 string) (invoiceID, runID string) {
+	t.Helper()
+	policyID := seedApprovalPolicy(t, w.super, w.tenantID, "two-step policy")
+	versionID := seedApprovalPolicyVersionN(t, w.super, w.tenantID, policyID, 1)
+	for i, k := range []string{k0, k1} {
+		seedApprovalPolicyStepInLane(t, w.super, w.tenantID, versionID, seedStepSpec{
+			Ord: i, Kind: "approval", WorkflowRoleKey: ptr(k), SLAHours: ptr(24),
+		})
+	}
+	activateApprovalPolicyVersion(t, w.super, versionID)
+	invoiceID = seedInvoice(t, w.super, w.tenantID, w.entA, "two-step-invoice")
+	setInvoiceStatus(t, w.super, invoiceID, "validated")
+	res, err := arm(t, w.app, w.tenantID, invoiceID, "fp-two-step", "fixture-arm")
+	if err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	return invoiceID, res.RunID
+}
+
+func TestApprovalRun_PendingStepWarnFollowsTheRow(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 card follows row")
+	w.role("wk-first", memberSpec{role: "reviewer"})
+	away := w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})[0]
+	inv, runID := armTwoSteps(t, w, "wk-first", "wk-away")
+	setRunStepState(t, w.super, runStepID(t, w.super, runID, 0), "satisfied")
+
+	run := w.panel(inv)
+	if len(run.Steps) != 2 {
+		t.Fatalf("len(run.Steps) = %d, want 2", len(run.Steps))
+	}
+	s0, s1 := run.Steps[0].Holder, run.Steps[1].Holder
+	if s1.Text != away || !s1.Warn || reasonText(s1.Reason) != HolderReasonNobodyCanApprove {
+		t.Errorf("step 1 holder = %+v (reason %s), want text %q, warn, %q", s1, reasonText(s1.Reason), away, HolderReasonNobodyCanApprove)
+	}
+	if s0.Warn || s0.Reason != nil {
+		t.Errorf("step 0 holder = %+v, want the role-level answer: no warn, nil reason", s0)
+	}
+	if rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]; rf.PendingHolderWarn != s1.Warn {
+		t.Errorf("row warn = %t, card warn = %t, want equal", rf.PendingHolderWarn, s1.Warn)
+	}
+}
+
+// decideAs approves the invoice's step as user through store.
+func decideAs(store *Store, tenantID, user, invoiceID string) (Run, error) {
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: tenantID})
+	return store.Decide(ctx, invoiceID, "approved", nil)
+}
+
+func TestDecide_ResponseWarnMatchesAFreshGet(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 decide response")
+	h0 := w.role("wk-first", memberSpec{role: "reviewer"})[0]
+	c := w.role("wk-creator", memberSpec{role: "reviewer"})[0]
+	inv, _ := armTwoSteps(t, w, "wk-first", "wk-creator")
+	seedHistory(t, w.super, w.tenantID, inv, nil, c)
+	posted, err := decideAs(NewStore(w.app, stubFingerprinter, nil), w.tenantID, h0, inv)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	got := posted.Steps[1].Holder
+	fresh := w.panel(inv).Steps[1].Holder
+	if !reflect.DeepEqual(got, fresh) || !got.Warn {
+		t.Errorf("POST step 1 holder = %+v, fresh GET = %+v, want equal and warned", got, fresh)
+	}
+}
+
+func TestDecide_SignerReadErrorRollsBackTheDecision(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 decide read error")
+	h0 := w.role("wk-first", memberSpec{role: "reviewer"})[0]
+	w.role("wk-second", memberSpec{role: "reviewer"})
+	inv, runID := armTwoSteps(t, w, "wk-first", "wk-second")
+
+	_, err := decideAs(NewStore(failingAppPool(t, signMarker), stubFingerprinter, nil), w.tenantID, h0, inv)
+	if err == nil {
+		t.Fatal("Decide returned nil, want the signer read error")
+	}
+	if steps := runStepsOf(t, w.super, runID); steps[0].State != "pending" {
+		t.Errorf("step 0 state = %q, want pending after the rollback", steps[0].State)
+	}
+	if n := len(decisionsForRun(t, w.super, runID)); n != 0 {
+		t.Errorf("approval_decisions rows = %d, want 0", n)
+	}
+}
+
+func TestApprovalRun_SignerReadErrorIsReturned(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14 QA GET read error")
+	w.role("wk-first", memberSpec{role: "reviewer"})
+	w.role("wk-second", memberSpec{role: "reviewer"})
+	inv, _ := armTwoSteps(t, w, "wk-first", "wk-second")
+	if got := w.panel(inv); len(got.Steps) != 2 {
+		t.Fatalf("len(Steps) = %d on the healthy pool, want 2 (the error row below is vacuous otherwise)", len(got.Steps))
+	}
+
+	run, err := NewStore(failingAppPool(t, signMarker), stubFingerprinter, nil).ApprovalRun(w.reader, inv)
+	if err == nil {
+		t.Fatal("ApprovalRun returned nil, want the signer read error and not a silent no-warning run")
+	}
+	if len(run.Steps) != 0 {
+		t.Errorf("run.Steps = %d on error, want a zero Run", len(run.Steps))
+	}
+}
+
+func TestApprovalRun_ADelegateStepIsNoWarning(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-07 delegate card")
+	ids := delegateWarnPage(w)
+
+	for i, wantWarn := range []bool{false, false, true} {
+		h := w.panel(ids[i]).Steps[0].Holder
+		rf := rowFacts(t, w.app, w.tenantID, []string{ids[i]})[ids[i]]
+		if h.Text != "Nobody assigned" {
+			t.Errorf("invoice %d: holder.text = %q, want the role-level Nobody assigned", i+1, h.Text)
+		}
+		if h.Warn != wantWarn || (h.Reason != nil) != wantWarn {
+			t.Errorf("invoice %d: holder warn = %t reason = %s, want warn = %t", i+1, h.Warn, reasonText(h.Reason), wantWarn)
+		}
+		if h.Warn != rf.PendingHolderWarn || reasonText(h.Reason) != reasonText(rf.PendingHolderReason) {
+			t.Errorf("invoice %d: card warn/reason = %t/%s, row = %t/%s, want equal", i+1,
+				h.Warn, reasonText(h.Reason), rf.PendingHolderWarn, reasonText(rf.PendingHolderReason))
+		}
 	}
 }

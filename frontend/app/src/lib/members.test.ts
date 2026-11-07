@@ -2624,7 +2624,7 @@ describe('ACCESS-01-04 — the role write and its copy', () => {
 
 // SENTENCE mirrors Go `memberLastSignerMessage` (internal/approval/approval.go); the list reads the 409 body's `invoices`.
 describe('lastSignerInvoices', () => {
-  const S = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+  const S = 'this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it'
   const conflict = (body: unknown) => new ApiError('http', S, 409, body)
 
   it('lastSignerInvoices reads items, roles and the total off a 409', () => {

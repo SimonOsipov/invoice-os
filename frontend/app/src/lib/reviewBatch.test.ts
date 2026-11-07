@@ -1840,7 +1840,7 @@ const OPEN_RUN: InvoiceApproval = {
   run_state: 'open',
   pending_ord: 1,
   pending_role_title: 'Reviewer',
-  pending_holder_warn: false,
+  pending_holder_warn: false, pending_holder_reason: null,
   due_at: null,
   overdue: false,
 }

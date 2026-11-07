@@ -408,7 +408,7 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -465,7 +465,7 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -553,7 +553,7 @@ describe('ReviewRow: the review row reads the wire submit gate (BUG-12)', () => 
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -614,7 +614,7 @@ describe('ReviewRow: the checkbox now states its own reason, retargeting [select
       run_state: 'open',
       pending_ord: 1,
       pending_role_title: 'Reviewer',
-      pending_holder_warn: false,
+      pending_holder_warn: false, pending_holder_reason: null,
       due_at: null,
       overdue: false,
     }
@@ -695,7 +695,7 @@ describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -744,7 +744,7 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -802,7 +802,7 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }

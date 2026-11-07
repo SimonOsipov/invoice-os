@@ -456,11 +456,11 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                     {av.pendingHolderWarn && (
                       <span
                         data-testid="approval-unstaffed-warning"
-                        title={APPROVALS_COPY.unstaffedSeat}
+                        title={av.pendingHolderLabel ?? undefined}
                         className="mono"
                         style={{ fontSize: 9.5, color: 'var(--status-amber-text)' }}
                       >
-                        {APPROVALS_COPY.unstaffedSeat}
+                        {av.pendingHolderLabel}
                       </span>
                     )}
                   </span>

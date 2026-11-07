@@ -64,13 +64,19 @@ func TestListHandler_EachRowCarriesItsOwnFacts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse fixture due_at: %v", err)
 		}
+		var reason *string
+		if i == 1 {
+			r := approval.HolderReasonUnstaffed
+			reason = &r
+		}
 		want[invID] = approval.RowFacts{
-			RunState:          []string{"open", "approved", "rejected"}[i],
-			PendingOrd:        &ord,
-			PendingRoleTitle:  &title,
-			PendingHolderWarn: i == 1,
-			DueAt:             &when,
-			Overdue:           i == 2,
+			RunState:            []string{"open", "approved", "rejected"}[i],
+			PendingOrd:          &ord,
+			PendingRoleTitle:    &title,
+			PendingHolderWarn:   i == 1,
+			PendingHolderReason: reason,
+			DueAt:               &when,
+			Overdue:             i == 2,
 		}
 	}
 
@@ -284,8 +290,8 @@ func TestListHandler_NonNullApprovalAlwaysCarriesRunState(t *testing.T) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		t.Fatalf("decode approval %q: %v", string(raw), err)
 	}
-	// All six keys, every time: the SPA reads each of them off a non-null approval.
-	for _, k := range []string{"run_state", "pending_ord", "pending_role_title", "pending_holder_warn", "due_at", "overdue"} {
+	// Every key, every time: the SPA reads each of them off a non-null approval.
+	for _, k := range []string{"run_state", "pending_ord", "pending_role_title", "pending_holder_warn", "pending_holder_reason", "due_at", "overdue"} {
 		if _, ok := obj[k]; !ok {
 			t.Errorf("approval has no %q key: %s -- the SPA reads it off every non-null approval", k, raw)
 		}

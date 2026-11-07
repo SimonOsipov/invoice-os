@@ -15,7 +15,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
-- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership role change and status change in `internal/tenancy` (`TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck`). The last-signer check runs only on remove, suspend and demotion to preparer. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership role change, status change and client access change in `internal/tenancy` (`TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck`). The last-signer check runs only on remove, suspend, demotion to preparer and a client access change that removes reach. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
@@ -43,8 +43,9 @@ paths:
 - Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
+- Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is an active admin or reviewer who is a member of the live role or the run step's delegate (`DelegateMayDecide`), reaches the invoice's client, and passes the creator rule (`TestCanSign_AgreesWithTheApprovePath`).
 - Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
-- Count role holders only in `strandedSQL`, the role staffing and delete refusals, `pending_holder_warn` and `CreatorStanding.OtherRoleHolder`. A delegate is not counted (`TestStranded_ADelegateDoesNotCountAsADecider`).
+- Count an eligible delegate as a signer (`TestStranded_AnEligibleDelegateCountsAsADecider`). The role delete refusal and `CreatorStanding.OtherRoleHolder` count role holders only (`TestDeleteRole_RefusesWhileOnlyADelegateCanDecide`).
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
 - Store a policy's scopes on its version (`approval_policy_versions`): document types, client companies (`business_entities` ids), an amount band with its currency, and workflow roles (`workflow_roles` ids). Each scope is optional.
 - Write a scope edit to the draft. It takes effect at publish.
@@ -57,9 +58,11 @@ paths:
 - Refuse a workflow role delete with 409 while the active version of a live policy names the role in a scope or an approval step. List those policies in the body.
 - List the policies in force per role as `in_force` on `GET /v1/workflow-roles`. It uses the predicate of the role delete refusal (`TestRoleUsage_AgreesWithDeleteRole`). Omit `in_force` when its read fails.
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.
-- Refuse a role staffing write with 409 while an open run has a pending approval step that names the role and the new set holds no active admin or reviewer. Use the body of the role delete refusal.
-- Refuse a membership remove, suspension or demotion to preparer with 409 when a live workflow role the member is staffed in has no active admin or reviewer member after the change while an open run waits on the role. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
-- List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing.
+- Refuse a role staffing write with 409 while an invoice that an open run waits on through the role has no signer on the new set. List only those invoices. Use the body of the role delete refusal.
+- Refuse a membership remove, suspension, demotion to preparer or client access change that removes reach with 409 when a live workflow role the member is staffed in leaves an invoice that an open run waits on through the role with no signer after the change. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
+- Before the write, also collect with `SignedWaitingStepsTx` every waiting step the member can sign as a role member, a named delegate or an "anyone" delegate. Judge those steps in the same refusal (`TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign`).
+- List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing. It reports the reason: `deleted`, `no holder`, `out of client reach` or `creator only`.
+- Raise `pending_holder_warn` and the pending step's `holder.warn` when `unsignableReasonsTx` gives the step a reason. Set `pending_holder_reason` and `holder.reason` with `holderReason`: `unstaffed` or `nobody_can_approve`.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
 - Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.

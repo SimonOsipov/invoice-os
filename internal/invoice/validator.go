@@ -88,10 +88,12 @@ const defaultValidateTimeout = 60 * time.Second
 // there) is the ONE deliberate exception to "field for field" -- see this
 // struct's own header above; it does not extend to Expected/Actual.
 type Violation struct {
-	RuleKey  string  `json:"rule_key"`
-	Severity string  `json:"severity"`
-	Message  string  `json:"message"`
-	Path     string  `json:"path,omitempty"`
+	RuleKey  string `json:"rule_key"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Path     string `json:"path,omitempty"`
+	// Field is the one field of the line a per-line cel rule judged; set only with a bare <list>[N] path.
+	Field    string  `json:"field,omitempty"`
 	Expected *string `json:"expected,omitempty"`
 	Actual   *string `json:"actual,omitempty"`
 }

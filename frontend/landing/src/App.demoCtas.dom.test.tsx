@@ -15,7 +15,7 @@ import type { ConsentStore } from './consent'
 
 const DIALOG = '[role="dialog"]'
 const DEMO_DIALOG_LABEL = 'Book a demo'
-const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', 'footer']
+const SCOPES = ['header', '#top', '#platform', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', 'footer']
 
 function memoryStorage(): ConsentStore {
   const map = new Map<string, string>()
@@ -75,7 +75,6 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'header', label: 'Book a demo' }, // Nav.tsx
   { scope: '#top', label: 'Book a demo' }, // Hero.tsx
   { scope: '#platform', label: 'See validation in action →' }, // Platform.tsx, Validate tab at rest
-  { scope: '#coverage', label: 'Discuss your country →' }, // Coverage.tsx
   { scope: '[data-sol-panel="fin"]', label: 'Find your workflow' }, // Solutions.tsx, SOL.fin.cta
   { scope: '[data-sol-panel="firm"]', label: 'Find your workflow' }, // SOL.firm.cta
   { scope: '[data-sol-panel="dev"]', label: 'Discuss a partnership' }, // SOL.dev.cta
@@ -87,15 +86,14 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'footer', label: 'Contact ASComply' }, // Footer.tsx, same onBookDemo (D-24)
 ]
 
-// The eighteen controls in these ten scopes that are NOT demo CTAs, named so the
-// 31-button completeness guard below is not a magic number:
+// The fifteen controls in these nine scopes that are NOT demo CTAs, named so the
+// 27-button completeness guard below is not a magic number:
 //   header        -- "Sign in" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
-//   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
 //   #solutions    -- the three Who-it's-for tabs (3)
 //   #faq          -- the five question headers (5)
 //   footer        -- "Open the cockpit" (sign-in), "Cookie choices"
-const NON_CTA_COUNT = 18
+const NON_CTA_COUNT = 15
 
 describe('F-3: every rendered demo CTA opens the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
@@ -109,13 +107,13 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  // Measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
-  // 1 (#api) + 6 (#faq) + 1 (closing) + 4 (footer) = 31 = the 13-entry roster + the 18 named non-CTA controls above. Asserted
+  // Measured 3 (header) + 1 (#top) + 4 (#platform) + 6 (#solutions) + 1 (#integrations) +
+  // 1 (#api) + 6 (#faq) + 1 (closing) + 4 (footer) = 27 = the 12-entry roster + the 15 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the ten scopes hold exactly 31 buttons in total, modal closed', async () => {
+  it('F3-f: the nine scopes hold exactly 27 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => {
@@ -226,32 +224,6 @@ describe('F3-j: the Platform panel link reports platform on every tab', () => {
       }
 
       expect(trackDemoOpen.mock.calls).toEqual([['platform'], ['platform'], ['platform']])
-      expect(consoleError).not.toHaveBeenCalled()
-    } finally {
-      vi.doUnmock('./analytics')
-    }
-  })
-})
-
-describe('R4-F3-1: "Discuss your country →" reports coverage', () => {
-  it("opens the demo dialog with trackDemoOpen('coverage') once", async () => {
-    const trackDemoOpen = vi.fn()
-    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
-    try {
-      await mountApp()
-      const band = document.querySelector('#coverage')!
-      expect(band, 'expected #coverage to resolve').not.toBeNull()
-      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
-
-      await clickByText(band, 'Kenya')
-      expect(trackDemoOpen, 'control: a country tab books nothing').not.toHaveBeenCalled()
-      expect(document.querySelectorAll(DIALOG).length, 'control: a country tab opens no dialog').toBe(0)
-
-      await clickByText(band, 'Discuss your country →')
-
-      expect(trackDemoOpen.mock.calls).toEqual([['coverage']])
-      expect(document.querySelectorAll(DIALOG).length).toBe(1)
-      expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe(DEMO_DIALOG_LABEL)
       expect(consoleError).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('./analytics')

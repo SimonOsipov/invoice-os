@@ -56,7 +56,7 @@ async function openRoutedLanding(page: Page, request: APIRequestContext, extraCo
   const errors = consoleGate(page, expected)
   const { leaked, pending } = watchStubLeaks(page)
   await page.goto(`${WWW}/`)
-  await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Nigeria moves. Compliance keeps up.' })).toBeVisible()
   await expect
     .poll(() => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => e[0])), 'the tag never loaded on the routed host')
     .toContain('config')

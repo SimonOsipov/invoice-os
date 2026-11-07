@@ -104,7 +104,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
 
     expect(existsSync(BRIDGE_PATH), `expected ${BRIDGE_PATH} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
     const { referenced, unresolved } = unresolvedVars(landingBuildInput({ withMonitoring: true }), Object.values(readV2Css()))
-    expect(referenced.length).toBeGreaterThanOrEqual(102)
+    expect(referenced.length).toBeGreaterThanOrEqual(99)
     expect(unresolved).toEqual([])
   })
 

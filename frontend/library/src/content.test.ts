@@ -106,6 +106,14 @@ describe('content', () => {
     expect(COMING_SOON_IDS).not.toContain('workflow-builder')
   })
 
+  it('content_workflowBuilderDescribesDelegationAsLive', () => {
+    const f = byId('workflow-builder')
+    expect(f.desc).toMatch(/can allow a delegate/)
+    expect(f.desc).toMatch(/one named Admin or Reviewer, or anyone with either role/)
+    expect(f.desc).toMatch(/audit trail records each decision a delegate makes/)
+    expect(COMING_SOON_IDS).not.toContain('workflow-builder')
+  })
+
   it('content_marksTheOtherTwentySixShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
     expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',

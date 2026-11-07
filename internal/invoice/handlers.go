@@ -611,7 +611,7 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 		r := "This invoice's approval run is already closed."
 		return false, &r
 	}
-	if !f.CallerHoldsRole {
+	if !f.CallerHoldsRole && !f.CallerIsDelegate {
 		r := "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
 		return false, &r
 	}
@@ -1106,11 +1106,12 @@ func ListHandler(
 			// disagree (TestListAndDetail_ApproveGateCannotDisagree). A pure
 			// call and map lookups: no query enters this loop.
 			row.CanApprove, row.ApproveBlockedReason, row.ApproveBlockedByCreator = approveGate(inv.Status, gate.CallerRole, ApprovalFacts{
-				RunState:        f.RunState,
-				PendingStepOrd:  f.PendingOrd,
-				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
-				Creator:         gate.Creator[inv.ID],
-				CreatorErr:      gate.CreatorErr,
+				RunState:         f.RunState,
+				PendingStepOrd:   f.PendingOrd,
+				CallerHoldsRole:  gate.HoldsPendingRole[inv.ID],
+				CallerIsDelegate: gate.DelegateOfPending[inv.ID],
+				Creator:          gate.Creator[inv.ID],
+				CreatorErr:       gate.CreatorErr,
 			})
 			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.

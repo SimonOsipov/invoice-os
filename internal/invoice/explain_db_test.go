@@ -48,7 +48,7 @@ func newExplainDB(t *testing.T, label string) explainDBFixture {
 	rec := newExplainRecorder()
 	rec.answer = map[string]any{"explanation": "x", "fix_field": "unit_price", "fix_value": "5.00"}
 	x := explainDBFixture{nrsFixture: f, invoiceID: inv.ID, fake: rec}
-	f.seedVerdict(t, inv.ID, `[{"rule_key":"line-cost-non-negative","severity":"error","message":"`+explainTestMessage+`","path":"line_items[2]"}]`)
+	f.seedVerdict(t, inv.ID, `[{"rule_key":"line-cost-non-negative","severity":"error","message":"`+explainTestMessage+`","path":"line_items[2]","field":"unit_price"}]`)
 	return x
 }
 
@@ -210,7 +210,7 @@ func TestRLS_ExplainLogsTenantPurposeAndCost(t *testing.T) {
 	x := newExplainDB(t, "EXPLAIN-LOG")
 	answer := `{"explanation":"Line 2 has a negative unit price.","fix_field":null,"fix_value":null}`
 	steered := x.create(t, "EXPLAIN-LOG-2", CreateInput{LineItems: []LineItemInput{nrsLine("a", "1", "1.00"), nrsLine(explainMarker("EXPLAIN-", answer), "1", "-5.00")}})
-	x.seedVerdict(t, steered.ID, `[{"rule_key":"line-cost-non-negative","severity":"error","message":"`+explainTestMessage+`","path":"line_items[2]"}]`)
+	x.seedVerdict(t, steered.ID, `[{"rule_key":"line-cost-non-negative","severity":"error","message":"`+explainTestMessage+`","path":"line_items[2]","field":"unit_price"}]`)
 
 	var buf bytes.Buffer
 	client := explainFakeClient(t, slog.New(slog.NewJSONHandler(&buf, nil)))

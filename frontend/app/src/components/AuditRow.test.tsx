@@ -517,4 +517,10 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     render(<AuditRow event={ev({ payload: { invoice_id: 'i-1', invoice_number: 'INV-1' } })} expanded onToggle={() => {}} onFilterToInvoice={() => {}} />)
     expect(sv(screen.getByTestId('audit-invoice-affordance'), 'font-family')).toBe('var(--font-sans)')
   })
+
+  it('AuditRow shows the delegate label', () => {
+    const payload = { as_delegate: true, acted_for_role_title: 'Finance Manager' }
+    render(<AuditRow event={ev({ event: 'invoice.approval_approved', actor: 'sub-1', actor_name: 'Ada Obi', actor_kind: 'person', payload })} expanded={false} onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-what').textContent).toBe('Approved by Ada Obi as delegate for Finance Manager')
+  })
 })

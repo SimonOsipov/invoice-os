@@ -96,6 +96,8 @@ export function mapApprovalSteps(steps: ApprovalStep[]): ApprovalStepInput[] {
     cond_amount: s.cond_amount,
     notify_target: s.notify_target,
     notify_channel: s.notify_channel,
+    allow_delegation: s.allow_delegation,
+    delegate_user_id: s.delegate_user_id,
     then: mapApprovalSteps(s.then),
     else: mapApprovalSteps(s.else),
   }))

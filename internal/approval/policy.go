@@ -15,7 +15,7 @@ import (
 )
 
 // Step is the nested wire shape of one approval_policy_steps row. No omitempty on
-// any field: the key set stays ten whatever the kind, and then/else are [] never null.
+// any field: the key set stays twelve whatever the kind, and then/else are [] never null.
 type Step struct {
 	ID              string  `json:"id"`
 	Kind            string  `json:"kind"` // approval|condition|notify|autoapprove
@@ -25,12 +25,14 @@ type Step struct {
 	CondAmount      *string `json:"cond_amount"` // numeric(14,2) as decimal text
 	NotifyTarget    *string `json:"notify_target"`
 	NotifyChannel   *string `json:"notify_channel"`
+	AllowDelegation bool    `json:"allow_delegation"`
+	DelegateUserID  *string `json:"delegate_user_id"` // null = anyone, when delegation is on
 	Then            []Step  `json:"then"`
 	Else            []Step  `json:"else"`
 }
 
 // MarshalJSON substitutes [] for a nil lane, which struct tags cannot do. Nested
-// steps re-enter it, so depth is covered (TestPolicy_StepMarshalsTenKeys).
+// steps re-enter it, so depth is covered (TestPolicy_StepMarshalsTwelveKeys).
 //
 // Never embed Step anonymously in a response struct: the promoted method would
 // hijack the outer struct and drop its sibling fields.
@@ -124,6 +126,8 @@ type stepInput struct {
 	CondAmount      *string     `json:"cond_amount"`
 	NotifyTarget    *string     `json:"notify_target"`
 	NotifyChannel   *string     `json:"notify_channel"`
+	AllowDelegation bool        `json:"allow_delegation"`
+	DelegateUserID  *string     `json:"delegate_user_id"`
 	Then            []stepInput `json:"then"`
 	Else            []stepInput `json:"else"`
 }
@@ -174,6 +178,8 @@ type stepRow struct {
 	CondAmount      *string
 	NotifyTarget    *string
 	NotifyChannel   *string
+	AllowDelegation bool
+	DelegateUserID  *string
 }
 
 const (
@@ -195,6 +201,9 @@ var (
 	ErrSweepCapExceeded       = errors.New("approval: validated backlog exceeds the publish sweep cap")
 	ErrPolicyCatchAll         = errors.New("approval: the policy with no scopes must stay last while any policy has scopes")
 	ErrPolicyOrderStale       = errors.New("approval: the reorder list is not the live policy list")
+
+	ErrPolicyDelegateNotMember  = errors.New("approval: step names a delegate outside the workspace")
+	ErrPolicyDelegateIneligible = errors.New("approval: step names a delegate who is not an active admin or reviewer")
 
 	ErrScopeDocumentType = errors.New("approval: scope names an unknown document type")
 	ErrScopeEntity       = errors.New("approval: scope names a client company outside the workspace")
@@ -237,6 +246,8 @@ func flattenLane(rows *[]stepRow, lane []stepInput, parent, branch *string) {
 			CondAmount:      s.CondAmount,
 			NotifyTarget:    s.NotifyTarget,
 			NotifyChannel:   s.NotifyChannel,
+			AllowDelegation: s.AllowDelegation,
+			DelegateUserID:  s.DelegateUserID,
 		})
 		thenBranch, elseBranch := "then", "else"
 		flattenLane(rows, s.Then, &id, &thenBranch)
@@ -273,6 +284,8 @@ func nestLane(lane []stepRow, kids map[string][]stepRow) []Step {
 			CondAmount:      r.CondAmount,
 			NotifyTarget:    r.NotifyTarget,
 			NotifyChannel:   r.NotifyChannel,
+			AllowDelegation: r.AllowDelegation,
+			DelegateUserID:  r.DelegateUserID,
 			Then:            nestLane(kids[laneKey(r.ID, "then")], kids),
 			Else:            nestLane(kids[laneKey(r.ID, "else")], kids),
 		})
@@ -326,8 +339,18 @@ func validateStepFields(s stepInput) error {
 	// Kind is closed by policyStepKinds, cond_op by the vocabulary below and cond_amount by
 	// validateCondAmount, so the three here are every client string that can still reach
 	// a text column.
-	for _, p := range []*string{s.WorkflowRoleKey, s.NotifyTarget, s.NotifyChannel} {
+	for _, p := range []*string{s.WorkflowRoleKey, s.NotifyTarget, s.NotifyChannel, s.DelegateUserID} {
 		if hasNUL(p) {
+			return ErrValidation
+		}
+	}
+	if s.Kind != "approval" && (s.AllowDelegation || s.DelegateUserID != nil) {
+		return ErrValidation
+	}
+	if s.DelegateUserID != nil {
+		// Canonical text only: ::uuid rejects the urn and braced spellings uuid.Parse takes.
+		u, err := uuid.Parse(*s.DelegateUserID)
+		if !s.AllowDelegation || err != nil || u.String() != strings.ToLower(*s.DelegateUserID) {
 			return ErrValidation
 		}
 	}
@@ -505,6 +528,13 @@ type scopeRoleDeleted struct{ titles []string }
 func (e *scopeRoleDeleted) Error() string { return ErrPolicyStepRole.Error() }
 func (e *scopeRoleDeleted) Unwrap() error { return ErrPolicyStepRole }
 
+// delegateIneligible is publish's refusal for a named delegate who may no longer decide;
+// it wraps ErrPolicyDelegateIneligible and carries the sentence's two names.
+type delegateIneligible struct{ name, step string }
+
+func (e *delegateIneligible) Error() string { return ErrPolicyDelegateIneligible.Error() }
+func (e *delegateIneligible) Unwrap() error { return ErrPolicyDelegateIneligible }
+
 // quoteTitles wraps each title in curly quotes, unescaped.
 func quoteTitles(titles []string) string {
 	q := make([]string, len(titles))
@@ -518,6 +548,7 @@ func quoteTitles(titles []string) string {
 // than err.Error() so the "approval: " sentinel prefix never reaches the SPA.
 func policyStatusForErr(err error) (status int, msg string) {
 	var sr *scopeRoleDeleted
+	var di *delegateIneligible
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
@@ -535,6 +566,8 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, "an amount band names a currency outside the NRS currency list"
 	case errors.Is(err, ErrScopeRole):
 		return http.StatusBadRequest, "a scope names a workflow role that does not exist or was deleted"
+	case errors.Is(err, ErrPolicyDelegateNotMember):
+		return http.StatusBadRequest, "a step names a delegate who is not a member of this workspace"
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, "invalid request"
 	case errors.Is(err, ErrNotPermitted):
@@ -547,6 +580,8 @@ func policyStatusForErr(err error) (status int, msg string) {
 			remedy = "remove them"
 		}
 		return http.StatusConflict, "a scope names a workflow role that was deleted: " + quoteTitles(sr.titles) + " — " + remedy + " from the scope, then publish"
+	case errors.As(err, &di):
+		return http.StatusConflict, di.name + " can no longer be a delegate on " + di.step + ". Pick another delegate or switch delegation off."
 	case errors.Is(err, ErrPolicyStepRole):
 		return http.StatusConflict, "an approval step names a workflow role that no longer exists"
 	case errors.Is(err, ErrPolicyEmptyBranches):

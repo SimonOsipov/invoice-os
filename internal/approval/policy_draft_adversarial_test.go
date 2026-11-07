@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -758,5 +759,33 @@ func TestPutDraft_LeavesNoPolicyRowsBehind(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Errorf("%d forked versions have no policy row", orphans)
+	}
+}
+
+func TestPutDraft_DelegateOutsideTheWorkspaceIs400(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 outside A")
+	otherTenant := policyTenant(t, f.super, "DELEG-01-02 outside B")
+	foreign := uuid.NewString()
+	seedMembership(t, f.super, otherTenant, foreign, "reviewer", "active")
+
+	prior := []stepInput{{Kind: "approval", WorkflowRoleKey: ptr("finance-manager")}}
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, prior); err != nil {
+		t.Fatalf("seed draft: %v", err)
+	}
+	for name, id := range map[string]string{"another workspace's member": foreign, "a random uuid": uuid.NewString()} {
+		t.Run(name, func(t *testing.T) {
+			_, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&id), delegatedStep(&id)})
+			status, msg := policyStatusForErr(err)
+			if status != 400 || msg != "a step names a delegate who is not a member of this workspace" {
+				t.Fatalf("status, msg = %d, %q (err %v), want the 400 sentence", status, msg, err)
+			}
+			got, err := f.store.GetPolicy(f.ctx, f.policyID)
+			if err != nil {
+				t.Fatalf("GetPolicy: %v", err)
+			}
+			if len(got.Steps) != 1 || got.Steps[0].AllowDelegation {
+				t.Errorf("steps = %+v, want the prior single undelegated step — nothing written on a refusal", got.Steps)
+			}
+		})
 	}
 }

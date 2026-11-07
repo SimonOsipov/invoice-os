@@ -900,10 +900,28 @@ describe('the Library shares the landing\'s choice', () => {
 
   // Pending PM approval of this copy.
   const LIBRARY_SECTION = [
-    `Our Feature Library at ${LIBRARY_ADDR} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
+    `Our Feature Library at ${LIBRARY_ADDR} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and in the Library's sidebar menu, brings the notice back on either, and a change made there applies to both.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
     "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
+
+  const LANDING_FOOT = "at the foot of this site's pages"
+  const MISPLACED = /\bfoot\b|\bfooter\b|Book the Demo|\bsidebar\b(?! menu)/i
+  const controlSentence = (paragraphs: string[]): string => {
+    const found = paragraphs.flatMap((p) => p.split(/(?<=\.)\s+/)).filter((s) => s.includes('Cookie choices'))
+    expect(found, 'exactly one sentence names Cookie choices').toHaveLength(1)
+    return found[0]
+  }
+  const withoutLandingFoot = (sentence: string): string => {
+    expect(sentence, `the landing clause "${LANDING_FOOT}" is present`).toContain(LANDING_FOOT)
+    return sentence.replace(LANDING_FOOT, '')
+  }
+
+  it('PL-11 Library control is in the sidebar menu, not at the foot', () => {
+    const rest = withoutLandingFoot(controlSentence(libraryParagraphs()))
+    expect(rest).toMatch(/in the Library's sidebar menu/)
+    expect(rest, `outside the clause "${LANDING_FOOT}" the Library control is not at the foot`).not.toMatch(MISPLACED)
+  })
 
   it('PL-01 the active-on sentence names all four hosts from the lists', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
@@ -1045,7 +1063,7 @@ describe('the Library shares the landing\'s choice', () => {
   // Pending the user's copy sign-off.
   const BLOG_HEADING = '>The Blog and its newsletter</h2>'
   const BLOG_SECTION = [
-    `Our Blog at ${BLOG_ADDR} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
+    `Our Blog at ${BLOG_ADDR} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of this site's pages and in the Library's and the Blog's sidebar menu, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
     BLOG_CHAT_PARAGRAPH,
     'The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often you want to hear from us. Nothing is kept for good until you confirm. We first hold your request on our own server with a one-time link, and we send the link to your address in a confirmation email. Resend, the service we use to send email, receives your address to deliver that email. A request you do not confirm within 48 hours expires, and its link stops working.',
     'When you click the link, we store your email address, your topics, how often you want to hear from us and the time you confirmed, on our own server. We also add you to our Blog list in Resend, with the same three details. Nothing from the newsletter goes to HubSpot. We send the newsletter by hand, and we follow the frequency you chose.',
@@ -1081,7 +1099,10 @@ describe('the Library shares the landing\'s choice', () => {
   })
 
   it('PB-08 the Cookie choices control is named', () => {
-    expect(blogParagraphs().join(' ')).toContain("Cookie choices, at the foot of each site's pages or sidebar, brings the notice back")
+    const sentence = controlSentence(blogParagraphs())
+    expect(sentence).toContain("Cookie choices, at the foot of this site's pages and in the Library's and the Blog's sidebar menu, brings the notice back")
+    expect(withoutLandingFoot(sentence)).toMatch(/in the Library's and the Blog's sidebar menu/)
+    expect(withoutLandingFoot(sentence)).not.toMatch(MISPLACED)
   })
 
   it('PL-08 no sentence still scopes analytics to the landing alone', () => {

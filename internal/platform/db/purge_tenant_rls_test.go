@@ -397,6 +397,57 @@ func TestRLS_PurgeTenantRemovesASealedTenantAndReturnsOne(t *testing.T) {
 	}
 }
 
+// The delegate FK points at memberships, which the tenant delete also removes: a sealed step and a
+// run step that name a delegate must not stop the purge.
+func TestRLS_PurgeTenantRemovesASealedTenantWithADelegateStep(t *testing.T) {
+	requireHarness(t)
+	requireDelegationColumns(t)
+	id := ptNewTenant(t)
+	delegate := uuid.NewString()
+	execSetup(t, h.super, `INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1,$2,'reviewer')`, id, delegate)
+
+	policy, version, step := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	entity, invoice, run, runStep := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	execSetup(t, h.super, `INSERT INTO approval_policies (id, tenant_id, name) VALUES ($1,$2,'Purge delegate policy')`, policy, id)
+	execSetup(t, h.super, `INSERT INTO approval_policy_versions (id, tenant_id, policy_id, version) VALUES ($1,$2,$3,1)`, version, id, policy)
+	execSetup(t, h.super,
+		`INSERT INTO approval_policy_steps (id, tenant_id, version_id, ord, kind, allow_delegation, delegate_user_id)
+		 VALUES ($1,$2,$3,1,'approval',true,$4)`, step, id, version, delegate)
+	execSetup(t, h.super, `UPDATE approval_policy_versions SET sealed = true WHERE id = $1`, version)
+	execSetup(t, h.super, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1,$2,'Purge delegate Corp')`, entity, id)
+	execSetup(t, h.super, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number) VALUES ($1,$2,$3,'purge-delegate-1')`, invoice, id, entity)
+	execSetup(t, h.super,
+		`INSERT INTO approval_runs (id, tenant_id, invoice_id, policy_version_id, content_fingerprint) VALUES ($1,$2,$3,$4,'fp-purge-delegate')`,
+		run, id, invoice, version)
+	execSetup(t, h.super,
+		`INSERT INTO approval_run_steps (id, tenant_id, run_id, ord, kind, allow_delegation, delegate_user_id)
+		 VALUES ($1,$2,$3,1,'approval',true,$4)`, runStep, id, run, delegate)
+
+	tables := []string{"approval_policy_steps", "approval_run_steps", "memberships", "tenants"}
+	for _, tbl := range tables {
+		if ptRows(t, tbl, id) == 0 {
+			t.Fatalf("test setup: no %s row", tbl)
+		}
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM approval_policy_steps WHERE id = $1 AND delegate_user_id = $2`, step, delegate); n != 1 {
+		t.Fatalf("test setup: the sealed step names the delegate in %d rows, want 1", n)
+	}
+
+	n, err := ptCall(h.app, id, id)
+	if err != nil {
+		t.Fatalf("purge_tenant as invoice_app: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("purge_tenant = %d, want 1", n)
+	}
+	for _, tbl := range tables {
+		if got := ptRows(t, tbl, id); got != 0 {
+			t.Errorf("%s rows left = %d, want 0", tbl, got)
+		}
+	}
+}
+
 func TestRLS_PurgeTenantOfAnUnknownTenantReturnsZero(t *testing.T) {
 	requireHarness(t)
 	id := uuid.NewString()

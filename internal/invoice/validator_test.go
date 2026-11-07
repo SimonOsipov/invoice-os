@@ -553,6 +553,24 @@ func stampServer(t *testing.T, body string) *Validator {
 	return NewValidator(srv.URL, "tok", nil)
 }
 
+func TestValidatorClient_BatchDecodesTheJudgedField(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id","results":[
+		{"ref":"r1","violations":[{"rule_key":"line-cost-non-negative","severity":"error","message":"m","path":"line_items[2]","field":"unit_price"}],"rule_set_version":%d,"rule_set_version_id":"id"}]}`,
+		cannedRuleSetVersion, cannedRuleSetVersion))
+	res, err := v.Validate(context.Background(), twoRefs[:1])
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	got := res.ByRef["r1"]
+	if len(got) != 1 || got[0].Field != "unit_price" {
+		t.Fatalf("violations = %+v, want Field unit_price", got)
+	}
+	b, _ := json.Marshal(got[0])
+	if !strings.Contains(string(b), `"field":"unit_price"`) {
+		t.Fatalf("re-marshal = %s", b)
+	}
+}
+
 var twoRefs = []ValidateItem{{Ref: "r1", Invoice: map[string]any{}}, {Ref: "r2", Invoice: map[string]any{}}}
 
 func TestValidate_DecodesPerItemStamps(t *testing.T) {

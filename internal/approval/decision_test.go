@@ -117,11 +117,12 @@ func invoiceStatusHistoryCount(t *testing.T, super *pgxpool.Pool, invoiceID stri
 
 // storedDecision is one approval_decisions row, read back as the superuser.
 type storedDecision struct {
-	RunStepID string
-	Decision  string
-	Actor     string
-	Reason    *string
-	DecidedAt time.Time
+	RunStepID  string
+	Decision   string
+	Actor      string
+	Reason     *string
+	DecidedAt  time.Time
+	AsDelegate bool
 }
 
 // decisionsForRun reads every approval_decisions row for runID, in decided_at order.
@@ -130,7 +131,7 @@ type storedDecision struct {
 func decisionsForRun(t *testing.T, super *pgxpool.Pool, runID string) []storedDecision {
 	t.Helper()
 	rows, err := super.Query(context.Background(),
-		`SELECT run_step_id, decision, actor, reason, decided_at
+		`SELECT run_step_id, decision, actor, reason, decided_at, as_delegate
 		   FROM approval_decisions WHERE run_id = $1 ORDER BY decided_at`, runID)
 	if err != nil {
 		t.Fatalf("read approval_decisions for run %s: %v", runID, err)
@@ -139,7 +140,7 @@ func decisionsForRun(t *testing.T, super *pgxpool.Pool, runID string) []storedDe
 	out := []storedDecision{}
 	for rows.Next() {
 		var d storedDecision
-		if err := rows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.Reason, &d.DecidedAt); err != nil {
+		if err := rows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.Reason, &d.DecidedAt, &d.AsDelegate); err != nil {
 			t.Fatalf("scan approval_decisions for run %s: %v", runID, err)
 		}
 		out = append(out, d)
@@ -251,6 +252,109 @@ func assertNothingWritten(t *testing.T, super *pgxpool.Pool, f approveFixture) {
 	run := oneApprovalRun(t, super, f.invoiceID)
 	if run.State != "open" {
 		t.Errorf("run state = %q, want unchanged open", run.State)
+	}
+}
+
+// delegateWorld is a one-step run on role "finance-manager" ("Finance Manager"). The role
+// has one holder, and the step names delegate: an active member outside the role.
+type delegateWorld struct {
+	approveFixture
+	roleKey          string
+	holder, delegate string
+}
+
+func setStepDelegation(t *testing.T, super *pgxpool.Pool, stepID string, allow bool, delegate *string) {
+	t.Helper()
+	tag, err := super.Exec(context.Background(),
+		`UPDATE approval_run_steps SET allow_delegation = $2, delegate_user_id = $3 WHERE id = $1`,
+		stepID, allow, delegate)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("set delegation on run step %s: %v (rows %d)", stepID, err, tag.RowsAffected())
+	}
+}
+
+func newDelegateWorld(t *testing.T, super, app *pgxpool.Pool, name, delegateRole string) delegateWorld {
+	t.Helper()
+	w := delegateWorld{roleKey: "finance-manager"}
+	w.approveFixture = newApproveFixture(t, super, app, name, w.roleKey)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE workflow_roles SET title = 'Finance Manager' WHERE id = $1`, w.roleID); err != nil {
+		t.Fatalf("retitle role: %v", err)
+	}
+	w.holder = seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", roleID: w.roleID})
+	w.delegate = seedMemberOf(t, super, w.tenantID, memberSpec{role: delegateRole})
+	setStepDelegation(t, super, w.stepID, true, &w.delegate)
+	return w
+}
+
+type auditRow struct {
+	Actor   string
+	Payload map[string]any
+}
+
+func auditRowsOf(t *testing.T, super *pgxpool.Pool, tenantID, event string) []auditRow {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT actor, payload FROM audit_log WHERE tenant_id = $1 AND event = $2 ORDER BY id`, tenantID, event)
+	if err != nil {
+		t.Fatalf("read %s audit rows: %v", event, err)
+	}
+	defer rows.Close()
+	var out []auditRow
+	for rows.Next() {
+		var r auditRow
+		var raw []byte
+		if err := rows.Scan(&r.Actor, &raw); err != nil {
+			t.Fatalf("scan audit row: %v", err)
+		}
+		if err := json.Unmarshal(raw, &r.Payload); err != nil {
+			t.Fatalf("unmarshal audit payload: %v", err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// wantDelegateAudit asserts the tenant's one audit row of event names the delegate and the role.
+func wantDelegateAudit(t *testing.T, super *pgxpool.Pool, tenantID, event, actor, roleKey, roleTitle string) {
+	t.Helper()
+	rows := auditRowsOf(t, super, tenantID, event)
+	if len(rows) != 1 {
+		t.Fatalf("%s rows = %d, want 1", event, len(rows))
+	}
+	r := rows[0]
+	if r.Actor != actor {
+		t.Errorf("%s actor = %q, want the delegate %q", event, r.Actor, actor)
+	}
+	if got := r.Payload["as_delegate"]; got != true {
+		t.Errorf("%s as_delegate = %v, want true", event, got)
+	}
+	if got := r.Payload["acted_for_role_key"]; got != roleKey {
+		t.Errorf("%s acted_for_role_key = %v, want %q", event, got, roleKey)
+	}
+	if got := r.Payload["acted_for_role_title"]; got != roleTitle {
+		t.Errorf("%s acted_for_role_title = %v, want %q", event, got, roleTitle)
+	}
+	if got, ok := r.Payload["step_ord"].(float64); !ok || int(got) != 0 {
+		t.Errorf("%s step_ord = %v, want 0", event, r.Payload["step_ord"])
+	}
+}
+
+// wantHolderAudit asserts the tenant's one audit row of event says as_delegate false and carries no acted_for_* key.
+func wantHolderAudit(t *testing.T, super *pgxpool.Pool, tenantID, event string) {
+	t.Helper()
+	rows := auditRowsOf(t, super, tenantID, event)
+	if len(rows) != 1 {
+		t.Fatalf("%s rows = %d, want 1", event, len(rows))
+	}
+	p := rows[0].Payload
+	if got, ok := p["as_delegate"]; !ok || got != false {
+		t.Errorf("%s as_delegate = %v (present %v), want present and false", event, got, ok)
+	}
+	for _, k := range []string{"acted_for_role_key", "acted_for_role_title"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("%s carries %q, want no acted_for_* key on a holder's decision", event, k)
+		}
 	}
 }
 
@@ -755,48 +859,60 @@ func TestApprove_SkipsNotifyStepsWhenAdvancing(t *testing.T) {
 // grants do not stop a plain ROLLBACK from undoing an uncommitted INSERT.
 func TestApprove_AuditsInSameTx(t *testing.T) {
 	super, app := dbTestPools(t)
-	f := newApproveFixture(t, super, app, "APPR-07 audit-same-tx", "audit-same-tx-role")
-
-	adminID := uuid.NewString()
-	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
-	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
-
-	beforeDecisions := len(decisionsForRun(t, super, f.runID))
-	beforeAudit := auditCount(t, super, f.tenantID, "invoice.approval_approved")
-
-	caller := auth.Identity{Subject: adminID, Role: "authenticated", TenantID: f.tenantID}
-	forceErr := errors.New("APPR-07-04 QA: force rollback after a real decideTx write")
-	err := db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
-		ctx := context.Background()
-		if _, decErr := decideTx(ctx, tx, f.invoiceID, "approved", nil, caller, nil); decErr != nil {
-			return decErr
+	for _, asDelegate := range []bool{false, true} {
+		name := "role holder"
+		if asDelegate {
+			name = "delegate"
 		}
-		// Anti-vacuity: the decision row must be visible from WITHIN this
-		// still-open transaction before it's thrown away, or the rollback
-		// assertions below would pass trivially against a decideTx that never
-		// wrote anything at all.
-		var n int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM approval_decisions WHERE run_id = $1`, f.runID).Scan(&n); err != nil {
-			return err
-		}
-		if n != 1 {
-			t.Fatalf("approval_decisions rows visible inside the uncommitted tx = %d, want 1 -- decideTx did not really write anything, so the rollback assertions below would prove nothing", n)
-		}
-		return forceErr
-	})
-	if !errors.Is(err, forceErr) {
-		t.Fatalf("forced rollback: err = %v, want the forced sentinel %v", err, forceErr)
-	}
+		t.Run(name, func(t *testing.T) {
+			var f approveFixture
+			var callerID string
+			if asDelegate {
+				w := newDelegateWorld(t, super, app, "DELEG-01-03 audit-same-tx", "reviewer")
+				f, callerID = w.approveFixture, w.delegate
+			} else {
+				f = newApproveFixture(t, super, app, "APPR-07 audit-same-tx", "audit-same-tx-role")
+				callerID = uuid.NewString()
+				seedMembership(t, super, f.tenantID, callerID, "admin", "active")
+				staffWorkflowRole(t, super, f.tenantID, f.roleID, callerID, 0)
+			}
 
-	if n := len(decisionsForRun(t, super, f.runID)); n != beforeDecisions {
-		t.Errorf("approval_decisions rows after the rollback = %d, want unchanged %d", n, beforeDecisions)
-	}
-	if n := auditCount(t, super, f.tenantID, "invoice.approval_approved"); n != beforeAudit {
-		t.Errorf("invoice.approval_approved audit rows after the rollback = %d, want unchanged %d", n, beforeAudit)
-	}
-	steps := runStepsOf(t, super, f.runID)
-	if len(steps) != 1 || steps[0].State != "pending" {
-		t.Errorf("step state after the rolled-back approve = %+v, want still pending", steps)
+			beforeDecisions := len(decisionsForRun(t, super, f.runID))
+			beforeAudit := auditCount(t, super, f.tenantID, "invoice.approval_approved")
+
+			caller := auth.Identity{Subject: callerID, Role: "authenticated", TenantID: f.tenantID}
+			forceErr := errors.New("APPR-07-04 QA: force rollback after a real decideTx write")
+			err := db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
+				ctx := context.Background()
+				if _, decErr := decideTx(ctx, tx, f.invoiceID, "approved", nil, caller, nil); decErr != nil {
+					return decErr
+				}
+				// Anti-vacuity: the row must be visible inside the tx before it is thrown away.
+				var n int
+				var gotDelegate bool
+				if err := tx.QueryRow(ctx, `SELECT count(*), COALESCE(bool_or(as_delegate), false) FROM approval_decisions WHERE run_id = $1`, f.runID).Scan(&n, &gotDelegate); err != nil {
+					return err
+				}
+				if n != 1 || gotDelegate != asDelegate {
+					t.Fatalf("decision rows inside the uncommitted tx = %d (as_delegate %v), want 1 (as_delegate %v) -- decideTx did not really write, so the rollback assertions below would prove nothing", n, gotDelegate, asDelegate)
+				}
+				return forceErr
+			})
+			if !errors.Is(err, forceErr) {
+				t.Fatalf("forced rollback: err = %v, want the forced sentinel %v", err, forceErr)
+			}
+
+			if n := len(decisionsForRun(t, super, f.runID)); n != beforeDecisions {
+				t.Errorf("approval_decisions rows after the rollback = %d, want unchanged %d", n, beforeDecisions)
+			}
+			if n := auditCount(t, super, f.tenantID, "invoice.approval_approved"); n != beforeAudit {
+				t.Errorf("invoice.approval_approved audit rows after the rollback = %d, want unchanged %d", n, beforeAudit)
+			}
+			steps := runStepsOf(t, super, f.runID)
+			if len(steps) != 1 || steps[0].State != "pending" {
+				t.Errorf("step state after the rolled-back approve = %+v, want still pending", steps)
+			}
+		})
 	}
 }
 
@@ -837,10 +953,10 @@ func TestApprove_AuditPayloadShape(t *testing.T) {
 	if len(body) == 0 {
 		t.Fatal("payload is empty {} -- want invoice_id/run_id/step_ord/reason populated")
 	}
-	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true, "approved_as": true}
+	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true, "approved_as": true, "as_delegate": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number, approved_as} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
+			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number, approved_as, as_delegate} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
 		}
 	}
 	for k := range allowed {
@@ -862,6 +978,9 @@ func TestApprove_AuditPayloadShape(t *testing.T) {
 	}
 	if got := body["approved_as"]; got != "approver" {
 		t.Errorf("payload approved_as = %v, want %q", got, "approver")
+	}
+	if got := body["as_delegate"]; got != false {
+		t.Errorf("payload as_delegate = %v, want false -- a role holder is not a delegate", got)
 	}
 }
 
@@ -978,7 +1097,7 @@ func TestApprove_SatisfiedStepUpdateAffectsNoRowsAndWritesNoDecision(t *testing.
 		t.Helper()
 		err = db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
 			var callErr error
-			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, number, f.tenantID, f.runID, f.stepID, 0, "approved", "commit-tx-actor", nil, false, nil)
+			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, number, f.tenantID, f.runID, f.stepID, 0, nil, false, "approved", "commit-tx-actor", nil, false, nil)
 			return callErr
 		})
 		return satisfied, err
@@ -1516,10 +1635,10 @@ func TestReject_AuditPayloadShape(t *testing.T) {
 	if len(body) == 0 {
 		t.Fatal("payload is empty {} -- want invoice_id/run_id/step_ord/reason populated")
 	}
-	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true}
+	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true, "as_delegate": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number}", k)
+			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number, as_delegate}", k)
 		}
 	}
 	for k := range allowed {
@@ -1539,4 +1658,122 @@ func TestReject_AuditPayloadShape(t *testing.T) {
 	if got, ok := body["reason"].(string); !ok || got != "incorrect line items" {
 		t.Errorf("payload reason = %v, want %q", body["reason"], "incorrect line items")
 	}
+	if got := body["as_delegate"]; got != false {
+		t.Errorf("payload as_delegate = %v, want false -- a role holder is not a delegate", got)
+	}
+}
+
+// --- DELEG-01-03: a step's delegate decides ---------------------------------------
+
+func TestDecide_NamedDelegateApproves(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, role := range []string{"reviewer", "admin"} {
+		t.Run(role, func(t *testing.T) {
+			w := newDelegateWorld(t, super, app, "DELEG-01-03 named-delegate-approves "+role, role)
+
+			run, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+			if err != nil {
+				t.Fatalf("Decide(approved) as the named %s delegate outside the role: %v, want success", role, err)
+			}
+			if run.State != "approved" {
+				t.Errorf("run.State = %q, want approved", run.State)
+			}
+			steps := runStepsOf(t, super, w.runID)
+			if len(steps) != 1 || steps[0].State != "satisfied" || steps[0].SatisfiedBy == nil || *steps[0].SatisfiedBy != w.delegate {
+				t.Errorf("steps = %+v, want the one step satisfied by the delegate %s", steps, w.delegate)
+			}
+			ds := decisionsForRun(t, super, w.runID)
+			if len(ds) != 1 || ds[0].Actor != w.delegate || ds[0].Decision != "approved" || !ds[0].AsDelegate {
+				t.Errorf("decisions = %+v, want one approved by %s with as_delegate true", ds, w.delegate)
+			}
+		})
+	}
+}
+
+func TestDecide_AnyoneDelegateLetsAnyActiveApproverDecide(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, role := range []string{"admin", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			w := newDelegateWorld(t, super, app, "DELEG-01-03 anyone-delegate "+role, "reviewer")
+			setStepDelegation(t, super, w.stepID, true, nil)
+			caller := seedMemberOf(t, super, w.tenantID, memberSpec{role: role})
+
+			run, err := approve(t, app, w.tenantID, caller, w.invoiceID, nil)
+			if err != nil {
+				t.Fatalf("Decide(approved) as an active %s outside the role on an \"anyone\" step: %v, want success", role, err)
+			}
+			if run.State != "approved" {
+				t.Errorf("run.State = %q, want approved", run.State)
+			}
+			ds := decisionsForRun(t, super, w.runID)
+			if len(ds) != 1 || ds[0].Actor != caller || !ds[0].AsDelegate {
+				t.Errorf("decisions = %+v, want one by %s with as_delegate true", ds, caller)
+			}
+		})
+	}
+}
+
+func TestDecide_HolderWhoIsAlsoTheDelegateIsNotADelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDelegateWorld(t, super, app, "DELEG-01-03 holder-is-delegate", "reviewer")
+	setStepDelegation(t, super, w.stepID, true, &w.holder)
+
+	if _, err := approve(t, app, w.tenantID, w.holder, w.invoiceID, nil); err != nil {
+		t.Fatalf("Decide(approved) as the role holder who is also the named delegate: %v, want success", err)
+	}
+	ds := decisionsForRun(t, super, w.runID)
+	if len(ds) != 1 || ds[0].Actor != w.holder || ds[0].AsDelegate {
+		t.Errorf("decisions = %+v, want one by %s with as_delegate false", ds, w.holder)
+	}
+	wantHolderAudit(t, super, w.tenantID, "invoice.approval_approved")
+}
+
+func TestDecide_AuditNamesDelegateStepAndRole(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("delegate approve", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 audit-delegate-approve", "reviewer")
+		if _, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil); err != nil {
+			t.Fatalf("Decide(approved) as delegate: %v", err)
+		}
+		wantDelegateAudit(t, super, w.tenantID, "invoice.approval_approved", w.delegate, w.roleKey, "Finance Manager")
+	})
+	t.Run("delegate reject", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 audit-delegate-reject", "reviewer")
+		if _, err := reject(t, app, w.tenantID, w.delegate, w.invoiceID, ptr("wrong buyer")); err != nil {
+			t.Fatalf("Decide(rejected) as delegate: %v", err)
+		}
+		wantDelegateAudit(t, super, w.tenantID, "invoice.approval_rejected", w.delegate, w.roleKey, "Finance Manager")
+	})
+	t.Run("holder approve", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 audit-holder-approve", "reviewer")
+		if _, err := approve(t, app, w.tenantID, w.holder, w.invoiceID, nil); err != nil {
+			t.Fatalf("Decide(approved) as holder: %v", err)
+		}
+		wantHolderAudit(t, super, w.tenantID, "invoice.approval_approved")
+	})
+	t.Run("holder reject", func(t *testing.T) {
+		w := newDelegateWorld(t, super, app, "DELEG-01-03 audit-holder-reject", "reviewer")
+		if _, err := reject(t, app, w.tenantID, w.holder, w.invoiceID, ptr("wrong buyer")); err != nil {
+			t.Fatalf("Decide(rejected) as holder: %v", err)
+		}
+		wantHolderAudit(t, super, w.tenantID, "invoice.approval_rejected")
+	})
+}
+
+func TestDecide_DelegateDecidesAStepWhoseRoleWasDeleted(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDelegateWorld(t, super, app, "DELEG-01-03 role-deleted", "reviewer")
+	setStepDelegation(t, super, w.stepID, true, nil)
+	softDeleteWorkflowRole(t, super, w.roleID)
+	caller := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+
+	run, err := approve(t, app, w.tenantID, caller, w.invoiceID, nil)
+	if err != nil {
+		t.Fatalf("Decide(approved) as an \"anyone\" delegate on a step whose role was deleted: %v, want success", err)
+	}
+	if run.State != "approved" {
+		t.Errorf("run.State = %q, want approved", run.State)
+	}
+	wantDelegateAudit(t, super, w.tenantID, "invoice.approval_approved", caller, w.roleKey, "Deleted role")
 }

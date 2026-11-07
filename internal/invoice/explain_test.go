@@ -176,7 +176,7 @@ func TestExplainTarget_HeaderPaths(t *testing.T) {
 		"buyer.tin": "buyer_tin", "buyer.name": "buyer_name", "currency": "currency",
 		"subtotal": "subtotal", "vat": "vat", "total": "total",
 	} {
-		field, line, ok := explainTarget(path, 2, "")
+		field, line, ok := explainTarget(path, 2)
 		if !ok || field != want || line != 0 {
 			t.Errorf("%s: got (%q, %d, %v), want (%q, 0, true)", path, field, line, ok, want)
 		}
@@ -190,7 +190,7 @@ func TestExplainTarget_NrsHeaderAndLineFieldsHaveAFix(t *testing.T) {
 	}{
 		{"due_date", "due_date", 0}, {"buyer.state", "buyer_state", 0}, {"line_items[2].hsn_code", "hsn_code", 2},
 	} {
-		field, line, ok := explainTarget(tc.path, 3, "")
+		field, line, ok := explainTarget(tc.path, 3)
 		if !ok || field != tc.field || line != tc.line {
 			t.Errorf("%s: got (%q, %d, %v), want (%q, %d, true)", tc.path, field, line, ok, tc.field, tc.line)
 		}
@@ -199,41 +199,82 @@ func TestExplainTarget_NrsHeaderAndLineFieldsHaveAFix(t *testing.T) {
 
 func TestExplainTarget_NonEditHeaderHasNoFix(t *testing.T) {
 	for _, path := range []string{"invoice_number", "tax_subtotals[1].tax_category"} {
-		if _, _, ok := explainTarget(path, 2, ""); ok {
+		if _, _, ok := explainTarget(path, 2); ok {
 			t.Errorf("%s: want no target", path)
 		}
 	}
 }
 
 func TestExplainTarget_LineFieldPath(t *testing.T) {
-	if f, n, ok := explainTarget("line_items[2].unit_price", 3, ""); !ok || f != "unit_price" || n != 2 {
+	if f, n, ok := explainTarget("line_items[2].unit_price", 3); !ok || f != "unit_price" || n != 2 {
 		t.Errorf("got (%q, %d, %v)", f, n, ok)
 	}
-	if _, _, ok := explainTarget("line_items[2].bogus", 3, "unit_price"); ok {
+	if _, _, ok := explainTarget("line_items[2].bogus", 3); ok {
 		t.Error("bogus is not an Edit line field")
 	}
 }
 
-func TestExplainTarget_BareLineUsesModelField(t *testing.T) {
-	if f, n, ok := explainTarget("line_items[2]", 3, "unit_price"); !ok || f != "unit_price" || n != 2 {
-		t.Errorf("got (%q, %d, %v)", f, n, ok)
+func TestExplainTarget_BareLineHasNoFix(t *testing.T) {
+	if _, _, ok := explainTarget("line_items[2]", 3); ok {
+		t.Error("a bare line path has no target")
 	}
-	for _, model := range []string{"hsn_code", "tax_percent", "base_quantity", "", "buyer_tin"} {
-		if _, _, ok := explainTarget("line_items[2]", 3, model); ok {
-			t.Errorf("model field %q: want no target", model)
+}
+
+func TestExplainSubject_Shapes(t *testing.T) {
+	for _, tc := range []struct{ name, path, field, want string }{
+		{"bare with field", "line_items[2]", "unit_price", "line_items[2].unit_price"},
+		{"field path keeps its path", "line_items[2].line_total", "unit_price", "line_items[2].line_total"},
+		{"header path", "vat", "unit_price", "vat"},
+		{"bare without field", "line_items[2]", "", "line_items[2]"},
+	} {
+		got := explainSubject(Violation{Path: tc.path, Field: tc.field})
+		if got.Path != tc.want || got.Field != "" {
+			t.Errorf("%s: got (%q, %q), want (%q, \"\")", tc.name, got.Path, got.Field, tc.want)
 		}
 	}
 }
 
-func TestExplainTarget_ModelCannotMoveAHeaderFix(t *testing.T) {
-	if f, _, ok := explainTarget("vat", 2, "subtotal"); !ok || f != "vat" {
-		t.Errorf("got (%q, %v), want vat", f, ok)
+func TestExplainPromptText_BareLineNamesTheJudgedField(t *testing.T) {
+	got := explainPromptText(Violation{RuleKey: "r", Message: "m", Path: "line_items[2]", Field: "unit_price"}, map[string]any{})
+	if !strings.Contains(got, `"path":"line_items[2].unit_price"`) || strings.Contains(got, `"field"`) {
+		t.Errorf("text = %s, want the field path and no field key", got)
+	}
+}
+
+func TestGuardExplanation_JudgedFieldBindsTheFix(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
+	if got.Fix == nil || got.Fix.Field != "unit_price" || got.Fix.Line == nil || *got.Fix.Line != 2 ||
+		got.Fix.Current == nil || *got.Fix.Current != "-5.00" || got.Fix.Value != "5.00" {
+		t.Errorf("fix = %+v, want unit_price on line 2, -5.00 -> 5.00", got.Fix)
+	}
+}
+
+func TestGuardExplanation_AnotherModelFieldDropsTheFix(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "line_total", "5.00"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
+	}
+}
+
+func TestGuardExplanation_BareLineWithoutJudgedFieldHasNoFix(t *testing.T) {
+	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]"}, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
+	}
+}
+
+func TestGuardExplanation_JudgedFieldNotEditableIsNoFix(t *testing.T) {
+	got := guardExplanation(Violation{Message: "m", Path: "line_items[2]", Field: "id"}, explainPayload(), explainAnswer("Why.", "id", "x"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got status %s, fix %v, want the explanation kept and no fix", got.Status, got.Fix)
 	}
 }
 
 func TestExplainTarget_OutOfRangeAndUnmappable(t *testing.T) {
 	for _, path := range []string{"line_items[4]", "line_items[0]", "line_items[0].unit_price", "line_items[01].unit_price", "line_items", "tax_subtotals[1].tax_category", "line_items[1].", ""} {
-		if _, _, ok := explainTarget(path, 3, "unit_price"); ok {
+		if _, _, ok := explainTarget(path, 3); ok {
 			t.Errorf("%q: want no target", path)
 		}
 	}
@@ -350,7 +391,7 @@ func TestGuardExplanation_EqualValueIsNoFix(t *testing.T) {
 }
 
 func TestGuardExplanation_FixCarriesCurrentAndLabel(t *testing.T) {
-	v := Violation{Message: "m", Path: "line_items[2]"}
+	v := Violation{Message: "m", Path: "line_items[2]", Field: "unit_price"}
 	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
 	b, _ := json.Marshal(got.Fix)
 	want := `{"field":"unit_price","label":"Unit price","line":2,"current":"-5.00","value":"5.00"}`
@@ -505,7 +546,8 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 	var cases []struct {
 		ID        string `json:"id"`
 		Violation struct {
-			Path string `json:"path"`
+			Path  string `json:"path"`
+			Field string `json:"field"`
 		} `json:"violation"`
 		Invoice struct {
 			LineItems []json.RawMessage `json:"line_items"`
@@ -522,7 +564,7 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 		if c.WantField == nil {
 			continue
 		}
-		field, _, ok := explainTarget(c.Violation.Path, len(c.Invoice.LineItems), *c.WantField)
+		field, _, ok := explainTarget(explainSubject(Violation{Path: c.Violation.Path, Field: c.Violation.Field}).Path, len(c.Invoice.LineItems))
 		// want_field is the name the model returns: the last path segment for a header path.
 		_, last, _ := strings.Cut(headerMBSPath(field), ".")
 		if last == "" {

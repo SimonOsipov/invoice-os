@@ -403,6 +403,53 @@ func TestRLS_ApprovalPolicyStepsCrossTenantVersionRefused(t *testing.T) {
 	}
 }
 
+// A policy step's delegate must be a member of the step's own tenant. Tenant B's active reviewer
+// dies at the composite FK; tenant A's own reviewer is the control.
+func TestRLS_ApprovalPolicyStepsDelegateOfAnotherTenantRefused(t *testing.T) {
+	h := requireHarness(t)
+	requireDelegationColumns(t)
+	ctx := context.Background()
+
+	// Seeded first, so they are removed last: the control step's FK blocks the member delete until its policy is gone.
+	memberB, memberA := uuid.NewString(), uuid.NewString()
+	_, cleanupMemberB := seedMembership(t, h.tenantB, memberB, "reviewer")
+	defer cleanupMemberB()
+	_, cleanupMemberA := seedMembership(t, h.tenantA, memberA, "reviewer")
+	defer cleanupMemberA()
+
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("deleg-policy-a"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	insert := func(ord int, delegate string) error {
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind, allow_delegation, delegate_user_id)
+				 VALUES ($1, $2, $3, 'approval', true, $4)`, h.tenantA, versionA, ord, delegate)
+			return err
+		})
+	}
+
+	err := insert(0, memberB)
+	if err == nil {
+		t.Fatal("step for tenant A naming tenant B's reviewer as delegate succeeded, want 23503 — the " +
+			"delegate FK is not composite on (tenant_id, user_id)")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("cross-tenant delegate: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "approval_policy_steps_tenant_delegate_fk" {
+		t.Errorf("constraint = %q, want %q", name, "approval_policy_steps_tenant_delegate_fk")
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_policy_steps WHERE version_id = $1`, versionA); n != 0 {
+		t.Errorf("step rows after the refused INSERT = %d, want 0", n)
+	}
+
+	if err := insert(0, memberA); err != nil {
+		t.Fatalf("control: step naming tenant A's own reviewer: want success, got: %v", err)
+	}
+}
+
 // PC-10: as SUPERUSER, a step for tenant A naming tenant B's step as parent_step_id is
 // refused — the parent self-FK is not composite on (tenant_id, id) either.
 func TestRLS_ApprovalPolicyStepsCrossTenantParentRefused(t *testing.T) {

@@ -293,3 +293,34 @@ func TestStoreRowFacts_TransmitClearIsConstantInPageSize(t *testing.T) {
 		t.Errorf("RowFacts issued %d statements for 1 invoice and %d for %d -- every read must be set-shaped: no query may enter the row loop", n1, n30, len(ids))
 	}
 }
+
+func TestStoreRowFacts_DelegateOfPendingIsSet(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := seedApprovalFactsFixture(t, super, "DELEG-01-04-DELEGATE", false)
+	store := NewStore(app)
+	arm := func(number string, allow bool, delegate *string) string {
+		fx.armInvoice(t, super, app, number)
+		if _, err := super.Exec(context.Background(),
+			`UPDATE approval_run_steps SET allow_delegation = $2, delegate_user_id = $3
+			  WHERE run_id IN (SELECT id FROM approval_runs WHERE invoice_id = $1)`, fx.invID, allow, delegate); err != nil {
+			t.Fatalf("set delegation: %v", err)
+		}
+		return fx.invID
+	}
+	anyone := arm("deleg-anyone", true, nil)
+	named := arm("deleg-named", true, &fx.subject)
+	none := arm("deleg-none", false, nil)
+	other := uuid.NewString()
+	seedMembership(t, super, fx.tenantID, other, "reviewer")
+	namedOther := arm("deleg-named-other", true, &other)
+
+	_, gate, err := store.RowFacts(fx.ctx, []string{anyone, named, none, namedOther})
+	if err != nil {
+		t.Fatalf("RowFacts: %v", err)
+	}
+	for id, want := range map[string]bool{anyone: true, named: true, none: false, namedOther: false} {
+		if gate.DelegateOfPending[id] != want {
+			t.Errorf("DelegateOfPending[%s] = %t, want %t", id, gate.DelegateOfPending[id], want)
+		}
+	}
+}

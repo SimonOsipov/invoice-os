@@ -903,6 +903,15 @@ func TestRLS_ApprovalDecisionsAppUpdateAndDeleteRefused(t *testing.T) {
 			t.Errorf("DELETE refusal message = %q, want the grant layer (\"permission denied\")", msg)
 		}
 
+		// as_delegate is no softer than the other columns: the refusal is the missing UPDATE grant.
+		flagErr := attemptWithSavepoint(t, ctx, tx,
+			`UPDATE approval_decisions SET as_delegate = true WHERE id = $1`, decisionA)
+		if flagErr == nil {
+			t.Error("app-role UPDATE of approval_decisions.as_delegate succeeded, want permission denied (SQLSTATE 42501)")
+		} else if code := pgCode(flagErr); code != "42501" {
+			t.Errorf("app-role UPDATE of as_delegate: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, flagErr)
+		}
+
 		// Positive control: same row, same role, same tx — still SELECT-able and present.
 		if n := mustCount(t, tx, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionA); n != 1 {
 			t.Errorf("decision row visible to its own tenant after the refused UPDATE/DELETE = %d, want 1", n)
@@ -919,6 +928,13 @@ func TestRLS_ApprovalDecisionsAppUpdateAndDeleteRefused(t *testing.T) {
 	}
 	if reason != nil {
 		t.Errorf("reason after the refused UPDATE = %q, want unchanged NULL", *reason)
+	}
+	var asDelegate bool
+	if e := h.super.QueryRow(ctx, `SELECT as_delegate FROM approval_decisions WHERE id = $1`, decisionA).Scan(&asDelegate); e != nil {
+		t.Fatalf("read back as_delegate as superuser: %v", e)
+	}
+	if asDelegate {
+		t.Error("as_delegate after the refused UPDATE = true, want unchanged false")
 	}
 }
 
@@ -1107,6 +1123,76 @@ func TestRLS_ApprovalRunStepsDeleteCascadesToDecisions(t *testing.T) {
 	}
 }
 
+// requireDelegationColumns fails by name when the approval_step_delegation migration is not applied.
+func requireDelegationColumns(t *testing.T) {
+	t.Helper()
+	for _, c := range [][2]string{
+		{"approval_policy_steps", "allow_delegation"}, {"approval_policy_steps", "delegate_user_id"},
+		{"approval_run_steps", "allow_delegation"}, {"approval_run_steps", "delegate_user_id"},
+		{"approval_decisions", "as_delegate"},
+	} {
+		if n := mustCount(t, h.super,
+			`SELECT count(*) FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`, c[0], c[1]); n != 1 {
+			t.Fatalf("%s.%s is missing: the approval_step_delegation migration is not applied", c[0], c[1])
+		}
+	}
+}
+
+// A run step's delegate must be a member of the step's own tenant. A member of tenant B and a
+// random uuid both die at the composite FK; A's own member is the control.
+func TestRLS_ApprovalRunStepsDelegateOfAnotherTenantRefused(t *testing.T) {
+	h := requireHarness(t)
+	requireDelegationColumns(t)
+	ctx := context.Background()
+
+	// Seeded first, so they are removed last: the control step's FK blocks the member delete until its run is gone.
+	memberB, memberA := uuid.NewString(), uuid.NewString()
+	_, cleanupMemberB := seedMembership(t, h.tenantB, memberB, "reviewer")
+	defer cleanupMemberB()
+	_, cleanupMemberA := seedMembership(t, h.tenantA, memberA, "reviewer")
+	defer cleanupMemberA()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "DELEG-01 run-step A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "DELEG-01-run-step-A")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("deleg-run-step-policy"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runA, cleanupRunA := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	defer cleanupRunA()
+
+	insert := func(delegate string) error {
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, allow_delegation, delegate_user_id)
+				 VALUES ($1, $2, 0, 'approval', true, $3)`, h.tenantA, runA, delegate)
+			return err
+		})
+	}
+	for name, delegate := range map[string]string{"member of another tenant": memberB, "random uuid": uuid.NewString()} {
+		err := insert(delegate)
+		if err == nil {
+			t.Fatalf("run step naming a %s as delegate succeeded, want 23503", name)
+		}
+		if code := pgCode(err); code != "23503" {
+			t.Fatalf("%s: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", name, code, err)
+		}
+		if got := pgConstraint(err); got != "approval_run_steps_tenant_delegate_fk" {
+			t.Errorf("%s: constraint = %q, want %q", name, got, "approval_run_steps_tenant_delegate_fk")
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_run_steps WHERE run_id = $1`, runA); n != 0 {
+		t.Errorf("run step rows after the refused INSERTs = %d, want 0", n)
+	}
+
+	if err := insert(memberA); err != nil {
+		t.Fatalf("control: run step naming tenant A's own reviewer: want success, got: %v", err)
+	}
+}
+
 // approvalRunStepsNotifyMigrationVersion is the notify-columns migration's goose
 // version id, taken from the embedded filename rather than hardcoded.
 func approvalRunStepsNotifyMigrationVersion(t *testing.T) int64 {
@@ -1182,7 +1268,8 @@ func TestRLS_ApprovalRunStepsNotifyDownDropsExactlyTwoColumns(t *testing.T) {
 	// Restore the column set regardless of how the assertions below turn out — later
 	// tests in this package depend on notify_target/notify_channel existing.
 	t.Cleanup(func() {
-		if _, err := provider.Up(context.Background()); err != nil {
+		// Up refuses a rolled-back version below the newest applied one, so re-apply it by version.
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
 			t.Errorf("restore approval_run_steps schema after the Down/Up round-trip: %v", err)
 		}
 	})
@@ -1194,6 +1281,7 @@ func TestRLS_ApprovalRunStepsNotifyDownDropsExactlyTwoColumns(t *testing.T) {
 	wantDown := []string{
 		"id", "tenant_id", "run_id", "ord", "kind", "workflow_role_key",
 		"sla_hours", "due_at", "state", "satisfied_at", "satisfied_by", "created_at",
+		"allow_delegation", "delegate_user_id",
 	}
 	if got := approvalRunStepsColumns(t, ctx); !reflect.DeepEqual(got, wantDown) {
 		t.Fatalf("columns after Down = %v, want %v", got, wantDown)

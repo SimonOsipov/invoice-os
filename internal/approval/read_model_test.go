@@ -284,7 +284,7 @@ func TestRunDecision_KeyNamesMatchSpec(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	want := []string{"run_step_id", "ord", "decision", "actor", "decided_at", "reason"}
+	want := []string{"run_step_id", "ord", "decision", "actor", "decided_at", "reason", "as_delegate"}
 	for _, k := range want {
 		if _, ok := m[k]; !ok {
 			t.Errorf("missing key %q in %v", k, m)

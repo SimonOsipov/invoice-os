@@ -881,14 +881,14 @@ function extractedPayloadKeys(): Record<string, string[]> {
 // Transcribed from the four map literals. activityFeed_goPayloadKeysAreTheOnesThisTableClaims
 // is what stops this rotting into a claim about keys the server no longer writes.
 const TRANSCRIBED_PAYLOAD_KEYS: Record<string, string[]> = {
-  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number', 'approved_as'],
-  'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
+  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number', 'as_delegate', 'approved_as'],
+  'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number', 'as_delegate'],
   'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'policy_id', 'position', 'matched_scopes', 'steps', 'invoice_number'],
   'invoice.approval_cancelled': ['id', 'run_id', 'invoice_number'],
 }
 
 const RETIRED_FIELD_KEYS = ['run_id', 'step_ord', 'reason']
-const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'policy_id', 'position', 'matched_scopes', 'steps', 'invoice_number', 'approved_as']
+const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'policy_id', 'position', 'matched_scopes', 'steps', 'invoice_number', 'as_delegate', 'approved_as']
 
 const RUN_ID_SENTINEL = 'run-7f21-nothing-dropped'
 const STEP_ORD_SENTINEL = 7
@@ -1063,7 +1063,9 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
     // One write site per event, or the extraction describes a payload the server may no
     // longer be the only writer of.
     for (const [event, path] of Object.entries(APPROVAL_EVENT_SOURCES)) {
-      expect(goAuditRecordSites(repoFile(path), event), `${event}: expected exactly one audit.Record site`).toBe(1)
+      // A decision event has two literals: a role holder's and a delegate's (acted_for_* keys).
+      const sites = path === GO_DECISION ? 2 : 1
+      expect(goAuditRecordSites(repoFile(path), event), `${event}: expected exactly ${sites} audit.Record site(s)`).toBe(sites)
     }
 
     const extracted = extractedPayloadKeys()

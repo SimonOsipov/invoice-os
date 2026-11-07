@@ -19,13 +19,16 @@ type GateFacts struct {
 	RunState        string // "" when the invoice has no run at all
 	PendingStepOrd  *int   // nil when no kind='approval' step is pending
 	CallerHoldsRole bool
-	PendingRoleKey  *string // the pending step's workflow role; nil when none
+	// CallerIsDelegate: the pending step names the caller (or anyone) as delegate.
+	CallerIsDelegate bool
+	PendingRoleKey   *string // the pending step's workflow role; nil when none
 }
 
 // RowFacts is one invoice row's approval standing, for the list.
 //
 // PendingRoleKey is the list gate's input, never wire copy: json:"-" keeps the six
-// public key set unchanged (TestListItem_ApprovalObjectKeySetIsExact).
+// public key set unchanged (TestListItem_ApprovalObjectKeySetIsExact). The delegation
+// fields are gate input only, with the same tag.
 type RowFacts struct {
 	RunState            string     `json:"run_state"`
 	PendingOrd          *int       `json:"pending_ord"`
@@ -35,6 +38,9 @@ type RowFacts struct {
 	DueAt               *time.Time `json:"due_at"`
 	Overdue             bool       `json:"overdue"`
 	PendingRoleKey      *string    `json:"-"`
+
+	PendingAllowDelegation bool    `json:"-"`
+	PendingDelegateUserID  *string `json:"-"`
 }
 
 // TransmitClear reports whether an invoice may pass into queued.
@@ -128,13 +134,14 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 	// decideTx's pending-step predicate (decision.go:162-166) minus FOR UPDATE: this is a
 	// read path, and a GET must take no row lock.
 	var stepOrd int
-	var roleKey *string
+	var roleKey, delegateUserID *string
+	var allowDelegation bool
 	if err := tx.QueryRow(ctx,
-		`SELECT ord, workflow_role_key
+		`SELECT ord, workflow_role_key, allow_delegation, delegate_user_id::text
 		   FROM approval_run_steps
 		  WHERE run_id = $1 AND kind = 'approval' AND state = 'pending'
 		  ORDER BY ord LIMIT 1`, runID,
-	).Scan(&stepOrd, &roleKey); err != nil {
+	).Scan(&stepOrd, &roleKey, &allowDelegation, &delegateUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return gf, nil
 		}
@@ -142,6 +149,7 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 	}
 	gf.PendingStepOrd = &stepOrd
 	gf.PendingRoleKey = roleKey
+	gf.CallerIsDelegate = DelegateMayDecide(allowDelegation, delegateUserID, subject)
 
 	// AXIS 2, with decideTx's roleKey != nil guard, so the gate and the decision refuse on
 	// the same rung (TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding). AXIS 1 is
@@ -236,13 +244,15 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		ord       int
 		roleKey   *string
 		dueAt     *time.Time
+		allow     bool
+		delegate  *string
 	}
 	pending := []pendingStep{}
 	roleKeys := []string{}
 	seenKeys := map[string]bool{}
 
 	steps, err := tx.Query(ctx,
-		`SELECT DISTINCT ON (run_id) run_id, ord, workflow_role_key, due_at
+		`SELECT DISTINCT ON (run_id) run_id, ord, workflow_role_key, due_at, allow_delegation, delegate_user_id::text
 		   FROM approval_run_steps
 		  WHERE run_id = ANY($1::uuid[]) AND kind = 'approval' AND state = 'pending'
 		  ORDER BY run_id, ord`, runIDs)
@@ -252,7 +262,7 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 	for steps.Next() {
 		var runID string
 		var p pendingStep
-		if err := steps.Scan(&runID, &p.ord, &p.roleKey, &p.dueAt); err != nil {
+		if err := steps.Scan(&runID, &p.ord, &p.roleKey, &p.dueAt, &p.allow, &p.delegate); err != nil {
 			steps.Close()
 			return nil, err
 		}
@@ -295,6 +305,8 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		ord := p.ord
 		rf.PendingOrd = &ord
 		rf.DueAt = p.dueAt
+		rf.PendingAllowDelegation = p.allow
+		rf.PendingDelegateUserID = p.delegate
 		// Go's clock, never SQL now(): the run panel reads the same one
 		// (read_model.go:161). The pending-only read above supplies its state conjunct.
 		rf.Overdue = rf.DueAt != nil && rf.DueAt.Before(time.Now())
@@ -310,4 +322,9 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		facts[p.invoiceID] = rf
 	}
 	return facts, nil
+}
+
+// DelegateMayDecide: the step's delegate test; AXIS 1 is the caller's.
+func DelegateMayDecide(allow bool, delegateUserID *string, subject string) bool {
+	return allow && (delegateUserID == nil || *delegateUserID == subject)
 }

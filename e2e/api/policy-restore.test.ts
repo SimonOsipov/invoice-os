@@ -75,6 +75,8 @@ function approvalStep(id: string, role: string): ApprovalStep {
     cond_amount: null,
     notify_target: null,
     notify_channel: null,
+    allow_delegation: false,
+    delegate_user_id: null,
     then: [],
     else: [],
   }
@@ -90,6 +92,8 @@ function conditionStep(id: string, then: ApprovalStep[], elseBranch: ApprovalSte
     cond_amount: '250000000.00',
     notify_target: null,
     notify_channel: null,
+    allow_delegation: false,
+    delegate_user_id: null,
     then,
     else: elseBranch,
   }
@@ -144,10 +148,19 @@ describe('mapApprovalSteps', () => {
         cond_amount: null,
         notify_target: null,
         notify_channel: null,
+        allow_delegation: false,
+        delegate_user_id: null,
         then: [],
         else: [],
       },
     ])
+  })
+
+  it("keeps a step's delegation", () => {
+    const step = { ...approvalStep('srv-1', 'fin_mgr'), allow_delegation: true, delegate_user_id: '6b1f0c9e-0000-4000-8000-000000000001' }
+    const mapped = mapApprovalSteps([step])
+    expect(mapped[0].allow_delegation).toBe(true)
+    expect(mapped[0].delegate_user_id).toBe('6b1f0c9e-0000-4000-8000-000000000001')
   })
 
   it('keeps a real value distinct from a sibling explicit null on the same step', () => {
@@ -172,6 +185,8 @@ describe('mapApprovalSteps', () => {
         cond_amount: null,
         notify_target: null,
         notify_channel: null,
+        allow_delegation: false,
+        delegate_user_id: null,
         then: [],
         else: [],
       },
@@ -194,6 +209,8 @@ describe('mapApprovalSteps', () => {
         cond_amount: null,
         notify_target: null,
         notify_channel: null,
+        allow_delegation: false,
+        delegate_user_id: null,
         then: [],
         else: [],
       },

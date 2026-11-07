@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -771,5 +772,106 @@ func TestPublish_SweepFingerprintIsARealHash(t *testing.T) {
 	if got != stubFingerprintValue {
 		t.Errorf("content_fingerprint = %q, want the stub's literal %q — the sweep must pass the "+
 			"Fingerprinter's return through verbatim", got, stubFingerprintValue)
+	}
+}
+
+// --- delegation ---------------------------------------------------------------
+
+func TestPublish_RefusesAnIneligibleNamedDelegate(t *testing.T) {
+	const want = "Ada Obi can no longer be a delegate on Finance Manager. Pick another delegate or switch delegation off."
+	cases := map[string]func(f stepDelegateFixture, id string){
+		"demoted to preparer": func(f stepDelegateFixture, id string) {
+			if _, err := f.super.Exec(context.Background(),
+				`UPDATE memberships SET role = 'preparer' WHERE tenant_id = $1 AND user_id = $2`, f.tenantID, id); err != nil {
+				f.t.Fatalf("demote: %v", err)
+			}
+		},
+		"suspended": func(f stepDelegateFixture, id string) { setMembershipStatus(f.t, f.super, f.tenantID, id, "suspended") },
+		"removed":   func(f stepDelegateFixture, id string) { setMembershipStatus(f.t, f.super, f.tenantID, id, "removed") },
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newStepDelegateFixture(t, "DELEG-01-02 refuse "+name)
+			delegate := f.delegate("reviewer", "active", "Ada Obi")
+			if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&delegate)}); err != nil {
+				t.Fatalf("PutDraft: %v", err)
+			}
+			entityID := seedBusinessEntity(t, f.super, f.tenantID, "Delegate Corp")
+			invoiceID := sweepValidated(t, f.super, f.tenantID, entityID, "deleg-refused-1")
+			change(f, delegate)
+
+			_, err := f.store.PublishPolicy(f.ctx, f.policyID)
+			if status, msg := policyStatusForErr(err); status != http.StatusConflict || msg != want {
+				t.Fatalf("status, msg = %d, %q (err %v), want 409 %q", status, msg, err, want)
+			}
+			if v := versionRows(t, f.super, f.policyID)[0]; v.Sealed || v.IsActive {
+				t.Errorf("version = %+v, want unsealed", v)
+			}
+			if n := approvalRunCountForInvoice(t, f.super, invoiceID); n != 0 {
+				t.Errorf("runs armed = %d, want 0", n)
+			}
+			got, err := f.store.GetPolicy(f.ctx, f.policyID)
+			if err != nil || len(got.Steps) != 1 || got.Steps[0].DelegateUserID == nil || *got.Steps[0].DelegateUserID != delegate {
+				t.Errorf("draft after the refusal = %+v (err %v), want it unchanged", got.Steps, err)
+			}
+		})
+	}
+}
+
+func TestPublish_IneligibleDelegateNameFallsBack(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 name fallback")
+	delegate := f.delegate("reviewer", "removed", "")
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&delegate)}); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	_, err := f.store.PublishPolicy(f.ctx, f.policyID)
+	if _, msg := policyStatusForErr(err); !strings.HasPrefix(msg, "Deleted member can no longer ") {
+		t.Errorf("msg = %q, want it to start with %q", msg, "Deleted member can no longer ")
+	}
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE memberships SET email = 'ada@example.com' WHERE tenant_id = $1 AND user_id = $2`, f.tenantID, delegate); err != nil {
+		t.Fatalf("set email: %v", err)
+	}
+	_, err = f.store.PublishPolicy(f.ctx, f.policyID)
+	if _, msg := policyStatusForErr(err); !strings.HasPrefix(msg, "ada@example.com can no longer ") {
+		t.Errorf("msg = %q, want the email when there is no display name", msg)
+	}
+}
+
+func TestPublish_NamesTheFirstIneligibleDelegateInTreeOrder(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 tree order")
+	ok := f.delegate("reviewer", "active", "A")
+	b := f.delegate("preparer", "active", "B")
+	c := f.delegate("preparer", "active", "C")
+	steps := []stepInput{
+		delegatedStep(&ok),
+		{Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("1.00"),
+			Then: []stepInput{delegatedStep(&b)}, Else: []stepInput{delegatedStep(&c)}},
+		delegatedStep(&c),
+	}
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, steps); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	_, err := f.store.PublishPolicy(f.ctx, f.policyID)
+	if _, msg := policyStatusForErr(err); !strings.HasPrefix(msg, "B can no longer ") {
+		t.Errorf("msg = %q, want the then-lane delegate B named first", msg)
+	}
+}
+
+func TestPublish_DeletedRoleRefusalWinsOverDelegate(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 deleted role first")
+	delegate := f.delegate("preparer", "active", "Ada Obi")
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&delegate)}); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	var roleID string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT id FROM workflow_roles WHERE tenant_id = $1 AND key = 'finance-manager'`, f.tenantID).Scan(&roleID); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	softDeleteWorkflowRole(t, f.super, roleID)
+	_, err := f.store.PublishPolicy(f.ctx, f.policyID)
+	if _, msg := policyStatusForErr(err); msg != "an approval step names a workflow role that no longer exists" {
+		t.Errorf("msg = %q, want the step-role sentence", msg)
 	}
 }

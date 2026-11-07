@@ -1913,6 +1913,8 @@ type ApprovalFacts struct {
 	RunState        string
 	PendingStepOrd  *int
 	CallerHoldsRole bool
+	// CallerIsDelegate: the caller is the pending step's delegate.
+	CallerIsDelegate bool
 	// Creator is read in its own transaction; CreatorErr set means the rung is skipped.
 	Creator    approval.CreatorStanding
 	CreatorErr error
@@ -1953,10 +1955,11 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			return err
 		}
 		out = ApprovalFacts{
-			TransmitClear:   approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
-			RunState:        f.RunState,
-			PendingStepOrd:  f.PendingStepOrd,
-			CallerHoldsRole: f.CallerHoldsRole,
+			TransmitClear:    approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
+			RunState:         f.RunState,
+			PendingStepOrd:   f.PendingStepOrd,
+			CallerHoldsRole:  f.CallerHoldsRole,
+			CallerIsDelegate: f.CallerIsDelegate,
 		}
 		pending, err := rulePendingByInvoiceTx(ctx, tx, []string{id})
 		if err != nil {
@@ -1985,6 +1988,8 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 type ListGateFacts struct {
 	CallerRole       string
 	HoldsPendingRole map[string]bool
+	// DelegateOfPending: the caller is the pending step's delegate, by invoice id.
+	DelegateOfPending map[string]bool
 	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
 	RulePending   map[string]bool
@@ -2070,6 +2075,12 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 				holds[id] = true
 			}
 		}
+		delegate := map[string]bool{}
+		for id, f := range facts {
+			if f.PendingOrd != nil && approval.DelegateMayDecide(f.PendingAllowDelegation, f.PendingDelegateUserID, subject) {
+				delegate[id] = true
+			}
+		}
 		clear, err := approval.TransmitClearTx(ctx, tx, ids)
 		if err != nil {
 			return err
@@ -2090,7 +2101,7 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			return err
 		}
 
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending, Demotion: demotion}
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, DelegateOfPending: delegate, TransmitClear: transmit, RulePending: pending, Demotion: demotion}
 		return nil
 	})
 	if err != nil {

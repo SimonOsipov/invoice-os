@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react'
 
 import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
+import { actorLabel } from '../lib/actor'
 import { auditEventView, TONE_TEXT } from '../lib/auditVocabulary'
 import { bundleCompanyFor } from '../lib/evidenceBundle'
 import { fmtDateTime } from '../lib/format'
@@ -73,7 +74,7 @@ export interface AuditRowProps {
 
 export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, onOpenEvidence, evidenceBusy = false, evidenceOpen = false, variant = 'audit' }: AuditRowProps) {
   const audit = variant === 'audit'
-  const view = auditEventView(event.event, event.payload)
+  const view = auditEventView(event.event, event.payload, actorLabel(event.actor, { name: event.actor_name, kind: event.actor_kind }).text)
   const inv = invoiceRef(event.payload)
   const payload = asRecord(event.payload)
   const keys = payload ? Object.keys(payload) : []

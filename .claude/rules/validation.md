@@ -11,6 +11,7 @@ paths:
 - Switch a rule through `PATCH /v1/staff/rules/{key}`. It writes a `staff_audit_log` row in the same transaction through `audit.RecordStaff`, with event `validation.rule.disabled` or `validation.rule.enabled`.
 - Run the owner `UPDATE` of the runbook only as break-glass. It writes no audit row.
 - Write a per-line `cel` rule as `[!has(invoice.<list>) ||] invoice.<list>.all(x, <body on x only>)` with `target` = `<list>`. Any other shape reports one violation at the target, not the line.
+- A per-line `cel` body that reads exactly one field of `x`, and uses `x` in no other way, names that field in the violation's `field`. Any other body leaves `field` empty.
 - Register a staff route under `/v1/staff/`.
 - The platform checks the staff claim on a staff route. The handler repeats no check.
 - Open the staff route transaction with `db.WithinStaffTx`.

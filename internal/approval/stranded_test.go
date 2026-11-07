@@ -589,3 +589,30 @@ func TestListStranded_ReadsATenantScheduledForDeletion(t *testing.T) {
 		t.Fatalf("rows = %+v, err = %v, want the scheduled tenant's one run", rows, err)
 	}
 }
+
+// Pins today's holder-only count: APSC-14 flips this test when it counts a delegate.
+func TestStranded_ADelegateDoesNotCountAsADecider(t *testing.T) {
+	for _, named := range []bool{true, false} {
+		name := "anyone"
+		if named {
+			name = "named"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newRunFixture(t, "DELEG-01-03 stranded "+name)
+			staffWith(t, f, seedWorkflowRole(t, f.super, f.tenantID, "susp", "Suspended"), "reviewer", "suspended")
+			inv, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+name, f.versionID, pendingOn("susp"))
+			var delegate *string
+			if named {
+				d := uuid.NewString()
+				seedMembership(t, f.super, f.tenantID, d, "reviewer", "active")
+				delegate = &d
+			}
+			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, runID, 0), true, delegate)
+
+			rows := strandedFor(t, f.app, f.tenantID)
+			if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedNoHolder {
+				t.Fatalf("rows = %+v, want the run listed once with reason no holder", rows)
+			}
+		})
+	}
+}

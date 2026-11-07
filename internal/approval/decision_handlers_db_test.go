@@ -419,3 +419,37 @@ func TestDecideHandler_PostReturnsTheCurrentRunNotACancelledPriorOneOverHTTP(t *
 		t.Errorf("second run state = %q, want approved", secondState)
 	}
 }
+
+func TestApprovalRun_DecisionCarriesAsDelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDelegateWorld(t, super, app, "DELEG-01-03 get-as-delegate", "reviewer")
+	store := NewStore(app, stubFingerprinter, nil)
+	if rec := decideOverHTTP(t, store, w.tenantID, w.delegate, w.invoiceID, `{"decision":"approved"}`); rec.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	getMux := runMux(func(ctx context.Context, invoiceID string) (Run, error) { return store.ApprovalRun(ctx, invoiceID) }, nil)
+	r := httptest.NewRequest("GET", "/v1/invoices/"+w.invoiceID+"/approval", nil)
+	r = r.WithContext(auth.WithIdentity(r.Context(), auth.Identity{Subject: w.delegate, Role: "authenticated", TenantID: w.tenantID}))
+	rec := httptest.NewRecorder()
+	getMux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Decisions []map[string]any `json:"decisions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode GET body: %v", err)
+	}
+	if len(body.Decisions) != 1 {
+		t.Fatalf("decisions = %d, want 1", len(body.Decisions))
+	}
+	d := body.Decisions[0]
+	if len(d) != 7 {
+		t.Errorf("decision keys = %d (%v), want seven", len(d), d)
+	}
+	if got := d["as_delegate"]; got != true {
+		t.Errorf("decisions[0].as_delegate = %v, want true", got)
+	}
+}

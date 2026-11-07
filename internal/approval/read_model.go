@@ -42,12 +42,13 @@ type RunStep struct {
 
 // RunDecision is one approval_decisions row.
 type RunDecision struct {
-	RunStepID string    `json:"run_step_id"`
-	Ord       int       `json:"ord"`
-	Decision  string    `json:"decision"`
-	Actor     string    `json:"actor"`
-	DecidedAt time.Time `json:"decided_at"`
-	Reason    *string   `json:"reason"`
+	RunStepID  string    `json:"run_step_id"`
+	Ord        int       `json:"ord"`
+	Decision   string    `json:"decision"`
+	Actor      string    `json:"actor"`
+	DecidedAt  time.Time `json:"decided_at"`
+	Reason     *string   `json:"reason"`
+	AsDelegate bool      `json:"as_delegate"`
 }
 
 // Run is the read model for GET/POST .../approval[s]. Never embed anonymously --
@@ -208,7 +209,7 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 	}
 
 	drows, err := tx.Query(ctx,
-		`SELECT run_step_id, decision, actor, decided_at, reason
+		`SELECT run_step_id, decision, actor, decided_at, reason, as_delegate
 		   FROM approval_decisions
 		  WHERE run_id = $1
 		  ORDER BY decided_at`, run.RunID)
@@ -217,7 +218,7 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 	}
 	for drows.Next() {
 		var d RunDecision
-		if err := drows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.DecidedAt, &d.Reason); err != nil {
+		if err := drows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.DecidedAt, &d.Reason, &d.AsDelegate); err != nil {
 			drows.Close()
 			return err
 		}

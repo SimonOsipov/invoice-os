@@ -1689,8 +1689,10 @@ test.describe('Customers screen and company fields', () => {
       // Boot on the last tab (Workspace, both personas) at phone width: the strip scrolls, the page does not.
       const entry = page.viewportSize()
       try {
-        await page.setViewportSize({ width: 375, height: 900 })
+        // The landing header hides Sign in at phone width: sign in wide, then boot narrow.
         await signInAtFrontDoor(page, account, '/settings/workspace')
+        await page.setViewportSize({ width: 375, height: 900 })
+        await page.reload()
         const bootStrip = settingsTab(page, 'Members').locator('xpath=..')
         const workspace = settingsTab(page, 'Workspace')
         await expect(workspace, `${persona} has no Workspace tab`).toBeVisible()

@@ -1948,7 +1948,7 @@ func (s *Store) NoteChecks(ctx context.Context, inv Invoice) (bool, error) {
 // still fails closed.
 func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
 	var out ApprovalFacts
-	var roleKey *string
+	var probe approval.CreatorProbe
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		f, err := approval.GateFactsTx(ctx, tx, id, actorFromContext(ctx).Subject)
 		if err != nil {
@@ -1966,7 +1966,7 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			return err
 		}
 		out.RulePending = pending[id]
-		roleKey = f.PendingRoleKey
+		probe = approval.CreatorProbe{InvoiceID: id, RoleKey: f.PendingRoleKey, AllowDelegation: f.PendingAllowDelegation, DelegateUserID: f.PendingDelegateUserID}
 		return nil
 	})
 	if err != nil {
@@ -1974,7 +1974,7 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 	}
 	if out.RunState == "open" && out.PendingStepOrd != nil {
 		out.CreatorErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-			standing, err := approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, []approval.CreatorProbe{{InvoiceID: id, RoleKey: roleKey}})
+			standing, err := approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, []approval.CreatorProbe{probe})
 			out.Creator = standing[id]
 			return err
 		})
@@ -2110,7 +2110,7 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 	var probes []approval.CreatorProbe
 	for id, f := range out {
 		if f.RunState == "open" && f.PendingOrd != nil {
-			probes = append(probes, approval.CreatorProbe{InvoiceID: id, RoleKey: f.PendingRoleKey})
+			probes = append(probes, approval.CreatorProbe{InvoiceID: id, RoleKey: f.PendingRoleKey, AllowDelegation: f.PendingAllowDelegation, DelegateUserID: f.PendingDelegateUserID})
 		}
 	}
 	if len(probes) > 0 {

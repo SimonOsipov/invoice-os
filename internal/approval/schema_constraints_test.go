@@ -943,3 +943,161 @@ func TestApprovalRunSteps_NotifyColumnsEmptyStringDistinctFromNull(t *testing.T)
 		t.Errorf("notify_channel = %q, want NULL", *channel)
 	}
 }
+
+// --- step delegation columns (DELEG-01-01) ----------------------------------
+
+var delegationColumns = [][2]string{
+	{"approval_policy_steps", "allow_delegation"}, {"approval_policy_steps", "delegate_user_id"},
+	{"approval_run_steps", "allow_delegation"}, {"approval_run_steps", "delegate_user_id"},
+	{"approval_decisions", "as_delegate"},
+}
+
+// failIfNoDelegationColumns names the missing migration instead of a raw 42703 from a later insert.
+func failIfNoDelegationColumns(t *testing.T, super *pgxpool.Pool) {
+	t.Helper()
+	for _, c := range delegationColumns {
+		var n int
+		if err := super.QueryRow(context.Background(),
+			`SELECT count(*) FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`, c[0], c[1]).Scan(&n); err != nil {
+			t.Fatalf("probe %s.%s: %v", c[0], c[1], err)
+		}
+		if n != 1 {
+			t.Fatalf("%s.%s is missing: the approval_step_delegation migration is not applied", c[0], c[1])
+		}
+	}
+}
+
+// delegationFixture holds one tenant with an unsealed version and a run, so both step tables take a row.
+type delegationFixture struct {
+	super               *pgxpool.Pool
+	tenantID, versionID string
+	runID, memberID     string
+}
+
+func newDelegationFixture(t *testing.T, label string) delegationFixture {
+	t.Helper()
+	super, _ := dbTestPools(t)
+	failIfNoDelegationColumns(t, super)
+	tenantID := seedTenant(t, super, "DELEG-01 "+label)
+	entityID := seedBusinessEntity(t, super, tenantID, label+" Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, label+"-invoice")
+	policyID := seedApprovalPolicy(t, super, tenantID, label+" policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+	memberID := uuid.NewString()
+	seedMembership(t, super, tenantID, memberID, "reviewer", "active")
+	return delegationFixture{super, tenantID, versionID, runID, memberID}
+}
+
+// insertStep inserts one step of the named table; ord keeps the policy slot unique.
+func (f delegationFixture) insertStep(table string, ord int, kind string, allow bool, delegate *string) error {
+	var q string
+	var args []any
+	switch table {
+	case "approval_policy_steps":
+		q = `INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind, allow_delegation, delegate_user_id)
+		     VALUES ($1, $2, $3, $4, $5, $6)`
+		args = []any{f.tenantID, f.versionID, ord, kind, allow, delegate}
+	case "approval_run_steps":
+		q = `INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, allow_delegation, delegate_user_id)
+		     VALUES ($1, $2, $3, $4, $5, $6)`
+		args = []any{f.tenantID, f.runID, ord, kind, allow, delegate}
+	default:
+		panic(table)
+	}
+	_, err := f.super.Exec(context.Background(), q, args...)
+	return err
+}
+
+var delegationStepTables = []string{"approval_policy_steps", "approval_run_steps"}
+
+// AC-1: the columns default to off and NULL, and the flags are never NULL.
+func TestApprovalSteps_DelegationDefaultsOff(t *testing.T) {
+	f := newDelegationFixture(t, "defaults")
+	ctx := context.Background()
+
+	policyStepID := seedApprovalPolicyStep(t, f.super, f.tenantID, f.versionID, nil, "approval", 0)
+	var runStepID string
+	if err := f.super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 0, 'approval') RETURNING id`,
+		f.tenantID, f.runID).Scan(&runStepID); err != nil {
+		t.Fatalf("insert run step: %v", err)
+	}
+	decisionID := seedApprovalDecision(t, f.super, f.tenantID, f.runID, runStepID, "approved", "deleg-defaults-actor", nil)
+
+	for _, c := range []struct{ table, id string }{
+		{"approval_policy_steps", policyStepID}, {"approval_run_steps", runStepID},
+	} {
+		var allow bool
+		var delegate *string
+		if err := f.super.QueryRow(ctx,
+			`SELECT allow_delegation, delegate_user_id::text FROM `+c.table+` WHERE id = $1`, c.id,
+		).Scan(&allow, &delegate); err != nil {
+			t.Fatalf("read %s: %v", c.table, err)
+		}
+		if allow {
+			t.Errorf("%s.allow_delegation = true, want false", c.table)
+		}
+		if delegate != nil {
+			t.Errorf("%s.delegate_user_id = %q, want NULL", c.table, *delegate)
+		}
+	}
+
+	var asDelegate bool
+	if err := f.super.QueryRow(ctx, `SELECT as_delegate FROM approval_decisions WHERE id = $1`, decisionID).Scan(&asDelegate); err != nil {
+		t.Fatalf("read decision: %v", err)
+	}
+	if asDelegate {
+		t.Error("approval_decisions.as_delegate = true, want false")
+	}
+
+	for _, c := range []struct {
+		table, col, nullable string
+	}{
+		{"approval_policy_steps", "allow_delegation", "NO"}, {"approval_run_steps", "allow_delegation", "NO"},
+		{"approval_decisions", "as_delegate", "NO"},
+		{"approval_policy_steps", "delegate_user_id", "YES"}, {"approval_run_steps", "delegate_user_id", "YES"},
+	} {
+		var got string
+		if err := f.super.QueryRow(ctx,
+			`SELECT is_nullable FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`, c.table, c.col).Scan(&got); err != nil {
+			t.Fatalf("read is_nullable of %s.%s: %v", c.table, c.col, err)
+		}
+		if got != c.nullable {
+			t.Errorf("%s.%s is_nullable = %s, want %s", c.table, c.col, got, c.nullable)
+		}
+	}
+}
+
+// AC-2: delegation on a non-approval step dies at *_delegation_kind alone (no delegate named,
+// so *_delegate_needs_allow cannot answer); an approval step with delegation on is the control.
+func TestApprovalSteps_DelegationOnlyOnApprovalKind(t *testing.T) {
+	f := newDelegationFixture(t, "kind")
+	for _, table := range delegationStepTables {
+		for i, kind := range []string{"notify", "condition", "autoapprove"} {
+			t.Run(table+"/"+kind, func(t *testing.T) {
+				assertCheckViolation(t, f.insertStep(table, i, kind, true, nil), table+"_delegation_kind")
+			})
+		}
+		if err := f.insertStep(table, 10, "approval", true, nil); err != nil {
+			t.Errorf("control: %s approval step with delegation on: want success, got: %v", table, err)
+		}
+		if err := f.insertStep(table, 11, "notify", false, nil); err != nil {
+			t.Errorf("control: %s notify step with delegation off: want success, got: %v", table, err)
+		}
+	}
+}
+
+// AC-2: a named delegate with delegation off dies at *_delegate_needs_allow alone. The delegate
+// is a real member and the kind is approval, so the FK and *_delegation_kind pass.
+func TestApprovalSteps_DelegateNeedsDelegationOn(t *testing.T) {
+	f := newDelegationFixture(t, "needs-allow")
+	for _, table := range delegationStepTables {
+		assertCheckViolation(t, f.insertStep(table, 0, "approval", false, &f.memberID), table+"_delegate_needs_allow")
+		if err := f.insertStep(table, 1, "approval", true, &f.memberID); err != nil {
+			t.Errorf("control: %s approval step naming a member with delegation on: want success, got: %v", table, err)
+		}
+	}
+}

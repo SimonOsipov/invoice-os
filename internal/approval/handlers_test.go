@@ -741,7 +741,7 @@ func TestWorkflowRoleHandlers_StatusMatrix(t *testing.T) {
 					t.Errorf("error = %q, want %q", got, s.msg)
 				}
 				wantKeys := "error"
-				if (rt.method == "DELETE" || rt.method == "PUT") && s.err == ErrRoleInUse { // writeRoleInUse serves both
+				if (rt.method == "DELETE" || rt.method == "PUT") && s.err == ErrRoleInUse { // WriteRoleInUse serves both
 					wantKeys = "error,policies"
 				}
 				if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != wantKeys {

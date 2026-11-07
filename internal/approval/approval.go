@@ -71,7 +71,7 @@ type roleInUse struct {
 	invoices      []InvoiceRef
 	invoicesTotal int
 	lastHolder    bool // a staffing write left no signer; policies stay empty
-	lastSigner    bool // stub field for the red tests
+	lastSigner    bool // a membership change left a waited-on role with no signer
 }
 
 func (e *roleInUse) Error() string { return ErrRoleInUse.Error() }
@@ -80,6 +80,8 @@ func (e *roleInUse) Unwrap() error { return ErrRoleInUse }
 // message is the 409 sentence for the lists this refusal carries.
 func (e *roleInUse) message() string {
 	switch {
+	case e.lastSigner:
+		return memberLastSignerMessage
 	case e.lastHolder:
 		return roleLastHolderMessage
 	case len(e.invoices) > 0 && len(e.policies) > 0:

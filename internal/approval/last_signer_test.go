@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -396,7 +397,9 @@ func TestRefuseUnsignedWaitingRoles_CreatorOnlyRefuses(t *testing.T) {
 		t.Errorf("invoices = %+v, total = %d, want [%+v] and 1", inUse.invoices, inUse.invoicesTotal, want)
 	}
 
-	setMembershipStatus(t, f.super, f.tenantID, other, "suspended") // no other approver reaches A: the creator self-approves
+	caller, _ := auth.IdentityFromContext(f.admin) // the fixture's admin is an approver reaching A too
+	setMembershipStatus(t, f.super, f.tenantID, other, "suspended")
+	setMembershipStatus(t, f.super, f.tenantID, caller.Subject, "suspended") // no other approver reaches A: the creator self-approves
 	f.wantPassedUnsigned(t, "tax-reviewer")
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -137,12 +138,14 @@ func heirLabel(m *activeMember) *string {
 // DeleteMyAccount ends the caller and queues their erasure; the sole admin first hands admin to
 // the heir. want, and for hand_on the previewed heirUserID, must equal the decision under the row
 // locks; heirUserID is a precondition only and never picks whom to act on.
-func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome, heirUserID string) error {
+func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome, heirUserID string) (StrandedAlert, error) {
 	if s.eraseQueue == nil {
-		return errNoEraseQueue
+		return StrandedAlert{}, errNoEraseQueue
 	}
-	return db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	var alert StrandedAlert
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
+		alert = StrandedAlert{TenantID: caller.TenantID}
 		active, err := activeMembers(ctx, tx, true)
 		if err != nil {
 			return err
@@ -167,6 +170,8 @@ func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome
 		if strings.TrimSpace(email) == "" {
 			return ErrNoEraseEmail
 		}
+		var signed []approval.SignedStep
+		signed, alert.err = signedBefore(ctx, tx, caller.Subject)
 		if got == OutcomeHandOn {
 			if _, err := tx.Exec(ctx, `UPDATE memberships SET role = 'admin' WHERE user_id = $1`, heir.UserID); err != nil {
 				return err
@@ -179,12 +184,19 @@ func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome
 		if err := endMembership(ctx, tx, caller.Subject); err != nil {
 			return err
 		}
+		if alert.err == nil {
+			judgeStranded(ctx, tx, caller.Subject, signed, &alert)
+		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.account_deleted",
 			map[string]any{"user_id": caller.Subject, "role": self.Role}); err != nil {
 			return err
 		}
 		return notifications.EnqueueErasure(ctx, tx, s.eraseQueue, caller.Subject, email)
 	})
+	if err != nil {
+		return StrandedAlert{}, err
+	}
+	return alert, nil
 }
 
 func (s *Store) SetEraseQueue(rc *river.Client[pgx.Tx]) { s.eraseQueue = rc }

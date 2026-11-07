@@ -149,7 +149,7 @@ export function ineligibleDelegateReason(list: readonly Member[], delegateId: st
   if (!delegateId) return null
   const m = list.find((x) => x.id === delegateId)
   if (m && m.status === 'active' && (m.role === 'admin' || m.role === 'reviewer')) return null
-  return `${m ? m.name : REMOVED_NAME} can no longer be a delegate on ${stepTitle}. Pick another delegate or switch delegation off.`
+  return `${(m && (m.name || m.email)) || REMOVED_NAME} can no longer be a delegate on ${stepTitle}. Pick another delegate or switch delegation off.`
 }
 
 /** The §9 last-admin lock reads this: at length 1, that admin cannot be demoted or suspended. */

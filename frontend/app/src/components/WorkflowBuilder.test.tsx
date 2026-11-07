@@ -35,6 +35,7 @@ function builderCtx(over: Record<string, unknown> = {}): PlatformCtx {
     mode: 'firm',
     roles: [],
     members: [],
+    membersState: 'ready',
     rolesState: 'ready',
     rolesError: null,
     refetchRoles: vi.fn(),
@@ -766,6 +767,19 @@ describe('DELEG-01-05: the picker offers active approvers by member id', () => {
     expect(card.textContent).toBe('Halima Yusuf can no longer be a delegate on Engagement Manager. Pick another delegate or switch delegation off.')
     expect((card.previousElementSibling as HTMLElement).textContent).toContain('within 24h')
     expect(card.style.whiteSpace).toBe('')
+  })
+
+  it.each(['loading', 'error'])('no mark and no "Deleted member" option while the roster is %s', (membersState) => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, members: [], membersState })} policy={delegating('m2')} />)
+    expect(screen.queryByTestId('step-delegate-ineligible')).toBeNull()
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+    expect(screen.queryByTestId('delegate-ineligible')).toBeNull()
+    expect(Array.from(delegatePicker().options).some((o) => o.textContent === 'Deleted member')).toBe(false)
+  })
+
+  it('a loaded roster without the delegate marks the step', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, members: ROSTER })} policy={delegating('gone')} />)
+    expect(screen.getByTestId('step-delegate-ineligible').textContent).toContain('Deleted member')
   })
 
   it('an eligible delegate and "anyone" show no mark', () => {

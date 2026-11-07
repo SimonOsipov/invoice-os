@@ -426,6 +426,12 @@ describe('ineligibleDelegateReason (DELEG-01-05)', () => {
     expect(ineligibleDelegateReason(roster, 'gone', 'Engagement Manager')).toBe(sentence('Deleted member'))
   })
 
+  it('names the delegate by the server rule: empty name falls to email, then Deleted member', () => {
+    const blank = { ...inhouseRow('x', 'suspended'), id: 'b', name: '', email: 'b@x.ng', role: 'reviewer' as const }
+    expect(ineligibleDelegateReason([blank], 'b', 'Engagement Manager')).toBe(sentence('b@x.ng'))
+    expect(ineligibleDelegateReason([{ ...blank, email: null }], 'b', 'Engagement Manager')).toBe(sentence('Deleted member'))
+  })
+
   it('is null for an active reviewer, an active admin and anyone', () => {
     expect(ineligibleDelegateReason(roster, 'r', 'Engagement Manager')).toBeNull()
     expect(ineligibleDelegateReason(roster, 'a', 'Engagement Manager')).toBeNull()

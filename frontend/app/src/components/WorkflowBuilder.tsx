@@ -433,8 +433,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const roleChoices = roleOptions(ctx.roles, selected?.type === 'approval' ? selected.role : '')
 
   // Mirrors the server's publish guard so the editor marks the step before Publish refuses it.
+  // ctx.members is [] while the roster loads or errors, so no mark until it has loaded.
   const delegateWarning = (n: WfNode): string | null =>
-    n.type === 'approval' && n.delegate && n.delegateTo ? ineligibleDelegateReason(ctx.members, n.delegateTo, roleOf(ctx.roles, n.role).title) : null
+    ctx.membersState === 'ready' && n.type === 'approval' && n.delegate && n.delegateTo ? ineligibleDelegateReason(ctx.members, n.delegateTo, roleOf(ctx.roles, n.role).title) : null
   const selectedWarning = selected ? delegateWarning(selected) : null
   const delegateOptions: WfOption[] = delegateCandidates(ctx.members).map((m) => ({ value: m.id, label: m.name }))
   if (selectedWarning && selected?.type === 'approval' && selected.delegateTo) {

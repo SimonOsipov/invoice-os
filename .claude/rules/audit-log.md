@@ -6,6 +6,7 @@ paths:
   - "internal/accountevents/**"
   - "internal/tenancy/staff_deletion.go"
   - "internal/tenancy/staff_account_deletion.go"
+  - "internal/tenancy/stranded_alert.go"
   - "migrations/*audit_log*"
 ---
 # Audit log
@@ -50,3 +51,4 @@ paths:
 - Widen the invoice-scoped event set with a new `ALTER TABLE` migration. The `invoice_id` column is stored and generated.
 - State the corpus in every plan test.
 - Run `ANALYZE` as the owner or the superuser, never as `invoice_app`.
+- Write `membership.stranded_alert` only from `internal/tenancy/stranded_alert.go`, after the send, with actor `system` and payload `stranded_role_keys`, `stranded_invoices_total`, `admins` and `delivery`.

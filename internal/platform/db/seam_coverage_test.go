@@ -756,6 +756,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
 	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                       // audits a failed export of a possibly locked workspace in its own short tx
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
+	{file: "internal/tenancy/stranded_alert.go", fn: "recordStrandedAlert"},                 // writes the alert row after the deletion committed, on the deletion's tenant; the actor just left, so the seam would refuse
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
 }
 

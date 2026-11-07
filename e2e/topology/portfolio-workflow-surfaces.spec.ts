@@ -602,7 +602,7 @@ test('PW-06 Workflows list at 1440: heading, policy row, pill, standing, buttons
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-07 Workflows list row and intro fit at every wide width and at 860px', async ({ page }, testInfo) => {
+test('PW-07 Workflows list row and count fit at every wide width and at 860px', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openWorkflows(page)
@@ -617,7 +617,8 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
     edit: row.getByRole('button', { name: 'Edit', exact: true }),
     delete: row.getByRole('button', { name: /^Delete / }),
     count: screen(page).getByText(/^\d+ POLICIES$/),
-    intro: screen(page).getByText(/^Each policy decides who signs off/),
+    header: h1Of(page, 'Approval policies').locator('xpath=../..'),
+    newPolicy: screen(page).getByRole('button', { name: 'New policy' }),
   }
   const parts = ['position', 'summary', 'standing', 'moveUp', 'moveDown', 'edit', 'delete']
   const read = async () => {
@@ -630,8 +631,9 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
   }
   const measured = await sweepWide(page, 'Workflows list', async () => {
     const { rects, problems } = await read()
-    noOverlap(rects, ['count', 'intro'], problems)
-    if (rects.count && rects.intro && Math.abs(centreY(rects.count) - centreY(rects.intro)) > 1) problems.push('the count and the intro do not share a vertical centre')
+    const { count, header, newPolicy } = rects
+    if (count && header && count.y < header.y + header.height - 1) problems.push('the count starts above the header row')
+    if (count && newPolicy && Math.abs(count.x + count.width - (newPolicy.x + newPolicy.width)) > 1) problems.push('the count and New policy differ in right edge')
     return { problems, rects }
   })
   const entry = page.viewportSize()
@@ -641,6 +643,10 @@ test('PW-07 Workflows list row and intro fit at every wide width and at 860px', 
     await expect
       .poll(async () => {
         const { rects, problems } = await read()
+        for (const k of ['count', 'newPolicy']) {
+          const r = rects[k]
+          if (r && (r.x < 0 || r.x + r.width > 860)) problems.push(`${k} is outside the 860px viewport`)
+        }
         narrow = rects
         return problems
       }, { message: 'Workflows list row at 860px', timeout: 10_000 })

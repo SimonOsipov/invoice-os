@@ -125,8 +125,14 @@ describe('activityRow account events', () => {
 })
 
 describe('activityRow self-approved', () => {
-  it('activityRow_selfApprovedStaysApproved', () => {
+  it('activityRow_selfApprovedReadsSelfApproved', () => {
     const row = activityRow(ev({ event: 'invoice.approval_approved', payload: { approved_as: 'self_approved' } }), NOW)
-    expect(row.label).toBe('Approved')
+    expect(row.label).toBe('Self-approved')
+  })
+
+  it('activityRow reads the delegate label', () => {
+    const payload = { as_delegate: true, acted_for_role_title: 'Finance Manager' }
+    const row = activityRow(ev({ event: 'invoice.approval_approved', actor_name: 'Ada Obi', payload }), NOW)
+    expect(row.label).toBe('Approved by Ada Obi as delegate for Finance Manager')
   })
 })

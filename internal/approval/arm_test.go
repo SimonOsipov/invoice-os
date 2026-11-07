@@ -1805,3 +1805,97 @@ func TestArm_AuditNamesEveryScopeInTheFixedOrder(t *testing.T) {
 		t.Errorf("matched_scopes = %v, want %v", body.MatchedScopes, want)
 	}
 }
+
+func runStepDelegations(t *testing.T, super *pgxpool.Pool, runID string) []delegation {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT allow_delegation, delegate_user_id::text FROM approval_run_steps WHERE run_id = $1 ORDER BY ord`, runID)
+	if err != nil {
+		t.Fatalf("read run step delegation: %v", err)
+	}
+	defer rows.Close()
+	out := []delegation{}
+	for rows.Next() {
+		var d delegation
+		if err := rows.Scan(&d.Allow, &d.ID); err != nil {
+			t.Fatalf("scan run step delegation: %v", err)
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// seedDelegatedStep seeds an approval step on the unsealed version, then sets its delegation.
+func seedDelegatedStep(t *testing.T, super *pgxpool.Pool, tenantID, versionID string, ord int, roleKey string, allow bool, delegate *string) {
+	t.Helper()
+	id := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: ord, Kind: "approval", WorkflowRoleKey: ptr(roleKey), SLAHours: ptr(48),
+	})
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_steps SET allow_delegation = $2, delegate_user_id = $3 WHERE id = $1`, id, allow, delegate); err != nil {
+		t.Fatalf("set step delegation: %v", err)
+	}
+}
+
+func TestArm_CopiesStepDelegationOntoTheRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "DELEG-01-03 arm-copies-delegation")
+	entityID := seedBusinessEntity(t, super, tenantID, "Delegation Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "arm-copies-delegation-1")
+	d := uuid.NewString()
+	seedMembership(t, super, tenantID, d, "reviewer", "active")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Delegation policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedDelegatedStep(t, super, tenantID, versionID, 0, "fin_mgr", false, nil)
+	seedDelegatedStep(t, super, tenantID, versionID, 1, "fin_mgr", true, nil)
+	seedDelegatedStep(t, super, tenantID, versionID, 2, "fin_mgr", true, &d)
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-arm-delegation", "fixture-arm")
+	if err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	want := []delegation{{false, nil}, {true, nil}, {true, &d}}
+	if got := runStepDelegations(t, super, res.RunID); !reflect.DeepEqual(got, want) {
+		t.Errorf("run step delegation = %+v, want off / anyone / named %s", got, d)
+	}
+}
+
+func TestArm_OpenRunKeepsItsDelegationAfterRepublish(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "DELEG-01-03 arm-open-run-republish")
+	c, _ := activeAdmin(t, super, tenantID)
+	staffedRoleKey(t, super, tenantID, "fin_mgr")
+	entityID := seedBusinessEntity(t, super, tenantID, "Republish Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "arm-open-run-republish-1")
+	setInvoiceStatus(t, super, invoiceID, "validated")
+	d := uuid.NewString()
+	seedMembership(t, super, tenantID, d, "reviewer", "active")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Republish policy")
+	v1 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedDelegatedStep(t, super, tenantID, v1, 0, "fin_mgr", true, &d)
+	activateApprovalPolicyVersion(t, super, v1)
+	res, err := arm(t, app, tenantID, invoiceID, "fp-republish", "fixture-arm")
+	if err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	v2 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
+	seedDelegatedStep(t, super, tenantID, v2, 0, "fin_mgr", false, nil)
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy(v2, delegation off): %v, want success", err)
+	}
+
+	if v := versionRow(t, super, v1); v.IsActive {
+		t.Fatalf("v1 = %+v, want deactivated by v2 -- the republish did not happen", v)
+	}
+	want := []delegation{{true, &d}}
+	if got := runStepDelegations(t, super, res.RunID); !reflect.DeepEqual(got, want) {
+		t.Fatalf("open run's step delegation after the republish = %+v, want the armed copy (named %s)", got, d)
+	}
+	if _, err := approve(t, app, tenantID, d, invoiceID, nil); err != nil {
+		t.Fatalf("Decide(approved) as the delegate the run armed with: %v, want success", err)
+	}
+}

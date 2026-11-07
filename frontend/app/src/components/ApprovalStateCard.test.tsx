@@ -159,6 +159,7 @@ function decisionFixture(over: Partial<ApprovalRunDecision> = {}): ApprovalRunDe
     actor: 'c0000000-0000-0000-0000-000000000001',
     decided_at: '2026-08-02T09:00:00Z',
     reason: null,
+    as_delegate: false,
     ...over,
   }
 }

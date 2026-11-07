@@ -11,7 +11,6 @@ import {
   OP_OPTIONS,
   ruleText,
   slaOptions,
-  toOptions,
   WfAmountInput,
   WfSelect,
   WfToggle,
@@ -32,31 +31,20 @@ const TITLES: Record<WfNode['type'], string> = {
 // toggling delegation off and on leaves the key present as `''`, still the default.
 const ANY_APPROVER = ''
 
-// Deliberately NOT the same wording as the option above it: the option names the fallback,
-// the note states the eligibility rule — do not harmonise.
-const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate. Delegation is not available yet.'
-
-// The delegation window: `delegate`/`delegateTo` are dropped on write (lib/policies.ts:145) and
-// forced false on read (:131), so both controls ship SHUT with all four layers and this sentence
-// is layer 3. A third register again — the option names the fallback, DELEGATE_NOTE states the
-// eligibility rule, this states the disable and its cause.
-const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowhere to store it yet.'
+// The option above names the fallback, the note states the eligibility rule - do not harmonise.
+const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate.'
 
 // The subject is DELIVERY, never storage: target and channel are persisted, sealed into the
 // version and materialised onto the run step as `skipped` — nothing in the repo dispatches them.
 // Copy reading "not saved" would be the false statement this story removes.
 const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, but no message is sent yet.'
 
-// ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it, as one
-// cause shuts both. A second copy of the sentence would put two matches under one `getAllByText`.
-const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
-
 /** The read-only hint under a select (prototype: 11px / 1.5). */
 function hintStyle(amber = false) {
   return { marginTop: 6, fontSize: 11, lineHeight: 1.5, color: amber ? 'var(--status-amber-text)' : 'var(--fg-3)' } as const
 }
 
-export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, notifyOptions, roleOptions, onManageRoles }: {
+export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, delegateWarning, notifyOptions, roleOptions, onManageRoles }: {
   node: WfNode | null
   onPatch: (id: string, patch: NodePatch) => void
   onRemove: (id: string) => void
@@ -65,8 +53,10 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
    * imports `lib/members.ts`, and never learns which mode it is in.
    */
   resolve: (position: RoleKey) => Resolved
-  /** Active members holding an approver role — Admin or Reviewer — in both modes. */
-  delegates: string[]
+  /** Active Admins and Reviewers by member id, plus the stored delegate when ineligible. */
+  delegates: WfOption[]
+  /** The publish-guard sentence when the stored delegate is ineligible, else null. */
+  delegateWarning: string | null
   /**
    * ALWAYS passed, because the notify fork has to happen somewhere and it cannot happen here.
    * Firm mode is handed the untouched `TARGET_OPTIONS` object itself, so its five values are
@@ -127,36 +117,33 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
               </button>
             </div>
             <WfSelect label="Deadline" value={node.sla} options={slaOptions(node.sla)} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0', opacity: 0.55, cursor: 'not-allowed' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
               <WfToggle
                 on={node.delegate}
-                onToggle={() => patch({ delegate: !node.delegate })}
+                onToggle={() => patch(node.delegate ? { delegate: false } : { delegate: true, delegateTo: ANY_APPROVER })}
                 label="Allow delegation"
-                disabled
-                title={DELEGATION_BLOCKED}
-                ariaDescribedBy={DELEGATION_BLOCKED_ID}
               />
             </div>
-            {/* Above the picker block, never inside it: `delegateNote()` reads that block's LAST
-                child positionally, and DELEGATE_NOTE has to stay the node it finds. */}
-            <div id={DELEGATION_BLOCKED_ID} data-testid="delegation-blocked-reason" style={hintStyle()}>
-              {DELEGATION_BLOCKED}
-            </div>
-            {/* No `{node.delegate && …}` guard: the toggle is shut, so behind one the picker would
-                be REMOVED rather than labelled. The wrapping div stays — see the comment above. */}
-            <div style={{ marginTop: 12 }}>
-              <WfSelect
-                label="Delegate to"
-                value={node.delegateTo ?? ANY_APPROVER}
-                options={[{ value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' }, ...toOptions(delegates)]}
-                onChange={(v) => patch({ delegateTo: v })}
-                disabled
-                title={DELEGATION_BLOCKED}
-                ariaDescribedBy={DELEGATION_BLOCKED_ID}
-              />
-              <div style={hintStyle()}>{DELEGATE_NOTE}</div>
-            </div>
+            {node.delegate && (
+              <div style={{ marginTop: 12 }}>
+                <WfSelect
+                  label="Delegate to"
+                  value={node.delegateTo ?? ANY_APPROVER}
+                  options={[
+                    { value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' },
+                    ...delegates,
+                  ]}
+                  onChange={(v) => patch({ delegateTo: v })}
+                />
+                <div style={hintStyle()}>{DELEGATE_NOTE}</div>
+                {delegateWarning && (
+                  <div data-testid="delegate-ineligible" style={hintStyle(true)}>
+                    {delegateWarning}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 

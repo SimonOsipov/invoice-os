@@ -342,14 +342,16 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // would be green on CI and red at home), and published_at is never string-compared against
 // another API timestamp — every other one marshals in pgx's time.Local.
 
-// The ten keys internal/approval's Policy serializes, sorted, and the five and ten of its
+// The ten keys internal/approval's Policy serializes, sorted, and the five and twelve of its
 // two nested shapes. No omitempty on any field, and Policy/Step both carry a value-receiver
 // MarshalJSON substituting [] for a nil lane, so every set is fixed whatever the content.
 const POLICY_KEYS = ['id', 'name', 'position', 'scope', 'scopes', 'sealed', 'status', 'steps', 'version', 'versions']
 const POLICY_VERSION_KEYS = ['is_active', 'published_at', 'published_by', 'scoped', 'sealed', 'version']
 const STEP_KEYS = [
+  'allow_delegation',
   'cond_amount',
   'cond_op',
+  'delegate_user_id',
   'else',
   'id',
   'kind',
@@ -381,11 +383,11 @@ const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'work
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
 const ORDER_PATH = '/api/invoice/v1/approval-policies/order' // the PUT route of ReorderPoliciesHandler
 
-// Walks the tree, not just the roots: the ten-key claim has to hold at depth, which is
+// Walks the tree, not just the roots: the Step key set has to hold at depth, which is
 // exactly what Step's MarshalJSON re-entering itself is for.
 function expectStepShape(step: unknown, label: string): Record<string, unknown> {
   const s = step as Record<string, unknown>
-  expect(Object.keys(s).sort(), `${label}: expected exactly the ten Step keys`).toEqual(STEP_KEYS)
+  expect(Object.keys(s).sort(), `${label}: expected exactly the twelve Step keys`).toEqual(STEP_KEYS)
   expect(Array.isArray(s.then), `${label}: then should be an array, never null`).toBe(true)
   expect(Array.isArray(s.else), `${label}: else should be an array, never null`).toBe(true)
   const then = s.then as unknown[]
@@ -594,7 +596,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   test('policy shape: exactly the ten keys, and a populated tree keeps [] never null', async () => {
     const probe = await createPolicyProbe()
     // A PUT before the GET is REQUIRED: a freshly created policy's draft is empty, so the
-    // ten-key Step claim below would otherwise pass vacuously over nothing.
+    // twelve-key Step claim below would otherwise pass vacuously over nothing.
     await putApprovalPolicyDraft(token, probe.id, {
       steps: [
         {
@@ -612,7 +614,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     })
     expect(res.status, 'the get should return 200').toBe(200)
 
-    // expectPolicyShape walks every step at every depth, so the ten-key claim is made on
+    // expectPolicyShape walks every step at every depth, so the Step key claim is made on
     // the nested approval too, not only the root.
     const policy = expectPolicyShape(res.body, 'fetched policy')
     const steps = policy.steps as Array<Record<string, unknown>>

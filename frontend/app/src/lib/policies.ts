@@ -21,6 +21,8 @@ export type PolicyStepWire = {
   workflow_role_key: string | null
   /** null = no deadline, which the SPA carries as the `'0'` sentinel. */
   sla_hours: number | null
+  allow_delegation: boolean
+  delegate_user_id: string | null
   cond_op: string | null
   /** numeric(14,2) read via ::text, so the scale survives ('0.00', not '0'). */
   cond_amount: string | null
@@ -67,6 +69,8 @@ export type StepInputWire = {
   kind: string
   workflow_role_key?: string | null
   sla_hours?: number | null
+  allow_delegation?: boolean
+  delegate_user_id?: string | null
   cond_op?: string | null
   cond_amount?: string | null
   notify_target?: string | null
@@ -78,10 +82,6 @@ export type StepInputWire = {
 // ---------------------------------------------------------------------------
 // Pure mappers
 // ---------------------------------------------------------------------------
-// There is NO server column for delegation: `delegate`/`delegateTo` exist only in the
-// builder's local node shape. Do not add them to a wire type to close an apparent gap —
-// the server would drop them at decode and the round-trip would silently lose the setting.
-
 /** null hours = no deadline, which the builder carries as the `'0'` sentinel, never as 0 hours. */
 function slaFromHours(hours: number | null): Sla {
   return hours === null ? '0' : String(hours)
@@ -133,10 +133,10 @@ function branchNodes(steps: readonly PolicyStepWire[]): BranchNode[] {
  * DELETES it. Widen `WfNode` in the same change that widens the server's vocabulary.
  */
 function branchNode(s: PolicyStepWire): BranchNode | null {
-  // `delegateTo` is left OFF, not set to undefined: an own key reads as a stored choice,
-  // and `''` is already the "anyone with the role" default.
   if (s.kind === 'approval') {
-    return { id: s.id, type: 'approval', role: s.workflow_role_key ?? '', sla: slaFromHours(s.sla_hours), delegate: false }
+    const base = { id: s.id, type: 'approval' as const, role: s.workflow_role_key ?? '', sla: slaFromHours(s.sla_hours) }
+    // Off leaves `delegateTo` OFF: an own key reads as a stored choice.
+    return s.allow_delegation ? { ...base, delegate: true, delegateTo: s.delegate_user_id ?? '' } : { ...base, delegate: false }
   }
   if (s.kind === 'notify') return { id: s.id, type: 'notify', target: s.notify_target ?? '', channel: s.notify_channel ?? '' }
   if (s.kind === 'autoapprove') return { id: s.id, type: 'autoapprove' }
@@ -150,8 +150,13 @@ export function stepInputsFromNodes(nodes: readonly WfNode[]): StepInputWire[] {
 function stepInput(n: WfNode): StepInputWire {
   switch (n.type) {
     case 'approval':
-      // `delegate`/`delegateTo` are dropped here — see the note above.
-      return { kind: 'approval', workflow_role_key: n.role, sla_hours: hoursFromSla(n.sla) }
+      return {
+        kind: 'approval',
+        workflow_role_key: n.role,
+        sla_hours: hoursFromSla(n.sla),
+        allow_delegation: n.delegate,
+        delegate_user_id: n.delegate && n.delegateTo ? n.delegateTo : null,
+      }
     case 'notify':
       return { kind: 'notify', notify_target: n.target, notify_channel: n.channel }
     case 'autoapprove':

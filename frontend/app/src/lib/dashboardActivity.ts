@@ -24,8 +24,8 @@ export function activityQuery(isInhouse: boolean, entityId: string | null): Audi
 }
 
 export function activityRow(e: AuditEvent, now: number): ActivityRowView {
-  const view = auditEventView(e.event)
   const actor = actorLabel(e.actor, { name: e.actor_name, kind: e.actor_kind })
+  const view = auditEventView(e.event, e.payload, actor.text)
   return {
     key: e.id,
     who: actor.text,

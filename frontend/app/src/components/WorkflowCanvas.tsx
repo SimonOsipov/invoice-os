@@ -54,6 +54,8 @@ export type CanvasProps = {
    * imports `lib/members.ts`; `WorkflowBuilder` closes over the roster and hands down copy.
    */
   resolve: (position: RoleKey) => Resolved
+  /** The ineligible-delegate sentence for a step, or null. */
+  delegateWarning: (node: BranchNode) => string | null
 }
 
 /** The resolved sub-line's colour. Non-amber is the tone the sub-line already had. */
@@ -193,6 +195,7 @@ function cardShell(highlight: boolean): { border: string } {
 function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
   const tone = NODE_TONE[node.type]
   const res = resolved(api, node)
+  const warning = api.delegateWarning(node)
   return (
     <div
       draggable
@@ -207,6 +210,11 @@ function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 600 }}>{nodeTitle(node, api.roles)}</div>
         <div style={{ fontSize: 11.5, color: subColor(res) }}>{nodeSub(node, api.roles, res?.text)}</div>
+        {warning && (
+          <div data-testid="step-delegate-ineligible" style={{ fontSize: 11.5, color: 'var(--status-amber-text)' }}>
+            {warning}
+          </div>
+        )}
       </div>
       <Badge tone={tone.badgeColor} bg={tone.badgeBg} border={tone.badgeBorder}>
         {tone.badge}
@@ -291,6 +299,7 @@ function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
   // Condition-lane cards carry the resolved line too, not just SimpleCard: EVERY in-house
   // `cfo` approval node sits in a `then` lane, so both amber cases exist only here.
   const res = resolved(api, node)
+  const warning = api.delegateWarning(node)
   return (
     <div
       draggable
@@ -309,6 +318,11 @@ function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node, api.roles)}</div>
           <div style={{ fontSize: 10.5, lineHeight: 1.3, marginTop: 1, color: subColor(res) }}>{nodeSub(node, api.roles, res.text)}</div>
+          {warning && (
+            <div data-testid="step-delegate-ineligible" style={{ fontSize: 10.5, lineHeight: 1.3, marginTop: 1, color: 'var(--status-amber-text)' }}>
+              {warning}
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node, api.roles)}</div>

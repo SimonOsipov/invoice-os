@@ -864,6 +864,9 @@ func TestPIL16_RemainingContentColumnsUpdateOnSealedStepRejected(t *testing.T) {
 		{"notify_target", `UPDATE approval_policy_steps SET notify_target = 'ops2@example.com' WHERE id = $1`},
 		{"notify_channel", `UPDATE approval_policy_steps SET notify_channel = 'slack' WHERE id = $1`},
 		{"created_at", `UPDATE approval_policy_steps SET created_at = created_at + interval '1 hour' WHERE id = $1`},
+		// The step is a condition: a lock that skips these lets a CHECK (23514) or the FK (23503) answer.
+		{"allow_delegation", `UPDATE approval_policy_steps SET allow_delegation = true WHERE id = $1`},
+		{"delegate_user_id", `UPDATE approval_policy_steps SET delegate_user_id = gen_random_uuid() WHERE id = $1`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

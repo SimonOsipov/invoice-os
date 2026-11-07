@@ -41,6 +41,7 @@ import {
   companySetupAccess,
   CLIENT_USERS_COPY,
   delegateCandidates,
+  ineligibleDelegateReason,
   emailLabel,
   filterClientRoster,
   filterMembers,
@@ -394,9 +395,53 @@ describe('notify targets (T1.29–T1.31, §11.4)', () => {
   })
 })
 
+const candidateNames = (list: readonly Member[]) => delegateCandidates(list).map((c) => c.name)
+
+describe('delegateCandidates returns ids and names (DELEG-01-05)', () => {
+  it('maps each admitted member to { id, name }, in roster order', () => {
+    const rows = [
+      { ...inhouseRow('Amara Eze', 'active'), id: 'u1', role: 'admin' as const },
+      { ...inhouseRow('Bola Adewale', 'active'), id: 'u2', role: 'preparer' as const },
+      { ...inhouseRow('Chika Obi', 'active'), id: 'u3', role: 'reviewer' as const },
+    ]
+    expect(delegateCandidates(rows)).toEqual([
+      { id: 'u1', name: 'Amara Eze' },
+      { id: 'u3', name: 'Chika Obi' },
+    ])
+  })
+})
+
+describe('ineligibleDelegateReason (DELEG-01-05)', () => {
+  const roster: Member[] = [
+    { ...inhouseRow('Pat Preparer', 'active'), id: 'p', role: 'preparer' },
+    { ...inhouseRow('Sue Suspended', 'suspended'), id: 's', role: 'reviewer' },
+    { ...inhouseRow('Rita Reviewer', 'active'), id: 'r', role: 'reviewer' },
+    { ...inhouseRow('Ada Admin', 'active'), id: 'a', role: 'admin' },
+  ]
+  const sentence = (name: string) => `${name} can no longer be a delegate on Engagement Manager. Pick another delegate or switch delegation off.`
+
+  it('names the delegate and the step for a preparer, a suspended member, and a removed or absent id', () => {
+    expect(ineligibleDelegateReason(roster, 'p', 'Engagement Manager')).toBe(sentence('Pat Preparer'))
+    expect(ineligibleDelegateReason(roster, 's', 'Engagement Manager')).toBe(sentence('Sue Suspended'))
+    expect(ineligibleDelegateReason(roster, 'gone', 'Engagement Manager')).toBe(sentence('Deleted member'))
+  })
+
+  it('names the delegate by the server rule: empty name falls to email, then Deleted member', () => {
+    const blank = { ...inhouseRow('x', 'suspended'), id: 'b', name: '', email: 'b@x.ng', role: 'reviewer' as const }
+    expect(ineligibleDelegateReason([blank], 'b', 'Engagement Manager')).toBe(sentence('b@x.ng'))
+    expect(ineligibleDelegateReason([{ ...blank, email: null }], 'b', 'Engagement Manager')).toBe(sentence('Deleted member'))
+  })
+
+  it('is null for an active reviewer, an active admin and anyone', () => {
+    expect(ineligibleDelegateReason(roster, 'r', 'Engagement Manager')).toBeNull()
+    expect(ineligibleDelegateReason(roster, 'a', 'Engagement Manager')).toBeNull()
+    expect(ineligibleDelegateReason(roster, '', 'Engagement Manager')).toBeNull()
+  })
+})
+
 describe('delegateCandidates (T1.32, APPR-00 Q1)', () => {
   it('lists every active in-house approver — the admin first, then the six active reviewers (T1.32)', () => {
-    const candidates = delegateCandidates(inhouse())
+    const candidates = candidateNames(inhouse())
     expect(candidates).toEqual([
       'Ngozi Balogun', // admin — mh1 leads the roster, and filter/map keep input order
       'Yetunde Fashola',
@@ -421,8 +466,8 @@ describe('APPR-00 Q1 — the widened set stops at the approver pair', () => {
     // only change this catches.
     expect(names(inhouse())).toContain('Zainab Lawal') // in the roster, so the exclusion is not vacuous
     expect(names(firm())).toContain('Folake Adesina')
-    expect(delegateCandidates(inhouse())).not.toContain('Zainab Lawal')
-    expect(delegateCandidates(firm())).not.toContain('Folake Adesina')
+    expect(candidateNames(inhouse())).not.toContain('Zainab Lawal')
+    expect(candidateNames(firm())).not.toContain('Folake Adesina')
   })
 })
 
@@ -433,7 +478,7 @@ describe('APPR-00 Q1 — the inline approver pair agrees with lib/roles.ts', () 
     const rows = inhouse()
     const viaIsApprover = rows.filter((m) => m.status === 'active' && isApprover(m.role)).map((m) => m.name)
     expect(viaIsApprover.length, 'isApprover admitted nobody, so the comparison below is vacuous').toBeGreaterThan(0)
-    expect(delegateCandidates(rows)).toEqual(viaIsApprover)
+    expect(candidateNames(rows)).toEqual(viaIsApprover)
   })
 })
 
@@ -445,7 +490,7 @@ describe('APPR-00 Q1 — status still gates the newly-admitted admin role', () =
     // The active admin is the positive control for the ROLE half — without it the two
     // exclusions are satisfied by any predicate that refuses every admin, which is the rule
     // Q1 retired. The reviewer is the control for the STATUS half.
-    const candidates = delegateCandidates([
+    const candidates = candidateNames([
       adminRow('Amara Eze', 'suspended'),
       adminRow('Bola Adewale', 'invited'),
       adminRow('Dele Okonkwo', 'active'),
@@ -1444,7 +1489,7 @@ describe('needsClientPick — true for an empty set only', () => {
 // spec of its own (T1.32 only ever ran in-house).
 describe('APPR-00 Q1 — delegateCandidates admits the admin in firm mode too', () => {
   it('lists the active firm admin first, then the two active firm reviewers', () => {
-    const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
+    const candidates = candidateNames(SEED_FIRM_MEMBERS)
     expect(candidates).toEqual(['Chinedu Okafor', 'Musa Danjuma', 'Chiamaka Nwosu'])
     expect(candidates).toContain('Chinedu Okafor') // admin — INVERTED by APPR-00 Q1, was not.toContain
     expect(candidates).not.toContain('Halima Yusuf') // reviewer, suspended
@@ -2151,7 +2196,7 @@ describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projectio
       wire({ user_id: 'c1', role: 'reviewer', status: 'active', display_name: 'Musa Danjuma' }),
       wire({ user_id: 'c2', role: 'admin', status: 'active', display_name: 'Chinedu Okafor' }),
     ].map((w) => toMember(w, SELF_SUBJECT))
-    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma', 'Chinedu Okafor'])
+    expect(candidateNames(rows)).toEqual(['Musa Danjuma', 'Chinedu Okafor'])
   })
 })
 
@@ -2325,23 +2370,23 @@ describe('QA APPR-00 Q1 — delegateCandidates, adversarial shapes', () => {
     const odd = toMember(wire({ user_id: 'c5', role: 'Auditor', status: 'active', display_name: 'Auditor One' }), SELF_SUBJECT)
     const rows = [...live, odd]
     expect(rows.map((m) => m.role as string), 'the projection dropped the odd role, so the exclusion below is vacuous').toContain('Auditor')
-    expect(delegateCandidates(rows)).not.toContain('Auditor One')
-    expect(delegateCandidates(rows)).toEqual(['Reviewer One', 'Admin One'])
+    expect(candidateNames(rows)).not.toContain('Auditor One')
+    expect(candidateNames(rows)).toEqual(['Reviewer One', 'Admin One'])
   })
 
   it('order tracks the roster, not the role — reversing the rows reverses the candidates', () => {
-    const forward = delegateCandidates(live)
+    const forward = candidateNames(live)
     expect(forward.length, 'fewer than two candidates, so the ordering assertions are vacuous').toBeGreaterThan(1)
     expect(forward).toEqual(['Reviewer One', 'Admin One'])
-    expect(delegateCandidates([...live].reverse())).toEqual(['Admin One', 'Reviewer One'])
+    expect(candidateNames([...live].reverse())).toEqual(['Admin One', 'Reviewer One'])
   })
 
   it('an empty roster and an all-ineligible roster both give an empty list, not a throw', () => {
-    expect(() => delegateCandidates([])).not.toThrow()
-    expect(delegateCandidates([])).toEqual([])
-    const ineligible = live.filter((m) => !delegateCandidates(live).includes(m.name))
+    expect(() => candidateNames([])).not.toThrow()
+    expect(candidateNames([])).toEqual([])
+    const ineligible = live.filter((m) => !candidateNames(live).includes(m.name))
     expect(ineligible.length, 'nothing ineligible in the fixture, so the empty result below is vacuous').toBeGreaterThan(0)
-    expect(delegateCandidates(ineligible)).toEqual([])
+    expect(candidateNames(ineligible)).toEqual([])
   })
 })
 

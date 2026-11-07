@@ -1168,3 +1168,82 @@ func TestPublish_DeadStepRoleKeepsTheStepSentence(t *testing.T) {
 		t.Errorf("msg = %q, want the step sentence", msg)
 	}
 }
+
+// --- delegation ---------------------------------------------------------------
+
+func TestPublish_SealsTheDelegation(t *testing.T) {
+	f := newStepDelegateFixture(t, "DELEG-01-02 seal")
+	reviewer := f.delegate("reviewer", "active", "Ada Obi")
+	steps := []stepInput{
+		{Kind: "approval", WorkflowRoleKey: ptr("finance-manager")},
+		delegatedStep(nil),
+		delegatedStep(&reviewer),
+	}
+	want := []delegation{{false, nil}, {true, nil}, {true, &reviewer}}
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, steps); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if _, err := f.store.PublishPolicy(f.ctx, f.policyID); err != nil {
+		t.Fatalf("PublishPolicy: %v", err)
+	}
+	got, err := f.store.GetPolicy(f.ctx, f.policyID)
+	if err != nil {
+		t.Fatalf("GetPolicy: %v", err)
+	}
+	if !got.Sealed || !reflect.DeepEqual(delegationsOf(got.Steps), want) {
+		t.Errorf("top version sealed = %v, delegations = %+v, want sealed with %+v", got.Sealed, delegationsOf(got.Steps), want)
+	}
+
+	sealedID := versionRows(t, f.super, f.policyID)[0].ID
+	if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, approvalStep("finance-manager")); err != nil {
+		t.Fatalf("PutDraft after publish: %v", err)
+	}
+	if n := len(versionRows(t, f.super, f.policyID)); n != 2 {
+		t.Fatalf("versions = %d, want 2 — the PUT forks a new draft", n)
+	}
+	var allowed, named int
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT count(*) FILTER (WHERE allow_delegation), count(delegate_user_id)
+		   FROM approval_policy_steps WHERE version_id = $1`, sealedID).Scan(&allowed, &named); err != nil {
+		t.Fatalf("read sealed steps: %v", err)
+	}
+	if allowed != 2 || named != 1 {
+		t.Errorf("sealed rows after the fork: allow=%d named=%d, want 2 and 1", allowed, named)
+	}
+}
+
+func TestPublish_IneligibleDelegateRecovers(t *testing.T) {
+	cases := map[string]func(f stepDelegateFixture, delegate string) []stepInput{
+		"another delegate who is an active reviewer": func(f stepDelegateFixture, _ string) []stepInput {
+			other := f.delegate("reviewer", "active", "Bola")
+			return []stepInput{delegatedStep(&other)}
+		},
+		"anyone":         func(stepDelegateFixture, string) []stepInput { return []stepInput{delegatedStep(nil)} },
+		"delegation off": func(stepDelegateFixture, string) []stepInput { return approvalStep("finance-manager") },
+		"member reactivated": func(f stepDelegateFixture, delegate string) []stepInput {
+			setMembershipStatus(f.t, f.super, f.tenantID, delegate, "active")
+			return nil
+		},
+	}
+	for name, fix := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newStepDelegateFixture(t, "DELEG-01-02 recover "+name)
+			delegate := f.delegate("reviewer", "active", "Ada Obi")
+			if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, []stepInput{delegatedStep(&delegate)}); err != nil {
+				t.Fatalf("PutDraft: %v", err)
+			}
+			setMembershipStatus(t, f.super, f.tenantID, delegate, "suspended")
+			if _, err := f.store.PublishPolicy(f.ctx, f.policyID); !errors.Is(err, ErrPolicyDelegateIneligible) {
+				t.Fatalf("PublishPolicy err = %v, want the ineligible refusal first", err)
+			}
+			if steps := fix(f, delegate); steps != nil {
+				if _, err := f.store.PutDraft(f.ctx, f.policyID, nil, nil, steps); err != nil {
+					t.Fatalf("PutDraft fix: %v", err)
+				}
+			}
+			if _, err := f.store.PublishPolicy(f.ctx, f.policyID); err != nil {
+				t.Errorf("PublishPolicy after the fix: %v, want 200", err)
+			}
+		})
+	}
+}

@@ -27,6 +27,7 @@ paths:
 - Re-activate a sealed version by publishing its tree again as a new version. No API path re-activates a sealed version.
 - Arm a run for every document at `validated` that a policy in force matches. A document that no policy matches gets no run, and the gate blocks it (`TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun`, `TestTransmitClearTx_UnmatchedDocumentIsBlockedWhileAPolicyIsInForce`).
 - Keep an open run on the version it was armed with. A publish or a reorder never re-arms it (`TestPublish_LeavesOpenRunsOnTheirVersion`).
+- Copy `allow_delegation` and `delegate_user_id` from the sealed version onto each run step at arm.
 - Record `policy_id`, `position` and `matched_scopes` in `invoice.approval_armed`. Record scope names, never scope values (`TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes`).
 - Write the run closed `approved` with `closed_by = 'system'` when no approval step is pending. Write no decision row.
 - Enforce the `TransmitClear` gate in `Store.Transition` and `Submitter.BatchSubmit` only.
@@ -38,10 +39,12 @@ paths:
 - Delete a policy softly with `deleted_at`.
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
-- Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
+- Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role or is the run step's delegate (`DelegateMayDecide`).
 - Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
+- Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
+- Count role holders only in `strandedSQL`, the role staffing and delete refusals, `pending_holder_warn` and `CreatorStanding.OtherRoleHolder`. A delegate is not counted (`TestStranded_ADelegateDoesNotCountAsADecider`).
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
 - Store a policy's scopes on its version (`approval_policy_versions`): document types, client companies (`business_entities` ids), an amount band with its currency, and workflow roles (`workflow_roles` ids). Each scope is optional.
 - Write a scope edit to the draft. It takes effect at publish.
@@ -50,6 +53,7 @@ paths:
 - Write no value to the legacy `scope` text on `approval_policies`. The API reads no `scope` key.
 - Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, an unknown workflow role, and a deleted workflow role the policy's top version does not already hold, with 400.
 - Refuse a publish with 409 while the draft's scopes name a deleted workflow role. Name the role in the sentence.
+- Refuse a publish with 409 while the draft names a delegate who is not an active admin or reviewer. Name the delegate and the step. Save accepts any member of the workspace as the delegate.
 - Refuse a workflow role delete with 409 while the active version of a live policy names the role in a scope or an approval step. List those policies in the body.
 - List the policies in force per role as `in_force` on `GET /v1/workflow-roles`. It uses the predicate of the role delete refusal (`TestRoleUsage_AgreesWithDeleteRole`). Omit `in_force` when its read fails.
 - Refuse the same delete with 409 while an open run has a pending approval step that names the role. List up to 20 of those invoices, with their count.

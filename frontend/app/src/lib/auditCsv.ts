@@ -1,5 +1,6 @@
 // AUDIT-07-09: CSV export serializer + toast copy for the audit log.
 
+import { actorLabel } from './actor'
 import type { AuditEvent } from './audit'
 import { auditEventView } from './auditVocabulary'
 import { pad2 } from './format'
@@ -32,7 +33,7 @@ export function auditCsv(events: AuditEvent[], opts?: { truncated: boolean; cap:
       e.actor_name,
       e.actor_kind,
       e.actor,
-      auditEventView(e.event, e.payload).label,
+      auditEventView(e.event, e.payload, actorLabel(e.actor, { name: e.actor_name, kind: e.actor_kind }).text).label,
       e.event,
       csvCompany(e),
       e.company_scope,

@@ -436,3 +436,63 @@ func TestDecide_CountTiming_TheOtherApproverLeavingReopensTheException(t *testin
 	}
 	wantApprovedAs(t, super, f.tenantID, "self_approved")
 }
+
+// creatorDelegateWorld: the named delegate created the invoice and is outside the role; the holder is another active reviewer.
+func creatorDelegateWorld(t *testing.T, name string) (super, app *pgxpool.Pool, w delegateWorld) {
+	t.Helper()
+	super, app = dbTestPools(t)
+	w = newDelegateWorld(t, super, app, name, "reviewer")
+	seedHistory(t, super, w.tenantID, w.invoiceID, nil, w.delegate)
+	return
+}
+
+func TestDecide_CreatorRuleAppliesToADelegate(t *testing.T) {
+	t.Run("another approver holds the role", func(t *testing.T) {
+		super, app, w := creatorDelegateWorld(t, "DELEG-01-03 creator-delegate-holder")
+		_, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+		wantRefused(t, err, creatorSentence)
+		assertNothingWritten(t, super, w.approveFixture)
+	})
+	t.Run("another approver reaches the client, the role has no holder", func(t *testing.T) {
+		super, app, w := creatorDelegateWorld(t, "DELEG-01-03 creator-delegate-no-holder")
+		if _, err := super.Exec(context.Background(),
+			`DELETE FROM workflow_role_members WHERE workflow_role_id = $1`, w.roleID); err != nil {
+			t.Fatalf("unstaff the role: %v", err)
+		}
+		_, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+		wantRefused(t, err, creatorSentence+" "+noHolderSentence)
+		assertNothingWritten(t, super, w.approveFixture)
+	})
+	t.Run("no other approver: self-approved as delegate", func(t *testing.T) {
+		super, app, w := creatorDelegateWorld(t, "DELEG-01-03 creator-delegate-alone")
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, w.holder); err != nil {
+			t.Fatalf("suspend the only other approver: %v", err)
+		}
+		run, err := approve(t, app, w.tenantID, w.delegate, w.invoiceID, nil)
+		if err != nil || run.State != "approved" {
+			t.Fatalf("Decide(approved) as a creator-delegate with no other approver = %q, %v, want approved", run.State, err)
+		}
+		wantApprovedAs(t, super, w.tenantID, "self_approved")
+		if ds := decisionsForRun(t, super, w.runID); len(ds) != 1 || !ds[0].AsDelegate {
+			t.Errorf("decisions = %+v, want one with as_delegate true", ds)
+		}
+		if got := auditRowsOf(t, super, w.tenantID, "invoice.approval_approved")[0].Payload["as_delegate"]; got != true {
+			t.Errorf("audit as_delegate = %v, want true", got)
+		}
+	})
+}
+
+func TestDecide_CreatorDelegateMayReject(t *testing.T) {
+	super, app, w := creatorDelegateWorld(t, "DELEG-01-03 creator-delegate-rejects")
+	run, err := reject(t, app, w.tenantID, w.delegate, w.invoiceID, ptr("not our invoice"))
+	if err != nil {
+		t.Fatalf("Decide(rejected) as a creator-delegate: %v, want success", err)
+	}
+	if run.State != "rejected" {
+		t.Errorf("run.State = %q, want rejected", run.State)
+	}
+	if ds := decisionsForRun(t, super, w.runID); len(ds) != 1 || ds[0].Decision != "rejected" || !ds[0].AsDelegate {
+		t.Errorf("decisions = %+v, want one rejection with as_delegate true", ds)
+	}
+}

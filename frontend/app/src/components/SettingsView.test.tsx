@@ -286,6 +286,7 @@ describe('Settings > active tab scrolled into the strip', () => {
     try {
       const { container } = render(<SettingsView ctx={settingsCtx('workspace', false, { user: USER, roles: [] })} />)
       expect((container.querySelector('.pf-tab')!.parentElement as HTMLElement).scrollLeft).toBe(600)
+      expect(scrollIntoView).not.toHaveBeenCalled()
     } finally {
       delete (HTMLElement.prototype as { scrollLeft?: number }).scrollLeft
     }
@@ -304,6 +305,26 @@ describe('Settings > active tab scrolled into the strip', () => {
     rerender(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
     expect(strip.scrollLeft).toBe(200)
     expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('a tab already inside the strip leaves scrollLeft alone, edges included', () => {
+    const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [100, 250] }
+    const back = stub(rects)
+    const { container, rerender } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+    back(strip)
+    rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(0)
+  })
+
+  it('a tab clipped on the right scrolls by the overhang only', () => {
+    const rects: Record<string, [number, number]> = { Members: [0, 150], Roles: [200, 350] }
+    const back = stub(rects)
+    const { container, rerender } = render(<SettingsView ctx={settingsCtx('members', false, { user: USER, roles: [] })} />)
+    const strip = container.querySelector('.pf-tab')!.parentElement as HTMLElement
+    back(strip)
+    rerender(<SettingsView ctx={settingsCtx('roles', false, { user: USER, roles: [] })} />)
+    expect(strip.scrollLeft).toBe(50)
   })
 })
 

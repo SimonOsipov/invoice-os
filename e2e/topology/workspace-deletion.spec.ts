@@ -56,7 +56,7 @@ async function downloadExport(page: Page, button: Locator, status: Locator): Pro
 
 async function openWorkspaceTab(page: Page): Promise<void> {
   // Scoped to the tab strip: the in-house sidebar group is also called "Workspace".
-  await page.locator('button.pf-tab').filter({ hasText: /^Workspace$/ }).click()
+  await page.locator('button.pf-tab').filter({ hasText: /^\d{2}\s*Workspace$/ }).click()
   await expect(page).toHaveURL(/\/settings\/workspace$/)
   await expect(page.getByTestId('settings-workspace-card')).toBeVisible()
 }
@@ -175,7 +175,7 @@ test('workspace deletion: an admin deletes from Settings, reloads, cancels and i
 
     await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
     await expect(notice).toHaveCount(0)
-    await expect(page.locator('button.pf-tab').filter({ hasText: /^Members$/ })).toBeVisible()
+    await expect(page.locator('button.pf-tab').filter({ hasText: /^\d{2}\s*Members$/ })).toBeVisible()
   })
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
@@ -205,7 +205,7 @@ test('workspace deletion: a 200-character name stays inside the dialog and the n
 
     await page.getByTestId('deletion-notice-cancel').click()
     await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
-    await expect(page.locator('button.pf-tab').filter({ hasText: /^Workspace$/ })).toBeVisible()
+    await expect(page.locator('button.pf-tab').filter({ hasText: /^\d{2}\s*Workspace$/ })).toBeVisible()
   })
 })
 

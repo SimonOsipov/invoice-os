@@ -22,7 +22,7 @@
 // file only supplies the "when to open which mode" wiring ClientsView's own local
 // `useState<{mode,entity}|null>` precedent already established.
 
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
@@ -67,6 +67,19 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
   const tabs: { id: SettingsTab; label: string }[] = mode === 'inhouse' ? [{ id: 'company', label: 'Company' }, ...SETTINGS_TABS] : SETTINGS_TABS
 
+  const stripRef = useRef<HTMLDivElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
+  // Scroll only the strip (not scrollIntoView, which can scroll the page too).
+  useLayoutEffect(() => {
+    const s = stripRef.current
+    const b = activeRef.current
+    if (!s || !b) return
+    const sr = s.getBoundingClientRect()
+    const br = b.getBoundingClientRect()
+    if (br.left < sr.left) s.scrollLeft += br.left - sr.left
+    else if (br.right > sr.right) s.scrollLeft += br.right - sr.right
+  }, [settingsTab, tabs.length])
+
   function goList() {
     setOpenId(null)
     setMappingOpen(false)
@@ -86,19 +99,43 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
         <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Settings</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>People, roles, integrations, developer access, and signing certificates.</p>
       </div>
-      <div style={{ display: 'flex', gap: 26, borderBottom: '1px solid var(--line-1)', marginBottom: 24 }}>
-        {tabs.map((t) => {
+      <div
+        ref={stripRef}
+        style={{ display: 'flex', gap: 0, marginBottom: 24, overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'thin', boxShadow: 'inset 0 -2px 0 var(--tab-border)' }}
+      >
+        {tabs.map((t, i) => {
           const a = settingsTab === t.id
           return (
             <button
               key={t.id}
+              ref={a ? activeRef : undefined}
               onClick={() => selectTab(t.id)}
               // .pf-tab, not .pf-btn: the button classes force `border-radius`
               // with `!important`.
               className="pf-tab"
-              style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)', padding: '0 0 12px', borderBottom: `2px solid ${a ? 'var(--action)' : 'transparent'}`, marginBottom: -1 }}
+              style={{
+                border: 0,
+                cursor: 'pointer',
+                padding: '10px 16px',
+                outlineOffset: -2,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                whiteSpace: 'nowrap',
+                flex: 'none',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 13.5,
+                fontWeight: 700,
+                background: a ? 'var(--sage-panel)' : 'transparent',
+                color: a ? 'var(--tab-active-text)' : 'var(--fg-3)',
+                borderBottom: `2px solid ${a ? 'var(--tab-active-border)' : 'transparent'}`,
+                borderRadius: '6px 6px 0 0',
+              }}
             >
-              {t.label}
+              <span className="mono" aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span>{t.label}</span>
             </button>
           )
         })}

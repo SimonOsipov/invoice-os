@@ -29,7 +29,7 @@ func StaffedRoleKeysTx(ctx context.Context, tx pgx.Tx, subject string) ([]string
 }
 
 // RefuseUnsignedWaitingRolesTx returns a lastSigner *roleInUse when a live role in keys has no signer
-// while an open run waits on it. APSC-14 changes the definition in unsignedWaitingInvoicesTx, not here.
+// while an open run waits on it. The signer definition lives in unsignedWaitingInvoicesTx.
 func RefuseUnsignedWaitingRolesTx(ctx context.Context, tx pgx.Tx, keys []string) error {
 	var invoices []InvoiceRef
 	var total int

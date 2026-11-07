@@ -15,7 +15,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
-- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership remove, suspension and demotion to preparer in `internal/tenancy`. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership role change and status change in `internal/tenancy` (`TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck`). The last-signer check runs only on remove, suspend and demotion to preparer. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.

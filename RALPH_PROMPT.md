@@ -233,6 +233,8 @@ Every stage brief (Test-Spec, Execution, QA Verify) says:
 
 Read a report file only when the reply names a failure or a concern.
 
+To send a subagent a re-check or a follow-up more than 5 minutes after its last reply, spawn a new subagent. Name the report file in its brief. Do not continue the old subagent with SendMessage: its prompt cache has expired, and the resume writes its whole context again.
+
 **Screen playbook.** Before the first spawn of the first subtask, resolve the screens that the story touches:
 1. List the story's features. `STORY_SOURCE=sysmap`: the story's feature. `STORY_SOURCE=obsidian`: each `F-<n>` that the story names. Add each feature that `hm sysmap list --story <STORY> --plain` prints.
 2. Get each feature's screen slug: `hm sysmap show <F-id> --plain | awk -F'\t' '$1=="screen"{print $3}'`. An empty result means that the feature has no screen.

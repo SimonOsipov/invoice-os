@@ -952,7 +952,7 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -1013,7 +1013,7 @@ describe('InvoicesList: the register reads the wire submit gate (BUG-12)', () =>
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -1065,7 +1065,7 @@ describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the 
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -1200,7 +1200,7 @@ describe('BUG-09: a blocked register row costs no extra grid line', () => {
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }
@@ -1271,7 +1271,7 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     run_state: 'open',
     pending_ord: 1,
     pending_role_title: 'Reviewer',
-    pending_holder_warn: false,
+    pending_holder_warn: false, pending_holder_reason: null,
     due_at: null,
     overdue: false,
   }

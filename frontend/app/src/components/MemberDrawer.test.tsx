@@ -929,7 +929,7 @@ describe('ACCESS-01: the drawer saves the access role', () => {
   })
 
   it('a refused role change lists the waiting invoices and keeps the stored role', async () => {
-    const S = 'this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer'
+    const S = 'this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it'
     const items = [
       { id: 'a', invoice_number: 'INV-1', workflow_role_key: 'tax', workflow_role_title: 'Tax' },
       { id: 'b', invoice_number: 'INV-2', workflow_role_key: 'audit' },

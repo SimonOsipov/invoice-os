@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -817,7 +818,7 @@ func TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding(t *testing.T) {
 // two active holders each, ONE statement. A per-key loop answers IDENTICALLY on this map
 // and costs eight round trips per list request, so the statement count is the only oracle
 // that separates the two -- the same argument
-// TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount makes for RowFactsTx.
+// TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount makes for RowFactsTx.
 //
 // The map assertions are the control: a read that returned nothing at all would pay one
 // statement too.
@@ -1027,10 +1028,10 @@ func TestRowFactsTx_OverdueTracksStepStateNotJustDueAt(t *testing.T) {
 	}
 }
 
-// TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount (AC-3): 30 invoices whose
+// TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount (AC-3): 30 invoices whose
 // first pending step spans four distinct roles -- a per-row or per-role query inflates
 // this, and its RESULTS would be identical.
-func TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount(t *testing.T) {
+func TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-08-01 rows-statement-count")
 	entityID := seedBusinessEntity(t, super, tenantID, "Rows Statement Count Corp")
@@ -1084,12 +1085,20 @@ func TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount(t *testing.T) {
 	if len(seen) != 4 {
 		t.Errorf("distinct pending role titles = %d (%v), want 4 -- the fixture never reached the multi-role path", len(seen), seen)
 	}
+	if got := len(rec.mentioning(signMarker)); got != 1 {
+		t.Errorf("statements marked %q = %d, want exactly 1", signMarker, got)
+	}
+	others := rec.without(signMarker)
 	for _, table := range []string{
 		"FROM approval_runs", "FROM approval_run_steps", "FROM workflow_roles",
-		"FROM workflow_role_members", "FROM memberships",
 	} {
-		if got := len(rec.mentioning(table)); got != 1 {
+		if got := len(filterContaining(others, table)); got != 1 {
 			t.Errorf("statements mentioning %q = %d, want exactly 1 (30 rows across four roles must not inflate this)", table, got)
+		}
+	}
+	for _, table := range []string{"FROM workflow_role_members", "FROM memberships"} {
+		if got := len(filterContaining(others, table)); got != 0 {
+			t.Errorf("statements mentioning %q = %d, want 0 (the row loads no holders)", table, got)
 		}
 	}
 }
@@ -1148,6 +1157,10 @@ func TestRowFactsTx_DeletedRoleTitleAndWarnMatchTheRunPanel(t *testing.T) {
 	if rf.PendingHolderWarn != panel.Holder.Warn {
 		t.Errorf("PendingHolderWarn = %t, panel step Holder.Warn = %t -- a row and the panel must agree",
 			rf.PendingHolderWarn, panel.Holder.Warn)
+	}
+	if reasonText(rf.PendingHolderReason) != reasonText(panel.Holder.Reason) || reasonText(rf.PendingHolderReason) != HolderReasonUnstaffed {
+		t.Errorf("row reason = %s, panel reason = %s, want both %q", reasonText(rf.PendingHolderReason),
+			reasonText(panel.Holder.Reason), HolderReasonUnstaffed)
 	}
 }
 
@@ -1242,6 +1255,271 @@ func TestGateFile_NoTenantIdPredicate(t *testing.T) {
 	}
 }
 
+// --- the holder warning is judged per invoice ----------------------------
+
+// warnWorld is a firm with clients A and B and one policy version that seedOpenRun hangs runs on.
+type warnWorld struct {
+	t          *testing.T
+	super, app *pgxpool.Pool
+	tenantID   string
+	entA, entB string
+	versionID  string
+	reader     context.Context
+	n          int
+}
+
+func newWarnWorld(t *testing.T, name string) *warnWorld {
+	t.Helper()
+	super, app := dbTestPools(t)
+	w := &warnWorld{t: t, super: super, app: app, tenantID: policyTenant(t, super, name)}
+	w.entA = seedBusinessEntity(t, super, w.tenantID, name+" A")
+	w.entB = seedBusinessEntity(t, super, w.tenantID, name+" B")
+	policyID := seedApprovalPolicy(t, super, w.tenantID, name+" policy")
+	w.versionID = seedApprovalPolicyVersionN(t, super, w.tenantID, policyID, 1)
+	w.reader, _ = callerCtx(t, super, w.tenantID, "preparer", "active")
+	return w
+}
+
+// role seeds a live role keyed key and staffs it with specs; it returns the staffed users.
+func (w *warnWorld) role(key string, specs ...memberSpec) []string {
+	w.t.Helper()
+	roleID := seedWorkflowRole(w.t, w.super, w.tenantID, key, key)
+	users := make([]string, len(specs))
+	for i, s := range specs {
+		s.roleID = roleID
+		users[i] = seedMemberOf(w.t, w.super, w.tenantID, s)
+	}
+	return users
+}
+
+// waiting seeds an invoice on ent whose open run waits on key (nil key: a step naming no role).
+func (w *warnWorld) waiting(ent string, key *string) string {
+	w.t.Helper()
+	w.n++
+	id, _ := seedOpenRun(w.t, w.super, w.tenantID, ent, fmt.Sprintf("warn-%d", w.n), w.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "pending", Key: key})
+	return id
+}
+
+func (w *warnWorld) panel(invoiceID string) Run {
+	w.t.Helper()
+	run, err := NewStore(w.app, stubFingerprinter, nil).ApprovalRun(w.reader, invoiceID)
+	if err != nil {
+		w.t.Fatalf("ApprovalRun: %v", err)
+	}
+	return run
+}
+
+func (w *warnWorld) suspend(user string) {
+	w.t.Helper()
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, user); err != nil {
+		w.t.Fatalf("suspend %s: %v", user, err)
+	}
+}
+
+func (w *warnWorld) wantFlag(inv string, warn bool, reason string) {
+	w.t.Helper()
+	rf, ok := rowFacts(w.t, w.app, w.tenantID, []string{inv})[inv]
+	if !ok {
+		w.t.Fatalf("invoice %s absent from the row facts", inv)
+	}
+	if rf.PendingHolderWarn != warn {
+		w.t.Errorf("PendingHolderWarn = %t, want %t", rf.PendingHolderWarn, warn)
+	}
+	if got := reasonText(rf.PendingHolderReason); got != reason {
+		w.t.Errorf("PendingHolderReason = %s, want %s", got, reason)
+	}
+}
+
+func reasonText(r *string) string {
+	if r == nil {
+		return "nil"
+	}
+	return *r
+}
+
+func TestRowFactsTx_WarnsWhenOnlyTheCreatorCouldSign(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 creator only")
+	c := w.role("wk-c", memberSpec{role: "reviewer"})[0]
+	o := seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "admin"})
+	inv := w.waiting(w.entA, ptr("wk-c"))
+	seedHistory(t, w.super, w.tenantID, inv, nil, c)
+
+	w.wantFlag(inv, true, HolderReasonNobodyCanApprove)
+	w.suspend(o)
+	w.wantFlag(inv, false, "nil")
+}
+
+func TestRowFactsTx_WarnsWhenNoMemberReachesTheClient(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 no reach")
+	r := w.role("wk-r", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})[0]
+	inv := w.waiting(w.entA, ptr("wk-r"))
+
+	w.wantFlag(inv, true, HolderReasonNobodyCanApprove)
+	limitMemberTo(t, w.super, w.tenantID, r, w.entA)
+	w.wantFlag(inv, false, "nil")
+}
+
+// warnPage seeds I1 on A, I2 on B, I3 on A, all waiting on a role of one reviewer limited to B.
+func warnPage(w *warnWorld) []string {
+	w.role("wk-p", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	return []string{w.waiting(w.entA, ptr("wk-p")), w.waiting(w.entB, ptr("wk-p")), w.waiting(w.entA, ptr("wk-p"))}
+}
+
+func TestRowFactsTx_WarnsPerInvoiceOnOnePage(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 per invoice")
+	ids := warnPage(w)
+
+	facts := rowFacts(t, w.app, w.tenantID, ids)
+	for i, want := range []bool{true, false, true} {
+		if got := facts[ids[i]].PendingHolderWarn; got != want {
+			t.Errorf("invoice %d: PendingHolderWarn = %t, want %t", i+1, got, want)
+		}
+	}
+}
+
+func TestRowFactsTx_LimitedReviewerSeesTheSameWarn(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 limited reader")
+	ids := warnPage(w)
+	lim := seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entA}})
+
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: lim, Role: "authenticated", TenantID: w.tenantID})
+	var got map[string]RowFacts
+	if err := db.WithinRequestTenantTx(ctx, w.app, func(tx pgx.Tx) error {
+		var err error
+		got, err = RowFactsTx(ctx, tx, ids)
+		return err
+	}); err != nil {
+		t.Fatalf("RowFactsTx as the limited reviewer: %v", err)
+	}
+	admin := rowFacts(t, w.app, w.tenantID, ids)
+	for _, i := range []int{0, 2} {
+		if got[ids[i]].PendingHolderWarn != admin[ids[i]].PendingHolderWarn || !got[ids[i]].PendingHolderWarn {
+			t.Errorf("invoice %d: limited reviewer warn = %t, admin warn = %t, want both true", i+1,
+				got[ids[i]].PendingHolderWarn, admin[ids[i]].PendingHolderWarn)
+		}
+	}
+	if _, seen := got[ids[1]]; seen {
+		t.Errorf("the limited reviewer reads invoice 2 on client B, want it invisible")
+	}
+}
+
+func TestRowFactsTx_InHouseReviewerWithoutClientsIsNoWarning(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 in-house")
+	w.role("wk-h", memberSpec{role: "reviewer", limited: true})
+	inv := w.waiting(w.entA, ptr("wk-h"))
+	setKind := func(kind string) {
+		if _, err := w.super.Exec(context.Background(), `UPDATE tenants SET kind = $2 WHERE id = $1`, w.tenantID, kind); err != nil {
+			t.Fatalf("set tenant kind %s: %v", kind, err)
+		}
+	}
+	panelWarn := func() bool { return w.panel(inv).Steps[0].Holder.Warn }
+
+	setKind("in_house")
+	w.wantFlag(inv, false, "nil")
+	if panelWarn() {
+		t.Errorf("in-house run read: pending step Holder.Warn = true, want false")
+	}
+	setKind("firm")
+	w.wantFlag(inv, true, HolderReasonNobodyCanApprove)
+	if !panelWarn() {
+		t.Errorf("firm run read: pending step Holder.Warn = false, want true")
+	}
+}
+
+func TestRowFactsTx_ReasonPerCase(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 reason per case")
+	seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "admin"}) // an outsider who reaches every client
+
+	w.role("wk-gone", memberSpec{role: "reviewer"})
+	var goneID string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT id FROM workflow_roles WHERE tenant_id = $1 AND key = 'wk-gone'`, w.tenantID).Scan(&goneID); err != nil {
+		t.Fatalf("read role id: %v", err)
+	}
+	softDeleteWorkflowRole(t, w.super, goneID)
+	w.role("wk-empty")
+	w.role("wk-susp", memberSpec{role: "reviewer", status: "suspended"})
+	creator := w.role("wk-creator", memberSpec{role: "reviewer"})[0]
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	w.role("wk-ok", memberSpec{role: "reviewer"})
+
+	ids := []string{
+		w.waiting(w.entA, ptr("wk-gone")), w.waiting(w.entA, ptr("wk-empty")), w.waiting(w.entA, ptr("wk-susp")),
+		w.waiting(w.entA, ptr("wk-creator")), w.waiting(w.entA, ptr("wk-away")),
+		w.waiting(w.entA, ptr("wk-ok")), w.waiting(w.entA, nil),
+	}
+	seedHistory(t, w.super, w.tenantID, ids[3], nil, creator)
+
+	un, no := HolderReasonUnstaffed, HolderReasonNobodyCanApprove
+	want := []*string{&un, &un, &un, &no, &no, nil, nil}
+	facts := rowFacts(t, w.app, w.tenantID, ids)
+	for i, rf := range facts2(facts, ids) {
+		if reasonText(rf.PendingHolderReason) != reasonText(want[i]) {
+			t.Errorf("case %d: reason = %s, want %s", i, reasonText(rf.PendingHolderReason), reasonText(want[i]))
+		}
+		if rf.PendingHolderWarn != (rf.PendingHolderReason != nil) {
+			t.Errorf("case %d: warn = %t but reason = %s", i, rf.PendingHolderWarn, reasonText(rf.PendingHolderReason))
+		}
+	}
+}
+
+func facts2(m map[string]RowFacts, ids []string) []RowFacts {
+	out := make([]RowFacts, len(ids))
+	for i, id := range ids {
+		out[i] = m[id]
+	}
+	return out
+}
+
+// TestRowFactsTx_ReasonMatchesThePanelStep: the row and the run read give one step the same warn and reason.
+func TestRowFactsTx_ReasonMatchesThePanelStep(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 row and card")
+	seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "admin"})
+	creator := w.role("wk-creator", memberSpec{role: "reviewer"})[0]
+	w.role("wk-empty")
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	w.role("wk-ok", memberSpec{role: "reviewer"})
+
+	cases := map[string]string{"creator only": "wk-creator", "empty": "wk-empty", "out of reach": "wk-away", "signable": "wk-ok"}
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			inv := w.waiting(w.entA, ptr(key))
+			if key == "wk-creator" {
+				seedHistory(t, w.super, w.tenantID, inv, nil, creator)
+			}
+			rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]
+			h := w.panel(inv).Steps[0].Holder
+			if rf.PendingHolderWarn != h.Warn || reasonText(rf.PendingHolderReason) != reasonText(h.Reason) {
+				t.Errorf("row warn/reason = %t/%s, card = %t/%s", rf.PendingHolderWarn, reasonText(rf.PendingHolderReason),
+					h.Warn, reasonText(h.Reason))
+			}
+		})
+	}
+}
+
+// TestRowFactsTx_NilKeyLowestStepIsNotSkippedByThePanel: a NULL-key lowest pending step warns nowhere, whatever follows.
+func TestRowFactsTx_NilKeyLowestStepIsNotSkippedByThePanel(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 nil key first")
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	w.n++
+	inv, _ := seedOpenRun(t, w.super, w.tenantID, w.entA, fmt.Sprintf("warn-%d", w.n), w.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "pending"},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("wk-away")})
+	rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]
+	var warn bool
+	var reason *string
+	for _, st := range w.panel(inv).Steps {
+		if st.Holder != nil && st.Holder.Warn {
+			warn, reason = true, st.Holder.Reason
+		}
+	}
+	if rf.PendingHolderWarn || warn || reasonText(rf.PendingHolderReason) != reasonText(reason) {
+		t.Errorf("row warn = %t, panel warn = %t, want both false", rf.PendingHolderWarn, warn)
+	}
+}
+
 func TestDelegateMayDecide(t *testing.T) {
 	d, e := "user-d", "user-e"
 	cases := []struct {
@@ -1264,6 +1542,22 @@ func TestDelegateMayDecide(t *testing.T) {
 				t.Errorf("DelegateMayDecide(%v, %v, %q) = %v, want %v", tc.allow, tc.delegate, tc.subject, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRowFactsTx_SignerReadErrorIsReturned(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-03 read error")
+	w.role("wk-e", memberSpec{role: "reviewer"})
+	inv := w.waiting(w.entA, ptr("wk-e"))
+
+	var facts map[string]RowFacts
+	err := db.WithinTenantTx(context.Background(), failingAppPool(t, signMarker), w.tenantID, func(tx pgx.Tx) error {
+		var err error
+		facts, err = RowFactsTx(context.Background(), tx, []string{inv})
+		return err
+	})
+	if err == nil || facts != nil {
+		t.Errorf("RowFactsTx = (%v, %v), want a non-nil error and a nil map", facts, err)
 	}
 }
 
@@ -1313,5 +1607,41 @@ func TestGateFactsTx_CarriesThePendingStepDelegation(t *testing.T) {
 	gf, err := gateFacts(t, app, f.tenantID, unarmed, delegate)
 	if err != nil || gf.PendingAllowDelegation || gf.PendingDelegateUserID != nil {
 		t.Errorf("no pending step: %+v, %v, want zero delegation", gf, err)
+	}
+}
+
+// delegateWarnPage seeds the page of the delegate warning rows: three invoices on client A waiting on one
+// empty role. I1 names an active reviewer outside the role, I2 is "anyone" (an admin is active),
+// I3 names a suspended reviewer.
+func delegateWarnPage(w *warnWorld) []string {
+	w.role("wk-dlg")
+	named := seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "reviewer"})
+	gone := seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "reviewer", status: "suspended"})
+	seedMemberOf(w.t, w.super, w.tenantID, memberSpec{role: "admin"})
+	ids := []string{w.waiting(w.entA, ptr("wk-dlg")), w.waiting(w.entA, ptr("wk-dlg")), w.waiting(w.entA, ptr("wk-dlg"))}
+	for i, d := range []*string{&named, nil, &gone} {
+		var step string
+		if err := w.super.QueryRow(context.Background(),
+			`SELECT s.id FROM approval_run_steps s JOIN approval_runs r ON r.id = s.run_id WHERE r.invoice_id = $1`, ids[i]).Scan(&step); err != nil {
+			w.t.Fatalf("read the run step of invoice %d: %v", i+1, err)
+		}
+		setStepDelegation(w.t, w.super, step, true, d)
+	}
+	return ids
+}
+
+func TestRowFactsTx_ADelegateStepIsNoWarning(t *testing.T) {
+	w := newWarnWorld(t, "APSC-14-07 delegate row")
+	ids := delegateWarnPage(w)
+
+	facts := facts2(rowFacts(t, w.app, w.tenantID, ids), ids)
+	un := HolderReasonUnstaffed
+	wantWarn := []bool{false, false, true}
+	wantReason := []*string{nil, nil, &un}
+	for i, rf := range facts {
+		if rf.PendingHolderWarn != wantWarn[i] || reasonText(rf.PendingHolderReason) != reasonText(wantReason[i]) {
+			t.Errorf("invoice %d: warn = %t reason = %s, want warn = %t reason = %s", i+1,
+				rf.PendingHolderWarn, reasonText(rf.PendingHolderReason), wantWarn[i], reasonText(wantReason[i]))
+		}
 	}
 }

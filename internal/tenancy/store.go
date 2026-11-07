@@ -288,8 +288,12 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		}
 
 		var keys []string
+		var signed []approval.SignedStep
 		if status == "suspended" {
 			if keys, err = approval.StaffedRoleKeysTx(ctx, tx, target.UserID); err != nil {
+				return err
+			}
+			if signed, err = approval.SignedWaitingStepsTx(ctx, tx, target.UserID, keys); err != nil {
 				return err
 			}
 		}
@@ -300,7 +304,7 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		).Scan(&updated.UserID, &updated.Role, &updated.Status, &updated.DisplayName, &updated.Email); err != nil {
 			return err
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, signed); err != nil {
 			return err
 		}
 
@@ -418,10 +422,14 @@ func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, 
 		if err != nil {
 			return err
 		}
+		signed, err := approval.SignedWaitingStepsTx(ctx, tx, target.UserID, keys)
+		if err != nil {
+			return err
+		}
 		if err := endMembership(ctx, tx, target.UserID); err != nil {
 			return err
 		}
-		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys); err != nil {
+		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, signed); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{

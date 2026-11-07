@@ -62,16 +62,16 @@ func TestRunReadModel_StepKeySetIsFixed(t *testing.T) {
 
 func TestResolveHolder_MissingRole(t *testing.T) {
 	got := resolveHolder(false, nil)
-	want := Resolved{Text: "Role no longer exists", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Role no longer exists", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(false, nil) = %+v, want %+v", got, want)
 	}
 }
 
 func TestResolveHolder_NoHolders(t *testing.T) {
 	got := resolveHolder(true, nil)
-	want := Resolved{Text: "Nobody assigned", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Nobody assigned", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, nil) = %+v, want %+v", got, want)
 	}
 }
@@ -82,8 +82,8 @@ func TestResolveHolder_BlockedNamesFirstHolderNotFirstActive(t *testing.T) {
 		{Name: "Folake Adesina", Status: "active", AccessRole: "preparer"},
 	}
 	got := resolveHolder(true, holders)
-	want := Resolved{Text: "Halima Yusuf +1", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Halima Yusuf +1", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -95,7 +95,7 @@ func TestResolveHolder_OkCountsSuspendedInTheExtra(t *testing.T) {
 	}
 	got := resolveHolder(true, holders)
 	want := Resolved{Text: "Musa Danjuma +1", Warn: false}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -104,7 +104,7 @@ func TestResolveHolder_SingleHolderHasNoPlusN(t *testing.T) {
 	holders := []holderInput{{Name: "Musa Danjuma", Status: "active", AccessRole: "reviewer"}}
 	got := resolveHolder(true, holders)
 	want := Resolved{Text: "Musa Danjuma", Warn: false}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -113,8 +113,8 @@ func TestResolveHolder_PreparerHolderIsNotEligible(t *testing.T) {
 	// Q2: staffing a preparer into a role is legal; it just can never satisfy the step.
 	holders := []holderInput{{Name: "Folake Adesina", Status: "active", AccessRole: "preparer"}}
 	got := resolveHolder(true, holders)
-	want := Resolved{Text: "Folake Adesina", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Folake Adesina", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -126,11 +126,11 @@ func TestInspectorResolveHolder_FourArms(t *testing.T) {
 		holders    []holderInput
 		want       Resolved
 	}{
-		{"missing", false, nil, Resolved{Text: "Role no longer exists", Warn: true}},
-		{"none", true, nil, Resolved{Text: "Nobody holds this role — this step will block", Warn: true}},
+		{"missing", false, nil, Resolved{Text: "Role no longer exists", Warn: true, Reason: ptr(HolderReasonUnstaffed)}},
+		{"none", true, nil, Resolved{Text: "Nobody holds this role — this step will block", Warn: true, Reason: ptr(HolderReasonUnstaffed)}},
 		{"blocked", true,
 			[]holderInput{{Name: "Halima Yusuf", Status: "suspended", AccessRole: "reviewer"}},
-			Resolved{Text: "Currently: Halima Yusuf — this step will block", Warn: true}},
+			Resolved{Text: "Currently: Halima Yusuf — this step will block", Warn: true, Reason: ptr(HolderReasonUnstaffed)}},
 		{"ok", true,
 			[]holderInput{{Name: "Musa Danjuma", Status: "active", AccessRole: "reviewer"}},
 			Resolved{Text: "Currently: Musa Danjuma", Warn: false}},
@@ -138,7 +138,7 @@ func TestInspectorResolveHolder_FourArms(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := inspectorResolveHolder(c.roleExists, c.holders)
-			if got != c.want {
+			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("inspectorResolveHolder(%v, %+v) = %+v, want %+v", c.roleExists, c.holders, got, c.want)
 			}
 		})
@@ -152,13 +152,13 @@ func TestInspectorResolveHolder_OmitsThePlusNSuffix(t *testing.T) {
 	}
 	gotInspector := inspectorResolveHolder(true, holders)
 	wantInspector := Resolved{Text: "Currently: Musa Danjuma", Warn: false}
-	if gotInspector != wantInspector {
+	if !reflect.DeepEqual(gotInspector, wantInspector) {
 		t.Errorf("inspectorResolveHolder(true, %+v) = %+v, want %+v", holders, gotInspector, wantInspector)
 	}
 
 	gotCard := resolveHolder(true, holders)
 	wantCard := Resolved{Text: "Musa Danjuma +1", Warn: false}
-	if gotCard != wantCard {
+	if !reflect.DeepEqual(gotCard, wantCard) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v (card DOES carry +N)", holders, gotCard, wantCard)
 	}
 }
@@ -226,13 +226,13 @@ func TestResolution_OkPrimaryIsFirstActiveNotFirstHolder(t *testing.T) {
 	}
 	got := resolveHolder(true, holders)
 	want := Resolved{Text: "Musa Danjuma +1", Warn: false}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 
 	gotInspector := inspectorResolveHolder(true, holders)
 	wantInspector := Resolved{Text: "Currently: Musa Danjuma", Warn: false}
-	if gotInspector != wantInspector {
+	if !reflect.DeepEqual(gotInspector, wantInspector) {
 		t.Errorf("inspectorResolveHolder(true, %+v) = %+v, want %+v", holders, gotInspector, wantInspector)
 	}
 }
@@ -323,8 +323,8 @@ func TestResolveHolder_AllHoldersSuspended(t *testing.T) {
 		{Name: "Musa Danjuma", Status: "suspended", AccessRole: "admin"},
 	}
 	got := resolveHolder(true, holders)
-	want := Resolved{Text: "Halima Yusuf +1", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Halima Yusuf +1", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -348,7 +348,7 @@ func TestResolveHolder_UnicodeAndVeryLongNameInPlusNFormatting(t *testing.T) {
 	}
 	got := resolveHolder(true, holders)
 	want := Resolved{Text: longName + " +1", Warn: false}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder with long unicode name: got %+v, want %+v", got, want)
 	}
 }
@@ -363,7 +363,7 @@ func TestResolution_ExtraCountsAllOtherHoldersEvenWhenEveryoneEligible(t *testin
 	}
 	got := resolveHolder(true, holders)
 	want := Resolved{Text: "Musa Danjuma +2", Warn: false}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
 	}
 }
@@ -372,8 +372,33 @@ func TestResolution_ExtraCountsAllOtherHoldersEvenWhenEveryoneEligible(t *testin
 // branch on nil-ness rather than length.
 func TestResolveHolder_EmptyNonNilHoldersSliceSameAsNil(t *testing.T) {
 	got := resolveHolder(true, []holderInput{})
-	want := Resolved{Text: "Nobody assigned", Warn: true}
-	if got != want {
+	want := Resolved{Text: "Nobody assigned", Warn: true, Reason: ptr(HolderReasonUnstaffed)}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resolveHolder(true, []holderInput{}) = %+v, want %+v", got, want)
+	}
+}
+
+func TestResolved_KeyNamesMatchSpec(t *testing.T) {
+	unstaffed := HolderReasonUnstaffed
+	for name, v := range map[string]Resolved{"zero": {}, "warned": {Warn: true, Reason: &unstaffed}} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("Marshal %s: %v", name, err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("Unmarshal %s: %v", name, err)
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if want := []string{"reason", "text", "warn"}; !reflect.DeepEqual(keys, want) {
+			t.Errorf("%s keys = %v, want %v", name, keys, want)
+		}
+		if name == "zero" && string(m["reason"]) != "null" {
+			t.Errorf("zero reason = %s, want null", m["reason"])
+		}
 	}
 }

@@ -23,7 +23,7 @@ import (
 )
 
 // The sentence restated on purpose: the wire oracle for approval's memberLastSignerMessage.
-const lastSignerSentence = "this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first"
+const lastSignerSentence = "this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it — add someone to the role who can approve it, or decide the run or edit its invoice to cancel it, first"
 
 const approver = "approver"
 
@@ -36,16 +36,28 @@ func lsInsertID(t *testing.T, super *pgxpool.Pool, sql string, args ...any) stri
 	return id
 }
 
-// seedWaitingRun seeds a validated invoice with an open run and one pending approval step on roleKey.
+// seedWaitingRun seeds a validated invoice on a new client with an open run and one pending approval step on roleKey.
 func seedWaitingRun(t *testing.T, super *pgxpool.Pool, tenant, roleKey string) (invoiceID, runID string) {
 	t.Helper()
+	return seedWaitingRunOn(t, super, tenant, roleKey, seedEntity(t, super, tenant), "")
+}
+
+// seedWaitingRunOn is seedWaitingRun on entityID; a non-empty creator writes the invoice's creation history row.
+func seedWaitingRunOn(t *testing.T, super *pgxpool.Pool, tenant, roleKey, entityID, creator string) (invoiceID, runID string) {
+	t.Helper()
 	sfx := uuid.NewString()[:8]
-	entity := lsInsertID(t, super, `INSERT INTO business_entities (tenant_id, name) VALUES ($1, $2) RETURNING id`, tenant, "Run Corp "+sfx)
 	policy := lsInsertID(t, super, `INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`, tenant, "Run policy "+sfx)
 	version := lsInsertID(t, super, `INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1) RETURNING id`, tenant, policy)
-	invoiceID = lsInsertID(t, super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3) RETURNING id`, tenant, entity, "INV-"+sfx)
+	invoiceID = lsInsertID(t, super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3) RETURNING id`, tenant, entityID, "INV-"+sfx)
 	if _, err := super.Exec(context.Background(), `UPDATE invoices SET status = 'validated' WHERE id = $1`, invoiceID); err != nil {
 		t.Fatalf("validate invoice: %v", err)
+	}
+	if creator != "" {
+		if _, err := super.Exec(context.Background(),
+			`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor) VALUES ($1, $2, NULL, 'draft', $3)`,
+			tenant, invoiceID, creator); err != nil {
+			t.Fatalf("seed creation history: %v", err)
+		}
 	}
 	runID = lsInsertID(t, super,
 		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint) VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -58,6 +70,16 @@ func seedWaitingRun(t *testing.T, super *pgxpool.Pool, tenant, roleKey string) (
 	return invoiceID, runID
 }
 
+// lsDelegate sets the delegation of the run's one step: allow with a nil user is "anyone".
+func lsDelegate(t *testing.T, super *pgxpool.Pool, runID string, allow bool, delegate *string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_run_steps SET allow_delegation = $2, delegate_user_id = $3 WHERE run_id = $1`,
+		runID, allow, delegate); err != nil {
+		t.Fatalf("set step delegation: %v", err)
+	}
+}
+
 func cancelRun(t *testing.T, super *pgxpool.Pool, runID string) {
 	t.Helper()
 	if _, err := super.Exec(context.Background(),
@@ -66,11 +88,38 @@ func cancelRun(t *testing.T, super *pgxpool.Pool, runID string) {
 	}
 }
 
-func lsWorld(t *testing.T, super, app *pgxpool.Pool) invWorld {
+// lsFirmWorld is a firm workspace: a reviewer reaches only the clients it is given.
+func lsFirmWorld(t *testing.T, super, app *pgxpool.Pool) invWorld {
 	t.Helper()
 	w := invWorld{super: super, app: app, store: NewStore(app), tenant: seedTenant(t, super, "APSC-13 last signer")}
 	w.admin = w.addMember(t, "admin", "active", "Ada Obi")
 	return w
+}
+
+func lsWorld(t *testing.T, super, app *pgxpool.Pool) invWorld {
+	t.Helper()
+	w := lsFirmWorld(t, super, app)
+	w.setKind(t, "in_house") // reach is not under test here
+	return w
+}
+
+func (w invWorld) setKind(t *testing.T, kind string) {
+	t.Helper()
+	if _, err := w.super.Exec(context.Background(), `UPDATE tenants SET kind = $2 WHERE id = $1`, w.tenant, kind); err != nil {
+		t.Fatalf("set tenant kind: %v", err)
+	}
+}
+
+// lsReviewer seeds an active reviewer; clients nil means "All clients", else exactly those.
+func lsReviewer(t *testing.T, w invWorld, name string, clients []string) string {
+	t.Helper()
+	id := w.addMember(t, "reviewer", "active", name)
+	if clients == nil {
+		giveAllClients(t, w.super, w.tenant, id)
+	} else {
+		giveClients(t, w.super, w.tenant, id, clients...)
+	}
+	return id
 }
 
 // lsGranted seeds a member holding two clients and "All clients", so a remove would change more than the status.
@@ -228,6 +277,7 @@ func lsMux(store *Store, log *slog.Logger) http.Handler {
 	mux.HandleFunc("PATCH /v1/memberships/{user_id}", SetMembershipStatusHandler(store.SetMembershipStatus, log))
 	mux.HandleFunc("POST /v1/memberships/{user_id}/remove", RemoveMemberHandler(store.RemoveMember, log))
 	mux.HandleFunc("PATCH /v1/memberships/{user_id}/role", SetMemberRoleHandler(store.SetMemberRole, log))
+	mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", SetMemberClientsHandler(store.SetMemberClients, log))
 	return mux
 }
 
@@ -604,11 +654,18 @@ func TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck(t *testing.T) {
 		{"remove", "preparer", ErrRemoveNotPermitted, func(w invWorld, c, u string) error { return w.lsRemove(c, u) }},
 		{"suspend", "preparer", ErrNotPermitted, func(w invWorld, c, u string) error { return w.lsSetStatus(c, u, "suspended") }},
 		{"demote", "reviewer", ErrRoleChangeNotPermitted, func(w invWorld, c, u string) error { return w.lsSetRole(c, u, "preparer") }},
+		{"clients", "reviewer", ErrClientAccessNotPermitted, func(w invWorld, c, u string) error {
+			_, err := w.set(c, u, setIDs())
+			return err
+		}},
 	}
 	for _, wr := range writers {
 		t.Run(wr.name, func(t *testing.T) {
 			ctx := context.Background()
 			w := lsWorld(t, super, app)
+			if wr.name == "clients" {
+				w.setKind(t, "firm") // client access is a firm-only write
+			}
 			target := w.addMember(t, wr.targetRole, "active", "Tara Target")
 			caller := w.addMember(t, "preparer", "active", "Pia Preparer")
 			hold, err := super.Begin(ctx)
@@ -803,5 +860,260 @@ func TestLastSigner_RacingAStaffingPutLeavesASigner(t *testing.T) {
 		if n := w.signerCount(t, approver); n != 1 {
 			t.Fatalf("round %d: signers left = %d, want 1", round, n)
 		}
+	}
+}
+
+func wantItemNames(t *testing.T, body lsBody, total int, invoices ...string) {
+	t.Helper()
+	var got []string
+	for _, it := range body.Items {
+		got = append(got, it["id"])
+	}
+	if !slices.Equal(got, invoices) || body.Total != total {
+		t.Errorf("items = %v total %d, want %v total %d", got, body.Total, invoices, total)
+	}
+}
+
+func TestLastSigner_JudgedPerInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("out of reach", func(t *testing.T) {
+		w := lsFirmWorld(t, super, app)
+		entA, entB := seedEntity(t, super, w.tenant), seedEntity(t, super, w.tenant)
+		r := lsReviewer(t, w, "Rita Eze", nil)
+		s := lsReviewer(t, w, "Sam Eze", []string{entB})
+		seedRoleStaffedBy(t, super, w.tenant, approver, r, s)
+		invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, "")
+		before := w.lsState(t, r, s)
+
+		body := wantLastSigner(t, w.lsSetStatus(w.admin, r, "suspended")) // S cannot reach A
+
+		wantItemNames(t, body, 1, invoice)
+		if after := w.lsState(t, r, s); after != before {
+			t.Errorf("a refusal wrote:\nbefore %s\nafter  %s", before, after)
+		}
+		if err := w.lsRemove(w.admin, s); err != nil { // R still reaches A
+			t.Errorf("remove S, who cannot approve the invoice: %v, want nil", err)
+		}
+	})
+
+	t.Run("creator", func(t *testing.T) {
+		w := lsFirmWorld(t, super, app)
+		entA := seedEntity(t, super, w.tenant)
+		c := lsReviewer(t, w, "Cleo Eze", nil)
+		r := lsReviewer(t, w, "Rita Eze", nil)
+		seedRoleStaffedBy(t, super, w.tenant, approver, c, r)
+		invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, c) // w.admin reaches A, so C may not approve
+		before := w.lsState(t, c, r)
+
+		body := wantLastSigner(t, w.lsSetStatus(w.admin, r, "suspended"))
+		wantItemNames(t, body, 1, invoice)
+		body = wantLastSigner(t, w.lsSetRole(w.admin, r, "preparer"))
+		wantItemNames(t, body, 1, invoice)
+
+		if after := w.lsState(t, c, r); after != before {
+			t.Errorf("refusals wrote:\nbefore %s\nafter  %s", before, after)
+		}
+	})
+
+	t.Run("pre-stranded role", func(t *testing.T) {
+		w := lsFirmWorld(t, super, app)
+		entA := seedEntity(t, super, w.tenant)
+		c := lsReviewer(t, w, "Cleo Eze", nil)
+		p := w.addMember(t, "preparer", "active", "Pia Preparer")
+		roleID := seedRoleStaffedBy(t, super, w.tenant, approver, c, p)
+		invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, c) // creator only before any change
+
+		body := wantLastSigner(t, w.lsRemove(w.admin, p)) // P could never sign it, the role is stranded all the same
+		wantItemNames(t, body, 1, invoice)
+
+		lsStaff(t, super, w.tenant, roleID, lsReviewer(t, w, "Rita Eze", nil), 2)
+		if err := w.lsRemove(w.admin, p); err != nil {
+			t.Errorf("remove P once R can approve the invoice: %v, want nil", err)
+		}
+	})
+
+	t.Run("delegate", func(t *testing.T) {
+		w := lsWorld(t, super, app)
+		r := lsReviewer(t, w, "Rita Eze", nil)
+		d := lsReviewer(t, w, "Dee Eze", nil) // in no role
+		seedRoleStaffedBy(t, super, w.tenant, approver, r)
+		_, runID := seedWaitingRun(t, super, w.tenant, approver)
+		lsDelegate(t, super, runID, true, &d)
+
+		if err := w.lsSetStatus(w.admin, r, "suspended"); err != nil {
+			t.Errorf("suspend R while the step's delegate D signs: %v, want nil", err)
+		}
+	})
+}
+
+func TestLastSigner_HandlersAnswerTheNewSentence(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := lsFirmWorld(t, super, app)
+	entA, entB := seedEntity(t, super, w.tenant), seedEntity(t, super, w.tenant)
+	r := lsReviewer(t, w, "Rita Eze", nil)
+	s := lsReviewer(t, w, "Sam Eze", []string{entB})
+	seedRoleStaffedBy(t, super, w.tenant, approver, r, s)
+	invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, "")
+
+	rec := w.lsHTTP(lsMux(w.store, nil), w.admin, "POST", "/v1/memberships/"+r+"/remove", "")
+
+	wantItemNames(t, wantRefusalBody(t, rec), 1, invoice) // the sentence is checked against the restated constant there
+}
+
+func TestClientAccess_NarrowingTheLastInReachReviewerIsRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := lsFirmWorld(t, super, app)
+	entA, entB := seedEntity(t, super, w.tenant), seedEntity(t, super, w.tenant)
+	r := lsReviewer(t, w, "Rita Eze", nil)
+	s := lsReviewer(t, w, "Sam Eze", []string{entB})
+	seedRoleStaffedBy(t, super, w.tenant, approver, r, s)
+	invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, "")
+	audits := w.auditCountOf(t, clientAccessEvent)
+
+	_, err := w.set(w.admin, r, setIDs(entB))
+	wantItemNames(t, wantLastSigner(t, err), 1, invoice)
+	w.requireStored(t, "R after the refusal", r, true)
+	if n := w.auditCountOf(t, clientAccessEvent); n != audits {
+		t.Errorf("%s rows = %d, want %d (a refusal adds none)", clientAccessEvent, n, audits)
+	}
+
+	if _, err := w.set(w.admin, r, setIDs(entA, entB)); err != nil { // judged, R still reaches A
+		t.Fatalf("R to [A, B]: %v, want nil", err)
+	}
+	_, err = w.set(w.admin, r, setIDs(entB)) // a dropped id, not only all -> list
+	wantItemNames(t, wantLastSigner(t, err), 1, invoice)
+	w.requireStored(t, "R after the second refusal", r, false, entA, entB)
+
+	if _, err := w.set(w.admin, s, setIDs()); err != nil { // judged, R still reaches A
+		t.Errorf("S to []: %v, want nil", err)
+	}
+}
+
+func TestClientAccess_ChangesThatKeepReachAreNotJudged(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := lsFirmWorld(t, super, app)
+	entA, entB := seedEntity(t, super, w.tenant), seedEntity(t, super, w.tenant)
+	c := lsReviewer(t, w, "Cleo Eze", []string{entB})
+	p := w.addMember(t, "preparer", "active", "Pia Preparer")
+	giveClients(t, super, w.tenant, p, entA)
+	sus := w.addMember(t, "reviewer", "suspended", "Sue Suspended") // signs nothing, so narrowing her is not judged
+	giveClients(t, super, w.tenant, sus, entA)
+	seedRoleStaffedBy(t, super, w.tenant, approver, c, p, sus)
+	seedWaitingRunOn(t, super, w.tenant, approver, entA, c) // stranded: out of reach, then creator only once C reaches A
+
+	for _, st := range []struct {
+		name   string
+		who    string
+		access ClientAccess
+	}{
+		{"widen C to [A, B]", c, setIDs(entA, entB)},
+		{"widen C to all", c, allClients},
+		{"narrow the preparer to []", p, setIDs()},
+		{"narrow the suspended reviewer to []", sus, setIDs()},
+	} {
+		if _, err := w.set(w.admin, st.who, st.access); err != nil {
+			t.Errorf("%s: %v, want nil (not judged)", st.name, err)
+		}
+	}
+}
+
+func TestClientAccess_HandlerAnswersTheRoleInUseBody(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := lsFirmWorld(t, super, app)
+	entA, entB := seedEntity(t, super, w.tenant), seedEntity(t, super, w.tenant)
+	r := lsReviewer(t, w, "Rita Eze", nil)
+	s := lsReviewer(t, w, "Sam Eze", []string{entB})
+	seedRoleStaffedBy(t, super, w.tenant, approver, r, s)
+	invoice, _ := seedWaitingRunOn(t, super, w.tenant, approver, entA, "")
+
+	rec := w.lsHTTP(lsMux(w.store, nil), w.admin, "PUT", "/v1/memberships/"+r+"/clients", fmt.Sprintf(`{"client_access":[%q]}`, entB))
+
+	wantItemNames(t, wantRefusalBody(t, rec), 1, invoice)
+
+	x := newLSDelegateWorld(t, super, app) // the refused narrowing of a named delegate
+	rec = x.lsHTTP(lsMux(x.store, nil), x.admin, "PUT", "/v1/memberships/"+x.d+"/clients", fmt.Sprintf(`{"client_access":[%q]}`, x.entB))
+	wantItemNames(t, wantRefusalBody(t, rec), 1, x.invoice)
+}
+
+// lsDelegateWorld is a firm world with an empty role, a run on client A whose step names D (an active reviewer, all clients, in no role).
+type lsDelegateWorld struct {
+	invWorld
+	entA, entB, d, invoice, roleID string
+}
+
+func newLSDelegateWorld(t *testing.T, super, app *pgxpool.Pool) lsDelegateWorld {
+	t.Helper()
+	w := lsFirmWorld(t, super, app)
+	x := lsDelegateWorld{invWorld: w, entA: seedEntity(t, super, w.tenant), entB: seedEntity(t, super, w.tenant)}
+	x.d = lsReviewer(t, w, "Dee Eze", nil)
+	x.roleID = seedRoleStaffedBy(t, super, w.tenant, approver)
+	var runID string
+	x.invoice, runID = seedWaitingRunOn(t, super, w.tenant, approver, x.entA, "")
+	lsDelegate(t, super, runID, true, &x.d)
+	return x
+}
+
+var lsFourWrites = []struct {
+	name string
+	do   func(x lsDelegateWorld) error
+}{
+	{"remove", func(x lsDelegateWorld) error { return x.lsRemove(x.admin, x.d) }},
+	{"suspend", func(x lsDelegateWorld) error { return x.lsSetStatus(x.admin, x.d, "suspended") }},
+	{"demote to preparer", func(x lsDelegateWorld) error { return x.lsSetRole(x.admin, x.d, "preparer") }},
+	{"narrow to B", func(x lsDelegateWorld) error { _, err := x.set(x.admin, x.d, setIDs(x.entB)); return err }},
+}
+
+func TestLastSigner_ANamedDelegateIsJudged(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	t.Run("refused when nobody else can approve", func(t *testing.T) {
+		x := newLSDelegateWorld(t, super, app)
+		before := x.lsState(t, x.d)
+		for _, c := range lsFourWrites {
+			body := wantLastSigner(t, c.do(x))
+			if len(body.Items) != 1 || body.Items[0]["id"] != x.invoice || body.Items[0]["workflow_role_key"] != approver ||
+				body.Items[0]["workflow_role_title"] != approver || body.Total != 1 {
+				t.Errorf("%s: items = %v total %d, want the invoice on %s", c.name, body.Items, body.Total, approver)
+			}
+			if after := x.lsState(t, x.d); after != before {
+				t.Errorf("%s: a refusal wrote:\nbefore %s\nafter  %s", c.name, before, after)
+			}
+		}
+	})
+
+	for _, c := range lsFourWrites {
+		t.Run("signer kept: "+c.name, func(t *testing.T) {
+			x := newLSDelegateWorld(t, super, app)
+			lsStaff(t, super, x.tenant, x.roleID, lsReviewer(t, x.invWorld, "Rita Eze", nil), 0)
+			if err := c.do(x); err != nil {
+				t.Errorf("%s while R in the role signs: %v, want nil", c.name, err)
+			}
+		})
+	}
+
+	t.Run("deleted role", func(t *testing.T) {
+		x := newLSDelegateWorld(t, super, app)
+		if _, err := super.Exec(context.Background(), `UPDATE workflow_roles SET deleted_at = now() WHERE id = $1`, x.roleID); err != nil {
+			t.Fatalf("soft delete the role: %v", err)
+		}
+		body := wantLastSigner(t, x.lsSetStatus(x.admin, x.d, "suspended"))
+		wantItemNames(t, body, 1, x.invoice)
+	})
+}
+
+func TestLastSigner_AnAnyoneStepKeepsTheAdmin(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, c := range lsFourWrites {
+		t.Run(c.name, func(t *testing.T) {
+			x := newLSDelegateWorld(t, super, app)
+			if _, err := super.Exec(context.Background(),
+				`UPDATE approval_run_steps SET delegate_user_id = NULL WHERE tenant_id = $1`, x.tenant); err != nil {
+				t.Fatalf("make the step anyone: %v", err)
+			}
+			if err := c.do(x); err != nil {
+				t.Errorf("%s on an anyone step: %v, want nil (w.admin reaches A and signs)", c.name, err)
+			}
+		})
 	}
 }

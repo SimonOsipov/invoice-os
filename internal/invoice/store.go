@@ -2038,7 +2038,7 @@ func latestDemotionsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string
 // never wire copy (TestStoreRowFacts_ReturnsTheArmedStanding).
 //
 // The gate reads are here rather than inside approval.RowFactsTx so that helper's
-// statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
+// statement count stays constant in page size (TestRowFactsTx_ConstantStatementsRegardlessOfRowAndRoleCount);
 // all are set-shaped, so the whole request stays constant in page size
 // (TestStoreRowFacts_TransmitClearIsConstantInPageSize, TestStoreRowFacts_RulePendingIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {

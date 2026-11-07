@@ -684,7 +684,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
   ])
   function settingsStripLabels(): string[] {
     return Array.from(document.querySelectorAll('.pf-tab'))
-      .map((el) => el.textContent ?? '')
+      .map((el) => (el.textContent ?? '').replace(/^\d{2}/, ''))
       .filter((t) => SETTINGS_TAB_LABELS.has(t))
   }
 
@@ -792,16 +792,17 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
     ).toBe('members')
 
     const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates', 'Workspace']
+    const tabLabel = (el: Element) => (el.textContent ?? '').replace(/^\d{2}/, '')
     const stripTabs = Array.from(document.querySelectorAll('.pf-tab')).filter((el) =>
-      FIRM_TAB_LABELS.includes(el.textContent ?? ''),
+      FIRM_TAB_LABELS.includes(tabLabel(el)),
     )
-    expect(stripTabs.map((el) => el.textContent), 'every firm settings tab must render, none unmatched').toEqual(
+    expect(stripTabs.map(tabLabel), 'every firm settings tab must render, none unmatched').toEqual(
       FIRM_TAB_LABELS,
     )
-    const underlined = stripTabs.filter((el) => (el as HTMLElement).style.fontWeight === '600')
+    const active = stripTabs.filter((el) => (el as HTMLElement).style.background === 'var(--sage-panel)')
     expect(
-      underlined.map((el) => el.textContent),
-      'exactly the Members tab may be underlined -- the empty-strip symptom is no tab matching',
+      active.map(tabLabel),
+      'exactly the Members tab may be active -- the empty-strip symptom is no tab matching',
     ).toEqual(['Members'])
   })
 })

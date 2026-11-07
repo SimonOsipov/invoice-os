@@ -4158,6 +4158,40 @@ describe('InvoiceDetail mounts the activity card in the main column (AUDIT-09-04
     expect((column as HTMLElement).style.minWidth, 'minWidth:0 on the grid item').toMatch(/^0(px)?$/)
   })
 
+  it('invoiceDetail_activityEvidenceStartsOnTheInvoiceCreatedDay', async () => {
+    const submission: AuditEvent = {
+      id: 'ev-sub-1',
+      created_at: '2026-08-20T09:15:00Z',
+      event: 'submission.accepted',
+      actor: APP_PERSONAS.firm.subject,
+      actor_name: APP_PERSONAS.firm.name,
+      actor_kind: 'person',
+      entity_id: 'ent-1',
+      company_name: 'Northgate Foods',
+      company_scope: 'company',
+      payload: { invoice_id: ID },
+    }
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, created_at: '2026-08-17T22:00:00Z' }), [], {
+      auditLog: auditLogOf([submission]),
+    })
+    const previews: string[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      if (String(url).includes('/evidence-bundle/preview')) {
+        previews.push(String(url))
+        return new Promise(() => {})
+      }
+      return fetchMock(url, init)
+    })
+    render(<InvoiceDetail ctx={{ ...detailCtx(ID), entities: [] } as unknown as PlatformCtx} />)
+    fireEvent.click(await screen.findByTestId('audit-row'))
+    fireEvent.click(screen.getByTestId('audit-evidence-affordance'))
+    await waitFor(() => expect(previews).toHaveLength(1))
+    const q = new URL(previews[0]!).searchParams
+    expect(q.get('entity_id')).toBe('ent-1')
+    expect(q.get('from')).toBe('2026-08-17T00:00:00.000Z')
+    expect(q.get('to')).toBe('2026-08-20T23:59:59.999Z')
+  })
+
   it('invoiceDetail_activityCardUnmountsAndRefetchesOnAMutationRoundTrip', async () => {
     // CHARACTERISATION, reported not fixed. AC-2 reads "fetches once per invoiceId" and the
     // card's own contract holds it; the PAGE does not. handleSaved / handleRevalidate /

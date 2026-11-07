@@ -221,6 +221,19 @@ describe('content', () => {
     expect(at).toEqual([...at].sort((a, b) => a - b))
   })
 
+  it('content_evidenceBundleNamesBothEntryPoints', () => {
+    const d = byId('evidence-bundle').desc
+    expect(d).toMatch(/audit log/i)
+    expect(d).toMatch(/activity/i)
+    expect(d).toMatch(/day the invoice was added/i)
+    expect(d).toMatch(/holds that invoice/i)
+  })
+
+  it('content_noSingleSubmissionEvidenceClaim', () => {
+    const claim = /(single|per|one)[- ]submission|this submission's evidence|transmission evidence for/i
+    for (const f of FEATURES) expect(JSON.stringify([f.title, f.short, f.desc, f.benefits]), f.id).not.toMatch(claim)
+  })
+
   it('content_deletionEntriesNameWhoTheyAreFor', () => {
     expect(byId('delete-account').who).toEqual(['Everyone'])
     expect(byId('delete-workspace').who).toEqual(['Admin'])

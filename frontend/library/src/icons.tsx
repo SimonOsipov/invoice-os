@@ -10,6 +10,7 @@ export type GlyphName =
   | 'chevron-left'
   | 'chevron-right'
   | 'circle-check'
+  | 'cookie'
   | 'file-search'
   | 'file-text'
   | 'layout-dashboard'
@@ -57,6 +58,15 @@ export const GLYPHS: Record<GlyphName, readonly string[]> = {
   'circle-check': [
     'M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0',
     'm9 12 2 2 4-4',
+  ],
+  // cookie: copied from frontend/app/src/glyphs.tsx
+  'cookie': [
+    'M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5',
+    'M8.5 8.5v.01',
+    'M16 15.5v.01',
+    'M12 12v.01',
+    'M11 17v.01',
+    'M7 14v.01',
   ],
   'file-search': [
     'M14 2v4a2 2 0 0 0 2 2h4',
@@ -123,9 +133,9 @@ export const GLYPHS: Record<GlyphName, readonly string[]> = {
   ],
 }
 
-type IconProps = { name: GlyphName; size?: number }
+type IconProps = { name: GlyphName; size?: number; strokeWidth?: number }
 
-export function Icon({ name, size = 16 }: IconProps) {
+export function Icon({ name, size = 16, strokeWidth = 2 }: IconProps) {
   return (
     <svg
       width={size}
@@ -133,7 +143,7 @@ export function Icon({ name, size = 16 }: IconProps) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

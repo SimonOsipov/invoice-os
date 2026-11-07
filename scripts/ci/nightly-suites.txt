@@ -16,6 +16,7 @@ hooks=Claude hooks=results
 clean-clone=Clean-clone build
 stale-refs=Stale references
 prod-ids=Production ids
+rule-globs=Rule-file globs
 migration-order=Migration order
 contract-step=Schema deletion
 cite-refs=Line-number citations

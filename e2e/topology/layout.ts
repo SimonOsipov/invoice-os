@@ -112,6 +112,11 @@ export function enclosesRect(outer: Rect, inner: Rect, slackPx = 0): boolean {
   )
 }
 
+/** `r` grown by `px` on every side. */
+export function inflateRect(r: Rect, px: number): Rect {
+  return { x: r.x - px, y: r.y - px, width: r.width + 2 * px, height: r.height + 2 * px }
+}
+
 /**
  * Asserts `inner` fills `outer` horizontally at every width in WIDE_WIDTHS, and
  * returns what it measured so the caller can attach the numbers.

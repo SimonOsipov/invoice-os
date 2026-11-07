@@ -3,7 +3,7 @@
 // component. All icons are stroke-based, 24x24 viewBox, currentColor — the
 // parent sets color/size to match the design.
 
-import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
+import markUrl from '@invoice-os/design-tokens/v2/assets/mark.svg'
 
 type IconProps = {
   paths: string[]
@@ -31,8 +31,8 @@ export function Icon({ paths, size = 16, strokeWidth = 1.6 }: IconProps) {
   )
 }
 
-// ASComply brand mark, raster only (never redrawn); the corner comes from CSS.
+// Brand mark from the vector master; mark.css draws the corner and, on .asc-dark, the ring.
 // Decorative: the wordmark beside every call site is live text.
 export function BrandMark({ size = 22 }: { size?: number }) {
-  return <img src={markUrl} alt="" aria-hidden="true" width={size} height={size} style={{ display: 'block', borderRadius: 'var(--radius-sm)' }} />
+  return <img className="asc-mark" src={markUrl} alt="" aria-hidden="true" width={size} height={size} />
 }

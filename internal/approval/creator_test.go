@@ -81,6 +81,9 @@ func TestCreatorStanding_WhoCounts(t *testing.T) {
 	}
 	for _, c := range cases {
 		for _, d := range delegations {
+			if d.delegate == "member" && c.spec.role == "" {
+				continue // no member seeded to name
+			}
 			t.Run(c.name+"/"+d.name, func(t *testing.T) {
 				w := newStandingWorld(t, super, "APPR-17 who-counts")
 				member := ""
@@ -101,9 +104,6 @@ func TestCreatorStanding_WhoCounts(t *testing.T) {
 				probe.AllowDelegation = d.allow
 				switch d.delegate {
 				case "member":
-					if member == "" {
-						t.Skip("no member to name")
-					}
 					probe.DelegateUserID = ptr(member)
 				case "different":
 					probe.DelegateUserID = ptr(seedMemberOf(t, super, w.tenantID, memberSpec{role: "preparer"}))

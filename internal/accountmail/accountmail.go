@@ -290,7 +290,11 @@ func RenderStrandedAlert(m StrandedAlertMail) (subject, html string, err error) 
 		rows = append(rows, strandedRow{Label: inv.Role, Value: inv.Number})
 	}
 	if m.More > 0 {
-		rows = append(rows, strandedRow{Label: fmt.Sprintf("And %d more invoices", m.More)})
+		noun := "invoices"
+		if m.More == 1 {
+			noun = "invoice"
+		}
+		rows = append(rows, strandedRow{Label: fmt.Sprintf("And %d more %s", m.More, noun)})
 	}
 	rows[len(rows)-1].Last = true
 	src, err := Template("stranded_alert")

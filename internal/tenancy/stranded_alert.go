@@ -115,9 +115,10 @@ func (n *DeletionNotifier) alertStranded(ctx context.Context, a StrandedAlert) {
 	if accepted > 0 {
 		delivery = "sent"
 	}
-	if err := n.Store.recordStrandedAlert(context.WithoutCancel(ctx), a, delivery); err != nil {
-		n.Logger.ErrorContext(ctx, "tenancy: stranded alert outcome not recorded", slog.Any("err", err))
-		platform.CaptureError(ctx, err)
+	ctx2 := context.WithoutCancel(ctx)
+	if err := n.Store.recordStrandedAlert(ctx2, a, delivery); err != nil {
+		n.Logger.ErrorContext(ctx2, "tenancy: stranded alert outcome not recorded", slog.Any("err", err))
+		platform.CaptureError(ctx2, err)
 	}
 }
 

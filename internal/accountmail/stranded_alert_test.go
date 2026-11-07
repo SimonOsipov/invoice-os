@@ -57,6 +57,11 @@ func TestRenderStrandedAlert_MoreRowOnlyWhenMore(t *testing.T) {
 	checkRows(t, out, [][2]string{
 		{"Organisation", "Okafor & Co"}, {"Finance manager", "INV-1"}, {"CFO", "INV-2"}, {"Reviewer", "INV-3"}, {"And 5 more invoices", ""},
 	})
+	m.More = 1
+	_, out = renderStranded(t, m)
+	checkRows(t, out, [][2]string{
+		{"Organisation", "Okafor & Co"}, {"Finance manager", "INV-1"}, {"CFO", "INV-2"}, {"Reviewer", "INV-3"}, {"And 1 more invoice", ""},
+	})
 	_, out = renderStranded(t, okaforStranded)
 	if strings.Contains(out, "more invoices") {
 		t.Error("More row rendered with More = 0")

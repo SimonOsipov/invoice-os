@@ -980,3 +980,106 @@ func TestDecide_IneligibleNamedDelegateIsRefusedAtAxisOne(t *testing.T) {
 		}
 	})
 }
+
+// A delegation names one step. D decides the step that names D and is refused on the other step of the same run,
+// whichever step carries it.
+func TestDecide_DelegationOnOneStepDoesNotReachTheOtherStep(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	for _, delegated := range []int{0, 1} {
+		name := map[int]string{0: "first step names D", 1: "second step names D"}[delegated]
+		t.Run(name, func(t *testing.T) {
+			tenantID := policyTenant(t, super, "DELEG-01-QA two-step "+name)
+			entityID := seedBusinessEntity(t, super, tenantID, "Two Step Corp")
+			invoiceID := seedInvoice(t, super, tenantID, entityID, "two-step-invoice-1")
+			setInvoiceStatus(t, super, invoiceID, "validated")
+			roleKeys := []string{"two-step-a", "two-step-b"}
+			holders := make([]string, 2)
+			for i, key := range roleKeys {
+				roleID := seedWorkflowRole(t, super, tenantID, key, key)
+				holders[i] = seedMemberOf(t, super, tenantID, memberSpec{role: "reviewer", roleID: roleID})
+			}
+			policyID := seedApprovalPolicy(t, super, tenantID, "Two step policy")
+			versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+			for i, key := range roleKeys {
+				seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+					Ord: i, Kind: "approval", WorkflowRoleKey: ptr(key), SLAHours: ptr(48),
+				})
+			}
+			activateApprovalPolicyVersion(t, super, versionID)
+			res, err := arm(t, app, tenantID, invoiceID, "fp-two-step", "fixture-arm")
+			if err != nil {
+				t.Fatalf("arm: %v", err)
+			}
+			d := seedMemberOf(t, super, tenantID, memberSpec{role: "reviewer"})
+			setStepDelegation(t, super, oneApprovalStep(t, super, res.RunID, delegated), true, &d)
+			other := 1 - delegated
+
+			decideAs := func(who string) error {
+				_, err := approve(t, app, tenantID, who, invoiceID, nil)
+				return err
+			}
+			wantRefused := func(who string) {
+				t.Helper()
+				before := len(decisionsForRun(t, super, res.RunID))
+				err := decideAs(who)
+				if !errors.Is(err, ErrNotRoleHolder) {
+					t.Fatalf("Decide(approved) as %s on the step that does not name them: err = %v, want ErrNotRoleHolder", who, err)
+				}
+				if n := len(decisionsForRun(t, super, res.RunID)); n != before {
+					t.Errorf("decisions after the refusal = %d, want %d", n, before)
+				}
+			}
+
+			// Walk the run in ord order; at each step the named delegate decides or is refused.
+			for ord := 0; ord < 2; ord++ {
+				if ord == delegated {
+					if err := decideAs(d); err != nil {
+						t.Fatalf("Decide(approved) as D on step %d, which names D: %v, want success", ord, err)
+					}
+					continue
+				}
+				wantRefused(d)
+				if err := decideAs(holders[other]); err != nil {
+					t.Fatalf("Decide(approved) as the holder of step %d: %v, want success", ord, err)
+				}
+			}
+
+			if got := oneApprovalRun(t, super, invoiceID).State; got != "approved" {
+				t.Fatalf("run state = %q, want approved", got)
+			}
+			ds := decisionsForRun(t, super, res.RunID)
+			if len(ds) != 2 {
+				t.Fatalf("decisions = %+v, want two", ds)
+			}
+			for _, dec := range ds {
+				wantDelegate := dec.Actor == d
+				if dec.AsDelegate != wantDelegate {
+					t.Errorf("decision by %s: as_delegate = %v, want %v", dec.Actor, dec.AsDelegate, wantDelegate)
+				}
+			}
+		})
+	}
+}
+
+// "Anyone" reaches the active admins and reviewers of the step's own workspace. A reviewer of another
+// workspace gets the not-found answer and writes nothing, while the same step's local reviewer decides.
+func TestDecide_AnyoneDelegateDoesNotReachAnotherWorkspace(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDelegateWorld(t, super, app, "DELEG-01-QA anyone-cross-tenant A", "reviewer")
+	setStepDelegation(t, super, w.stepID, true, nil)
+
+	tenantB := policyTenant(t, super, "DELEG-01-QA anyone-cross-tenant B")
+	foreign := seedMemberOf(t, super, tenantB, memberSpec{role: "reviewer"})
+
+	_, err := approve(t, app, tenantB, foreign, w.invoiceID, nil)
+	if !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("Decide(approved) by tenant B's reviewer on tenant A's \"anyone\" step: err = %v, want ErrRunNotFound", err)
+	}
+	assertNothingWritten(t, super, w.approveFixture)
+
+	local := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+	if _, err := approve(t, app, w.tenantID, local, w.invoiceID, nil); err != nil {
+		t.Fatalf("Decide(approved) by tenant A's own reviewer on the same step: %v, want success", err)
+	}
+}

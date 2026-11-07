@@ -310,12 +310,15 @@ func TestStoreRowFacts_DelegateOfPendingIsSet(t *testing.T) {
 	anyone := arm("deleg-anyone", true, nil)
 	named := arm("deleg-named", true, &fx.subject)
 	none := arm("deleg-none", false, nil)
+	other := uuid.NewString()
+	seedMembership(t, super, fx.tenantID, other, "reviewer")
+	namedOther := arm("deleg-named-other", true, &other)
 
 	_, gate, err := store.RowFacts(fx.ctx, []string{anyone, named, none})
 	if err != nil {
 		t.Fatalf("RowFacts: %v", err)
 	}
-	for id, want := range map[string]bool{anyone: true, named: true, none: false} {
+	for id, want := range map[string]bool{anyone: true, named: true, none: false, namedOther: false} {
 		if gate.DelegateOfPending[id] != want {
 			t.Errorf("DelegateOfPending[%s] = %t, want %t", id, gate.DelegateOfPending[id], want)
 		}

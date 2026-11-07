@@ -670,3 +670,93 @@ func TestStoreCreatorRead_DoesNotCrossTenants(t *testing.T) {
 		t.Errorf("detail standing = %+v, want IsCreator and no other approver", one.Creator)
 	}
 }
+
+// TestListAndDetail_RealStoreDelegateGate: the real store behind the Approvals queue's list
+// (?awaiting_approval=true) and the detail page offer the decide controls to the step's delegate
+// and to nobody else outside the role. Each refused caller is paired with one the same step lets through.
+func TestListAndDetail_RealStoreDelegateGate(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	for _, c := range []struct {
+		name string
+		// delegation is nil when off; else it returns the delegate's id, "" for anyone.
+		delegation func(d string) string
+		wantD      bool
+		wantE      bool
+	}{
+		{"named delegate", func(d string) string { return d }, true, false},
+		{"anyone", func(string) string { return "" }, true, true},
+		{"delegation off", nil, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fx := seedApprovalFactsFixture(t, super, "DELEG-01-04-"+strings.ToUpper(strings.ReplaceAll(c.name, " ", "-")), true)
+			d, e := uuid.NewString(), uuid.NewString()
+			seedMembership(t, super, fx.tenantID, d, "reviewer")
+			seedMembership(t, super, fx.tenantID, e, "reviewer")
+			fx.armInvoice(t, super, app, "deleg-01-04-gate")
+			if c.delegation != nil {
+				var delegate *string
+				if named := c.delegation(d); named != "" {
+					delegate = &named
+				}
+				if _, err := super.Exec(context.Background(),
+					`UPDATE approval_run_steps SET allow_delegation = true, delegate_user_id = $2
+					  WHERE run_id IN (SELECT id FROM approval_runs WHERE invoice_id = $1)`, fx.invID, delegate); err != nil {
+					t.Fatalf("set delegation: %v", err)
+				}
+			}
+			as := func(subject string) context.Context {
+				return auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: fx.tenantID})
+			}
+
+			for _, who := range []struct {
+				label, subject string
+				want           bool
+			}{
+				{"step delegate candidate D", d, c.wantD},
+				{"bystander reviewer E", e, c.wantE},
+			} {
+				r := httptest.NewRequest("GET", "/v1/invoices?awaiting_approval=true&limit=200", nil).WithContext(as(who.subject))
+				rec := httptest.NewRecorder()
+				ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s list status = %d (body=%s)", who.label, rec.Code, rec.Body.String())
+				}
+				var row map[string]json.RawMessage
+				for _, candidate := range listRowsRaw(t, rec) {
+					var id string
+					_ = json.Unmarshal(candidate["id"], &id)
+					if id == fx.invID {
+						row = candidate
+					}
+				}
+				if row == nil {
+					t.Fatalf("%s: the armed invoice is not on the awaiting-approval page", who.label)
+				}
+				listCan, listReason := approveFlagsOf(t, row, who.label+" list row")
+
+				dr := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil).WithContext(as(who.subject))
+				dr.SetPathValue("id", fx.invID)
+				drec := httptest.NewRecorder()
+				GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(drec, dr)
+				if drec.Code != http.StatusOK {
+					t.Fatalf("%s detail status = %d (body=%s)", who.label, drec.Code, drec.Body.String())
+				}
+				detail := decodeApproveBody(t, drec)
+
+				if listCan != strconv.FormatBool(who.want) || detail.CanApprove != who.want || detail.CanReject != who.want {
+					t.Errorf("%s: list can_approve = %s, detail can_approve/can_reject = %v/%v, want all %v", who.label, listCan, detail.CanApprove, detail.CanReject, who.want)
+				}
+				if !who.want {
+					if want := jsonOf(t, reasonNotRoleHolder); listReason != want {
+						t.Errorf("%s: list approve_blocked_reason = %s, want %s", who.label, listReason, want)
+					}
+					if detail.ApproveBlockedReason == nil || *detail.ApproveBlockedReason != reasonNotRoleHolder {
+						t.Errorf("%s: detail approve_blocked_reason = %v, want %q", who.label, detail.ApproveBlockedReason, reasonNotRoleHolder)
+					}
+				}
+			}
+		})
+	}
+}

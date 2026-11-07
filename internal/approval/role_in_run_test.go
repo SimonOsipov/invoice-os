@@ -274,6 +274,9 @@ func TestDeleteRole_RefusalCarriesPoliciesAndInvoicesTogether(t *testing.T) {
 	}
 }
 
+// The staffing sentence restated on purpose: the oracle for roleLastHolderMessage.
+const roleLastHolderSentence = "an open approval run is waiting on this workflow role — keep someone on it who can approve each listed invoice until the run is decided, or edit its invoice to cancel it, first"
+
 func TestRoleInUseMessage_ByCase(t *testing.T) {
 	pol := []PolicyRef{{ID: "p1", Name: "A"}}
 	inv := []InvoiceRef{{ID: "i1", Number: "INV-1"}}
@@ -287,6 +290,7 @@ func TestRoleInUseMessage_ByCase(t *testing.T) {
 		{"both", roleInUse{policies: pol, invoices: inv, invoicesTotal: 1}, roleInUseMessage + "; " + roleInRunMessage},
 		{"empty", roleInUse{}, roleInUseMessage},
 		{"last holder, invoices only", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
+		{"last holder sentence", roleInUse{lastHolder: true, invoices: inv, invoicesTotal: 1}, roleLastHolderSentence},
 		{"last holder, policies set", roleInUse{lastHolder: true, policies: pol, invoices: inv, invoicesTotal: 1}, roleLastHolderMessage},
 		{"last signer, invoices", roleInUse{lastSigner: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},
 		{"last signer beats last holder", roleInUse{lastSigner: true, lastHolder: true, invoices: inv, invoicesTotal: 1}, memberLastSignerMessage},

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -398,5 +399,104 @@ func TestSetRoleMembers_RemovedMemberIsValidationNotWaiting(t *testing.T) {
 	_, err := f.put(removed)
 	if !errors.Is(err, ErrValidation) || errors.Is(err, ErrRoleInUse) {
 		t.Fatalf("SetRoleMembers err = %v, want ErrValidation", err)
+	}
+}
+
+// wantStaffingRefusal saves members through the store and asserts the refusal lists exactly want, with total.
+func wantStaffingRefusal(t *testing.T, f runFixture, members []string, want []InvoiceRef, total int) {
+	t.Helper()
+	_, err := f.store.SetRoleMembers(f.admin, "tax-reviewer", members)
+	var inUse *roleInUse
+	if !errors.Is(err, ErrRoleInUse) || !errors.As(err, &inUse) || !inUse.lastHolder {
+		t.Fatalf("SetRoleMembers err = %v, want a lastHolder *roleInUse", err)
+	}
+	if !slices.Equal(inUse.invoices, want) || inUse.invoicesTotal != total {
+		t.Errorf("invoices = %+v, total = %d, want %+v and %d", inUse.invoices, inUse.invoicesTotal, want, total)
+	}
+}
+
+func TestSetRoleMembers_RefusesWhenTheOnlyMemberCreatedTheInvoice(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-14 creator only")
+	creator := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // another approver reaching A, in no role
+	seedHistory(t, f.super, f.tenantID, f.invoiceID, nil, creator)
+
+	wantStaffingRefusal(t, f.runFixture, []string{creator}, []InvoiceRef{{ID: f.invoiceID, Number: "INV-1"}}, 1)
+	if rows := staffingRows(t, f.super, f.roleID); len(rows) != 0 {
+		t.Errorf("members = %v, want none (a refusal writes nothing)", rows)
+	}
+	if n := auditCount(t, f.super, f.tenantID, "workflow_role.staffed"); n != 0 {
+		t.Errorf("workflow_role.staffed rows = %d, want 0", n)
+	}
+
+	colleague := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	f.wantSaved(t, creator, colleague)
+	if got := userIDs(staffingRows(t, f.super, f.roleID)); !slices.Equal(got, []string{creator, colleague}) {
+		t.Errorf("members = %v, want [%s %s]", got, creator, colleague)
+	}
+}
+
+func TestSetRoleMembers_RefusesWhenNoMemberReachesTheClient(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-14 out of reach")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
+	onlyB := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}})
+	onlyA := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{f.entityID}})
+	admin := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "admin"})
+
+	wantStaffingRefusal(t, f.runFixture, []string{onlyB}, []InvoiceRef{{ID: f.invoiceID, Number: "INV-1"}}, 1)
+	if rows := staffingRows(t, f.super, f.roleID); len(rows) != 0 {
+		t.Errorf("members = %v, want none (a refusal writes nothing)", rows)
+	}
+	f.wantSaved(t, onlyB, onlyA)
+	f.wantSaved(t, admin)
+}
+
+func TestSetRoleMembers_RefusalListsOnlyTheInvoicesNobodyCanApprove(t *testing.T) {
+	f := newRunFixture(t, "APSC-14 list only unsigned")
+	seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
+	i1, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("tax-reviewer"))
+	seedOpenRun(t, f.super, f.tenantID, entB, "INV-2", f.versionID, pendingOn("tax-reviewer"))
+	i3, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-3", f.versionID, pendingOn("tax-reviewer"))
+	onlyB := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}})
+
+	wantStaffingRefusal(t, f, []string{onlyB}, []InvoiceRef{{ID: i1, Number: "INV-1"}, {ID: i3, Number: "INV-3"}}, 2)
+}
+
+func TestSetRoleMembers_PerInvoiceRefusalCapsAtTwentyAndCountsAll(t *testing.T) {
+	f := newRunFixture(t, "APSC-14 cap per invoice")
+	seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
+	for i := range 3 { // oldest, so a cap applied before the filter would spend slots on them
+		seedOpenRun(t, f.super, f.tenantID, entB, fmt.Sprintf("INV-B%02d", i), f.versionID, pendingOn("tax-reviewer"))
+	}
+	var want []InvoiceRef
+	for i := range 25 {
+		n := fmt.Sprintf("INV-A%02d", i)
+		id, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, n, f.versionID, pendingOn("tax-reviewer"))
+		if i < 20 {
+			want = append(want, InvoiceRef{ID: id, Number: n})
+		}
+	}
+	onlyB := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}})
+
+	wantStaffingRefusal(t, f, []string{onlyB}, want, 25)
+}
+
+func TestSetRoleMembers_SignerReadErrorWritesNothing(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-14 read error")
+	reviewer := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	store := NewStore(failingAppPool(t, signMarker), stubFingerprinter, nil)
+
+	_, err := store.SetRoleMembers(f.admin, "tax-reviewer", []string{reviewer})
+
+	if err == nil || errors.Is(err, ErrRoleInUse) {
+		t.Fatalf("SetRoleMembers err = %v, want a read error that is not ErrRoleInUse", err)
+	}
+	if rows := staffingRows(t, f.super, f.roleID); len(rows) != 0 {
+		t.Errorf("members = %v, want none (a failed signer read stores nothing)", rows)
+	}
+	if n := auditCount(t, f.super, f.tenantID, "workflow_role.staffed"); n != 0 {
+		t.Errorf("workflow_role.staffed rows = %d, want 0", n)
 	}
 }

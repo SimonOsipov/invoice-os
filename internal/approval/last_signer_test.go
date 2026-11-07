@@ -18,7 +18,7 @@ import (
 )
 
 // The sentence restated on purpose: the oracle for the shipped constant.
-const memberLastSignerSentence = "this change would leave a workflow role an open approval run is waiting on with no active admin or reviewer — add another admin or reviewer to the role, or decide the run or edit its invoice to cancel it, first"
+const memberLastSignerSentence = "this change would leave an invoice an open approval run is waiting on with nobody in its workflow role who can approve it — add someone to the role who can approve it, or decide the run or edit its invoice to cancel it, first"
 
 func (f runFixture) staffedRoleKeys(t *testing.T, subject string) []string {
 	t.Helper()
@@ -362,5 +362,65 @@ func TestWriteRoleInUse_MemberRefusalBody(t *testing.T) {
 	slices.Sort(keys)
 	if got := strings.Join(keys, ","); got != "id,invoice_number,workflow_role_key,workflow_role_title" {
 		t.Errorf("item keys = %s, want id,invoice_number,workflow_role_key,workflow_role_title", got)
+	}
+}
+
+func TestRefuseUnsignedWaitingRoles_JudgesEachInvoice(t *testing.T) {
+	f := newRunFixture(t, "APSC-14 judges each invoice")
+	roleX := seedWorkflowRole(t, f.super, f.tenantID, "x", "Role X")
+	roleY := seedWorkflowRole(t, f.super, f.tenantID, "y", "Role Y")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}, roleID: roleX})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: roleY})
+	onX, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-X", f.versionID, pendingOn("x"))
+	seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Y", f.versionID, pendingOn("y"))
+
+	inUse := f.wantRefusedUnsigned(t, "x", "y")
+
+	want := []InvoiceRef{{ID: onX, Number: "INV-X", RoleKey: "x", RoleTitle: "Role X"}}
+	if !slices.Equal(inUse.invoices, want) || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want %+v and 1 (role y has a signer for its invoice)", inUse.invoices, inUse.invoicesTotal, want)
+	}
+	f.wantPassedUnsigned(t, "y")
+}
+
+func TestRefuseUnsignedWaitingRoles_CreatorOnlyRefuses(t *testing.T) {
+	f := newLastHolderFixture(t, "APSC-14 creator only refuses")
+	creator := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	other := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"})
+	seedHistory(t, f.super, f.tenantID, f.invoiceID, nil, creator)
+
+	inUse := f.wantRefusedUnsigned(t, "tax-reviewer")
+	want := InvoiceRef{ID: f.invoiceID, Number: "INV-1", RoleKey: "tax-reviewer", RoleTitle: "Tax Reviewer"}
+	if len(inUse.invoices) != 1 || inUse.invoices[0] != want || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want [%+v] and 1", inUse.invoices, inUse.invoicesTotal, want)
+	}
+
+	setMembershipStatus(t, f.super, f.tenantID, other, "suspended") // no other approver reaches A: the creator self-approves
+	f.wantPassedUnsigned(t, "tax-reviewer")
+}
+
+func TestRefuseUnsignedWaitingRoles_CapsAtTwentyAcrossRolesAndSumsTheTotal(t *testing.T) {
+	f := newRunFixture(t, "APSC-14 cap across roles")
+	roleX := seedWorkflowRole(t, f.super, f.tenantID, "x", "Role X")
+	roleY := seedWorkflowRole(t, f.super, f.tenantID, "y", "Role Y")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}, roleID: roleX})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}, roleID: roleY})
+	xs := f.seedRunsOn(t, "x", "X", 15)
+	for i := range 2 { // Y's invoices on B have a signer: not listed, not counted
+		seedOpenRun(t, f.super, f.tenantID, entB, fmt.Sprintf("YB-%02d", i), f.versionID, pendingOn("y"))
+	}
+	ys := f.seedRunsOn(t, "y", "Y", 10)
+
+	inUse := f.wantRefusedUnsigned(t, "x", "y")
+
+	var got []string
+	for _, ref := range inUse.invoices {
+		got = append(got, ref.ID)
+	}
+	want := append(slices.Clone(xs), ys[:5]...)
+	if !slices.Equal(got, want) || inUse.invoicesTotal != 25 {
+		t.Errorf("listed ids = %v, total = %d, want X's 15 then Y's 5 oldest (%v) and 25", got, inUse.invoicesTotal, want)
 	}
 }

@@ -605,3 +605,236 @@ func TestEvaluate_SkipTwiceCountsOnce(t *testing.T) {
 		t.Errorf("skip name should print once; out=%q", out)
 	}
 }
+
+// TestEvaluatePrintsPackageLevelOutputWhenNoTestRan: a package that fails
+// before any test runs must show go test's own output, not only the
+// zero-results verdict.
+func TestEvaluatePrintsPackageLevelOutputWhenNoTestRan(t *testing.T) {
+	fixture := `{"Action":"start","Package":"x"}
+{"Action":"output","Package":"x","Output":"rls suite setup failed: dial tcp: connection refused\n"}
+{"Action":"output","Package":"x","Output":"FAIL\tx\t0.4s\n"}
+{"Action":"fail","Package":"x","Elapsed":0.49}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code == 0 {
+		t.Fatalf("evaluate() exit code = 0, want non-zero when no test ran; buf=%q", buf.String())
+	}
+	if !mentionsZeroResults(buf.String()) {
+		t.Errorf("evaluate() output does not mention zero test-level results; buf=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "rls suite setup failed: dial tcp: connection refused") {
+		t.Errorf("package-level output missing from render; buf=%q", buf.String())
+	}
+}
+
+// Streams below are go test -json output (go1.26) from scratch modules.
+func TestEvaluatePackageLevelOutputOnlyForFailedPackages(t *testing.T) {
+	cases := []struct {
+		name, stream string
+		want, absent []string
+		once         string
+	}{
+		{"passing package prints no package output",
+			`{"Action":"start","Package":"ok"}
+{"Action":"run","Package":"ok","Test":"TestA"}
+{"Action":"output","Package":"ok","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"output","Package":"ok","Output":"PASS\n"}
+{"Action":"output","Package":"ok","Output":"ok  \tok\t0.380s\n"}
+{"Action":"pass","Package":"ok"}
+`, []string{"PASS  ok.TestA"}, []string{"ok  \tok", "PASS\n"}, ""},
+		{"no-test-files skip prints nothing",
+			`{"Action":"start","Package":"n"}
+{"Action":"output","Package":"n","Output":"?   \tn\t[no test files]\n"}
+{"Action":"skip","Package":"n"}
+`, []string{"zero"}, []string{"no test files"}, ""},
+		{"only the failing package's output is printed",
+			`{"Action":"output","Package":"good","Output":"GOOD NOISE\n"}
+{"Action":"output","Package":"bad","Output":"BAD REASON\n"}
+{"Action":"pass","Package":"good","Test":"TestG"}
+{"Action":"pass","Package":"good"}
+{"Action":"fail","Package":"bad"}
+`, []string{"BAD REASON"}, []string{"GOOD NOISE"}, ""},
+		{"init panic output printed in order, interleaved with a test event",
+			`{"Action":"output","Package":"p","Output":"panic: INIT PANIC\n"}
+{"Action":"output","Package":"p","Output":"\n"}
+{"Action":"pass","Package":"q","Test":"TestQ"}
+{"Action":"output","Package":"p","Output":"goroutine 1 [running]:\n"}
+{"Action":"output","Package":"p","Output":"FAIL\tp\t0.445s\n"}
+{"Action":"fail","Package":"p","Elapsed":0.446}
+`, []string{"panic: INIT PANIC\n\ngoroutine 1 [running]:\nFAIL\tp\t0.445s\n"}, nil, ""},
+		{"TestMain stderr exit(1)",
+			`{"Action":"output","Package":"scratch/tmain","Output":"SETUP BOOM stderr\n"}
+{"Action":"output","Package":"scratch/tmain","Output":"FAIL\tscratch/tmain\t0.443s\n"}
+{"Action":"fail","Package":"scratch/tmain","Elapsed":0.445}
+`, []string{"SETUP BOOM stderr"}, nil, ""},
+		{"output not printed twice after a retried package",
+			`{"Action":"output","Package":"r","Output":"ATTEMPT1\n"}
+{"Action":"fail","Package":"r"}
+{"Action":"output","Package":"r","Output":"ok  \tr\n"}
+{"Action":"pass","Package":"r"}
+`, []string{"ATTEMPT1"}, []string{"ok  \tr"}, "ATTEMPT1"},
+		{"package output printed alongside build output of a failed build",
+			`{"Action":"pass","Package":"ok","Test":"TestOK"}
+{"ImportPath":"p [p.test]","Action":"build-output","Output":"BUILDERR\n"}
+{"Action":"output","Package":"p","Output":"FAIL\tp [build failed]\n"}
+{"Action":"fail","Package":"p","FailedBuild":"p [p.test]"}
+`, []string{"BUILDERR\nFAIL\tp [build failed]"}, nil, "BUILDERR"},
+		{"output of a passed package is dropped before a later failure",
+			`{"Action":"output","Package":"p","Output":"STALE\n"}
+{"Action":"pass","Package":"p"}
+{"Action":"fail","Package":"p"}
+`, []string{"zero"}, []string{"STALE"}, ""},
+		{"output cut before any verdict is flushed in arrival order",
+			`{"Action":"output","Package":"p","Output":"FIRST\n"}
+{"ImportPath":"q [q.test]","Action":"build-output","Output":"SECOND\n"}
+{"Action":"output","Package":"p","Output":"THIRD\n"}
+`, []string{"FIRST\nTHIRD\nSECOND\nrlsgate: 0 passed"}, nil, ""},
+		{"cut output is not flushed when tests ran",
+			`{"Action":"output","Package":"p","Output":"CUTNOISE\n"}
+{"Action":"pass","Package":"q","Test":"TestQ"}
+`, []string{"1 passed"}, []string{"CUTNOISE"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			evaluate(strings.NewReader(c.stream), &buf)
+			got := buf.String()
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in %q", w, got)
+				}
+			}
+			for _, a := range c.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("unexpected %q in %q", a, got)
+				}
+			}
+			if c.once != "" && strings.Count(got, c.once) != 1 {
+				t.Errorf("%q printed %d times, want 1: %q", c.once, strings.Count(got, c.once), got)
+			}
+		})
+	}
+}
+
+// Go >=1.24 reports a compile error as build-output events keyed by ImportPath
+// (no Package, no Test), then a package fail carrying FailedBuild.
+func TestEvaluatePrintsCompileErrorFromBuildOutputEvents(t *testing.T) {
+	stream := `{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-output","Output":"# scratch/cerr [scratch/cerr.test]\n"}
+{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-output","Output":"./x.go:2:23: cannot use \"s\" (untyped string constant) as int value in return statement\n"}
+{"ImportPath":"scratch/cerr [scratch/cerr.test]","Action":"build-fail"}
+{"Action":"start","Package":"scratch/cerr"}
+{"Action":"output","Package":"scratch/cerr","Output":"FAIL\tscratch/cerr [build failed]\n"}
+{"Action":"fail","Package":"scratch/cerr","Elapsed":0,"FailedBuild":"scratch/cerr [scratch/cerr.test]"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(stream), &buf); code == 0 {
+		t.Fatalf("exit 0 on build failure; %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "cannot use") {
+		t.Errorf("compile error text missing from render; %q", buf.String())
+	}
+}
+
+// Real go1.26 streams: FailedBuild can name a dependency, not the package
+// under test, and vet failures arrive as build-output with a "[pkg]" header.
+func TestEvaluateBuildOutputReplayedOncePerBrokenBuild(t *testing.T) {
+	// A passing test keeps the EOF flush from masking the replay; without
+	// one the build failure must exit non-zero.
+	const pass = `{"Action":"pass","Package":"ok","Test":"TestOK"}` + "\n"
+	dep := `{"ImportPath":"dep/sub","Action":"build-output","Output":"# dep/sub\n"}
+{"ImportPath":"dep/sub","Action":"build-output","Output":"sub/s.go:2:23: DEPERR\n"}
+{"ImportPath":"dep/sub","Action":"build-fail"}
+{"Action":"output","Package":"dep","Output":"FAIL\tdep [build failed]\n"}
+{"Action":"fail","Package":"dep","FailedBuild":"dep/sub"}
+{"Action":"output","Package":"dep/sub","Output":"FAIL\tdep/sub [build failed]\n"}
+{"Action":"fail","Package":"dep/sub","FailedBuild":"dep/sub"}
+`
+	vet := `{"ImportPath":"vet [vet.test]","Action":"build-output","Output":"# vet\n"}
+{"ImportPath":"vet [vet.test]","Action":"build-output","Output":"./x_test.go:3:39: VETERR\n"}
+{"ImportPath":"vet [vet.test]","Action":"build-fail"}
+{"Action":"output","Package":"vet","Output":"FAIL\tvet [build failed]\n"}
+{"Action":"fail","Package":"vet","FailedBuild":"vet [vet.test]"}
+`
+	own := `{"ImportPath":"p [p.test]","Action":"build-output","Output":"OWNERR\n"}
+{"Action":"fail","Package":"p","FailedBuild":"p [p.test]"}
+`
+	xtest := `{"ImportPath":"xt_test [xt.test]","Action":"build-output","Output":"XTESTERR\n"}
+{"Action":"fail","Package":"xt","FailedBuild":"xt_test [xt.test]"}
+`
+	shared := `{"ImportPath":"dep/sub","Action":"build-output","Output":"SHAREDERR\n"}
+{"Action":"fail","Package":"a","FailedBuild":"dep/sub"}
+{"Action":"fail","Package":"b","FailedBuild":"dep/sub"}
+`
+	for _, c := range []struct{ name, stream, want string }{
+		{"dependency compile error", dep, "DEPERR"},
+		{"vet failure", vet, "VETERR"},
+		{"FailedBuild equals Package", own, "OWNERR"},
+		{"external _test package compile error", xtest, "XTESTERR"},
+		{"two packages share a broken dependency", shared, "SHAREDERR"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if code := evaluate(strings.NewReader(c.stream), &buf); code == 0 {
+				t.Fatalf("exit 0 on build failure; %q", buf.String())
+			}
+			buf.Reset()
+			evaluate(strings.NewReader(pass+c.stream), &buf)
+			if n := strings.Count(buf.String(), c.want); n != 1 {
+				t.Errorf("%q printed %d times, want 1; %q", c.want, n, buf.String())
+			}
+		})
+	}
+}
+
+// A package that passes prints no build output, even if an unrelated build failed.
+func TestEvaluateBuildOutputOfOtherPackageNotPrintedForPassingPackage(t *testing.T) {
+	stream := `{"ImportPath":"other [other.test]","Action":"build-output","Output":"OTHERERR\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"pass","Package":"ok"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(stream), &buf); code != 0 {
+		t.Fatalf("exit %d, want 0; %q", code, buf.String())
+	}
+	if strings.Contains(buf.String(), "OTHERERR") {
+		t.Errorf("unrelated build output printed: %q", buf.String())
+	}
+}
+
+// Test variants "dep [a.test]" and "dep [b.test]" and dep's own package output
+// are separate buckets: a's failure prints only a's build output.
+func TestEvaluateBuildOutputVariantsDoNotShareBucket(t *testing.T) {
+	stream := `{"ImportPath":"dep [a.test]","Action":"build-output","Output":"ADEPERR\n"}
+{"ImportPath":"dep [b.test]","Action":"build-output","Output":"BDEPERR\n"}
+{"Action":"output","Package":"dep","Output":"DEPTESTMAIN\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"fail","Package":"a","FailedBuild":"dep [a.test]"}
+`
+	var buf bytes.Buffer
+	evaluate(strings.NewReader(stream), &buf)
+	got := buf.String()
+	if !strings.Contains(got, "ADEPERR") {
+		t.Errorf("a's build output missing: %q", got)
+	}
+	for _, a := range []string{"BDEPERR", "DEPTESTMAIN"} {
+		if strings.Contains(got, a) {
+			t.Errorf("unrelated %q printed: %q", a, got)
+		}
+	}
+}
+
+// An ordinary package fail has no FailedBuild and must not replay a "" bucket.
+func TestEvaluateFailWithoutFailedBuildIgnoresEmptyKeyBucket(t *testing.T) {
+	stream := `{"ImportPath":"","Action":"build-output","Output":"EMPTYKEY\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"fail","Package":"p"}
+`
+	var buf bytes.Buffer
+	evaluate(strings.NewReader(stream), &buf)
+	if strings.Contains(buf.String(), "EMPTYKEY") {
+		t.Errorf("empty-key bucket replayed: %q", buf.String())
+	}
+}

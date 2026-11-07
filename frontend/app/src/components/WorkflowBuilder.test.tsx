@@ -753,6 +753,21 @@ describe('DELEG-01-05: the picker offers active approvers by member id', () => {
     expect(Array.from(picker.options).find((o) => o.value === 'm4')?.textContent).toBe('Halima Yusuf')
   })
 
+  it('the compact card in a condition lane carries the same mark under its sub-line', () => {
+    const inLane: Policy = {
+      ...policyWith('fin_mgr'),
+      nodes: [{ id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true, delegateTo: 'm4' },
+      ], else: [] }],
+    }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, members: ROSTER })} policy={inLane} />)
+
+    const card = screen.getByTestId('step-delegate-ineligible')
+    expect(card.textContent).toBe('Halima Yusuf can no longer be a delegate on Engagement Manager. Pick another delegate or switch delegation off.')
+    expect((card.previousElementSibling as HTMLElement).textContent).toContain('within 24h')
+    expect(card.style.whiteSpace).toBe('')
+  })
+
   it('an eligible delegate and "anyone" show no mark', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, members: ROSTER })} policy={delegating('m2')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))

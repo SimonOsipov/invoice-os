@@ -383,7 +383,7 @@ const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'work
 const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
 const ORDER_PATH = '/api/invoice/v1/approval-policies/order' // the PUT route of ReorderPoliciesHandler
 
-// Walks the tree, not just the roots: the ten-key claim has to hold at depth, which is
+// Walks the tree, not just the roots: the Step key set has to hold at depth, which is
 // exactly what Step's MarshalJSON re-entering itself is for.
 function expectStepShape(step: unknown, label: string): Record<string, unknown> {
   const s = step as Record<string, unknown>
@@ -614,7 +614,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     })
     expect(res.status, 'the get should return 200').toBe(200)
 
-    // expectPolicyShape walks every step at every depth, so the ten-key claim is made on
+    // expectPolicyShape walks every step at every depth, so the Step key claim is made on
     // the nested approval too, not only the root.
     const policy = expectPolicyShape(res.body, 'fetched policy')
     const steps = policy.steps as Array<Record<string, unknown>>

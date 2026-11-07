@@ -314,7 +314,7 @@ func TestStoreRowFacts_DelegateOfPendingIsSet(t *testing.T) {
 	seedMembership(t, super, fx.tenantID, other, "reviewer")
 	namedOther := arm("deleg-named-other", true, &other)
 
-	_, gate, err := store.RowFacts(fx.ctx, []string{anyone, named, none})
+	_, gate, err := store.RowFacts(fx.ctx, []string{anyone, named, none, namedOther})
 	if err != nil {
 		t.Fatalf("RowFacts: %v", err)
 	}

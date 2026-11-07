@@ -23,10 +23,12 @@ import (
 // rlsgate consumes. encoding/json ignores unknown fields, so the full
 // event set (Time, Elapsed, …) decodes leniently into this struct.
 type event struct {
-	Action  string
-	Package string
-	Test    string
-	Output  string
+	Action      string
+	Package     string
+	Test        string
+	Output      string
+	ImportPath  string
+	FailedBuild string
 }
 
 // summarizer accumulates test-level results while streaming the event log
@@ -65,11 +67,18 @@ func (s *summarizer) consume(line string) {
 		switch e.Action {
 		case "output":
 			s.pkgPending[e.Package] = append(s.pkgPending[e.Package], e.Output)
+		case "build-output":
+			// Compile errors carry ImportPath "pkg [pkg.test]", no Package.
+			k, _, _ := strings.Cut(e.ImportPath, " ")
+			s.pkgPending[k] = append(s.pkgPending[k], e.Output)
 		case "fail":
-			for _, o := range s.pkgPending[e.Package] {
-				io.WriteString(s.out, o)
+			built, _, _ := strings.Cut(e.FailedBuild, " ")
+			for _, k := range []string{built, e.Package} {
+				for _, o := range s.pkgPending[k] {
+					io.WriteString(s.out, o)
+				}
+				delete(s.pkgPending, k)
 			}
-			delete(s.pkgPending, e.Package)
 		}
 		return
 	}

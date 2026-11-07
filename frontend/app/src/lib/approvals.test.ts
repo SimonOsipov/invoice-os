@@ -97,7 +97,7 @@ const OPEN_APPROVAL: InvoiceApproval = {
   run_state: 'open',
   pending_ord: 1,
   pending_role_title: 'Reviewer',
-  pending_holder_warn: false,
+  pending_holder_warn: false, pending_holder_reason: null,
   due_at: null,
   overdue: false,
 }
@@ -419,6 +419,15 @@ describe('approvalRowView (A02-15, A02-16, A02-18)', () => {
 
     expect(isApprovableRow(row)).toBe(true)
     expect(approvalRowView(row).pendingHolderWarn).toBe(true)
+  })
+
+  it('approvalRowView: pendingHolderLabel follows the reason', () => {
+    const label = (warn: boolean, reason: 'unstaffed' | 'nobody_can_approve' | null) =>
+      approvalRowView({ ...baseRow, approval: { ...OPEN_APPROVAL, pending_holder_warn: warn, pending_holder_reason: reason } }).pendingHolderLabel
+    expect(label(true, 'nobody_can_approve')).toBe('Nobody here can approve this invoice')
+    expect(label(true, 'unstaffed')).toBe('Unstaffed seat')
+    expect(label(true, null)).toBe('Unstaffed seat')
+    expect(label(false, 'nobody_can_approve')).toBeNull()
   })
 })
 
@@ -1287,11 +1296,20 @@ describe("approvalStateView: the rail card's pure core", () => {
 
   it('holder is a passthrough, never re-derived through roles.ts (D-34)', () => {
     // withExtra's "+N" form (internal/approval/read_model.go) survives byte for byte.
-    const view = approvalStateView(stateRun([baseStep({ holder: { text: 'Ada Obi +2', warn: false } })]))
+    const view = approvalStateView(stateRun([baseStep({ holder: { text: 'Ada Obi +2', warn: false, reason: null } })]))
 
     expect(view.pending?.holderText).toBe('Ada Obi +2')
     expect(view.pending?.holderWarn).toBe(false)
-    expect(approvalStateView(stateRun([baseStep({ holder: { text: 'Nobody assigned', warn: true } })])).pending?.holderWarn).toBe(true)
+    expect(approvalStateView(stateRun([baseStep({ holder: { text: 'Nobody assigned', warn: true, reason: 'unstaffed' } })])).pending?.holderWarn).toBe(true)
+  })
+
+  it('approvalStateView: holderWarnLabel follows holder.reason', () => {
+    const label = (warn: boolean, reason: 'unstaffed' | 'nobody_can_approve' | null) =>
+      approvalStateView(stateRun([baseStep({ holder: { text: 'Rita Eze', warn, reason } })])).pending?.holderWarnLabel
+    expect(label(true, 'nobody_can_approve')).toBe('Nobody here can approve this invoice')
+    expect(label(true, 'unstaffed')).toBe('Unstaffed seat')
+    expect(label(true, null)).toBe('Unstaffed seat')
+    expect(label(false, 'nobody_can_approve')).toBeNull()
   })
 
   it('voided is exactly run.state === "cancelled"', () => {
@@ -1351,7 +1369,7 @@ describe('approvalStateView: edges the retired trail projection covered (AUDIT-0
     // `?? null` keeps '' as ''; the card's `holderText != null` guard then renders an empty
     // holder-name line instead of omitting it. Conflating the two is a one-character change
     // (`??` -> `||`). Retired twin of the same name.
-    expect(approvalStateView(stateRun([baseStep({ holder: { text: '', warn: true } })])).pending?.holderText).toBe('')
+    expect(approvalStateView(stateRun([baseStep({ holder: { text: '', warn: true, reason: 'unstaffed' } })])).pending?.holderText).toBe('')
     expect(approvalStateView(stateRun([baseStep({ holder: null })])).pending?.holderText).toBeNull()
   })
 })

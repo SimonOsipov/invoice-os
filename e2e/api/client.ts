@@ -792,7 +792,7 @@ export interface InvoiceApproval {
   pending_ord: number | null
   pending_role_title: string | null
   pending_holder_warn: boolean
-  pending_holder_reason?: 'unstaffed' | 'nobody_can_approve' | null
+  pending_holder_reason: 'unstaffed' | 'nobody_can_approve' | null
   due_at: string | null
   overdue: boolean
 }
@@ -1718,7 +1718,7 @@ export function deleteApprovalPolicy(token: string, id: string): Promise<Approva
 export interface ApprovalResolved {
   text: string
   warn: boolean
-  reason?: 'unstaffed' | 'nobody_can_approve' | null
+  reason: 'unstaffed' | 'nobody_can_approve' | null
 }
 
 export interface ApprovalRunStep {

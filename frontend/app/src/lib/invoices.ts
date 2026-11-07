@@ -268,7 +268,7 @@ export interface InvoiceRecord {
 }
 
 // One list row's approval standing, mirroring approval.RowFacts (gate.go) key for key --
-// its six WIRE keys. RowFacts also carries PendingRoleKey, tagged json:"-" because it is
+// its WIRE keys (TestListItem_ApprovalObjectKeySetIsExact pins the set). RowFacts also carries PendingRoleKey, tagged json:"-" because it is
 // the list gate's input and not wire copy (APPR-12-09), so it has no member here.
 // `due_at` is the wire's RFC3339 string, not a Date.
 export interface InvoiceApproval {
@@ -276,7 +276,7 @@ export interface InvoiceApproval {
   pending_ord: number | null
   pending_role_title: string | null
   pending_holder_warn: boolean
-  pending_holder_reason?: 'unstaffed' | 'nobody_can_approve' | null
+  pending_holder_reason: 'unstaffed' | 'nobody_can_approve' | null
   due_at: string | null
   overdue: boolean
 }
@@ -672,6 +672,7 @@ export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
           pending_ord: wire.pending_ord ?? null,
           pending_role_title: wire.pending_role_title ?? null,
           pending_holder_warn: wire.pending_holder_warn === true,
+          pending_holder_reason: typeof wire.pending_holder_reason === 'string' ? wire.pending_holder_reason : null,
           due_at: wire.due_at ?? null,
           overdue: wire.overdue === true,
         }

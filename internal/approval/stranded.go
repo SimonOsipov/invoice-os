@@ -40,58 +40,77 @@ func requireReadOnly(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-// strandedSQL counts holders instead of testing for one: TestAxis2_ZeroWorkflowRoleMembersExistsPredicatesRemain.
-// The second JOIN LATERAL is inner on purpose: a run with no pending approval step is not stranded.
-const strandedSQL = `
-SELECT t.id, t.name, i.id, i.invoice_number,
-       COALESCE(d.key, ''), COALESCE(d.title, ''),
-       CASE WHEN d.role_id IS NULL OR d.role_deleted_at IS NOT NULL THEN 'deleted' ELSE 'no holder' END,
-       r.opened_at,
-       CASE WHEN d.ord = cur.ord THEN 'now' ELSE 'later' END
+// strandedStepsSQL lists the pending approval steps of open runs on validated invoices, run by run, lowest ord first.
+// Joins stay inner: a run with no pending approval step is not stranded. The title is read even for a deleted role.
+const strandedStepsSQL = `
+SELECT r.id, t.id, t.name, i.id, i.invoice_number, s.ord, s.workflow_role_key,
+       COALESCE(wr.title, ''), r.opened_at,
+       min(s.ord) OVER (PARTITION BY r.id)
   FROM approval_runs r
   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
   JOIN tenants t ON t.id = r.tenant_id
-  JOIN LATERAL (
-        SELECT min(c.ord) AS ord
-          FROM approval_run_steps c
-         WHERE c.tenant_id = r.tenant_id AND c.run_id = r.id
-           AND c.kind = 'approval' AND c.state = 'pending') cur ON true
-  JOIN LATERAL (
-        SELECT s.ord, s.workflow_role_key AS key, wr.id AS role_id, wr.title, wr.deleted_at AS role_deleted_at
-          FROM approval_run_steps s
-          LEFT JOIN workflow_roles wr ON wr.tenant_id = s.tenant_id AND wr.key = s.workflow_role_key
-         WHERE s.tenant_id = r.tenant_id AND s.run_id = r.id
-           AND s.kind = 'approval' AND s.state = 'pending'
-           AND (wr.id IS NULL OR wr.deleted_at IS NOT NULL
-                OR (SELECT count(*)
-                      FROM workflow_role_members wrm
-                      JOIN memberships m ON m.tenant_id = wrm.tenant_id AND m.user_id = wrm.user_id
-                     WHERE wrm.tenant_id = wr.tenant_id AND wrm.workflow_role_id = wr.id
-                       AND m.status = 'active' AND m.role IN ('admin', 'reviewer')) = 0)
-         ORDER BY s.ord LIMIT 1) d ON true
+  JOIN approval_run_steps s ON s.tenant_id = r.tenant_id AND s.run_id = r.id
+       AND s.kind = 'approval' AND s.state = 'pending'
+  LEFT JOIN workflow_roles wr ON wr.tenant_id = s.tenant_id AND wr.key = s.workflow_role_key
  WHERE r.state = 'open' AND i.status = 'validated'
- ORDER BY r.opened_at, i.id`
+ ORDER BY r.opened_at, i.id, r.id, s.ord`
+
+type strandedStep struct {
+	runID    string
+	run      StrandedRun
+	ord, cur int
+}
 
 // StrandedRunsTx lists the current tenant's stranded runs; tx must be READ ONLY and tenant-scoped.
+// A run is stranded on its lowest-ord pending step that unsignableReasonsTx gives a reason.
 func StrandedRunsTx(ctx context.Context, tx pgx.Tx) ([]StrandedRun, error) {
 	if err := requireReadOnly(ctx, tx); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, strandedSQL)
+	rows, err := tx.Query(ctx, strandedStepsSQL)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []StrandedRun
+	var steps []strandedStep
+	var probes []CreatorProbe
 	for rows.Next() {
-		var s StrandedRun
-		if err := rows.Scan(&s.WorkspaceID, &s.Workspace, &s.InvoiceID, &s.InvoiceNumber,
-			&s.RoleKey, &s.RoleTitle, &s.Reason, &s.ArmedAt, &s.Blocks); err != nil {
+		var s strandedStep
+		var key *string
+		if err := rows.Scan(&s.runID, &s.run.WorkspaceID, &s.run.Workspace, &s.run.InvoiceID, &s.run.InvoiceNumber,
+			&s.ord, &key, &s.run.RoleTitle, &s.run.ArmedAt, &s.cur); err != nil {
 			return nil, err
 		}
-		out = append(out, s)
+		if key != nil {
+			s.run.RoleKey = *key
+		}
+		steps = append(steps, s)
+		probes = append(probes, CreatorProbe{InvoiceID: s.run.InvoiceID, RoleKey: key})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	reasons, err := unsignableReasonsTx(ctx, tx, probes)
+	if err != nil {
+		return nil, err
+	}
+	var out []StrandedRun
+	done := map[string]bool{}
+	for i, s := range steps {
+		if reasons[i] == "" || done[s.runID] {
+			continue
+		}
+		done[s.runID] = true
+		s.run.Reason = reasons[i]
+		s.run.Blocks = BlocksLater
+		if s.ord == s.cur {
+			s.run.Blocks = BlocksNow
+		}
+		out = append(out, s.run)
+	}
+	return out, nil
 }
 
 // ListStranded reads every given tenant in its own READ ONLY transaction, in the given order.

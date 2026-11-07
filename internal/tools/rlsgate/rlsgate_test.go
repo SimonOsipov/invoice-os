@@ -715,3 +715,60 @@ func TestEvaluatePrintsCompileErrorFromBuildOutputEvents(t *testing.T) {
 		t.Errorf("compile error text missing from render; %q", buf.String())
 	}
 }
+
+// Real go1.26 streams: FailedBuild can name a dependency, not the package
+// under test, and vet failures arrive as build-output with a "[pkg]" header.
+func TestEvaluateBuildOutputReplayedOncePerBrokenBuild(t *testing.T) {
+	dep := `{"ImportPath":"dep/sub","Action":"build-output","Output":"# dep/sub\n"}
+{"ImportPath":"dep/sub","Action":"build-output","Output":"sub/s.go:2:23: DEPERR\n"}
+{"ImportPath":"dep/sub","Action":"build-fail"}
+{"Action":"output","Package":"dep","Output":"FAIL\tdep [build failed]\n"}
+{"Action":"fail","Package":"dep","FailedBuild":"dep/sub"}
+{"Action":"output","Package":"dep/sub","Output":"FAIL\tdep/sub [build failed]\n"}
+{"Action":"fail","Package":"dep/sub","FailedBuild":"dep/sub"}
+`
+	vet := `{"ImportPath":"vet [vet.test]","Action":"build-output","Output":"# vet\n"}
+{"ImportPath":"vet [vet.test]","Action":"build-output","Output":"./x_test.go:3:39: VETERR\n"}
+{"ImportPath":"vet [vet.test]","Action":"build-fail"}
+{"Action":"output","Package":"vet","Output":"FAIL\tvet [build failed]\n"}
+{"Action":"fail","Package":"vet","FailedBuild":"vet [vet.test]"}
+`
+	own := `{"ImportPath":"p [p.test]","Action":"build-output","Output":"OWNERR\n"}
+{"Action":"fail","Package":"p","FailedBuild":"p [p.test]"}
+`
+	shared := `{"ImportPath":"dep/sub","Action":"build-output","Output":"SHAREDERR\n"}
+{"Action":"fail","Package":"a","FailedBuild":"dep/sub"}
+{"Action":"fail","Package":"b","FailedBuild":"dep/sub"}
+`
+	for _, c := range []struct{ name, stream, want string }{
+		{"dependency compile error", dep, "DEPERR"},
+		{"vet failure", vet, "VETERR"},
+		{"FailedBuild equals Package", own, "OWNERR"},
+		{"two packages share a broken dependency", shared, "SHAREDERR"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if code := evaluate(strings.NewReader(c.stream), &buf); code == 0 {
+				t.Fatalf("exit 0 on build failure; %q", buf.String())
+			}
+			if n := strings.Count(buf.String(), c.want); n != 1 {
+				t.Errorf("%q printed %d times, want 1; %q", c.want, n, buf.String())
+			}
+		})
+	}
+}
+
+// A package that passes prints no build output, even if an unrelated build failed.
+func TestEvaluateBuildOutputOfOtherPackageNotPrintedForPassingPackage(t *testing.T) {
+	stream := `{"ImportPath":"other [other.test]","Action":"build-output","Output":"OTHERERR\n"}
+{"Action":"pass","Package":"ok","Test":"TestA"}
+{"Action":"pass","Package":"ok"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(stream), &buf); code != 0 {
+		t.Fatalf("exit %d, want 0; %q", code, buf.String())
+	}
+	if strings.Contains(buf.String(), "OTHERERR") {
+		t.Errorf("unrelated build output printed: %q", buf.String())
+	}
+}

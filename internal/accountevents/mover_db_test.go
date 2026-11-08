@@ -838,3 +838,32 @@ func TestMover_FirstSessionAndFormSignInInOneTickKnowTheFirstPair(t *testing.T) 
 		t.Errorf("messages = %+v, want none", m)
 	}
 }
+
+// A userless first session and a repeated pair must not stop the rest of the batch.
+func TestMover_FirstSessionBatchSkipsAUserlessRowAndKeepsTheFormSignIn(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u, other := e.user(), e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	now := time.Now().UTC().Truncate(time.Second)
+	e.enqueueFirstSession(t, nil, e.email("ghost"), e.tag+"-fs0", uaChromeMac, now.Add(-4*time.Minute))
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs1", uaChromeMac, now.Add(-3*time.Minute))
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs2", uaChromeMac, now.Add(-2*time.Minute))
+	e.enqueueFirstSession(t, other, e.email("o"), e.tag+"-fs3", uaFirefoxWin, now.Add(-90*time.Second))
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-form", uaChromeMac, now)
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.pairs(t, u); n != 1 {
+		t.Errorf("pairs of the repeated first session = %d, want 1", n)
+	}
+	if !e.pairOf(t, other, "Firefox", "Windows") {
+		t.Errorf("the first session after the userless row recorded no pair")
+	}
+	if j := e.jobs(t, u); len(j) != 1 || j[0].IP != e.tag+"-form" {
+		t.Errorf("audit jobs = %+v, want one, for the form sign-in only", j)
+	}
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("outbox = %d, want 0", n)
+	}
+}

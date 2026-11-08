@@ -5,7 +5,6 @@ package db_test
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,8 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -541,7 +538,7 @@ func TestRLS_AccountEventMigrationDownAndUp(t *testing.T) {
 		t.Fatalf("before the Down: auth_hook_reader holds no memberships column grant")
 	}
 
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), append(aeFirstSessionVersions(t), migrationVersion(t, "*_account_events.sql"))...)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), migrationVersion(t, "*_account_event_first_session.sql"), migrationVersion(t, "*_account_events.sql"))
 	if tables, fn := aeObjectsPresent(t); tables != [2]bool{false, false} || fn {
 		t.Errorf("after the Down: tables present = %v, function present = %v, want none", tables, fn)
 	}
@@ -679,16 +676,6 @@ func aeFirstSessionColumn(t *testing.T) (dataType, nullable, def string, ok bool
 		def = *d
 	}
 	return dataType, nullable, def, true
-}
-
-// aeFirstSessionVersions is the first_session migration's version, newest first, so an Up of the table
-// does not drop its column. Empty before the file exists; the first_session tests fail on that.
-func aeFirstSessionVersions(t *testing.T) []int64 {
-	t.Helper()
-	if m, _ := fs.Glob(migrations.FS, "*_account_event_first_session.sql"); len(m) == 0 {
-		return nil
-	}
-	return []int64{migrationVersion(t, "*_account_event_first_session.sql")}
 }
 
 func aeCleanupEmails(t *testing.T, emails ...string) {
@@ -841,12 +828,29 @@ func TestRLS_AccountEventFirstSessionMigrationDownAndUp(t *testing.T) {
 	if !ok || dataType != "boolean" || nullable != "NO" || def != "false" {
 		t.Errorf("after the Up: first_session = %s %s %q (present %v), want boolean NO %q", dataType, nullable, def, ok, "false")
 	}
-	err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_out", uuid.NewString(), nil, "ua", true)
+	for _, ev := range aeEvents {
+		if err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, aeInsertFirstSession, ev, nil, aeAddr(), "ua", false)
+			return err
+		}); err != nil {
+			t.Errorf("after the Up: %s with first_session = false = %v, want it accepted", ev, err)
+		}
+		err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, aeInsertFirstSession, ev, uuid.NewString(), nil, "ua", true)
+			return err
+		})
+		var pgErr *pgconn.PgError
+		switch {
+		case ev == "account.signed_in" && err != nil:
+			t.Errorf("after the Up: first_session on %s = %v, want it accepted", ev, err)
+		case ev != "account.signed_in" && (!errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != aeFirstSessionCheck):
+			t.Errorf("after the Up: first_session on %s = %v, want 23514 on %s", ev, err, aeFirstSessionCheck)
+		}
+	}
+	if err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_in", nil, aeAddr(), "ua", true)
 		return err
-	})
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != aeFirstSessionCheck {
-		t.Errorf("after the Up: first_session on account.signed_out = %v, want 23514 on %s", err, aeFirstSessionCheck)
+	}); err != nil {
+		t.Errorf("after the Up: a first session with an email and no user id = %v, want it accepted", err)
 	}
 }

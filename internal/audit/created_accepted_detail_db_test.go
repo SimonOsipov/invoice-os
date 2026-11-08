@@ -147,7 +147,7 @@ func cdSearch(t *testing.T, f *fixture, ctx context.Context, q string, events ..
 	return csList(t, f, ctx, audit.Filter{Limit: 50, Q: q, Events: events})
 }
 
-// Control: an admin reads the stored payload today.
+// An admin reads the stored payload.
 func TestCreatedAcceptedDetail_AdminReadsTheKeys(t *testing.T) {
 	f := requireFixture(t)
 	w := cdNew(t, f)
@@ -157,7 +157,7 @@ func TestCreatedAcceptedDetail_AdminReadsTheKeys(t *testing.T) {
 	cdAssertPayloads(t, w, "admin", got, []int64{w.prov, w.accepted, w.old}, false)
 }
 
-// Control: the row's actor reads their own keys today.
+// The row's actor reads their own keys.
 func TestCreatedAcceptedDetail_ActorReadsOwnKeys(t *testing.T) {
 	f := requireFixture(t)
 	w := cdNew(t, f)
@@ -172,7 +172,7 @@ func TestCreatedAcceptedDetail_ActorReadsOwnKeys(t *testing.T) {
 	}
 }
 
-// Red: a full-scope member who is not the actor reads the keys today.
+// A full-scope member who is not the actor reads both rows without the keys.
 func TestCreatedAcceptedDetail_OtherFullScopeMemberReadsTheRowWithoutTheKeys(t *testing.T) {
 	f := requireFixture(t)
 	t.Run("firm all-clients member", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestCreatedAcceptedDetail_LimitedMemberReadsNeitherRow(t *testing.T) {
 	}
 }
 
-// Red for N (search reaches the keys today); admin and actor are controls.
+// Search by the IP or device label finds the rows for an admin and the actor, not for N.
 func TestCreatedAcceptedDetail_SearchCannotReachTheKeys(t *testing.T) {
 	f := requireFixture(t)
 	w := cdNew(t, f)
@@ -308,7 +308,7 @@ func TestCreatedAcceptedDetail_CrossTenantReaderSeesNothing(t *testing.T) {
 	}
 }
 
-// Red: admin in Y, but an all-clients preparer in X and not the actor, reads X without the keys.
+// An admin in Y who is an all-clients preparer in X, not the actor, reads X without the keys.
 func TestCreatedAcceptedDetail_AdminElsewhereIsNotAdminHere(t *testing.T) {
 	f := requireFixture(t)
 	super := csSuper(t)
@@ -323,5 +323,49 @@ func TestCreatedAcceptedDetail_AdminElsewhereIsNotAdminHere(t *testing.T) {
 	cdAssertPayloads(t, w, "V in X", got, w.both, true)
 	if n := cdSearch(t, f, vInX, cdIP).Total; n != 0 {
 		t.Errorf("V in X: search for the IP matched %d rows, want 0", n)
+	}
+}
+
+// Pages of one row each: the bound redaction values sit after the cursor values and before the limit.
+func TestCreatedAcceptedDetail_RedactionHoldsOnEveryCursorPage(t *testing.T) {
+	f := requireFixture(t)
+	w := cdNew(t, f)
+	var cur *audit.Cursor
+	seen := map[int64]bool{}
+	for page := 0; page < 20; page++ {
+		got := csList(t, f, w.ctx["N"], audit.Filter{Limit: 1, Cursor: cur})
+		if len(got.Events) != 1 {
+			t.Fatalf("page %d holds %d rows, want 1", page, len(got.Events))
+		}
+		id := cdIDs(got)[0]
+		seen[id] = true
+		if slices.Contains(w.both, id) {
+			cdAssertPayloads(t, w, fmt.Sprintf("N, page %d", page), got, []int64{id}, true)
+		}
+		if got.Page.NextCursor == nil {
+			break
+		}
+		c, err := audit.DecodeCursor(*got.Page.NextCursor)
+		if err != nil {
+			t.Fatalf("decode cursor: %v", err)
+		}
+		cur = &c
+	}
+	for _, id := range w.both {
+		if !seen[id] {
+			t.Errorf("paging never reached row %d", id)
+		}
+	}
+}
+
+// ILIKE matches a fragment in any letter case, so the search arm must hide a fragment of a withheld value too.
+func TestCreatedAcceptedDetail_PartialAndMixedCaseSearchCannotReachTheKeys(t *testing.T) {
+	f := requireFixture(t)
+	w := cdNew(t, f)
+	for _, q := range []string{"203.0.113", "113.7", "chrome on", "MACOS", "Chrome"} {
+		if got := cdSearch(t, f, w.ctx["N"], q); len(got.Events) != 0 || got.Total != 0 {
+			t.Errorf("N, %q: page %v, total %d, want none", q, cdIDs(got), got.Total)
+		}
+		csAssertRows(t, "admin, "+q, cdSearch(t, f, w.ctx["A"], q, cdProvisioned, cdAccepted), w.both)
 	}
 }

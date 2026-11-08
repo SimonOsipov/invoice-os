@@ -174,12 +174,14 @@ const threeInvoices = "Inv,Total,BTIN,Date\nA,1,12345678-0001,\nB,2,,\nC,3,12345
 
 func TestCheck_NeedsNoIdentityAndReturnsNumberFailuresAndCounts(t *testing.T) {
 	r := newRig()
-	res, err := r.c.Check(context.Background(), csvReq(threeInvoices, "buyer_tin", "BTIN"))
+	// A has two rows, so the row count (4) differs from the invoice count (3).
+	const fourRows = "Inv,Total,BTIN,Date\nA,1,12345678-0001,\nB,2,,\nA,1,12345678-0001,\nC,3,12345678-0002,\n"
+	res, err := r.c.Check(context.Background(), csvReq(fourRows, "buyer_tin", "BTIN"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Invoices) != 2 || res.InvoicesTotal != 3 || res.RowsTotal != 3 {
-		t.Fatalf("invoices %d total %d rows %d, want 2 3 3", len(res.Invoices), res.InvoicesTotal, res.RowsTotal)
+	if len(res.Invoices) != 2 || res.InvoicesTotal != 3 || res.RowsTotal != 4 {
+		t.Fatalf("invoices %d total %d rows %d, want 2 3 4", len(res.Invoices), res.InvoicesTotal, res.RowsTotal)
 	}
 	a, b := res.Invoices[0], res.Invoices[1]
 	if a.Number != "A" || len(a.Failures) != 0 {

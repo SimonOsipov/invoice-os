@@ -258,12 +258,15 @@ func TestReadForCheck_NilTextReaderIsAnError(t *testing.T) {
 func TestReadForCheck_ContextEndedDuringTheReadReturnsItsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var order []string
-	a := &pcAI{enabled: false, order: &order}
+	a := &pcAI{enabled: true, order: &order, header: map[string]any{"invoice_number": "INV-9"}}
 	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20, onRun: cancel}, AI: a}
 
 	fields, _, err := ReadForCheck(ctx, r, []byte("%PDF"), "pdf")
 	if !errors.Is(err, context.Canceled) || fields != nil {
 		t.Fatalf("fields = %+v, err = %v; want nil and context.Canceled", fields, err)
+	}
+	if len(a.reqs) != 0 {
+		t.Errorf("AI calls = %d after the context ended, want 0 (no paid call on a spent budget)", len(a.reqs))
 	}
 }
 

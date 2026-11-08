@@ -170,6 +170,17 @@ func TestSuggestCheckMapping_OffSuggesterAnswersNone(t *testing.T) {
 	}
 }
 
+func TestSuggestCheckMapping_AFileWithNoHeaderAnswersNoneWithAnEmptyMapping(t *testing.T) {
+	f := &fakeSuggester{enabled: true}
+	got, err := SuggestCheckMapping(t.Context(), f, []byte("\n"), "csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "none" || got.Mapping == nil || len(got.Mapping) != 0 || len(f.calls) != 0 {
+		t.Errorf("got source %q mapping %#v, %d calls; want none, an empty non-nil map, 0 calls", got.Source, got.Mapping, len(f.calls))
+	}
+}
+
 func TestSuggestCheckMapping_FailedSuggesterCallAnswersNone(t *testing.T) {
 	f := &fakeSuggester{enabled: true, err: errors.New("boom")}
 	got, err := SuggestCheckMapping(t.Context(), f, supplierCSV(), "csv")
@@ -288,7 +299,7 @@ func TestCheckSpreadsheet_AQuarantinedInvoiceCarriesItsProblem(t *testing.T) {
 }
 
 func TestCheckSpreadsheet_BlankNumberRowsAreNotInvoices(t *testing.T) {
-	csv := "Inv,Total\n,1\nA,2\n,3\nB,4\nC,5\n"
+	csv := "Inv,Total\n,1\nA,2\n  ,3\nB,4\nC,5\n"
 	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap(), 2)
 	if err != nil {
 		t.Fatal(err)

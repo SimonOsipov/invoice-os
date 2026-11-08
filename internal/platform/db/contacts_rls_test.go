@@ -24,9 +24,13 @@ const (
 	contactsTable         = "contacts"
 	contactsFunction      = "contacts_facts_only_grow"
 	contactsMigrationGlob = "*_contacts.sql"
-	pgRestrictViolation   = "23001"
-	pgCheckViolation      = "23514"
-	pgInsufficientPriv    = "42501"
+	// contactsReadinessMigrationGlob is the migration that adds readiness_checked_at.
+	contactsReadinessMigrationGlob = "*_contacts_readiness_checked.sql"
+	// contactsTwoColumnSourceDef is how Postgres prints the source CHECK before readiness_checked_at.
+	contactsTwoColumnSourceDef = "CHECK (((registered_at IS NOT NULL) OR (demo_requested_at IS NOT NULL)))"
+	pgRestrictViolation        = "23001"
+	pgCheckViolation           = "23514"
+	pgInsufficientPriv         = "42501"
 )
 
 // contactsEmail is unique per call and already trimmed lower case; the row is removed
@@ -70,6 +74,45 @@ func contactsSeedConsented(t *testing.T, email string, registered, demo, consent
 		[]any{registered, demo, "Yes, send me product news.", consented})
 }
 
+// contactsRequireReadinessColumn fails by name when the migration is not applied to the live DB.
+func contactsRequireReadinessColumn(t *testing.T) {
+	t.Helper()
+	var typ, nullable string
+	err := requireHarness(t).super.QueryRow(context.Background(),
+		`SELECT data_type, is_nullable FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'contacts' AND column_name = 'readiness_checked_at'`,
+	).Scan(&typ, &nullable)
+	if errors.Is(err, pgx.ErrNoRows) {
+		t.Fatal("contacts.readiness_checked_at does not exist: the readiness migration is not applied")
+	}
+	if err != nil {
+		t.Fatalf("read contacts.readiness_checked_at: %v", err)
+	}
+	if typ != "timestamp with time zone" || nullable != "YES" {
+		t.Fatalf("contacts.readiness_checked_at is (%s, nullable=%s), want (timestamp with time zone, YES)", typ, nullable)
+	}
+}
+
+// contactsSeedAllSources seeds a row that holds all five protected facts.
+func contactsSeedAllSources(t *testing.T, email string, registered, demo, consented time.Time) {
+	t.Helper()
+	contactsRequireReadinessColumn(t)
+	contactsSeed(t, email,
+		[]string{"registered_at", "demo_requested_at", "marketing_consent_text", "marketing_consented_at", "readiness_checked_at"},
+		[]any{registered, demo, "Yes, send me product news.", consented, contactsCheckAt})
+}
+
+// contactsReadinessUnchanged re-reads readiness_checked_at as the superuser.
+func contactsReadinessUnchanged(t *testing.T, email string) {
+	t.Helper()
+	var got *time.Time
+	err := requireHarness(t).super.QueryRow(context.Background(),
+		`SELECT readiness_checked_at FROM contacts WHERE email = $1`, email).Scan(&got)
+	if err != nil || got == nil || !got.Equal(contactsCheckAt) {
+		t.Fatalf("readiness_checked_at = %v (err=%v), want it kept at %v", got, err, contactsCheckAt)
+	}
+}
+
 func wantPgCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var pgErr *pgconn.PgError
@@ -78,6 +121,17 @@ func wantPgCode(t *testing.T, err error, code string) {
 	}
 	if pgErr.Code != code {
 		t.Fatalf("want SQLSTATE %s, got %s: %s", code, pgErr.Code, pgErr.Message)
+	}
+}
+
+// wantCheckRefusal asserts a 23514 raised by the named constraint, so a sibling CHECK cannot pass for it.
+func wantCheckRefusal(t *testing.T, err error, constraint string) {
+	t.Helper()
+	wantPgCode(t, err, pgCheckViolation)
+	var pgErr *pgconn.PgError
+	errors.As(err, &pgErr)
+	if pgErr.ConstraintName != constraint {
+		t.Fatalf("refused by constraint %q, want %q", pgErr.ConstraintName, constraint)
 	}
 }
 
@@ -219,16 +273,17 @@ func TestRLS_ContactsTagFactsCannotBeCleared(t *testing.T) {
 	ctx := context.Background()
 	email := contactsEmail(t)
 	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
-	contactsSeedConsented(t, email, reg, demo, consented)
+	contactsSeedAllSources(t, email, reg, demo, consented)
 
-	for _, col := range []string{"registered_at", "demo_requested_at"} {
-		// The other tag time stays set, so the either-tag CHECK cannot be what refuses.
+	for _, col := range []string{"registered_at", "demo_requested_at", "readiness_checked_at"} {
+		// The other sources stay set, so the source CHECK cannot be what refuses.
 		_, err := hh.app.Exec(ctx, `UPDATE contacts SET `+col+` = NULL WHERE email = $1`, email)
 		wantPgCode(t, err, pgRestrictViolation)
 
 		_, err = hh.app.Exec(ctx, `UPDATE contacts SET `+col+` = now() WHERE email = $1`, email)
 		wantPgCode(t, err, pgRestrictViolation)
 		contactsFactsUnchanged(t, email, reg, demo, consented)
+		contactsReadinessUnchanged(t, email)
 	}
 }
 
@@ -237,7 +292,7 @@ func TestRLS_ContactsOwnerCannotRewriteFacts(t *testing.T) {
 	ctx := context.Background()
 	email := contactsEmail(t)
 	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
-	contactsSeedConsented(t, email, reg, demo, consented)
+	contactsSeedAllSources(t, email, reg, demo, consented)
 
 	// Positive control: the owner may write a non-fact column, so the refusal below is the trigger.
 	if _, err := hh.mig.Exec(ctx, `UPDATE contacts SET company = 'Owner Co' WHERE email = $1`, email); err != nil {
@@ -248,6 +303,12 @@ func TestRLS_ContactsOwnerCannotRewriteFacts(t *testing.T) {
 		`UPDATE contacts SET marketing_consent_text = 'Owner rewrote this.' WHERE email = $1`, email)
 	wantPgCode(t, err, pgRestrictViolation)
 	contactsFactsUnchanged(t, email, reg, demo, consented)
+
+	_, err = hh.mig.Exec(ctx,
+		`UPDATE contacts SET readiness_checked_at = readiness_checked_at + interval '1 day' WHERE email = $1`, email)
+	wantPgCode(t, err, pgRestrictViolation)
+	contactsFactsUnchanged(t, email, reg, demo, consented)
+	contactsReadinessUnchanged(t, email)
 }
 
 // --- AC-3: a NULL fact is set the first time ----------------------------------------
@@ -275,6 +336,26 @@ func TestRLS_ContactsFactSetOnceSucceeds(t *testing.T) {
 	}
 	if gotDemo == nil || !gotDemo.Equal(demo) {
 		t.Fatalf("demo_requested_at = %v, want it kept at %v", gotDemo, demo)
+	}
+
+	// A registered-only row takes its readiness check the first time, and keeps registered_at.
+	contactsRequireReadinessColumn(t)
+	regOnly := contactsEmail(t)
+	registered := contactsNow().Add(-2 * time.Hour)
+	contactsSeed(t, regOnly, []string{"registered_at"}, []any{registered})
+	tag, err = hh.app.Exec(context.Background(),
+		`UPDATE contacts SET readiness_checked_at = now() WHERE email = $1`, regOnly)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("setting readiness_checked_at for the first time: rows=%d err=%v, want 1 row", tag.RowsAffected(), err)
+	}
+	var checked *time.Time
+	if err := hh.super.QueryRow(context.Background(),
+		`SELECT readiness_checked_at FROM contacts WHERE email = $1`, regOnly).Scan(&checked); err != nil || checked == nil {
+		t.Fatalf("readiness_checked_at not stored (err=%v)", err)
+	}
+	reg, _, _, _ = contactsFactsOf(t, regOnly)
+	if reg == nil || !reg.Equal(registered) {
+		t.Fatalf("registered_at = %v, want it kept at %v", reg, registered)
 	}
 }
 
@@ -310,16 +391,19 @@ func TestRLS_ContactsNeedsATag(t *testing.T) {
 	hh := requireHarness(t)
 	ctx := context.Background()
 
-	for name, col := range map[string]string{"registered": "registered_at", "demo": "demo_requested_at"} {
+	for name, col := range map[string]string{
+		"registered": "registered_at", "demo": "demo_requested_at", "readiness": "readiness_checked_at",
+	} {
 		email := contactsEmail(t)
 		if _, err := hh.app.Exec(ctx, `INSERT INTO contacts (email, `+col+`) VALUES ($1, now())`, email); err != nil {
 			t.Fatalf("insert with only %s tag: %v", name, err)
 		}
 	}
 
+	// Consent pair NULL, valid email, no delivery_mode: only the source CHECK can refuse this.
 	email := contactsEmail(t)
 	_, err := hh.app.Exec(ctx, `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, email)
-	wantPgCode(t, err, pgCheckViolation)
+	wantCheckRefusal(t, err, "contacts_has_a_source")
 	if n := contactsRowCount(t, email); n != 0 {
 		t.Fatalf("refused insert left %d rows", n)
 	}
@@ -449,21 +533,21 @@ func contactsAssertUpApplied(t *testing.T, c contactsCatalog) {
 	}
 }
 
-func contactsMigrationName(t *testing.T) string {
+func contactsMigrationName(t *testing.T, glob string) string {
 	t.Helper()
-	matches, err := fs.Glob(migrations.FS, contactsMigrationGlob)
+	matches, err := fs.Glob(migrations.FS, glob)
 	if err != nil {
-		t.Fatalf("glob %s: %v", contactsMigrationGlob, err)
+		t.Fatalf("glob %s: %v", glob, err)
 	}
 	if len(matches) != 1 {
-		t.Fatalf("migrations.FS holds %d files matching %s (%v), want exactly 1", len(matches), contactsMigrationGlob, matches)
+		t.Fatalf("migrations.FS holds %d files matching %s (%v), want exactly 1", len(matches), glob, matches)
 	}
 	return matches[0]
 }
 
-func contactsSection(t *testing.T, section string) string {
+func contactsSection(t *testing.T, glob, section string) string {
 	t.Helper()
-	name := contactsMigrationName(t)
+	name := contactsMigrationName(t, glob)
 	b, err := fs.ReadFile(migrations.FS, name)
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
@@ -479,10 +563,10 @@ func contactsSection(t *testing.T, section string) string {
 	return raw[strings.Index(raw, gooseDown)+len(gooseDown):]
 }
 
-func contactsExec(t *testing.T, ctx context.Context, tx pgx.Tx, section string) {
+func contactsExec(t *testing.T, ctx context.Context, tx pgx.Tx, glob, section string) {
 	t.Helper()
-	if _, err := tx.Exec(ctx, contactsSection(t, section)); err != nil {
-		t.Fatalf("%s body failed: %v", section, err)
+	if _, err := tx.Exec(ctx, contactsSection(t, glob, section)); err != nil {
+		t.Fatalf("%s body of %s failed: %v", section, glob, err)
 	}
 }
 
@@ -497,7 +581,7 @@ func TestRLS_ContactsMigrationDownDropsTableAndFunction(t *testing.T) {
 
 	before := contactsReadCatalog(t, ctx, tx)
 	contactsAssertUpApplied(t, before)
-	contactsExec(t, ctx, tx, "Down")
+	contactsExec(t, ctx, tx, contactsMigrationGlob, "Down")
 	after := contactsReadCatalog(t, ctx, tx)
 
 	if after.hasTable {
@@ -522,11 +606,12 @@ func TestRLS_ContactsMigrationUpRestoresWhatDownDropped(t *testing.T) {
 
 	before := contactsReadCatalog(t, ctx, tx)
 	contactsAssertUpApplied(t, before)
-	contactsExec(t, ctx, tx, "Down")
+	contactsExec(t, ctx, tx, contactsMigrationGlob, "Down")
 	if contactsReadCatalog(t, ctx, tx).hasTable {
 		t.Fatalf("the Down left public.%s in place -- this case cannot tell 'Up restored it' from 'Down did nothing'", contactsTable)
 	}
-	contactsExec(t, ctx, tx, "Up")
+	contactsExec(t, ctx, tx, contactsMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
 	after := contactsReadCatalog(t, ctx, tx)
 
 	contactsAssertUpApplied(t, after)
@@ -589,15 +674,17 @@ func (c contactsSavepointConn) QueryRow(ctx context.Context, sql string, args ..
 	return c.tx.QueryRow(ctx, sql, args...)
 }
 
-// contactsReplayed returns the table as the migration file creates it: Down, then Up.
+// contactsReplayed returns the table as the migration files create it: the original Down and Up,
+// then the readiness Up.
 // The transaction rolls back before the cleanups run: they DELETE rows and would block on its lock.
 func contactsReplayed(t *testing.T) pgx.Tx {
 	t.Helper()
 	requireHarness(t)
 	ctx := context.Background()
 	tx := migratorTx(t, ctx)
-	contactsExec(t, ctx, tx, "Down")
-	contactsExec(t, ctx, tx, "Up")
+	contactsExec(t, ctx, tx, contactsMigrationGlob, "Down")
+	contactsExec(t, ctx, tx, contactsMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
 	return tx
 }
 
@@ -607,6 +694,7 @@ var (
 	contactsRegAt     = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	contactsDemoAt    = time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC)
 	contactsConsentAt = time.Date(2026, 1, 4, 3, 4, 5, 0, time.UTC)
+	contactsCheckAt   = time.Date(2026, 1, 5, 3, 4, 5, 0, time.UTC)
 )
 
 const contactsConsentText = "Yes, send me product news."
@@ -630,8 +718,8 @@ func contactsSeedFull(t *testing.T, c contactsConn) string {
 	t.Helper()
 	email := contactsEmail(t)
 	contactsMustExec(t, c,
-		`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at)
-		 VALUES ($1, $2, $3, $4, $5)`, email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt)
+		`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at, readiness_checked_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`, email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt, contactsCheckAt)
 	return email
 }
 
@@ -640,9 +728,10 @@ func contactsFactsIntact(t *testing.T, c contactsConn, email string) {
 	var ok bool
 	err := c.QueryRow(context.Background(),
 		`SELECT coalesce(registered_at = $2 AND demo_requested_at = $3
-		            AND marketing_consent_text = $4 AND marketing_consented_at = $5, false)
+		            AND marketing_consent_text = $4 AND marketing_consented_at = $5
+		            AND readiness_checked_at = $6, false)
 		   FROM contacts WHERE email = $1`,
-		email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt).Scan(&ok)
+		email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt, contactsCheckAt).Scan(&ok)
 	if err != nil || !ok {
 		t.Fatalf("protected facts changed or row missing (err=%v)", err)
 	}
@@ -654,6 +743,7 @@ func contactsFactCases() []struct{ name, col, rewrite string } {
 		{"demo_requested_at", "demo_requested_at", "demo_requested_at + interval '1 day'"},
 		{"marketing_consent_text", "marketing_consent_text", "'A different text.'"},
 		{"marketing_consented_at", "marketing_consented_at", "marketing_consented_at + interval '1 day'"},
+		{"readiness_checked_at", "readiness_checked_at", "readiness_checked_at + interval '1 day'"},
 	}
 }
 
@@ -665,7 +755,7 @@ type contactsContractCase struct {
 
 func contactsContract() []contactsContractCase {
 	var cases []contactsContractCase
-	// Each fact alone: clearing text without time would also trip the pair CHECK, so the
+	// Each of the five facts alone: clearing text without time would also trip the pair CHECK, so the
 	// SQLSTATE proves the trigger ran first and named the fact.
 	for _, f := range contactsFactCases() {
 		cases = append(cases, contactsContractCase{"FactsCannotChange_" + f.name, true, func(t *testing.T, c contactsConn) {
@@ -682,14 +772,14 @@ func contactsContract() []contactsContractCase {
 			tag := contactsMustExec(t, c,
 				`UPDATE contacts SET registered_at = registered_at, demo_requested_at = demo_requested_at,
 				        marketing_consent_text = marketing_consent_text, marketing_consented_at = marketing_consented_at,
-				        company = 'Same Co' WHERE email = $1`, email)
+				        readiness_checked_at = readiness_checked_at, company = 'Same Co' WHERE email = $1`, email)
 			if tag.RowsAffected() != 1 {
 				t.Fatalf("write-back touched %d rows, want 1", tag.RowsAffected())
 			}
 			tag = contactsMustExec(t, c,
 				`UPDATE contacts SET registered_at = $2, demo_requested_at = $3,
-				        marketing_consent_text = $4, marketing_consented_at = $5 WHERE email = $1`,
-				email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt)
+				        marketing_consent_text = $4, marketing_consented_at = $5, readiness_checked_at = $6 WHERE email = $1`,
+				email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt, contactsCheckAt)
 			if tag.RowsAffected() != 1 {
 				t.Fatalf("literal write-back touched %d rows, want 1", tag.RowsAffected())
 			}
@@ -699,13 +789,14 @@ func contactsContract() []contactsContractCase {
 		contactsContractCase{"MergeUpsertKeepsSetFacts", true, func(t *testing.T, c contactsConn) {
 			email := contactsSeedFull(t, c)
 			tag := contactsMustExec(t, c,
-				`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at, first_name)
-				 VALUES ($1, now(), now(), 'Later text.', now(), 'Grace')
+				`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at, readiness_checked_at, first_name)
+				 VALUES ($1, now(), now(), 'Later text.', now(), now(), 'Grace')
 				 ON CONFLICT (email) DO UPDATE SET
 				   registered_at = COALESCE(contacts.registered_at, EXCLUDED.registered_at),
 				   demo_requested_at = COALESCE(contacts.demo_requested_at, EXCLUDED.demo_requested_at),
 				   marketing_consent_text = COALESCE(contacts.marketing_consent_text, EXCLUDED.marketing_consent_text),
 				   marketing_consented_at = COALESCE(contacts.marketing_consented_at, EXCLUDED.marketing_consented_at),
+				   readiness_checked_at = COALESCE(contacts.readiness_checked_at, EXCLUDED.readiness_checked_at),
 				   first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), contacts.first_name)`, email)
 			if tag.RowsAffected() != 1 {
 				t.Fatalf("merge upsert touched %d rows, want 1", tag.RowsAffected())
@@ -723,6 +814,7 @@ func contactsContract() []contactsContractCase {
 			contactsMustExec(t, c,
 				`UPDATE contacts SET marketing_consent_text = $2, marketing_consented_at = $3 WHERE email = $1`,
 				demoOnly, contactsConsentText, contactsConsentAt)
+			contactsMustExec(t, c, `UPDATE contacts SET readiness_checked_at = $2 WHERE email = $1`, demoOnly, contactsCheckAt)
 			contactsFactsIntact(t, c, demoOnly)
 
 			regOnly := contactsEmail(t)
@@ -732,6 +824,12 @@ func contactsContract() []contactsContractCase {
 			if err := c.QueryRow(context.Background(), `SELECT demo_requested_at FROM contacts WHERE email = $1`, regOnly).Scan(&got); err != nil || !got.Equal(contactsDemoAt) {
 				t.Fatalf("demo_requested_at = %v (err=%v), want %v", got, err, contactsDemoAt)
 			}
+
+			readinessOnly := contactsEmail(t)
+			contactsMustExec(t, c, `INSERT INTO contacts (email, readiness_checked_at) VALUES ($1, $2)`, readinessOnly, contactsCheckAt)
+			contactsMustExec(t, c, `UPDATE contacts SET registered_at = $2 WHERE email = $1`, readinessOnly, contactsRegAt)
+			contactsRefuse(t, c, pgRestrictViolation,
+				`UPDATE contacts SET readiness_checked_at = readiness_checked_at + interval '1 day' WHERE email = $1`, readinessOnly)
 		}},
 		contactsContractCase{"NonFactColumnsStayWritable", true, func(t *testing.T, c contactsConn) {
 			email := contactsSeedFull(t, c)
@@ -791,11 +889,15 @@ func contactsContract() []contactsContractCase {
 				`INSERT INTO contacts (email, registered_at, marketing_consented_at) VALUES ($1, now(), now())`, contactsEmail(t))
 		}},
 		contactsContractCase{"NeedsATag", false, func(t *testing.T, c contactsConn) {
-			for _, col := range []string{"registered_at", "demo_requested_at", "registered_at, demo_requested_at"} {
+			for _, col := range []string{
+				"registered_at", "demo_requested_at", "readiness_checked_at", "registered_at, demo_requested_at, readiness_checked_at",
+			} {
 				vals := strings.Repeat("now(), ", strings.Count(col, ",")+1)
 				contactsMustExec(t, c, `INSERT INTO contacts (email, `+col+`) VALUES ($1, `+strings.TrimSuffix(vals, ", ")+`)`, contactsEmail(t))
 			}
-			contactsRefuse(t, c, pgCheckViolation, `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, contactsEmail(t))
+			// Consent pair NULL and no delivery_mode: only the source CHECK can refuse this.
+			_, err := c.Exec(context.Background(), `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, contactsEmail(t))
+			wantCheckRefusal(t, err, "contacts_has_a_source")
 		}},
 		contactsContractCase{"EmailShape", false, func(t *testing.T, c contactsConn) {
 			const insert = `INSERT INTO contacts (email, registered_at) VALUES ($1, now())`
@@ -875,3 +977,246 @@ func TestRLS_ContactsReplayedMigrationHoldsContract(t *testing.T) {
 
 // timestamptz holds microseconds; a finer Go time never round-trips equal.
 func contactsNow() time.Time { return time.Now().Truncate(time.Microsecond) }
+
+// --- readiness_checked_at: a third source, and a fact --------------------------------
+
+type contactsQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// contactsCheckDefs maps each CHECK constraint on public.contacts to its definition.
+// The table always has the email and consent CHECKs, so an empty map is a broken query.
+func contactsCheckDefs(t *testing.T, q contactsQuerier) map[string]string {
+	t.Helper()
+	rows, err := q.Query(context.Background(),
+		`SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+		  WHERE conrelid = 'public.contacts'::regclass AND contype = 'c'`)
+	if err != nil {
+		t.Fatalf("read contacts CHECKs: %v", err)
+	}
+	defer rows.Close()
+	defs := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		if err := rows.Scan(&name, &def); err != nil {
+			t.Fatalf("scan contacts CHECK: %v", err)
+		}
+		defs[name] = def
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate contacts CHECKs: %v", err)
+	}
+	if len(defs) == 0 {
+		t.Fatal("contacts has no CHECK constraint: the query is broken")
+	}
+	return defs
+}
+
+func contactsHasReadinessColumn(t *testing.T, tx pgx.Tx) bool {
+	t.Helper()
+	var n int
+	err := tx.QueryRow(context.Background(),
+		`SELECT count(*) FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'contacts' AND column_name = 'readiness_checked_at'`).Scan(&n)
+	if err != nil {
+		t.Fatalf("read contacts columns: %v", err)
+	}
+	return n == 1
+}
+
+func contactsMentionsAllThree(def string) bool {
+	return strings.Contains(def, "registered_at") && strings.Contains(def, "demo_requested_at") &&
+		strings.Contains(def, "readiness_checked_at")
+}
+
+func TestRLS_ContactsReadinessCheckAloneIsASource(t *testing.T) {
+	hh := requireHarness(t)
+	contactsRequireReadinessColumn(t)
+	email := contactsEmail(t)
+
+	if _, err := hh.app.Exec(context.Background(),
+		`INSERT INTO contacts (email, readiness_checked_at) VALUES ($1, $2)`, email, contactsCheckAt); err != nil {
+		t.Fatalf("app INSERT of a readiness-only row: %v", err)
+	}
+	var reg, demo, checked *time.Time
+	if err := hh.super.QueryRow(context.Background(),
+		`SELECT registered_at, demo_requested_at, readiness_checked_at FROM contacts WHERE email = $1`, email,
+	).Scan(&reg, &demo, &checked); err != nil {
+		t.Fatalf("read the readiness-only row: %v", err)
+	}
+	if reg != nil || demo != nil {
+		t.Fatalf("registered_at=%v demo_requested_at=%v, want both NULL", reg, demo)
+	}
+	if checked == nil || !checked.Equal(contactsCheckAt) {
+		t.Fatalf("readiness_checked_at = %v, want %v", checked, contactsCheckAt)
+	}
+}
+
+func TestRLS_ContactsSourceCheckIsNamed(t *testing.T) {
+	requireHarness(t)
+	defs := contactsCheckDefs(t, requireHarness(t).super)
+
+	def, ok := defs["contacts_has_a_source"]
+	if !ok {
+		t.Fatalf("contacts_has_a_source is missing; contacts CHECKs are %v", defs)
+	}
+	if !contactsMentionsAllThree(def) {
+		t.Fatalf("contacts_has_a_source is %q, want a definition that names registered_at, demo_requested_at and readiness_checked_at", def)
+	}
+	if old, ok := defs["contacts_check1"]; ok {
+		t.Fatalf("contacts_check1 still exists: %s", old)
+	}
+}
+
+func TestRLS_ContactsReadinessMigrationDownThenUp(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	contactsMigrationName(t, contactsReadinessMigrationGlob)
+	contactsRequireReadinessColumn(t)
+	tx := migratorTx(t, ctx)
+	defer contactsRollback(tx)
+	sp := contactsSavepointConn{tx}
+
+	readinessOnly, registered := contactsEmail(t), contactsEmail(t)
+	contactsMustExec(t, sp, `INSERT INTO contacts (email, readiness_checked_at) VALUES ($1, $2)`, readinessOnly, contactsCheckAt)
+	contactsMustExec(t, sp, `INSERT INTO contacts (email, registered_at) VALUES ($1, $2)`, registered, contactsRegAt)
+
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Down")
+
+	if contactsHasReadinessColumn(t, tx) {
+		t.Error("after Down contacts.readiness_checked_at still exists")
+	}
+	defs := contactsCheckDefs(t, tx)
+	if got := defs["contacts_check1"]; got != contactsTwoColumnSourceDef {
+		t.Errorf("after Down contacts_check1 = %q, want %q", got, contactsTwoColumnSourceDef)
+	}
+	if _, ok := defs["contacts_has_a_source"]; ok {
+		t.Error("after Down contacts_has_a_source still exists")
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM contacts WHERE email = $1`, readinessOnly); n != 0 {
+		t.Errorf("after Down the readiness-only row count = %d, want 0 (the old schema cannot hold it)", n)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM contacts WHERE email = $1`, registered); n != 1 {
+		t.Errorf("after Down the registered row count = %d, want 1", n)
+	}
+	// Sourceless input dies at the restored contacts_check1.
+	_, err := sp.Exec(ctx, `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, contactsEmail(t))
+	wantCheckRefusal(t, err, "contacts_check1")
+	// The four-clause trigger: a non-fact write passes, a registered_at rewrite is refused. A function
+	// that still read OLD.readiness_checked_at would fail 42703 here instead.
+	contactsMustExec(t, sp, `UPDATE contacts SET company = 'Down Co' WHERE email = $1`, registered)
+	contactsRefuse(t, sp, pgRestrictViolation,
+		`UPDATE contacts SET registered_at = registered_at + interval '1 day' WHERE email = $1`, registered)
+
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+
+	if !contactsHasReadinessColumn(t, tx) {
+		t.Fatal("after Up contacts.readiness_checked_at is missing")
+	}
+	var typ, nullable string
+	if err := tx.QueryRow(ctx, `SELECT data_type, is_nullable FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'contacts' AND column_name = 'readiness_checked_at'`).Scan(&typ, &nullable); err != nil {
+		t.Fatalf("read the restored column: %v", err)
+	}
+	if typ != "timestamp with time zone" || nullable != "YES" {
+		t.Errorf("after Up readiness_checked_at is (%s, nullable=%s), want (timestamp with time zone, YES)", typ, nullable)
+	}
+	defs = contactsCheckDefs(t, tx)
+	if def, ok := defs["contacts_has_a_source"]; !ok || !contactsMentionsAllThree(def) {
+		t.Errorf("after Up contacts_has_a_source = %q (present=%v), want all three source columns", def, ok)
+	}
+	if _, ok := defs["contacts_check1"]; ok {
+		t.Error("after Up contacts_check1 still exists")
+	}
+	again := contactsEmail(t)
+	contactsMustExec(t, sp, `INSERT INTO contacts (email, readiness_checked_at) VALUES ($1, $2)`, again, contactsCheckAt)
+	_, err = sp.Exec(ctx, `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, contactsEmail(t))
+	wantCheckRefusal(t, err, "contacts_has_a_source")
+	contactsRefuse(t, sp, pgRestrictViolation,
+		`UPDATE contacts SET readiness_checked_at = readiness_checked_at + interval '1 day' WHERE email = $1`, again)
+	contactsRefuse(t, sp, pgRestrictViolation, `UPDATE contacts SET readiness_checked_at = NULL WHERE email = $1`, again)
+
+	// The new column adds no grant: invoice_app keeps all four verbs.
+	for _, priv := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
+		var ok bool
+		if err := tx.QueryRow(ctx, `SELECT has_table_privilege('invoice_app', 'public.contacts', $1)`, priv).Scan(&ok); err != nil || !ok {
+			t.Errorf("invoice_app %s on contacts after Down/Up = %v (err=%v), want true", priv, ok, err)
+		}
+	}
+}
+
+func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	contactsMigrationName(t, contactsReadinessMigrationGlob)
+	contactsRequireReadinessColumn(t)
+	tx := migratorTx(t, ctx)
+	defer contactsRollback(tx)
+
+	// The old CHECK under another name: Up must find it by definition.
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Down")
+	if _, ok := contactsCheckDefs(t, tx)["contacts_check1"]; !ok {
+		t.Fatal("after Down contacts_check1 is missing, so the rename below proves nothing")
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE public.contacts RENAME CONSTRAINT contacts_check1 TO contacts_legacy_source`); err != nil {
+		t.Fatalf("rename contacts_check1: %v", err)
+	}
+	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+
+	defs := contactsCheckDefs(t, tx)
+	for name, def := range defs {
+		if def == contactsTwoColumnSourceDef {
+			t.Errorf("after Up CHECK %s still has the two-column definition", name)
+		}
+	}
+	if _, ok := defs["contacts_has_a_source"]; !ok {
+		t.Errorf("after Up contacts_has_a_source is missing; CHECKs are %v", defs)
+	}
+
+	// No such CHECK at all: Up fails and names the definition it expected.
+	inner, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	contactsExec(t, ctx, inner, contactsReadinessMigrationGlob, "Down")
+	var dropped string
+	for name, def := range contactsCheckDefs(t, inner) {
+		if def == contactsTwoColumnSourceDef {
+			dropped = name
+		}
+	}
+	if dropped == "" {
+		t.Fatal("after Down no CHECK has the two-column definition, so the drop below proves nothing")
+	}
+	if _, err := inner.Exec(ctx, `ALTER TABLE public.contacts DROP CONSTRAINT `+dropped); err != nil {
+		t.Fatalf("drop %s: %v", dropped, err)
+	}
+	_, err = inner.Exec(ctx, contactsSection(t, contactsReadinessMigrationGlob, "Up"))
+	if err == nil {
+		t.Fatal("Up succeeded with no two-column source CHECK, want an error")
+	}
+	if !strings.Contains(err.Error(), contactsTwoColumnSourceDef) {
+		t.Fatalf("Up error %q does not name the expected definition %q", err, contactsTwoColumnSourceDef)
+	}
+	if err := inner.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the savepoint: %v", err)
+	}
+
+	// Two CHECKs with that definition: Up cannot tell which one is the source rule, so it refuses.
+	twin, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	defer func() { _ = twin.Rollback(ctx) }()
+	contactsExec(t, ctx, twin, contactsReadinessMigrationGlob, "Down")
+	if _, err := twin.Exec(ctx, `ALTER TABLE public.contacts ADD CONSTRAINT contacts_twin_source CHECK (registered_at IS NOT NULL OR demo_requested_at IS NOT NULL)`); err != nil {
+		t.Fatalf("add the twin CHECK: %v", err)
+	}
+	_, err = twin.Exec(ctx, contactsSection(t, contactsReadinessMigrationGlob, "Up"))
+	if err == nil {
+		t.Fatal("Up succeeded with two CHECKs of the two-column definition, want an error")
+	}
+	if !strings.Contains(err.Error(), contactsTwoColumnSourceDef) {
+		t.Fatalf("Up error %q does not name the expected definition %q", err, contactsTwoColumnSourceDef)
+	}
+}

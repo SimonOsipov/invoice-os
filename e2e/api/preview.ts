@@ -12,10 +12,10 @@ export function previewSuffix(): string {
 }
 
 // One secret of this preview. The value stays in memory: never log or write it.
-export function previewSecret(name: string): string {
+export function previewSecret(name: string, version = 'latest'): string {
   return execFileSync(
     'gcloud',
-    ['secrets', 'versions', 'access', 'latest', '--secret', `${previewSuffix()}-${name}`, '--project', 'ascomply-preview'],
+    ['secrets', 'versions', 'access', version, '--secret', `${previewSuffix()}-${name}`, '--project', 'ascomply-preview'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
   )
 }

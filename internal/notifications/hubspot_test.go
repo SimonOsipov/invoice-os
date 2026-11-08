@@ -163,6 +163,8 @@ func TestHubSpotUpsert_TagsKeepTheLeadingSemicolon(t *testing.T) {
 		"registered only": {[]string{"registered"}, ";registered"},
 		"demo only":       {[]string{"demo request"}, ";demo_request"},
 		"both":            {bothTags(), ";registered;demo_request"},
+		"readiness only":  {[]string{"readiness check"}, ";readiness_check"},
+		"all three":       {[]string{"registered", "demo request", "readiness check"}, ";registered;demo_request;readiness_check"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := newVendor(t, hubspotRoutes(200, 201))

@@ -1039,6 +1039,7 @@ func TestRLS_StaffReadAICallsDownAndUp(t *testing.T) {
 	staff := seedHouseMember(t, "reviewer", "active")
 	x := seedDetailTenant(t, freshName("ai down and up"))
 	row := seedStaffAICall(t, staffAIRow(x, freshName("staff-downup"), "ok", staffAIFarBase()))
+	nullRow := seedNullTenantAICall(t, staffAIRow("", freshName("staff-downup-null"), "ok", staffAIFarBase()))
 
 	requireUp := func(when string) {
 		t.Helper()
@@ -1067,5 +1068,13 @@ func TestRLS_StaffReadAICallsDownAndUp(t *testing.T) {
 	}
 	if !found {
 		t.Error("after the Up: staff_read_ai_calls does not list the seeded row for a house member")
+	}
+	// The public-check migration is newer than every one rolled back here: it must come back last.
+	found = false
+	for _, r := range (staffAICallsArgs{tenant: sp(publicCheckTenantID)}).mustCall(t, h.app, staff) {
+		found = found || r.id == nullRow.id
+	}
+	if !found {
+		t.Error("after the Up: staff_read_ai_calls does not list the NULL-tenant row (the public-check migration was not re-applied last)")
 	}
 }

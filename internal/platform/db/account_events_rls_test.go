@@ -652,7 +652,7 @@ func TestRLS_AccountEventMembershipsIgnoreACallerSearchPath(t *testing.T) {
 	}
 }
 
-// AUDIT-14-01: account_event_handoffs.first_session.
+// account_event_handoffs.first_session.
 const (
 	aeFirstSessionCheck  = "account_event_handoffs_first_session_check"
 	aeInsertFirstSession = `INSERT INTO account_event_handoffs (event, user_id, email, user_agent, first_session) VALUES ($1, $2, $3, $4, $5)`

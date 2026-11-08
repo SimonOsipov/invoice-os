@@ -248,7 +248,7 @@ func TestExportCSV_CarriesCreatedAcceptedDetail(t *testing.T) {
 	f := requireFixture(t)
 	p := pageSeedTenant(t, f)
 	filtInsert(t, f, p, []filtRow{{
-		event: "workspace.provisioned", actor: uuid.NewString(), ageSeconds: 10, // internal/tenancy/store.go:154
+		event: "workspace.provisioned", actor: uuid.NewString(), ageSeconds: 10, // Store.ProvisionWorkspace
 		payload: `{"tenant_id":"` + p.tenant + `","name":"Kestrel Works","kind":"firm","ip_address":"203.0.113.7","device":"Chrome on macOS"}`,
 	}})
 

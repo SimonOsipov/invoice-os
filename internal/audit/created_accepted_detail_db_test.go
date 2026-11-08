@@ -1,4 +1,4 @@
-// AUDIT-14-08: the IP and device on "Workspace created" and "Invite accepted" reach only an admin and the row's actor.
+// The IP and device on "Workspace created" and "Invite accepted" reach only an admin and the row's actor.
 // Reads go through Store.List as identities built from seeded memberships. Helpers use a cd* prefix.
 package audit_test
 
@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	cdProvisioned = "workspace.provisioned" // internal/tenancy/store.go:154
-	cdAccepted    = "invitation.accepted"   // internal/tenancy/store.go:603
+	cdProvisioned = "workspace.provisioned" // Store.ProvisionWorkspace
+	cdAccepted    = "invitation.accepted"   // Store.AcceptInvitation
 	cdIP          = "203.0.113.7"
 	cdDevice      = "Chrome on macOS"
 )
 
-// cdKeys are the payload keys of accountevents' auditPayload (internal/accountevents/audit_job.go:40-41).
+// cdKeys are the payload keys of accountevents' auditPayload (auditPayload in internal/accountevents/audit_job.go).
 var cdKeys = []string{"ip_address", "device"}
 
 type cdWorld struct {

@@ -202,7 +202,7 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 	}
 
 	if f.Q != "" {
-		conditions = append(conditions, searchFragment(f.Q, s, bind))
+		conditions = append(conditions, searchFragment(f.Q, s, f.scope, bind))
 	}
 
 	if len(conditions) == 0 {
@@ -224,13 +224,18 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 //
 // invoice_number leaves the generic arm: an OR-group only widens, so matched there it would
 // stay unscoped and the resolved arm below could not fence it.
-func searchFragment(q string, s searchTargets, bind func(any) string) string {
+func searchFragment(q string, s searchTargets, scope callerScope, bind func(any) string) string {
 	like := bind(escapeLike(q))
+	hidden := ""
+	if !scope.admin {
+		hidden = ` AND NOT (kv.key = ANY(` + bind(selfDetailKeys) + `) AND a.event = ANY(` +
+			bind(selfDetailEvents) + `) AND a.actor <> ` + bind(scope.self) + `)`
+	}
 	arms := []string{
 		`a.event ILIKE '%' || ` + like + ` || '%' ESCAPE '\'`,
 		`EXISTS (SELECT 1 FROM jsonb_each_text(a.payload) kv
 		          WHERE kv.key <> 'invoice_number'
-		            AND kv.value ILIKE '%' || ` + like + ` || '%' ESCAPE '\')`,
+		            AND kv.value ILIKE '%' || ` + like + ` || '%' ESCAPE '\'` + hidden + `)`,
 	}
 	if len(s.subjects) > 0 {
 		arms = append(arms, "a.actor = ANY("+bind(s.subjects)+")")
@@ -253,4 +258,14 @@ func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, "%", `\%`)
 	s = strings.ReplaceAll(s, "_", `\_`)
 	return s
+}
+
+// payloadColumn is the page's payload expression: ip_address and device of the
+// selfDetailEvents are withheld from a non-admin who is not the row's actor.
+func payloadColumn(s callerScope, bind func(any) string) string {
+	if s.admin {
+		return "a.payload"
+	}
+	return "(CASE WHEN a.event = ANY(" + bind(selfDetailEvents) + ") AND a.actor <> " + bind(s.self) +
+		" THEN a.payload - " + bind(selfDetailKeys) + "::text[] ELSE a.payload END)"
 }

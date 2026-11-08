@@ -316,9 +316,13 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 			pageWhere += " AND " + clause
 		}
 	}
+	payload := payloadColumn(f.scope, func(v any) string {
+		pageArgs = append(pageArgs, v)
+		return "$" + strconv.Itoa(len(pageArgs))
+	})
 	pageArgs = append(pageArgs, f.Limit+1)
 
-	sql := `SELECT a.id, a.created_at, a.event, a.actor, a.entity_id, be.name, a.payload
+	sql := `SELECT a.id, a.created_at, a.event, a.actor, a.entity_id, be.name, ` + payload + `
 	          FROM audit_log a
 	          LEFT JOIN business_entities be ON be.id = a.entity_id` +
 		pageWhere +

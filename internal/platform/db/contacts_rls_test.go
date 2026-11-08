@@ -1113,6 +1113,14 @@ func TestRLS_ContactsReadinessMigrationDownThenUp(t *testing.T) {
 	if !contactsHasReadinessColumn(t, tx) {
 		t.Fatal("after Up contacts.readiness_checked_at is missing")
 	}
+	var typ, nullable string
+	if err := tx.QueryRow(ctx, `SELECT data_type, is_nullable FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'contacts' AND column_name = 'readiness_checked_at'`).Scan(&typ, &nullable); err != nil {
+		t.Fatalf("read the restored column: %v", err)
+	}
+	if typ != "timestamp with time zone" || nullable != "YES" {
+		t.Errorf("after Up readiness_checked_at is (%s, nullable=%s), want (timestamp with time zone, YES)", typ, nullable)
+	}
 	defs = contactsCheckDefs(t, tx)
 	if def, ok := defs["contacts_has_a_source"]; !ok || !contactsMentionsAllThree(def) {
 		t.Errorf("after Up contacts_has_a_source = %q (present=%v), want all three source columns", def, ok)
@@ -1170,7 +1178,6 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("savepoint: %v", err)
 	}
-	defer func() { _ = inner.Rollback(ctx) }()
 	contactsExec(t, ctx, inner, contactsReadinessMigrationGlob, "Down")
 	var dropped string
 	for name, def := range contactsCheckDefs(t, inner) {
@@ -1187,6 +1194,27 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 	_, err = inner.Exec(ctx, contactsSection(t, contactsReadinessMigrationGlob, "Up"))
 	if err == nil {
 		t.Fatal("Up succeeded with no two-column source CHECK, want an error")
+	}
+	if !strings.Contains(err.Error(), contactsTwoColumnSourceDef) {
+		t.Fatalf("Up error %q does not name the expected definition %q", err, contactsTwoColumnSourceDef)
+	}
+	if err := inner.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the savepoint: %v", err)
+	}
+
+	// Two CHECKs with that definition: Up cannot tell which one is the source rule, so it refuses.
+	twin, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	defer func() { _ = twin.Rollback(ctx) }()
+	contactsExec(t, ctx, twin, contactsReadinessMigrationGlob, "Down")
+	if _, err := twin.Exec(ctx, `ALTER TABLE public.contacts ADD CONSTRAINT contacts_twin_source CHECK (registered_at IS NOT NULL OR demo_requested_at IS NOT NULL)`); err != nil {
+		t.Fatalf("add the twin CHECK: %v", err)
+	}
+	_, err = twin.Exec(ctx, contactsSection(t, contactsReadinessMigrationGlob, "Up"))
+	if err == nil {
+		t.Fatal("Up succeeded with two CHECKs of the two-column definition, want an error")
 	}
 	if !strings.Contains(err.Error(), contactsTwoColumnSourceDef) {
 		t.Fatalf("Up error %q does not name the expected definition %q", err, contactsTwoColumnSourceDef)

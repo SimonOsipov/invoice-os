@@ -223,6 +223,8 @@ func aeMatrix(t *testing.T, f *fixture, w *aeWorld, users map[string]string, ctx
 		"no account":    {ExcludeAccountEvents: true},
 		// The workspace filter keeps the non-account workspace rows (membership.*) and drops the account ones.
 		"no account+workspace": {ExcludeAccountEvents: true, Company: audit.WorkspaceOnly()},
+		// An explicit account Events filter cannot bring the rows back: the exclusion is ANDed.
+		"signed_in+no account": {Events: []string{aeSignedIn}, ExcludeAccountEvents: true},
 	}
 	for name, id := range users {
 		filters["actor "+name] = audit.Filter{Actors: []string{id}}
@@ -765,6 +767,10 @@ func TestAccountEvents_ExclusionFillsTheLimitForANonAdmin(t *testing.T) {
 
 	if !slices.Equal(aeIDs(got), plain) || got.Total != 5 || got.Page.HasMore {
 		t.Errorf("page = %v total %d has_more %v, want the 5 non-account rows %v, 5, false", aeIDs(got), got.Total, got.Page.HasMore, plain)
+	}
+	// A cursor walk of the excluded read never lets an account row back in, on any page.
+	if walked := aeWalk(t, f, prep, audit.Filter{Limit: 2, ExcludeAccountEvents: true}); !slices.Equal(walked, plain) {
+		t.Errorf("excluded cursor walk = %v, want %v", walked, plain)
 	}
 	ctl := csList(t, f, prep, audit.Filter{Limit: 5})
 	if want := own[:5]; !slices.Equal(aeIDs(ctl), want) || ctl.Total != 11 {

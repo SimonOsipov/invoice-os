@@ -404,6 +404,9 @@ func TestAuditListHandler_ExcludeAccountEventsParses(t *testing.T) {
 		"exclude_account_events=1":     true,
 		"exclude_account_events=false": false,
 		"exclude_account_events=0":     false,
+		"exclude_account_events=T":     true,
+		"exclude_account_events=TRUE":  true,
+		"exclude_account_events=False": false,
 		"":                             false,
 	} {
 		if got := hndAccepts(t, query).ExcludeAccountEvents; got != want {
@@ -411,16 +414,18 @@ func TestAuditListHandler_ExcludeAccountEventsParses(t *testing.T) {
 		}
 	}
 
-	spy := &hndSpy{}
-	w := hndGet(t, spy, "exclude_account_events=maybe")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("exclude_account_events=maybe -> %d, want 400", w.Code)
-	}
-	if got := hndBody(t, w)["error"]; got != "exclude_account_events must be a boolean" {
-		t.Errorf("error = %v, want %q", got, "exclude_account_events must be a boolean")
-	}
-	if spy.calls != 0 {
-		t.Errorf("the store ran %d times for a non-boolean value, want 0", spy.calls)
+	for _, bad := range []string{"maybe", "yes", "2", "on"} {
+		spy := &hndSpy{}
+		w := hndGet(t, spy, "exclude_account_events="+bad)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("exclude_account_events=%s -> %d, want 400", bad, w.Code)
+		}
+		if got := hndBody(t, w)["error"]; got != "exclude_account_events must be a boolean" {
+			t.Errorf("error = %v, want %q", got, "exclude_account_events must be a boolean")
+		}
+		if spy.calls != 0 {
+			t.Errorf("the store ran %d times for %q, want 0", spy.calls, bad)
+		}
 	}
 }
 

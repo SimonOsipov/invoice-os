@@ -808,7 +808,8 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   it('DEL-13-03 no paragraph of the page says an invitation keeps an email address', () => {
     const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
     expect(paras.length).toBeGreaterThan(10)
-    expect(paras.filter((t) => /invitation/i.test(t) && /email/i.test(t))).toEqual([])
+    const p5 = ACCOUNT_RECORD_SENTENCES.find((x) => x.id === 'P5')!.text
+    expect(paras.filter((t) => t !== p5 && /invitation/i.test(t) && /email/i.test(t))).toEqual([])
   })
 
   it('DEL-10-03 R1 promises no completeness', () => {
@@ -1141,12 +1142,12 @@ describe('AUDIT-13-08: sign-in records on the page', () => {
   )
 
   it('privacyAccountRecordsStayUntilWorkspaceDeleted', () => {
-    const [p1, p2, p3, p4] = ACCOUNT_RECORD_SENTENCES.map((x) => x.text)
+    const [p1, p2, p3, p4, p5] = ACCOUNT_RECORD_SENTENCES.map((x) => x.text)
     const at = paras.indexOf(p1)
     expect(at).toBeGreaterThan(-1)
-    expect(paras.slice(at, at + 4)).toEqual([p1, p2, p3, p4])
+    expect(paras.slice(at, at + 5)).toEqual([p1, p2, p3, p4, p5])
     expect(p3).toContain('until the workspace is deleted')
-    expect(paras.slice(at, at + 4).join(' ')).not.toMatch(/six years/i)
+    expect(paras.slice(at, at + 5).join(' ')).not.toMatch(/six years/i)
     const hits = auditLogDeletes()
     expect(hits).toHaveLength(1)
     expect(hits[0][0]).toBe('20261026120001_purge_tenant.sql')

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -261,8 +262,8 @@ func TestAccept_TenantlessInviteeJoinsWithTheInvitedRole(t *testing.T) {
 	if audits[0].Actor != user {
 		t.Errorf("audit actor = %q, want the caller %q", audits[0].Actor, user)
 	}
-	if len(audits[0].Payload) != 2 || audits[0].Payload["invitation_id"] != inv.ID || audits[0].Payload["role"] != "reviewer" {
-		t.Errorf("audit payload = %v, want exactly {invitation_id: %s, role: reviewer}", audits[0].Payload, inv.ID)
+	if len(audits[0].Payload) != 4 || audits[0].Payload["invitation_id"] != inv.ID || audits[0].Payload["role"] != "reviewer" {
+		t.Errorf("audit payload = %v, want {invitation_id: %s, role: reviewer, ip_address, device}", audits[0].Payload, inv.ID)
 	}
 }
 
@@ -1002,8 +1003,8 @@ func TestAcceptInvitation_StoresTheTrimmedName(t *testing.T) {
 	}
 	// The name stays out of the audit payload.
 	audits := acceptedAudits(t, w.super, w.tenant)
-	if len(audits) != 1 || len(audits[0].Payload) != 2 {
-		t.Fatalf("audit rows = %+v, want one with exactly {invitation_id, role}", audits)
+	if len(audits) != 1 || len(audits[0].Payload) != 4 {
+		t.Fatalf("audit rows = %+v, want one with exactly {invitation_id, role, ip_address, device}", audits)
 	}
 	if strings.Contains(fmt.Sprint(audits[0].Payload), "Ada Obi") {
 		t.Errorf("audit payload carries the display name: %v", audits[0].Payload)
@@ -1023,5 +1024,39 @@ func TestAcceptInvitation_NoNameStoresNull(t *testing.T) {
 				t.Errorf("memberships = %+v, want one active row with a NULL display_name", rows)
 			}
 		})
+	}
+}
+
+func TestAccept_EventCarriesTheRequestDetail(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(withDetail(tenantless(user, inviteeAddr), "2001:db8::7", uaFirefoxWindows), w.invite.Token, nil); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	audits := acceptedAudits(t, w.super, w.tenant)
+	if len(audits) != 1 || audits[0].Actor != user {
+		t.Fatalf("invitation.accepted rows = %+v, want one with actor %s", audits, user)
+	}
+	want := map[string]any{"invitation_id": w.invite.ID, "role": "reviewer", "ip_address": "2001:db8::7", "device": "Firefox on Windows"}
+	if !reflect.DeepEqual(audits[0].Payload, want) {
+		t.Errorf("payload = %v, want %v", audits[0].Payload, want)
+	}
+}
+
+func TestAccept_UnknownDetailStillAccepts(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), inviteeAddr), w.invite.Token, nil); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	j, addr := newJoinWorld(t, "reviewer")
+	if _, _, _, err := j.store.AcceptInvitationByID(tenantless(uuid.NewString(), addr), j.invite.ID, nil); err != nil {
+		t.Fatalf("AcceptInvitationByID: %v", err)
+	}
+	for _, world := range []acceptWorld{w, j} {
+		audits := acceptedAudits(t, world.super, world.tenant)
+		if len(audits) != 1 || audits[0].Payload["ip_address"] != "Unknown IP" || audits[0].Payload["device"] != "Unknown device" {
+			t.Errorf("audits = %+v, want one with the unknown literals", audits)
+		}
 	}
 }

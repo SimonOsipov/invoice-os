@@ -10,3 +10,9 @@ var AccountEvents = []string{
 	"account.password_reset_requested",
 	"account.password_reset_completed",
 }
+
+// The events whose ip_address and device only an admin and the row's actor read.
+var (
+	selfDetailEvents = []string{"workspace.provisioned", "invitation.accepted"}
+	selfDetailKeys   = []string{"ip_address", "device"}
+)

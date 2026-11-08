@@ -435,3 +435,25 @@ func TestRequireToken_AdmitsOnlyTheExactTokenBeforeReadingTheBody(t *testing.T) 
 		t.Errorf("handler ran %d times, want 1 (exact token only)", handlerReads)
 	}
 }
+
+func TestRequireGateway_OpenRouteStripsTheUserIPHeader(t *testing.T) {
+	app, calls := guardedApp(t, "POST /v1/peer")
+	r := httptest.NewRequest(http.MethodPost, "/v1/peer", nil)
+	r.Header.Set(HeaderUserIP, "192.0.2.99")
+
+	if rec := serve(app, r); rec.Code != http.StatusOK || calls.count() != 1 {
+		t.Fatalf("status %d, handler ran %d times, want 200 and 1", rec.Code, calls.count())
+	}
+	if v := calls.header.Values(HeaderUserIP); len(v) != 0 {
+		t.Errorf("handler still sees X-User-IP = %q, want it deleted", v)
+	}
+
+	app, calls = guardedApp(t, "POST /v1/peer")
+	r = httptest.NewRequest(http.MethodPost, "/v1/peer", nil)
+	r.Header.Set(HeaderGatewayToken, guardToken)
+	r.Header.Set(HeaderUserIP, "192.0.2.99")
+	serve(app, r)
+	if calls.header.Get(HeaderUserIP) != "192.0.2.99" {
+		t.Errorf("control: with the token the handler saw %v, want X-User-IP", calls.header)
+	}
+}

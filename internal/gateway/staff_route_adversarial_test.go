@@ -96,7 +96,7 @@ func assertNoHeader(t *testing.T, h http.Header, key string) {
 	}
 }
 
-// assertStaffHeaders asserts X-User-Staff and that no X-User-* header beyond the identity four reaches the upstream.
+// assertStaffHeaders asserts X-User-Staff and that no X-User-* header beyond the identity four and X-User-IP reaches the upstream.
 func assertStaffHeaders(t *testing.T, h http.Header, staff bool) {
 	t.Helper()
 	if staff {
@@ -106,7 +106,7 @@ func assertStaffHeaders(t *testing.T, h http.Header, staff bool) {
 	} else {
 		assertNoHeader(t, h, wireUserStaff)
 	}
-	known := []string{headerUserID, headerUserRole, headerUserEmail, headerUserStaff}
+	known := []string{headerUserID, headerUserRole, headerUserEmail, headerUserStaff, platform.HeaderUserIP}
 	for k := range h {
 		if strings.HasPrefix(k, "X-User-") && !slices.ContainsFunc(known, func(n string) bool { return http.CanonicalHeaderKey(n) == k }) {
 			t.Errorf("upstream header %s = %q, want only %v", k, h[k], known)

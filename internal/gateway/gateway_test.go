@@ -1363,3 +1363,70 @@ func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
 		}
 	}
 }
+
+func proxiedWithXFF(t *testing.T, env, xff string, extra map[string]string) http.Header {
+	t.Helper()
+	t.Setenv("DEPLOY_ENV", env)
+	tg := setupGateway(t)
+	r := request("GET", "/api/tenancy/v1/ping", tg.validToken(t))
+	if xff != "" {
+		r.Header.Set("X-Forwarded-For", xff)
+	}
+	for k, v := range extra {
+		r.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	return tg.caps["tenancy"].header
+}
+
+func TestUserIPHeaderFromClientIPHosted(t *testing.T) {
+	h := proxiedWithXFF(t, "production", "203.0.113.7, 34.36.1.1", nil)
+	assertHeader(t, h, platform.HeaderUserIP, "203.0.113.7")
+}
+
+func TestUserIPHeaderFromClientIPPreview(t *testing.T) {
+	h := proxiedWithXFF(t, "pr-1", "198.51.100.4", nil)
+	assertHeader(t, h, platform.HeaderUserIP, "198.51.100.4")
+}
+
+func TestUserIPClientCopyStripped(t *testing.T) {
+	forged := map[string]string{platform.HeaderUserIP: "192.0.2.99"}
+	h := proxiedWithXFF(t, "production", "10.0.0.1, 34.36.1.1", forged)
+	if v := h.Values(platform.HeaderUserIP); len(v) != 0 {
+		t.Errorf("forged X-User-IP reached the upstream: %q", v)
+	}
+	h = proxiedWithXFF(t, "production", "203.0.113.7, 34.36.1.1", forged)
+	if v := h.Values(platform.HeaderUserIP); len(v) != 1 || v[0] != "203.0.113.7" {
+		t.Errorf("X-User-IP = %q, want only 203.0.113.7", v)
+	}
+	t.Run("lower case name", func(t *testing.T) {
+		tg := setupGateway(t)
+		t.Setenv("DEPLOY_ENV", "production")
+		r := request("GET", "/api/tenancy/v1/ping", tg.validToken(t))
+		r.Header["x-user-ip"] = []string{"192.0.2.99"}
+		tg.handler.ServeHTTP(httptest.NewRecorder(), r)
+		for k, v := range tg.caps["tenancy"].header {
+			if strings.EqualFold(k, platform.HeaderUserIP) {
+				t.Errorf("upstream has %s = %q, want none", k, v)
+			}
+		}
+	})
+}
+
+func TestUserIPSurvivesAConnectionHeader(t *testing.T) {
+	h := proxiedWithXFF(t, "pr-1", "198.51.100.4", map[string]string{"Connection": platform.HeaderUserIP})
+	assertHeader(t, h, platform.HeaderUserIP, "198.51.100.4")
+}
+
+func TestUserIPAbsentWithoutForwardedFor(t *testing.T) {
+	for _, env := range []string{"production", "pr-1"} {
+		h := proxiedWithXFF(t, env, "", nil)
+		if v := h.Values(platform.HeaderUserIP); len(v) != 0 {
+			t.Errorf("%s: X-User-IP = %q, want none", env, v)
+		}
+	}
+}

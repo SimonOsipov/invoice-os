@@ -23,6 +23,9 @@ const (
 	headerUserStaff = "X-User-Staff"
 )
 
+// HeaderUserIP carries the caller's address, set by the gateway from clientIP.
+const HeaderUserIP = "X-User-IP"
+
 // identityMiddleware reconstructs the caller Identity from the trusted headers the
 // gateway sets after verifying the JWT, and places it in the context so tenant-scoped
 // data access (db.WithinRequestTenantTx) and handlers can read the caller without

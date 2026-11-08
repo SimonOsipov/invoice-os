@@ -35,7 +35,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Identity
 
 - `Verifier.Verify` in `internal/platform/auth/verify.go` checks the JWT signature against the issuer's JWKS, then the issuer and claims in `validate`.
-- `injectIdentity` in `internal/gateway/gateway.go` deletes every client `X-User-*` header and sets identity from the verified token only.
+- `injectIdentity` in `internal/gateway/gateway.go` deletes every client `X-User-*` header, sets identity from the verified token only, and sets `X-User-IP` from `clientIP`.
 - A service trusts identity headers only behind `App.RequireGateway` in `internal/platform/peer.go`. It refuses a request without the gateway token.
 - `auth.RequireStaff` admits only a caller whose verified identity has `Staff`.
 - The mock issuer routes (`/auth/login`, `/auth/mock/*`, `/.well-known/jwks.json`) exist only in a `-tags mockissuer` build. `MockIssuerEnabled` also needs `GATEWAY_MOCK_ISSUER=true` and an environment other than `production`. `cmd/gateway/build.tags` is empty on `main`.

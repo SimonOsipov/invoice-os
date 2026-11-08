@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -479,4 +481,47 @@ func TestSuggestMapping_ACancelledContextIsReturned(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 	r.untouched(t)
+}
+
+func TestPublicCheck_ImportingDocumentOrDocadapterWouldOpenABucketWrite(t *testing.T) {
+	out, err := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, ".").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	imports := strings.Fields(string(out))
+	const mod = "github.com/SimonOsipov/invoice-os/internal/"
+	if !slices.Contains(imports, mod+"importer") {
+		t.Fatalf("imports %v lack internal/importer: the scan reads nothing", imports)
+	}
+	for _, banned := range []string{"document", "docadapter"} {
+		if slices.Contains(imports, mod+banned) {
+			t.Errorf("publiccheck imports internal/%s", banned)
+		}
+	}
+}
+
+func TestChecker_HoldsNoObjectStoreSinkOrLogger(t *testing.T) {
+	fields := func(v any) []string {
+		var out []string
+		rt := reflect.TypeOf(v)
+		for i := 0; i < rt.NumField(); i++ {
+			out = append(out, rt.Field(i).Name+" "+rt.Field(i).Type.String())
+		}
+		return out
+	}
+	wantChecker := []string{
+		"LoadRules func(context.Context, []string, []validation.Rule) (map[string]validation.RuleSet, error)",
+		"Engine *validation.Engine",
+		"Mapper importer.MappingSuggester",
+		"Readers extraction.CheckReaders",
+		"Now func() time.Time",
+	}
+	if got := fields(publiccheck.Checker{}); !slices.Equal(got, wantChecker) {
+		t.Errorf("Checker fields = %q, want %q", got, wantChecker)
+	}
+	wantReaders := []string{"Text extraction.PageReader", "Render extraction.PageReader",
+		"AI extraction.AIReader", "Jev extraction.JevAsker"}
+	if got := fields(extraction.CheckReaders{}); !slices.Equal(got, wantReaders) {
+		t.Errorf("CheckReaders fields = %q, want %q", got, wantReaders)
+	}
 }

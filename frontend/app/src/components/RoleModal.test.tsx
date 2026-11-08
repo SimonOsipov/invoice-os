@@ -6,9 +6,18 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// React's scheduler captures setImmediate at load, so wrap it before the imports below run.
+const commit = vi.hoisted(() => {
+  const real = globalThis.setImmediate
+  const hold = { ms: 0 }
+  globalThis.setImmediate = ((fn: (...a: unknown[]) => void, ...args: unknown[]) =>
+    hold.ms ? real(() => setTimeout(fn, hold.ms, ...args)) : real(fn, ...args)) as typeof setImmediate
+  return hold
+})
 
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
@@ -54,19 +63,10 @@ function ctxWith(over: Record<string, unknown> = {}) {
   } as unknown as PlatformCtx
 }
 
-/** Reads back a mock's own settled promise and attaches a no-op catch, so a deliberately
- * rejected write does not surface as vitest's global unhandled-rejection failure on top of
- * the real assertions below. Never used to weaken an assertion.
- *
- * The extra macrotask tick is load-bearing: React 19 commits a `setState` made from a promise
- * continuation (outside any React event or `act()`) via its scheduler's `MessageChannel`
- * queue, one tick past the microtask this awaits — proven by an isolated repro (3x chained
- * `await Promise.resolve()` still observes the pre-update DOM; one `setTimeout(0)` does not).
- * ClientsView.test.tsx's `waitFor`/`findBy*` calls around EntityFormModal's identical
- * rejected-submit path are this same wait, just via a polling helper instead of a fixed tick. */
+/** Attaches a no-op catch to a mock's rejected promise so it is not an unhandled rejection.
+ * Callers then wait for the DOM with findBy or waitFor: React's commit lands a variable time later. */
 async function drain(fn: ReturnType<typeof vi.fn>) {
   await fn.mock.results[0]?.value?.catch(() => {})
-  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function renderModal(subject: RoleModalSubject, ctxOver: Record<string, unknown> = {}, onClose = vi.fn(), onFlash = vi.fn()) {
@@ -100,7 +100,13 @@ function renderModalRerenderable(ctxOver: Record<string, unknown> = {}) {
   return { rerender: (next: Record<string, unknown>) => view.rerender(el(next)) }
 }
 
-afterEach(cleanup)
+afterEach(async () => {
+  // Let a held commit land before unmount, or it leaks into the next test.
+  if (commit.ms) await new Promise((resolve) => setTimeout(resolve, commit.ms + 10))
+  commit.ms = 0
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  cleanup()
+})
 
 describe('AC-5: RoleModal.save() calls the server-minted-key create verb, arguments only', () => {
   it('TestRoleModal_UsesServerMintedKey', () => {
@@ -201,7 +207,11 @@ describe('the delete confirm', () => {
 })
 
 describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejection', () => {
-  it('a rejected delete keeps the modal open and shows the reason', async () => {
+  // A loaded CI box lands React's commit later than one tick; held 25ms here to force that deterministically.
+  it.each([0, 25])('a rejected delete keeps the modal open and shows the reason (commit held %ims)', async (heldMs) => {
+    // The scheduler skips setImmediate while a message loop is already pending, so let it go idle first.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    commit.ms = heldMs
     const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404))
     const { onClose, onFlash } = renderModal({ mode: 'edit', role: role() }, { deleteRole })
 
@@ -209,8 +219,8 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     fireEvent.click(screen.getByTestId('role-delete-confirmed'))
     await drain(deleteRole)
 
+    expect((await screen.findByTestId('role-modal-error')).textContent).toBe('workflow role not found')
     expect(screen.getByTestId('role-modal')).toBeTruthy()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
     expect(onClose).not.toHaveBeenCalled()
     expect(onFlash).not.toHaveBeenCalled()
   })
@@ -223,6 +233,7 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     fireEvent.click(screen.getByTestId('role-delete'))
     fireEvent.click(screen.getByTestId('role-delete-confirmed'))
     await drain(deleteRole)
+    await screen.findByTestId('role-modal-error')
   }
 
   it('a 409 delete refusal lists the policies under the server sentence', async () => {
@@ -293,8 +304,10 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(screen.queryByTestId('role-modal-error-policies'), 'cleared while the save is in flight').toBeNull()
     await drain(renameRole)
 
+    await waitFor(() =>
+      expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles'),
+    )
     expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
   })
 
   it('a 404 delete refusal renders no policy list', async () => {
@@ -316,11 +329,8 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(screen.getByTestId('role-modal-error-policies')).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('role-delete-confirmed'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
+    await waitFor(() => expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found'))
     expect(screen.queryByTestId('role-modal-error-policies')).toBeNull()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
   })
 
   const SRun = 'this workflow role is awaited by an open approval run'
@@ -408,11 +418,8 @@ describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejec
     expect(screen.getByTestId('role-modal-error-invoices')).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('role-delete-confirmed'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
+    await waitFor(() => expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found'))
     expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
   })
 
   it('a successful delete does not close the modal before ctx.deleteRole resolves', () => {
@@ -435,8 +442,8 @@ describe('AC-10: a rejected save keeps the modal open and shows the server sente
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(renameRole)
 
+    expect((await screen.findByTestId('role-modal-error')).textContent).toBe('only an admin can change workflow roles')
     expect(screen.getByTestId('role-modal')).toBeTruthy()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('only an admin can change workflow roles')
     expect(onClose).not.toHaveBeenCalled()
     expect(onFlash).not.toHaveBeenCalled()
   })
@@ -458,6 +465,7 @@ describe('APSC-11: a refused staffing save', () => {
     fireEvent.click(within(screen.getAllByTestId('role-modal-member')[0]).getByRole('checkbox'))
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(staffRole)
+    await screen.findByTestId('role-modal-error')
     return { ...r, staffRole }
   }
   const invoiceItems = () => within(screen.getByTestId('role-modal-error-invoices')).getAllByRole('listitem')
@@ -501,8 +509,7 @@ describe('APSC-11: a refused staffing save', () => {
     staffRole.mockResolvedValueOnce(role())
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(staffRole)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(onClose).toHaveBeenCalledOnce()
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
     expect(screen.queryByTestId('role-modal-error')).toBeNull()
   })
 
@@ -516,11 +523,9 @@ describe('APSC-11: a refused staffing save', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByTestId('role-modal-error-invoices'), 'cleared as the next save starts').toBeNull()
     failSecond(new ApiError('http', 'workflow role not found', 404))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
 
+    await waitFor(() => expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found'))
     expect(screen.queryByTestId('role-modal-error-invoices')).toBeNull()
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('workflow role not found')
   })
 
   it('a 403 or a 400 on save renders no invoice list', async () => {
@@ -543,8 +548,8 @@ describe('APSC-11: a refused staffing save', () => {
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(staffRole)
 
+    expect((await screen.findByTestId('role-modal-error')).textContent?.startsWith(S)).toBe(true)
     expect(renameRole).toHaveBeenCalledOnce()
-    expect(screen.getByTestId('role-modal-error').textContent?.startsWith(S)).toBe(true)
     expect(invoiceItems().map((li) => li.textContent)).toEqual(['INV-1', 'INV-2'])
     expect(onClose).not.toHaveBeenCalled()
     expect(onFlash).not.toHaveBeenCalled()
@@ -561,7 +566,7 @@ describe('AC-11 [D-PARTIAL-CREATE]: a partially-failed create shows the staffing
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(createRole)
 
-    expect(screen.getByTestId('role-modal-error').textContent).toBe('invalid request')
+    expect((await screen.findByTestId('role-modal-error')).textContent).toBe('invalid request')
     expect(refetchRoles).toHaveBeenCalledOnce()
     expect(onClose).not.toHaveBeenCalled()
   })
@@ -635,7 +640,7 @@ describe('AC-7: the EntityFormModal in-flight idiom', () => {
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(createRole)
 
-    const err = screen.getByTestId('role-modal-error')
+    const err = await screen.findByTestId('role-modal-error')
     expect(err.style.background).toBe('var(--status-red-bg)')
     expect(err.style.border).toContain('var(--status-red-border)')
     expect(err.style.color).toBe('var(--status-red-text)')
@@ -1003,7 +1008,7 @@ describe('Role modal v2 paint', () => {
     fireEvent.click(screen.getByTestId('role-modal-save'))
     await drain(renameRole)
 
-    const err = screen.getByTestId('role-modal-error')
+    const err = await screen.findByTestId('role-modal-error')
     expect(err.textContent).toBe('only an admin can change workflow roles')
     expect(err.style.borderRadius).toBe('var(--radius-md)')
     expect(footer().contains(err)).toBe(true)

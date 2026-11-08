@@ -75,13 +75,10 @@ function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
   } as unknown as PlatformCtx
 }
 
-/** RoleModal.test.tsx's own drain: attaches a .catch to the mock's OWN promise before the
- * test's assertions run, so a deliberately rejected write never surfaces as vitest's global
- * unhandled-rejection failure on top of the real assertion below. The extra tick matches
- * React 19 committing a setState made from a promise continuation one macrotask late. */
+/** Attaches a no-op catch to a mock's rejected promise so it is not an unhandled rejection.
+ * Callers then wait for the DOM with findBy or waitFor: React's commit lands a variable time later. */
 async function drain(fn: ReturnType<typeof vi.fn>) {
   await fn.mock.results[0]?.value?.catch(() => {})
-  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 afterEach(cleanup)
@@ -105,7 +102,7 @@ describe('APPR-04-06 AC3: a rejected workflow-role write renders the server sent
     fireEvent.click(pill)
     await drain(staffRole)
 
-    expect(screen.getByText(REASON), "the server's own 403 sentence must reach the drawer verbatim").toBeTruthy()
+    expect(await screen.findByText(REASON), "the server's own 403 sentence must reach the drawer verbatim").toBeTruthy()
     expect(pill.getAttribute('aria-pressed'), 'a rejected write must never render as if the toggle succeeded').toBe('false')
   })
 
@@ -128,7 +125,7 @@ describe('APPR-04-06 AC3: a rejected workflow-role write renders the server sent
     fireEvent.click(pill)
     await drain(staffRole)
 
-    expect(screen.getByText(S)).toBeTruthy()
+    expect(await screen.findByText(S)).toBeTruthy()
     expect(pill.getAttribute('aria-pressed')).toBe('false')
   })
 
@@ -230,7 +227,7 @@ describe('APPR-04-06 QA: a rejected toggle followed by a successful retry', () =
     const pill = screen.getByTestId('drawer-wfrole-cfo')
     fireEvent.click(pill)
     await drain(staffRole)
-    expect(screen.getByText(REASON)).toBeTruthy()
+    expect(await screen.findByText(REASON)).toBeTruthy()
 
     fireEvent.click(pill) // the retry
     expect(screen.queryByText(REASON), 'setRoleError(null) fires synchronously on the next click').toBeNull()

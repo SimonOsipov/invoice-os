@@ -10,6 +10,7 @@ import {
   getInvoice,
   getInvoiceApproval,
   inviteWithToken,
+  listInvoices,
   listMine,
   me,
   publishApprovalPolicy,
@@ -28,6 +29,8 @@ import { freshPolicyName, freshRoleTitle, freshTin } from './fixtures'
 
 // internal/approval/handlers.go decisionStatusForErr: ErrNotRoleHolder.
 const NOT_ROLE_HOLDER = 'you do not hold the workflow role this step is waiting on'
+// internal/approval/creator.go CreatorRefusedReason.
+const CREATOR_REFUSED_REASON = 'You created this invoice, so another approver must approve it.'
 // internal/approval/policy.go policyStatusForErr: delegateIneligible.
 const guardSentence = (name: string, step: string) => `${name} can no longer be a delegate on ${step}. Pick another delegate or switch delegation off.`
 // internal/approval/decision.go commitDecisionTx audit events.
@@ -147,6 +150,44 @@ test.describe.serial('step delegation (API E2E, over the deployed gateway)', () 
     const log = await getAuditLog(admin, { invoice_id: invoiceId, event: [EVENT_REJECTED], limit: 100 })
     expect(log.events).toHaveLength(1)
     expect(log.events[0].payload).toMatchObject({ as_delegate: true, acted_for_role_title: roleTitle })
+  })
+
+  test('the creator is refused with one sentence on a delegate step', async () => {
+    // Every door must carry exactly this sentence, with no missing-role-holder sentence.
+    const expectOneSentence = async (invoiceId: string) => {
+      const res = await decide(admin, invoiceId, { decision: 'approved' })
+      expect(res.status, JSON.stringify(res.body)).toBe(403)
+      expect((res.body as { error: string }).error, 'the 403 carries the one sentence').toBe(CREATOR_REFUSED_REASON)
+
+      const detail = await getInvoice(admin, invoiceId)
+      expect(detail.can_approve, 'a refused creator cannot approve').toBe(false)
+      expect(detail.approve_blocked_by_creator, 'the detail wire reads refused').toBe(true)
+      expect(detail.approve_blocked_reason, 'the detail wire names the one sentence').toBe(CREATOR_REFUSED_REASON)
+
+      const row = (await listInvoices(admin, { entity_id: entityId })).invoices.find((i) => i.id === invoiceId)
+      expect(row, 'the invoice appears in its own entity list').toBeDefined()
+      expect(row!.approve_blocked_by_creator, 'the list wire reads refused').toBe(true)
+      expect(row!.approve_blocked_reason, 'the list wire names the one sentence').toBe(CREATOR_REFUSED_REASON)
+    }
+
+    // The run must close so a later member write is not refused for stranding it.
+    const closeRun = async (token: string, invoiceId: string) => {
+      const res = await decide(token, invoiceId, { decision: 'rejected', reason: 'Close the run' })
+      expect(res.status, JSON.stringify(res.body)).toBe(200)
+      expect((res.body as ApprovalRun).state).toBe('rejected')
+    }
+
+    await putApprovalPolicyDraft(admin, policyId, { steps: delegateStep(null) })
+    await publishApprovalPolicy(admin, policyId)
+    const invoiceC = await armedInvoice('C')
+    await expectOneSentence(invoiceC)
+    await closeRun(r.token, invoiceC)
+
+    await putApprovalPolicyDraft(admin, policyId, { steps: delegateStep(d.userId) })
+    await publishApprovalPolicy(admin, policyId)
+    const invoiceD = await armedInvoice('D')
+    await expectOneSentence(invoiceD)
+    await closeRun(d.token, invoiceD)
   })
 
   test('publish refuses a delegate who can no longer be one', async () => {

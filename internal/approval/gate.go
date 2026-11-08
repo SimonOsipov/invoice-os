@@ -22,6 +22,9 @@ type GateFacts struct {
 	// CallerIsDelegate: the pending step names the caller (or anyone) as delegate.
 	CallerIsDelegate bool
 	PendingRoleKey   *string // the pending step's workflow role; nil when none
+
+	PendingAllowDelegation bool
+	PendingDelegateUserID  *string
 }
 
 // RowFacts is one invoice row's approval standing, for the list.
@@ -149,6 +152,7 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 	}
 	gf.PendingStepOrd = &stepOrd
 	gf.PendingRoleKey = roleKey
+	gf.PendingAllowDelegation, gf.PendingDelegateUserID = allowDelegation, delegateUserID
 	gf.CallerIsDelegate = DelegateMayDecide(allowDelegation, delegateUserID, subject)
 
 	// AXIS 2, with decideTx's roleKey != nil guard, so the gate and the decision refuse on

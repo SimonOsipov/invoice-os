@@ -324,3 +324,22 @@ func TestStoreRowFacts_DelegateOfPendingIsSet(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreRowFacts_CreatorStandingCountsTheStepDelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx, other := creatorFixture(t, super, "BUG-118-02-ROWS")
+	both := approval.CreatorRefusedReason + " " + approval.CreatorNoRoleHolderReason
+	anyone := fx.armWithDelegation(t, super, app, "bug118-rows-anyone", true, nil)
+	named := fx.armWithDelegation(t, super, app, "bug118-rows-named", true, &other)
+	off := fx.armWithDelegation(t, super, app, "bug118-rows-off", false, nil)
+
+	_, gate, err := NewStore(app).RowFacts(fx.ctx, []string{anyone, named, off})
+	if err != nil || gate.CreatorErr != nil {
+		t.Fatalf("RowFacts: %v, %v", err, gate.CreatorErr)
+	}
+	for id, want := range map[string]string{anyone: approval.CreatorRefusedReason, named: approval.CreatorRefusedReason, off: both} {
+		if got, _ := gate.Creator[id].Refusal(); got != want {
+			t.Errorf("Creator[%s].Refusal = %q, want %q", id, got, want)
+		}
+	}
+}

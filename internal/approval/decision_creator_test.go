@@ -496,3 +496,74 @@ func TestDecide_CreatorDelegateMayReject(t *testing.T) {
 		t.Errorf("decisions = %+v, want one rejection with as_delegate true", ds)
 	}
 }
+
+// delegateStepWorld: an unstaffed-role step, a creator outside the role, and the step's delegation set.
+func delegateStepWorld(t *testing.T, name string, allow bool) (super, app *pgxpool.Pool, f approveFixture, creator string) {
+	t.Helper()
+	super, app = dbTestPools(t)
+	f = newApproveFixture(t, super, app, name, "creator-role")
+	creator = seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"})
+	seedHistory(t, super, f.tenantID, f.invoiceID, nil, creator)
+	setStepDelegation(t, super, f.stepID, allow, nil)
+	return
+}
+
+func TestDecide_CreatorRung_AnyoneDelegateStepDropsTheSecondSentence(t *testing.T) {
+	super, app, f, creator := delegateStepWorld(t, "BUG-118 anyone", true)
+	seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"})
+
+	_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+	assertNothingWritten(t, super, f)
+}
+
+func TestDecide_CreatorRung_NamedEligibleDelegateDropsTheSecondSentence(t *testing.T) {
+	super, app, f, creator := delegateStepWorld(t, "BUG-118 named", true)
+	delegate := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"})
+	setStepDelegation(t, super, f.stepID, true, &delegate)
+
+	_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+	assertNothingWritten(t, super, f)
+}
+
+func TestDecide_CreatorRung_IneligibleNamedDelegateKeepsBothSentences(t *testing.T) {
+	cases := []struct {
+		name string
+		spec func(entB string) memberSpec
+		self bool // the creator is the named delegate
+	}{
+		{"suspended", func(string) memberSpec { return memberSpec{role: "reviewer", status: "suspended"} }, false},
+		{"invited", func(string) memberSpec { return memberSpec{role: "reviewer", status: "invited"} }, false},
+		{"preparer", func(string) memberSpec { return memberSpec{role: "preparer"} }, false},
+		{"limited to another client", func(entB string) memberSpec {
+			return memberSpec{role: "reviewer", limited: true, entityIDs: []string{entB}}
+		}, false},
+		{"the creator", nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			super, app, f, creator := delegateStepWorld(t, "BUG-118 ineligible "+c.name, true)
+			seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"}) // an other approver the step does not name
+			delegate := creator
+			if !c.self {
+				entB := seedBusinessEntity(t, super, f.tenantID, "BUG-118 other client")
+				delegate = seedMemberOf(t, super, f.tenantID, c.spec(entB))
+			}
+			setStepDelegation(t, super, f.stepID, true, &delegate)
+
+			_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+			wantRefused(t, err, creatorSentence+" "+noHolderSentence)
+			assertNothingWritten(t, super, f)
+		})
+	}
+}
+
+func TestDecide_CreatorRung_DelegateStepWithAStaffedRoleStillDropsTheSecondSentence(t *testing.T) {
+	super, app, f, creator := delegateStepWorld(t, "BUG-118 staffed", true)
+	seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"})
+
+	_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+}

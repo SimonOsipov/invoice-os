@@ -142,7 +142,7 @@ func doclingStatusError(resp *http.Response) error {
 	return err
 }
 
-// ErrDocumentUnreadable marks the sidecar's 422: the file is bad, the service is not down.
+// ErrDocumentUnreadable marks a read that failed on the file: a sidecar 422, a pdfium open failure or the page cap.
 var ErrDocumentUnreadable = errors.New("docling: document unreadable")
 
 type unreadableError struct{ error }

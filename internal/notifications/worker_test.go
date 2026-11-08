@@ -1419,9 +1419,16 @@ func TestDemoDeal_UnknownSourceIsCancelled(t *testing.T) {
 	if n := len(r.hs.dealCalls()); n != 0 {
 		t.Errorf("OpenDemoDeal called %d times, want 0", n)
 	}
-	if err != nil && strings.Contains(err.Error(), email) {
-		t.Errorf("error %q holds the email", err)
+	// River records a cancel in the job's errors, not in the returned err.
+	if len(res.Job.Errors) == 0 || !strings.Contains(res.Job.Errors[0].Error, "newsletter") {
+		t.Fatalf("job errors = %+v, want one naming the source", res.Job.Errors)
 	}
+	for _, e := range res.Job.Errors {
+		if strings.Contains(e.Error, email) {
+			t.Errorf("recorded error %q holds the email", e.Error)
+		}
+	}
+	qaRequireNoLeak(t, nil, r.sinks(), email)
 }
 
 func TestDemoDeal_ReadinessCheckDealRespectsAnOpenDeal(t *testing.T) {

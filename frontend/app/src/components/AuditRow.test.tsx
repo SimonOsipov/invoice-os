@@ -85,6 +85,25 @@ describe('AuditRow', () => {
     ])
   })
 
+  it('auditRow_createdAndAcceptedShowIpAndDeviceLikeSignedIn', () => {
+    const payload = { ip_address: '203.0.113.7', device: 'Chrome on macOS' }
+    const seen: (string | null)[][][] = []
+    for (const event of ['account.signed_in', 'workspace.provisioned', 'invitation.accepted']) {
+      const { unmount } = render(<AuditRow event={ev({ event, payload })} expanded onToggle={() => {}} />)
+      const fields = screen.getAllByTestId('audit-payload-field')
+      expect(fields.map((f) => f.textContent)).toEqual(['IP address203.0.113.7', 'DeviceChrome on macOS'])
+      seen.push(
+        fields.map((f) => {
+          const v = f.querySelector('.mono') as HTMLElement
+          return [v.className, v.getAttribute('style')]
+        }),
+      )
+      unmount()
+    }
+    expect(seen[1]).toEqual(seen[0])
+    expect(seen[2]).toEqual(seen[0])
+  })
+
   it('auditRow_accountUnknownValuesShowVerbatim', () => {
     const payload = { ip_address: 'Unknown IP', device: 'Unknown device', occurred_at: '2026-10-29T10:00:00Z' }
     render(<AuditRow event={ev({ event: 'account.sign_in_failed', payload })} expanded onToggle={() => {}} />)

@@ -325,6 +325,9 @@ func contactProblems(jobs map[string]workflowJob) []string {
 	if x, _ := foldedIf(dep); !strings.Contains(x, "needs.prepare-env.result == 'success'") {
 		bad("deploy if does not require prepare-env success")
 	}
+	if s, ok := nlStep(jobs["e2e"], "API E2E (typed contract suite)"); !ok || s.env["NIGHTLY_HUBSPOT_TOKEN_VERSION"] != nlTokenVersionOut {
+		bad("api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not " + nlTokenVersionOut)
+	}
 	if s, ok := nlStep(dep, "Deploy the backends"); !ok || s.env["NIGHTLY_HUBSPOT_TOKEN_VERSION"] != nlTokenVersionOut {
 		bad("deploy backends env NIGHTLY_HUBSPOT_TOKEN_VERSION is not " + nlTokenVersionOut)
 	}
@@ -1272,10 +1275,13 @@ func TestDevEnvNightly_GuardAndServicesUseOneTokenVersion(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
 	read := `preview.sh contact-token "$PR" "` + nlTokenVersionStep + `"`
+	ver := "NIGHTLY_HUBSPOT_TOKEN_VERSION: " + nlTokenVersionOut
 	for _, c := range []struct{ old, repl, want string }{
 		{read, `preview.sh contact-token "$PR"`, "start reads the token without"},
 		{"hubspot_token_version: " + nlTokenVersionStep, "hubspot_token_version: ${{ steps.urls.outputs.gateway_url }}", "output hubspot_token_version"},
-		{"NIGHTLY_HUBSPOT_TOKEN_VERSION: " + nlTokenVersionOut, "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest", "NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{ver + "\n        run: bash scripts/ci/preview.sh deploy", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: bash scripts/ci/preview.sh deploy", "deploy backends env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{ver + "\n        run: pnpm", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{"\n          " + ver + "\n        run: pnpm", "\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {

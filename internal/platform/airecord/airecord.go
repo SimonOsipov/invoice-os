@@ -20,6 +20,7 @@ type Call struct {
 	LatencyMS    int64
 	Attempts     int
 	Outcome      string
+	PublicCheck  bool // stub: set by Record under WithPublicCheck
 }
 
 // Sink receives one Call. It returns at once and never affects the AI call.
@@ -46,3 +47,6 @@ func Record(ctx context.Context, sink Sink, logger *slog.Logger, c Call) {
 	c.Cost = max(c.Cost, 0)
 	sink(c)
 }
+
+// WithPublicCheck marks ctx as a tenantless public check. Stub: returns ctx unchanged.
+func WithPublicCheck(ctx context.Context) context.Context { return ctx }

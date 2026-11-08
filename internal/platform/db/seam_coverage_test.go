@@ -215,6 +215,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
+	{file: "internal/aicalls/recorder.go", fn: "writePublicCheck"},                    // a public check has no tenant to bind: the NULL-tenant INSERT is the one write invoice_app may make with no GUC
 	{file: "internal/notifications/erase.go"},                                         // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
 	{file: "internal/accountevents/new_device.go"},                                    // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
 	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool

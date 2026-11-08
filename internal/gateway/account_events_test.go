@@ -11,7 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -417,8 +418,8 @@ func TestAccountEvents_UserAgentIsCleanedAndCut(t *testing.T) {
 	recordAccountEvent(req, rec, nopLog(), AccountEvent{Event: EventSignedOut, UserID: aeUserID})
 
 	got := rec.events()[0].UserAgent
-	if n := len([]rune(got)); n != maxUserAgentRunes {
-		t.Errorf("recorded user agent has %d runes, want %d", n, maxUserAgentRunes)
+	if n := len([]rune(got)); n != platform.MaxUserAgentRunes {
+		t.Errorf("recorded user agent has %d runes, want %d", n, platform.MaxUserAgentRunes)
 	}
 	if strings.ContainsRune(got, '�') || strings.Contains(got, "\xff") {
 		t.Error("recorded user agent keeps the invalid byte")
@@ -541,26 +542,5 @@ func TestAccountEvents_ResetRequestAnswerIsTheSameForMemberAndNonMember(t *testi
 	}
 	if answers[0] != answers[1] {
 		t.Errorf("member answer %q differs from non-member answer %q", answers[0], answers[1])
-	}
-}
-
-func TestAccountEvents_UserAgentCutsAtTheBoundary(t *testing.T) {
-	cases := []struct {
-		name string
-		ua   string
-		want int
-	}{
-		{"511 runes kept", strings.Repeat("é", 511), 511},
-		{"512 runes kept", strings.Repeat("é", 512), 512},
-		{"513 runes cut", strings.Repeat("é", 513), 512},
-		{"NUL dropped", "a\x00b", 2},
-		{"empty", "", 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := cleanUserAgent(c.ua); utf8.RuneCountInString(got) != c.want || !utf8.ValidString(got) || strings.ContainsRune(got, 0) {
-				t.Errorf("cleanUserAgent = %d runes %q, want %d valid runes with no NUL", utf8.RuneCountInString(got), got, c.want)
-			}
-		})
 	}
 }

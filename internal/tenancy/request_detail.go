@@ -16,7 +16,7 @@ type requestDetail struct{ ip, userAgent string }
 // withRequestDetail carries the gateway's X-User-IP and the user agent to the audit write.
 func withRequestDetail(r *http.Request) context.Context {
 	return context.WithValue(r.Context(), requestDetailKey{},
-		requestDetail{ip: r.Header.Get(platform.HeaderUserIP), userAgent: r.UserAgent()})
+		requestDetail{ip: r.Header.Get(platform.HeaderUserIP), userAgent: platform.CleanUserAgent(r.UserAgent())})
 }
 
 // requestDetailOf returns the audit ip_address and device; the unknown literals match the account.* events.

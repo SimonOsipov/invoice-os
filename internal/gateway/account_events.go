@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -19,9 +17,6 @@ const (
 	EventSignedOut              = "account.signed_out"
 	EventPasswordResetRequested = "account.password_reset_requested"
 	EventPasswordResetCompleted = "account.password_reset_completed"
-
-	// Mirrors the CHECK on account_event_handoffs.user_agent.
-	maxUserAgentRunes = 512
 )
 
 // AccountEvent is one account event. UserID or Email must be set; IP and UserAgent are filled from the request.
@@ -79,18 +74,9 @@ func recordAccountEvent(r *http.Request, events AccountEvents, log *slog.Logger,
 		return
 	}
 	e.IP = clientIP(r, platform.Posture(platform.DeployEnv()))
-	e.UserAgent = cleanUserAgent(r.UserAgent())
+	e.UserAgent = platform.CleanUserAgent(r.UserAgent())
 	if err := events.Record(r.Context(), e); err != nil {
 		log.ErrorContext(r.Context(), "account-event: record failed", slog.String("event", e.Event))
 		platform.CaptureError(r.Context(), err)
 	}
-}
-
-// cleanUserAgent makes ua valid UTF-8 without NUL and at most maxUserAgentRunes long.
-func cleanUserAgent(ua string) string {
-	ua = strings.ReplaceAll(strings.ToValidUTF8(ua, ""), "\x00", "")
-	if utf8.RuneCountInString(ua) <= maxUserAgentRunes {
-		return ua
-	}
-	return string([]rune(ua)[:maxUserAgentRunes])
 }

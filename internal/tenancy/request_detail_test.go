@@ -4,7 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/accountevents"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -44,4 +48,20 @@ func TestRequestDetailOf_Table(t *testing.T) {
 			t.Errorf("requestDetailOf = (%q, %q), want the unknown literals", ip, device)
 		}
 	})
+}
+
+// The label comes from the cleaned user agent, the same value the account events store.
+func TestRequestDetailOf_LabelsTheCleanedUserAgent(t *testing.T) {
+	for name, ua := range map[string]string{
+		"over 512 runes":       strings.Repeat("é", 600) + uaChromeMac,
+		"invalid UTF-8 first":  "\xff\xfe" + uaChromeMac,
+		"NUL before the token": "Mozilla\x00/5.0 " + uaChromeMac,
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := accountevents.Parse(platform.CleanUserAgent(ua)).Label()
+			if _, got := requestDetailOf(withDetail(context.Background(), "203.0.113.7", ua)); got != want {
+				t.Errorf("requestDetailOf device = %q, want %q", got, want)
+			}
+		})
+	}
 }

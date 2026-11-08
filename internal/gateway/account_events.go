@@ -37,7 +37,7 @@ type AccountEvents interface {
 }
 
 // AccountEventOutbox writes each event to account_event_handoffs as invoice_gateway, inside the
-// request; the worker moves the row into the audit log.
+// request.
 type AccountEventOutbox struct{ pool *pgxpool.Pool }
 
 // Record inserts the event. A client that leaves must not drop it.

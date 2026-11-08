@@ -4,6 +4,7 @@ package publiccheck
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -141,7 +142,10 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 			}}}
 			continue
 		}
-		p := invoice.MBSPayload(*it.Invoice)
+		p, err := jsonShaped(invoice.MBSPayload(*it.Invoice))
+		if err != nil {
+			return Result{}, err
+		}
 		res.Invoices[i] = Invoice{Number: it.Number, Payload: p}
 		dateOf[i] = validation.RuleSetDate(p, today)
 		if !slices.Contains(distinct, dateOf[i]) {
@@ -183,6 +187,19 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		res.Invoices[i].Failures = out.Violations
 	}
 	return res, nil
+}
+
+// jsonShaped round-trips p so the engine sees float64 numbers, as BatchValidateHandler's decoded body gives it.
+func jsonShaped(p map[string]any) (map[string]any, error) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // dropCompanyRules returns a copy of rs without the rules on companyTargets, and the keys of the enabled ones.

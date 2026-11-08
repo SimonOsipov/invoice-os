@@ -200,8 +200,8 @@ func TestCheck_CarriesTheEvaluatedPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := res.Invoices[0].Payload
-	if got, ok := p["total"].(json.Number); !ok || got != "1075.00" {
-		t.Errorf("total = %#v, want json.Number 1075.00", p["total"])
+	if got, ok := p["total"].(float64); !ok || got != 1075 {
+		t.Errorf("total = %#v, want float64 1075 (the JSON-decoded shape the batch handler evaluates)", p["total"])
 	}
 	if b, _ := p["buyer"].(map[string]any); b["name"] != "Beta Ltd" {
 		t.Errorf("buyer = %#v, want name Beta Ltd", p["buyer"])

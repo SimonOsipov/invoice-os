@@ -227,3 +227,20 @@ func TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow(t *testing.T) {
 		t.Errorf("NULL-tenant ai_calls = %d, want %d (control: the counting query sees the check's writes)", got, want)
 	}
 }
+
+func TestCheckDB_ValidLineRaisesNoLineRuleFailure(t *testing.T) {
+	c := dbChecker(t)
+	seedCodeLists(t)
+	res, err := c.Check(context.Background(), csvReq(
+		"Inv,Total,Date,Seller,TIN,Desc,Qty,Price,LTotal,Pct,BQ\nA,215,2027-01-02,Acme Ltd,123456780001,Widget,2,100,200,7.5,1\n",
+		"issue_date", "Date", "supplier_name", "Seller", "supplier_tin", "TIN", "line_description", "Desc",
+		"line_quantity", "Qty", "line_unit_price", "Price", "line_total", "LTotal", "line_tax_percent", "Pct", "line_base_quantity", "BQ"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range ruleKeys(res.Invoices[0]) {
+		if strings.Contains(k, "quantity") || strings.Contains(k, "line-total") || strings.Contains(k, "tax-percent") {
+			t.Errorf("valid line fails %s (all: %v)", k, ruleKeys(res.Invoices[0]))
+		}
+	}
+}

@@ -130,6 +130,15 @@ describe('AuditView states', () => {
     expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy()
   })
 
+  it('auditView_firstRequestCarriesNoAccountExclusion', async () => {
+    const fetchMock = mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/invoice/v1/audit-log')
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('exclude_account_events')
+  })
+
   it('auditStates_newWorkspaceSaysNothingAboutFilters', async () => {
     mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: true })])
     render(<AuditView ctx={auditCtx()} />)

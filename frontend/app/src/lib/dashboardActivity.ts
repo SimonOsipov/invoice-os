@@ -18,9 +18,9 @@ export interface ActivityRowView {
 
 // null: a firm with no resolved client. Sending no company would list every client.
 export function activityQuery(isInhouse: boolean, entityId: string | null): AuditLogQuery | null {
-  if (isInhouse) return { limit: ACTIVITY_LIMIT }
+  if (isInhouse) return { limit: ACTIVITY_LIMIT, exclude_account_events: true }
   if (entityId == null) return null
-  return { limit: ACTIVITY_LIMIT, company: entityId }
+  return { limit: ACTIVITY_LIMIT, company: entityId, exclude_account_events: true }
 }
 
 export function activityRow(e: AuditEvent, now: number): ActivityRowView {

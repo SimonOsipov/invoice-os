@@ -665,6 +665,7 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
     const q = new URL(u).searchParams
     expect(q.get('limit'), `limit in ${u}`).toBe('5')
     expect(q.has('company'), `no company in ${u}`).toBe(false)
+    expect(q.get('exclude_account_events'), `account events excluded in ${u}`).toBe('true')
   }
 
   const widths = await atWidths(page, 'recent activity rows', async () => {

@@ -894,3 +894,18 @@ describe('setInvitationToken and inviteWithToken', () => {
     expect(stub).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('getAuditLog', () => {
+  async function urlFor(query: { limit?: number; exclude_account_events?: boolean }) {
+    const { getAuditLog } = await import('./client')
+    requested.length = 0
+    await getAuditLog('tok', query)
+    return requested[0]
+  }
+
+  it('getAuditLog sends exclude_account_events only when true', async () => {
+    expect(await urlFor({ limit: 5, exclude_account_events: true })).toContain('exclude_account_events=true')
+    expect(await urlFor({ limit: 5 })).not.toContain('exclude_account_events')
+    expect(await urlFor({ exclude_account_events: false })).not.toContain('exclude_account_events')
+  })
+})

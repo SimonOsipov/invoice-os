@@ -871,7 +871,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
   }
   const firmWith = (id: string) => firmCtx(id, `Client ${id}`)
 
-  it('in-house requests five rows and no company', async () => {
+  it('in-house requests five rows, the exclusion and no company', async () => {
     const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
     render(<DashboardActive ctx={{ ...dashCtx(), active: { entityId: 'ent-1' } } as unknown as PlatformCtx} />)
     await screen.findByText('Invoice created')
@@ -880,6 +880,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     expect(urls).toHaveLength(1)
     expect(urls[0].pathname).toBe('/api/invoice/v1/audit-log')
     expect(urls[0].searchParams.get('limit')).toBe('5')
+    expect(urls[0].searchParams.get('exclude_account_events')).toBe('true')
     expect(urls[0].searchParams.has('company')).toBe(false)
   })
 
@@ -891,14 +892,15 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     const u = auditUrls(m)[0]
     expect(u.searchParams.get('company')).toBe('ent-1')
     expect(u.searchParams.get('limit')).toBe('5')
+    expect(u.searchParams.get('exclude_account_events')).toBe('true')
   })
 
-  it('the request carries no client filter beyond limit and company', async () => {
+  it('the request carries only limit, company and the exclusion', async () => {
     const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
     render(<DashboardActive ctx={firmWith('ent-1')} />)
     await screen.findByText('Invoice created')
 
-    expect([...auditUrls(m)[0].searchParams.keys()].sort()).toEqual(['company', 'limit'])
+    expect([...auditUrls(m)[0].searchParams.keys()].sort()).toEqual(['company', 'exclude_account_events', 'limit'])
   })
 
   const byCompany = (replies: Record<string, AuditResponse>): AuditReply => (url) =>

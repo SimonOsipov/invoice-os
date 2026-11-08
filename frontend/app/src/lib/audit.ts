@@ -67,6 +67,7 @@ export interface AuditLogQuery {
   company?: string
   q?: string
   invoice_id?: string
+  exclude_account_events?: boolean
 }
 
 // The store coerces nil slices to [], but the Go struct carries no omitempty guarantee, so a
@@ -101,6 +102,7 @@ export async function getAuditLog(
   if (query.company !== undefined) params.set('company', query.company)
   if (query.q !== undefined) params.set('q', query.q)
   if (query.invoice_id !== undefined) params.set('invoice_id', query.invoice_id)
+  if (query.exclude_account_events === true) params.set('exclude_account_events', 'true')
   const qs = params.toString() ? `?${params.toString()}` : ''
   const res = await authedFetch<AuditResponse>(`${base}/api/invoice/v1/audit-log${qs}`)
   return normaliseAuditResponse(res)

@@ -24,7 +24,8 @@ const (
 )
 
 // HeaderUserIP carries the caller's address, set by the gateway from clientIP.
-const HeaderUserIP = "X-User-IP"
+// Not X-User-IP: Google's front end on the Cloud Run hop is suspected of dropping it; e2e/api/account-events.spec.ts "workspace created and invite accepted carry the device and IP" proves it arrives.
+const HeaderUserIP = "X-User-Address"
 
 // identityMiddleware reconstructs the caller Identity from the trusted headers the
 // gateway sets after verifying the JWT, and places it in the context so tenant-scoped

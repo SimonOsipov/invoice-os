@@ -1397,11 +1397,11 @@ func TestUserIPClientCopyStripped(t *testing.T) {
 	forged := map[string]string{platform.HeaderUserIP: "192.0.2.99"}
 	h := proxiedWithXFF(t, "production", "10.0.0.1, 34.36.1.1", forged)
 	if v := h.Values(platform.HeaderUserIP); len(v) != 0 {
-		t.Errorf("forged X-User-IP reached the upstream: %q", v)
+		t.Errorf("forged X-User-Address reached the upstream: %q", v)
 	}
 	h = proxiedWithXFF(t, "production", "203.0.113.7, 34.36.1.1", forged)
 	if v := h.Values(platform.HeaderUserIP); len(v) != 1 || v[0] != "203.0.113.7" {
-		t.Errorf("X-User-IP = %q, want only 203.0.113.7", v)
+		t.Errorf("X-User-Address = %q, want only 203.0.113.7", v)
 	}
 	t.Run("lower case name", func(t *testing.T) {
 		tg := setupGateway(t)
@@ -1426,7 +1426,7 @@ func TestUserIPAbsentWithoutForwardedFor(t *testing.T) {
 	for _, env := range []string{"production", "pr-1"} {
 		h := proxiedWithXFF(t, env, "", nil)
 		if v := h.Values(platform.HeaderUserIP); len(v) != 0 {
-			t.Errorf("%s: X-User-IP = %q, want none", env, v)
+			t.Errorf("%s: X-User-Address = %q, want none", env, v)
 		}
 	}
 }

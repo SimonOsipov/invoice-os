@@ -445,7 +445,7 @@ func TestRequireGateway_OpenRouteStripsTheUserIPHeader(t *testing.T) {
 		t.Fatalf("status %d, handler ran %d times, want 200 and 1", rec.Code, calls.count())
 	}
 	if v := calls.header.Values(HeaderUserIP); len(v) != 0 {
-		t.Errorf("handler still sees X-User-IP = %q, want it deleted", v)
+		t.Errorf("handler still sees X-User-Address = %q, want it deleted", v)
 	}
 
 	app, calls = guardedApp(t, "POST /v1/peer")
@@ -454,6 +454,6 @@ func TestRequireGateway_OpenRouteStripsTheUserIPHeader(t *testing.T) {
 	r.Header.Set(HeaderUserIP, "192.0.2.99")
 	serve(app, r)
 	if calls.header.Get(HeaderUserIP) != "192.0.2.99" {
-		t.Errorf("control: with the token the handler saw %v, want X-User-IP", calls.header)
+		t.Errorf("control: with the token the handler saw %v, want X-User-Address", calls.header)
 	}
 }

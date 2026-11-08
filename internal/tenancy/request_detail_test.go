@@ -20,7 +20,7 @@ const (
 func withDetail(ctx context.Context, ip, ua string) context.Context {
 	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
 	if ip != "" {
-		r.Header.Set("X-User-IP", ip)
+		r.Header.Set("X-User-Address", ip)
 	}
 	if ua != "" {
 		r.Header.Set("User-Agent", ua)

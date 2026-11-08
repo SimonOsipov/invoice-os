@@ -1143,7 +1143,7 @@ func TestProvisionHandler_PassesTheRequestDetail(t *testing.T) {
 			})
 			r := httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(validProvisionBody))
 			if c.ip != "" {
-				r.Header.Set("X-User-IP", c.ip)
+				r.Header.Set("X-User-Address", c.ip)
 			}
 			r.Header.Set("User-Agent", c.ua)
 			rec := httptest.NewRecorder()

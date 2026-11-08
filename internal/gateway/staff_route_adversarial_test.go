@@ -96,7 +96,7 @@ func assertNoHeader(t *testing.T, h http.Header, key string) {
 	}
 }
 
-// assertStaffHeaders asserts X-User-Staff and that no X-User-* header beyond the identity four and X-User-IP reaches the upstream.
+// assertStaffHeaders asserts X-User-Staff and that no X-User-* header beyond the identity four and X-User-Address reaches the upstream.
 func assertStaffHeaders(t *testing.T, h http.Header, staff bool) {
 	t.Helper()
 	if staff {

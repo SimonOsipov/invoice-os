@@ -54,4 +54,4 @@ paths:
 - State the corpus in every plan test.
 - Run `ANALYZE` as the owner or the superuser, never as `invoice_app`.
 - Write `membership.stranded_alert` only from `internal/tenancy/stranded_alert.go`, after the send, with actor `system` and payload `stranded_role_keys`, `stranded_invoices_total`, `admins` and `delivery`.
-- Write `ip_address` and `device` on `workspace.provisioned` and `invitation.accepted` from `X-User-IP` and the user agent, with the `account.*` unknown literals.
+- Write `ip_address` and `device` on `workspace.provisioned` and `invitation.accepted` from `X-User-Address` and the user agent, with the `account.*` unknown literals.

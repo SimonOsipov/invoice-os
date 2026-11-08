@@ -499,7 +499,7 @@ func TestAcceptHandlers_PassTheRequestDetail(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			gotIP, gotDevice = "", ""
 			r := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
-			r.Header.Set("X-User-IP", "203.0.113.7")
+			r.Header.Set("X-User-Address", "203.0.113.7")
 			r.Header.Set("User-Agent", uaChromeMac)
 			rec := httptest.NewRecorder()
 			c.h.ServeHTTP(rec, r)

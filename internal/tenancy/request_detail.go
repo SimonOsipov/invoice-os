@@ -13,7 +13,7 @@ type requestDetailKey struct{}
 
 type requestDetail struct{ ip, userAgent string }
 
-// withRequestDetail carries the gateway's X-User-IP and the user agent to the audit write.
+// withRequestDetail carries the gateway's X-User-Address and the user agent to the audit write.
 func withRequestDetail(r *http.Request) context.Context {
 	return context.WithValue(r.Context(), requestDetailKey{},
 		requestDetail{ip: r.Header.Get(platform.HeaderUserIP), userAgent: platform.CleanUserAgent(r.UserAgent())})

@@ -68,12 +68,16 @@ type pdfText struct {
 	calls int
 	chars int
 	err   error
+	onRun func()
 }
 
 func (r *pdfText) Name() string    { return "stub" }
 func (r *pdfText) Version() string { return "1" }
 func (r *pdfText) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
 	r.calls++
+	if r.onRun != nil {
+		r.onRun()
+	}
 	if r.err != nil {
 		return extraction.PageResult{}, r.err
 	}
@@ -254,7 +258,7 @@ func TestCheck_LoadsRulesOnceWithDistinctDatesAndNoCustomRules(t *testing.T) {
 func TestCheck_RefusesAFileOneByteOverFifteenMiB(t *testing.T) {
 	r := newRig()
 	req := csvReq("")
-	req.File = padded(threeInvoices, publiccheck.MaxFileBytes+1)
+	req.File = padded(threeInvoices, 15<<20+1)
 	if _, err := r.c.Check(context.Background(), req); !errors.Is(err, publiccheck.ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -264,7 +268,7 @@ func TestCheck_RefusesAFileOneByteOverFifteenMiB(t *testing.T) {
 func TestCheck_AcceptsAFileOfExactlyFifteenMiB(t *testing.T) {
 	r := newRig()
 	req := csvReq("")
-	req.File = padded(threeInvoices, publiccheck.MaxFileBytes)
+	req.File = padded(threeInvoices, 15<<20)
 	req.Mapping["buyer_tin"] = "BTIN"
 	res, err := r.c.Check(context.Background(), req)
 	if err != nil || len(res.Invoices) != 2 {
@@ -274,7 +278,7 @@ func TestCheck_AcceptsAFileOfExactlyFifteenMiB(t *testing.T) {
 
 func TestSuggestMapping_RefusesAFileOneByteOverFifteenMiB(t *testing.T) {
 	r := newRig()
-	_, err := r.c.SuggestMapping(context.Background(), padded(threeInvoices, publiccheck.MaxFileBytes+1), "csv")
+	_, err := r.c.SuggestMapping(context.Background(), padded(threeInvoices, 15<<20+1), "csv")
 	if !errors.Is(err, publiccheck.ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -387,21 +391,29 @@ func TestCheck_APoorScanDocumentIsAProblemWithThePoorScanSentence(t *testing.T) 
 
 func TestCheck_CompanyProfileRulesAreNotChecked(t *testing.T) {
 	r := newRig()
-	r.l.rules = []validation.Rule{
-		requiredRule("supplier-lga-allowed", "supplier.lga"),
-		requiredRule("supplier-email-required", "supplier.email"),
-		requiredRule("buyer-tin-required", "buyer.tin"),
+	// Unsorted on purpose; every one of the eight targets carries a rule.
+	targets := []string{"supplier.state", "supplier.lga", "supplier.telephone", "supplier.email", "supplier.street",
+		"supplier.city", "supplier.postal_zone", "supplier.country"}
+	r.l.rules = []validation.Rule{requiredRule("buyer-tin-required", "buyer.tin")}
+	for _, tg := range targets {
+		r.l.rules = append(r.l.rules, requiredRule(strings.ReplaceAll(tg, ".", "-")+"-required", tg))
 	}
-	res, err := r.c.Check(context.Background(), csvReq("Inv,Total\nA,1\nB,2\n"))
+	// Two dates make the loader hand back the same rules twice: the keys must come out distinct.
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,2026-10-01\nB,2,2026-10-02\n", "issue_date", "Date"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(res.Invoices) != 2 {
+		t.Fatalf("%d invoices, want 2", len(res.Invoices))
 	}
 	for _, inv := range res.Invoices {
 		if len(inv.Failures) != 1 || inv.Failures[0].RuleKey != "buyer-tin-required" {
 			t.Errorf("%s failures = %+v, want only buyer-tin-required", inv.Number, inv.Failures)
 		}
 	}
-	if want := []string{"supplier-email-required", "supplier-lga-allowed"}; !slices.Equal(res.NotChecked, want) {
+	want := []string{"supplier-city-required", "supplier-country-required", "supplier-email-required", "supplier-lga-required",
+		"supplier-postal_zone-required", "supplier-state-required", "supplier-street-required", "supplier-telephone-required"}
+	if !slices.Equal(res.NotChecked, want) {
 		t.Errorf("NotChecked = %v, want %v (sorted, distinct)", res.NotChecked, want)
 	}
 }
@@ -523,5 +535,23 @@ func TestChecker_HoldsNoObjectStoreSinkOrLogger(t *testing.T) {
 		"AI extraction.AIReader", "Jev extraction.JevAsker"}
 	if got := fields(extraction.CheckReaders{}); !slices.Equal(got, wantReaders) {
 		t.Errorf("CheckReaders fields = %q, want %q", got, wantReaders)
+	}
+}
+
+// A context that ends during the read comes back as the context's own error, not as an outage.
+func TestCheck_AContextEndedDuringTheReadIsNotAnOutage(t *testing.T) {
+	r := newRig()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.tx.err = errors.New("docling: request aborted")
+	r.tx.onRun = cancel
+	_, err := r.c.Check(ctx, publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	if err != context.Canceled || errors.Is(err, publiccheck.ErrReadUnavailable) {
+		t.Errorf("pdf err = %v, want context.Canceled itself, not ErrReadUnavailable", err)
+	}
+	r.tx.err, r.tx.onRun = nil, nil
+	_, err = r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	if err != nil {
+		t.Fatalf("control: the same read with a live context failed: %v", err)
 	}
 }

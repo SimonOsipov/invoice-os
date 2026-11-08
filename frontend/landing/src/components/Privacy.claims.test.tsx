@@ -31,6 +31,9 @@ import {
   staffSearchReadsAccountRows,
   accountEventPayloadKeys,
   accountRowsAreSelfOnly,
+  createdAcceptedDetailIsAdminOrSelf,
+  createdAcceptedDetailKeys,
+  firstSessionIsNotASignInRow,
   auditLogDeletes,
   eraseDeletesKnownDevices,
   newDeviceMailFacts,
@@ -1212,8 +1215,57 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     expect(accountEventsRecorded(gw.replace(call, '_ = AccountEvent{Event: EventSignedOut, UserID: claims.Subject}'))).not.toEqual(six)
     expect(accountEventPayloadKeys()).toEqual(['device', 'ip_address', 'occurred_at'])
     expect(sentence('P1')).toContain('with the IP address and the browser and operating system')
+    expect(sentence('P1')).toContain('signs in to your account through the sign-in form')
     expect(accountEventPayloadKeys(swap('internal/accountevents/audit_job.go', 'json:"ip_address"', 'json:"ip"'))).not.toContain('ip_address')
     expect(accountEventPayloadKeys(swap('internal/accountevents/audit_job.go', 'a.Event, p)', 'a.Event, nil)'))).toEqual([])
+  })
+
+  it('createdAcceptedRecordIpAndDevice', () => {
+    const both = ['device', 'invitation_id', 'ip_address', 'role']
+    expect(createdAcceptedDetailKeys()['workspace.provisioned']).toEqual(expect.arrayContaining(['device', 'ip_address']))
+    expect(createdAcceptedDetailKeys()['invitation.accepted']).toEqual(both)
+    expect(sentence('P5')).toContain('with the IP address and the browser and operating system of that request')
+    const S = 'internal/tenancy/store.go'
+    expect(createdAcceptedDetailKeys(swap(S, '"role": role, "ip_address": ip, "device": device,', '"role": role, "device": device,'))['invitation.accepted']).not.toContain('ip_address')
+    expect(createdAcceptedDetailKeys(swap(S, '"ip_address": ip, "device": device,\n\t\t})', '"ip_address": ip,\n\t\t})'))['workspace.provisioned']).not.toContain('device')
+  })
+
+  it('createdAcceptedDetailIsAdminOrSelf', () => {
+    const F = 'internal/audit/filter.go'
+    const R = 'internal/audit/reader.go'
+    const A = 'internal/audit/account_events.go'
+    const filter = readSource(F)
+    const reader = readSource(R)
+    const account = readSource(A)
+    expect(createdAcceptedDetailIsAdminOrSelf()).toBe(true)
+    expect(sentence('P5')).toContain("only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP")
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '"account.signed_out",', '"account.signed_out",\n"invitation.accepted",'))).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(swap(F, 'names := bind(AccountEvents)\n\t\tconditions = append(conditions, "(a.entity_id', 'names := bind(append(AccountEvents, "invitation.accepted"))\n\t\tconditions = append(conditions, "(a.entity_id'), reader, account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, '"workspace.provisioned":            {},', ''), account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"ip_address", "device"}', '[]string{"ip_address"}'))).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"workspace.provisioned", "invitation.accepted"}', '[]string{"invitation.accepted"}'))).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(swap(F, /return "\(CASE WHEN a\.event = ANY[\s\S]*?END\)"/, 'return "a.payload"'), reader, account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(swap(F, 'AND NOT (kv.key = ANY(', 'AND (kv.key = ANY('), reader, account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(swap(F, '` + hidden + `)`', '`)`'), reader, account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, 'be.name, ` + payload +', 'be.name, a.payload`+'), account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, 'be.name, ` + payload +', 'be.name, A.Payload`+'), account)).toBe(false)
+  })
+
+  it('firstSessionIsNotRecordedAsASignIn', () => {
+    expect(firstSessionIsNotASignInRow()).toBe(true)
+    expect(sentence('P5')).toContain('is not recorded as a sign-in')
+    expect(sentence('P5')).toContain('without an email')
+    const gw = gatewaySource()
+    const mover = readSource('internal/accountevents/mover.go')
+    const planted = gw.replace('Email: user.Email, FirstSession: true}', 'Email: user.Email}')
+    expect(planted).not.toBe(gw)
+    expect(firstSessionIsNotASignInRow(planted, mover)).toBe(false)
+    const reg = gw.replace('Email: confirmed.User.Email, FirstSession: true}', 'Email: confirmed.User.Email}')
+    expect(reg).not.toBe(gw)
+    expect(firstSessionIsNotASignInRow(reg, mover)).toBe(false)
+    const noContinue = mover.replace(/(INSERT INTO account_known_devices[\s\S]*?\n\s*)continue\n/, '$1')
+    expect(noContinue).not.toBe(mover)
+    expect(firstSessionIsNotASignInRow(gw, noContinue)).toBe(false)
   })
 
   it('accountEventsSelfOnlyForNonAdmins', () => {

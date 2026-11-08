@@ -34,6 +34,9 @@ type AuditWorker struct {
 // AddAuditTo registers w on the worker's one bundle.
 func AddAuditTo(bundle *river.Workers, w *AuditWorker) { river.AddWorker(bundle, w) }
 
+// UnknownIP is written when the request carried no usable address.
+const UnknownIP = "Unknown IP"
+
 type auditPayload struct {
 	IP         string `json:"ip_address"`
 	Device     string `json:"device"`
@@ -44,7 +47,7 @@ func (w *AuditWorker) Work(ctx context.Context, job *river.Job[AuditArgs]) error
 	a := job.Args
 	p := auditPayload{IP: a.IP, Device: a.Device, OccurredAt: a.OccurredAt}
 	if p.IP == "" {
-		p.IP = "Unknown IP"
+		p.IP = UnknownIP
 	}
 	if p.Device == "" {
 		p.Device = unknownDevice

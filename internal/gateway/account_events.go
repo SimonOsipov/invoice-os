@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -19,14 +17,13 @@ const (
 	EventSignedOut              = "account.signed_out"
 	EventPasswordResetRequested = "account.password_reset_requested"
 	EventPasswordResetCompleted = "account.password_reset_completed"
-
-	// Mirrors the CHECK on account_event_handoffs.user_agent.
-	maxUserAgentRunes = 512
 )
 
 // AccountEvent is one account event. UserID or Email must be set; IP and UserAgent are filled from the request.
 type AccountEvent struct {
 	Event, UserID, Email, IP, UserAgent string
+	// FirstSession marks a hand-off mint; the worker records its device.
+	FirstSession bool
 }
 
 // AccountEvents records account events. A handler given nil records nothing and logs nothing (tests only; main passes NewAccountEvents).
@@ -35,15 +32,15 @@ type AccountEvents interface {
 }
 
 // AccountEventOutbox writes each event to account_event_handoffs as invoice_gateway, inside the
-// request; the worker moves the row into the audit log.
+// request.
 type AccountEventOutbox struct{ pool *pgxpool.Pool }
 
 // Record inserts the event. A client that leaves must not drop it.
 func (o *AccountEventOutbox) Record(ctx context.Context, e AccountEvent) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outboxTimeout)
 	defer cancel()
-	_, err := o.pool.Exec(ctx, `INSERT INTO account_event_handoffs (event, user_id, email, ip, user_agent)
-		VALUES ($1, $2, $3, $4, $5)`, e.Event, nullIfEmpty(e.UserID), nullIfEmpty(e.Email), e.IP, e.UserAgent)
+	_, err := o.pool.Exec(ctx, `INSERT INTO account_event_handoffs (event, user_id, email, ip, user_agent, first_session)
+		VALUES ($1, $2, $3, $4, $5, $6)`, e.Event, nullIfEmpty(e.UserID), nullIfEmpty(e.Email), e.IP, e.UserAgent, e.FirstSession)
 	return err
 }
 
@@ -77,18 +74,9 @@ func recordAccountEvent(r *http.Request, events AccountEvents, log *slog.Logger,
 		return
 	}
 	e.IP = clientIP(r, platform.Posture(platform.DeployEnv()))
-	e.UserAgent = cleanUserAgent(r.UserAgent())
+	e.UserAgent = platform.CleanUserAgent(r.UserAgent())
 	if err := events.Record(r.Context(), e); err != nil {
 		log.ErrorContext(r.Context(), "account-event: record failed", slog.String("event", e.Event))
 		platform.CaptureError(r.Context(), err)
 	}
-}
-
-// cleanUserAgent makes ua valid UTF-8 without NUL and at most maxUserAgentRunes long.
-func cleanUserAgent(ua string) string {
-	ua = strings.ReplaceAll(strings.ToValidUTF8(ua, ""), "\x00", "")
-	if utf8.RuneCountInString(ua) <= maxUserAgentRunes {
-		return ua
-	}
-	return string([]rune(ua)[:maxUserAgentRunes])
 }

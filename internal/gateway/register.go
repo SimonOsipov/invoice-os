@@ -271,7 +271,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 				answer, _ := json.Marshal(map[string]string{"access_token": confirmed.AccessToken, "refresh_token": confirmed.RefreshToken}) // cannot fail
 				if code, ok := store.Put(string(answer), sha256.Sum256([]byte(state))); ok {
 					location = verified + "&handoff=" + code
-					recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: confirmed.User.ID, Email: confirmed.User.Email})
+					recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: confirmed.User.ID, Email: confirmed.User.Email, FirstSession: true})
 				} else {
 					log.WarnContext(r.Context(), "verify: hand-off store full")
 				}

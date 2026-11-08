@@ -375,9 +375,21 @@ func TestDoclingReader_Only422IsDocumentUnreadable(t *testing.T) {
 			w.Write([]byte(`{"error":"x"}`))
 		})
 		_, err := dcNewReader(t, srv.URL).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+		if err == nil {
+			t.Errorf("status %d: Read returned no error", status)
+		}
 		if got := errors.Is(err, extraction.ErrDocumentUnreadable); got != want {
 			t.Errorf("status %d: errors.Is(ErrDocumentUnreadable) = %v, want %v", status, got, want)
 		}
+	}
+
+	// A sidecar that is down is an outage, not a bad file.
+	down := httptest.NewServer(http.NotFoundHandler())
+	url := down.URL
+	down.Close()
+	_, err := dcNewReader(t, url).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+	if err == nil || errors.Is(err, extraction.ErrDocumentUnreadable) {
+		t.Errorf("transport error = %v, want a non-nil error that is not ErrDocumentUnreadable", err)
 	}
 }
 

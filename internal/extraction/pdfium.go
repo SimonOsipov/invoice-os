@@ -49,7 +49,8 @@ var _ PageReader = (*PDFiumReader)(nil)
 func NewPDFiumReader() *PDFiumReader { return &PDFiumReader{} }
 
 // NewPDFiumEndsReader skips every page but the first and last: a public check needs two PNGs
-// and the upload can run to maxPages. PageResult totals then count only those pages' text.
+// and the upload can run to maxPages. PageResult.Pages stays the document's count; TextChars and
+// PagesWithText cover only those pages.
 func NewPDFiumEndsReader() *PDFiumReader { return &PDFiumReader{endsOnly: true} }
 
 func (r *PDFiumReader) Name() string { return pdfiumReaderName }
@@ -64,7 +65,7 @@ func (r *PDFiumReader) renderDPI() int {
 }
 
 // Read hands doc.Bytes to pdfium by reference and calls onPage once per page in ascending
-// order. onPage must not be nil.
+// order (an ends reader: the first and last page only). onPage must not be nil.
 //
 // ctx.Err() is tested before the pool is touched, so a cancelled call never pays the wasm
 // compile (law E12). The totals are assigned only once the whole document is through, so any

@@ -385,6 +385,9 @@ func TestPDFiumEndsReader_RendersOnlyTheFirstAndLastPage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if len(full) != 3 {
+		t.Fatalf("control: a full read delivered %d pages, want 3", len(full))
+	}
 
 	base := extraction.PDFiumCleanupsForTest()
 	got := map[int][32]byte{}
@@ -406,6 +409,24 @@ func TestPDFiumEndsReader_RendersOnlyTheFirstAndLastPage(t *testing.T) {
 		if got[n] != full[n] {
 			t.Errorf("page %d PNG differs from a full read's", n)
 		}
+	}
+}
+
+// TestPDFiumEndsReader_ASinglePageDocumentIsDeliveredOnce: the first page is also the last.
+func TestPDFiumEndsReader_ASinglePageDocumentIsDeliveredOnce(t *testing.T) {
+	full, _ := ptRead(t, fxNative)
+	if len(full) != 1 {
+		t.Fatalf("control: %s has %d pages, want 1", fxNative, len(full))
+	}
+	var order []int
+	if _, err := extraction.NewPDFiumEndsReader().Read(t.Context(), ptDoc(t, fxNative), func(p extraction.Page) error {
+		order = append(order, p.Number)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 1 || order[0] != 1 {
+		t.Errorf("pages delivered = %v, want [1]", order)
 	}
 }
 

@@ -337,6 +337,15 @@ func TestCheckSpreadsheet_ReportsEachBlankNumberRowAsImportDoes(t *testing.T) {
 	if !reflect.DeepEqual(got.BlankNumberRows, want) {
 		t.Errorf("BlankNumberRows = %+v, want %+v", got.BlankNumberRows, want)
 	}
+
+	// Rows count from the sheet's top, so a header on row 2 shifts them.
+	got, err = CheckSpreadsheet(t.Context(), []byte("junk\nInv,Total\n,1\nA,2\n"), "csv", 2, checkMap(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []RowError{{Row: 3, Message: "blank invoice number: row cannot be grouped"}}; !reflect.DeepEqual(got.BlankNumberRows, want) {
+		t.Errorf("header row 2: BlankNumberRows = %+v, want %+v", got.BlankNumberRows, want)
+	}
 }
 
 func TestCheckSpreadsheet_RefusesAMappingWithoutInvoiceNumber(t *testing.T) {

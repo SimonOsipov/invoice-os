@@ -120,8 +120,8 @@ func (r *DoclingReader) Read(ctx context.Context, doc Document, onPage func(Page
 	return totals, nil
 }
 
-// doclingStatusError names the status and the service's own reason, so a 422 (unreadable
-// document) is distinguishable from a 500 without a sentinel error type.
+// doclingStatusError names the status and the service's own reason. Only a 422 (unreadable
+// document) matches ErrDocumentUnreadable.
 func doclingStatusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, doclingErrBodyMax))
 

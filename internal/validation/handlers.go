@@ -88,6 +88,18 @@ type batchResponse struct {
 	Results          []batchItemResult `json:"results"`
 }
 
+// RuleSetDate is the date whose rule-set version judges an invoice: its issue_date when that
+// parses as time.DateOnly, else today.
+func RuleSetDate(inv map[string]any, today string) string {
+	if v, ok := inv["issue_date"].(string); ok {
+		// Year 0 parses in Go but Postgres rejects it at d::date, which would 500 the batch.
+		if t, err := time.Parse(time.DateOnly, v); err == nil && t.Year() >= 1 {
+			return v
+		}
+	}
+	return today
+}
+
 // BatchValidateHandler returns POST /v1/validate/batch: 03 submits many
 // invoices in one request and gets each one's violations back, stamped with
 // the rule-set version in force on that invoice's issue date.
@@ -157,13 +169,7 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string, custom 
 		var distinct []string
 		seen := map[string]bool{}
 		for i, it := range req.Invoices {
-			d := today
-			if v, ok := it.Invoice["issue_date"].(string); ok {
-				// Year 0 parses in Go but Postgres rejects it at d::date, which would 500 the batch.
-				if t, err := time.Parse(time.DateOnly, v); err == nil && t.Year() >= 1 {
-					d = v
-				}
-			}
+			d := RuleSetDate(it.Invoice, today)
 			dates[i] = d
 			if !seen[d] {
 				seen[d] = true

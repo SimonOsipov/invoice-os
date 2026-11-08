@@ -572,7 +572,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const formsOnly = hubspotFormsKeys().filter((k) => !hubspotCrmKeys().includes(k))
     expect(formsOnly.length, 'the forms-only list is empty').toBeGreaterThan(0)
     expect(Object.keys(FORMS_ONLY_WORDS).sort()).toEqual(formsOnly)
-    expect(crmTags()).toEqual(['registered', 'demo request'])
+    expect(crmTags()).toEqual(['registered', 'demo request', 'readiness check'])
   })
 
   it('the page names what HubSpot receives from a registrant and from a demo booker, and when', () => {

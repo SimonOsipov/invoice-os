@@ -1672,3 +1672,35 @@ func TestDemoDealWorker_TimeoutCoversSixVendorCalls(t *testing.T) {
 		t.Errorf("Timeout = %v, want above River's default %v", got, river.JobTimeoutDefault)
 	}
 }
+
+func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	ctx := context.Background()
+	only := uniqueEmail(t, r.e, "tagready")
+	all := uniqueEmail(t, r.e, "tagall")
+	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: only, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	qaRegistrant(t, r.e, all, "Ada Lovelace", "", "")
+	if err := r.e.store.DemoRequest(ctx, DemoIntake{Email: all, Name: "Ada Lovelace"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: all, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, only, "hubspot", 1))
+	qaRequireCompleted(t, res, err, "readiness-only hubspot job")
+	res, err = r.work(t, r.jobRow(t, all, "hubspot", 3))
+	qaRequireCompleted(t, res, err, "three-source hubspot job")
+	calls := r.hs.got()
+	if len(calls) != 2 {
+		t.Fatalf("HubSpot.Upsert called %d times, want 2", len(calls))
+	}
+	if want := []string{"readiness check"}; !slices.Equal(calls[0].Tags, want) {
+		t.Errorf("readiness-only tags = %v, want %v", calls[0].Tags, want)
+	}
+	if want := []string{"registered", "demo request", "readiness check"}; !slices.Equal(calls[1].Tags, want) {
+		t.Errorf("three-source tags = %v, want %v", calls[1].Tags, want)
+	}
+}

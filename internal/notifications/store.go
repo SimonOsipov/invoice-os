@@ -42,6 +42,11 @@ type DemoIntake struct {
 	ConsentText          string
 }
 
+// ReadinessIntake: the store stamps the check time and the consent time.
+type ReadinessIntake struct {
+	Email, ConsentText string
+}
+
 type Contact struct {
 	Email              string
 	FirstName          string
@@ -59,14 +64,17 @@ type Contact struct {
 const newFactSQL = `(
         (contacts.registered_at IS NULL AND EXCLUDED.registered_at IS NOT NULL)
      OR (contacts.demo_requested_at IS NULL AND EXCLUDED.demo_requested_at IS NOT NULL)
+     OR (contacts.readiness_checked_at IS NULL AND EXCLUDED.readiness_checked_at IS NOT NULL)
      OR (contacts.marketing_consented_at IS NULL AND EXCLUDED.marketing_consented_at IS NOT NULL))`
 
+// ceiling: a readiness-only contact skips Resend; add it with the double opt-in.
 const mergeSQL = `
 INSERT INTO contacts (email, user_id, first_name, last_name, company,
-                      registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at)
+                      registered_at, demo_requested_at, readiness_checked_at, marketing_consent_text, marketing_consented_at)
 VALUES (lower(btrim($1)), $2::uuid, $3, $4, $5,
         CASE WHEN $6 THEN now() END,
         CASE WHEN $7 THEN now() END,
+        CASE WHEN $10 THEN now() END,
         $8::text,
         CASE WHEN $8::text IS NOT NULL THEN COALESCE($9::timestamptz, now()) END)
 ON CONFLICT (email) DO UPDATE SET
@@ -76,6 +84,7 @@ ON CONFLICT (email) DO UPDATE SET
     company                = COALESCE(NULLIF(EXCLUDED.company, ''), contacts.company),
     registered_at          = COALESCE(contacts.registered_at, EXCLUDED.registered_at),
     demo_requested_at      = COALESCE(contacts.demo_requested_at, EXCLUDED.demo_requested_at),
+    readiness_checked_at   = COALESCE(contacts.readiness_checked_at, EXCLUDED.readiness_checked_at),
     marketing_consent_text = COALESCE(contacts.marketing_consent_text, EXCLUDED.marketing_consent_text),
     marketing_consented_at = COALESCE(contacts.marketing_consented_at, EXCLUDED.marketing_consented_at),
     version                = contacts.version + CASE WHEN ` + newFactSQL + ` THEN 1 ELSE 0 END,
@@ -83,13 +92,13 @@ ON CONFLICT (email) DO UPDATE SET
     resend_delivered_at    = CASE WHEN ` + newFactSQL + ` THEN NULL ELSE contacts.resend_delivered_at END,
     updated_at             = now()
 RETURNING email, version, hubspot_delivered_at IS NULL,
-          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL),
+          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL)),
           old.registered_at IS NULL AND new.registered_at IS NOT NULL`
 
 type intake struct {
 	email, userID, first, last, company string
 	name                                string
-	registered, demo                    bool
+	registered, demo, readiness         bool
 	consentText                         string
 	consentAt                           time.Time
 }
@@ -108,6 +117,10 @@ func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 		email: in.Email, first: first, last: last, company: strings.TrimSpace(in.Company),
 		name: strings.TrimSpace(in.Name), demo: true, consentText: in.ConsentText,
 	})
+}
+
+func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {
+	return s.merge(ctx, intake{email: in.Email, readiness: true, consentText: in.ConsentText})
 }
 
 func (s *Store) merge(ctx context.Context, in intake) error {
@@ -133,7 +146,7 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 	var version int64
 	var hubspotPending, resendPending, newlyRegistered bool
 	err = tx.QueryRow(ctx, mergeSQL, in.email, userID, in.first, in.last, in.company,
-		in.registered, in.demo, consentText, consentAt).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
+		in.registered, in.demo, consentText, consentAt, in.readiness).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
 	if err != nil {
 		return fmt.Errorf("notifications: merge contact: %w", err)
 	}
@@ -151,9 +164,13 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		}
 	}
 	// RETURNING old/new (Postgres 18) sees the prior row, so exactly one concurrent sign-up wins.
-	if in.demo || newlyRegistered {
+	if in.demo || in.readiness || newlyRegistered {
 		args := DemoDealArgs{Email: email, Name: in.name, Company: in.company}
-		if !in.demo {
+		switch {
+		case in.demo:
+		case in.readiness:
+			args.Source = dealSourceReadinessCheck
+		default:
 			args.Source = dealSourceSignUp
 		}
 		if _, err := s.river.InsertTx(ctx, tx, args, nil); err != nil {
@@ -178,12 +195,12 @@ func splitName(full string) (first, last string) {
 
 func (s *Store) Me(ctx context.Context, email string) (Contact, error) {
 	var c Contact
-	var registered, demo, consented bool
+	var registered, demo, readiness, consented bool
 	err := s.pool.QueryRow(ctx, `
-		SELECT email, registered_at IS NOT NULL, demo_requested_at IS NOT NULL, marketing_consented_at IS NOT NULL,
-		       hubspot_delivered_at, resend_delivered_at, delivery_mode
+		SELECT email, registered_at IS NOT NULL, demo_requested_at IS NOT NULL, readiness_checked_at IS NOT NULL,
+		       marketing_consented_at IS NOT NULL, hubspot_delivered_at, resend_delivered_at, delivery_mode
 		FROM contacts WHERE email = lower(btrim($1))`, email).Scan(
-		&c.Email, &registered, &demo, &consented, &c.HubSpotDeliveredAt, &c.ResendDeliveredAt, &c.Mode)
+		&c.Email, &registered, &demo, &readiness, &consented, &c.HubSpotDeliveredAt, &c.ResendDeliveredAt, &c.Mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Contact{}, ErrNotFound
 	}
@@ -196,7 +213,11 @@ func (s *Store) Me(ctx context.Context, email string) (Contact, error) {
 	if demo {
 		c.Tags = append(c.Tags, "demo request")
 	}
-	c.MarketingEligible = consented
-	c.ResendApplies = registered || consented
+	if readiness {
+		c.Tags = append(c.Tags, "readiness check")
+	}
+	eligible := consented && (registered || demo)
+	c.MarketingEligible = eligible
+	c.ResendApplies = registered || eligible
 	return c, nil
 }

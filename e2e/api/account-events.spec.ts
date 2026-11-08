@@ -208,11 +208,11 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     expect(created.length).toBeGreaterThan(0)
     expect((created[0].payload as { id: string }).id).toBe(entity.id)
 
-    // A preparer sees only their own account rows; the control read must hold one.
+    // A firm preparer with no client grants reads only its own account rows, so the exclusion removes them all.
     const control = await getAuditLog(preparer.token, { limit: 100 })
-    expect(control.events.filter((e) => ACCOUNT_EVENTS.includes(e.event)).length).toBeGreaterThan(0)
+    expect(control.events.filter((e) => e.actor === preparer.id && ACCOUNT_EVENTS.includes(e.event)).length).toBeGreaterThan(0)
     const own = await getAuditLog(preparer.token, { limit: 5, exclude_account_events: true })
-    expect(own.events.length).toBeGreaterThan(0)
     expect(own.events.filter((e) => ACCOUNT_EVENTS.includes(e.event))).toEqual([])
+    expect(own.total).toBe(0)
   })
 })

@@ -1000,6 +1000,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
 
     expect(auditUrls(m)).toHaveLength(0)
     expect(within(activityTile()).getByText('No activity yet')).toBeDefined()
+    expect(within(activityTile()).getByTestId('activity-note').textContent).toBe('Sign-in activity is in the Audit log')
   })
 
   it('in-house: entity id landing after the rollup keeps the rows and makes no second call', async () => {
@@ -1066,14 +1067,14 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     expect(screen.queryByText('INV-2026-00481')).toBeNull()
   })
 
-  it('the empty tile holds only title and empty copy', async () => {
+  it('the empty tile holds title, empty copy and the note', async () => {
     mockRollupFetch(rollup(0, { validated: 5 }))
     render(<DashboardActive ctx={dashCtx()} />)
     await settleTile()
     await within(activityTile()).findByText('No activity yet')
 
     expect(activityTile().textContent).toBe(
-      'Recent activityNo activity yetEdits, validations, approvals and submissions appear here as they happen.',
+      'Recent activityNo activity yetEdits, validations, approvals and submissions appear here as they happen.Sign-in activity is in the Audit log',
     )
   })
 
@@ -1085,6 +1086,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     const tile = within(activityTile())
     expect(await tile.findByText(/Something went wrong/)).toBeDefined()
     expect(tile.queryByText('No activity yet')).toBeNull()
+    expect(tile.queryByTestId('activity-note')).toBeNull()
   })
 
   it('Retry refetches', async () => {
@@ -1104,6 +1106,33 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     await settleTile()
 
     expect(within(activityTile()).getByText('Loading activity…')).toBeDefined()
+    expect(within(activityTile()).queryByTestId('activity-note')).toBeNull()
+  })
+
+  it('with rows the note follows the last row', async () => {
+    mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Invoice created')
+
+    const tile = within(activityTile())
+    const note = tile.getByTestId('activity-note')
+    expect(note.textContent).toBe('Sign-in activity is in the Audit log')
+    const rows = tile.getByTestId('activity-rows')
+    expect(rows.children).toHaveLength(5)
+    expect(rows.lastElementChild!.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(rows.contains(note)).toBe(false)
+  })
+
+  it('Audit log opens the Audit screen with no filter', async () => {
+    mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    const nav = vi.fn()
+    render(<DashboardActive ctx={{ ...dashCtx(), nav } as unknown as PlatformCtx} />)
+    await screen.findByText('Invoice created')
+
+    const note = within(activityTile()).getByTestId('activity-note')
+    expect(within(note).getAllByRole('button')).toHaveLength(1)
+    fireEvent.click(within(note).getByRole('button', { name: 'Audit log' }))
+    expect(nav.mock.calls).toEqual([['audit']])
   })
 
   it.each([true, false])('the head carries no SAMPLE and no mock row (handoff %s)', async (handoff) => {

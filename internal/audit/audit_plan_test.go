@@ -1680,8 +1680,9 @@ func aePlanScratch(t *testing.T) *fixture {
 	return planScratch.fx
 }
 
-func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
-	f := aePlanScratch(t)
+// aePlanSeed fills the scratch database with the corpus above and returns the tenant read and its 20 actors.
+func aePlanSeed(t *testing.T, f *fixture) (string, []string) {
+	t.Helper()
 	ctx := context.Background()
 	tenant := uuid.NewString()
 	actors := make([]string, aePlanActors)
@@ -1694,7 +1695,6 @@ func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	member := csMemberUser(t, planScratch.super, actors[0], tenant, "preparer", true)
 	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `
 			INSERT INTO audit_log (tenant_id, actor, event, payload, created_at)
@@ -1736,6 +1736,13 @@ func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
 	if _, err := f.mig.Exec(ctx, `VACUUM (ANALYZE) audit_log`); err != nil {
 		t.Fatalf("analyze as the owner: %v", err)
 	}
+	return tenant, actors
+}
+
+func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
+	f := aePlanScratch(t)
+	tenant, actors := aePlanSeed(t, f)
+	member := csMemberUser(t, planScratch.super, actors[0], tenant, "preparer", true)
 
 	// Floor: the admin's page, with no account arm, is index-served here, so a later failure is the arm's.
 	admin := csMemberUser(t, planScratch.super, uuid.NewString(), tenant, "admin", false)
@@ -1759,5 +1766,30 @@ func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
 	}
 	if planHasSort(plan) {
 		t.Errorf("plan = %s\nthe non-admin page must keep index order, with no Sort node", plan)
+	}
+}
+
+// Corpus: the corpus above (50,000 rows in the tenant read, every tenth an account event; 19 other
+// tenants of 5,000). No flood: this pins the plan's shape, not its latency.
+func TestAudit_AccountExclusionPageKeepsTheTenantIndex(t *testing.T) {
+	f := aePlanScratch(t)
+	tenant, _ := aePlanSeed(t, f)
+	admin := csMemberUser(t, planScratch.super, uuid.NewString(), tenant, "admin", false)
+
+	got, stmts := planTraceList(t, admin, audit.Filter{Limit: 5, ExcludeAccountEvents: true})
+
+	if want := aePlanRows - aePlanRows/10; got.Total != want {
+		t.Fatalf("the admin read %d rows, want %d: the plan below is not the plan of the exclusion", got.Total, want)
+	}
+	page, ok := stmts[planKindPage]
+	if !ok {
+		t.Fatal("Store.List issued no page statement")
+	}
+	plan := assertServedByIndex(t, f, tenant, "", nil, page.sql, page.args...)
+	if !strings.Contains(plan, "Index Scan") {
+		t.Errorf("plan = %s\nwant an Index Scan on a tenant_id-led index", plan)
+	}
+	if planHasSort(plan) {
+		t.Errorf("plan = %s\nthe excluded page must keep index order, with no Sort node", plan)
 	}
 }

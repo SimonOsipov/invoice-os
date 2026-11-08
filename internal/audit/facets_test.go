@@ -66,6 +66,10 @@ func TestAuditFacetSQL_EachFacetOmitsItsOwnFilterAndKeepsTheRest(t *testing.T) {
 		Actors:    []string{uuid.NewString()},
 		ActorKind: "people",
 		Company:   audit.NamedCompany(uuid.NewString()),
+		// Not a facet's own dimension: all three keep it, the event facet too (it clears Events only).
+		// FacetSQLForTest renders a non-admin scope, whose own-account arm also reads `(a.event <> ALL(`;
+		// only the exclusion is preceded by AND.
+		ExcludeAccountEvents: true,
 	})
 
 	cases := []struct {
@@ -78,7 +82,7 @@ func TestAuditFacetSQL_EachFacetOmitsItsOwnFilterAndKeepsTheRest(t *testing.T) {
 			name:   "event",
 			sql:    sqls[0],
 			absent: "a.event = ANY(",
-			want:   []string{"a.actor = ANY(", "a.entity_id = $", "a.created_at >=", "a.actor <> 'system'"},
+			want:   []string{"a.actor = ANY(", "a.entity_id = $", "a.created_at >=", "a.actor <> 'system'", "AND a.event <> ALL("},
 		},
 		{
 			name:   "actor",
@@ -86,13 +90,13 @@ func TestAuditFacetSQL_EachFacetOmitsItsOwnFilterAndKeepsTheRest(t *testing.T) {
 			absent: "a.actor = ANY(",
 			// ActorKind survives here on purpose: it is a separate control, so kind=system
 			// must narrow the actors the picker offers (task-624, judgment call 1).
-			want: []string{"a.event = ANY(", "a.entity_id = $", "a.created_at >=", "a.actor <> 'system'"},
+			want: []string{"a.event = ANY(", "a.entity_id = $", "a.created_at >=", "a.actor <> 'system'", "AND a.event <> ALL("},
 		},
 		{
 			name:   "company",
 			sql:    sqls[2],
 			absent: "a.entity_id = $",
-			want:   []string{"a.event = ANY(", "a.actor = ANY(", "a.created_at >=", "a.actor <> 'system'"},
+			want:   []string{"a.event = ANY(", "a.actor = ANY(", "a.created_at >=", "a.actor <> 'system'", "AND a.event <> ALL("},
 		},
 	}
 

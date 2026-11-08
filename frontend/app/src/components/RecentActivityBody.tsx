@@ -1,4 +1,5 @@
-// Body of the Overview "Recent activity" tile: the workspace's last audit events.
+// Body of the Overview "Recent activity" tile.
+import type { CSSProperties } from 'react'
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { type AuditResponse, getAuditLog } from '../lib/audit'
@@ -7,11 +8,29 @@ import type { PlatformCtx } from '../types'
 
 const PAD = { padding: '0 20px' } as const
 
-function EmptyActivity() {
+function ActivityNote({ ctx, style }: { ctx: PlatformCtx; style: CSSProperties }) {
   return (
-    <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-      <div className="card-title" style={{ marginBottom: 3 }}>No activity yet</div>
-      <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Edits, validations, approvals and submissions appear here as they happen.</div>
+    <p data-testid="activity-note" style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', ...style }}>
+      Sign-in activity is in the{' '}
+      <button
+        type="button"
+        onClick={() => ctx.nav('audit')}
+        style={{ background: 'none', border: 0, padding: 0, font: 'inherit', fontWeight: 600, color: 'var(--action)', textDecoration: 'underline', cursor: 'pointer' }}
+      >
+        Audit log
+      </button>
+    </p>
+  )
+}
+
+function EmptyActivity({ ctx }: { ctx?: PlatformCtx }) {
+  return (
+    <div>
+      <div style={{ padding: '40px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+        <div className="card-title" style={{ marginBottom: 3 }}>No activity yet</div>
+        <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Edits, validations, approvals and submissions appear here as they happen.</div>
+      </div>
+      {ctx && <ActivityNote ctx={ctx} style={{ padding: '0 20px 20px', textAlign: 'center' }} />}
     </div>
   )
 }
@@ -28,12 +47,14 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
 
   if (log.status === 'loading') return <div style={PAD}><Loading label="Loading activity…" /></div>
   if (log.status === 'error' && log.error) return <div style={PAD}><ErrorState error={log.error} onRetry={log.run} /></div>
+  if (log.status === 'empty') return <EmptyActivity ctx={ctx} />
   if (log.status !== 'ready' || !log.data) return <EmptyActivity />
 
   const now = Date.now()
   const rows = log.data.events.map((e) => activityRow(e, now))
   return (
-    <div style={{ padding: '18px 20px 6px' }}>
+    <div>
+      <div data-testid="activity-rows" style={{ padding: '18px 20px 6px' }}>
       {rows.map((r, i) => (
         <div key={r.key} style={{ display: 'flex', gap: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
@@ -54,6 +75,8 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       ))}
+      </div>
+      <ActivityNote ctx={ctx} style={{ padding: '0 20px 16px' }} />
     </div>
   )
 }

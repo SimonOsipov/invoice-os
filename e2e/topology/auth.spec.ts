@@ -31,6 +31,7 @@ import {
   provisionStaffAccount,
   registerFresh,
   rawFetch,
+  requestPasswordReset,
   signInForCode,
   signInSession,
   subjectOf,
@@ -1192,6 +1193,15 @@ async function placeInvoiceNumberAndExpectImportEnabled(page: Page): Promise<voi
   await expect(page.getByRole('button', { name: /^Import \d+ rows$/ })).toBeEnabled()
 }
 
+const ACCOUNT_LABELS = [
+  'Signed in',
+  'Sign-in failed',
+  'Sign-in blocked',
+  'Signed out',
+  'Password reset requested',
+  'Password reset completed',
+]
+
 // Real rows by label and company (no count); the demo feed and the empty copy are absent.
 async function expectOverviewActivity(page: Page, rows: Array<{ label: string; company: string }>): Promise<void> {
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
@@ -1203,6 +1213,12 @@ async function expectOverviewActivity(page: Page, rows: Array<{ label: string; c
   for (const gone of ['No activity to show', 'No activity yet', 'SAMPLE', 'INV-2026-00481']) {
     await expect(tile.getByText(gone), `tile has no ${gone}`).toHaveCount(0)
   }
+  // auditVocabulary.ts labels of the six audit.AccountEvents.
+  for (const account of ACCOUNT_LABELS) {
+    await expect(tile.getByText(account, { exact: false }), `tile has no ${account}`).toHaveCount(0)
+  }
+  await expect(tile.getByTestId('activity-note')).toHaveText('Sign-in activity is in the Audit log')
+  await expect(tile.getByRole('button', { name: 'Audit log' })).toBeVisible()
 }
 
 test('deployed app: a new in-house workspace lands on Add your company, and adding it opens the import', async ({ page }) => {
@@ -1268,8 +1284,18 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
     total: '1075',
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
+  // The reset request is among the newest rows, so the tile can only be right by excluding it.
+  expect((await requestPasswordReset({ email: account.email })).status).toBe(202)
+  await expect
+    .poll(async () => (await getAuditLog(token, { limit: 5 })).events.map((e) => e.event), { message: 'the reset request is among the 5 newest audit rows', timeout: 30_000, intervals: [1_000] })
+    .toContain('account.password_reset_requested')
   await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
   await expectOverviewActivity(page, [{ label: 'Invoice created', company: name }])
+  await page.getByTestId('activity-note').getByRole('button', { name: 'Audit log' }).click()
+  await expect(page).toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page.getByTestId('audit-row').filter({ hasText: 'Password reset requested' }).first()).toBeVisible({ timeout: 20_000 })
+  await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
   const chip = page.getByTestId('company-chip')
   await expect(chip).toContainText('WORKSPACE')
   await expect(chip.getByText('ERP', { exact: true })).toHaveCount(0)

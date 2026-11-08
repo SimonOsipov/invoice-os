@@ -134,6 +134,17 @@ const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= 
 const leftOf = (a: Rect, b: Rect, what: string): string[] => (a.x + a.width <= b.x + 1 ? [] : [`${what}: not left of`])
 const sameLeft = (a: Rect, b: Rect, what: string): string[] => (Math.abs(a.x - b.x) <= 1 ? [] : [`${what}: left edges ${a.x} vs ${b.x}`])
 const centreY = (r: Rect): number => r.y + r.height / 2
+const sameCentreX = (a: Rect, b: Rect, what: string): string[] => (Math.abs(a.x + a.width / 2 - (b.x + b.width / 2)) <= 1 ? [] : [`${what}: centres ${a.x + a.width / 2} vs ${b.x + b.width / 2}`])
+
+// The rect of the text itself, not of the block that holds it.
+function textRect(loc: Locator): Promise<Rect> {
+  return loc.evaluate((el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const r = range.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })
+}
 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
@@ -651,29 +662,33 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
     facets: { event: [], actor: [], company: [] },
   }
   const requests: string[] = []
+  let answer: typeof body = body
   await routeGet(page, (url) => onPath(url, '/api/invoice/v1/audit-log'), async (route, url) => {
     requests.push(url.toString())
-    await fulfil(route, body)
+    await fulfil(route, answer)
   })
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
 
   const tile = page.getByText('Recent activity', { exact: true }).locator('xpath=ancestor::div[2]')
-  const rowsLoc = tile.locator('> :last-child > div')
+  const rowsLoc = tile.getByTestId('activity-rows').locator('> div')
+  const note = tile.getByTestId('activity-note')
   await expect(rowsLoc, 'the stubbed events drew as rows').toHaveCount(events.length, { timeout: 20_000 })
   expect(requests.length, 'the tile read the audit log').toBeGreaterThan(0)
   for (const u of requests) {
     const q = new URL(u).searchParams
     expect(q.get('limit'), `limit in ${u}`).toBe('5')
     expect(q.has('company'), `no company in ${u}`).toBe(false)
+    expect(q.get('exclude_account_events'), `account events excluded in ${u}`).toBe('true')
   }
 
   const widths = await atWidths(page, 'recent activity rows', async () => {
     const problems: string[] = []
     const rects: Record<string, unknown> = {}
-    const b = await boxes(page, { tile, body: tile.locator('> :last-child') })
+    const b = await boxes(page, { tile, body: tile.getByTestId('activity-rows') })
     problems.push(...within(b.tile, b.body, 'tile body in tile'))
     rects.tile = b
     let prev: Rect | null = null
+    let firstDot: Rect | null = null
     for (const [i, row] of (await rowsLoc.all()).entries()) {
       const text = row.locator('> div:last-child')
       const r = await boxes(page, { row, dot: row.locator('> div:first-child > span:first-child'), text })
@@ -683,13 +698,32 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
       if (spill > 1) problems.push(`row ${i} text spills ${spill}px past its block`)
       if (prev) problems.push(...below(prev, r.row, `row ${i} vs previous`))
       prev = r.row
+      firstDot ??= r.dot
       rects[`row ${i}`] = { ...r, spill }
     }
+    const n = await boxes(page, { note, link: note.getByRole('button', { name: 'Audit log' }) })
+    const noteText = await textRect(note)
+    problems.push(...within(b.tile, n.note, 'note in tile'), ...within(n.note, n.link, 'Audit log button in note'), ...below(prev!, n.note, 'note vs last row'), ...sameLeft(noteText, firstDot!, 'note text vs row 0 dot'))
+    const noteSpill = await note.evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (noteSpill > 1) problems.push(`note spills ${noteSpill}px past its block`)
+    rects.note = { ...n, text: noteText, spill: noteSpill }
     await assertPageDoesNotScrollSideways(page, 'overview')
     return { problems, rects }
   })
 
-  await attachJson(testInfo, 'ov-05-measurements', { requests, widths })
+  answer = { ...body, events: [], total: 0 }
+  await page.reload()
+  const title = tile.getByText('No activity yet', { exact: true })
+  await expect(title, 'an empty answer shows the empty state').toBeVisible({ timeout: 20_000 })
+  const emptyWidths = await atWidths(page, 'recent activity empty note', async () => {
+    const e = await boxes(page, { tile, copy: tile.getByText('Edits, validations, approvals and submissions appear here as they happen.'), note, link: note.getByRole('button', { name: 'Audit log' }) })
+    const noteText = await textRect(note)
+    const problems = [...within(e.tile, e.note, 'note in tile'), ...within(e.note, e.link, 'Audit log button in note'), ...below(e.copy, e.note, 'note vs empty copy'), ...sameCentreX(noteText, await textRect(title), 'note text vs title')]
+    await assertPageDoesNotScrollSideways(page, 'overview')
+    return { problems, rects: { ...e, text: noteText } }
+  })
+
+  await attachJson(testInfo, 'ov-05-measurements', { requests, widths, emptyWidths })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -1954,6 +1954,7 @@ export interface AuditLogQuery {
   company?: string
   q?: string
   invoice_id?: string
+  exclude_account_events?: boolean
 }
 
 // ---- custom rules: internal/customrule (Rule, RuleInput), /api/invoice/v1/custom-rules ----
@@ -2055,6 +2056,7 @@ export function getAuditLog(token: string, query?: AuditLogQuery): Promise<Audit
   if (query?.company !== undefined) params.set('company', query.company)
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.invoice_id !== undefined) params.set('invoice_id', query.invoice_id)
+  if (query?.exclude_account_events === true) params.set('exclude_account_events', 'true')
   const qs = params.toString()
   return apiFetch<AuditResponse>(`${apiBase()}/api/invoice/v1/audit-log${qs ? `?${qs}` : ''}`, { token })
 }

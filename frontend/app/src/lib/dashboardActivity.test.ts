@@ -23,13 +23,13 @@ function ev(over: Partial<AuditEvent> = {}): AuditEvent {
 }
 
 describe('activityQuery', () => {
-  it('in-house query has the limit and no company', () => {
+  it('in-house query has the limit, the exclusion and no company', () => {
     const q = activityQuery(true, 'e1')
-    expect(q).toEqual({ limit: 5 })
+    expect(q).toEqual({ limit: 5, exclude_account_events: true })
     expect('company' in q!).toBe(false)
   })
-  it('firm query carries the active entity', () => {
-    expect(activityQuery(false, 'e1')).toEqual({ limit: 5, company: 'e1' })
+  it('firm query carries the active entity and the exclusion', () => {
+    expect(activityQuery(false, 'e1')).toEqual({ limit: 5, company: 'e1', exclude_account_events: true })
   })
   it('firm with no client yields no query', () => {
     expect(activityQuery(false, null)).toBeNull()

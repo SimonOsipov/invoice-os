@@ -35,6 +35,7 @@ paths:
 - Classify a NULL-`entity_id` event as `workspace` only when it is in `firmWideEvents`. Add every new firm-wide event to that map.
 - The tenant request reader (`Store.List`: page, count, facets, probe) limits rows to the caller scope through `filterPredicates`. A limited member gets no row with `entity_id` NULL from it, except their own account events. A member who is not an admin gets no other member's account event.
 - The tenant request reader shows `ip_address` and `device` of `workspace.provisioned` and `invitation.accepted` only to an admin and the row's actor, in the page payload and in free-text search. A client-scoped member reads neither row.
+- Pass `exclude_account_events=true` to drop the six account events from the page, count and facets. `filterPredicates` adds it as its own AND condition, outside the scope group. Absent, empty or `false` applies nothing.
 - Offer three company filters: all, one company and workspace-level. Never write `entity_id = $1 OR entity_id IS NULL`.
 - Resolve company names with a `LEFT JOIN`. Show a dangling `entity_id` as a deleted company.
 - The UUID grammar has several live copies: the resolver, the generated column and `actor.Resolve`. Change all live copies together.

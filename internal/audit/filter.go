@@ -181,6 +181,12 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 		return "", nil, fmt.Errorf("audit: unknown actor kind %q, want \"\", \"system\" or \"people\"", f.ActorKind)
 	}
 
+	// Its own AND condition, outside the scope group above: it only narrows.
+	// ceiling: the page walks every newer account row; revisit if a blocked-row flood slows the tile.
+	if f.ExcludeAccountEvents {
+		conditions = append(conditions, "a.event <> ALL("+bind(AccountEvents)+")")
+	}
+
 	switch f.Company.Mode() {
 	case ModeAllCompanies:
 	case ModeNamedCompany:

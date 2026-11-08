@@ -129,6 +129,13 @@ func (e *env) enqueue(t *testing.T, event string, userID, email any, ip, ua stri
 		VALUES ($1, $2, $3, $4, $5, $6)`, event, userID, email, ip, ua, at)
 }
 
+// enqueueFirstSession writes the outbox row of a first session.
+func (e *env) enqueueFirstSession(t *testing.T, userID, email any, ip, ua string, at time.Time) {
+	t.Helper()
+	e.mustExec(t, `INSERT INTO account_event_handoffs (event, user_id, email, ip, user_agent, occurred_at, first_session)
+		VALUES ('account.signed_in', $1, $2, $3, $4, $5, true)`, userID, email, ip, ua, at)
+}
+
 func (e *env) outbox(t *testing.T) int {
 	t.Helper()
 	return e.mustCount(t, `SELECT count(*) FROM account_event_handoffs`)

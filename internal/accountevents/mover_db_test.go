@@ -662,3 +662,179 @@ func TestMover_OneNewDeviceJobPerSignInForRepeatedSignIns(t *testing.T) {
 		t.Errorf("new-device jobs = %d, want 2 (one per sign-in)", len(nd))
 	}
 }
+
+const uaFirefoxWin = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0"
+
+func (e *env) pairOf(t *testing.T, user, browser, os string) bool {
+	t.Helper()
+	return e.mustCount(t, `SELECT count(*) FROM account_known_devices WHERE user_id::text = $1 AND browser = $2 AND os = $3`, user, browser, os) == 1
+}
+
+func TestMover_FirstSessionRecordsTheDeviceAndQueuesNothing(t *testing.T) {
+	e := newEnv(t)
+	u := e.user()
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.pairs(t, u); n != 1 || !e.pairOf(t, u, "Chrome", "macOS") {
+		t.Errorf("pairs = %d, want the one pair (Chrome, macOS)", n)
+	}
+	if j := e.jobs(t, u); len(j) != 0 {
+		t.Errorf("audit jobs = %+v, want none", j)
+	}
+	if nd := e.newDeviceJobs(t, u); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("outbox = %d, want 0", n)
+	}
+}
+
+func TestMover_FirstSessionWithAnActiveMembershipWritesNoAuditJob(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	e.member(t, b, u, "active", e.email("u"))
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if j := e.jobs(t, u); len(j) != 0 {
+		t.Errorf("audit jobs = %+v, want none", j)
+	}
+	if nd := e.newDeviceJobs(t, u); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+	if n := e.pairs(t, u); n != 1 {
+		t.Errorf("pairs = %d, want 1", n)
+	}
+}
+
+func TestMover_FirstSessionKnownPairIsANoOp(t *testing.T) {
+	e := newEnv(t)
+	u := e.user()
+	seen := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	e.mustExec(t, `INSERT INTO account_known_devices (user_id, browser, os, first_seen_at) VALUES ($1, 'Chrome', 'macOS', $2)`, u, seen)
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.pairs(t, u); n != 1 {
+		t.Errorf("pairs = %d, want 1", n)
+	}
+	if n := e.mustCount(t, `SELECT count(*) FROM account_known_devices WHERE user_id::text = $1 AND first_seen_at = $2`, u, seen); n != 1 {
+		t.Errorf("first_seen_at changed")
+	}
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("outbox = %d, want 0", n)
+	}
+}
+
+func TestMover_FirstSessionAddsAPairToAKnownAccount(t *testing.T) {
+	e := newEnv(t)
+	u := e.user()
+	e.mustExec(t, `INSERT INTO account_known_devices (user_id, browser, os) VALUES ($1, 'Firefox', 'Windows')`, u)
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.pairs(t, u); n != 2 {
+		t.Errorf("pairs = %d, want 2", n)
+	}
+	if nd := e.newDeviceJobs(t, u); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+}
+
+func TestMover_FirstSessionUnknownAgentRecordsTheEmptyPair(t *testing.T) {
+	e := newEnv(t)
+	u := e.user()
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", "", time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if !e.pairOf(t, u, "", "") {
+		t.Errorf("the pair (\"\", \"\") is not recorded")
+	}
+}
+
+func TestMover_FirstSessionWithoutAUserQueuesNothing(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	e.enqueueFirstSession(t, nil, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.pairs(t, u); n != 0 {
+		t.Errorf("pairs = %d, want 0", n)
+	}
+	if j := e.jobs(t, u); len(j) != 0 {
+		t.Errorf("audit jobs = %+v, want none", j)
+	}
+	if nd := e.newDeviceJobs(t, u); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("outbox = %d, want 0", n)
+	}
+}
+
+func TestMover_FirstSessionThenFormSignInFromAnotherDeviceMailsOnce(t *testing.T) {
+	e := newEnv(t)
+	u := e.user()
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, time.Now().Add(-time.Minute))
+	mustTick(t, e, slog.Default())
+	a := e.tenant(t)
+	e.member(t, a, u, "active", e.email("u"))
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-b", uaFirefoxWin, time.Now())
+	mustTick(t, e, slog.Default())
+	nd := e.newDeviceJobs(t, u)
+	if len(nd) != 1 {
+		t.Fatalf("new-device jobs = %d, want 1", len(nd))
+	}
+	mustWork(t, w, &river.Job[NewDeviceArgs]{Args: nd[0]})
+	if m := c.Messages(); len(m) != 1 || m[0].To != e.email("u") {
+		t.Fatalf("messages = %+v, want one to the member", m)
+	}
+
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-a", uaChromeMac, time.Now())
+	mustTick(t, e, slog.Default())
+	nd = e.newDeviceJobs(t, u)
+	if len(nd) != 2 {
+		t.Fatalf("new-device jobs = %d, want 2", len(nd))
+	}
+	mustWork(t, w, &river.Job[NewDeviceArgs]{Args: nd[1]})
+	if m := c.Messages(); len(m) != 1 {
+		t.Errorf("messages = %d, want still 1", len(m))
+	}
+}
+
+func TestMover_FirstSessionAndFormSignInInOneTickKnowTheFirstPair(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	now := time.Now().UTC().Truncate(time.Second)
+	e.enqueueFirstSession(t, u, e.email("u"), e.tag+"-fs", uaChromeMac, now.Add(-time.Minute))
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-form", uaChromeMac, now)
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+
+	mustTick(t, e, slog.Default())
+	nd := e.newDeviceJobs(t, u)
+	if len(nd) != 1 {
+		t.Fatalf("new-device jobs = %d, want 1 (the form sign-in)", len(nd))
+	}
+	mustWork(t, w, &river.Job[NewDeviceArgs]{Args: nd[0]})
+
+	if m := c.Messages(); len(m) != 0 {
+		t.Errorf("messages = %+v, want none", m)
+	}
+}

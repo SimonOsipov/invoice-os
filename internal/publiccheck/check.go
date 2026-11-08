@@ -43,6 +43,8 @@ type Result struct {
 	RowsTotal     int      // spreadsheet data rows; 0 for a document
 	DocumentType  string   // a document's non-invoice verdict; "" otherwise
 	NotChecked    []string // rule keys dropped because only the company profile fills them
+	// BlankNumberRows lists the spreadsheet rows with no invoice number, as Service.Import reports them.
+	BlankNumberRows []importer.RowError
 }
 
 type Invoice struct {
@@ -127,7 +129,7 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 			return Result{}, fmt.Errorf("%w: %w", ErrBadFile, err)
 		}
 	}
-	res.InvoicesTotal, res.RowsTotal = sheet.InvoicesTotal, sheet.RowsTotal
+	res.InvoicesTotal, res.RowsTotal, res.BlankNumberRows = sheet.InvoicesTotal, sheet.RowsTotal, sheet.BlankNumberRows
 
 	now := time.Now
 	if c.Now != nil {

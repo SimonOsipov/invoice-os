@@ -209,6 +209,24 @@ func TestCheck_CarriesTheEvaluatedPayload(t *testing.T) {
 	}
 }
 
+func TestCheck_AFileWithNoInvoiceNumberExplainsWhy(t *testing.T) {
+	r := newRig()
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total\n,1\n,2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invoices) != 0 || res.InvoicesTotal != 0 || res.RowsTotal != 2 {
+		t.Errorf("invoices %d total %d rows %d, want 0 0 2", len(res.Invoices), res.InvoicesTotal, res.RowsTotal)
+	}
+	want := []importer.RowError{
+		{Row: 2, Message: "blank invoice number: row cannot be grouped"},
+		{Row: 3, Message: "blank invoice number: row cannot be grouped"},
+	}
+	if !reflect.DeepEqual(res.BlankNumberRows, want) {
+		t.Errorf("BlankNumberRows = %+v, want %+v", res.BlankNumberRows, want)
+	}
+}
+
 func TestCheck_AProblemInvoiceIsOneFailureWithNoPayload(t *testing.T) {
 	r := newRig()
 	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,31/02/2026\nB,2,2026-10-01\n", "issue_date", "Date"))

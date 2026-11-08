@@ -99,6 +99,8 @@ type CheckSheet struct {
 	Invoices      []CheckSheetInvoice
 	RowsTotal     int
 	InvoicesTotal int
+	// BlankNumberRows is one RowError per row Service.Import cannot group; the whole file's.
+	BlankNumberRows []RowError
 }
 
 // CheckSpreadsheet reads the first limit invoice groups of a file in file order.
@@ -118,6 +120,7 @@ func CheckSpreadsheet(ctx context.Context, file []byte, format string, headerRow
 
 	groups := map[string]*invoiceGroup{}
 	var order []string
+	var blank []RowError
 	invNumIdx := colIndex["invoice_number"]
 	for i, row := range rows {
 		var raw string
@@ -125,6 +128,7 @@ func CheckSpreadsheet(ctx context.Context, file []byte, format string, headerRow
 			raw = row[invNumIdx]
 		}
 		if strings.TrimSpace(raw) == "" {
+			blank = append(blank, RowError{Row: sheetRow(headerRow, i), Message: blankNumberMessage})
 			continue
 		}
 		g, ok := groups[raw]
@@ -136,7 +140,7 @@ func CheckSpreadsheet(ctx context.Context, file []byte, format string, headerRow
 		g.rowIdxs = append(g.rowIdxs, i)
 	}
 
-	out := CheckSheet{RowsTotal: len(rows), InvoicesTotal: len(order)}
+	out := CheckSheet{RowsTotal: len(rows), InvoicesTotal: len(order), BlankNumberRows: blank}
 	for _, num := range order[:min(limit, len(order))] {
 		g := groups[num]
 		item := CheckSheetInvoice{Number: num}

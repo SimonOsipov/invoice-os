@@ -217,6 +217,11 @@ func TestAuditFilter_EmptyFilterEmitsNoPredicate(t *testing.T) {
 	if len(args) != 0 {
 		t.Errorf("an unset Filter bound %d args (%v), want 0", len(args), args)
 	}
+	// An explicit false is the same as unset: the flag adds a condition only when true.
+	where, args, err = audit.FilterSQLForTest(audit.Filter{Limit: 50, ExcludeAccountEvents: false}, nil, nil, nil)
+	if err != nil || where != "" || len(args) != 0 {
+		t.Errorf("ExcludeAccountEvents=false produced %q with args %v (err %v), want no predicate", where, args, err)
+	}
 }
 
 // TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression is AUDIT-04-06 AC #2. The two
@@ -469,4 +474,83 @@ func TestAuditFilter_AdminAddsNoAccountArm(t *testing.T) {
 	if where != "" || len(args) != 0 {
 		t.Errorf("admin rendered %q with args %#v, want no predicate", where, args)
 	}
+}
+
+var aeFSQLExclusion = regexp.MustCompile(`a\.event <> ALL\(\$(\d+)\)`)
+
+// The exclusion is a condition of its own, ANDed after the scope group and never inside it: a bare
+// OR in the group would let a caller's own account rows back in.
+func TestAuditFilter_AccountExclusionIsItsOwnAndCondition(t *testing.T) {
+	self := uuid.NewString()
+	exclude := audit.Filter{Limit: 50, ExcludeAccountEvents: true}
+	boundSix := func(t *testing.T, where string, args []any) {
+		t.Helper()
+		ms := aeFSQLExclusion.FindAllStringSubmatch(where, -1)
+		if len(ms) == 0 {
+			t.Fatalf("where = %q, want a.event <> ALL($n) for the exclusion", where)
+		}
+		last := ms[len(ms)-1]
+		n, _ := strconv.Atoi(last[1])
+		if n < 1 || n > len(args) || !reflect.DeepEqual(args[n-1], any(aeFSQLSix)) {
+			t.Errorf("the exclusion binds $%d of %#v, want the six names %v", n, args, aeFSQLSix)
+		}
+	}
+
+	t.Run("admin", func(t *testing.T) {
+		where, args, err := audit.AccountScopedFilterSQLForTest(exclude, "*", true, self)
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		if where != "a.event <> ALL($1)" || len(args) != 1 {
+			t.Fatalf("where = %q args %#v, want exactly a.event <> ALL($1) and one arg", where, args)
+		}
+		boundSix(t, where, args)
+	})
+
+	t.Run("limited scope keeps its group and the exclusion follows it", func(t *testing.T) {
+		scope := "{" + uuid.NewString() + "}"
+		plain, _, err := audit.AccountScopedFilterSQLForTest(audit.Filter{Limit: 50}, scope, false, self)
+		if err != nil || plain == "" {
+			t.Fatalf("control rendered %q (err %v), want the scope group", plain, err)
+		}
+		where, args, err := audit.AccountScopedFilterSQLForTest(exclude, scope, false, self)
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		group := aeFSQLLimitedGroup.FindString(where)
+		if group == "" || !strings.HasPrefix(where, group+" AND ") {
+			t.Fatalf("where = %q, want the scope group first and then ` AND `", where)
+		}
+		if tail := strings.TrimPrefix(where, group+" AND "); !regexp.MustCompile(`^a\.event <> ALL\(\$\d+\)$`).MatchString(tail) {
+			t.Errorf("after the group: %q, want exactly the exclusion, outside every parenthesis pair", tail)
+		}
+		if strings.Contains(group, "<> ALL") {
+			t.Errorf("the exclusion sits inside the scope group %q", group)
+		}
+		boundSix(t, where, args)
+	})
+
+	t.Run("non-admin full scope keeps its group and the exclusion follows it", func(t *testing.T) {
+		where, args, err := audit.AccountScopedFilterSQLForTest(exclude, "*", false, self)
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		want := regexp.MustCompile(`^\(a\.event <> ALL\(\$\d+\) OR a\.actor = \$\d+(::text)?\) AND a\.event <> ALL\(\$\d+\)$`)
+		if !want.MatchString(where) {
+			t.Fatalf("where = %q, want (own-account arm) AND a.event <> ALL($n)", where)
+		}
+		boundSix(t, where, args)
+	})
+
+	t.Run("an event filter and the exclusion are two conditions", func(t *testing.T) {
+		where, args, err := audit.AccountScopedFilterSQLForTest(
+			audit.Filter{Limit: 50, Events: []string{"invoice.created"}, ExcludeAccountEvents: true}, "*", true, self)
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		if !strings.Contains(where, "a.event = ANY(") || !aeFSQLExclusion.MatchString(where) || strings.Count(where, " AND ") != 1 {
+			t.Errorf("where = %q, want a.event = ANY(...) AND a.event <> ALL(...)", where)
+		}
+		boundSix(t, where, args)
+	})
 }

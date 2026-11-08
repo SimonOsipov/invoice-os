@@ -4,9 +4,11 @@ package audit_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +157,9 @@ func (w *aeWorld) restrict(ids []int64, fl audit.Filter) []int64 {
 		if len(fl.Actors) > 0 && !slices.Contains(fl.Actors, m.actor) {
 			continue
 		}
+		if fl.ExcludeAccountEvents && slices.Contains(aeSix, m.event) {
+			continue
+		}
 		if fl.Company.Mode() == audit.ModeWorkspaceOnly && !m.workspace {
 			continue
 		}
@@ -215,6 +220,9 @@ func aeMatrix(t *testing.T, f *fixture, w *aeWorld, users map[string]string, ctx
 		"signed_in":     {Events: []string{aeSignedIn}},
 		"workspace":     {Company: audit.WorkspaceOnly()},
 		"six+workspace": {Events: aeSix, Company: audit.WorkspaceOnly()},
+		"no account":    {ExcludeAccountEvents: true},
+		// The workspace filter keeps the non-account workspace rows (membership.*) and drops the account ones.
+		"no account+workspace": {ExcludeAccountEvents: true, Company: audit.WorkspaceOnly()},
 	}
 	for name, id := range users {
 		filters["actor "+name] = audit.Filter{Actors: []string{id}}
@@ -248,6 +256,20 @@ func aeMatrix(t *testing.T, f *fixture, w *aeWorld, users map[string]string, ctx
 		}
 		if n := aeSum(all.Facets.Actor); n != len(want[member]) {
 			t.Errorf("%s: actor facet sums to %d, want %d", member, n, len(want[member]))
+		}
+
+		// The same view with the exclusion: every facet carries it and sums to what the member may read.
+		kept := w.restrict(want[member], audit.Filter{ExcludeAccountEvents: true})
+		ex := csList(t, f, ctx, audit.Filter{Limit: 50, ExcludeAccountEvents: true})
+		for _, v := range aeFacetValues(ex.Facets.Event) {
+			if slices.Contains(aeSix, v) {
+				t.Errorf("%s: the event facet holds %s under the exclusion", member, v)
+			}
+		}
+		for name, fs := range map[string][]audit.Facet{"event": ex.Facets.Event, "actor": ex.Facets.Actor, "company": ex.Facets.Company} {
+			if n := aeSum(fs); n != len(kept) {
+				t.Errorf("%s: %s facet sums to %d under the exclusion, want %d", member, name, n, len(kept))
+			}
 		}
 	}
 }
@@ -589,5 +611,228 @@ func TestAccountEvents_NonAccountRowsKeepTheirFirms04Rules(t *testing.T) {
 	sort.Strings(have)
 	if want := []string{w.ids["N"]}; !slices.Equal(have, want) {
 		t.Errorf("N reads signed_in rows of %v, want only its own %v", have, want)
+	}
+}
+
+// aeStack seeds the 13-row log of the fill-to-limit tests in an in-house tenant read by an admin and a
+// preparer. Newest first: A1..A5 account, N1 invoice.created, A6, N2, N3 membership.suspended, A7, N4..N6.
+// A1..A7 carry all six names. Ages are distinct, so the order is created_at, not id.
+type aeStack struct {
+	w          *aeWorld
+	admin      context.Context
+	adminID    string
+	nonAccount []int64 // N1..N6
+	account    []int64 // A1..A7
+	ordered    []int64 // all 13, newest first
+}
+
+func aeNewStack(t *testing.T, f *fixture) *aeStack {
+	t.Helper()
+	super := csSuper(t)
+	w := &aeWorld{p: pageSeedTenant(t, f)}
+	aeKind(t, super, w.p.tenant, "in_house")
+	a := uuid.NewString()
+	st := &aeStack{w: w, adminID: a, admin: csMemberUser(t, super, a, w.p.tenant, "admin", false)}
+	other := uuid.NewString()
+	csMemberUser(t, super, other, w.p.tenant, "preparer", false)
+
+	age := 100
+	next := func() int { age += 10; return age }
+	acc := func(i int) {
+		actor := a
+		if i%2 == 1 {
+			actor = other
+		}
+		id := w.account(t, f, actor, aeSix[i%len(aeSix)], "Safari on iOS", next())
+		st.account, st.ordered = append(st.account, id), append(st.ordered, id)
+	}
+	non := func(event string) {
+		id := w.add(t, f, filtRow{event: event, actor: a, payload: `{}`, ageSeconds: next()})
+		st.nonAccount, st.ordered = append(st.nonAccount, id), append(st.ordered, id)
+	}
+	for i := 0; i < 5; i++ {
+		acc(i)
+	}
+	_, n1 := w.client(t, f, "Stack Client", next())
+	st.nonAccount, st.ordered = append(st.nonAccount, n1), append(st.ordered, n1)
+	acc(5)
+	non("membership.removed")
+	non("membership.suspended")
+	acc(6)
+	non("membership.reactivated")
+	non("membership.removed")
+	non("membership.suspended")
+	return st
+}
+
+func aeIDs(got audit.Response) []int64 {
+	var ids []int64
+	for _, e := range got.Events {
+		var id int64
+		fmt.Sscan(e.ID, &id)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// Five newer account rows must not cost the page its five rows: the page is the N newest rows the
+// caller may read, so it reaches past the account rows to older ones, and keyset-pages on.
+func TestAccountEvents_ExclusionFillsTheLimitFromOlderRows(t *testing.T) {
+	f := requireFixture(t)
+	st := aeNewStack(t, f)
+	if len(st.ordered) != 13 {
+		t.Fatalf("seeded %d rows, want 13", len(st.ordered))
+	}
+
+	got := csList(t, f, st.admin, audit.Filter{Limit: 5, ExcludeAccountEvents: true})
+
+	if want := st.nonAccount[:5]; !slices.Equal(aeIDs(got), want) {
+		t.Errorf("page = %v, want N1..N5 %v in order", aeIDs(got), want)
+	}
+	if got.Total != 6 || !got.Page.HasMore {
+		t.Errorf("total %d, has_more %v, want 6 and true", got.Total, got.Page.HasMore)
+	}
+	for _, e := range got.Events {
+		if slices.Contains(aeSix, e.Event) {
+			t.Errorf("the page holds account event %s", e.Event)
+		}
+	}
+	if !slices.ContainsFunc(got.Events, func(e audit.Event) bool { return e.Event == "membership.suspended" }) {
+		t.Error("N3 membership.suspended is missing: a workspace-level non-account event stays in the excluded result")
+	}
+	// Facets carry the exclusion: no account bucket, and each sums to the 6 rows of the total.
+	if v := aeFacetValues(got.Facets.Event); len(v) == 0 || slices.ContainsFunc(v, func(s string) bool { return slices.Contains(aeSix, s) }) {
+		t.Errorf("event facet values %v, want some and no account.* bucket", v)
+	}
+	for name, fs := range map[string][]audit.Facet{"event": got.Facets.Event, "actor": got.Facets.Actor, "company": got.Facets.Company} {
+		if n := aeSum(fs); n != 6 {
+			t.Errorf("%s facet sums to %d, want 6", name, n)
+		}
+	}
+
+	// The cursor from the excluded page leads to the sixth non-account row and nothing else.
+	if got.Page.NextCursor == nil {
+		t.Fatal("no next cursor on a page with has_more")
+	}
+	cur, err := audit.DecodeCursor(*got.Page.NextCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	next := csList(t, f, st.admin, audit.Filter{Limit: 5, ExcludeAccountEvents: true, Cursor: &cur})
+	if want := st.nonAccount[5:]; !slices.Equal(aeIDs(next), want) || next.Page.HasMore || next.Total != 6 {
+		t.Errorf("page 2 = %v has_more %v total %d, want N6 %v, false, 6", aeIDs(next), next.Page.HasMore, next.Total, want)
+	}
+
+	// Control: the same list without the flag is the five newest rows, all account.
+	ctl := csList(t, f, st.admin, audit.Filter{Limit: 5})
+	if want := st.ordered[:5]; !slices.Equal(aeIDs(ctl), want) || ctl.Total != 13 {
+		t.Errorf("control page = %v total %d, want A1..A5 %v and 13", aeIDs(ctl), ctl.Total, want)
+	}
+	for _, e := range ctl.Events {
+		if !slices.Contains(aeSix, e.Event) {
+			t.Errorf("control page holds %s: the seed is not a newest-first account run", e.Event)
+		}
+	}
+	buckets := aeFacetValues(ctl.Facets.Event)
+	if !slices.ContainsFunc(buckets, func(s string) bool { return slices.Contains(aeSix, s) }) || aeSum(ctl.Facets.Event) != 13 {
+		t.Errorf("control event facet %v sums to %d, want account buckets and 13", buckets, aeSum(ctl.Facets.Event))
+	}
+}
+
+// A non-admin's own account rows are readable, yet the exclusion removes them too; another member's rows
+// were never readable. The page still fills to five from older rows.
+func TestAccountEvents_ExclusionFillsTheLimitForANonAdmin(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	w := &aeWorld{p: pageSeedTenant(t, f)}
+	aeKind(t, super, w.p.tenant, "in_house")
+	a, p := uuid.NewString(), uuid.NewString()
+	csMemberUser(t, super, a, w.p.tenant, "admin", false)
+	prep := csMemberUser(t, super, p, w.p.tenant, "preparer", false)
+
+	var own, plain []int64
+	for i := 0; i < 6; i++ {
+		own = append(own, w.account(t, f, p, aeSix[i], "Safari on iOS", 10+10*i))
+	}
+	for i := 0; i < 3; i++ {
+		w.account(t, f, a, aeSix[i], "Chrome on macOS", 15+20*i)
+	}
+	for i, ev := range []string{"membership.removed", "membership.suspended", "membership.reactivated", "membership.removed", "membership.suspended"} {
+		plain = append(plain, w.add(t, f, filtRow{event: ev, actor: a, payload: `{}`, ageSeconds: 200 + 10*i}))
+	}
+
+	got := csList(t, f, prep, audit.Filter{Limit: 5, ExcludeAccountEvents: true})
+
+	if !slices.Equal(aeIDs(got), plain) || got.Total != 5 || got.Page.HasMore {
+		t.Errorf("page = %v total %d has_more %v, want the 5 non-account rows %v, 5, false", aeIDs(got), got.Total, got.Page.HasMore, plain)
+	}
+	ctl := csList(t, f, prep, audit.Filter{Limit: 5})
+	if want := own[:5]; !slices.Equal(aeIDs(ctl), want) || ctl.Total != 11 {
+		t.Errorf("control page = %v total %d, want its own newest account rows %v and 11", aeIDs(ctl), ctl.Total, want)
+	}
+}
+
+// entity_id NULL never matches a named company, so the six newer account rows cannot crowd it out.
+func TestAccountEvents_ExclusionWithANamedCompany(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	w := &aeWorld{p: pageSeedTenant(t, f)}
+	aeKind(t, super, w.p.tenant, "firm")
+	a := uuid.NewString()
+	admin := csMemberUser(t, super, a, w.p.tenant, "admin", false)
+	for i := 0; i < 6; i++ {
+		w.account(t, f, a, aeSix[i], "Chrome on macOS", 10+10*i)
+	}
+	c1, c2 := pageSeedEntity(t, f, w.p, "Alpha Holdings Ltd"), pageSeedEntity(t, f, w.p, "Bravo Trading Ltd")
+	var c1Rows []int64
+	for i := 0; i < 2; i++ {
+		c1Rows = append(c1Rows, w.add(t, f, filtRow{event: "portfolio.entity.updated", actor: "ae-system", payload: fmt.Sprintf(`{"id":%q,"name":"x"}`, c1), ageSeconds: 100 + 10*i}))
+	}
+	c2Row := w.add(t, f, filtRow{event: "portfolio.entity.updated", actor: "ae-system", payload: fmt.Sprintf(`{"id":%q,"name":"y"}`, c2), ageSeconds: 130})
+	for _, id := range append(c1Rows, c2Row) {
+		if w.meta[id].workspace {
+			t.Fatalf("row %d has no entity_id: the trigger changed and the oracle is void", id)
+		}
+	}
+
+	named := audit.Filter{Company: audit.NamedCompany(c1), Limit: 5}
+	csAssertRows(t, "named company, control", csList(t, f, admin, named), c1Rows)
+	named.ExcludeAccountEvents = true
+	got := csList(t, f, admin, named)
+	csAssertRows(t, "named company, excluded", got, c1Rows)
+	if len(got.Events) != 2 {
+		t.Fatalf("excluded page holds %d rows, want C1's 2", len(got.Events))
+	}
+	// Paired: the same exclusion over all companies reaches past the 6 newer account rows to every client row.
+	all := csList(t, f, admin, audit.Filter{Limit: 5, ExcludeAccountEvents: true})
+	csAssertRows(t, "all companies, excluded", all, append(slices.Clone(c1Rows), c2Row))
+}
+
+// A caller who may read only account rows gets an empty page of a log that is not empty.
+func TestAccountEvents_ExclusionOverOnlyAccountRowsIsEmptyNotFresh(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	w := &aeWorld{p: pageSeedTenant(t, f)}
+	aeKind(t, super, w.p.tenant, "in_house")
+	a := uuid.NewString()
+	admin := csMemberUser(t, super, a, w.p.tenant, "admin", false)
+	for i := 0; i < 3; i++ {
+		w.account(t, f, a, aeSix[i], "Chrome on macOS", 10+10*i)
+	}
+
+	if ctl := csList(t, f, admin, audit.Filter{Limit: 5}); ctl.Total != 3 {
+		t.Fatalf("control read total %d, want the 3 account rows", ctl.Total)
+	}
+	got := csList(t, f, admin, audit.Filter{Limit: 5, ExcludeAccountEvents: true})
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"events":[]`) || got.Total != 0 {
+		t.Errorf("response = %s, want events [] and total 0", body)
+	}
+	if got.LogIsEmpty {
+		t.Error("log_is_empty = true, want false: the exclusion emptied the page, not the log")
 	}
 }

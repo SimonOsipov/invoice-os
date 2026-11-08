@@ -4,8 +4,10 @@ package importer
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 )
@@ -83,4 +85,99 @@ func checkSuggestion(source string, headerRow int, header []string, rows [][]str
 		RowsTotal:  len(rows),
 		Mapping:    mapping,
 	}
+}
+
+// CheckSheetInvoice is one checked invoice; Invoice is nil when Problem is set.
+type CheckSheetInvoice struct {
+	Number  string
+	Invoice *invoice.Invoice
+	Problem *RowError
+}
+
+// CheckSheet holds the first invoices of a file; the totals count the whole file.
+type CheckSheet struct {
+	Invoices      []CheckSheetInvoice
+	RowsTotal     int
+	InvoicesTotal int
+}
+
+// CheckSpreadsheet reads the first limit invoice groups of a file in file order.
+// A group that fails Service.Import's classification carries its Problem.
+func CheckSpreadsheet(ctx context.Context, file []byte, format string, headerRow int, mapping map[string]string, limit int) (CheckSheet, error) {
+	if headerRow == 0 {
+		headerRow = defaultHeaderRow
+	}
+	header, rows, _, err := DecodeFrom(ctx, bytes.NewReader(file), format, headerRow)
+	if err != nil {
+		return CheckSheet{}, err
+	}
+	colIndex, err := resolveMappingIn(mapping, header, checkFieldsAllowed)
+	if err != nil {
+		return CheckSheet{}, err
+	}
+
+	groups := map[string]*invoiceGroup{}
+	var order []string
+	invNumIdx := colIndex["invoice_number"]
+	for i, row := range rows {
+		var raw string
+		if invNumIdx < len(row) {
+			raw = row[invNumIdx]
+		}
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		g, ok := groups[raw]
+		if !ok {
+			g = &invoiceGroup{number: raw}
+			groups[raw] = g
+			order = append(order, raw)
+		}
+		g.rowIdxs = append(g.rowIdxs, i)
+	}
+
+	out := CheckSheet{RowsTotal: len(rows), InvoicesTotal: len(order)}
+	for _, num := range order[:min(limit, len(order))] {
+		g := groups[num]
+		item := CheckSheetInvoice{Number: num}
+		if p := classifyGroup(rows, colIndex, g, headerRow); p != nil {
+			item.Problem = p
+		} else {
+			in := buildCreateInput("", rows, colIndex, g, "", "", headerRow, "", nil, invoice.SupplierContact{}, "")
+			firstRow := rows[g.rowIdxs[0]]
+			in.SupplierName = fieldValue(firstRow, colIndex, "supplier_name")
+			in.SupplierTIN = invoice.MBSSupplierTIN(fieldValue(firstRow, colIndex, "supplier_tin"))
+			inv := invoiceFromCreateInput(in)
+			item.Invoice = &inv
+		}
+		out.Invoices = append(out.Invoices, item)
+	}
+	return out, nil
+}
+
+// classifyGroup runs Service.Import's per-group checks in its order; nil means ready.
+func classifyGroup(rows [][]string, colIndex map[string]int, g *invoiceGroup, headerRow int) *RowError {
+	re := func(field, msg string) *RowError {
+		return &RowError{Rows: sheetRows(headerRow, g.rowIdxs), Field: field, Message: msg}
+	}
+	if field := commaDecimalField(rows, colIndex, g.rowIdxs); field != "" {
+		return re(field, fmt.Sprintf("%s uses a comma as the decimal mark; write it with a dot, e.g. 1234.56", field))
+	}
+	if field := headerConflictField(rows, colIndex, g.rowIdxs); field != "" {
+		return re(field, fmt.Sprintf("rows disagree on %s", field))
+	}
+	if field, dateErr := dateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
+		return re(field, dateErr.Error())
+	}
+	if timeErr := issueTimeError(rows, colIndex, g.rowIdxs); timeErr != nil {
+		return re("issue_time", timeErr.Error())
+	}
+	if field := bestEffortBadNumericField(rows, colIndex, g.rowIdxs); field != "" {
+		return re(field, fmt.Sprintf("%s is not a valid number", field))
+	}
+	if field := numericRangeField(rows, colIndex, g.rowIdxs); field != "" {
+		lim := numericRange[field]
+		return re(field, fmt.Sprintf("%s must have at most %d digits before the decimal point and %d after", field, lim.intDigits, lim.scale))
+	}
+	return nil
 }

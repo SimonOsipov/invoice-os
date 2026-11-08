@@ -192,3 +192,155 @@ func TestSuggestCheckMapping_UndecodableFileIsAnError(t *testing.T) {
 		t.Errorf("suggester called %d time(s), want 0", len(f.calls))
 	}
 }
+
+func checkMap(extra ...string) map[string]string {
+	m := map[string]string{"invoice_number": "Inv", "total": "Total"}
+	for i := 0; i+1 < len(extra); i += 2 {
+		m[extra[i]] = extra[i+1]
+	}
+	return m
+}
+
+func checkNumbers(s CheckSheet) []string {
+	var out []string
+	for _, i := range s.Invoices {
+		out = append(out, i.Number)
+	}
+	return out
+}
+
+func TestCheckSpreadsheet_ChecksTheFirstTwoInvoicesInFileOrder(t *testing.T) {
+	csv := "Inv,Total\nA,1\nB,2\nA,1\nC,4\nD,5\n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(checkNumbers(got), []string{"A", "B"}) || got.RowsTotal != 5 || got.InvoicesTotal != 4 {
+		t.Fatalf("got %v rows %d invoices %d, want [A B] 5 4", checkNumbers(got), got.RowsTotal, got.InvoicesTotal)
+	}
+	if n := len(got.Invoices[0].Invoice.LineItems); n != 2 {
+		t.Errorf("A has %d lines, want 2", n)
+	}
+}
+
+func TestCheckSpreadsheet_LimitAboveTheInvoiceCountReturnsEveryInvoice(t *testing.T) {
+	csv := "Inv,Total\nA,1\nB,2\nC,3\n"
+	for limit, want := range map[int]int{2: 2, 5: 3} {
+		got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap(), limit)
+		if err != nil || len(got.Invoices) != want {
+			t.Errorf("limit %d: %d invoices, err %v, want %d", limit, len(got.Invoices), err, want)
+		}
+	}
+}
+
+func TestCheckSpreadsheet_ReadsSupplierNameVerbatimAndRestoresABareTINHyphen(t *testing.T) {
+	csv := "Inv,Total,Seller,TIN\nA,1,Acme Ltd,123456780001\nB,2,Beta,12345678-0001\nC,3,Gamma,1234567890\n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap("supplier_name", "Seller", "supplier_tin", "TIN"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"Acme Ltd", "Beta", "Gamma"}
+	tins := []string{"12345678-0001", "12345678-0001", "1234567890"}
+	for i, ci := range got.Invoices {
+		inv := ci.Invoice
+		if inv == nil || inv.SupplierName == nil || *inv.SupplierName != names[i] || inv.SupplierTIN == nil || *inv.SupplierTIN != tins[i] {
+			t.Errorf("invoice %d: %+v, want %s / %s", i, inv, names[i], tins[i])
+		}
+	}
+}
+
+func TestCheckSpreadsheet_BlankOrUnmappedSupplierIsAbsent(t *testing.T) {
+	cases := map[string]struct {
+		csv string
+		m   map[string]string
+	}{
+		"blank":    {"Inv,Total,Seller,TIN\nA,1,,\n", checkMap("supplier_name", "Seller", "supplier_tin", "TIN")},
+		"unmapped": {"Inv,Total,Seller,TIN\nA,1,Acme,123456780001\n", checkMap()},
+	}
+	for name, c := range cases {
+		got, err := CheckSpreadsheet(t.Context(), []byte(c.csv), "csv", 1, c.m, 2)
+		if err != nil || len(got.Invoices) != 1 || got.Invoices[0].Invoice == nil {
+			t.Fatalf("%s: %+v err %v", name, got, err)
+		}
+		if inv := got.Invoices[0].Invoice; inv.SupplierName != nil || inv.SupplierTIN != nil {
+			t.Errorf("%s: supplier name %v tin %v, want both nil", name, inv.SupplierName, inv.SupplierTIN)
+		}
+	}
+}
+
+func TestCheckSpreadsheet_AQuarantinedInvoiceCarriesItsProblem(t *testing.T) {
+	csv := "Inv,Total,Date\nA,1,31/02/2026\nB,2,2026-01-02\nC,3,2026-01-03\n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap("issue_date", "Date"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(checkNumbers(got), []string{"A", "B"}) {
+		t.Fatalf("got %v, want [A B]", checkNumbers(got))
+	}
+	a, b := got.Invoices[0], got.Invoices[1]
+	if a.Invoice != nil || a.Problem == nil || a.Problem.Field != "issue_date" || !slices.Equal(a.Problem.Rows, []int{2}) {
+		t.Errorf("A = %+v, want a Problem on issue_date row 2 and no Invoice", a)
+	}
+	if b.Invoice == nil || b.Problem != nil {
+		t.Errorf("B = %+v, want ready", b)
+	}
+}
+
+func TestCheckSpreadsheet_BlankNumberRowsAreNotInvoices(t *testing.T) {
+	csv := "Inv,Total\n,1\nA,2\n,3\nB,4\nC,5\n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(checkNumbers(got), []string{"A", "B"}) || got.RowsTotal != 5 || got.InvoicesTotal != 3 {
+		t.Errorf("got %v rows %d invoices %d, want [A B] 5 3", checkNumbers(got), got.RowsTotal, got.InvoicesTotal)
+	}
+}
+
+func TestCheckSpreadsheet_RefusesAMappingWithoutInvoiceNumber(t *testing.T) {
+	_, err := CheckSpreadsheet(t.Context(), []byte("Inv,Total\nA,1\n"), "csv", 1, map[string]string{"total": "Total"}, 2)
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}
+
+func TestCheckSpreadsheet_RefusesSupplierEmailAsAKey(t *testing.T) {
+	_, err := CheckSpreadsheet(t.Context(), []byte("Inv,Total\nA,1\n"), "csv", 1, checkMap("supplier_email", "Total"), 2)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "supplier_email") {
+		t.Errorf("err = %v, want ErrValidation naming supplier_email", err)
+	}
+}
+
+func TestResolveMapping_AppStillRefusesSupplierName(t *testing.T) {
+	_, err := resolveMapping(map[string]string{"invoice_number": "Inv", "supplier_name": "Seller"}, []string{"Inv", "Seller"})
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}
+
+func TestCheckSpreadsheet_HonoursAHeaderRowAboveOne(t *testing.T) {
+	csv := "Quarterly report,\nInv,Total\nA,1\nB,2\n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 2, checkMap(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(checkNumbers(got), []string{"A", "B"}) || got.RowsTotal != 2 {
+		t.Errorf("got %v rows %d, want [A B] 2", checkNumbers(got), got.RowsTotal)
+	}
+}
+
+func TestCheckSpreadsheet_HeaderRowZeroMeansOne(t *testing.T) {
+	csv := []byte("Inv,Total\nA,1\nB,2\n")
+	zero, err0 := CheckSpreadsheet(t.Context(), csv, "csv", 0, checkMap(), 2)
+	one, err1 := CheckSpreadsheet(t.Context(), csv, "csv", 1, checkMap(), 2)
+	if err0 != nil || err1 != nil || !reflect.DeepEqual(zero, one) {
+		t.Errorf("zero %+v (%v) != one %+v (%v)", zero, err0, one, err1)
+	}
+}
+
+func TestCheckSpreadsheet_HeaderOnlyFileHasNoInvoices(t *testing.T) {
+	got, err := CheckSpreadsheet(t.Context(), []byte("Inv,Total\n"), "csv", 1, checkMap(), 2)
+	if err != nil || len(got.Invoices) != 0 || got.RowsTotal != 0 || got.InvoicesTotal != 0 {
+		t.Errorf("got %+v err %v, want empty", got, err)
+	}
+}

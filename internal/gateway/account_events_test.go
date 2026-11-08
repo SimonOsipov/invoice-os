@@ -91,8 +91,8 @@ func TestAccountEvents_SignInSuccessRecordsOneSignedIn(t *testing.T) {
 	requireOnlyKey(t, resp, "code")
 	rec.requireNames(t, EventSignedIn)
 	want := AccountEvent{Event: EventSignedIn, UserID: aeUserID, Email: aeEmail, IP: aeIP, UserAgent: aeUA}
-	if got := rec.events()[0]; got != want {
-		t.Errorf("event = %+v, want %+v", got, want)
+	if got := rec.events()[0]; got != want || got.FirstSession {
+		t.Errorf("event = %+v, want %+v with FirstSession false", got, want)
 	}
 }
 
@@ -366,8 +366,8 @@ func TestAccountEvents_VerifyHandoffRecordsASignIn(t *testing.T) {
 	vhCode(t, vhClick(h, vhState))
 
 	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != aeUserID || e.Email != aeEmail {
-		t.Errorf("event = %+v, want user %s and email %s", e, aeUserID, aeEmail)
+	if e := rec.events()[0]; e.UserID != aeUserID || e.Email != aeEmail || !e.FirstSession {
+		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, aeUserID, aeEmail)
 	}
 
 	resp := vhClick(h, "")
@@ -387,8 +387,8 @@ func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
 		t.Fatalf("Location = %q, want a hand-off", resp.Header().Get("Location"))
 	}
 	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != subjectS1 || e.Email != rpEmail {
-		t.Errorf("event = %+v, want user %s and email %s", e, subjectS1, rpEmail)
+	if e := rec.events()[0]; e.UserID != subjectS1 || e.Email != rpEmail || !e.FirstSession {
+		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, subjectS1, rpEmail)
 	}
 
 	f2 := newResetGoTrue(t)

@@ -27,6 +27,8 @@ const (
 // AccountEvent is one account event. UserID or Email must be set; IP and UserAgent are filled from the request.
 type AccountEvent struct {
 	Event, UserID, Email, IP, UserAgent string
+	// FirstSession marks a hand-off mint; the worker records its device.
+	FirstSession bool
 }
 
 // AccountEvents records account events. A handler given nil records nothing and logs nothing (tests only; main passes NewAccountEvents).
@@ -42,8 +44,8 @@ type AccountEventOutbox struct{ pool *pgxpool.Pool }
 func (o *AccountEventOutbox) Record(ctx context.Context, e AccountEvent) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outboxTimeout)
 	defer cancel()
-	_, err := o.pool.Exec(ctx, `INSERT INTO account_event_handoffs (event, user_id, email, ip, user_agent)
-		VALUES ($1, $2, $3, $4, $5)`, e.Event, nullIfEmpty(e.UserID), nullIfEmpty(e.Email), e.IP, e.UserAgent)
+	_, err := o.pool.Exec(ctx, `INSERT INTO account_event_handoffs (event, user_id, email, ip, user_agent, first_session)
+		VALUES ($1, $2, $3, $4, $5, $6)`, e.Event, nullIfEmpty(e.UserID), nullIfEmpty(e.Email), e.IP, e.UserAgent, e.FirstSession)
 	return err
 }
 

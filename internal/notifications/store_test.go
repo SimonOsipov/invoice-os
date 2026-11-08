@@ -1122,7 +1122,7 @@ func TestStore_RegistrantQueuesOneDealJob(t *testing.T) {
 	if queue != QueueContacts {
 		t.Errorf("demo_deal queue = %q, want %q", queue, QueueContacts)
 	}
-	want := []DemoDealArgs{{Email: email, Name: "Ada Lovelace", Company: "Navy", SignUp: true}}
+	want := []DemoDealArgs{{Email: email, Name: "Ada Lovelace", Company: "Navy", Source: dealSourceSignUp}}
 	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
 		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
 	}
@@ -1135,7 +1135,7 @@ func TestStore_RegistrantWithNoNamesQueuesASignUpDealJob(t *testing.T) {
 	if err := e.store.Registrant(context.Background(), RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
 		t.Fatalf("Registrant: %v", err)
 	}
-	want := []DemoDealArgs{{Email: email, SignUp: true}}
+	want := []DemoDealArgs{{Email: email, Source: dealSourceSignUp}}
 	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
 		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
 	}
@@ -1197,7 +1197,7 @@ func TestStore_ConcurrentRegistrantsQueueOneSignUpDealJob(t *testing.T) {
 			}
 		}
 		got := dealJobsFor(t, e, email)
-		if len(got) != 1 || !got[0].SignUp {
+		if len(got) != 1 || got[0].Source != dealSourceSignUp {
 			t.Errorf("round %d: demo_deal jobs = %+v, want exactly one sign-up job", round, got)
 		}
 	}
@@ -1214,7 +1214,7 @@ func TestStore_RegistrantAfterDemoQueuesASecondDealJob(t *testing.T) {
 		t.Fatalf("Registrant: %v", err)
 	}
 	got := dealJobsFor(t, e, email)
-	if len(got) != 2 || got[0].SignUp || !got[1].SignUp {
+	if len(got) != 2 || got[0].Source != "" || got[1].Source != dealSourceSignUp {
 		t.Errorf("demo_deal jobs = %+v, want a demo job then a sign-up job", got)
 	}
 }
@@ -1322,5 +1322,35 @@ func TestStore_DemoRequestCommitFailureLeavesNoDealJob(t *testing.T) {
 	}
 	if got := dealJobsFor(t, e, email); len(got) != 0 {
 		t.Errorf("demo_deal jobs after a failed commit = %+v, want none (the insert must share the intake's transaction)", got)
+	}
+}
+
+func TestStore_DealJobArgsCarryTheSourceKeyOnly(t *testing.T) {
+	e := newEnv(t)
+	demo := uniqueEmail(t, e, "srcdemo")
+	reg := uniqueEmail(t, e, "srcreg")
+	ctx := context.Background()
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: demo, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: reg, DisplayName: "Ada Lovelace"}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	for _, c := range []struct{ email, source string }{{demo, ""}, {reg, dealSourceSignUp}} {
+		var raw []byte
+		if err := e.app.QueryRow(ctx, `SELECT args FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1`, c.email).Scan(&raw); err != nil {
+			t.Fatalf("read args: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		if _, has := m["sign_up"]; has {
+			t.Errorf("args %s carry a sign_up key", raw)
+		}
+		src, has := m["source"]
+		if c.source == "" && has || c.source != "" && src != c.source {
+			t.Errorf("args %s, want source %q", raw, c.source)
+		}
 	}
 }

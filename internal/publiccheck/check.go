@@ -185,7 +185,7 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 	return res, nil
 }
 
-// dropCompanyRules returns a copy of rs without the rules on companyTargets and their keys.
+// dropCompanyRules returns a copy of rs without the rules on companyTargets, and the keys of the enabled ones.
 func dropCompanyRules(rs validation.RuleSet) (validation.RuleSet, []string) {
 	var dropped []string
 	kept := make([]validation.Rule, 0, len(rs.Rules))

@@ -261,6 +261,21 @@ func TestCheckSpreadsheet_ReadsSupplierNameVerbatimAndRestoresABareTINHyphen(t *
 	}
 }
 
+func TestCheckSpreadsheet_TrimsSupplierTINAndName(t *testing.T) {
+	csv := "Inv,Total,Seller,TIN\nA,1, Acme Ltd ,123456780001 \nB,2,   ,  \n"
+	got, err := CheckSpreadsheet(t.Context(), []byte(csv), "csv", 1, checkMap("supplier_name", "Seller", "supplier_tin", "TIN"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := got.Invoices[0].Invoice, got.Invoices[1].Invoice
+	if a.SupplierName == nil || *a.SupplierName != "Acme Ltd" || a.SupplierTIN == nil || *a.SupplierTIN != "12345678-0001" {
+		t.Errorf("A name %v tin %v, want Acme Ltd / 12345678-0001", a.SupplierName, a.SupplierTIN)
+	}
+	if b.SupplierName != nil || b.SupplierTIN != nil {
+		t.Errorf("B name %v tin %v, want both absent", b.SupplierName, b.SupplierTIN)
+	}
+}
+
 func TestCheckSpreadsheet_BlankOrUnmappedSupplierIsAbsent(t *testing.T) {
 	cases := map[string]struct {
 		csv string

@@ -149,8 +149,8 @@ func CheckSpreadsheet(ctx context.Context, file []byte, format string, headerRow
 		} else {
 			in := buildCreateInput("", rows, colIndex, g, "", "", headerRow, "", nil, invoice.SupplierContact{}, "")
 			firstRow := rows[g.rowIdxs[0]]
-			in.SupplierName = fieldValue(firstRow, colIndex, "supplier_name")
-			in.SupplierTIN = invoice.MBSSupplierTIN(fieldValue(firstRow, colIndex, "supplier_tin"))
+			in.SupplierName = invoice.TrimmedOrNil(fieldValue(firstRow, colIndex, "supplier_name"))
+			in.SupplierTIN = invoice.MBSSupplierTIN(invoice.TrimmedOrNil(fieldValue(firstRow, colIndex, "supplier_tin")))
 			inv := invoiceFromCreateInput(in)
 			item.Invoice = &inv
 		}

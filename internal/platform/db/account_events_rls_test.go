@@ -5,6 +5,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -538,7 +541,7 @@ func TestRLS_AccountEventMigrationDownAndUp(t *testing.T) {
 		t.Fatalf("before the Down: auth_hook_reader holds no memberships column grant")
 	}
 
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), migrationVersion(t, "*_account_events.sql"))
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), append(aeFirstSessionVersions(t), migrationVersion(t, "*_account_events.sql"))...)
 	if tables, fn := aeObjectsPresent(t); tables != [2]bool{false, false} || fn {
 		t.Errorf("after the Down: tables present = %v, function present = %v, want none", tables, fn)
 	}
@@ -649,5 +652,201 @@ func TestRLS_AccountEventMembershipsIgnoreACallerSearchPath(t *testing.T) {
 	got := aeMemberships(t, tx, nil, addr)
 	if want := aeWant(user, tenant); !reflect.DeepEqual(got, want) {
 		t.Errorf("rows with a hijacked search_path = %v, want only the real %v", got, want)
+	}
+}
+
+// AUDIT-14-01: account_event_handoffs.first_session.
+const (
+	aeFirstSessionCheck  = "account_event_handoffs_first_session_check"
+	aeInsertFirstSession = `INSERT INTO account_event_handoffs (event, user_id, email, user_agent, first_session) VALUES ($1, $2, $3, $4, $5)`
+)
+
+// aeFirstSessionColumn reads the column's type, nullability and default; ok is false when it is absent.
+func aeFirstSessionColumn(t *testing.T) (dataType, nullable, def string, ok bool) {
+	t.Helper()
+	var d *string
+	err := h.super.QueryRow(context.Background(),
+		`SELECT data_type, is_nullable, column_default FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'first_session'`, aeHandoffs).
+		Scan(&dataType, &nullable, &d)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", "", false
+	}
+	if err != nil {
+		t.Fatalf("read first_session column: %v", err)
+	}
+	if d != nil {
+		def = *d
+	}
+	return dataType, nullable, def, true
+}
+
+// aeFirstSessionVersions is the first_session migration's version, newest first, so an Up of the table
+// does not drop its column. Empty before the file exists; the first_session tests fail on that.
+func aeFirstSessionVersions(t *testing.T) []int64 {
+	t.Helper()
+	if m, _ := fs.Glob(migrations.FS, "*_account_event_first_session.sql"); len(m) == 0 {
+		return nil
+	}
+	return []int64{migrationVersion(t, "*_account_event_first_session.sql")}
+}
+
+func aeCleanupEmails(t *testing.T, emails ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, e := range emails {
+			_, _ = h.super.Exec(context.Background(), `DELETE FROM account_event_handoffs WHERE email = $1`, e)
+		}
+	})
+}
+
+func TestRLS_AccountEventFirstSessionDefaultsFalse(t *testing.T) {
+	aeRequireTables(t)
+	dataType, nullable, def, ok := aeFirstSessionColumn(t)
+	if !ok {
+		t.Fatalf("%s.first_session is absent, want boolean NOT NULL DEFAULT false", aeHandoffs)
+	}
+	if dataType != "boolean" || nullable != "NO" || def != "false" {
+		t.Errorf("first_session = %s nullable=%s default=%q, want boolean NO %q", dataType, nullable, def, "false")
+	}
+
+	marker := aeAddr()
+	aeCleanupEmails(t, marker)
+	if err := aeAsGateway(t, true, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsert, "account.signed_in", nil, marker, "ua")
+		return err
+	}); err != nil {
+		t.Fatalf("AUDIT-13 insert without first_session: %v", err)
+	}
+	var got bool
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT first_session FROM account_event_handoffs WHERE email = $1`, marker).Scan(&got); err != nil {
+		t.Fatalf("read first_session: %v", err)
+	}
+	if got {
+		t.Errorf("first_session of a row that names none = true, want false")
+	}
+}
+
+func TestRLS_AccountEventFirstSessionAcceptsASignIn(t *testing.T) {
+	aeRequireTables(t)
+	user, email := uuid.NewString(), aeAddr()
+	aeCleanupEmails(t, email)
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM account_event_handoffs WHERE user_id = $1`, user)
+	})
+
+	if err := aeAsGateway(t, true, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_in", user, nil, "ua", true)
+		return err
+	}); err != nil {
+		t.Fatalf("insert a first session with a user id: %v", err)
+	}
+	if err := aeAsGateway(t, true, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_in", nil, email, "ua", true)
+		return err
+	}); err != nil {
+		t.Fatalf("insert a first session with an email and no user id: %v", err)
+	}
+
+	var first bool
+	var userNull bool
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT first_session FROM account_event_handoffs WHERE user_id = $1`, user).Scan(&first); err != nil || !first {
+		t.Errorf("stored first_session for the user-id row = %v (err %v), want true", first, err)
+	}
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT first_session, user_id IS NULL FROM account_event_handoffs WHERE email = $1`, email).Scan(&first, &userNull); err != nil {
+		t.Fatalf("read the email-only row: %v", err)
+	}
+	if !first || !userNull {
+		t.Errorf("email-only row: first_session = %v, user_id IS NULL = %v, want true, true", first, userNull)
+	}
+}
+
+func TestRLS_AccountEventFirstSessionRefusesOtherRows(t *testing.T) {
+	aeRequireTables(t)
+	// the signed-in case is the positive pair: the CHECK narrows, it does not refuse everything
+	if err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_in", uuid.NewString(), nil, "ua", true)
+		return err
+	}); err != nil {
+		t.Errorf("insert account.signed_in with first_session = true: %v, want it accepted", err)
+	}
+
+	others := 0
+	for _, ev := range aeEvents {
+		if ev == "account.signed_in" {
+			continue
+		}
+		others++
+		t.Run(ev, func(t *testing.T) {
+			err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, aeInsertFirstSession, ev, uuid.NewString(), nil, "ua", true)
+				return err
+			})
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) {
+				t.Fatalf("want SQLSTATE 23514 on %s, got %v", aeHandoffs, err)
+			}
+			if pgErr.Code != "23514" || pgErr.TableName != aeHandoffs || pgErr.ConstraintName != aeFirstSessionCheck {
+				t.Errorf("got %s on %q constraint %q (%s), want 23514 on %s constraint %s",
+					pgErr.Code, pgErr.TableName, pgErr.ConstraintName, pgErr.Message, aeHandoffs, aeFirstSessionCheck)
+			}
+		})
+	}
+	if others != 5 {
+		t.Fatalf("refused %d other events, want 5", others)
+	}
+}
+
+func TestRLS_AccountEventFirstSessionFalseAcceptsEveryEvent(t *testing.T) {
+	aeRequireTables(t)
+	if len(aeEvents) != 6 {
+		t.Fatalf("aeEvents holds %d events, want 6", len(aeEvents))
+	}
+	for _, ev := range aeEvents {
+		t.Run(ev, func(t *testing.T) {
+			err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, aeInsertFirstSession, ev, nil, aeAddr(), "ua", false)
+				return err
+			})
+			if err != nil {
+				t.Errorf("insert %s with first_session = false and an email: %v, want it accepted", ev, err)
+			}
+		})
+	}
+}
+
+func TestRLS_AccountEventFirstSessionMigrationDownAndUp(t *testing.T) {
+	aeRequireTables(t)
+	// the column must exist before the Down, so the red names the missing column, not the missing file
+	if _, _, _, ok := aeFirstSessionColumn(t); !ok {
+		t.Fatalf("before the Down: %s.first_session is absent, want present", aeHandoffs)
+	}
+
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), migrationVersion(t, "*_account_event_first_session.sql"))
+	if _, _, _, ok := aeFirstSessionColumn(t); ok {
+		t.Errorf("after the Down: %s.first_session is present, want dropped", aeHandoffs)
+	}
+	if err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsert, "account.signed_in", nil, aeAddr(), "ua")
+		return err
+	}); err != nil {
+		t.Errorf("after the Down: AUDIT-13 insert: %v, want it accepted", err)
+	}
+
+	reapply()
+	dataType, nullable, def, ok := aeFirstSessionColumn(t)
+	if !ok || dataType != "boolean" || nullable != "NO" || def != "false" {
+		t.Errorf("after the Up: first_session = %s %s %q (present %v), want boolean NO %q", dataType, nullable, def, ok, "false")
+	}
+	err := aeAsGateway(t, false, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsertFirstSession, "account.signed_out", uuid.NewString(), nil, "ua", true)
+		return err
+	})
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != aeFirstSessionCheck {
+		t.Errorf("after the Up: first_session on account.signed_out = %v, want 23514 on %s", err, aeFirstSessionCheck)
 	}
 }

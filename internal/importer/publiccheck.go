@@ -181,3 +181,30 @@ func classifyGroup(rows [][]string, colIndex map[string]int, g *invoiceGroup, he
 	}
 	return nil
 }
+
+// CheckField is one field of a document reading; it mirrors extraction.FieldResult's decided value.
+type CheckField struct {
+	Name   string
+	Value  *string
+	Reason *string
+}
+
+// CheckDocumentInvoice builds the invoice a document reading describes, supplier included.
+// A reading with no invoice number, or the poor-scan marker, is a RowError.
+func CheckDocumentInvoice(fields []CheckField) (*invoice.Invoice, *RowError) {
+	ef := make([]extractedField, len(fields))
+	values := make(map[string]*string, len(fields))
+	for i, f := range fields {
+		ef[i] = extractedField{Name: f.Name, Value: f.Value, Reason: f.Reason}
+		values[f.Name] = f.Value
+	}
+	in, rowErr := documentCreateInput("", "", SettledExtraction{Fields: ef})
+	if rowErr != nil {
+		return nil, rowErr
+	}
+	in.SourceDocumentID = nil // no stored document
+	in.SupplierName = invoice.TrimmedOrNil(values["supplier_name"])
+	in.SupplierTIN = invoice.MBSSupplierTIN(invoice.TrimmedOrNil(values["supplier_tin"]))
+	inv := invoiceFromCreateInput(in)
+	return &inv, nil
+}

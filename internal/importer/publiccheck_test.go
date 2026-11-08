@@ -344,3 +344,61 @@ func TestCheckSpreadsheet_HeaderOnlyFileHasNoInvoices(t *testing.T) {
 		t.Errorf("got %+v err %v, want empty", got, err)
 	}
 }
+
+func pcf(name, v string) CheckField { return CheckField{Name: name, Value: &v} }
+
+func TestCheckDocumentInvoice_TakesSupplierFromTheReading(t *testing.T) {
+	inv, rowErr := CheckDocumentInvoice([]CheckField{
+		pcf("invoice_number", "INV-1"), pcf("supplier_name", " Acme "), pcf("supplier_tin", "12345678-0001"),
+	})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if inv.InvoiceNumber != "INV-1" || inv.SupplierName == nil || *inv.SupplierName != "Acme" ||
+		inv.SupplierTIN == nil || *inv.SupplierTIN != "12345678-0001" {
+		t.Errorf("number %q, name %v, tin %v", inv.InvoiceNumber, inv.SupplierName, inv.SupplierTIN)
+	}
+}
+
+func TestCheckDocumentInvoice_RestoresABareSupplierTINHyphenAndReadsTheLines(t *testing.T) {
+	inv, rowErr := CheckDocumentInvoice([]CheckField{
+		pcf("invoice_number", "INV-1"), pcf("supplier_tin", "123456780001"),
+		pcf("line_items[2].description", "Widget"), pcf("line_items[2].quantity", "2"), pcf("line_items[2].unit_price", "5.00"),
+		pcf("line_items[1].description", "Gadget"), pcf("line_items[1].quantity", "1"), pcf("line_items[1].unit_price", "3.00"),
+	})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if inv.SupplierTIN == nil || *inv.SupplierTIN != "12345678-0001" {
+		t.Errorf("SupplierTIN = %v, want 12345678-0001", inv.SupplierTIN)
+	}
+	if len(inv.LineItems) != 2 || inv.LineItems[0].Description == nil || *inv.LineItems[0].Description != "Gadget" ||
+		*inv.LineItems[1].Description != "Widget" {
+		t.Errorf("LineItems = %+v, want Gadget then Widget", inv.LineItems)
+	}
+}
+
+func TestCheckDocumentInvoice_BlankSupplierIsAbsent(t *testing.T) {
+	inv, rowErr := CheckDocumentInvoice([]CheckField{pcf("invoice_number", "INV-1"), pcf("supplier_name", "  ")})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if inv.SupplierName != nil || inv.SupplierTIN != nil {
+		t.Errorf("name %v, tin %v; want both nil", inv.SupplierName, inv.SupplierTIN)
+	}
+}
+
+func TestCheckDocumentInvoice_NoInvoiceNumberIsAProblem(t *testing.T) {
+	inv, rowErr := CheckDocumentInvoice([]CheckField{pcf("supplier_name", "Acme")})
+	if inv != nil || rowErr == nil || rowErr.Field != "invoice_number" {
+		t.Fatalf("inv %v, rowErr %+v; want nil and a RowError on invoice_number", inv, rowErr)
+	}
+}
+
+func TestCheckDocumentInvoice_PoorScanIsAProblemWithThePoorScanSentence(t *testing.T) {
+	reason := "unreadable"
+	inv, rowErr := CheckDocumentInvoice([]CheckField{{Name: "document_text_layer", Reason: &reason}})
+	if inv != nil || rowErr == nil || rowErr.Message != poorScanMessage {
+		t.Fatalf("inv %v, rowErr %+v; want nil and poorScanMessage", inv, rowErr)
+	}
+}

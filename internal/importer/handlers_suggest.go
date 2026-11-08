@@ -45,15 +45,20 @@ type MappingSuggester interface {
 // askMapping answers nil on off, a failed call, and a refused envelope: every failure has the
 // same consequence, so there is no second return value.
 func askMapping(ctx context.Context, s MappingSuggester, window [][]string) map[string]any {
+	return askMappingWith(ctx, s, window, mappingSystem, mappingSchema)
+}
+
+// askMappingWith is askMapping with the prompt and schema chosen by the caller.
+func askMappingWith(ctx context.Context, s MappingSuggester, window [][]string, system string, schema json.RawMessage) map[string]any {
 	if s == nil || !s.Enabled() {
 		return nil
 	}
 	ans, err := s.Call(ctx, ai.Request{
 		Purpose:    ai.PurposeSpreadsheet,
-		System:     mappingSystem,
+		System:     system,
 		Text:       mappingPromptText(window),
 		SchemaName: mappingSchemaName,
-		Schema:     mappingSchema,
+		Schema:     schema,
 	})
 	if err != nil {
 		return nil

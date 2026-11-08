@@ -84,6 +84,27 @@ func buildTitleRowsFixture(dataRows int) []byte {
 	return []byte(b.String())
 }
 
+func TestSuggestMappingHandler_StillDropsASupplierPlacement(t *testing.T) {
+	id := testIdentity()
+	open := newFakeDocOpen("data.csv", "text/csv", supplierCSV())
+	suggester := &fakeSuggester{enabled: true, answer: supplierAnswer()}
+
+	rec, raw := doSuggestRequest(t, open.fn(), (&lookupSpy{}).fn(), suggester, nil, &id, suggestReqBody(uuid.NewString(), open.doc.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	m := mustDecodeSuggest(t, raw).Mapping
+	if _, ok := m["supplier_name"]; ok {
+		t.Errorf("mapping placed supplier_name: %v", m)
+	}
+	if _, ok := m["supplier_tin"]; ok {
+		t.Errorf("mapping placed supplier_tin: %v", m)
+	}
+	if m["invoice_number"] != "Inv" {
+		t.Errorf("mapping[invoice_number] = %q, want Inv", m["invoice_number"])
+	}
+}
+
 // --- row 1 -------------------------------------------------------------------------
 
 func TestSuggestHandler_SendsTheFirstTenRowsUnheadered(t *testing.T) {

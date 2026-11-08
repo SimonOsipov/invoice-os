@@ -1,4 +1,4 @@
-// Body of the Overview "Recent activity" tile: the workspace's last audit events.
+// Body of the Overview "Recent activity" tile.
 import type { CSSProperties } from 'react'
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 

@@ -666,7 +666,7 @@ func TestAuditFilter_NumberArmAddsNoWireField(t *testing.T) {
 	}{
 		{audit.Filter{}, []string{
 			"Limit", "Cursor", "From", "To", "Events", "Actors", "ActorKind", "Company", "Q", "InvoiceID",
-			"ExcludeAccountEvents", // AUDIT-15: a request flag; audit.ts and e2e/api/client.ts mirror it
+			"ExcludeAccountEvents", // a request flag; audit.ts and e2e/api/client.ts mirror it
 		}},
 		{audit.Event{}, []string{
 			"ID", "CreatedAt", "Event", "Actor", "ActorName", "ActorKind", "EntityID", "CompanyName",

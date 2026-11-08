@@ -30,9 +30,9 @@ const RESET_REQUESTED = 'account.password_reset_requested' // EventPasswordReset
 
 // internal/accountevents/device.go: the label for CHROME_MAC.
 const CHROME_ON_MACOS = 'Chrome on macOS'
-// internal/gateway/signin_throttle.go SignInMaxFailures.
 // internal/audit/account_events.go AccountEvents: the six codes the exclusion removes.
 const ACCOUNT_EVENTS = [SIGNED_IN, SIGN_IN_FAILED, SIGN_IN_BLOCKED, SIGNED_OUT, RESET_REQUESTED, 'account.password_reset_completed'] // EventPasswordResetCompleted
+// internal/gateway/signin_throttle.go SignInMaxFailures.
 const MAX_FAILURES = 10
 const IP_PATTERN = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*)$/
 const POLL = { timeout: 30_000, intervals: [1_000] }
@@ -191,19 +191,28 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
   })
 
   test('the overview exclusion fills the limit from older rows', async () => {
-    await createEntity(adminToken, { name: `AUDIT-15 ${freshTin()}`, tin: freshTin() })
+    const entity = await createEntity(adminToken, { name: `AUDIT-15 ${freshTin()}`, tin: freshTin() })
     for (let i = 0; i < 6; i++) await signIn(admin.email, admin.password)
     // Control: with no exclusion the newest 5 are account rows (the root cause).
     await expect
       .poll(async () => (await getAuditLog(adminToken, { limit: 5 })).events.filter((e) => ACCOUNT_EVENTS.includes(e.event)).length, { ...POLL, message: 'five newest rows are account rows' })
       .toBe(5)
+    expect((await getAuditLog(adminToken, { event: ACCOUNT_EVENTS, limit: 1 })).total).toBeGreaterThan(5)
 
+    // The tenant holds few non-account rows, so the page size is min(5, total), not 5.
     const tile = await getAuditLog(adminToken, { limit: 5, exclude_account_events: true })
-    expect(tile.events.length).toBe(5)
+    expect(tile.total).toBeGreaterThan(0)
+    expect(tile.events.length).toBe(Math.min(5, tile.total))
     expect(tile.events.filter((e) => ACCOUNT_EVENTS.includes(e.event))).toEqual([])
-    expect(tile.events.map((e) => e.event)).toContain('portfolio.entity.created')
+    const created = tile.events.filter((e) => e.event === 'portfolio.entity.created')
+    expect(created.length).toBeGreaterThan(0)
+    expect((created[0].payload as { id: string }).id).toBe(entity.id)
 
+    // A preparer sees only their own account rows; the control read must hold one.
+    const control = await getAuditLog(preparer.token, { limit: 100 })
+    expect(control.events.filter((e) => ACCOUNT_EVENTS.includes(e.event)).length).toBeGreaterThan(0)
     const own = await getAuditLog(preparer.token, { limit: 5, exclude_account_events: true })
+    expect(own.events.length).toBeGreaterThan(0)
     expect(own.events.filter((e) => ACCOUNT_EVENTS.includes(e.event))).toEqual([])
   })
 })

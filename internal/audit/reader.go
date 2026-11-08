@@ -259,6 +259,8 @@ type Filter struct {
 	Company   CompanyFilter
 	Q         string
 	InvoiceID string
+	// ExcludeAccountEvents drops the six account.* events from the page, count and facets.
+	ExcludeAccountEvents bool
 	// scope is the caller's scope, set by Store.List.
 	scope callerScope
 }

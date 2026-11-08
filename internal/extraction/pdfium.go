@@ -79,7 +79,7 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 	err := withPDFiumInstance(ctx, func(inst pdfium.Pdfium) error {
 		opened, err := inst.OpenDocument(&requests.OpenDocument{File: &doc.Bytes})
 		if err != nil {
-			return fmt.Errorf("pdfium: open document: %w", err)
+			return unreadableError{fmt.Errorf("pdfium: open document: %w", err)}
 		}
 		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
 
@@ -88,7 +88,7 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 			return fmt.Errorf("pdfium: page count: %w", err)
 		}
 		if count.PageCount > maxPages {
-			return fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)
+			return unreadableError{fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)}
 		}
 
 		totals := PageResult{Pages: count.PageCount}

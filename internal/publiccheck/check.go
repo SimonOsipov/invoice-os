@@ -25,7 +25,7 @@ const (
 var (
 	ErrTooLarge        = errors.New("publiccheck: file is over 15 MiB")
 	ErrFormat          = errors.New("publiccheck: format is not csv, xlsx, pdf or docx")
-	ErrBadFile         = errors.New("publiccheck: the file is empty or the spreadsheet cannot be read")
+	ErrBadFile         = errors.New("publiccheck: the file is empty or cannot be read")
 	ErrReadUnavailable = errors.New("publiccheck: the document cannot be read now")
 )
 

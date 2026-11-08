@@ -345,6 +345,26 @@ func TestCheck_ADoclingRefusalOfTheFileIsBadFile(t *testing.T) {
 	}
 }
 
+func TestCheck_ACorruptPDFInTheImagePathIsBadFile(t *testing.T) {
+	r := newRig()
+	r.tx.chars = 0
+	r.c.Readers.Render = extraction.NewPDFiumEndsReader()
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4 not really a pdf"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrBadFile) || errors.Is(err, publiccheck.ErrReadUnavailable) {
+		t.Fatalf("err = %v, want ErrBadFile and not ErrReadUnavailable", err)
+	}
+}
+
+func TestCheck_ARenderFailureInTheImagePathIsReadUnavailable(t *testing.T) {
+	r := newRig()
+	r.tx.chars = 0
+	r.rd.err = errors.New("pdfium: get instance: pool closed")
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrReadUnavailable) || errors.Is(err, publiccheck.ErrBadFile) {
+		t.Fatalf("err = %v, want ErrReadUnavailable and not ErrBadFile", err)
+	}
+}
+
 func TestCheck_ADoclingErrorIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.tx.err = errors.New("docling 500")

@@ -191,7 +191,9 @@ func dropCompanyRules(rs validation.RuleSet) (validation.RuleSet, []string) {
 	kept := make([]validation.Rule, 0, len(rs.Rules))
 	for _, r := range rs.Rules {
 		if slices.Contains(companyTargets, r.Target) {
-			dropped = append(dropped, r.Key)
+			if r.Enabled { // a disabled rule would never have run
+				dropped = append(dropped, r.Key)
+			}
 			continue
 		}
 		kept = append(kept, r)

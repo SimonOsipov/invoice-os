@@ -421,6 +421,23 @@ func TestCheck_CompanyProfileRulesAreNotChecked(t *testing.T) {
 	}
 }
 
+func TestCheck_NotCheckedOmitsDisabledSupplierContactRules(t *testing.T) {
+	r := newRig()
+	off := requiredRule("supplier-city-required", "supplier.city")
+	off.Enabled = false
+	r.l.rules = []validation.Rule{off, requiredRule("supplier-email-required", "supplier.email")}
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,2026-10-01\n", "issue_date", "Date"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.NotChecked) == 0 {
+		t.Fatal("NotChecked is empty, want the enabled rule")
+	}
+	if want := []string{"supplier-email-required"}; !slices.Equal(res.NotChecked, want) {
+		t.Errorf("NotChecked = %v, want %v", res.NotChecked, want)
+	}
+}
+
 func TestCheck_AnEmptyFileIsBadFile(t *testing.T) {
 	r := newRig()
 	for _, f := range []string{"csv", "pdf"} {

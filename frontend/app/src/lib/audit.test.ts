@@ -75,4 +75,23 @@ describe('audit wire mirror', () => {
     expect(url).not.toContain('to=')
     expect(url).not.toContain('q=')
   })
+
+  it('getAuditLog_sendsExcludeAccountEventsOnlyWhenTrue', async () => {
+    const authedFetch = vi.fn().mockResolvedValue({
+      events: [],
+      page: { limit: 5, has_more: false, next_cursor: null },
+      total: 0,
+      log_is_empty: true,
+      facets: { event: [], actor: [], company: [] },
+    })
+    const urlFor = async (q: Parameters<typeof getAuditLog>[2]) => {
+      authedFetch.mockClear()
+      await getAuditLog(authedFetch, 'https://api.test', q)
+      return String(authedFetch.mock.calls[0][0])
+    }
+
+    expect(await urlFor({ limit: 5, exclude_account_events: true })).toContain('exclude_account_events=true')
+    expect(await urlFor({ limit: 5 })).not.toContain('exclude_account_events')
+    expect(await urlFor({ exclude_account_events: false })).not.toContain('exclude_account_events')
+  })
 })

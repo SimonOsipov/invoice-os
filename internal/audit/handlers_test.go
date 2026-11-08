@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -214,6 +215,7 @@ func TestAuditListHandler_MalformedParamsAre400(t *testing.T) {
 		{"bogus company", "company=not-a-uuid-or-workspace"},
 		{"over-length q", "q=" + strings.Repeat("z", maxFilterTextLenForTest+1)},
 		{"non-uuid invoice_id", "invoice_id=not-a-uuid"},
+		{"non-boolean exclude_account_events", "exclude_account_events=maybe"},
 	}
 	if len(cases) < 12 {
 		t.Fatalf("the malformed table has %d rows, want at least the 12 §2 names", len(cases))
@@ -252,7 +254,7 @@ func TestAuditListHandler_AtTheCapIsAccepted(t *testing.T) {
 // would not show that a filter was applied.
 func TestAuditListHandler_EmptyParamValueAppliesNoFilter(t *testing.T) {
 	bare := hndAccepts(t, "")
-	empty := hndAccepts(t, "event=&actor=&q=&company=&from=&to=&invoice_id=&actor_kind=&cursor=&limit=")
+	empty := hndAccepts(t, "event=&actor=&q=&company=&from=&to=&invoice_id=&actor_kind=&cursor=&limit=&exclude_account_events=")
 
 	if len(empty.Events) != 0 || len(empty.Actors) != 0 {
 		t.Errorf("empty repeated values produced Events=%v Actors=%v, want both empty",
@@ -267,6 +269,13 @@ func TestAuditListHandler_EmptyParamValueAppliesNoFilter(t *testing.T) {
 	}
 	if empty.Cursor != nil {
 		t.Errorf("an empty cursor produced %v, want nil", empty.Cursor)
+	}
+	if empty.ExcludeAccountEvents || bare.ExcludeAccountEvents {
+		t.Errorf("exclude_account_events= produced %v (bare %v), want false: empty is absent",
+			empty.ExcludeAccountEvents, bare.ExcludeAccountEvents)
+	}
+	if !reflect.DeepEqual(empty, bare) {
+		t.Errorf("an all-empty query built %+v, want the bare Filter %+v", empty, bare)
 	}
 	if empty.Company.Mode() != bare.Company.Mode() {
 		t.Errorf("company= produced mode %v but no company param produced %v; empty must mean "+
@@ -355,6 +364,7 @@ func TestAuditListHandler_EveryParameterReachesTheStore(t *testing.T) {
 		"company=" + entity,
 		"q=acme",
 		"invoice_id=" + invoice,
+		"exclude_account_events=true",
 	}, "&"))
 
 	if got.Limit != 10 {
@@ -380,6 +390,42 @@ func TestAuditListHandler_EveryParameterReachesTheStore(t *testing.T) {
 	}
 	if got.InvoiceID != invoice {
 		t.Errorf("InvoiceID = %q, want %q", got.InvoiceID, invoice)
+	}
+	if !got.ExcludeAccountEvents {
+		t.Error("ExcludeAccountEvents = false, want true: the parameter was parsed and dropped")
+	}
+}
+
+// exclude_account_events is parsed with strconv.ParseBool. The 400 must come from that clause: every
+// other parameter is valid, and the body names the parameter.
+func TestAuditListHandler_ExcludeAccountEventsParses(t *testing.T) {
+	for query, want := range map[string]bool{
+		"exclude_account_events=true":  true,
+		"exclude_account_events=1":     true,
+		"exclude_account_events=false": false,
+		"exclude_account_events=0":     false,
+		"exclude_account_events=T":     true,
+		"exclude_account_events=TRUE":  true,
+		"exclude_account_events=False": false,
+		"":                             false,
+	} {
+		if got := hndAccepts(t, query).ExcludeAccountEvents; got != want {
+			t.Errorf("%q produced ExcludeAccountEvents %v, want %v", query, got, want)
+		}
+	}
+
+	for _, bad := range []string{"maybe", "yes", "2", "on"} {
+		spy := &hndSpy{}
+		w := hndGet(t, spy, "exclude_account_events="+bad)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("exclude_account_events=%s -> %d, want 400", bad, w.Code)
+		}
+		if got := hndBody(t, w)["error"]; got != "exclude_account_events must be a boolean" {
+			t.Errorf("error = %v, want %q", got, "exclude_account_events must be a boolean")
+		}
+		if spy.calls != 0 {
+			t.Errorf("the store ran %d times for %q, want 0", spy.calls, bad)
+		}
 	}
 }
 

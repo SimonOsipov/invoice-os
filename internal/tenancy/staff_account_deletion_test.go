@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -55,7 +56,8 @@ func staffAccWorldOn(t *testing.T, super, app *pgxpool.Pool, name string) staffA
 
 // del is the staff delete with the standard reason.
 func (w staffAccWorld) del(target string, o AccountDeletionOutcome, heir string) error {
-	return w.store.StaffDeleteAccount(w.ctx, w.tenant, target, o, heir, staffAccReason)
+	_, err := w.store.StaffDeleteAccount(w.ctx, w.tenant, target, o, heir, staffAccReason)
+	return err
 }
 
 type accStaffRow struct {
@@ -509,7 +511,7 @@ func TestStaffAccountDeletion_Refusals(t *testing.T) {
 	})
 	t.Run("an unknown or malformed tenant", func(t *testing.T) {
 		for name, tenant := range map[string]string{"a random uuid": uuid.NewString(), "a malformed id": "x"} {
-			if err := w.store.StaffDeleteAccount(w.ctx, tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrTenantNotFound) {
+			if _, err := w.store.StaffDeleteAccount(w.ctx, tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrTenantNotFound) {
 				t.Errorf("%s: delete err = %v, want ErrTenantNotFound", name, err)
 			}
 			if _, err := w.store.StaffPreviewAccountDeletion(w.ctx, tenant, p); !errors.Is(err, ErrTenantNotFound) {
@@ -535,7 +537,7 @@ func TestStaffAccountDeletion_RefusesTheHouseTenant(t *testing.T) {
 	staffRows := len(staffEvents(t, w.super, w.houseID))
 
 	for name, target := range map[string]string{"a colleague": colleague, "the staff caller": w.staff} {
-		if err := w.store.StaffDeleteAccount(w.ctx, w.houseID, target, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrHouseWorkspace) {
+		if _, err := w.store.StaffDeleteAccount(w.ctx, w.houseID, target, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrHouseWorkspace) {
 			t.Errorf("%s: delete err = %v, want ErrHouseWorkspace", name, err)
 		}
 		if _, err := w.store.StaffPreviewAccountDeletion(w.ctx, w.houseID, target); !errors.Is(err, ErrHouseWorkspace) {
@@ -559,7 +561,7 @@ func TestStaffAccountDeletion_RefusesTheHouseTenant(t *testing.T) {
 		if _, err := w.store.StaffPreviewAccountDeletion(ctx, w.houseID, colleague); !errors.Is(err, db.ErrNotStaff) {
 			t.Errorf("%s house member: preview err = %v, want db.ErrNotStaff", status, err)
 		}
-		if err := w.store.StaffDeleteAccount(ctx, w.houseID, colleague, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
+		if _, err := w.store.StaffDeleteAccount(ctx, w.houseID, colleague, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
 			t.Errorf("%s house member: delete err = %v, want db.ErrNotStaff", status, err)
 		}
 	}
@@ -713,7 +715,7 @@ func TestStaffAccountDeletion_NoEraseQueueFailsClosed(t *testing.T) {
 
 	bare := NewStore(w.app)
 	for _, o := range []AccountDeletionOutcome{OutcomeLeave, OutcomeHandOn} {
-		err := bare.StaffDeleteAccount(w.ctx, w.tenant, p, o, heirIf(o, uuid.NewString()), staffAccReason)
+		_, err := bare.StaffDeleteAccount(w.ctx, w.tenant, p, o, heirIf(o, uuid.NewString()), staffAccReason)
 		if !errors.Is(err, errNoEraseQueue) {
 			t.Errorf("%s: err = %v, want errNoEraseQueue", o, err)
 		}
@@ -742,7 +744,7 @@ func TestStaffAccountDeletion_RefusesWithoutAStaffCaller(t *testing.T) {
 			if _, err := w.store.StaffPreviewAccountDeletion(ctx, w.tenant, p); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("preview: err = %v, want db.ErrNotStaff", err)
 			}
-			if err := w.store.StaffDeleteAccount(ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
+			if _, err := w.store.StaffDeleteAccount(ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("delete: err = %v, want db.ErrNotStaff", err)
 			}
 		})
@@ -941,7 +943,7 @@ func TestStaffAccountDeletion_ARepeatedDeleteAndAReasonTheStoreCannotWriteChange
 	before := w.snapshot(t, w.admin, q)
 	before.audit = w.auditTotal(t)
 	staffRows := len(staffEvents(t, w.super, w.tenant))
-	err := w.store.StaffDeleteAccount(w.ctx, w.tenant, w.admin, OutcomeHandOn, q, "a\x00b")
+	_, err := w.store.StaffDeleteAccount(w.ctx, w.tenant, w.admin, OutcomeHandOn, q, "a\x00b")
 	if err == nil || errors.Is(err, ErrDeletionOutcomeChanged) {
 		t.Fatalf("hand_on with a NUL reason err = %v, want a write failure", err)
 	}
@@ -966,7 +968,7 @@ func memberRoutes(t *testing.T, store *Store) http.Handler {
 		t.Fatal(err)
 	}
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/members/{user_id}/deletion", StaffAccountDeletionPreviewHandler(store.StaffPreviewAccountDeletion, slog.Default()))
-	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/members/{user_id}/deletion", StaffDeleteAccountHandler(store.StaffDeleteAccount, slog.Default()))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/members/{user_id}/deletion", StaffDeleteAccountHandler((&DeletionNotifier{Store: store, Sender: &accountmail.Capture{}, Logger: slog.Default()}).StaffDeleteAccount, slog.Default()))
 	app.RequireGateway(staffGatewayToken)
 	return app.Handler()
 }
@@ -1043,22 +1045,22 @@ func TestStaffAccountDeletion_TheGuardsRefuseBeforeAnyStatement(t *testing.T) {
 	withQueue := NewStore(closed)
 	withQueue.SetEraseQueue(w.store.eraseQueue)
 
-	if err := noQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, errNoEraseQueue) {
+	if _, err := noQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, errNoEraseQueue) {
 		t.Errorf("no queue: err = %v, want errNoEraseQueue", err)
 	}
 	for name, ctx := range map[string]context.Context{"no caller": context.Background(), "a customer admin": w.adminCtx()} {
 		if _, err := withQueue.StaffPreviewAccountDeletion(ctx, w.tenant, p); !errors.Is(err, db.ErrNotStaff) {
 			t.Errorf("%s: preview err = %v, want db.ErrNotStaff", name, err)
 		}
-		if err := withQueue.StaffDeleteAccount(ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
+		if _, err := withQueue.StaffDeleteAccount(ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
 			t.Errorf("%s: delete err = %v, want db.ErrNotStaff", name, err)
 		}
 	}
-	if err := withQueue.StaffDeleteAccount(w.ctx, "x", p, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrTenantNotFound) {
+	if _, err := withQueue.StaffDeleteAccount(w.ctx, "x", p, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrTenantNotFound) {
 		t.Errorf("malformed tenant: delete err = %v, want ErrTenantNotFound", err)
 	}
 	// control: with a staff caller and a real tenant the closed pool is reached and fails
-	err = withQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason)
+	_, err = withQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason)
 	if err == nil || errors.Is(err, db.ErrNotStaff) || errors.Is(err, errNoEraseQueue) || errors.Is(err, ErrTenantNotFound) {
 		t.Errorf("control: err = %v, want a closed-pool failure", err)
 	}

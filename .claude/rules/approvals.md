@@ -3,6 +3,8 @@ paths:
   - "internal/approval/**"
   - "internal/tenancy/store.go"
   - "internal/tenancy/member_role.go"
+  - "internal/tenancy/account_deletion.go"
+  - "internal/tenancy/staff_account_deletion.go"
   - "internal/demopolicy/**"
   - "internal/invoice/batch_submit.go"
   - "migrations/*approval*"
@@ -15,7 +17,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
-- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership role change, status change and client access change in `internal/tenancy` (`TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck`). The last-signer check runs only on remove, suspend, demotion to preparer and a client access change that removes reach. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write, every role delete, every role staffing write, and every membership role change, status change and client access change in `internal/tenancy` (`TestLastSigner_WritersTakeTheTenantLockAfterTheAdminCheck`), except the member and staff account deletions: they refuse nothing, and the lock after their row locks would invert the lock order. The last-signer check runs only on remove, suspend, demotion to preparer and a client access change that removes reach. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
@@ -62,6 +64,7 @@ paths:
 - Refuse a role staffing write with 409 while an invoice that an open run waits on through the role has no signer on the new set. List only those invoices. Use the body of the role delete refusal.
 - Refuse a membership remove, suspension, demotion to preparer or client access change that removes reach with 409 when a live workflow role the member is staffed in leaves an invoice that an open run waits on through the role with no signer after the change. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
 - Before the write, also collect with `SignedWaitingStepsTx` every waiting step the member can sign as a role member, a named delegate or an "anyone" delegate. Judge those steps in the same refusal (`TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign`).
+- Never refuse a member's self-deletion or a staff account deletion. Collect `SignedWaitingStepsTx` with no keys before `endMembership` and judge the steps with `StrandedStepsTx` after it (`TestStrandedAlert_SelfDeletionOfTheLastSignerAlertsTheAdmins`). Mail every active admin after the commit, then record the send as `membership.stranded_alert` (`TestStrandedAlertMail_TheAlertRowRecordsTheSend`).
 - List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing. It reports the reason: `deleted`, `no holder`, `out of client reach` or `creator only`.
 - Raise `pending_holder_warn` and the pending step's `holder.warn` when `unsignableReasonsTx` gives the step a reason. Set `pending_holder_reason` and `holder.reason` with `holderReason`: `unstaffed` or `nobody_can_approve`.
 - Name a workflow role in a scope by its key on the wire. Store its id.

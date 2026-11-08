@@ -128,6 +128,7 @@ var firmWideEvents = map[string]struct{}{
 	"membership.suspended":             {},
 	"membership.reactivated":           {},
 	"membership.removed":               {},
+	"membership.stranded_alert":        {},
 	"account.signed_in":                {},
 	"account.sign_in_failed":           {},
 	"account.sign_in_blocked":          {},

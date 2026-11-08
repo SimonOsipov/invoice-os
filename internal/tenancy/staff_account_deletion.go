@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -77,11 +78,13 @@ func (s *Store) StaffPreviewAccountDeletion(ctx context.Context, tenantID, userI
 
 // StaffDeleteAccount is DeleteMyAccount for the path member, with a staff row beside each customer row.
 // want and, for hand_on, heirUserID must equal the decision under the row locks.
-func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string, want AccountDeletionOutcome, heirUserID, reason string) error {
+func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string, want AccountDeletionOutcome, heirUserID, reason string) (StrandedAlert, error) {
 	if s.eraseQueue == nil {
-		return errNoEraseQueue
+		return StrandedAlert{}, errNoEraseQueue
 	}
-	return s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+	var alert StrandedAlert
+	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+		alert = StrandedAlert{TenantID: tenant.String()}
 		if err := refuseHouseTenant(ctx, tx, actor); err != nil {
 			return err
 		}
@@ -131,6 +134,8 @@ func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string,
 		if got != want || (got == OutcomeHandOn && heir.UserID != heirUserID) {
 			return ErrDeletionOutcomeChanged
 		}
+		var signed []approval.SignedStep
+		signed, alert.err = signedBefore(ctx, tx, target)
 		if got == OutcomeHandOn {
 			if _, err := tx.Exec(ctx, `UPDATE memberships SET role = 'admin' WHERE user_id = $1`, heir.UserID); err != nil {
 				return err
@@ -145,6 +150,9 @@ func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string,
 		if err := endMembership(ctx, tx, target); err != nil {
 			return err
 		}
+		if alert.err == nil {
+			judgeStranded(ctx, tx, target, signed, &alert)
+		}
 		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{
 			Actor: actor, Event: "membership.account_deleted", TenantID: tenant, SubjectID: uuid.MustParse(target),
 			Payload: map[string]any{"user_id": target, "role": self.Role, "reason": reason},
@@ -156,6 +164,10 @@ func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string,
 		}
 		return notifications.EnqueueErasureByID(ctx, tx, s.eraseQueue, target)
 	})
+	if err != nil {
+		return StrandedAlert{}, err
+	}
+	return alert, nil
 }
 
 // StaffAccountDeletionPreviewHandler repeats no staff check: auth.RequireStaff runs before it.

@@ -74,6 +74,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'workspace.export_failed',
     'membership.account_deleted',
     'membership.admin_handed_on',
+    'membership.stranded_alert',
   ],
   account: [
     'account.signed_in',
@@ -214,6 +215,7 @@ describe('audit vocabulary', () => {
       'membership.role_changed',
       'membership.client_access_set',
       'membership.removed',
+      'membership.stranded_alert',
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
@@ -284,6 +286,7 @@ describe('audit vocabulary', () => {
       ['workspace.exported', 'Workspace exported'],
       ['membership.account_deleted', 'Account deleted'],
       ['membership.admin_handed_on', 'Admin handed on'],
+      ['membership.stranded_alert', 'No-approver alert'],
     ]) {
       const view = auditEventView(id)
       expect(view.domain, `${id} must be a labelled memberships event`).toBe('memberships')

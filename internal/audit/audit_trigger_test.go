@@ -104,6 +104,7 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"workspace.export_failed":      {"files": 2, "bytes": 512},
 		"membership.account_deleted":   {"user_id": userID, "role": "preparer"},
 		"membership.admin_handed_on":   {"user_id": userID, "from": "preparer", "to": "admin"},
+		"membership.stranded_alert":    {"stranded_role_keys": []string{"approver"}, "stranded_invoices_total": 1, "admins": 1, "delivery": "sent"},
 		"membership.role_changed":      {"user_id": userID, "from": "admin", "to": "preparer"},
 	}
 }
@@ -186,8 +187,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 36 {
-		t.Fatalf("rule-D payload map holds %d events, want 36", len(ruleD))
+	if len(ruleD) != 37 {
+		t.Fatalf("rule-D payload map holds %d events, want 37", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

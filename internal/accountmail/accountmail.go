@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html recovery.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html recovery.html stranded_alert.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -20,7 +20,7 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
 	switch name {
-	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "recovery":
+	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "recovery", "stranded_alert":
 	default:
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
@@ -256,4 +256,58 @@ func RenderNewDevice(m NewDeviceMail) (subject, html string, err error) {
 		return "", "", err
 	}
 	return NewDeviceSubject, buf.String(), nil
+}
+
+const StrandedAlertSubject = "Invoices in your ASComply workspace have nobody to approve them"
+
+// StrandedInvoice is one invoice left with nobody to approve it, and the role that has nobody.
+type StrandedInvoice struct{ Number, Role string }
+
+// StrandedAlertMail is the data of one stranded-invoice alert; More counts invoices not listed.
+type StrandedAlertMail struct {
+	Workspace string
+	Invoices  []StrandedInvoice
+	More      int
+}
+
+type strandedRow struct {
+	Label, Value string
+	Last         bool
+}
+
+type strandedView struct {
+	Workspace, ActionURL string
+	Rows                 []strandedRow
+}
+
+// RenderStrandedAlert renders the stranded-invoice alert; the subject is fixed so it never carries user text.
+func RenderStrandedAlert(m StrandedAlertMail) (subject, html string, err error) {
+	if len(m.Invoices) == 0 {
+		return "", "", fmt.Errorf("accountmail: stranded alert needs an invoice")
+	}
+	rows := []strandedRow{{Label: "Organisation", Value: m.Workspace}}
+	for _, inv := range m.Invoices {
+		rows = append(rows, strandedRow{Label: inv.Role, Value: inv.Number})
+	}
+	if m.More > 0 {
+		noun := "invoices"
+		if m.More == 1 {
+			noun = "invoice"
+		}
+		rows = append(rows, strandedRow{Label: fmt.Sprintf("And %d more %s", m.More, noun)})
+	}
+	rows[len(rows)-1].Last = true
+	src, err := Template("stranded_alert")
+	if err != nil {
+		return "", "", err
+	}
+	tpl, err := template.New("stranded_alert").Parse(string(src))
+	if err != nil {
+		return "", "", err
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, strandedView{Workspace: m.Workspace, ActionURL: AppURL, Rows: rows}); err != nil {
+		return "", "", err
+	}
+	return StrandedAlertSubject, buf.String(), nil
 }

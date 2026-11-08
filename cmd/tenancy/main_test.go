@@ -274,7 +274,8 @@ func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
 		{"POST /v1/staff/tenants/{id}/deletion/cancel", "tenancy.StaffCancelDeletionHandler", "notifier.StaffCancel"},
 		{"POST /v1/staff/tenants/{id}/deletion/purge", "tenancy.StaffPurgeHandler", "store.StaffPurgeWorkspace"},
 		{"GET /v1/staff/tenants/{id}/members/{user_id}/deletion", "tenancy.StaffAccountDeletionPreviewHandler", "store.StaffPreviewAccountDeletion"},
-		{"POST /v1/staff/tenants/{id}/members/{user_id}/deletion", "tenancy.StaffDeleteAccountHandler", "store.StaffDeleteAccount"},
+		{"POST /v1/staff/tenants/{id}/members/{user_id}/deletion", "tenancy.StaffDeleteAccountHandler", "notifier.StaffDeleteAccount"},
+		{"POST /v1/me/deletion", "tenancy.DeleteMyAccountHandler", "notifier.DeleteMyAccount"},
 	} {
 		if got := handlers[want.pattern]; len(got) != 1 || got[0] != want.handler {
 			t.Errorf("%q registered with %v, want exactly [%s]", want.pattern, got, want.handler)

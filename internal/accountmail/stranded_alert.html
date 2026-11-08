@@ -1,0 +1,13 @@
+{{- define "title"}}Invoices in your ASComply workspace have nobody to approve them{{end}}
+{{- define "preheader"}}An account deletion left invoices with nobody who can approve them.{{end}}
+{{- define "eyebrow"}}Approvals{{end}}
+{{- define "heading"}}Some invoices have nobody to approve them.{{end}}
+{{- define "heading_accent"}}Add someone to the role.{{end}}
+{{- define "intro"}}An account in {{.Workspace}} was deleted. Nobody left in the workspace can approve the invoices below. Add someone who can approve them to each role, or they stay waiting.{{end}}
+{{- define "action_url"}}{{.ActionURL}}{{end}}
+{{- define "action_label"}}Open ASComply{{end}}
+{{- define "expiry"}}Each invoice keeps waiting until someone in its role approves it.{{end}}
+{{- define "details"}}{{range .Rows}}{{if .Last}}<tr><td width="120" style="{{template "row_label_style_last"}}">{{.Label}}</td><td style="{{template "row_value_style_last"}}">{{.Value}}</td></tr>{{else}}<tr><td width="120" style="{{template "row_label_style"}}">{{.Label}}</td><td style="{{template "row_value_style"}}">{{.Value}}</td></tr>{{end}}{{end}}{{end}}
+{{- define "ignore_note"}}If you have already added someone to the role, ignore this email.{{end}}
+{{- define "reason"}}You received this email because you are an admin of this ASComply workspace.{{end}}
+{{- template "layout" .}}

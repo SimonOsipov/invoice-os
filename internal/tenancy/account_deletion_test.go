@@ -289,7 +289,7 @@ func TestDeleteMyAccount_AMemberLeavesAndIsErased(t *testing.T) {
 	p, _ := w.grantedMember(t, "Grace Eze")
 	pBefore, aBefore := imageOf(t, w.super, w.tenant, p), imageOf(t, w.super, w.tenant, w.admin)
 
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Fatalf("DeleteMyAccount(leave): %v", err)
 	}
 
@@ -322,7 +322,7 @@ func TestDeleteMyAccount_AnAdminWithAnotherAdminLeaves(t *testing.T) {
 	a2 := w.member(t, "admin", "active", "Bola Ade", joined(1))
 	a1Before, a2Before := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, a2)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); err != nil {
 		t.Fatalf("DeleteMyAccount(leave): %v", err)
 	}
 	requireImage(t, w, "leaving admin", w.admin, endState(a1Before))
@@ -341,7 +341,7 @@ func TestDeleteMyAccount_TheLastAdminHandsOnToTheFirstJoined(t *testing.T) {
 	p2 := w.member(t, "preparer", "active", "Tunde Bello", joined(2))
 	aBefore, p1Before, p2Before := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, p1), imageOf(t, w.super, w.tenant, p2)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p1); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p1); err != nil {
 		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
 	}
 
@@ -382,7 +382,7 @@ func TestDeleteMyAccount_ATieGoesToTheLowerUserID(t *testing.T) {
 	p2 := w.addJoined(t, lo, "preparer", "active", "Tunde Bello", joined(1))
 	p1Before := imageOf(t, w.super, w.tenant, p1)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p2); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p2); err != nil {
 		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
 	}
 	if got := imageOf(t, w.super, w.tenant, p2); got.Role != "admin" {
@@ -398,7 +398,7 @@ func TestDeleteMyAccount_SuspendedAndInvitedNeverInherit(t *testing.T) {
 	p := w.member(t, "preparer", "active", "Chidi Eze", joined(2))
 	sBefore, iBefore := imageOf(t, w.super, w.tenant, s), imageOf(t, w.super, w.tenant, i)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
 		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
 	}
 	if got := imageOf(t, w.super, w.tenant, p); got.Role != "admin" {
@@ -425,7 +425,7 @@ func TestDeleteMyAccount_TheLastMemberIsRefused(t *testing.T) {
 	aBefore, auditBefore := imageOf(t, w.super, w.tenant, w.admin), w.auditTotal(t)
 
 	for _, o := range []AccountDeletionOutcome{OutcomeLeave, OutcomeHandOn} {
-		if err := w.store.DeleteMyAccount(w.adminCtx(), o, heirIf(o, uuid.NewString())); !errors.Is(err, ErrDeletionOutcomeChanged) {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), o, heirIf(o, uuid.NewString())); !errors.Is(err, ErrDeletionOutcomeChanged) {
 			t.Errorf("DeleteMyAccount(%s) err = %v, want ErrDeletionOutcomeChanged", o, err)
 		}
 	}
@@ -443,7 +443,7 @@ func TestDeleteMyAccount_AChangedOutcomeIs409(t *testing.T) {
 		p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
 		aBefore, pBefore, auditBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, p), w.auditTotal(t)
 
-		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); !errors.Is(err, ErrDeletionOutcomeChanged) {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); !errors.Is(err, ErrDeletionOutcomeChanged) {
 			t.Fatalf("err = %v, want ErrDeletionOutcomeChanged", err)
 		}
 		requireImage(t, w, "admin", w.admin, aBefore)
@@ -452,7 +452,7 @@ func TestDeleteMyAccount_AChangedOutcomeIs409(t *testing.T) {
 		if n := w.auditTotal(t); n != auditBefore {
 			t.Errorf("audit rows = %d, want %d", n, auditBefore)
 		}
-		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
 			t.Errorf("control: the confirmed outcome hand_on: %v", err)
 		}
 	})
@@ -464,7 +464,7 @@ func TestDeleteMyAccount_AChangedOutcomeIs409(t *testing.T) {
 		before := []memberImage{imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, a2), imageOf(t, w.super, w.tenant, p)}
 		auditBefore := w.auditTotal(t)
 
-		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); !errors.Is(err, ErrDeletionOutcomeChanged) {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); !errors.Is(err, ErrDeletionOutcomeChanged) {
 			t.Fatalf("err = %v, want ErrDeletionOutcomeChanged", err)
 		}
 		for i, u := range []string{w.admin, a2, p} {
@@ -474,7 +474,7 @@ func TestDeleteMyAccount_AChangedOutcomeIs409(t *testing.T) {
 		if n := w.auditTotal(t); n != auditBefore {
 			t.Errorf("audit rows = %d, want %d", n, auditBefore)
 		}
-		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); err != nil {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); err != nil {
 			t.Errorf("control: the confirmed outcome leave: %v", err)
 		}
 	})
@@ -494,7 +494,7 @@ func TestDeleteMyAccount_AHeirWhoChangedSincePreviewIs409(t *testing.T) {
 	}
 	aBefore, p1Before, p2Before, auditBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, p1), imageOf(t, w.super, w.tenant, p2), w.auditTotal(t)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, *prev.HeirUserID); !errors.Is(err, ErrDeletionOutcomeChanged) {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, *prev.HeirUserID); !errors.Is(err, ErrDeletionOutcomeChanged) {
 		t.Fatalf("err = %v, want ErrDeletionOutcomeChanged", err)
 	}
 	requireImage(t, w, "admin", w.admin, aBefore)
@@ -504,7 +504,7 @@ func TestDeleteMyAccount_AHeirWhoChangedSincePreviewIs409(t *testing.T) {
 	if n := w.auditTotal(t); n != auditBefore {
 		t.Errorf("audit rows = %d, want %d", n, auditBefore)
 	}
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p2); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p2); err != nil {
 		t.Errorf("control: the current heir: %v", err)
 	}
 }
@@ -533,7 +533,7 @@ func TestDeleteMyAccount_OnlyTheLockedHeirPasses(t *testing.T) {
 		{"an empty id", ""},
 	}
 	for _, tc := range wrong {
-		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, tc.heir); !errors.Is(err, ErrDeletionOutcomeChanged) {
+		if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, tc.heir); !errors.Is(err, ErrDeletionOutcomeChanged) {
 			t.Errorf("%s: err = %v, want ErrDeletionOutcomeChanged", tc.name, err)
 		}
 	}
@@ -546,7 +546,7 @@ func TestDeleteMyAccount_OnlyTheLockedHeirPasses(t *testing.T) {
 		t.Errorf("audit rows = %d, want %d", n, auditBefore)
 	}
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p1); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p1); err != nil {
 		t.Fatalf("control: the locked heir: %v", err)
 	}
 	if got := imageOf(t, w.super, w.tenant, p1); got.Role != "admin" {
@@ -563,7 +563,7 @@ func TestDeleteMyAccount_EndsOnlyTheCaller(t *testing.T) {
 	q, _ := w.grantedMember(t, "Tunde Bello")
 	pBefore, qBefore, aBefore := imageOf(t, w.super, w.tenant, p), imageOf(t, w.super, w.tenant, q), imageOf(t, w.super, w.tenant, w.admin)
 
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Fatalf("DeleteMyAccount(leave): %v", err)
 	}
 	requireImage(t, w, "caller", p, endState(pBefore))
@@ -579,8 +579,8 @@ func TestDeleteMyAccount_TwoLastAdminsLeavingAtOnceNeverScheduleTheWorkspace(t *
 		a2 := w.member(t, "admin", "active", "Bola Ade", joined(1))
 
 		e1, e2 := race(
-			func() error { return w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, "") },
-			func() error { return w.store.DeleteMyAccount(w.as(a2), OutcomeLeave, "") },
+			func() error { _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeLeave, ""); return err },
+			func() error { _, err := w.store.DeleteMyAccount(w.as(a2), OutcomeLeave, ""); return err },
 		)
 		nils := 0
 		for _, e := range []error{e1, e2} {
@@ -612,7 +612,7 @@ func TestDeleteMyAccount_AFailedAuditRollsBack(t *testing.T) {
 	aBefore, pBefore, auditBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, p), w.auditTotal(t)
 	drop := failAudit(t, w.super, w.tenant, evAccountDeleted)
 
-	err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p)
+	_, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p)
 	if pgCode(err) != "23514" {
 		t.Fatalf("err = %v (SQLSTATE %q), want the forced audit failure 23514", err, pgCode(err))
 	}
@@ -625,7 +625,7 @@ func TestDeleteMyAccount_AFailedAuditRollsBack(t *testing.T) {
 	}
 
 	drop()
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p); err != nil {
 		t.Errorf("after the trigger is gone: %v", err)
 	}
 }
@@ -636,7 +636,7 @@ func TestDeleteMyAccount_NoEraseQueueFailsClosed(t *testing.T) {
 	pBefore, auditBefore := imageOf(t, w.super, w.tenant, p), w.auditTotal(t)
 
 	bare := NewStore(w.app)
-	err := bare.DeleteMyAccount(w.as(p), OutcomeLeave, "")
+	_, err := bare.DeleteMyAccount(w.as(p), OutcomeLeave, "")
 	if err == nil {
 		t.Fatal("DeleteMyAccount succeeded on a store with no erase queue")
 	}
@@ -653,7 +653,7 @@ func TestDeleteMyAccount_NoEraseQueueFailsClosed(t *testing.T) {
 		t.Errorf("audit rows = %d, want %d", n, auditBefore)
 	}
 
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Errorf("control: the same call on a store with a queue: %v", err)
 	}
 }
@@ -667,7 +667,7 @@ func TestDeleteMyAccount_ANullRowEmailUsesTheTokenEmail(t *testing.T) {
 			t.Fatalf("set the row email: %v", err)
 		}
 
-		if err := w.store.DeleteMyAccount(w.asWithEmail(p, "P@Example.test"), OutcomeLeave, ""); err != nil {
+		if _, err := w.store.DeleteMyAccount(w.asWithEmail(p, "P@Example.test"), OutcomeLeave, ""); err != nil {
 			t.Fatalf("row email %v: DeleteMyAccount(leave): %v", rowEmail, err)
 		}
 		if email, _, found := w.erasureOf(t, p); !found || email != "p@example.test" {
@@ -688,7 +688,7 @@ func TestDeleteMyAccount_NoEmailAnywhereIsRefused(t *testing.T) {
 	}
 	pBefore, auditBefore := imageOf(t, w.super, w.tenant, p), w.auditTotal(t)
 
-	if err := w.store.DeleteMyAccount(w.asWithEmail(p, ""), OutcomeLeave, ""); !errors.Is(err, ErrNoEraseEmail) {
+	if _, err := w.store.DeleteMyAccount(w.asWithEmail(p, ""), OutcomeLeave, ""); !errors.Is(err, ErrNoEraseEmail) {
 		t.Fatalf("err = %v, want ErrNoEraseEmail", err)
 	}
 	requireImage(t, w, "caller", p, pBefore)
@@ -697,7 +697,7 @@ func TestDeleteMyAccount_NoEmailAnywhereIsRefused(t *testing.T) {
 		t.Errorf("audit rows = %d, want %d", n, auditBefore)
 	}
 
-	if err := w.store.DeleteMyAccount(w.asWithEmail(p, "p@example.test"), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.asWithEmail(p, "p@example.test"), OutcomeLeave, ""); err != nil {
 		t.Errorf("control: the same call with a token email: %v", err)
 	}
 }
@@ -708,11 +708,11 @@ func TestDeleteMyAccount_ASuspendedOrLockedCallerIsRefused(t *testing.T) {
 	p := w.member(t, "preparer", "active", "Chidi Eze", joined(2))
 	sBefore, pBefore, auditBefore := imageOf(t, w.super, w.tenant, s), imageOf(t, w.super, w.tenant, p), w.auditTotal(t)
 
-	if err := w.store.DeleteMyAccount(w.as(s), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
+	if _, err := w.store.DeleteMyAccount(w.as(s), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
 		t.Errorf("suspended caller: err = %v, want db.ErrNotActiveMember", err)
 	}
 	lockByOwner(t, w.super, w.tenant, w.admin)
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); !errors.Is(err, db.ErrWorkspaceLocked) {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); !errors.Is(err, db.ErrWorkspaceLocked) {
 		t.Errorf("locked workspace: err = %v, want db.ErrWorkspaceLocked", err)
 	}
 	requireImage(t, w, "suspended caller", s, sBefore)
@@ -723,7 +723,7 @@ func TestDeleteMyAccount_ASuspendedOrLockedCallerIsRefused(t *testing.T) {
 	}
 
 	unlockByOwner(t, w.super, w.tenant)
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Errorf("control: the same caller after the unlock: %v", err)
 	}
 }
@@ -732,10 +732,10 @@ func TestDeleteMyAccount_ARepeatCallIsRefused(t *testing.T) {
 	w := newAccWorld(t, "DEL-08-01 repeat")
 	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
 
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Fatalf("first DeleteMyAccount(leave): %v", err)
 	}
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
 		t.Errorf("second call: err = %v, want db.ErrNotActiveMember", err)
 	}
 	if _, gen, found := w.erasureOf(t, p); !found || gen != 1 {
@@ -761,10 +761,10 @@ func TestDeleteMyAccount_OtherTenantsAreUntouched(t *testing.T) {
 	}
 	pOther, heirOther, adminOther := imageOf(t, w.super, other.tenant, p), imageOf(t, w.super, other.tenant, heir), imageOf(t, w.super, other.tenant, other.admin)
 
-	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave, ""); err != nil {
 		t.Fatalf("DeleteMyAccount(leave): %v", err)
 	}
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir); err != nil {
 		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
 	}
 	if got := imageOf(t, w.super, w.tenant, heir); got.Role != "admin" {
@@ -779,7 +779,7 @@ func TestDeleteMyAccount_OtherTenantsAreUntouched(t *testing.T) {
 
 	// a member of tenant B only, naming tenant A in the token, is not a member of A
 	outsider := other.member(t, "admin", "active", "Out Sider", joined(3))
-	if err := w.store.DeleteMyAccount(w.as(outsider), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
+	if _, err := w.store.DeleteMyAccount(w.as(outsider), OutcomeLeave, ""); !errors.Is(err, db.ErrNotActiveMember) {
 		t.Errorf("outsider: err = %v, want db.ErrNotActiveMember", err)
 	}
 	if _, err := w.store.PreviewAccountDeletion(w.as(outsider)); !errors.Is(err, db.ErrNotActiveMember) {
@@ -810,7 +810,7 @@ func TestDeleteMyAccount_AHeirKeepsTheirGrants(t *testing.T) {
 	}
 	before := imageOf(t, w.super, w.tenant, heir)
 
-	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir); err != nil {
+	if _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir); err != nil {
 		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
 	}
 	want := before
@@ -825,8 +825,8 @@ func TestDeleteMyAccount_TheSoleAdminAndTheHeirDeletingAtOnceKeepOneAdmin(t *tes
 		heir := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
 
 		e1, e2 := race(
-			func() error { return w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir) },
-			func() error { return w.store.DeleteMyAccount(w.as(heir), OutcomeLeave, "") },
+			func() error { _, err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, heir); return err },
+			func() error { _, err := w.store.DeleteMyAccount(w.as(heir), OutcomeLeave, ""); return err },
 		)
 		nils := 0
 		for _, e := range []error{e1, e2} {

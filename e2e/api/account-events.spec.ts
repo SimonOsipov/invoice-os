@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test'
 import {
   claimsOf,
+  createEntity,
   getAuditLog,
   grantMembership,
   mintSignInState,
@@ -15,6 +16,7 @@ import {
   type AuditEvent,
   type RealAccount,
 } from './client'
+import { freshTin } from './fixtures'
 
 const CHROME_MAC =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -29,6 +31,8 @@ const RESET_REQUESTED = 'account.password_reset_requested' // EventPasswordReset
 // internal/accountevents/device.go: the label for CHROME_MAC.
 const CHROME_ON_MACOS = 'Chrome on macOS'
 // internal/gateway/signin_throttle.go SignInMaxFailures.
+// internal/audit/account_events.go AccountEvents: the six codes the exclusion removes.
+const ACCOUNT_EVENTS = [SIGNED_IN, SIGN_IN_FAILED, SIGN_IN_BLOCKED, SIGNED_OUT, RESET_REQUESTED, 'account.password_reset_completed'] // EventPasswordResetCompleted
 const MAX_FAILURES = 10
 const IP_PATTERN = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*)$/
 const POLL = { timeout: 30_000, intervals: [1_000] }
@@ -185,5 +189,21 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     for (const e of own) expect(e.actor).toBe(blocked.id)
     expect(rowsOf(await rows(adminToken, SIGN_IN_BLOCKED), blocked.id)).toHaveLength(2)
   })
-})
 
+  test('the overview exclusion fills the limit from older rows', async () => {
+    await createEntity(adminToken, { name: `AUDIT-15 ${freshTin()}`, tin: freshTin() })
+    for (let i = 0; i < 6; i++) await signIn(admin.email, admin.password)
+    // Control: with no exclusion the newest 5 are account rows (the root cause).
+    await expect
+      .poll(async () => (await getAuditLog(adminToken, { limit: 5 })).events.filter((e) => ACCOUNT_EVENTS.includes(e.event)).length, { ...POLL, message: 'five newest rows are account rows' })
+      .toBe(5)
+
+    const tile = await getAuditLog(adminToken, { limit: 5, exclude_account_events: true })
+    expect(tile.events.length).toBe(5)
+    expect(tile.events.filter((e) => ACCOUNT_EVENTS.includes(e.event))).toEqual([])
+    expect(tile.events.map((e) => e.event)).toContain('portfolio.entity.created')
+
+    const own = await getAuditLog(preparer.token, { limit: 5, exclude_account_events: true })
+    expect(own.events.filter((e) => ACCOUNT_EVENTS.includes(e.event))).toEqual([])
+  })
+})

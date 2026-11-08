@@ -340,3 +340,36 @@ func TestReadForCheck_EveryAICallCarriesThePublicCheckMark(t *testing.T) {
 		t.Errorf("the image call is not marked as a public check")
 	}
 }
+
+func TestReadForCheck_NoTextPDFImagePathFailuresAreNotAReading(t *testing.T) {
+	var order []string
+	boom := errors.New("pdfium 500")
+	cases := []struct {
+		name    string
+		render  *pcReader
+		ai      *pcAI
+		wantErr error
+		poor    bool
+		aiCalls int
+	}{
+		{"render error", &pcReader{err: boom}, &pcAI{enabled: true, order: &order}, boom, false, 0},
+		{"render yields no page", &pcReader{}, &pcAI{enabled: true, order: &order}, nil, true, 0},
+		{"image call fails", pcRender("p1"), &pcAI{enabled: true, order: &order, failOn: ai.PurposeDocument}, ErrCheckAIUnavailable, false, 1},
+		{"image answer is empty", pcRender("p1"), &pcAI{enabled: true, order: &order, header: map[string]any{}}, nil, true, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := CheckReaders{Text: &pcReader{}, Render: c.render, AI: c.ai}
+			fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
+			if !errors.Is(err, c.wantErr) || (c.wantErr == nil) != (err == nil) {
+				t.Fatalf("err = %v, want %v", err, c.wantErr)
+			}
+			if c.poor != pcIsPoorScan(fields) {
+				t.Errorf("fields = %+v, poor scan = %v, want %v", fields, pcIsPoorScan(fields), c.poor)
+			}
+			if len(c.ai.reqs) != c.aiCalls {
+				t.Errorf("AI calls = %d, want %d", len(c.ai.reqs), c.aiCalls)
+			}
+		})
+	}
+}

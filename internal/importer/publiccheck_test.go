@@ -12,6 +12,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 const (
@@ -400,5 +401,92 @@ func TestCheckDocumentInvoice_PoorScanIsAProblemWithThePoorScanSentence(t *testi
 	inv, rowErr := CheckDocumentInvoice([]CheckField{{Name: "document_text_layer", Reason: &reason}})
 	if inv != nil || rowErr == nil || rowErr.Message != poorScanMessage {
 		t.Fatalf("inv %v, rowErr %+v; want nil and poorScanMessage", inv, rowErr)
+	}
+}
+
+// classifyCSV has one group per Service.Import classification step, in the app's order; the
+// "both" groups carry two defects so the earlier step must win.
+const classifyCSV = "Inv,Total,Date,Time,Buyer,LineTotal\n" +
+	"comma,\"12,50\",2026-01-02,,Acme,1\n" +
+	"conflict,5,2026-01-02,,Acme,1\n" +
+	"conflict,5,2026-01-02,,Beta,1\n" +
+	"baddate,5,31/02/2026,,Acme,1\n" +
+	"badtime,5,2026-01-02,25:61,Acme,1\n" +
+	"badnum,N/A,2026-01-02,,Acme,1\n" +
+	"range,5,2026-01-02,,Acme,1234567890123\n" +
+	"commaAndDate,\"12,50\",31/02/2026,,Acme,1\n" +
+	"dateAndTime,5,31/02/2026,25:61,Acme,1\n" +
+	"timeAndNum,N/A,2026-01-02,25:61,Acme,1\n" +
+	"numAndRange,N/A,2026-01-02,,Acme,1234567890123\n" +
+	"clean,5,2026-01-02,10:00:00,Acme,1\n"
+
+var classifyMapping = map[string]string{
+	"invoice_number": "Inv", "total": "Total", "issue_date": "Date", "issue_time": "Time",
+	"buyer_name": "Buyer", "line_total": "LineTotal",
+}
+
+// wantField is the classification step that must reject each group; "" is ready.
+var wantField = map[string]string{
+	"comma": "total", "conflict": "buyer_name", "baddate": "issue_date", "badtime": "issue_time",
+	"badnum": "total", "range": "line_total", "commaAndDate": "total", "dateAndTime": "issue_date",
+	"timeAndNum": "issue_time", "numAndRange": "total", "clean": "",
+}
+
+func TestCheckSpreadsheet_EachClassificationStepQuarantinesItsGroup(t *testing.T) {
+	got, err := CheckSpreadsheet(t.Context(), []byte(classifyCSV), "csv", 1, classifyMapping, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Invoices) != len(wantField) {
+		t.Fatalf("%d invoices, want %d", len(got.Invoices), len(wantField))
+	}
+	for _, it := range got.Invoices {
+		want, ok := wantField[it.Number]
+		if !ok {
+			t.Fatalf("unexpected invoice %q", it.Number)
+		}
+		switch {
+		case want == "" && (it.Problem != nil || it.Invoice == nil):
+			t.Errorf("%s: %+v, want ready", it.Number, it)
+		case want != "" && (it.Problem == nil || it.Problem.Field != want || it.Invoice != nil):
+			t.Errorf("%s: %+v, want a Problem on %s and no Invoice", it.Number, it, want)
+		}
+	}
+	if conflict := got.Invoices[1]; conflict.Problem == nil || !slices.Equal(conflict.Problem.Rows, []int{3, 4}) {
+		t.Errorf("conflict rows = %+v, want sheet rows [3 4]", conflict.Problem)
+	}
+}
+
+// The check classifies a group with the app's helpers; this pins the two against drift
+// (a step added to Service.Import, or reordered, fails here).
+func TestCheckSpreadsheet_ClassifiesEveryGroupAsTheAppsImportDoes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "FREECHK-01 parity tenant")
+	entityID := seedEntity(t, super, tenantID, "FREECHK-01 parity entity")
+	ctx := auth.WithIdentity(t.Context(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	header, rows, _, err := DecodeFrom(ctx, strings.NewReader(classifyCSV), "csv", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := newTestService(app).Import(ctx, entityID, "", "", 1, classifyMapping, header, rows, true, "")
+	if err != nil {
+		t.Fatalf("Import (dry-run): %v", err)
+	}
+	if len(res.Errors) != len(wantField)-1 || res.ReadyInvoices != 1 {
+		t.Fatalf("app verdict: %d errors, %d ready; want %d and 1", len(res.Errors), res.ReadyInvoices, len(wantField)-1)
+	}
+	sheet, err := CheckSpreadsheet(t.Context(), []byte(classifyCSV), "csv", 1, classifyMapping, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problems []RowError
+	for _, it := range sheet.Invoices {
+		if it.Problem != nil {
+			problems = append(problems, *it.Problem)
+		}
+	}
+	if !reflect.DeepEqual(problems, res.Errors) {
+		t.Errorf("check problems differ from the app's errors:\ncheck %+v\napp   %+v", problems, res.Errors)
 	}
 }

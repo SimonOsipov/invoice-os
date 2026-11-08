@@ -15,7 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// Recorder is the airecord.Sink that stores each call under its tenant.
+// Recorder is the airecord.Sink that stores each call.
 type Recorder struct {
 	pool    *pgxpool.Pool
 	logger  *slog.Logger

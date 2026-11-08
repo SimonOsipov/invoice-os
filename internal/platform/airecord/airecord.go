@@ -26,7 +26,7 @@ type Call struct {
 // Sink receives one Call. It returns at once and never affects the AI call.
 type Sink func(Call)
 
-// Record hands c to sink under the caller's tenant. A call that sent nothing is not recorded.
+// Record hands c to sink. A call that sent nothing is not recorded.
 // Negative vendor usage becomes 0, so a CHECK never drops the row.
 func Record(ctx context.Context, sink Sink, logger *slog.Logger, c Call) {
 	if sink == nil || c.Attempts == 0 {

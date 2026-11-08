@@ -806,6 +806,89 @@ func TestRLS_AICallsPublicCheckRowInvisibleToTenantsAndToNoTenant(t *testing.T) 
 	}
 }
 
+func TestRLS_AICallsPublicCheckRowRefusedToEveryOtherRole(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	t1 := aiTenants(t, 1)[0]
+	row := seedNullTenantAICall(t, staffAIRow("", "public-check-other-roles", "ok", staffAIFarBase()))
+	if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1 AND tenant_id IS NULL`, row.id); n != 1 {
+		t.Fatalf("superuser sees %d NULL-tenant rows, want 1: the zeros below prove nothing", n)
+	}
+	const nullRows = `SELECT count(*) FROM ai_calls WHERE tenant_id IS NULL`
+
+	// The owner is bound by FORCE ROW LEVEL SECURITY, and public_check_insert is TO invoice_app only.
+	ownerID := uuid.NewString()
+	deleteAICallOnCleanup(t, ownerID)
+	if err := aiInsertNullTenant(ctx, h.mig, ownerID, staffAIFarBase()); !isRLSViolation(err) {
+		t.Errorf("owner INSERT of a NULL-tenant row = %v, want SQLSTATE 42501", err)
+	}
+	if n := mustCount(t, h.mig, nullRows); n != 0 {
+		t.Errorf("NULL-tenant rows visible to the owner with no tenant = %d, want 0", n)
+	}
+	if err := db.WithinTenantTx(ctx, h.mig, t1, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, nullRows); n != 0 {
+			t.Errorf("NULL-tenant rows visible to the owner under a tenant = %d, want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("owner WithinTenantTx: %v", err)
+	}
+
+	readerID := uuid.NewString()
+	deleteAICallOnCleanup(t, readerID)
+	if err := aiInsertNullTenant(ctx, h.reader, readerID, staffAIFarBase()); pgCode(err) != "42501" {
+		t.Errorf("reader INSERT of a NULL-tenant row = %v, want SQLSTATE 42501", err)
+	}
+	var n int
+	if err := h.reader.QueryRow(ctx, nullRows).Scan(&n); pgCode(err) != "42501" {
+		t.Errorf("reader SELECT of NULL-tenant rows = %d, %v; want SQLSTATE 42501", n, err)
+	}
+	if got := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id IN ($1, $2)`, ownerID, readerID); got != 0 {
+		t.Errorf("rows written by the refused roles = %d, want 0", got)
+	}
+}
+
+// A binding that is not "unset or empty" must not open public_check_insert, whatever its spelling.
+func TestRLS_AICallsPublicCheckRowRefusedUnderAnyNonEmptyTenantBinding(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	okID := uuid.NewString()
+	deleteAICallOnCleanup(t, okID)
+	if err := aiInsertNullTenant(ctx, h.app, okID, staffAIFarBase()); err != nil {
+		t.Fatalf("INSERT of a NULL-tenant row with no tenant bound: %v", err)
+	}
+	for _, c := range []struct{ name, guc string }{
+		{"the nil UUID the staff reads use", publicCheckTenantID},
+		{"a space", " "},
+		{"not a UUID", "not-a-uuid"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id := uuid.NewString()
+			deleteAICallOnCleanup(t, id)
+			tx, err := h.app.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, c.guc); err != nil {
+				t.Fatalf("bind tenant %q: %v", c.guc, err)
+			}
+			err = aiInsertNullTenant(ctx, tx, id, staffAIFarBase())
+			if err == nil {
+				t.Fatalf("INSERT of a NULL-tenant row under tenant binding %q succeeded", c.guc)
+			}
+			if c.guc == publicCheckTenantID {
+				assertRLSViolation(t, err)
+			}
+			_ = tx.Rollback(ctx)
+			if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1`, id); n != 0 {
+				t.Errorf("rows after the refused INSERT = %d, want 0", n)
+			}
+		})
+	}
+}
+
 // publicCheckMigrationVersion is the one migration that creates the public_check_insert policy.
 func publicCheckMigrationVersion(t *testing.T) int64 {
 	t.Helper()

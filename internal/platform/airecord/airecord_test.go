@@ -101,16 +101,6 @@ func TestRecord_AFakeCallWithOneAttemptIsRecorded(t *testing.T) {
 	}
 }
 
-func TestRecord_NoIdentityWarnsOnceAndSkips(t *testing.T) {
-	var s spy
-	logger, buf := newLogger()
-	Record(context.Background(), s.sink, logger, Call{Client: "ai", Purpose: "document", Attempts: 1, Outcome: "ok"})
-	if len(s.got) != 0 {
-		t.Errorf("sink called %d times", len(s.got))
-	}
-	wantOneWarn(t, buf)
-}
-
 func TestRecord_EmptyTenantWarnsOnceAndSkips(t *testing.T) {
 	var s spy
 	logger, buf := newLogger()
@@ -257,5 +247,26 @@ func TestRecord_AMarkedCallClampsNegativeUsage(t *testing.T) {
 	}
 	if g := s.got[0]; g.InputTokens != 0 || g.OutputTokens != 0 || g.Cost != 0 || !g.PublicCheck {
 		t.Errorf("got %+v, want usage clamped to 0 on a PublicCheck call", g)
+	}
+}
+
+// A tenantless caller (WithTenantlessCaller) carries a tenant id that is not a tenant binding;
+// under a mark the call is a public check and the id never reaches the row.
+func TestRecord_AMarkedCallFromATenantlessCallerIsAPublicCheckWithNoTenant(t *testing.T) {
+	var s spy
+	logger, buf := newLogger()
+	base := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: "u1", TenantID: "T1"})
+	Record(base, s.sink, logger, okCall())
+	if len(s.got) != 0 {
+		t.Fatalf("unmarked tenantless caller: sink called %d times, want 0", len(s.got))
+	}
+	wantOneWarn(t, buf)
+
+	Record(WithPublicCheck(base), s.sink, nil, okCall())
+	if len(s.got) != 1 {
+		t.Fatalf("marked tenantless caller: sink called %d times, want 1", len(s.got))
+	}
+	if g := s.got[0]; g.TenantID != "" || !g.PublicCheck {
+		t.Errorf("got %+v, want TenantID empty and PublicCheck true", g)
 	}
 }

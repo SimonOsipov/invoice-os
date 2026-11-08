@@ -100,6 +100,9 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
 			}
+			if errors.Is(err, extraction.ErrDocumentUnreadable) {
+				return Result{}, fmt.Errorf("%w: %w", ErrBadFile, err)
+			}
 			return Result{}, fmt.Errorf("%w: %w", ErrReadUnavailable, err)
 		}
 		inv, problem := importer.CheckDocumentInvoice(checkFields(fields))

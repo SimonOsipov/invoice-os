@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -134,8 +135,20 @@ func doclingStatusError(resp *http.Response) error {
 	if reason == "" {
 		reason = http.StatusText(resp.StatusCode)
 	}
-	return fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
+	err := fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		return unreadableError{err}
+	}
+	return err
 }
+
+// ErrDocumentUnreadable marks the sidecar's 422: the file is bad, the service is not down.
+var ErrDocumentUnreadable = errors.New("docling: document unreadable")
+
+type unreadableError struct{ error }
+
+func (e unreadableError) Unwrap() error      { return e.error }
+func (unreadableError) Is(target error) bool { return target == ErrDocumentUnreadable }
 
 // doclingTokens converts one page's wire tokens and counts the non-whitespace runes they carry,
 // the same predicate pdfiumTokens uses.

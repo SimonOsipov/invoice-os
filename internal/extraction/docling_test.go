@@ -368,6 +368,19 @@ func TestDoclingReader_500NamesStatusAndReason(t *testing.T) {
 	}
 }
 
+func TestDoclingReader_Only422IsDocumentUnreadable(t *testing.T) {
+	for status, want := range map[int]bool{http.StatusUnprocessableEntity: true, http.StatusInternalServerError: false, http.StatusServiceUnavailable: false} {
+		srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":"x"}`))
+		})
+		_, err := dcNewReader(t, srv.URL).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+		if got := errors.Is(err, extraction.ErrDocumentUnreadable); got != want {
+			t.Errorf("status %d: errors.Is(ErrDocumentUnreadable) = %v, want %v", status, got, want)
+		}
+	}
+}
+
 // T-05-16: the 422 case must be distinguishable from the 500 case by its own status and reason.
 func TestDoclingReader_422NamesStatusAndReasonDistinctFrom500(t *testing.T) {
 	srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {

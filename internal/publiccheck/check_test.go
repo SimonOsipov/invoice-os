@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"slices"
@@ -314,6 +315,15 @@ func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {
 	}
 	if len(r.l.calls) != 0 {
 		t.Errorf("loader calls = %d, want 0", len(r.l.calls))
+	}
+}
+
+func TestCheck_ADoclingRefusalOfTheFileIsBadFile(t *testing.T) {
+	r := newRig()
+	r.tx.err = fmt.Errorf("docling: /v1/read returned 422: encrypted: %w", extraction.ErrDocumentUnreadable)
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrBadFile) || errors.Is(err, publiccheck.ErrReadUnavailable) {
+		t.Fatalf("err = %v, want ErrBadFile and not ErrReadUnavailable", err)
 	}
 }
 

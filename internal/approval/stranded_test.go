@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -212,58 +213,211 @@ func TestStranded_RowCarriesWorkspaceInvoiceRoleReasonArmedAtAndBlocks(t *testin
 	}
 }
 
-func TestStranded_AgreesWithHeldRoleKeysTx(t *testing.T) {
+// memberIn staffs roleID with a new member of the given spec.
+func memberIn(t *testing.T, f runFixture, roleID string, s memberSpec) string {
+	t.Helper()
+	s.roleID = roleID
+	return seedMemberOf(t, f.super, f.tenantID, s)
+}
+
+func limitedTo(ents ...string) memberSpec {
+	return memberSpec{role: "reviewer", limited: true, entityIDs: ents}
+}
+
+func TestStranded_AgreesWithUnsignableReasons(t *testing.T) {
 	f := newRunFixture(t, "Stranded agrees")
-	type fixtureRole struct {
-		key     string
-		members []string
-	}
-	var roles []fixtureRole
-	add := func(key string, memberships ...[2]string) (string, []string) {
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "Stranded agrees B")
+	var keys []string
+	add := func(key string, specs ...memberSpec) string {
 		id := seedWorkflowRole(t, f.super, f.tenantID, key, key)
-		var users []string
-		for _, m := range memberships {
-			users = append(users, staffWith(t, f, id, m[0], m[1]))
+		for _, sp := range specs {
+			memberIn(t, f, id, sp)
 		}
-		roles = append(roles, fixtureRole{key, users})
-		return id, users
+		keys = append(keys, key)
+		return id
 	}
-	add("admin", [2]string{"admin", "active"})
-	add("reviewer", [2]string{"reviewer", "active"})
-	add("suspended", [2]string{"reviewer", "suspended"})
-	add("preparer", [2]string{"preparer", "active"})
+	add("admin", memberSpec{role: "admin"})
+	add("reviewer", memberSpec{role: "reviewer"})
+	add("suspended", memberSpec{role: "reviewer", status: "suspended"})
+	add("preparer", memberSpec{role: "preparer"})
 	add("empty")
-	delID, _ := add("deleted", [2]string{"reviewer", "active"})
-	softDeleteWorkflowRole(t, f.super, delID)
+	softDeleteWorkflowRole(t, f.super, add("deleted", memberSpec{role: "reviewer"}))
+	add("reach", limitedTo(entB))
+	creatorID := add("creator")
+	creator := memberIn(t, f, creatorID, memberSpec{role: "reviewer"})
+	add("deleg") // empty: its step names an active reviewer outside every role
+	add("deleg-off")
+	delegate := memberIn(t, f, "", memberSpec{role: "reviewer"})
 
 	invByKey := map[string]string{}
-	for _, r := range roles {
-		inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+r.key, f.versionID, pendingOn(r.key))
-		invByKey[r.key] = inv
+	var probes []SignerProbe
+	for _, k := range keys {
+		inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+k, f.versionID, pendingOn(k))
+		invByKey[k] = inv
+		p := SignerProbe{InvoiceID: inv, RoleKey: ptr(k)}
+		if k == "deleg" {
+			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 0), true, &delegate)
+			p.AllowDelegation, p.DelegateUserID = true, &delegate
+		}
+		probes = append(probes, p)
 	}
-	listed := byInvoice(strandedFor(t, f.app, f.tenantID))
+	seedHistory(t, f.super, f.tenantID, invByKey["creator"], nil, creator)
 
-	for _, r := range roles {
-		held := false
-		err := db.WithinTenantTx(context.Background(), f.app, f.tenantID, func(tx pgx.Tx) error {
-			for _, u := range r.members {
-				m, err := HeldRoleKeysTx(context.Background(), tx, []string{r.key}, u)
-				if err != nil {
-					return err
-				}
-				held = held || m[r.key]
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("HeldRoleKeysTx %s: %v", r.key, err)
-		}
-		if _, isListed := listed[invByKey[r.key]]; isListed == held {
-			t.Errorf("role %s: listed = %v, held by a member = %v, want opposite", r.key, isListed, held)
+	reasons := readReasons(t, f.app, f.tenantID, probes)
+	listed := byInvoice(strandedFor(t, f.app, f.tenantID))
+	seen := map[string]bool{}
+	for i, k := range keys {
+		seen[reasons[i]] = true
+		row, isListed := listed[invByKey[k]]
+		if isListed != (reasons[i] != "") || row.Reason != reasons[i] {
+			t.Errorf("role %s: listed = %v with %q, unsignableReasonsTx = %q", k, isListed, row.Reason, reasons[i])
 		}
 	}
-	if len(listed) == len(roles) || len(listed) == 0 {
-		t.Errorf("listed %d of %d roles: the fixture needs both outcomes", len(listed), len(roles))
+	idx := func(k string) int { return slices.Index(keys, k) }
+	if reasons[idx("deleg")] != "" {
+		t.Errorf("role deleg: unsignableReasonsTx = %q, want \"\" (an eligible delegate decides)", reasons[idx("deleg")])
+	}
+	if _, isListed := listed[invByKey["deleg"]]; isListed {
+		t.Errorf("role deleg: listed as stranded, but an eligible delegate can decide it")
+	}
+	if r := listed[invByKey["deleg-off"]]; r.Reason != StrandedNoHolder || reasons[idx("deleg-off")] != StrandedNoHolder {
+		t.Errorf("role deleg-off: listed %+v, reason %q, want no holder from both", r, reasons[idx("deleg-off")])
+	}
+	for _, want := range []string{"", StrandedDeleted, StrandedNoHolder, StrandedOutOfReach, StrandedCreatorOnly} {
+		if !seen[want] {
+			t.Errorf("the fixture yields no %q: reasons = %q", want, reasons)
+		}
+	}
+}
+
+func TestStranded_ListsACreatorOnlyRun(t *testing.T) {
+	f := newRunFixture(t, "Stranded creator only")
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "c-role", "C Role")
+	c := memberIn(t, f, roleID, memberSpec{role: "reviewer"})
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("c-role"))
+	seedHistory(t, f.super, f.tenantID, inv, nil, c)
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedCreatorOnly || rows[0].Blocks != BlocksNow {
+		t.Fatalf("rows = %+v, want one creator only row blocking now", rows)
+	}
+}
+
+func TestStranded_ListsAnOutOfReachRun(t *testing.T) {
+	f := newRunFixture(t, "Stranded out of reach")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "Stranded out of reach B")
+	memberIn(t, f, seedWorkflowRole(t, f.super, f.tenantID, "r-role", "R Role"), limitedTo(entB))
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("r-role"))
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedOutOfReach {
+		t.Fatalf("rows = %+v, want one out of client reach row", rows)
+	}
+}
+
+func TestStranded_SkipsARunOneMemberCanApprove(t *testing.T) {
+	f := newRunFixture(t, "Stranded one member")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "Stranded one member B")
+	mixed := seedWorkflowRole(t, f.super, f.tenantID, "mixed", "Mixed")
+	memberIn(t, f, mixed, limitedTo(entB))
+	memberIn(t, f, mixed, limitedTo(f.entityID))
+	seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-mixed", f.versionID, pendingOn("mixed"))
+
+	cr := seedWorkflowRole(t, f.super, f.tenantID, "cr", "CR")
+	c := memberIn(t, f, cr, memberSpec{role: "reviewer"})
+	memberIn(t, f, cr, memberSpec{role: "reviewer"})
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-cr", f.versionID, pendingOn("cr"))
+	seedHistory(t, f.super, f.tenantID, inv, nil, c)
+
+	if rows := strandedFor(t, f.app, f.tenantID); len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
+	}
+}
+
+func TestStranded_PicksTheFirstStepNobodyCanApprove(t *testing.T) {
+	f := newRunFixture(t, "Stranded first step")
+	entB := seedBusinessEntity(t, f.super, f.tenantID, "Stranded first step B")
+	staffedByActiveReviewer(t, f, "ok", "Ok")
+	memberIn(t, f, seedWorkflowRole(t, f.super, f.tenantID, "far", "Far"), limitedTo(entB))
+	deadRole(t, f, "dead", "Dead")
+	step := func(ord int, key string) runStepSeed {
+		return runStepSeed{Ord: ord, Kind: "approval", State: "pending", Key: ptr(key)}
+	}
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, step(0, "ok"), step(1, "far"), step(2, "dead"))
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].RoleKey != "far" || rows[0].Reason != StrandedOutOfReach || rows[0].Blocks != BlocksLater {
+		t.Fatalf("rows = %+v, want one row on step far, out of client reach, later", rows)
+	}
+}
+
+func TestStranded_ThreeRunsTwoTenantsKeepOrder(t *testing.T) {
+	a := newRunFixture(t, "Stranded order A")
+	b := newRunFixture(t, "Stranded order B")
+	entB := seedBusinessEntity(t, a.super, a.tenantID, "Stranded order A2")
+	cr := seedWorkflowRole(t, a.super, a.tenantID, "cr", "CR")
+	c := memberIn(t, a, cr, memberSpec{role: "reviewer"})
+	staffedByActiveReviewer(t, a, "ok", "Ok")
+	memberIn(t, a, seedWorkflowRole(t, a.super, a.tenantID, "far", "Far"), limitedTo(entB))
+	seedWorkflowRole(t, b.super, b.tenantID, "empty", "Empty")
+
+	r1, run1 := seedOpenRun(t, a.super, a.tenantID, a.entityID, "A-1", a.versionID, pendingOn("cr"))
+	seedHistory(t, a.super, a.tenantID, r1, nil, c)
+	_, run2 := seedOpenRun(t, a.super, a.tenantID, a.entityID, "A-2", a.versionID, pendingOn("ok"))
+	r3, run3 := seedOpenRun(t, a.super, a.tenantID, a.entityID, "A-3", a.versionID, pendingOn("far"))
+	bInv, _ := seedOpenRun(t, b.super, b.tenantID, b.entityID, "B-1", b.versionID, pendingOn("empty"))
+	for i, run := range []string{run3, run2, run1} { // opened 30, 20, 10 minutes ago
+		if _, err := a.super.Exec(context.Background(),
+			`UPDATE approval_runs SET opened_at = now() - make_interval(mins => $2) WHERE id = $1`, run, 30-i*10); err != nil {
+			t.Fatalf("set opened_at: %v", err)
+		}
+	}
+	rows, err := ListStranded(context.Background(), a.app, []string{a.tenantID, b.tenantID})
+	if err != nil {
+		t.Fatalf("ListStranded: %v", err)
+	}
+	if len(rows) != 3 || rows[0].InvoiceID != r3 || rows[1].InvoiceID != r1 || rows[2].InvoiceID != bInv {
+		t.Fatalf("rows = %+v, want A's [r3, r1] by opened_at then B's run", rows)
+	}
+	if rows[0].Reason != StrandedOutOfReach || rows[1].Reason != StrandedCreatorOnly || rows[2].WorkspaceID != b.tenantID {
+		t.Errorf("rows = %+v", rows)
+	}
+}
+
+func TestStranded_InHouseReviewerWithoutClientsIsNotListed(t *testing.T) {
+	f := newRunFixture(t, "Stranded in-house")
+	memberIn(t, f, seedWorkflowRole(t, f.super, f.tenantID, "r", "R"), memberSpec{role: "reviewer", limited: true})
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("r"))
+	setKind := func(kind string) {
+		if _, err := f.super.Exec(context.Background(), `UPDATE tenants SET kind = $2 WHERE id = $1`, f.tenantID, kind); err != nil {
+			t.Fatalf("set tenant kind: %v", err)
+		}
+	}
+
+	setKind("in_house")
+	if rows := strandedFor(t, f.app, f.tenantID); len(rows) != 0 {
+		t.Fatalf("in-house rows = %+v, want none", rows)
+	}
+	setKind("firm")
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedOutOfReach {
+		t.Fatalf("firm rows = %+v, want one out of client reach", rows)
+	}
+}
+
+func TestStranded_SignerReadErrorIsReturned(t *testing.T) {
+	f := newRunFixture(t, "Stranded signer error")
+	seedWorkflowRole(t, f.super, f.tenantID, "x", "X")
+	seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("x"))
+
+	var rows []StrandedRun
+	err := db.WithinTenantTxOpts(context.Background(), failingAppPool(t, signMarker), f.tenantID, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		var err error
+		rows, err = StrandedRunsTx(context.Background(), tx)
+		return err
+	})
+	if err == nil || rows != nil {
+		t.Fatalf("rows = %+v, err = %v, want an error and no rows", rows, err)
 	}
 }
 
@@ -455,28 +609,40 @@ func TestListStranded_ReadsATenantScheduledForDeletion(t *testing.T) {
 	}
 }
 
-// Pins today's holder-only count: APSC-14 flips this test when it counts a delegate.
-func TestStranded_ADelegateDoesNotCountAsADecider(t *testing.T) {
-	for _, named := range []bool{true, false} {
-		name := "anyone"
-		if named {
-			name = "named"
-		}
-		t.Run(name, func(t *testing.T) {
-			f := newRunFixture(t, "DELEG-01-03 stranded "+name)
+// A delegate who could approve the step counts as someone who can decide it (DELEG-01 hand-off).
+func TestStranded_AnEligibleDelegateCountsAsADecider(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		delegate func(t *testing.T, f runFixture) *string
+		want     string // "" = not listed
+	}{
+		{"named", func(t *testing.T, f runFixture) *string {
+			d := uuid.NewString()
+			seedMembership(t, f.super, f.tenantID, d, "reviewer", "active")
+			return &d
+		}, ""},
+		{"anyone", func(*testing.T, runFixture) *string { return nil }, ""},
+		{"named ineligible", func(t *testing.T, f runFixture) *string {
+			d := uuid.NewString()
+			seedMembership(t, f.super, f.tenantID, d, "reviewer", "suspended")
+			return &d
+		}, StrandedNoHolder},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRunFixture(t, "APSC-14-07 stranded "+c.name)
 			staffWith(t, f, seedWorkflowRole(t, f.super, f.tenantID, "susp", "Suspended"), "reviewer", "suspended")
-			inv, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+name, f.versionID, pendingOn("susp"))
-			var delegate *string
-			if named {
-				d := uuid.NewString()
-				seedMembership(t, f.super, f.tenantID, d, "reviewer", "active")
-				delegate = &d
-			}
-			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, runID, 0), true, delegate)
+			inv, runID := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-"+c.name, f.versionID, pendingOn("susp"))
+			setStepDelegation(t, f.super, oneApprovalStep(t, f.super, runID, 0), true, c.delegate(t, f))
 
 			rows := strandedFor(t, f.app, f.tenantID)
-			if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedNoHolder {
-				t.Fatalf("rows = %+v, want the run listed once with reason no holder", rows)
+			if c.want == "" {
+				if len(rows) != 0 {
+					t.Fatalf("rows = %+v, want none: an eligible delegate decides the step", rows)
+				}
+				return
+			}
+			if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != c.want {
+				t.Fatalf("rows = %+v, want the run listed once with reason %q", rows, c.want)
 			}
 		})
 	}

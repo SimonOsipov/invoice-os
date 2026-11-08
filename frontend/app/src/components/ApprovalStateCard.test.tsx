@@ -68,6 +68,7 @@ const EXPECTED_COPY = {
   noPending: 'Nobody is waiting on this invoice.',
   decideAbove: 'Approve or reject from the buttons at the top of this page.',
   unstaffedSeat: 'Unstaffed seat',
+  nobodyCanApprove: 'Nobody here can approve this invoice',
   overdue: 'Overdue',
   stateOpen: 'In progress',
   stateApproved: 'Approved',
@@ -225,7 +226,7 @@ describe('ApprovalStateCard', () => {
 
   it('approvalStateCard_rendersStateAndHolder', () => {
     const run = runFixture({
-      steps: [stepFixture({ ord: 0, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } })],
+      steps: [stepFixture({ ord: 0, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false, reason: null } })],
     })
 
     render(<ApprovalStateCard run={readyRun(run)} />)
@@ -269,11 +270,26 @@ describe('ApprovalStateCard', () => {
     }
   })
 
+  it('approvalStateCard_holderWarnFollowsReason', () => {
+    for (const [reason, key] of [['nobody_can_approve', 'nobodyCanApprove'], ['unstaffed', 'unstaffedSeat']] as const) {
+      const step = stepFixture({ ord: 0, holder: { text: 'Rita Eze', warn: true, reason } })
+      render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
+      const el = card()
+      expect(within(el).getByTestId('approval-holder-name').textContent).toContain('Rita Eze')
+      const tag = within(el).getByTestId('approval-holder-warn')
+      expect(tag.textContent).toBe(copyOf(key))
+      expect(tag.className).toBe('mono')
+      expect(tag.style.fontSize).toBe('10px')
+      expect(tag.style.color).toBe('var(--status-amber-text)')
+      cleanup()
+    }
+  })
+
   it('approvalStateCard_keepsUnstaffedAndOverdue', () => {
     const step = stepFixture({
       ord: 0,
       workflow_role_title: 'Compliance lead',
-      holder: { text: 'Nobody assigned', warn: true },
+      holder: { text: 'Nobody assigned', warn: true, reason: 'unstaffed' },
       overdue: true,
     })
 
@@ -295,7 +311,7 @@ describe('ApprovalStateCard', () => {
     // Positive control on the same three locators: flip warn and overdue off and the two
     // markers disappear while the holder line stays. Without it the amber/red assertions
     // above could be satisfied by a card that paints every holder amber.
-    const calm = stepFixture({ ord: 0, workflow_role_title: 'Compliance lead', holder: { text: 'Ada Obi', warn: false }, overdue: false })
+    const calm = stepFixture({ ord: 0, workflow_role_title: 'Compliance lead', holder: { text: 'Ada Obi', warn: false, reason: null }, overdue: false })
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [calm] }))} />)
     el = card()
     expect(within(el).queryAllByTestId('approval-holder-warn')).toHaveLength(0)
@@ -346,7 +362,7 @@ describe('ApprovalStateCard', () => {
   })
 
   it('an open run is a gap-6 column; the hint carries the divider', () => {
-    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false }, due_at: '2026-07-01T00:00:00Z' })
+    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false, reason: null }, due_at: '2026-07-01T00:00:00Z' })
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
 
     const el = card()
@@ -367,7 +383,7 @@ describe('ApprovalStateCard', () => {
   })
 
   it('the hint inherits the body size; role and holder are separate column items', () => {
-    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } })
+    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false, reason: null } })
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
 
     const el = card()
@@ -416,7 +432,7 @@ describe('ApprovalStateCard', () => {
 
     // Positive control on the same locator: a step that DOES carry a holder renders exactly
     // one holder-name line, so the zero above is the null-safety and not a dead testid.
-    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [stepFixture({ ord: 0, holder: { text: 'Ada Obi', warn: false } })] }))} />)
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [stepFixture({ ord: 0, holder: { text: 'Ada Obi', warn: false, reason: null } })] }))} />)
     el = card()
     expect(within(el).queryAllByTestId('approval-holder-name')).toHaveLength(1)
   })
@@ -429,7 +445,7 @@ describe('ApprovalStateCard', () => {
     // pendingApprovalStep that does not gate on run.state === 'open' renders
     // "Waiting on Musa Danjuma" directly beside a "Voided" pill.
     const steps = [
-      stepFixture({ ord: 0, kind: 'approval', state: 'pending', workflow_role_title: 'Compliance lead', holder: { text: 'Musa Danjuma', warn: false } }),
+      stepFixture({ ord: 0, kind: 'approval', state: 'pending', workflow_role_title: 'Compliance lead', holder: { text: 'Musa Danjuma', warn: false, reason: null } }),
     ]
 
     // The predicate is asserted DIRECTLY, and first. Arch 3.3's component double-guards
@@ -497,7 +513,7 @@ describe('ApprovalStateCard', () => {
         kind: 'approval',
         state: 'pending',
         workflow_role_title: 'Group Controller',
-        holder: { text: 'Ngozi Eze', warn: false },
+        holder: { text: 'Ngozi Eze', warn: false, reason: null },
       }),
     ]
 
@@ -627,7 +643,7 @@ describe('ApprovalStateCard', () => {
     expect(within(card()).getByRole('button', { name: 'Retry' })).toBeTruthy()
     cleanup()
 
-    const pending = runFixture({ steps: [stepFixture({ ord: 0, holder: { text: 'Ada Obi', warn: false } })] })
+    const pending = runFixture({ steps: [stepFixture({ ord: 0, holder: { text: 'Ada Obi', warn: false, reason: null } })] })
     for (const [label, state] of [
       ['idle', idleRun()],
       ['loading', loadingRun()],
@@ -683,9 +699,9 @@ describe('ApprovalStateCard', () => {
     // list is now on NO surface (arch 4.5) -- what replaces it is the claim that exactly
     // one step is named, and it is the lowest-ord pending one.
     const steps = [
-      stepFixture({ ord: 0, workflow_role_title: 'Engagement Manager', holder: { text: 'Ada Obi', warn: false } }),
-      stepFixture({ ord: 1, workflow_role_title: 'Tax Reviewer', holder: { text: 'Musa Danjuma', warn: false } }),
-      stepFixture({ ord: 2, workflow_role_title: 'Managing Partner', holder: { text: 'Ngozi Eze', warn: false } }),
+      stepFixture({ ord: 0, workflow_role_title: 'Engagement Manager', holder: { text: 'Ada Obi', warn: false, reason: null } }),
+      stepFixture({ ord: 1, workflow_role_title: 'Tax Reviewer', holder: { text: 'Musa Danjuma', warn: false, reason: null } }),
+      stepFixture({ ord: 2, workflow_role_title: 'Managing Partner', holder: { text: 'Ngozi Eze', warn: false, reason: null } }),
     ]
 
     render(<ApprovalStateCard run={readyRun(runFixture({ steps }))} />)
@@ -707,7 +723,7 @@ describe('ApprovalStateCard', () => {
     // Activity feed (D-AC-11, subtask 07) -- restating it in a 340px rail is the
     // third-card restatement this story exists to prevent.
     const run = runFixture({
-      steps: [stepFixture({ ord: 2, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } })],
+      steps: [stepFixture({ ord: 2, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false, reason: null } })],
       decisions: [
         decisionFixture({ ord: 0, decision: 'approved', reason: 'Cleared by finance' }),
         decisionFixture({ ord: 1, decision: 'rejected', reason: 'Budget exceeded', decided_at: '2026-08-03T10:00:00Z' }),
@@ -732,7 +748,7 @@ describe('ApprovalStateCard', () => {
     // ladder (arch 4.5). A notify step is rendered nowhere on the invoice page any more.
     const steps = [
       stepFixture({ ord: 0, kind: 'notify', state: 'pending', workflow_role_title: 'AP Team', notify_target: 'ap@acme.test', notify_channel: 'email' }),
-      stepFixture({ ord: 1, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } }),
+      stepFixture({ ord: 1, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false, reason: null } }),
     ]
 
     render(<ApprovalStateCard run={readyRun(runFixture({ steps }))} />)
@@ -795,7 +811,7 @@ describe('ApprovalStateCard', () => {
 
   it('approvalStateCard_dropsTheRetiredTestids', () => {
     const run = runFixture({
-      steps: [stepFixture({ ord: 0, workflow_role_title: 'Finance lead', holder: { text: 'Nobody assigned', warn: true }, overdue: true })],
+      steps: [stepFixture({ ord: 0, workflow_role_title: 'Finance lead', holder: { text: 'Nobody assigned', warn: true, reason: 'unstaffed' }, overdue: true })],
     })
 
     render(<ApprovalStateCard run={readyRun(run)} />)
@@ -819,7 +835,7 @@ describe('ApprovalStateCard', () => {
     const step = stepFixture({
       ord: 0,
       workflow_role_title: 'Compliance lead',
-      holder: { text: 'Nobody assigned', warn: true },
+      holder: { text: 'Nobody assigned', warn: true, reason: 'unstaffed' },
       overdue: true,
       due_at: '2026-07-01T00:00:00Z',
     })

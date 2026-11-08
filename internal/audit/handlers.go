@@ -194,6 +194,14 @@ func parseFilter(query url.Values) (Filter, string) {
 		}
 	}
 
+	if raw := query.Get("exclude_account_events"); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Filter{}, "exclude_account_events must be a boolean"
+		}
+		f.ExcludeAccountEvents = b
+	}
+
 	return f, ""
 }
 

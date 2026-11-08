@@ -3260,6 +3260,9 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_InviteWithoutChoiceGivesNoClients"},                                   // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopyRollsBackWithTheAccept"},                                          // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopiesOnlyTheAcceptedInvitesSet"},                                     // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_EventCarriesTheRequestDetail"},                                        // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_UnknownDetailStillAccepts"},                                           // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_EventCarriesTheRequestDetail"},                                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_DeletedEntityIsNotCopied"},                                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AReplayedLinkLeavesTheMembersSetAlone"},                               // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ARevokedOrExpiredLinkCopiesNothing"},                                  // the invitee holds no membership in the invite's tenant before accepting

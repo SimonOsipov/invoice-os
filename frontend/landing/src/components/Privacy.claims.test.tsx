@@ -1238,8 +1238,9 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     const reader = readSource(R)
     const account = readSource(A)
     expect(createdAcceptedDetailIsAdminOrSelf()).toBe(true)
-    expect(sentence('P5')).toContain("only your workspace's admins and the member a record is about")
+    expect(sentence('P5')).toContain("only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP")
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '"account.signed_out",', '"account.signed_out",\n"invitation.accepted",'))).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(swap(F, 'names := bind(AccountEvents)\n\t\tconditions = append(conditions, "(a.entity_id', 'names := bind(append(AccountEvents, "invitation.accepted"))\n\t\tconditions = append(conditions, "(a.entity_id'), reader, account)).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, '"workspace.provisioned":            {},', ''), account)).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"ip_address", "device"}', '[]string{"ip_address"}'))).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"workspace.provisioned", "invitation.accepted"}', '[]string{"invitation.accepted"}'))).toBe(false)
@@ -1247,6 +1248,7 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     expect(createdAcceptedDetailIsAdminOrSelf(swap(F, 'AND NOT (kv.key = ANY(', 'AND (kv.key = ANY('), reader, account)).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(swap(F, '` + hidden + `)`', '`)`'), reader, account)).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, 'be.name, ` + payload +', 'be.name, a.payload`+'), account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, 'be.name, ` + payload +', 'be.name, A.Payload`+'), account)).toBe(false)
   })
 
   it('firstSessionIsNotRecordedAsASignIn', () => {

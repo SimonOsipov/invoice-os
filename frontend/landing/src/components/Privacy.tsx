@@ -380,8 +380,8 @@ export function Privacy() {
             confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser
             and operating system are added to the list above without an email. Every member who reads the
             workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's
-            admins and the member a record is about see its IP address and browser and operating system. ASComply's
-            support staff can also read them.
+            admins, and the member a record is about when that member can read the workspace-wide entries, see its IP
+            address and browser and operating system. ASComply's support staff can also read them.
           </p>
           <p style={P}>
             You can delete your account yourself. Open {APP_LABELS.page}, from your name at the foot of the sidebar, and

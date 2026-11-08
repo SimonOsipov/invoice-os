@@ -598,7 +598,7 @@ export const ACCOUNT_RECORD_SENTENCES: readonly { id: string; text: string }[] =
   { id: 'P2', text: "Your workspace's admins see these records for every member. Every other member sees only their own. ASComply's support staff can also read them." },
   { id: 'P3', text: 'These records stay with the audit log, which keeps every record until the workspace is deleted.' },
   { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. The first pair is recorded without an email. When you later sign in with a pair that is not on the list, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
-  { id: 'P5', text: "When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it with the IP address and the browser and operating system of that request. The first session after someone confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser and operating system are added to the list above without an email. Every member who reads the workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's admins and the member a record is about see its IP address and browser and operating system. ASComply's support staff can also read them." },
+  { id: 'P5', text: "When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it with the IP address and the browser and operating system of that request. The first session after someone confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser and operating system are added to the list above without an email. Every member who reads the workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP address and browser and operating system. ASComply's support staff can also read them." },
 ]
 
 // The six account event names, sorted.
@@ -773,7 +773,7 @@ export function createdAcceptedDetailKeys(src: string = readSource('internal/ten
 
 const goStrings = (re: RegExp, text: string): string[] => keysOf(/"([^"]+)"/g, found(re.exec(text)?.[1], String(re)))
 
-// Both events are workspace-wide rows, and a non-admin who is not the actor gets no ip_address or device, on the page and in search.
+// Both events are workspace-wide rows, a non-admin who is not the actor gets no ip_address or device, and a client-scoped member reads neither row.
 export function createdAcceptedDetailIsAdminOrSelf(
   filter: string = readSource('internal/audit/filter.go'),
   reader: string = readSource('internal/audit/reader.go'),
@@ -796,7 +796,8 @@ export function createdAcceptedDetailIsAdminOrSelf(
     /if !scope\.admin \{\s*hidden = ` AND NOT \(kv\.key = ANY\(` \+ bind\(selfDetailKeys\) \+ `\) AND a\.event = ANY\(` \+\s*bind\(selfDetailEvents\) \+ `\) AND a\.actor <> ` \+ bind\(scope\.self\) \+ `\)`\s*\}/.test(search) &&
     /jsonb_each_text\(a\.payload\) kv[\s\S]*?ESCAPE '\\'` \+ hidden \+ `\)`/.test(search) &&
     /be\.name, ` \+ payload\b/.test(reader) &&
-    !/\ba\.payload\b/.test(page)
+    !/\ba\.payload\b/i.test(page) &&
+    /case f\.scope\.set:\s*ids := bind\(f\.scope\.ids\)\s*names := bind\(AccountEvents\)\s*conditions = append\(conditions, "\(a\.entity_id = ANY\("\+ids\+"::uuid\[\]\) OR \(a\.event = ANY\("\+names\+"\) AND a\.actor = "\+bind\(f\.scope\.self\)\+"\)\)"\)/.test(filter)
   )
 }
 

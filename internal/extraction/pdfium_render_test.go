@@ -375,6 +375,40 @@ func TestPDFiumReader_HoldsOnePageAtATime(t *testing.T) {
 	}
 }
 
+// TestPDFiumEndsReader_RendersOnlyTheFirstAndLastPage: the check needs two PNGs, so the
+// middle pages of an upload are neither rendered nor handed over, and the ends match a full read.
+func TestPDFiumEndsReader_RendersOnlyTheFirstAndLastPage(t *testing.T) {
+	full := map[int][32]byte{}
+	if _, err := extraction.NewPDFiumReader().Read(t.Context(), ptDoc(t, fxNative3), func(p extraction.Page) error {
+		full[p.Number] = sha256.Sum256(p.ImagePNG)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	base := extraction.PDFiumCleanupsForTest()
+	got := map[int][32]byte{}
+	var order []int
+	if _, err := extraction.NewPDFiumEndsReader().Read(t.Context(), ptDoc(t, fxNative3), func(p extraction.Page) error {
+		got[p.Number] = sha256.Sum256(p.ImagePNG)
+		order = append(order, p.Number)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := extraction.PDFiumCleanupsForTest() - base; n != 2 {
+		t.Errorf("rendered %d page(s), want 2", n)
+	}
+	if len(order) != 2 || order[0] != 1 || order[1] != 3 {
+		t.Fatalf("pages delivered = %v, want [1 3]", order)
+	}
+	for _, n := range order {
+		if got[n] != full[n] {
+			t.Errorf("page %d PNG differs from a full read's", n)
+		}
+	}
+}
+
 // TestPDFiumReader_CleansUpOnAnOnPageError: an onPage error aborts the read, comes back
 // unwrapped, and every page that rendered is still released.
 func TestPDFiumReader_CleansUpOnAnOnPageError(t *testing.T) {

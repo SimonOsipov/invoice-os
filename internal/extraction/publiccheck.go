@@ -12,7 +12,7 @@ import (
 // CheckReaders are the readers a check reads one document with.
 type CheckReaders struct {
 	Text   PageReader // docling
-	Render PageReader // pdfium, for a PDF with no text layer
+	Render PageReader // NewPDFiumEndsReader, for a PDF with no text layer
 	AI     AIReader
 	Jev    JevAsker
 }

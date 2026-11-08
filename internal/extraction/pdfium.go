@@ -39,11 +39,18 @@ type PDFiumReader struct {
 	// dpi overrides pdfiumRenderDPI. Only AC-4's alignment sweep sets it, through
 	// NewPDFiumReaderAtDPIForTest.
 	dpi int
+
+	// endsOnly renders and delivers only the first and last page.
+	endsOnly bool
 }
 
 var _ PageReader = (*PDFiumReader)(nil)
 
 func NewPDFiumReader() *PDFiumReader { return &PDFiumReader{} }
+
+// NewPDFiumEndsReader skips every page but the first and last: a public check needs two PNGs
+// and the upload can run to maxPages. PageResult totals then count only those pages' text.
+func NewPDFiumEndsReader() *PDFiumReader { return &PDFiumReader{endsOnly: true} }
 
 func (r *PDFiumReader) Name() string { return pdfiumReaderName }
 
@@ -87,6 +94,9 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 		for i := range count.PageCount {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			if r.endsOnly && i != 0 && i != count.PageCount-1 {
+				continue
 			}
 
 			size, err := inst.FPDF_GetPageSizeByIndex(&requests.FPDF_GetPageSizeByIndex{

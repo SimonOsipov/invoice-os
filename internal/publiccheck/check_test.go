@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
@@ -554,4 +555,20 @@ func TestCheck_AContextEndedDuringTheReadIsNotAnOutage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("control: the same read with a live context failed: %v", err)
 	}
+}
+
+// A mapping the check refuses is the caller's mistake, not a bad file: ErrValidation, never ErrBadFile.
+func TestCheck_ARefusedMappingIsValidationNotBadFile(t *testing.T) {
+	r := newRig()
+	for name, mapping := range map[string]map[string]string{
+		"no invoice number":    {"total": "Total"},
+		"a key the check bars": {"invoice_number": "Inv", "supplier_email": "Total"},
+	} {
+		req := publiccheck.Request{File: []byte("Inv,Total\nA,1\n"), Format: "csv", Mapping: mapping}
+		_, err := r.c.Check(context.Background(), req)
+		if !errors.Is(err, importer.ErrValidation) || errors.Is(err, publiccheck.ErrBadFile) {
+			t.Errorf("%s: err = %v, want importer.ErrValidation and not ErrBadFile", name, err)
+		}
+	}
+	r.untouched(t)
 }

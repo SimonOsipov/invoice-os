@@ -11,7 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -91,8 +92,8 @@ func TestAccountEvents_SignInSuccessRecordsOneSignedIn(t *testing.T) {
 	requireOnlyKey(t, resp, "code")
 	rec.requireNames(t, EventSignedIn)
 	want := AccountEvent{Event: EventSignedIn, UserID: aeUserID, Email: aeEmail, IP: aeIP, UserAgent: aeUA}
-	if got := rec.events()[0]; got != want {
-		t.Errorf("event = %+v, want %+v", got, want)
+	if got := rec.events()[0]; got != want || got.FirstSession {
+		t.Errorf("event = %+v, want %+v with FirstSession false", got, want)
 	}
 }
 
@@ -366,8 +367,8 @@ func TestAccountEvents_VerifyHandoffRecordsASignIn(t *testing.T) {
 	vhCode(t, vhClick(h, vhState))
 
 	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != aeUserID || e.Email != aeEmail {
-		t.Errorf("event = %+v, want user %s and email %s", e, aeUserID, aeEmail)
+	if e := rec.events()[0]; e.UserID != aeUserID || e.Email != aeEmail || !e.FirstSession {
+		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, aeUserID, aeEmail)
 	}
 
 	resp := vhClick(h, "")
@@ -387,8 +388,8 @@ func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
 		t.Fatalf("Location = %q, want a hand-off", resp.Header().Get("Location"))
 	}
 	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != subjectS1 || e.Email != rpEmail {
-		t.Errorf("event = %+v, want user %s and email %s", e, subjectS1, rpEmail)
+	if e := rec.events()[0]; e.UserID != subjectS1 || e.Email != rpEmail || !e.FirstSession {
+		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, subjectS1, rpEmail)
 	}
 
 	f2 := newResetGoTrue(t)
@@ -417,8 +418,8 @@ func TestAccountEvents_UserAgentIsCleanedAndCut(t *testing.T) {
 	recordAccountEvent(req, rec, nopLog(), AccountEvent{Event: EventSignedOut, UserID: aeUserID})
 
 	got := rec.events()[0].UserAgent
-	if n := len([]rune(got)); n != maxUserAgentRunes {
-		t.Errorf("recorded user agent has %d runes, want %d", n, maxUserAgentRunes)
+	if n := len([]rune(got)); n != platform.MaxUserAgentRunes {
+		t.Errorf("recorded user agent has %d runes, want %d", n, platform.MaxUserAgentRunes)
 	}
 	if strings.ContainsRune(got, '�') || strings.Contains(got, "\xff") {
 		t.Error("recorded user agent keeps the invalid byte")
@@ -541,26 +542,5 @@ func TestAccountEvents_ResetRequestAnswerIsTheSameForMemberAndNonMember(t *testi
 	}
 	if answers[0] != answers[1] {
 		t.Errorf("member answer %q differs from non-member answer %q", answers[0], answers[1])
-	}
-}
-
-func TestAccountEvents_UserAgentCutsAtTheBoundary(t *testing.T) {
-	cases := []struct {
-		name string
-		ua   string
-		want int
-	}{
-		{"511 runes kept", strings.Repeat("é", 511), 511},
-		{"512 runes kept", strings.Repeat("é", 512), 512},
-		{"513 runes cut", strings.Repeat("é", 513), 512},
-		{"NUL dropped", "a\x00b", 2},
-		{"empty", "", 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := cleanUserAgent(c.ua); utf8.RuneCountInString(got) != c.want || !utf8.ValidString(got) || strings.ContainsRune(got, 0) {
-				t.Errorf("cleanUserAgent = %d runes %q, want %d valid runes with no NUL", utf8.RuneCountInString(got), got, c.want)
-			}
-		})
 	}
 }

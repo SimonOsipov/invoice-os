@@ -69,7 +69,7 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 				log.WarnContext(ctx, "invitation-password: hand-off store full")
 			}
 			if code != "" {
-				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: user.ID, Email: user.Email})
+				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: user.ID, Email: user.Email, FirstSession: true})
 			}
 			return code
 		},

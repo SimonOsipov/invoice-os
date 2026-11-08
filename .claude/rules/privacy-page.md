@@ -156,5 +156,5 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 
 ## Sign-in records
 
-- `P1`..`P4` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventsRecorded()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `adminFollowsTheRole()`, `staffReadsAuditPayload()`, `staffSearchReadsAccountRows()`, `auditLogDeletes()`, `auditLogGoDeletes()`, `newDeviceMailFacts()` and `eraseDeletesKnownDevices()` back them.
+- `P1`..`P5` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventsRecorded()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `adminFollowsTheRole()`, `staffReadsAuditPayload()`, `staffSearchReadsAccountRows()`, `auditLogDeletes()`, `auditLogGoDeletes()`, `newDeviceMailFacts()`, `eraseDeletesKnownDevices()`, `createdAcceptedDetailKeys()`, `createdAcceptedDetailIsAdminOrSelf()` and `firstSessionIsNotASignInRow()` back them.
 - `P3`: no job prunes `audit_log` by age. The workspace purge is the only delete in `migrations/` and in non-test Go, except the PR-environment `db.Reset` truncate. Retention answer: AUDIT-13 Q1 = B.

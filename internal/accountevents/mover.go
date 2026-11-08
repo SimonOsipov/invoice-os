@@ -22,6 +22,7 @@ type handoff struct {
 	event, ip, ua string
 	userID, email *string
 	at            time.Time
+	firstSession  bool
 }
 
 // newDeviceJob builds the one new-device job of a sign-in; the gateway sets both user id and address.
@@ -33,21 +34,21 @@ func newDeviceJob(h handoff) (NewDeviceArgs, bool) {
 	return NewDeviceArgs{UserID: *h.userID, Email: strings.TrimSpace(*h.email), Browser: d.Browser, OS: d.OS, IP: h.ip, OccurredAt: h.at.UTC().Format(time.RFC3339)}, true
 }
 
-// MoveHandoffs moves outbox rows into one account_audit job per active workspace, plus one account_new_device job per sign-in, in one transaction.
+// MoveHandoffs moves outbox rows into one account_audit job per active workspace, plus one account_new_device job per sign-in, in one transaction; a first-session row only records its known device.
 func MoveHandoffs(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) func(context.Context) error {
 	return func(ctx context.Context) error {
 		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 			// DELETE hands each row to one mover; the jobs commit with it or neither does.
 			rows, err := tx.Query(ctx, `DELETE FROM account_event_handoffs WHERE id IN
 				(SELECT id FROM account_event_handoffs ORDER BY occurred_at, id LIMIT $1)
-				RETURNING event, user_id::text, email, ip, user_agent, occurred_at`, handoffBatch)
+				RETURNING event, user_id::text, email, ip, user_agent, occurred_at, first_session`, handoffBatch)
 			if err != nil {
 				return fmt.Errorf("accountevents: read hand-offs: %w", err)
 			}
 			var batch []handoff
 			for rows.Next() {
 				var h handoff
-				if err := rows.Scan(&h.event, &h.userID, &h.email, &h.ip, &h.ua, &h.at); err != nil {
+				if err := rows.Scan(&h.event, &h.userID, &h.email, &h.ip, &h.ua, &h.at, &h.firstSession); err != nil {
 					rows.Close()
 					return fmt.Errorf("accountevents: read hand-off: %w", err)
 				}
@@ -62,6 +63,17 @@ func MoveHandoffs(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger
 
 			var jobs []river.InsertManyParams
 			for _, h := range batch {
+				if h.firstSession {
+					if h.userID == nil {
+						log.Debug("account-event-handoff: first session without user; no known device")
+						continue
+					}
+					d := Parse(h.ua)
+					if _, err := tx.Exec(ctx, `INSERT INTO account_known_devices (user_id, browser, os) VALUES ($1::uuid, $2, $3) ON CONFLICT DO NOTHING`, *h.userID, d.Browser, d.OS); err != nil {
+						return fmt.Errorf("accountevents: record first-session device: %w", err)
+					}
+					continue
+				}
 				found, err := tx.Query(ctx, `SELECT tenant_id::text, user_id::text FROM public.account_event_memberships($1, $2)`, h.userID, h.email)
 				if err != nil {
 					return fmt.Errorf("accountevents: resolve members: %w", err)

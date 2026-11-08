@@ -20,7 +20,7 @@ type Call struct {
 	LatencyMS    int64
 	Attempts     int
 	Outcome      string
-	PublicCheck  bool // stub: set by Record under WithPublicCheck
+	PublicCheck  bool // tenantless public check: stored with tenant_id NULL
 }
 
 // Sink receives one Call. It returns at once and never affects the AI call.
@@ -33,7 +33,12 @@ func Record(ctx context.Context, sink Sink, logger *slog.Logger, c Call) {
 		return
 	}
 	id, ok := auth.IdentityFromContext(ctx)
-	if !ok || id.TenantID == "" {
+	switch {
+	case ok && id.TenantID != "":
+		c.TenantID = id.TenantID
+	case ctx.Value(publicCheckKey{}) != nil:
+		c.TenantID, c.PublicCheck = "", true
+	default:
 		if logger != nil {
 			// WARN, not ERROR: ERROR reaches Sentry, one event per call.
 			logger.LogAttrs(context.Background(), slog.LevelWarn, "ai call not recorded: no tenant",
@@ -41,12 +46,15 @@ func Record(ctx context.Context, sink Sink, logger *slog.Logger, c Call) {
 		}
 		return
 	}
-	c.TenantID = id.TenantID
 	c.InputTokens = max(c.InputTokens, 0)
 	c.OutputTokens = max(c.OutputTokens, 0)
 	c.Cost = max(c.Cost, 0)
 	sink(c)
 }
 
-// WithPublicCheck marks ctx as a tenantless public check. Stub: returns ctx unchanged.
-func WithPublicCheck(ctx context.Context) context.Context { return ctx }
+type publicCheckKey struct{}
+
+// WithPublicCheck marks ctx as a tenantless public check; a tenant identity still wins.
+func WithPublicCheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, publicCheckKey{}, true)
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -472,6 +473,41 @@ func TestAcceptHandlers_500LogsNoName(t *testing.T) {
 			}
 			if strings.Contains(logs.String(), name) || strings.Contains(rec.Body.String(), name) {
 				t.Errorf("the log or the body carries the display name:\n%s\n%s", logs.String(), rec.Body)
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_PassTheRequestDetail(t *testing.T) {
+	var gotIP, gotDevice string
+	record := func(ctx context.Context, _ string, _ *string) (Tenant, string, string, error) {
+		gotIP, gotDevice = requestDetailOf(ctx)
+		return Tenant{ID: uuid.NewString(), Name: "Obi Partners", Kind: "firm"}, uuid.NewString(), "reviewer", nil
+	}
+	token := strings.Repeat("A", 43)
+	for _, c := range []struct {
+		name, path, body string
+		h                http.Handler
+	}{
+		{"token", "/v1/invitations/accept", `{"token":"` + token + `"}`, AcceptInvitationHandler(record, nil)},
+		{"by id", "/v1/invitations/" + uuid.NewString() + "/accept", `{}`, func() http.Handler {
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDHandler(record, nil))
+			return mux
+		}()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gotIP, gotDevice = "", ""
+			r := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+			r.Header.Set("X-User-IP", "203.0.113.7")
+			r.Header.Set("User-Agent", uaChromeMac)
+			rec := httptest.NewRecorder()
+			c.h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			if gotIP != "203.0.113.7" || gotDevice != "Chrome on macOS" {
+				t.Errorf("handler passed (%q, %q), want (203.0.113.7, Chrome on macOS)", gotIP, gotDevice)
 			}
 		})
 	}

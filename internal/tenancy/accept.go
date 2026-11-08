@@ -144,7 +144,7 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 		if !ok {
 			return
 		}
-		tenant, subject, role, err := accept(r.Context(), req.Token, req.DisplayName)
+		tenant, subject, role, err := accept(withRequestDetail(r), req.Token, req.DisplayName)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -194,7 +194,7 @@ func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logg
 		if !ok {
 			return
 		}
-		tenant, subject, role, err := accept(r.Context(), r.PathValue("id"), req.DisplayName)
+		tenant, subject, role, err := accept(withRequestDetail(r), r.PathValue("id"), req.DisplayName)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

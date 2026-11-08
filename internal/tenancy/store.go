@@ -150,8 +150,10 @@ func (s *Store) provisionAttempt(ctx context.Context, tenantID string, in Provis
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			return err
 		}
+		ip, device := requestDetailOf(ctx)
 		return audit.Record(ctx, tx, caller.Subject, "workspace.provisioned", map[string]any{
 			"tenant_id": t.ID, "user_id": subject, "name": t.Name, "kind": t.Kind,
+			"ip_address": ip, "device": device,
 		})
 	})
 	return t, err
@@ -597,7 +599,10 @@ func (s *Store) acceptInTenant(ctx context.Context, tenantID, subject, query str
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, subject, "invitation.accepted", map[string]any{"invitation_id": id, "role": role})
+		ip, device := requestDetailOf(ctx)
+		return audit.Record(ctx, tx, subject, "invitation.accepted", map[string]any{
+			"invitation_id": id, "role": role, "ip_address": ip, "device": device,
+		})
 	})
 	if err != nil {
 		return Tenant{}, "", "", err

@@ -594,10 +594,11 @@ export function staffLogIsAppendOnly(migrations: string[] = migrationUps()): boo
 
 // Sentences the page states about sign-in records; Privacy.render.test.tsx pins each verbatim on the page.
 export const ACCOUNT_RECORD_SENTENCES: readonly { id: string; text: string }[] = [
-  { id: 'P1', text: 'Each time someone signs in to your account, fails to sign in with a wrong password, is blocked after too many attempts, signs out, or asks for or completes a password reset, our own server records it in the audit log of your workspace, with the IP address and the browser and operating system.' },
+  { id: 'P1', text: 'Each time someone signs in to your account through the sign-in form, fails to sign in with a wrong password, is blocked after too many attempts, signs out, or asks for or completes a password reset, our own server records it in the audit log of your workspace, with the IP address and the browser and operating system.' },
   { id: 'P2', text: "Your workspace's admins see these records for every member. Every other member sees only their own. ASComply's support staff can also read them." },
   { id: 'P3', text: 'These records stay with the audit log, which keeps every record until the workspace is deleted.' },
   { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. The first pair is recorded without an email. When you later sign in with a pair that is not on the list, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
+  { id: 'P5', text: "When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it with the IP address and the browser and operating system of that request. The first session after someone confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser and operating system are added to the list above without an email. Every member who reads the workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's admins and the member a record is about see its IP address and browser and operating system. ASComply's support staff can also read them." },
 ]
 
 // The six account event names, sorted.
@@ -758,4 +759,54 @@ export function staffSearchReadsAccountRows(
     /member_email, payload\s+FROM public\.staff_read_audit_log\(/.test(reader) &&
     /"GET \/v1\/staff\/audit-log", audit\.StaffSearchHandler/.test(main)
   )
+}
+
+// Payload keys of the workspace.provisioned and invitation.accepted audit.Record calls.
+export function createdAcceptedDetailKeys(src: string = readSource('internal/tenancy/store.go')): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const ev of ['workspace.provisioned', 'invitation.accepted']) {
+    const body = found(new RegExp(`audit\\.Record\\(ctx, tx, \\w+(?:\\.\\w+)?, "${ev.replace('.', '\\.')}", map\\[string\\]any\\{([\\s\\S]*?)\\}\\)`).exec(src)?.[1], `${ev} audit.Record`)
+    out[ev] = unique(keysOf(/"([a-z_]+)"\s*:/g, body))
+  }
+  return out
+}
+
+const goStrings = (re: RegExp, text: string): string[] => keysOf(/"([^"]+)"/g, found(re.exec(text)?.[1], String(re)))
+
+// Both events are workspace-wide rows, and a non-admin who is not the actor gets no ip_address or device, on the page and in search.
+export function createdAcceptedDetailIsAdminOrSelf(
+  filter: string = readSource('internal/audit/filter.go'),
+  reader: string = readSource('internal/audit/reader.go'),
+  account: string = readSource('internal/audit/account_events.go'),
+): boolean {
+  const events = ['workspace.provisioned', 'invitation.accepted']
+  const firmWide = found(/var firmWideEvents = map\[string\]struct\{\}\{([\s\S]*?)\n\}/.exec(reader)?.[1], 'firmWideEvents')
+  const accountEvents = goStrings(/var AccountEvents = \[\]string\{([^}]*)\}/, account)
+  const selfEvents = goStrings(/selfDetailEvents\s*=\s*\[\]string\{([^}]*)\}/, account)
+  const selfKeys = goStrings(/selfDetailKeys\s*=\s*\[\]string\{([^}]*)\}/, account)
+  const column = found(/func payloadColumn\(([\s\S]*?)\n\}\n/.exec(filter)?.[1], 'payloadColumn')
+  const search = found(/func searchFragment\(([\s\S]*?)\n\}\n/.exec(filter)?.[1], 'searchFragment')
+  const page = found(/payload := payloadColumn\([\s\S]*?\n\s*sql := `([^`]*)`/.exec(reader)?.[1], 'the page SELECT')
+  return (
+    events.every((e) => firmWide.includes(`"${e}":`) && !accountEvents.includes(e)) &&
+    selfEvents.join() === events.join() &&
+    unique(selfKeys).join() === 'device,ip_address' &&
+    selfKeys.length === 2 &&
+    /\{\s*if s\.admin \{\s*return "a\.payload"\s*\}\s*return "\(CASE WHEN a\.event = ANY\(" \+ bind\(selfDetailEvents\) \+ "\) AND a\.actor <> " \+ bind\(s\.self\) \+\s*" THEN a\.payload - " \+ bind\(selfDetailKeys\) \+ "::text\[\] ELSE a\.payload END\)"\s*$/.test(column) &&
+    /if !scope\.admin \{\s*hidden = ` AND NOT \(kv\.key = ANY\(` \+ bind\(selfDetailKeys\) \+ `\) AND a\.event = ANY\(` \+\s*bind\(selfDetailEvents\) \+ `\) AND a\.actor <> ` \+ bind\(scope\.self\) \+ `\)`\s*\}/.test(search) &&
+    /jsonb_each_text\(a\.payload\) kv[\s\S]*?ESCAPE '\\'` \+ hidden \+ `\)`/.test(search) &&
+    /be\.name, ` \+ payload\b/.test(reader) &&
+    !/\ba\.payload\b/.test(page)
+  )
+}
+
+// A first-session mint is marked, and the mover records its device and stops before the membership lookup.
+export function firstSessionIsNotASignInRow(
+  gw: string = gatewaySource(),
+  mover: string = readSource('internal/accountevents/mover.go'),
+): boolean {
+  const marked = gw.match(/AccountEvent\{Event: EventSignedIn,[^}]*FirstSession: true\}/g) ?? []
+  const fn = found(/func MoveHandoffs\b[\s\S]*$/.exec(mover)?.[0], 'MoveHandoffs')
+  const block = found(/if h\.firstSession \{([\s\S]*?)account_event_memberships\(/.exec(fn)?.[1], 'the first-session block')
+  return marked.length === 2 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
 }

@@ -23,14 +23,14 @@ function ActivityNote({ ctx, style }: { ctx: PlatformCtx; style: CSSProperties }
   )
 }
 
-function EmptyActivity({ ctx }: { ctx: PlatformCtx }) {
+function EmptyActivity({ ctx }: { ctx?: PlatformCtx }) {
   return (
     <div>
       <div style={{ padding: '40px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
         <div className="card-title" style={{ marginBottom: 3 }}>No activity yet</div>
         <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Edits, validations, approvals and submissions appear here as they happen.</div>
       </div>
-      <ActivityNote ctx={ctx} style={{ padding: '0 20px 20px', textAlign: 'center' }} />
+      {ctx && <ActivityNote ctx={ctx} style={{ padding: '0 20px 20px', textAlign: 'center' }} />}
     </div>
   )
 }
@@ -47,7 +47,8 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
 
   if (log.status === 'loading') return <div style={PAD}><Loading label="Loading activity…" /></div>
   if (log.status === 'error' && log.error) return <div style={PAD}><ErrorState error={log.error} onRetry={log.run} /></div>
-  if (log.status !== 'ready' || !log.data) return <EmptyActivity ctx={ctx} />
+  if (log.status === 'empty') return <EmptyActivity ctx={ctx} />
+  if (log.status !== 'ready' || !log.data) return <EmptyActivity />
 
   const now = Date.now()
   const rows = log.data.events.map((e) => activityRow(e, now))

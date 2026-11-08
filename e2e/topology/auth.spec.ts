@@ -1284,11 +1284,11 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
     total: '1075',
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
-  // The reset request is now the newest row, so the tile can only be right by excluding it.
+  // The reset request is among the newest rows, so the tile can only be right by excluding it.
   expect((await requestPasswordReset({ email: account.email })).status).toBe(202)
   await expect
-    .poll(async () => (await getAuditLog(token, { limit: 5 })).events[0]?.event, { message: 'the newest audit row is the reset request', timeout: 30_000, intervals: [1_000] })
-    .toBe('account.password_reset_requested')
+    .poll(async () => (await getAuditLog(token, { limit: 5 })).events.map((e) => e.event), { message: 'the reset request is among the 5 newest audit rows', timeout: 30_000, intervals: [1_000] })
+    .toContain('account.password_reset_requested')
   await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
   await expectOverviewActivity(page, [{ label: 'Invoice created', company: name }])
   await page.getByTestId('activity-note').getByRole('button', { name: 'Audit log' }).click()

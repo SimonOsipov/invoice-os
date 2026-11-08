@@ -1000,7 +1000,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
 
     expect(auditUrls(m)).toHaveLength(0)
     expect(within(activityTile()).getByText('No activity yet')).toBeDefined()
-    expect(within(activityTile()).getByTestId('activity-note').textContent).toBe('Sign-in activity is in the Audit log')
+    expect(within(activityTile()).queryByTestId('activity-note')).toBeNull()
   })
 
   it('in-house: entity id landing after the rollup keeps the rows and makes no second call', async () => {

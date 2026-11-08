@@ -1769,7 +1769,7 @@ func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
 	}
 }
 
-// Corpus: the AUDIT-13-05 corpus above (50,000 rows in the tenant read, every tenth an account event; 19 other
+// Corpus: the corpus above (50,000 rows in the tenant read, every tenth an account event; 19 other
 // tenants of 5,000). No flood: this pins the plan's shape, not its latency.
 func TestAudit_AccountExclusionPageKeepsTheTenantIndex(t *testing.T) {
 	f := aePlanScratch(t)

@@ -6,8 +6,10 @@ package db_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 type aiExecer interface {
@@ -660,5 +663,247 @@ func TestRLS_AICallsNullColumnsAndDuplicateIDRefused(t *testing.T) {
 	}
 	if _, err := h.super.Exec(ctx, withID, id, t1); pgCode(err) != "23505" {
 		t.Errorf("duplicate id INSERT: got %v, want unique_violation (23505)", err)
+	}
+}
+
+// The staff reads show a NULL tenant as this id and name (D12).
+const (
+	publicCheckTenantID   = "00000000-0000-0000-0000-000000000000"
+	publicCheckTenantName = "Readiness check"
+)
+
+const aiNullTenantInsertSQL = `INSERT INTO ai_calls
+	(id, tenant_id, client, purpose, model, input_tokens, output_tokens, cost, latency_ms, attempts, outcome, created_at)
+	VALUES ($1, NULL, 'ai', 'public-check', 'test/model', 10, 5, 0.001, 120, 1, 'ok', $2)`
+
+func aiInsertNullTenant(ctx context.Context, e aiExecer, id string, at time.Time) error {
+	_, err := e.Exec(ctx, aiNullTenantInsertSQL, id, at)
+	return err
+}
+
+// deleteAICallOnCleanup removes a NULL-tenant row by id as superuser: no tenant cleanup reaches it (D26).
+func deleteAICallOnCleanup(t *testing.T, id string) {
+	t.Helper()
+	t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM ai_calls WHERE id = $1`, id) })
+}
+
+// seedNullTenantAICall commits one NULL-tenant row as the superuser; s.tenant is ignored.
+func seedNullTenantAICall(t *testing.T, s staffAISeed) staffAISeed {
+	t.Helper()
+	s.id = uuid.NewString()
+	deleteAICallOnCleanup(t, s.id)
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO ai_calls (id, tenant_id, client, purpose, model, input_tokens, output_tokens, cost, latency_ms, attempts, outcome, created_at)
+		 VALUES ($1, NULL, $2, $3, $4, $5, $6, $7::text::numeric, $8, $9, $10, $11)`,
+		s.id, s.client, s.purpose, s.model, s.in, s.out, s.cost, s.latency, s.attempts, s.outcome, s.at); err != nil {
+		t.Fatalf("seed a NULL-tenant ai_calls row (ai_calls.tenant_id must be nullable): %v", err)
+	}
+	s.tenant = publicCheckTenantID
+	return s
+}
+
+func TestRLS_AICallsPublicCheckRowInsertsWithNoTenantBound(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name     string
+		emptyGUC bool
+	}{{"GUC never set", false}, {"GUC set to empty", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			id := uuid.NewString()
+			deleteAICallOnCleanup(t, id)
+			tx, err := h.app.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			defer tx.Rollback(ctx)
+			if c.emptyGUC {
+				if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+					t.Fatalf("set empty tenant: %v", err)
+				}
+			}
+			if err := aiInsertNullTenant(ctx, tx, id, staffAIFarBase()); err != nil {
+				t.Fatalf("INSERT of a NULL-tenant row with no tenant bound: %v", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1 AND tenant_id IS NULL`, id); n != 1 {
+				t.Errorf("NULL-tenant rows with the inserted id = %d, want 1", n)
+			}
+		})
+	}
+}
+
+func TestRLS_AICallsPublicCheckRowRefusedInsideATenantTx(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	t1 := aiTenants(t, 1)[0]
+
+	// Positive half: the same statement shape is accepted with no tenant bound, so the refusal below is the tenant binding.
+	okID := uuid.NewString()
+	deleteAICallOnCleanup(t, okID)
+	if err := aiInsertNullTenant(ctx, h.app, okID, staffAIFarBase()); err != nil {
+		t.Fatalf("INSERT of a NULL-tenant row with no tenant bound: %v", err)
+	}
+
+	refusedID := uuid.NewString()
+	deleteAICallOnCleanup(t, refusedID)
+	err := db.WithinTenantTx(ctx, h.app, t1, func(tx pgx.Tx) error {
+		return aiInsertNullTenant(ctx, tx, refusedID, staffAIFarBase())
+	})
+	assertRLSViolation(t, err)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1`, refusedID); n != 0 {
+		t.Errorf("rows after the refused INSERT = %d, want 0", n)
+	}
+}
+
+func TestRLS_AICallsPublicCheckRowInvisibleToTenantsAndToNoTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	t1 := aiTenants(t, 1)[0]
+
+	row := seedNullTenantAICall(t, staffAIRow("", "public-check-invisible", "ok", staffAIFarBase()))
+	own := seedAICall(t, t1)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1 AND tenant_id IS NULL`, row.id); n != 1 {
+		t.Fatalf("superuser sees %d NULL-tenant rows, want 1: the zeros below prove nothing", n)
+	}
+
+	const nullRows = `SELECT count(*) FROM ai_calls WHERE tenant_id IS NULL`
+	if err := db.WithinTenantTx(ctx, h.app, t1, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, nullRows); n != 0 {
+			t.Errorf("NULL-tenant rows visible under a tenant = %d, want 0", n)
+		}
+		// Only RLS narrows this: the superuser holds the NULL row and T1's row.
+		if n := mustCount(t, tx, `SELECT count(*) FROM ai_calls WHERE id IN ($1, $2)`, row.id, own); n != 1 {
+			t.Errorf("seeded rows visible under T1 = %d, want 1 (its own)", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+
+	fresh, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("fresh app connection: %v", err)
+	}
+	defer fresh.Close(ctx)
+	if n := mustCount(t, fresh, nullRows); n != 0 {
+		t.Errorf("NULL-tenant rows visible on a fresh connection = %d, want 0", n)
+	}
+
+	etx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer etx.Rollback(ctx)
+	if _, err := etx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+		t.Fatalf("set empty tenant: %v", err)
+	}
+	if n := mustCount(t, etx, nullRows); n != 0 {
+		t.Errorf("NULL-tenant rows visible with an empty tenant = %d, want 0", n)
+	}
+}
+
+// publicCheckMigrationVersion is the one migration that creates the public_check_insert policy.
+func publicCheckMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations.FS: %v", err)
+	}
+	for _, f := range files {
+		raw, err := fs.ReadFile(migrations.FS, f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if strings.Contains(string(raw), "CREATE POLICY public_check_insert") {
+			v, err := strconv.ParseInt(strings.SplitN(f, "_", 2)[0], 10, 64)
+			if err != nil {
+				t.Fatalf("parse goose version out of %q: %v", f, err)
+			}
+			return v
+		}
+	}
+	t.Fatal("no migration holds CREATE POLICY public_check_insert: the ai_calls_public_check migration is not shipped")
+	return 0
+}
+
+// D19: the Down keeps NULL-tenant rows and the nullable column, and the Up shows them again.
+func TestRLS_AICallsPublicCheckDownAndUp(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	staff := seedHouseMember(t, "reviewer", "active")
+	x := aiTenants(t, 1)[0]
+	day := staffAIFarDay()
+	purpose := freshName("public-check-downup")
+
+	seed := seedNullTenantAICall(t, staffAIRow("", purpose, "ok", day.Add(10*time.Hour)))
+	xRow := staffAIRow(x, purpose, "ok", day.Add(11*time.Hour))
+	xRow.cost = "0.125"
+	seedStaffAICall(t, xRow)
+
+	version := publicCheckMigrationVersion(t)
+	versions := []int64{version}
+	for _, v := range staffReadMigrationVersions(t) {
+		if v > version {
+			versions = append(versions, v)
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] > versions[j] })
+
+	nullable := func() string {
+		var s string
+		if err := h.super.QueryRow(ctx,
+			`SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ai_calls' AND column_name = 'tenant_id'`).Scan(&s); err != nil {
+			t.Fatalf("read ai_calls.tenant_id nullability: %v", err)
+		}
+		return s
+	}
+	policies := func() int {
+		return mustCount(t, h.super, `SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'ai_calls' AND policyname = 'public_check_insert'`)
+	}
+	groups := func() map[string]staffAITotalRow {
+		out := map[string]staffAITotalRow{}
+		for _, r := range (staffAITotalsArgs{purpose: sp(purpose), from: tp(day), to: tp(day.Add(24*time.Hour - time.Second))}).mustCall(t, h.app, staff) {
+			out[r.tenant] = r
+		}
+		return out
+	}
+
+	if nullable() != "YES" || policies() != 1 {
+		t.Fatalf("before the Down: tenant_id nullable = %q, public_check_insert policies = %d, want YES and 1", nullable(), policies())
+	}
+	if g := groups(); len(g) != 2 || g[publicCheckTenantID].tenantName != publicCheckTenantName || g[x].calls != 1 {
+		t.Fatalf("before the Down: totals groups = %+v, want the Readiness check group and tenant X", g)
+	}
+
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), versions...)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE id = $1 AND tenant_id IS NULL`, seed.id); n != 1 {
+		t.Errorf("after the Down: NULL-tenant rows kept = %d, want 1", n)
+	}
+	if got := nullable(); got != "YES" {
+		t.Errorf("after the Down: ai_calls.tenant_id is_nullable = %q, want YES (no spend history is lost)", got)
+	}
+	if n := policies(); n != 0 {
+		t.Errorf("after the Down: public_check_insert policies = %d, want 0", n)
+	}
+	if g := groups(); len(g) != 1 || g[x].calls != 1 {
+		t.Errorf("after the Down: totals groups = %+v, want tenant X only (INNER JOIN)", g)
+	}
+	downID := uuid.NewString()
+	deleteAICallOnCleanup(t, downID)
+	if err := aiInsertNullTenant(ctx, h.app, downID, day.Add(12*time.Hour)); !isRLSViolation(err) {
+		t.Errorf("after the Down: INSERT of a NULL-tenant row with no tenant bound = %v, want SQLSTATE 42501", err)
+	}
+
+	reapply()
+	g := groups()
+	if len(g) != 2 || g[x].calls != 1 || g[publicCheckTenantID].calls != 1 || g[publicCheckTenantID].tenantName != publicCheckTenantName {
+		t.Errorf("after the Up: totals groups = %+v, want tenant X (1 call) and Readiness check (1 call)", g)
+	}
+	if n := policies(); n != 1 {
+		t.Errorf("after the Up: public_check_insert policies = %d, want 1", n)
 	}
 }

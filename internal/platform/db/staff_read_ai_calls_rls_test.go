@@ -627,6 +627,194 @@ func mustDay(t *testing.T, s string) time.Time {
 	return d
 }
 
+func TestRLS_StaffReadAICallTotalsShowsPublicCheckRowsAsTheirOwnGroup(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	purpose := freshName("staff-public-totals")
+	nameX := freshName("ai public X")
+	x := seedDetailTenant(t, nameX)
+	day := staffAIFarDay()
+	d := staffAIDay(day)
+
+	xr := staffAIRow(x, purpose, "ok", day.Add(9*time.Hour))
+	xr.cost, xr.in, xr.out = "0.125", 100, 10
+	seedStaffAICall(t, xr)
+	for i, c := range []struct{ outcome, cost string }{{"ok", "0.25"}, {"unavailable", "0.5"}} {
+		r := staffAIRow("", purpose, c.outcome, day.Add(time.Duration(10+i)*time.Hour))
+		r.cost, r.in, r.out = c.cost, 7, 3
+		seedNullTenantAICall(t, r)
+	}
+
+	got := staffAITotalsArgs{purpose: sp(purpose)}.mustCall(t, h.app, staff)
+	want := map[string]staffAITotalRow{
+		publicCheckTenantID: {d, publicCheckTenantID, publicCheckTenantName, "0.75", 2, 14, 6, 1},
+		x:                   {d, x, nameX, "0.125", 1, 100, 10, 0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("groups = %+v, want exactly the Readiness check group and tenant X", got)
+	}
+	for _, r := range got {
+		if w, ok := want[r.tenant]; !ok || r != w {
+			t.Errorf("group %+v, want %+v", r, w)
+		}
+	}
+}
+
+func TestRLS_StaffReadAICallsListsPublicCheckRows(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	purpose := freshName("staff-public-list")
+	nameX := freshName("ai public list X")
+	x := seedDetailTenant(t, nameX)
+	base := staffAIFarBase()
+
+	xr := seedStaffAICall(t, staffAIRow(x, purpose, "ok", base.Add(time.Second)))
+	nr := staffAIRow("", purpose, "unavailable", base.Add(2*time.Second))
+	nr.client, nr.model, nr.cost, nr.in, nr.out, nr.latency, nr.attempts = "jev", "vendor/model-b", "0.25", 11, 22, 33, 2
+	nr = seedNullTenantAICall(t, nr)
+
+	got := staffAICallsArgs{purpose: sp(purpose)}.mustCall(t, h.app, staff)
+	if want := []string{nr.id, xr.id}; !reflect.DeepEqual(staffAIRowIDs(got), want) {
+		t.Fatalf("rows = %v, want the NULL-tenant row then X's row %v", staffAIRowIDs(got), want)
+	}
+	n := got[0]
+	if n.tenant != publicCheckTenantID || n.tenantName != publicCheckTenantName {
+		t.Errorf("NULL-tenant row: tenant = %s name %q, want %s %q", n.tenant, n.tenantName, publicCheckTenantID, publicCheckTenantName)
+	}
+	if n.client != nr.client || n.purpose != nr.purpose || n.model != nr.model || n.in != nr.in || n.out != nr.out ||
+		n.cost != nr.cost || n.latency != nr.latency || n.attempts != nr.attempts || n.outcome != nr.outcome || !n.at.Equal(nr.at) {
+		t.Errorf("NULL-tenant row = %+v, want the inserted values %+v", n, nr)
+	}
+	if got[1].tenant != x || got[1].tenantName != nameX {
+		t.Errorf("tenant row: tenant = %s name %q, want %s %q", got[1].tenant, got[1].tenantName, x, nameX)
+	}
+}
+
+func TestRLS_StaffReadAICallsNilTenantFilterSelectsOnlyPublicCheckRows(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	purpose := freshName("staff-public-filter")
+	x := seedDetailTenant(t, freshName("ai public filter X"))
+	base := staffAIFarBase()
+	at := func(n int) time.Time { return base.Add(time.Duration(n) * time.Second) }
+
+	x1 := seedStaffAICall(t, staffAIRow(x, purpose, "ok", at(1)))
+	n2 := seedNullTenantAICall(t, staffAIRow("", purpose, "ok", at(2)))
+	x3 := seedStaffAICall(t, staffAIRow(x, purpose, "ok", at(3)))
+	n4 := seedNullTenantAICall(t, staffAIRow("", purpose, "ok", at(4)))
+
+	window := staffAICallsArgs{purpose: sp(purpose)}
+	if got, want := staffAIRowIDs(window.mustCall(t, h.app, staff)), []string{n4.id, x3.id, n2.id, x1.id}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unfiltered rows = %v, want all four %v: the filtered cases prove nothing", got, want)
+	}
+	for _, c := range []struct {
+		name   string
+		tenant string
+		want   []string
+	}{
+		{"nil UUID", publicCheckTenantID, []string{n4.id, n2.id}},
+		{"tenant X", x, []string{x3.id, x1.id}},
+	} {
+		got := staffAICallsArgs{purpose: sp(purpose), tenant: sp(c.tenant)}.mustCall(t, h.app, staff)
+		if !reflect.DeepEqual(staffAIRowIDs(got), c.want) {
+			t.Errorf("p_tenant %s: rows = %v, want %v", c.name, staffAIRowIDs(got), c.want)
+		}
+	}
+}
+
+func TestRLS_StaffReadAICallTotalsNilTenantFilterSelectsOnlyTheReadinessGroup(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	purpose := freshName("staff-public-totals-filter")
+	nameX := freshName("ai public totals X")
+	x := seedDetailTenant(t, nameX)
+	day := staffAIFarDay()
+	d := staffAIDay(day)
+
+	xr := staffAIRow(x, purpose, "ok", day.Add(9*time.Hour))
+	xr.cost = "0.125"
+	seedStaffAICall(t, xr)
+	for i := 0; i < 2; i++ {
+		r := staffAIRow("", purpose, "ok", day.Add(time.Duration(10+i)*time.Hour))
+		r.cost = "0.25"
+		seedNullTenantAICall(t, r)
+	}
+
+	if got := (staffAITotalsArgs{purpose: sp(purpose)}).mustCall(t, h.app, staff); len(got) != 2 {
+		t.Fatalf("unfiltered groups = %+v, want two on the day: the filtered cases prove nothing", got)
+	}
+	for _, c := range []struct {
+		name   string
+		tenant string
+		want   staffAITotalRow
+	}{
+		{"nil UUID", publicCheckTenantID, staffAITotalRow{d, publicCheckTenantID, publicCheckTenantName, "0.50", 2, 20, 10, 0}},
+		{"tenant X", x, staffAITotalRow{d, x, nameX, "0.125", 1, 10, 5, 0}},
+	} {
+		got := staffAITotalsArgs{purpose: sp(purpose), tenant: sp(c.tenant)}.mustCall(t, h.app, staff)
+		if !reflect.DeepEqual(got, []staffAITotalRow{c.want}) {
+			t.Errorf("p_tenant %s: groups = %+v, want only %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRLS_StaffReadAICallTotalsKeysetCrossesThePublicCheckGroup(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	purpose := freshName("staff-public-keyset")
+	alphaName, zuluName := freshName("Alpha"), freshName("Zulu")
+	alpha, zulu := seedDetailTenant(t, alphaName), seedDetailTenant(t, zuluName)
+	day := staffAIFarDay()
+	for _, tenant := range []string{alpha, zulu} {
+		seedStaffAICall(t, staffAIRow(tenant, purpose, "ok", day.Add(10*time.Hour)))
+	}
+	seedNullTenantAICall(t, staffAIRow("", purpose, "ok", day.Add(11*time.Hour)))
+
+	order := []string{
+		alphaName + "/" + alpha,
+		publicCheckTenantName + "/" + publicCheckTenantID,
+		zuluName + "/" + zulu,
+	}
+	keys := func(rows []staffAITotalRow) []string {
+		out := []string{}
+		for _, r := range rows {
+			out = append(out, r.tenantName+"/"+r.tenant)
+		}
+		return out
+	}
+	after := func(r staffAITotalRow) staffAITotalsArgs {
+		return staffAITotalsArgs{purpose: sp(purpose), beforeDay: sp(r.day), beforeName: sp(r.tenantName), beforeTenant: sp(r.tenant)}
+	}
+
+	var walk []string
+	args := staffAITotalsArgs{purpose: sp(purpose), limit: ip(1)}
+	for i := 0; i < 6; i++ {
+		rows := args.mustCall(t, h.app, staff)
+		if len(rows) == 0 {
+			break
+		}
+		walk = append(walk, keys(rows)[0])
+		args = after(rows[0])
+		args.limit = ip(1)
+	}
+	if !reflect.DeepEqual(walk, order) {
+		t.Errorf("walk of pages of one = %v, want all three groups once each, Readiness check between Alpha and Zulu %v", walk, order)
+	}
+
+	page1 := staffAITotalsArgs{purpose: sp(purpose), limit: ip(2)}.mustCall(t, h.app, staff)
+	if !reflect.DeepEqual(keys(page1), order[:2]) {
+		t.Fatalf("page 1 = %v, want %v", keys(page1), order[:2])
+	}
+	if page2 := after(page1[1]).mustCall(t, h.app, staff); !reflect.DeepEqual(keys(page2), order[2:]) {
+		t.Errorf("page 2 after Readiness check = %v, want %v", keys(page2), order[2:])
+	}
+}
+
 func TestRLS_StaffReadAICallsOutcomeAndPurposeAreExactMatches(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadAICalls(t)

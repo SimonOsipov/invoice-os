@@ -37,6 +37,7 @@ paths:
 - Keep the stamp when the contact was unsubscribed or opted out of Marketing (`TestErase_AnUnsubscribedContactStaysUnsubscribed`, `TestErase_AMarketingOptOutStaysOptedOut`).
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
+- Queue no Resend job for a contact whose only source is a readiness check. Add its Marketing `opt_in` with the double opt-in.
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
@@ -49,7 +50,7 @@ paths:
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
 - Only the nightly sets `HUBSPOT_DEAL_STAGE`; production leaves it unset and deals open in `demoStage`.
-- Open one HubSpot deal per demo request and one per first registration.
+- Open one HubSpot deal per demo request, one per first registration and one per readiness check.
 - Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.

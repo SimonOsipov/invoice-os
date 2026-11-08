@@ -710,12 +710,14 @@ func TestSweep_DeletesARunDealWithNoContact(t *testing.T) {
 				{"d2", "Acme — other", testStage, "none"},
 				{"d3", "Acme — demo request", testStage, "none"},
 				{"d4", "Erased contact", testStage, "none"},
+				{"d5", "Acme — readiness check", testStage, "none"},
+				{"d6", "Readiness check", testStage, "none"},
 			}
-			want, got := "HubSpot 4 deleted, 0 failed", ""
+			want, got := "HubSpot 6 deleted, 0 failed", ""
 			if phase == "start" {
 				got = greenStart(t, w).step(stLeftovers).Detail
 			} else {
-				got, want = finish(t, w, baseEnv()).step(stDelHS).Detail, "4 deleted, 0 failed"
+				got, want = finish(t, w, baseEnv()).step(stDelHS).Detail, "6 deleted, 0 failed"
 			}
 			if !strings.HasPrefix(got, want) {
 				t.Errorf("sweep detail %q, want it to start %q", got, want)
@@ -728,8 +730,8 @@ func TestSweep_DeletesARunDealWithNoContact(t *testing.T) {
 				t.Fatalf("deals left %v, want only d2 (Acme — other)", left)
 			}
 			dels := dealCalls(w, "DELETE")
-			if len(dels) != 3 {
-				t.Fatalf("%d deal deletes, want 3", len(dels))
+			if len(dels) != 5 {
+				t.Fatalf("%d deal deletes, want 5", len(dels))
 			}
 			// every deal list page comes before the first deal delete, and the contact sweep before both
 			lastList, firstGdpr := 0, -1
@@ -747,8 +749,8 @@ func TestSweep_DeletesARunDealWithNoContact(t *testing.T) {
 					pages++
 				}
 			}
-			if pages != 4 || lastList > dels[0] || firstGdpr > lastList {
-				t.Errorf("deal list pages before the first delete = %d (want 4), gdpr at %d, last list at %d", pages, firstGdpr, lastList)
+			if pages != 6 || lastList > dels[0] || firstGdpr > lastList {
+				t.Errorf("deal list pages before the first delete = %d (want 6), gdpr at %d, last list at %d", pages, firstGdpr, lastList)
 			}
 		})
 	}

@@ -245,8 +245,8 @@ func TestJoin_AcceptByIdJoinsWithTheInvitedRole(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("invitation.accepted rows = %d, want exactly 1", len(audits))
 	}
-	if audits[0].Actor != user || len(audits[0].Payload) != 2 || audits[0].Payload["invitation_id"] != w.invite.ID || audits[0].Payload["role"] != "reviewer" {
-		t.Errorf("audit = %+v, want actor %s, exactly {invitation_id: %s, role: reviewer}", audits[0], user, w.invite.ID)
+	if audits[0].Actor != user || len(audits[0].Payload) != 4 || audits[0].Payload["invitation_id"] != w.invite.ID || audits[0].Payload["role"] != "reviewer" {
+		t.Errorf("audit = %+v, want actor %s, exactly {invitation_id: %s, role: reviewer, ip_address, device}", audits[0], user, w.invite.ID)
 	}
 
 	me := auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: w.tenant})
@@ -1212,4 +1212,20 @@ func TestInvitationsMine_LiveMembershipIgnoresClientInput(t *testing.T) {
 	}
 	requireLive(t, get(clean, live, "true"), false, "clean caller naming the live member")
 	requireLive(t, get(live, clean, "false"), true, "live caller naming the clean one")
+}
+
+func TestJoin_EventCarriesTheRequestDetail(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitationByID(withDetail(tenantless(user, addr), "2001:db8::7", uaFirefoxWindows), w.invite.ID, nil); err != nil {
+		t.Fatalf("AcceptInvitationByID: %v", err)
+	}
+	audits := acceptedAudits(t, w.super, w.tenant)
+	if len(audits) != 1 || audits[0].Actor != user {
+		t.Fatalf("invitation.accepted rows = %+v, want one with actor %s", audits, user)
+	}
+	if audits[0].Payload["ip_address"] != "2001:db8::7" || audits[0].Payload["device"] != "Firefox on Windows" {
+		t.Errorf("payload = %v, want the request's address and device", audits[0].Payload)
+	}
 }

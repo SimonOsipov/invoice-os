@@ -78,6 +78,7 @@ func uniqueEmail(t *testing.T, e env, prefix string) string {
 type contactRow struct {
 	UserID, First, Last, Company  *string
 	RegisteredAt, DemoRequestedAt *time.Time
+	ReadinessAt                   *time.Time
 	ConsentText                   *string
 	ConsentedAt                   *time.Time
 	Version                       int64
@@ -88,10 +89,10 @@ func readRow(t *testing.T, e env, email string) contactRow {
 	t.Helper()
 	var r contactRow
 	err := e.app.QueryRow(context.Background(), `
-		SELECT user_id::text, first_name, last_name, company, registered_at, demo_requested_at,
+		SELECT user_id::text, first_name, last_name, company, registered_at, demo_requested_at, readiness_checked_at,
 		       marketing_consent_text, marketing_consented_at, version, hubspot_delivered_at, resend_delivered_at
 		FROM contacts WHERE email = $1`, email).Scan(
-		&r.UserID, &r.First, &r.Last, &r.Company, &r.RegisteredAt, &r.DemoRequestedAt,
+		&r.UserID, &r.First, &r.Last, &r.Company, &r.RegisteredAt, &r.DemoRequestedAt, &r.ReadinessAt,
 		&r.ConsentText, &r.ConsentedAt, &r.Version, &r.HubSpotAt, &r.ResendAt)
 	if err != nil {
 		t.Fatalf("read contacts row %q: %v", email, err)
@@ -1122,7 +1123,7 @@ func TestStore_RegistrantQueuesOneDealJob(t *testing.T) {
 	if queue != QueueContacts {
 		t.Errorf("demo_deal queue = %q, want %q", queue, QueueContacts)
 	}
-	want := []DemoDealArgs{{Email: email, Name: "Ada Lovelace", Company: "Navy", SignUp: true}}
+	want := []DemoDealArgs{{Email: email, Name: "Ada Lovelace", Company: "Navy", Source: dealSourceSignUp}}
 	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
 		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
 	}
@@ -1135,7 +1136,7 @@ func TestStore_RegistrantWithNoNamesQueuesASignUpDealJob(t *testing.T) {
 	if err := e.store.Registrant(context.Background(), RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
 		t.Fatalf("Registrant: %v", err)
 	}
-	want := []DemoDealArgs{{Email: email, SignUp: true}}
+	want := []DemoDealArgs{{Email: email, Source: dealSourceSignUp}}
 	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
 		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
 	}
@@ -1197,7 +1198,7 @@ func TestStore_ConcurrentRegistrantsQueueOneSignUpDealJob(t *testing.T) {
 			}
 		}
 		got := dealJobsFor(t, e, email)
-		if len(got) != 1 || !got[0].SignUp {
+		if len(got) != 1 || got[0].Source != dealSourceSignUp {
 			t.Errorf("round %d: demo_deal jobs = %+v, want exactly one sign-up job", round, got)
 		}
 	}
@@ -1214,7 +1215,7 @@ func TestStore_RegistrantAfterDemoQueuesASecondDealJob(t *testing.T) {
 		t.Fatalf("Registrant: %v", err)
 	}
 	got := dealJobsFor(t, e, email)
-	if len(got) != 2 || got[0].SignUp || !got[1].SignUp {
+	if len(got) != 2 || got[0].Source != "" || got[1].Source != dealSourceSignUp {
 		t.Errorf("demo_deal jobs = %+v, want a demo job then a sign-up job", got)
 	}
 }
@@ -1322,5 +1323,233 @@ func TestStore_DemoRequestCommitFailureLeavesNoDealJob(t *testing.T) {
 	}
 	if got := dealJobsFor(t, e, email); len(got) != 0 {
 		t.Errorf("demo_deal jobs after a failed commit = %+v, want none (the insert must share the intake's transaction)", got)
+	}
+}
+
+func TestStore_DealJobArgsCarryTheSourceKeyOnly(t *testing.T) {
+	e := newEnv(t)
+	demo := uniqueEmail(t, e, "srcdemo")
+	reg := uniqueEmail(t, e, "srcreg")
+	ctx := context.Background()
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: demo, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: reg, DisplayName: "Ada Lovelace"}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	for _, c := range []struct{ email, source string }{{demo, ""}, {reg, dealSourceSignUp}} {
+		var raw []byte
+		if err := e.app.QueryRow(ctx, `SELECT args FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1`, c.email).Scan(&raw); err != nil {
+			t.Fatalf("read args: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		if _, has := m["sign_up"]; has {
+			t.Errorf("args %s carry a sign_up key", raw)
+		}
+		src, has := m["source"]
+		if c.source == "" && has || c.source != "" && src != c.source {
+			t.Errorf("args %s, want source %q", raw, c.source)
+		}
+	}
+}
+
+func TestStore_ReadinessCheckCreatesARowAndTwoJobs(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "ready")
+	lo := dbNow(t, e)
+	if err := e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	hi := dbNow(t, e)
+	r := readRow(t, e, email)
+	requireSetBetween(t, "readiness_checked_at", r.ReadinessAt, lo, hi)
+	requireSetBetween(t, "marketing_consented_at", r.ConsentedAt, lo, hi)
+	if r.RegisteredAt != nil || r.DemoRequestedAt != nil || r.Version != 1 || deref(r.ConsentText) != consentText {
+		t.Errorf("row = %+v, want only the readiness fact and consent at version 1", r)
+	}
+	requireJobs(t, e, email, "hubspot@1")
+	want := []DemoDealArgs{{Email: email, Source: dealSourceReadinessCheck}}
+	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
+		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
+	}
+}
+
+func TestStore_ReadinessDealInsertFailureRollsBackTheIntake(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readyfail")
+	fn := "fail_ready_deal_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	if _, err := e.admin.Exec(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.kind = 'demo_deal' AND NEW.args->>'email' = '%[2]s' THEN RAISE EXCEPTION 'test: refuse demo_deal'; END IF;
+			RETURN NEW;
+		END $$`, fn, email)); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `DROP TRIGGER IF EXISTS `+fn+` ON river_job`)
+		_, _ = e.admin.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+fn+`()`)
+	})
+	if _, err := e.admin.Exec(ctx, `CREATE TRIGGER `+fn+` BEFORE INSERT ON river_job FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err == nil {
+		t.Fatal("ReadinessCheck with a failing deal insert returned nil")
+	}
+	if n := rowCount(t, e, email); n != 0 {
+		t.Errorf("rows after a failed intake = %d, want 0", n)
+	}
+	requireJobs(t, e, email)
+}
+
+func TestStore_RepeatReadinessCheckKeepsTheFactAndQueuesAnotherDeal(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readyrepeat")
+	in := ReadinessIntake{Email: email, ConsentText: consentText}
+	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	first := readRow(t, e, email)
+	markDelivered(t, e, email)
+	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+		t.Fatalf("repeat check: %v", err)
+	}
+	r := readRow(t, e, email)
+	requireSameTime(t, "readiness_checked_at", r.ReadinessAt, first.ReadinessAt)
+	if r.Version != first.Version {
+		t.Errorf("version = %d, want %d", r.Version, first.Version)
+	}
+	requireJobs(t, e, email, "hubspot@1")
+	if got := dealJobsFor(t, e, email); len(got) != 2 {
+		t.Errorf("demo_deal jobs = %+v, want 2", got)
+	}
+}
+
+func TestStore_ReadinessCheckOfARegisteredContactBumpsTheVersion(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readyreg")
+	const textA, textB = "Text A.", "Text B."
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, ConsentText: textA}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	before := readRow(t, e, email)
+	markDelivered(t, e, email)
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textB}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	r := readRow(t, e, email)
+	if r.Version != before.Version+1 || r.HubSpotAt != nil || r.ResendAt != nil {
+		t.Errorf("version=%d hubspot=%v resend=%v, want %d and both NULL", r.Version, r.HubSpotAt, r.ResendAt, before.Version+1)
+	}
+	requireSameTime(t, "registered_at", r.RegisteredAt, before.RegisteredAt)
+	if deref(r.ConsentText) != textA {
+		t.Errorf("consent text = %q, want the earlier %q", deref(r.ConsentText), textA)
+	}
+	requireJobs(t, e, email, "hubspot@1", "resend@1", "hubspot@2", "resend@2")
+}
+
+func TestStore_RegistrantAfterReadinessCheckQueuesASignUpDealJob(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readythenreg")
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	var sources []string
+	for _, d := range dealJobsFor(t, e, email) {
+		sources = append(sources, d.Source)
+	}
+	if want := []string{dealSourceReadinessCheck, dealSourceSignUp}; !slices.Equal(sources, want) {
+		t.Errorf("deal sources = %v, want %v", sources, want)
+	}
+}
+
+func TestStore_ReadinessOnlyContactQueuesNoResendJob(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readyonly")
+	in := ReadinessIntake{Email: email, ConsentText: consentText}
+	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	requireJobs(t, e, email, "hubspot@1")
+	markDelivered(t, e, email)
+	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+		t.Fatalf("repeat ReadinessCheck: %v", err)
+	}
+	requireJobs(t, e, email, "hubspot@1")
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	requireJobs(t, e, email, "hubspot@1", "hubspot@2", "resend@2")
+
+	demo := uniqueEmail(t, e, "readydemo")
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: demo, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: demo, Name: "Grace Hopper", Company: "Navy", ConsentText: consentText}); err != nil {
+		t.Fatalf("ticked DemoRequest: %v", err)
+	}
+	requireJobs(t, e, demo, "hubspot@1", "hubspot@2", "resend@2")
+}
+
+func TestStore_ResendPendingRuleUnchangedForExistingKinds(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	unticked := uniqueEmail(t, e, "ruleunt")
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: unticked, Name: "Grace Hopper"}); err != nil {
+		t.Fatal(err)
+	}
+	requireJobs(t, e, unticked, "hubspot@1")
+	ticked := uniqueEmail(t, e, "ruletick")
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: ticked, Name: "Grace Hopper", ConsentText: consentText}); err != nil {
+		t.Fatal(err)
+	}
+	requireJobs(t, e, ticked, "hubspot@1", "resend@1")
+	reg := uniqueEmail(t, e, "rulereg")
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: reg}); err != nil {
+		t.Fatal(err)
+	}
+	requireJobs(t, e, reg, "hubspot@1", "resend@1")
+}
+
+func TestStore_MeReportsTheReadinessCheckTag(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	only := uniqueEmail(t, e, "meready")
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: only, ConsentText: consentText}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.store.Me(ctx, only)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if !slices.Equal(c.Tags, []string{"readiness check"}) || c.MarketingEligible || c.ResendApplies {
+		t.Errorf("Me = %+v, want tag readiness check, not eligible, resend not applicable", c)
+	}
+
+	reg := uniqueEmail(t, e, "meregready")
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: reg}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: reg, ConsentText: consentText}); err != nil {
+		t.Fatal(err)
+	}
+	c, err = e.store.Me(ctx, reg)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if !slices.Equal(c.Tags, []string{"registered", "readiness check"}) || !c.ResendApplies {
+		t.Errorf("Me = %+v, want registered + readiness check and resend applicable", c)
 	}
 }

@@ -7,6 +7,7 @@ import {
   createEntity,
   getAuditLog,
   grantMembership,
+  inviteWithToken,
   mintSignInState,
   provisionRealAccount,
   rawFetch,
@@ -27,6 +28,10 @@ const SIGN_IN_FAILED = 'account.sign_in_failed' // EventSignInFailed
 const SIGN_IN_BLOCKED = 'account.sign_in_blocked' // EventSignInBlocked
 const SIGNED_OUT = 'account.signed_out' // EventSignedOut
 const RESET_REQUESTED = 'account.password_reset_requested' // EventPasswordResetRequested
+
+// internal/tenancy/store.go, the audit.Record calls.
+const PROVISIONED = 'workspace.provisioned'
+const ACCEPTED = 'invitation.accepted'
 
 // internal/accountevents/device.go: the label for CHROME_MAC.
 const CHROME_ON_MACOS = 'Chrome on macOS'
@@ -132,6 +137,61 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
       expect(payloadOf(e).ip_address).not.toBe('Unknown IP')
       expect(e.company_scope).toBe('workspace')
     }
+  })
+
+  test('workspace created and invite accepted carry the device and IP', async () => {
+    const headers = (token: string) => ({ Authorization: `Bearer ${token}`, 'User-Agent': CHROME_MAC })
+    const detailOf = (e: AuditEvent): Record<string, unknown> => e.payload as Record<string, unknown>
+    const expectDetail = (e: AuditEvent) => {
+      expect(payloadOf(e).device).toBe(CHROME_ON_MACOS)
+      expect(payloadOf(e).ip_address).toMatch(IP_PATTERN)
+      expect(payloadOf(e).ip_address).not.toBe('Unknown IP')
+    }
+    const poll = async (token: string, event: string, actor: string): Promise<AuditEvent[]> => {
+      await expect.poll(async () => rowsOf(await rows(token, event), actor).length, { ...POLL, message: event }).toBeGreaterThan(0)
+      return rowsOf(await rows(token, event), actor)
+    }
+
+    // (1) The registrant provisions an in-house workspace: admin and actor.
+    const reg = await registerFresh('acct-events-ws')
+    const regId = subjectOf((await signIn(reg.email, reg.password)).access_token)
+    const created = await rawFetch('/api/tenancy/v1/workspaces', {
+      method: 'POST',
+      headers: headers((await signIn(reg.email, reg.password)).access_token),
+      body: { workspace_name: `Acct events ${crypto.randomUUID().slice(0, 8)}`, display_name: 'Acct events ws', kind: 'in_house' },
+    })
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+    const newTenantId = (created.body as { tenant: { id: string } }).tenant.id
+    const regToken = (await signIn(reg.email, reg.password)).access_token
+    const provisioned = await poll(regToken, PROVISIONED, regId)
+    for (const e of provisioned) expectDetail(e)
+
+    // (2) An invitee accepts: the registrant (admin) and the invitee (actor) both read the detail.
+    const inv = await registerFresh('acct-events-inv')
+    const invSession = (await signIn(inv.email, inv.password)).access_token
+    const invId = subjectOf(invSession)
+    const inviteToken = await inviteWithToken(regToken, newTenantId, inv.email)
+    const accepted = await rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: headers(invSession), body: { token: inviteToken } })
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+    const asAdmin = await poll(regToken, ACCEPTED, invId)
+    for (const e of asAdmin) expectDetail(e)
+    const invToken = (await signIn(inv.email, inv.password)).access_token
+    const asActor = await poll(invToken, ACCEPTED, invId)
+    expect(asActor.map((e) => e.id)).toEqual(asAdmin.map((e) => e.id))
+    for (const e of asActor) expect(detailOf(e)).toEqual(detailOf(asAdmin.find((a) => a.id === e.id) as AuditEvent))
+
+    // (3) O is in-house full scope, neither admin nor actor: both rows, no detail, no search hit.
+    const o = await member(newTenantId, 'acct-events-ws-o')
+    const oProvisioned = await poll(o.token, PROVISIONED, regId)
+    const oAccepted = await poll(o.token, ACCEPTED, invId)
+    expect(oProvisioned.map((e) => e.id)).toEqual(provisioned.map((e) => e.id))
+    expect(oAccepted.map((e) => e.id)).toEqual(asAdmin.map((e) => e.id))
+    for (const e of [...oProvisioned, ...oAccepted]) {
+      expect(detailOf(e)).not.toHaveProperty('ip_address')
+      expect(detailOf(e)).not.toHaveProperty('device')
+    }
+    const ip = payloadOf(provisioned[0]).ip_address
+    expect((await getAuditLog(o.token, { event: [PROVISIONED, ACCEPTED], q: ip })).total).toBe(0)
   })
 
   test('a wrong password, a sign-out and a reset request are recorded', async () => {

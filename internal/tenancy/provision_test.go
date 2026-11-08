@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -526,7 +527,7 @@ func failAuditWrites(t *testing.T, r registrant) {
 func TestStoreProvisionWorkspace_WritesOneProvisionedEvent(t *testing.T) {
 	r := newRegistrant(t)
 	in := ProvisionInput{WorkspaceName: "Audited Works", DisplayName: "Ada Registrant"}
-	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), in); err != nil {
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(withDetail(r.ctx(), "203.0.113.7", uaChromeMac), in); err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 
@@ -542,7 +543,8 @@ func TestStoreProvisionWorkspace_WritesOneProvisionedEvent(t *testing.T) {
 		t.Errorf("entity_id = %q, want NULL", *e.EntityID)
 	}
 	// kind is what the store resolved for an absent kind, not an input echo.
-	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house"}
+	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house",
+		"ip_address": "203.0.113.7", "device": "Chrome on macOS"}
 	if !reflect.DeepEqual(e.Payload, want) {
 		t.Errorf("payload = %v, want exactly %v", e.Payload, want)
 	}
@@ -658,7 +660,7 @@ func TestAuditRead_NewAdminReadsTheProvisionedEvent(t *testing.T) {
 func TestStoreProvisionWorkspace_EventCarriesTheStoredKindAndName(t *testing.T) {
 	r := newRegistrant(t)
 	in := ProvisionInput{WorkspaceName: "In House Works", Kind: "in_house", DisplayName: "Zed Distinct"}
-	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), in); err != nil {
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(withDetail(r.ctx(), "203.0.113.7", uaChromeMac), in); err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 
@@ -666,7 +668,8 @@ func TestStoreProvisionWorkspace_EventCarriesTheStoredKindAndName(t *testing.T) 
 	if len(events) != 1 {
 		t.Fatalf("workspace.provisioned rows = %d, want 1", len(events))
 	}
-	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house"}
+	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house",
+		"ip_address": "203.0.113.7", "device": "Chrome on macOS"}
 	if !reflect.DeepEqual(events[0].Payload, want) {
 		t.Errorf("payload = %v, want exactly %v (no display name, no email)", events[0].Payload, want)
 	}
@@ -1092,6 +1095,64 @@ func TestHoldsRemovedRow(t *testing.T) {
 			}
 			if got != c.want {
 				t.Errorf("holdsRemovedRow = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func provisionDetailOf(t *testing.T, ctx context.Context, r registrant) (ip, device any) {
+	t.Helper()
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(ctx, ProvisionInput{WorkspaceName: "Detail Works", DisplayName: "Ada"}); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	events := provisionedEvents(t, r.super, r.tenantID)
+	if len(events) != 1 {
+		t.Fatalf("workspace.provisioned rows = %d, want 1", len(events))
+	}
+	return events[0].Payload["ip_address"], events[0].Payload["device"]
+}
+
+func TestStoreProvisionWorkspace_UnknownDetailIsWrittenLiterally(t *testing.T) {
+	r := newRegistrant(t)
+	if ip, device := provisionDetailOf(t, r.ctx(), r); ip != "Unknown IP" || device != "Unknown device" {
+		t.Errorf("ip_address, device = %v, %v; want the unknown literals", ip, device)
+	}
+}
+
+func TestStoreProvisionWorkspace_MalformedIPIsUnknownIP(t *testing.T) {
+	for _, bad := range []string{"not-an-ip", "203.0.113.7, 10.0.0.1"} {
+		t.Run(bad, func(t *testing.T) {
+			r := newRegistrant(t)
+			if ip, _ := provisionDetailOf(t, withDetail(r.ctx(), bad, uaChromeMac), r); ip != "Unknown IP" {
+				t.Errorf("ip_address = %v, want Unknown IP", ip)
+			}
+		})
+	}
+}
+
+func TestProvisionHandler_PassesTheRequestDetail(t *testing.T) {
+	for _, c := range []struct{ name, ip, ua, wantIP, wantDevice string }{
+		{"both headers", "203.0.113.7", uaChromeMac, "203.0.113.7", "Chrome on macOS"},
+		{"no headers", "", "", "Unknown IP", "Unknown device"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var gotIP, gotDevice string
+			provision := ProvisionFunc(func(ctx context.Context, _ ProvisionInput) (Tenant, string, error) {
+				gotIP, gotDevice = requestDetailOf(ctx)
+				return Tenant{ID: uuid.NewString(), Name: "Acme Ltd", Kind: "in_house"}, uuid.NewString(), nil
+			})
+			r := httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(validProvisionBody))
+			if c.ip != "" {
+				r.Header.Set("X-User-Address", c.ip)
+			}
+			r.Header.Set("User-Agent", c.ua)
+			rec := httptest.NewRecorder()
+			ProvisionHandler(provision, nil).ServeHTTP(rec, r)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body)
+			}
+			if gotIP != c.wantIP || gotDevice != c.wantDevice {
+				t.Errorf("handler passed (%q, %q), want (%q, %q)", gotIP, gotDevice, c.wantIP, c.wantDevice)
 			}
 		})
 	}

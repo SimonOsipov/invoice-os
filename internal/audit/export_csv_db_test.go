@@ -242,3 +242,26 @@ func TestExportCSV_WritesAccountRowsWithPayload(t *testing.T) {
 		t.Errorf("company_scope = %q, want workspace", got)
 	}
 }
+
+// Control: the admin-only workspace export keeps ip_address and device on a workspace.provisioned row.
+func TestExportCSV_CarriesCreatedAcceptedDetail(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	filtInsert(t, f, p, []filtRow{{
+		event: "workspace.provisioned", actor: uuid.NewString(), ageSeconds: 10, // Store.ProvisionWorkspace
+		payload: `{"tenant_id":"` + p.tenant + `","name":"Kestrel Works","kind":"firm","ip_address":"203.0.113.7","device":"Chrome on macOS"}`,
+	}})
+
+	_, recs := exportCSV(t, f, p)
+
+	if len(recs) != 2 {
+		t.Fatalf("records = %d, want header and one row", len(recs))
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(recs[1][exportCol(t, "payload")]), &payload); err != nil {
+		t.Fatalf("payload cell is not JSON: %v", err)
+	}
+	if payload["ip_address"] != "203.0.113.7" || payload["device"] != "Chrome on macOS" {
+		t.Errorf("payload %v lacks the stored ip_address and device", payload)
+	}
+}

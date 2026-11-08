@@ -13,6 +13,12 @@ import (
 
 const destHubSpotDeal = "hubspot_deal"
 
+// Deal sources; an absent source is a demo request.
+const (
+	dealSourceSignUp         = "sign_up"
+	dealSourceReadinessCheck = "readiness_check"
+)
+
 // demoDealTimeout is six vendor calls plus a 20 s lock wait behind a HubSpot contact job.
 const demoDealTimeout = 6*vendorTimeout + 20*time.Second
 
@@ -21,8 +27,9 @@ type DemoDealArgs struct {
 	Email   string `json:"email"`
 	Name    string `json:"name"`
 	Company string `json:"company"`
-	// SignUp marks a first-registration deal; a job queued without the key is a demo deal.
-	SignUp bool `json:"sign_up,omitempty"`
+	Source  string `json:"source,omitempty"`
+	// ceiling: read only for jobs queued before Source; drop once no demo_deal job carries sign_up.
+	LegacySignUp bool `json:"sign_up,omitempty"`
 }
 
 func (DemoDealArgs) Kind() string { return "demo_deal" }
@@ -39,7 +46,7 @@ func dealName(company, name, label, fallback string) string {
 	return fallback
 }
 
-// DemoDealWorker opens one HubSpot deal for a demo request or a first sign-up.
+// DemoDealWorker opens one HubSpot deal for a demo request, a first sign-up or a readiness check.
 type DemoDealWorker struct {
 	river.WorkerDefaults[DemoDealArgs]
 	Pool    *pgxpool.Pool
@@ -52,6 +59,19 @@ func (w *DemoDealWorker) Timeout(*river.Job[DemoDealArgs]) time.Duration { retur
 
 // Work holds the HubSpot contact job's advisory lock so the two jobs of one person never run together.
 func (w *DemoDealWorker) Work(ctx context.Context, job *river.Job[DemoDealArgs]) error {
+	label, fallback := "demo request", "Demo request"
+	switch src := job.Args.Source; src {
+	case "":
+		if job.Args.LegacySignUp {
+			label, fallback = "sign-up", "Sign-up"
+		}
+	case dealSourceSignUp:
+		label, fallback = "sign-up", "Sign-up"
+	case dealSourceReadinessCheck:
+		label, fallback = "readiness check", "Readiness check"
+	default:
+		return river.JobCancel(fmt.Errorf("notifications: unknown deal source %q", src))
+	}
 	// ceiling: the lock and its connection are held across up to six 10 s vendor calls on the shared contacts queue (MaxWorkers 2); revisit if MaxWorkers rises past the pool size or contact jobs run late behind deal jobs.
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
@@ -64,10 +84,6 @@ func (w *DemoDealWorker) Work(ctx context.Context, job *river.Job[DemoDealArgs])
 
 	first, last := splitName(job.Args.Name)
 	c := Contact{Email: job.Args.Email, FirstName: first, LastName: last, Company: job.Args.Company}
-	label, fallback := "demo request", "Demo request"
-	if job.Args.SignUp {
-		label, fallback = "sign-up", "Sign-up"
-	}
 	if err = w.HubSpot.OpenDemoDeal(ctx, c, dealName(job.Args.Company, job.Args.Name, label, fallback)); err != nil {
 		logDeliveryFailure(ctx, w.Logger, destHubSpotDeal, err)
 		return err

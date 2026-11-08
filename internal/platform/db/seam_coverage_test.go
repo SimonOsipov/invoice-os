@@ -1164,6 +1164,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /blog/subscriptions":                               {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /blog/subscriptions/confirm":                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /internal/contacts/demo-requests":                  {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/contacts/readiness-checks":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                    {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
 	"POST /internal/invitations/preview":                     {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /internal/invitations/pending":                     {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
@@ -3260,6 +3261,9 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_InviteWithoutChoiceGivesNoClients"},                                   // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopyRollsBackWithTheAccept"},                                          // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopiesOnlyTheAcceptedInvitesSet"},                                     // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_EventCarriesTheRequestDetail"},                                        // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_UnknownDetailStillAccepts"},                                           // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_EventCarriesTheRequestDetail"},                                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_DeletedEntityIsNotCopied"},                                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AReplayedLinkLeavesTheMembersSetAlone"},                               // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ARevokedOrExpiredLinkCopiesNothing"},                                  // the invitee holds no membership in the invite's tenant before accepting

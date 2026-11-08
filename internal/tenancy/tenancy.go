@@ -443,7 +443,7 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 			in.Kind = *req.Kind
 		}
 
-		tenant, subject, err := provision(r.Context(), in)
+		tenant, subject, err := provision(withRequestDetail(r), in)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

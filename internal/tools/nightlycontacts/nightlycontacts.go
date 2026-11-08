@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	sectionSuite = "hubspot"
-	sectionFile  = "internal/tools/nightlycontacts"
-	pollEvery    = 5 * time.Second
-	checkLimit   = 3 * time.Minute
-	leftLimit    = 2 * time.Minute
-	demoSuffix   = " — demo request"
-	signUpSuffix = " — sign-up"
+	sectionSuite    = "hubspot"
+	sectionFile     = "internal/tools/nightlycontacts"
+	pollEvery       = 5 * time.Second
+	checkLimit      = 3 * time.Minute
+	leftLimit       = 2 * time.Minute
+	demoSuffix      = " — demo request"
+	signUpSuffix    = " — sign-up"
+	readinessSuffix = " — readiness check"
 )
 
 const (
@@ -66,7 +67,8 @@ func isRunContact(email, domain string) bool {
 func isRunDeal(name string) bool {
 	n := strings.ToLower(name)
 	return strings.HasSuffix(n, demoSuffix) || strings.HasSuffix(n, signUpSuffix) ||
-		n == "demo request" || n == "sign-up" || n == "erased contact"
+		strings.HasSuffix(n, readinessSuffix) ||
+		n == "demo request" || n == "sign-up" || n == "readiness check" || n == "erased contact"
 }
 
 type stepResult struct {

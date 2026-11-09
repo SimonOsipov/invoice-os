@@ -38,6 +38,11 @@ describe('refusal', () => {
     expect(r.text).not.toContain('invoice_number')
   })
 
+  it('refusal_400OnADocumentRunIsTheFileSentenceNotTheMappingOne', () => {
+    expect(refusal('document', 400, 'invalid request body').text).toBe(UNREADABLE_SENTENCE)
+    expect(refusal('run', 400, 'invalid request body').text).toBe(MAPPING_SENTENCE)
+  })
+
   it('refusal_400OnTheMappingRouteIsTheColumnsSentence', () => {
     expect(refusal('mapping', 400, 'invalid request body').text).toBe('We could not read the columns of this file.')
   })

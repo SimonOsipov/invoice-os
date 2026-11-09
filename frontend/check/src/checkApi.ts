@@ -15,7 +15,7 @@ export interface RunAnswer {
   checks_left: number
 }
 
-// Part order is FREECHK-03 D4: the gateway refuses a file part before email and consent_text.
+// Part order matters: the gateway refuses a file part before email and consent_text.
 export function runForm(i: RunInput): FormData {
   const f = new FormData()
   f.append('email', i.email.trim())

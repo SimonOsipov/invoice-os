@@ -7,7 +7,7 @@ import { App } from './App'
 import { CONSENT_TEXT } from './analytics'
 import { CHECK_FIELD_KEYS, fieldLabel } from './fields'
 import { READING_TEXT, SENT_TEXT, SENDING_TEXT, TYPE_SENTENCE } from './copy'
-import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -305,6 +305,37 @@ describe('map and details extras', () => {
 })
 
 describe('details and sent', () => {
+  it('details_backAndANewFileArriveUnticked', async () => {
+    stubFetch({})
+    await mount()
+    await pick(file('a.pdf'))
+    await type(byLabel<HTMLInputElement>('Email address'), 'a@example.com')
+    await click(container.querySelector('input[type="checkbox"]')!)
+    await click(button('Back'))
+    await pick(file('b.pdf'))
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false)
+    expect(byLabel<HTMLInputElement>('Email address').value).toBe('a@example.com')
+    expect(button('Send').disabled).toBe(true)
+  })
+
+  it('send_aDocument400IsNotTheMappingSentence', async () => {
+    stubFetch({ [RUN]: () => json(400, { error: 'invalid request body' }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(UNREADABLE_SENTENCE)
+    expect(text()).not.toContain(MAPPING_SENTENCE)
+  })
+
+  it('send_aSpreadsheet400IsTheMappingSentence', async () => {
+    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'invalid request body' }) })
+    await mount()
+    await pick(file('a.csv'))
+    await click(button('Continue'))
+    await fillAndSend()
+    expect(text()).toContain(MAPPING_SENTENCE)
+  })
+
   it('send_isDisabledUntilEmailAndTick', async () => {
     stubFetch({})
     await mount()

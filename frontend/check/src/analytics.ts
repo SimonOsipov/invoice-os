@@ -7,7 +7,6 @@ import type { ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { readConsent } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
-export { CHECK_BASE } from '../../landing/src/sitePaths'
 export { READINESS_CONSENT_TEXT as CONSENT_TEXT } from '../../landing/src/readinessConsent'
 
 export const bootCheckAnalytics = (): boolean => bootAnalytics()

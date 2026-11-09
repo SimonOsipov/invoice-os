@@ -35,6 +35,7 @@ export function App() {
     setSuggestion(null)
     setFields(null)
     setRefusal(null)
+    setTicked(false)
     const v = fileVerdict(picked)
     setVerdict(v)
     if (v) return
@@ -63,6 +64,7 @@ export function App() {
     setSuggestion(null)
     setFields(null)
     setRefusal(null)
+    setTicked(false)
     setVerdict('')
   }
 
@@ -73,7 +75,7 @@ export function App() {
     const res = await runCheck({ email, file, mapping: suggestion && fields ? { headerRow: suggestion.header_row, fields } : undefined })
     setSending(false)
     if (res.ok) setStep('sent')
-    else setRefusal(refuse('run', res.status, res.error))
+    else setRefusal(refuse(suggestion ? 'run' : 'document', res.status, res.error))
   }
 
   // A choice made in another tab applies here when this tab is shown again.

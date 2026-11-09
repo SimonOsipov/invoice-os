@@ -776,6 +776,11 @@ func TestRun_UnattributableClientIsStillLimited(t *testing.T) {
 	}
 }
 
+// validMapping is a JSON object of exactly n bytes.
+func validMapping(n int) []byte {
+	return append(append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), n-len(`{"a":""}`))...), `"}`...)
+}
+
 func TestRun_BadPartsAreRefusedBeforeTheFile(t *testing.T) {
 	email, consent := mpPart{"email", "", []byte("a@x.co")}, mpPart{"consent_text", "", []byte(checkConsent)}
 	for _, tc := range []struct {
@@ -786,7 +791,7 @@ func TestRun_BadPartsAreRefusedBeforeTheFile(t *testing.T) {
 		{"unknown part", []mpPart{email, consent, {"x", "", []byte("1")}}},
 		{"email over its cap", []mpPart{{"email", "", bytes.Repeat([]byte("a"), 1025)}, consent}},
 		{"consent over its cap", []mpPart{email, {"consent_text", "", bytes.Repeat([]byte("a"), 4097)}}},
-		{"mapping over its cap", []mpPart{email, consent, {"mapping", "", append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), 16<<10)...)}}},
+		{"mapping over its cap", []mpPart{email, consent, {"mapping", "", validMapping(16<<10 + 1)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newCheckEnv(t, true)

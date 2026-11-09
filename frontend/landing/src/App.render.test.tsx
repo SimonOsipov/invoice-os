@@ -369,7 +369,7 @@ describe('NV-03 the hero Explore anchors land on Platform', () => {
 
 describe('the check link is wired from VITE_CHECK_URL', () => {
   const CHECK = 'https://c.x/check'
-  const countOf = (html: string, href: string) => (html.match(new RegExp(`href="${href}"`, 'g')) ?? []).length
+  const countOf = (html: string, href: string) => html.split(`href="${href}"`).length - 1
 
   it('App_checkHref_usedByAllLinks: nav, hero and closing carry the stub', () => {
     vi.stubEnv('VITE_CHECK_URL', CHECK)

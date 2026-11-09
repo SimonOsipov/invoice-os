@@ -283,8 +283,6 @@ test('landing nav: no link is marked current outside the nav sections', async ({
 test('landing nav: the hero check link opens the check page', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 })
   const { errors } = await openLanding(page)
-  // Asserted before the click: the check page is another site, and its console is not this page's.
-  expectNoConsoleErrors(errors)
 
   const checkUrl = resolveTarget('CHECK_URL')
   const link = page.locator('#top').getByRole('link', { name: 'Check your invoices' })
@@ -294,6 +292,7 @@ test('landing nav: the hero check link opens the check page', async ({ page }) =
   await page.waitForURL((u) => u.href.replace(/\/$/, '') === checkUrl.replace(/\/$/, ''))
   // CHECK_H1 in frontend/check/src/copy.ts.
   await expect(page.getByRole('heading', { level: 1, name: 'Check your invoices against the MBS rules' })).toBeVisible()
+  expectNoConsoleErrors(errors)
 })
 
 // The nav Library link carries the Library URL the preview build bakes as VITE_LIBRARY_URL.

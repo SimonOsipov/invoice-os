@@ -199,7 +199,7 @@ type Measured = { tag: string; text: string; left: number; right: number; top: n
 async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
   const bakedBlogUrl = resolveTarget('BAKED_BLOG_URL')
-  const checkUrl = resolveTarget('CHECK_URL')
+  const bakedCheckUrl = resolveTarget('BAKED_CHECK_URL')
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
 
@@ -378,7 +378,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       const firstLink = navLinks.reduce((a, b) => (b.left < a.left ? b : a))
       expect(firstLink.left - m.logo!.right, `${width}px: logo to the first nav link`).toBeGreaterThanOrEqual(m.barGap - 1)
       expect(signIn!.left - check[0].right, `${width}px: "Free check" to "Sign in"`).toBeGreaterThanOrEqual(m.barGap - 1)
-      await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Free check' }), `${width}px: the Free check href`).toHaveAttribute('href', checkUrl)
+      await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Free check' }), `${width}px: the Free check href`).toHaveAttribute('href', bakedCheckUrl)
     }
     if (navLinks.length > 0) {
       navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
@@ -1566,7 +1566,7 @@ test('landing faq sticky and closing panel', async ({ page }, testInfo) => {
 test('landing check links: hero and closing fit their panels', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
-  const checkUrl = resolveTarget('CHECK_URL')
+  const bakedCheckUrl = resolveTarget('BAKED_CHECK_URL')
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await openLandingFrame(page)
   const measured: unknown[] = []
@@ -1578,7 +1578,7 @@ test('landing check links: hero and closing fit their panels', async ({ page }, 
     const heroLink = page.locator('#top').getByRole('link', { name: 'Check your invoices' })
     const heroDemo = page.locator('#top').getByRole('button', { name: 'Book a demo' })
     await expect(heroLink, `${label}: one hero check link (is landing.VITE_CHECK_URL set?)`).toHaveCount(1)
-    await expect(heroLink, `${label}: hero check href`).toHaveAttribute('href', checkUrl)
+    await expect(heroLink, `${label}: hero check href`).toHaveAttribute('href', bakedCheckUrl)
     const [heroCheck, heroBook, column, card] = [
       await box(heroLink, `${label} hero check link`),
       await box(heroDemo, `${label} hero Book a demo`),
@@ -1594,7 +1594,7 @@ test('landing check links: hero and closing fit their panels', async ({ page }, 
     await page.locator('[data-closing]').evaluate((el) => el.scrollIntoView({ block: 'center' }))
     const closingLink = page.locator('[data-closing]').getByRole('link', { name: 'Check your invoices' })
     await expect(closingLink, `${label}: one closing check link`).toHaveCount(1)
-    await expect(closingLink, `${label}: closing check href`).toHaveAttribute('href', checkUrl)
+    await expect(closingLink, `${label}: closing check href`).toHaveAttribute('href', bakedCheckUrl)
     const [closing, copy] = await rectsOf(page, '[data-closing], [data-closing] > div:first-child')
     const closeCheck = await box(closingLink, `${label} closing check link`)
     const closeBook = await box(page.locator('[data-closing]').getByRole('button', { name: 'Book a demo' }), `${label} closing Book a demo`)

@@ -57,10 +57,12 @@ describe('check package', () => {
     for (const app of ['landing', 'library', 'check']) {
       const d = read(join(HERE, `../../${app}/Dockerfile`))
       const stage = d.indexOf('AS build')
+      const run = d.search(/^RUN pnpm .*\bbuild\b/m)
       const at = d.indexOf('ARG VITE_CHECK_URL\nENV VITE_CHECK_URL=$VITE_CHECK_URL')
       expect(stage, app).toBeGreaterThan(-1)
+      expect(run, app).toBeGreaterThan(stage)
       expect(at, app).toBeGreaterThan(stage)
-      expect(at, app).toBeLessThan(d.indexOf('AS serve'))
+      expect(at, app).toBeLessThan(run)
     }
   })
 

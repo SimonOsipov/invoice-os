@@ -4,6 +4,7 @@ paths:
   - "cmd/notifications/**"
   - "internal/gateway/contacts*.go"
   - "internal/gateway/blog_subscribe*.go"
+  - "internal/gateway/readiness_check*.go"
   - "migrations/*contacts*"
 ---
 # Contact sync
@@ -58,6 +59,8 @@ paths:
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
 - Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Log no client IP on the demo route.
+- Log no client IP, address or file name on the readiness-check routes.
+- Hand a readiness check's contact to the intake once, on a 200 from the worker, on `context.WithoutCancel`. A failed hand-off still answers 200 and logs a WARN with the status only.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.
 - Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
 - Page the deals by reading the first page again after each delete. Never follow `after` across a delete (`TestHubSpotErase_DeletesEveryDealWhenThePagesShrink`).

@@ -48,9 +48,10 @@ type Result struct {
 }
 
 type Invoice struct {
-	Number   string
-	Failures []validation.Violation
-	Payload  map[string]any // nil for a problem invoice
+	Number     string
+	Failures   []validation.Violation
+	Payload    map[string]any // nil for a problem invoice
+	NotChecked []string       // sorted rule keys dropped from this invoice's rule set; nil for a problem invoice
 }
 
 // Checker holds no logger on purpose: it handles the visitor's payload.
@@ -169,12 +170,15 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 	sets := make(map[string]validation.RuleSet, len(distinct))
+	droppedBy := make(map[string][]string, len(distinct))
 	for _, d := range distinct {
 		rs, ok := loaded[d]
 		if !ok {
 			return Result{}, fmt.Errorf("publiccheck: no rule set loaded for %s", d)
 		}
 		rs, dropped := dropCompanyRules(rs)
+		slices.Sort(dropped)
+		droppedBy[d] = slices.Compact(dropped)
 		res.NotChecked = append(res.NotChecked, dropped...)
 		sets[d] = rs
 	}
@@ -189,6 +193,7 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+		res.Invoices[i].NotChecked = droppedBy[dateOf[i]]
 		res.Invoices[i].Failures = out.Violations
 	}
 	return res, nil

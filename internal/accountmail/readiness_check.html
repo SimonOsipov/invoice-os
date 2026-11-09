@@ -1,0 +1,24 @@
+{{- define "title"}}Your ASComply readiness check results{{end}}
+{{- define "preheader"}}{{.Intro}}{{end}}
+{{- define "eyebrow"}}Readiness check{{end}}
+{{- define "heading"}}{{.Heading}}{{end}}
+{{- define "heading_accent"}}{{.Accent}}{{end}}
+{{- define "intro"}}{{.Intro}}{{end}}
+{{- define "action_url"}}{{.SignUpURL}}{{end}}
+{{- define "action_label"}}Create your account{{end}}
+{{- define "expiry"}}{{.ChecksLine}}{{end}}
+{{- define "details"}}{{range .Invoices}}<tbody data-invoice><tr><td width="120" style="{{template "row_label_style"}}">Invoice</td><td style="{{template "row_value_style"}}">{{.Number}}</td></tr>
+{{- with .IssueDate}}<tr><td width="120" style="{{template "row_label_style"}}">Issue date</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}
+{{- with .Currency}}<tr><td width="120" style="{{template "row_label_style"}}">Currency</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}
+{{- with .Subtotal}}<tr><td width="120" style="{{template "row_label_style"}}">Subtotal</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}
+{{- with .VAT}}<tr><td width="120" style="{{template "row_label_style"}}">VAT</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}
+{{- with .Total}}<tr><td width="120" style="{{template "row_label_style"}}">Total</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}
+{{- range .Buyer}}<tr><td width="120" style="{{template "row_label_style"}}">{{.Label}}</td><td style="{{template "row_value_style"}}">{{.Value}}</td></tr>{{end}}
+{{- range .Failures}}<tr><td width="120" style="{{template "row_label_style"}}">{{.Label}}</td><td style="{{template "row_value_style"}}">{{.Value}}</td></tr>{{end}}
+{{- if .Passes}}<tr><td width="120" style="{{template "row_label_style"}}">Result</td><td style="{{template "row_value_style"}}">Passes every rule</td></tr>{{end}}
+{{- if .Warnings}}<tr><td colspan="2" style="{{template "row_label_style"}}">Warnings</td></tr>
+{{- range .Warnings}}<tr><td width="120" style="{{template "row_label_style"}}">{{.Label}}</td><td style="{{template "row_value_style"}}">{{.Value}}</td></tr>{{end}}{{end}}
+{{- if .NotChecked}}<tr><td width="120" style="{{template "row_label_style"}}">Not checked</td><td style="{{template "row_value_style"}}">{{range $i, $k := .NotChecked}}{{if $i}}, {{end}}{{$k}}{{end}}<br>These rules read the company profile in ASComply, not a file.</td></tr>{{end}}</tbody>{{end}}{{end}}
+{{- define "ignore_note"}}This check ran on the file you sent. We did not keep the file.{{end}}
+{{- define "reason"}}You received this email because you asked for a readiness check at ascomply.com.{{end}}
+{{- template "layout" .}}

@@ -639,3 +639,50 @@ func TestCheck_ARefusedMappingIsValidationNotBadFile(t *testing.T) {
 	}
 	r.untouched(t)
 }
+
+func TestCheck_NotCheckedIsPerInvoice(t *testing.T) {
+	r := newRig()
+	r.c.LoadRules = func(_ context.Context, dates []string, _ []validation.Rule) (map[string]validation.RuleSet, error) {
+		out := map[string]validation.RuleSet{}
+		for _, d := range dates {
+			rs := validation.RuleSet{Version: 4}
+			if strings.HasPrefix(d, "2027") {
+				rs.Rules = []validation.Rule{requiredRule("supplier-email-required", "supplier.email"), requiredRule("supplier-city-required", "supplier.city")}
+			}
+			out[d] = rs
+		}
+		return out, nil
+	}
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,2026-06-01\nB,2,2027-02-01\nC,3,2026-07-01\n", "issue_date", "Date"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invoices) != 2 {
+		t.Fatalf("%d invoices, want the first two of three (MaxInvoices)", len(res.Invoices))
+	}
+	if res.Invoices[0].NotChecked != nil {
+		t.Errorf("invoice 1 NotChecked = %v, want nil", res.Invoices[0].NotChecked)
+	}
+	want := []string{"supplier-city-required", "supplier-email-required"}
+	if !slices.Equal(res.Invoices[1].NotChecked, want) {
+		t.Errorf("invoice 2 NotChecked = %v, want %v", res.Invoices[1].NotChecked, want)
+	}
+	if !slices.Equal(res.NotChecked, want) {
+		t.Errorf("Result.NotChecked = %v, want the union %v", res.NotChecked, want)
+	}
+}
+
+func TestCheck_AProblemInvoiceHasNoNotCheckedList(t *testing.T) {
+	r := newRig()
+	r.l.rules = []validation.Rule{requiredRule("supplier-email-required", "supplier.email")}
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,31/02/2026\nB,2,2026-10-01\n", "issue_date", "Date"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Invoices[0].Payload != nil || res.Invoices[0].NotChecked != nil {
+		t.Errorf("problem invoice = %+v, want nil payload and nil NotChecked", res.Invoices[0])
+	}
+	if len(res.Invoices[1].NotChecked) != 1 {
+		t.Errorf("checked invoice NotChecked = %v, want one key", res.Invoices[1].NotChecked)
+	}
+}

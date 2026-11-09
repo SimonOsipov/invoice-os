@@ -1183,6 +1183,8 @@ jobs:
         run: pnpm --filter @invoice-os/library test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-library.json}
       - name: Unit tests (blog)
         run: pnpm --filter @invoice-os/blog test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-blog.json}
+      - name: Unit tests (check)
+        run: pnpm --filter @invoice-os/check test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-check.json}
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic

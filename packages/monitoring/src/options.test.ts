@@ -8,7 +8,7 @@ import { markReported } from './reported'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
 const GATEWAY = 'https://gw.test'
-const SERVICES: Service[] = ['app', 'ops-console', 'support-console', 'landing', 'library', 'blog']
+const SERVICES: Service[] = ['app', 'ops-console', 'support-console', 'landing', 'library', 'blog', 'check']
 const routeName = (p: string) => (p.startsWith('/invoices/') ? '/invoices/:id' : p)
 
 const cfg = (over: Partial<MonitoringConfig> = {}): MonitoringConfig => ({
@@ -66,7 +66,7 @@ describe('sentryOptions', () => {
     expect('debug' in o).toBe(false)
   })
 
-  it.each(['ops-console', 'support-console', 'library', 'blog'] as const)('sentryOptions_consolesReportCrashesOnly (%s)', (service) => {
+  it.each(['ops-console', 'support-console', 'library', 'blog', 'check'] as const)('sentryOptions_consolesReportCrashesOnly (%s)', (service) => {
     const o = build({ service })
     expect(o.dsn).toBe(DSN)
     expect(o.environment).toBe('production')

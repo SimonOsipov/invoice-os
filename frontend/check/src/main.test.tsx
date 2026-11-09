@@ -1,0 +1,51 @@
+import { StrictMode, type ReactElement } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+
+import { CrashBoundary } from '@invoice-os/monitoring'
+
+const h = vi.hoisted(() => {
+  const render = vi.fn()
+  return { render, boot: vi.fn(), bootChat: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1 }
+})
+
+vi.mock('@invoice-os/monitoring', () => ({
+  initMonitoring: h.initMonitoring,
+  CrashBoundary: () => null,
+}))
+vi.mock('./analytics', () => ({ bootCheckAnalytics: h.boot, bootCheckChat: h.bootChat }))
+vi.mock('react-dom/client', () => ({ createRoot: h.createRoot }))
+// Evaluated when main.tsx's own import runs: counts inits that ran before it.
+vi.mock('@invoice-os/design-tokens/v2/assets/mark.svg', () => {
+  h.initsBeforeMark = h.initMonitoring.mock.calls.length
+  return { default: 'mark-stub.svg' }
+})
+
+describe('main', () => {
+  it('main_startsMonitoringBeforeRenderAndWrapsTheRoot', async () => {
+    vi.stubGlobal('document', { getElementById: () => ({}) })
+    await import('./main')
+
+    expect(h.initMonitoring).toHaveBeenCalledTimes(1)
+    expect(h.initMonitoring.mock.calls[0]).toEqual(['check'])
+
+    expect(h.createRoot).toHaveBeenCalledTimes(1)
+    expect(h.initMonitoring.mock.invocationCallOrder[0]).toBeLessThan(h.createRoot.mock.invocationCallOrder[0])
+
+    expect(h.render).toHaveBeenCalledTimes(1)
+    expect(h.boot).toHaveBeenCalledTimes(1)
+    expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.boot.mock.invocationCallOrder[0])
+    expect(h.bootChat).toHaveBeenCalledTimes(1)
+    expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
+    expect(h.boot.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
+    const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown; className?: unknown; width?: unknown; height?: unknown }> }> }>
+    expect(root.type).toBe(StrictMode)
+    const boundary = root.props.children
+    expect(boundary.type).toBe(CrashBoundary)
+    expect(boundary.props.brand.type).toBe('img')
+    expect(boundary.props.brand.props.src).toBe('mark-stub.svg')
+    expect(boundary.props.brand.props.className).toBe('asc-mark')
+    expect([boundary.props.brand.props.width, boundary.props.brand.props.height]).toEqual([20, 20])
+    // Imports evaluate in order: init must already have run when main.tsx's later imports load.
+    expect(h.initsBeforeMark).toBe(1)
+  })
+})

@@ -857,7 +857,7 @@ const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_
 // systemhealth.ConnectionBudget
 const CONNECTION_BUDGET = 80
 // systemhealth.MetricServices
-const METRIC_SERVICES = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+const METRIC_SERVICES = ['app', 'auth', 'blog', 'check', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
 // Terraform output dashboard_urls in invoice-os-infra.
 const DASHBOARD_HREFS: Record<string, string> = {
   'Services dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod',
@@ -1363,7 +1363,7 @@ async function healthLayout(page: Page): Promise<Read> {
 const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
 const FIXTURE_STEPS = 61
 // frontend/support-console/src/metricsApi.ts METRIC_SERVICES
-const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'check', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
 
 // Wire-shaped body of systemhealth.Metrics: every Cloud Run panel full, 5xx over 1, p95 peaked then back under, CPU over 80, one gap, one deploy after the end.
 function metricsFixture() {

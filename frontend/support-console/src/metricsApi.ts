@@ -51,6 +51,7 @@ export const METRIC_SERVICES = [
   'app',
   'auth',
   'blog',
+  'check',
   'dashboard',
   'docling',
   'gateway',

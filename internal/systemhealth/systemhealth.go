@@ -37,7 +37,7 @@ const JobRunner = "worker" // runs every queue, so its view is the total
 var DeadFromSubmissionJobs = []string{"submission_submit", "submission_poll"}
 
 // ceiling: hand-kept list of the Cloud Run fleet; add a new service here or it is not selectable
-var MetricServices = []string{"app", "auth", "blog", "dashboard", "docling", "gateway", "invoice", "landing", "library", "notifications", "ops-console", "portfolio", "submission", "support-console", "tenancy", "validation", "worker"}
+var MetricServices = []string{"app", "auth", "blog", "check", "dashboard", "docling", "gateway", "invoice", "landing", "library", "notifications", "ops-console", "portfolio", "submission", "support-console", "tenancy", "validation", "worker"}
 
 // Counts returns a copy of raw with every JobStates entry present.
 func Counts(raw map[string]int64) map[string]int64 {

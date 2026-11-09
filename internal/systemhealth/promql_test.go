@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -268,6 +269,12 @@ func TestMetricServices_AreSafeToInterpolate(t *testing.T) {
 			t.Errorf("bad or duplicate service %q", s)
 		}
 		seen[s] = true
+	}
+}
+
+func TestMetricServices_ListsTheCheckSiteInSortedOrder(t *testing.T) {
+	if !slices.Contains(MetricServices, "check") || !slices.IsSorted(MetricServices) {
+		t.Errorf("MetricServices = %v, want it sorted and to include check", MetricServices)
 	}
 }
 

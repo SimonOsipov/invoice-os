@@ -786,7 +786,7 @@ func TestRun_BadPartsAreRefusedBeforeTheFile(t *testing.T) {
 		{"unknown part", []mpPart{email, consent, {"x", "", []byte("1")}}},
 		{"email over its cap", []mpPart{{"email", "", bytes.Repeat([]byte("a"), 1025)}, consent}},
 		{"consent over its cap", []mpPart{email, {"consent_text", "", bytes.Repeat([]byte("a"), 4097)}}},
-		{"mapping over its cap", []mpPart{email, consent, {"mapping", "", append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), 64<<10)...)}}},
+		{"mapping over its cap", []mpPart{email, consent, {"mapping", "", append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), 16<<10)...)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newCheckEnv(t, true)
@@ -815,6 +815,20 @@ func TestRun_AFileOfExactlyTheCapIsAccepted(t *testing.T) {
 	}
 	if len(e.w.got) != 1 || len(e.w.got[0].file) != MaxCheckFileBytes {
 		t.Errorf("worker got %d calls, want 1 with the whole file", len(e.w.got))
+	}
+}
+
+func TestRun_AMappingOfExactlyTheCapIsAccepted(t *testing.T) {
+	e := newCheckEnv(t, true)
+	mapping := append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), 16<<10-len(`{"a":""}`))...)
+	mapping = append(mapping, `"}`...)
+	if len(mapping) != 16<<10 {
+		t.Fatalf("mapping is %d bytes, want 16 KiB", len(mapping))
+	}
+	parts := append([]mpPart{{"mapping", "", mapping}}, okParts("inv.csv", []byte("a,b\n1,2\n"))...)
+	req, _ := newCheckRequest(t, "/readiness-check/run", parts...)
+	if rec := e.run(t, req); rec.Code != 200 {
+		t.Fatalf("answer = %d %s, want 200 for a mapping of exactly 16 KiB", rec.Code, rec.Body)
 	}
 }
 

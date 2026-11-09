@@ -28,6 +28,7 @@ const (
 
 const (
 	maxCheckUploads         = 4
+	unattributableIPKey     = "unattributable"
 	readinessRunTimeout     = 295 * time.Second
 	readinessMappingTimeout = 70 * time.Second
 	checkBodySlack          = 1 << 20
@@ -48,7 +49,7 @@ const (
 var headerRowRE = regexp.MustCompile(`^[0-9]{1,6}$`)
 
 var (
-	runFieldCaps     = map[string]int{"email": 1 << 10, "consent_text": 4 << 10, "header_row": 16, "mapping": 64 << 10}
+	runFieldCaps     = map[string]int{"email": 1 << 10, "consent_text": 4 << 10, "header_row": 16, "mapping": 16 << 10}
 	mappingFieldCaps = map[string]int{}
 	checkFormats     = map[string]string{".csv": "csv", ".xlsx": "xlsx", ".pdf": "pdf", ".docx": "docx"}
 )
@@ -213,24 +214,23 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := clientIP(r, c.posture)
-	held := false
-	if ip != "" {
-		var admitErr error
-		held, admitErr = c.perIP.Admit(ip)
-		if !held {
-			// A database error is already logged by the throttle.
-			if admitErr == nil {
-				c.log.WarnContext(r.Context(), "readiness-check: limit reached",
-					slog.String("limit", "ip"), slog.Bool("enforced", c.enforce))
+	if ip == "" {
+		ip = unattributableIPKey
+	}
+	held, admitErr := c.perIP.Admit(ip)
+	if !held {
+		// A database error is already logged by the throttle.
+		if admitErr == nil {
+			c.log.WarnContext(r.Context(), "readiness-check: limit reached",
+				slog.String("limit", "ip"), slog.Bool("enforced", c.enforce))
+		}
+		if c.enforce {
+			if admitErr != nil {
+				writeError(w, http.StatusServiceUnavailable, checkUnavailableSentence)
+			} else {
+				writeError(w, http.StatusTooManyRequests, checkIPSentence)
 			}
-			if c.enforce {
-				if admitErr != nil {
-					writeError(w, http.StatusServiceUnavailable, checkUnavailableSentence)
-				} else {
-					writeError(w, http.StatusTooManyRequests, checkIPSentence)
-				}
-				return
-			}
+			return
 		}
 	}
 	refund := func() {

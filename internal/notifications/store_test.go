@@ -81,6 +81,8 @@ type contactRow struct {
 	ReadinessAt                   *time.Time
 	ConsentText                   *string
 	ConsentedAt                   *time.Time
+	ReadinessConsentText          *string
+	ReadinessConsentedAt          *time.Time
 	Version                       int64
 	HubSpotAt, ResendAt           *time.Time
 }
@@ -90,39 +92,15 @@ func readRow(t *testing.T, e env, email string) contactRow {
 	var r contactRow
 	err := e.app.QueryRow(context.Background(), `
 		SELECT user_id::text, first_name, last_name, company, registered_at, demo_requested_at, readiness_checked_at,
-		       marketing_consent_text, marketing_consented_at, version, hubspot_delivered_at, resend_delivered_at
+		       marketing_consent_text, marketing_consented_at, readiness_consent_text, readiness_consented_at,
+		       version, hubspot_delivered_at, resend_delivered_at
 		FROM contacts WHERE email = $1`, email).Scan(
 		&r.UserID, &r.First, &r.Last, &r.Company, &r.RegisteredAt, &r.DemoRequestedAt, &r.ReadinessAt,
-		&r.ConsentText, &r.ConsentedAt, &r.Version, &r.HubSpotAt, &r.ResendAt)
+		&r.ConsentText, &r.ConsentedAt, &r.ReadinessConsentText, &r.ReadinessConsentedAt, &r.Version, &r.HubSpotAt, &r.ResendAt)
 	if err != nil {
 		t.Fatalf("read contacts row %q: %v", email, err)
 	}
 	return r
-}
-
-// requireReadinessConsentColumns fails by name when the readiness consent migration is not applied.
-func requireReadinessConsentColumns(t *testing.T, e env) {
-	t.Helper()
-	var n int
-	if err := e.admin.QueryRow(context.Background(), `SELECT count(*) FROM information_schema.columns
-		WHERE table_schema = 'public' AND table_name = 'contacts'
-		  AND column_name IN ('readiness_consent_text', 'readiness_consented_at')`).Scan(&n); err != nil {
-		t.Fatalf("read contacts columns: %v", err)
-	}
-	if n != 2 {
-		t.Fatalf("contacts holds %d of readiness_consent_text and readiness_consented_at, want 2: the readiness consent migration is not applied", n)
-	}
-}
-
-// readReadinessConsent reads the readiness consent pair apart from readRow, so a missing migration fails only the tests that name the pair.
-func readReadinessConsent(t *testing.T, e env, email string) (text *string, at *time.Time) {
-	t.Helper()
-	requireReadinessConsentColumns(t, e)
-	if err := e.app.QueryRow(context.Background(),
-		`SELECT readiness_consent_text, readiness_consented_at FROM contacts WHERE email = $1`, email).Scan(&text, &at); err != nil {
-		t.Fatalf("read the readiness consent of %q: %v", email, err)
-	}
-	return text, at
 }
 
 // rowCount counts rows whose normalized key is email, so a stray differently-cased row is seen too.
@@ -1397,10 +1375,9 @@ func TestStore_ReadinessCheckCreatesARowAndTwoJobs(t *testing.T) {
 	if r.RegisteredAt != nil || r.DemoRequestedAt != nil || r.Version != 1 {
 		t.Errorf("row = %+v, want only the readiness fact at version 1", r)
 	}
-	text, at := readReadinessConsent(t, e, email)
-	requireSetBetween(t, "readiness_consented_at", at, lo, hi)
-	if deref(text) != consentText {
-		t.Errorf("readiness_consent_text = %q, want %q", deref(text), consentText)
+	requireSetBetween(t, "readiness_consented_at", r.ReadinessConsentedAt, lo, hi)
+	if deref(r.ReadinessConsentText) != consentText {
+		t.Errorf("readiness_consent_text = %q, want %q", deref(r.ReadinessConsentText), consentText)
 	}
 	requireJobs(t, e, email, "hubspot@1")
 	want := []DemoDealArgs{{Email: email, Source: dealSourceReadinessCheck}}
@@ -1598,12 +1575,12 @@ func TestStore_SecondCheckKeepsTheFirstConsentText(t *testing.T) {
 	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textB}); err != nil {
 		t.Fatalf("second check: %v", err)
 	}
-	if r := readRow(t, e, email); r.Version != first.Version {
+	r := readRow(t, e, email)
+	if r.Version != first.Version {
 		t.Errorf("version = %d after the second check, want %d", r.Version, first.Version)
 	}
-	text, _ := readReadinessConsent(t, e, email)
-	if deref(text) != textA {
-		t.Errorf("readiness_consent_text = %q, want the first %q", deref(text), textA)
+	if deref(r.ReadinessConsentText) != textA {
+		t.Errorf("readiness_consent_text = %q, want the first %q", deref(r.ReadinessConsentText), textA)
 	}
 }
 
@@ -1627,8 +1604,8 @@ func TestStore_RegistrantWithoutMarketingKeepsItAfterACheck(t *testing.T) {
 	if r := readRow(t, e, email); r.ConsentedAt != nil || r.ConsentText != nil {
 		t.Errorf("marketing_consent_text=%v marketing_consented_at=%v, want both NULL", r.ConsentText, r.ConsentedAt)
 	}
-	if text, _ := readReadinessConsent(t, e, email); deref(text) != consentText {
-		t.Errorf("readiness_consent_text = %q, want %q", deref(text), consentText)
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != consentText {
+		t.Errorf("readiness_consent_text = %q, want %q", got, consentText)
 	}
 }
 
@@ -1653,8 +1630,8 @@ func TestStore_TickedDemoBookerKeepsConsentAfterACheck(t *testing.T) {
 	if !c.MarketingEligible {
 		t.Error("MarketingEligible = false, want true: the demo form's own tick still counts")
 	}
-	if text, _ := readReadinessConsent(t, e, email); deref(text) != textC {
-		t.Errorf("readiness_consent_text = %q, want %q", deref(text), textC)
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != textC {
+		t.Errorf("readiness_consent_text = %q, want %q", got, textC)
 	}
 }
 
@@ -1702,7 +1679,7 @@ func TestStore_CheckOnlyContactWhoRegistersTickedIsEligible(t *testing.T) {
 		t.Error("MarketingEligible = false, want true: the registrant ticked")
 	}
 	requireJobs(t, e, email, "hubspot@1", "hubspot@2", "resend@2")
-	if text, _ := readReadinessConsent(t, e, email); deref(text) != textC {
-		t.Errorf("readiness_consent_text = %q, want the check's %q", deref(text), textC)
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != textC {
+		t.Errorf("readiness_consent_text = %q, want the check's %q", got, textC)
 	}
 }

@@ -1736,7 +1736,6 @@ func TestErase_SweepDeletesKnownDevicesAndAccountEventRows(t *testing.T) {
 
 func TestErase_ClearsTheReadinessConsent(t *testing.T) {
 	r := newEraseRig(t)
-	requireReadinessConsentColumns(t, r.e)
 	gen := r.start()
 	r.exec(`INSERT INTO contacts (email, readiness_checked_at, readiness_consent_text, readiness_consented_at) VALUES ($1, now(), $2, now())`,
 		r.mail, consentText)

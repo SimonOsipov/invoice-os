@@ -33,11 +33,12 @@ A PR preview's URLs are `https://<svc>-pr-<N>-944095690109.africa-south1.run.app
 | support-console | `SUPPORT_CONSOLE_URL` | smoke                |                                     |
 | library         | `LIBRARY_URL`         | smoke, topology      | site address, base path included    |
 | blog            | `BLOG_URL`            | smoke, api, topology | site address, base path included    |
+| check           | `CHECK_URL`           | smoke, topology      | site address, base path included    |
 | app             | `APP_URL`             | smoke, topology      |                                     |
 | gateway         | `GATEWAY_URL`         | smoke, api, topology |                                     |
 | HubSpot portal id | `HUBSPOT_PORTAL_ID` | smoke                | the portal id the deployed build bakes (`gh variable get HUBSPOT_PORTAL_ID`) |
 
-CI sets all eight for the whole `e2e` job (the `dev-env.yml` workflow `env:` provides the portal id), so this table matters mainly when running a
+CI sets all of them for the whole `e2e` job (the `dev-env.yml` workflow `env:` provides the portal id), so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few
 resolve lazily and throw on the first test that needs them.
 
@@ -45,8 +46,8 @@ resolve lazily and throw on the first test that needs them.
 
 `playwright.config.ts` → `testDir: './smoke'`, `fullyParallel: true`.
 
-Covers five SPAs — `landing`, `ops-console`,
-`support-console`, `library` and `blog`. It is no longer only a render check:
+Covers the SPAs — `landing`, `ops-console`,
+`support-console`, `library`, `blog` and `check`. It is no longer only a render check:
 
 - **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing, library and blog are opened bare and each console on a
   seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
@@ -64,7 +65,7 @@ Covers five SPAs — `landing`, `ops-console`,
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... BLOG_URL=... APP_URL=... GATEWAY_URL=... HUBSPOT_PORTAL_ID=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... BLOG_URL=... CHECK_URL=... APP_URL=... GATEWAY_URL=... HUBSPOT_PORTAL_ID=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 
@@ -167,7 +168,7 @@ ctl login firm --env pr-348 --role reviewer     # sign in, save a storage state,
 ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440
 ```
 
-- **`env <pr-N|production>`** prints the seven service URLs: the PR's run.app services, or production's hosts. It needs no login.
+- **`env <pr-N|production>`** prints the service URLs: the PR's run.app services, or production's hosts. It needs no login.
 - **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). Each preview deploy recreates the database; `login` then re-creates the accounts. `--env production` exits 1: production has no demo account, so use read-only probes there.
 - **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1. `--viewport` leaves the open page at that width.
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.

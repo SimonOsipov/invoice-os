@@ -202,7 +202,7 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{"gateway": "3", "auth": "1", "worker": "1", "portfolio": "2", "tenancy": "3", "docling": "3",
 		"invoice": "3", "validation": "2", "dashboard": "2", "submission": "2", "notifications": "2",
-		"app": "3", "landing": "3", "library": "3", "blog": "3", "ops-console": "3", "support-console": "3"}
+		"app": "3", "landing": "3", "library": "3", "blog": "3", "check": "3", "ops-console": "3", "support-console": "3"}
 	all := append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
 	if len(all) != len(want) {
 		t.Fatalf("preview.sh lists %d services, table has %d", len(all), len(want))
@@ -222,6 +222,45 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	}
 	if got := flagValue(calls["gateway"], "--min-instances"); got != "0" {
 		t.Errorf("gateway --min-instances = %q, want 0", got)
+	}
+}
+
+func TestPreviewGatewayCORSNamesTheCheckOrigin(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "deploy", "7", "abc123", "gateway")
+	env := r.file(t, "env-gateway-pr-7")
+	const origin = "https://check-pr-7-944095690109.africa-south1.run.app"
+	for _, l := range strings.Split(env, "\n") {
+		if v, ok := strings.CutPrefix(l, "CORS_ALLOWED_ORIGINS: "); ok {
+			if !slices.Contains(strings.Split(v, ","), origin) {
+				t.Errorf("CORS_ALLOWED_ORIGINS = %q, want %s in it", v, origin)
+			}
+			return
+		}
+	}
+	t.Fatalf("gateway env has no CORS_ALLOWED_ORIGINS:\n%s", env)
+}
+
+func TestPreviewCheckDeploysAsAPublicSite(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "deploy", "7", "abc123", "check")
+	call := deployCalls(t, r, "7")["check"]
+	if call == "" {
+		t.Fatalf("no check deploy call:\n%s", r.file(t, "calls"))
+	}
+	if got := flagValue(call, "--memory"); got != "256Mi" {
+		t.Errorf("--memory = %q, want 256Mi", got)
+	}
+	if got := flagValue(call, "--image"); got != "africa-south1-docker.pkg.dev/ascomply-preview/images/pr/check:pr-7-abc123" {
+		t.Errorf("--image = %q", got)
+	}
+	if !strings.Contains(call, "--no-invoker-iam-check") {
+		t.Errorf("no --no-invoker-iam-check: %s", call)
+	}
+	for _, f := range []string{"--network", "--subnet", "--vpc-egress"} {
+		if strings.Contains(call, f) {
+			t.Errorf("check call carries %s: %s", f, call)
+		}
 	}
 }
 
@@ -539,7 +578,7 @@ func TestPreviewNightlyURLsAndImage(t *testing.T) {
 	r := runPreview(t, nil, "urls", "nightly")
 	const host = "-nightly-944095690109.africa-south1.run.app"
 	want := "gateway_url=https://gateway" + host + "\napp_url=https://app" + host + "\nlanding_url=https://landing" + host +
-		"\nlibrary_url=https://library" + host + "/library\nblog_url=https://blog" + host + "/blog\nops_console_url=https://ops-console" + host +
+		"\nlibrary_url=https://library" + host + "/library\nblog_url=https://blog" + host + "/blog\ncheck_url=https://check" + host + "/check\nops_console_url=https://ops-console" + host +
 		"\nsupport_console_url=https://support-console" + host + "\n"
 	if r.stdout != want {
 		t.Errorf("urls:\n%s\nwant\n%s", r.stdout, want)

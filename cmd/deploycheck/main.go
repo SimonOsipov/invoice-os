@@ -29,7 +29,7 @@ import (
 var backends = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 
 // sites serve /build.txt and their page at /.
-var sites = []string{"app", "landing", "library", "blog", "ops-console", "support-console"}
+var sites = []string{"app", "landing", "library", "blog", "check", "ops-console", "support-console"}
 
 const (
 	deadline = 15 * time.Minute

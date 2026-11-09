@@ -26,6 +26,8 @@ const (
 	contactsMigrationGlob = "*_contacts.sql"
 	// contactsReadinessMigrationGlob is the migration that adds readiness_checked_at.
 	contactsReadinessMigrationGlob = "*_contacts_readiness_checked.sql"
+	// contactsReadinessConsentMigrationGlob is the migration that adds readiness_consent_text and readiness_consented_at.
+	contactsReadinessConsentMigrationGlob = "*_contacts_readiness_consent.sql"
 	// contactsTwoColumnSourceDef is how Postgres prints the source CHECK before readiness_checked_at.
 	contactsTwoColumnSourceDef = "CHECK (((registered_at IS NOT NULL) OR (demo_requested_at IS NOT NULL)))"
 	pgRestrictViolation        = "23001"
@@ -612,6 +614,7 @@ func TestRLS_ContactsMigrationUpRestoresWhatDownDropped(t *testing.T) {
 	}
 	contactsExec(t, ctx, tx, contactsMigrationGlob, "Up")
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Up")
 	after := contactsReadCatalog(t, ctx, tx)
 
 	contactsAssertUpApplied(t, after)
@@ -675,7 +678,7 @@ func (c contactsSavepointConn) QueryRow(ctx context.Context, sql string, args ..
 }
 
 // contactsReplayed returns the table as the migration files create it: the original Down and Up,
-// then the readiness Up.
+// then the readiness Up and the readiness consent Up.
 // The transaction rolls back before the cleanups run: they DELETE rows and would block on its lock.
 func contactsReplayed(t *testing.T) pgx.Tx {
 	t.Helper()
@@ -685,6 +688,7 @@ func contactsReplayed(t *testing.T) pgx.Tx {
 	contactsExec(t, ctx, tx, contactsMigrationGlob, "Down")
 	contactsExec(t, ctx, tx, contactsMigrationGlob, "Up")
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Up")
 	return tx
 }
 
@@ -1072,6 +1076,7 @@ func TestRLS_ContactsReadinessMigrationDownThenUp(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	contactsMigrationName(t, contactsReadinessMigrationGlob)
+	contactsMigrationName(t, contactsReadinessConsentMigrationGlob)
 	contactsRequireReadinessColumn(t)
 	tx := migratorTx(t, ctx)
 	defer contactsRollback(tx)
@@ -1081,6 +1086,7 @@ func TestRLS_ContactsReadinessMigrationDownThenUp(t *testing.T) {
 	contactsMustExec(t, sp, `INSERT INTO contacts (email, readiness_checked_at) VALUES ($1, $2)`, readinessOnly, contactsCheckAt)
 	contactsMustExec(t, sp, `INSERT INTO contacts (email, registered_at) VALUES ($1, $2)`, registered, contactsRegAt)
 
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Down")
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Down")
 
 	if contactsHasReadinessColumn(t, tx) {
@@ -1109,6 +1115,7 @@ func TestRLS_ContactsReadinessMigrationDownThenUp(t *testing.T) {
 		`UPDATE contacts SET registered_at = registered_at + interval '1 day' WHERE email = $1`, registered)
 
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Up")
 
 	if !contactsHasReadinessColumn(t, tx) {
 		t.Fatal("after Up contacts.readiness_checked_at is missing")
@@ -1149,11 +1156,13 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	contactsMigrationName(t, contactsReadinessMigrationGlob)
+	contactsMigrationName(t, contactsReadinessConsentMigrationGlob)
 	contactsRequireReadinessColumn(t)
 	tx := migratorTx(t, ctx)
 	defer contactsRollback(tx)
 
 	// The old CHECK under another name: Up must find it by definition.
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Down")
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Down")
 	if _, ok := contactsCheckDefs(t, tx)["contacts_check1"]; !ok {
 		t.Fatal("after Down contacts_check1 is missing, so the rename below proves nothing")
@@ -1162,6 +1171,7 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 		t.Fatalf("rename contacts_check1: %v", err)
 	}
 	contactsExec(t, ctx, tx, contactsReadinessMigrationGlob, "Up")
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Up")
 
 	defs := contactsCheckDefs(t, tx)
 	for name, def := range defs {
@@ -1178,6 +1188,7 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("savepoint: %v", err)
 	}
+	contactsExec(t, ctx, inner, contactsReadinessConsentMigrationGlob, "Down")
 	contactsExec(t, ctx, inner, contactsReadinessMigrationGlob, "Down")
 	var dropped string
 	for name, def := range contactsCheckDefs(t, inner) {
@@ -1208,6 +1219,7 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 		t.Fatalf("savepoint: %v", err)
 	}
 	defer func() { _ = twin.Rollback(ctx) }()
+	contactsExec(t, ctx, twin, contactsReadinessConsentMigrationGlob, "Down")
 	contactsExec(t, ctx, twin, contactsReadinessMigrationGlob, "Down")
 	if _, err := twin.Exec(ctx, `ALTER TABLE public.contacts ADD CONSTRAINT contacts_twin_source CHECK (registered_at IS NOT NULL OR demo_requested_at IS NOT NULL)`); err != nil {
 		t.Fatalf("add the twin CHECK: %v", err)
@@ -1219,4 +1231,150 @@ func TestRLS_ContactsReadinessUpDropsTheOldCheckByDefinition(t *testing.T) {
 	if !strings.Contains(err.Error(), contactsTwoColumnSourceDef) {
 		t.Fatalf("Up error %q does not name the expected definition %q", err, contactsTwoColumnSourceDef)
 	}
+}
+
+// --- readiness consent: a fourth fact pair, apart from marketing_consent_* -----------
+
+// contactsRequireReadinessConsentColumns fails by name when the migration is not applied to the live DB.
+func contactsRequireReadinessConsentColumns(t *testing.T) {
+	t.Helper()
+	for _, col := range []string{"readiness_consent_text", "readiness_consented_at"} {
+		if n := mustCount(t, requireHarness(t).super,
+			`SELECT count(*) FROM information_schema.columns
+			  WHERE table_schema = 'public' AND table_name = 'contacts' AND column_name = $1`, col); n != 1 {
+			t.Fatalf("contacts.%s does not exist: the readiness consent migration is not applied", col)
+		}
+	}
+}
+
+func contactsFunctionDef(t *testing.T, tx pgx.Tx) string {
+	t.Helper()
+	var def string
+	if err := tx.QueryRow(context.Background(),
+		`SELECT pg_get_functiondef('public.contacts_facts_only_grow()'::regprocedure)`).Scan(&def); err != nil {
+		t.Fatalf("read the trigger function: %v", err)
+	}
+	return def
+}
+
+func TestRLS_ContactsReadinessConsentNeedsTextAndTime(t *testing.T) {
+	hh := requireHarness(t)
+	ctx := context.Background()
+	contactsRequireReadinessConsentColumns(t)
+	email := contactsEmail(t)
+	contactsSeed(t, email, []string{"readiness_checked_at"}, []any{contactsCheckAt})
+
+	_, err := hh.app.Exec(ctx, `UPDATE contacts SET readiness_consent_text = 'Yes.' WHERE email = $1`, email)
+	wantCheckRefusal(t, err, "contacts_readiness_consent_pair")
+	_, err = hh.app.Exec(ctx, `UPDATE contacts SET readiness_consented_at = now() WHERE email = $1`, email)
+	wantCheckRefusal(t, err, "contacts_readiness_consent_pair")
+
+	if _, err := hh.app.Exec(ctx,
+		`UPDATE contacts SET readiness_consent_text = 'Yes.', readiness_consented_at = now() WHERE email = $1`, email); err != nil {
+		t.Fatalf("app UPDATE setting both readiness consent columns: %v", err)
+	}
+	var text *string
+	var at *time.Time
+	if err := hh.super.QueryRow(ctx,
+		`SELECT readiness_consent_text, readiness_consented_at FROM contacts WHERE email = $1`, email).Scan(&text, &at); err != nil {
+		t.Fatalf("read the readiness consent: %v", err)
+	}
+	if text == nil || *text != "Yes." || at == nil {
+		t.Fatalf("readiness consent = (%v, %v), want ('Yes.', set)", text, at)
+	}
+}
+
+func TestRLS_ContactsReadinessConsentCannotBeRewritten(t *testing.T) {
+	hh := requireHarness(t)
+	ctx := context.Background()
+	contactsRequireReadinessConsentColumns(t)
+	email := contactsEmail(t)
+	contactsSeed(t, email,
+		[]string{"readiness_checked_at", "readiness_consent_text", "readiness_consented_at"},
+		[]any{contactsCheckAt, "Yes.", contactsConsentAt})
+
+	for _, set := range []string{
+		`readiness_consent_text = 'Another text.'`,
+		`readiness_consent_text = NULL`,
+		`readiness_consent_text = NULL, readiness_consented_at = NULL`,
+		`readiness_consented_at = now()`,
+	} {
+		_, err := hh.app.Exec(ctx, `UPDATE contacts SET `+set+` WHERE email = $1`, email)
+		wantPgCode(t, err, pgRestrictViolation)
+	}
+
+	var text *string
+	var at *time.Time
+	if err := hh.super.QueryRow(ctx,
+		`SELECT readiness_consent_text, readiness_consented_at FROM contacts WHERE email = $1`, email).Scan(&text, &at); err != nil {
+		t.Fatalf("read the readiness consent: %v", err)
+	}
+	if text == nil || *text != "Yes." || at == nil || !at.Equal(contactsConsentAt) {
+		t.Fatalf("readiness consent = (%v, %v) after the refusals, want ('Yes.', %v)", text, at, contactsConsentAt)
+	}
+	// A write that leaves the pair alone still passes.
+	if _, err := hh.app.Exec(ctx, `UPDATE contacts SET company = 'Co' WHERE email = $1`, email); err != nil {
+		t.Fatalf("app UPDATE of a non-fact column: %v", err)
+	}
+}
+
+func TestRLS_ContactsReadinessConsentMigrationDownThenUp(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	contactsMigrationName(t, contactsReadinessConsentMigrationGlob)
+	contactsRequireReadinessConsentColumns(t)
+	tx := migratorTx(t, ctx)
+	defer contactsRollback(tx)
+	sp := contactsSavepointConn{tx}
+
+	// The FREECHK-02 trigger body, as that file's own Up creates it.
+	ref, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	contactsExec(t, ctx, ref, contactsReadinessConsentMigrationGlob, "Down")
+	contactsExec(t, ctx, ref, contactsReadinessMigrationGlob, "Down")
+	contactsExec(t, ctx, ref, contactsReadinessMigrationGlob, "Up")
+	wantBody := contactsFunctionDef(t, ref)
+	if err := ref.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the savepoint: %v", err)
+	}
+
+	before := contactsReadCatalog(t, ctx, tx)
+	row := contactsEmail(t)
+	contactsMustExec(t, sp, `INSERT INTO contacts (email, readiness_checked_at, readiness_consent_text, readiness_consented_at)
+		VALUES ($1, $2, 'Yes.', $2)`, row, contactsCheckAt)
+
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Down")
+
+	down := contactsReadCatalog(t, ctx, tx)
+	for _, col := range []string{"readiness_consent_text", "readiness_consented_at"} {
+		if slices.Contains(down.columns, col) {
+			t.Errorf("after Down contacts.%s still exists", col)
+		}
+	}
+	if _, ok := contactsCheckDefs(t, tx)["contacts_readiness_consent_pair"]; ok {
+		t.Error("after Down contacts_readiness_consent_pair still exists")
+	}
+	if got := contactsFunctionDef(t, tx); got != wantBody {
+		t.Errorf("after Down the trigger function is not the FREECHK-02 body:\n%s\nwant:\n%s", got, wantBody)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM contacts WHERE email = $1`, row); n != 1 {
+		t.Errorf("after Down the readiness row count = %d, want 1 (the Down drops columns, not rows)", n)
+	}
+
+	contactsExec(t, ctx, tx, contactsReadinessConsentMigrationGlob, "Up")
+
+	after := contactsReadCatalog(t, ctx, tx)
+	if !slices.Equal(after.columns, before.columns) {
+		t.Errorf("columns after Down/Up = %v, want %v", after.columns, before.columns)
+	}
+	if _, ok := contactsCheckDefs(t, tx)["contacts_readiness_consent_pair"]; !ok {
+		t.Error("after Up contacts_readiness_consent_pair is missing")
+	}
+	again := contactsEmail(t)
+	contactsMustExec(t, sp, `INSERT INTO contacts (email, readiness_checked_at, readiness_consent_text, readiness_consented_at)
+		VALUES ($1, $2, 'Yes.', $2)`, again, contactsCheckAt)
+	contactsRefuse(t, sp, pgRestrictViolation, `UPDATE contacts SET readiness_consent_text = 'Another.' WHERE email = $1`, again)
+	contactsRefuse(t, sp, pgRestrictViolation, `UPDATE contacts SET readiness_consented_at = NULL, readiness_consent_text = NULL WHERE email = $1`, again)
 }

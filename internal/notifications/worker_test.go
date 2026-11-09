@@ -1711,3 +1711,25 @@ func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
 		t.Errorf("three-source tags = %v, want %v", calls[1].Tags, want)
 	}
 }
+
+func TestDeliver_RegistrantWhoRanACheckGetsNoMarketingOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "chkoptin")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", "")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "resend job after the check")
+	calls := r.rs.got()
+	if len(calls) != 1 {
+		t.Fatalf("Sync called %d times, want 1", len(calls))
+	}
+	if calls[0].OptIn {
+		t.Error("Sync sendOptIn = true for a registrant whose only tick was on a readiness check")
+	}
+	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+	}
+}

@@ -1733,3 +1733,24 @@ func TestErase_SweepDeletesKnownDevicesAndAccountEventRows(t *testing.T) {
 		}
 	}
 }
+
+func TestErase_ClearsTheReadinessConsent(t *testing.T) {
+	r := newEraseRig(t)
+	requireReadinessConsentColumns(t, r.e)
+	gen := r.start()
+	r.exec(`INSERT INTO contacts (email, readiness_checked_at, readiness_consent_text, readiness_consented_at) VALUES ($1, now(), $2, now())`,
+		r.mail, consentText)
+	if n := r.count(`SELECT count(*) FROM contacts WHERE email = $1 AND readiness_consent_text IS NOT NULL`, r.mail); n != 1 {
+		t.Fatalf("seeded rows holding a readiness consent = %d, want 1", n)
+	}
+	if err := r.work(gen); err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+	if n := r.count(`SELECT count(*) FROM contacts WHERE email = $1
+		AND (readiness_consent_text IS NOT NULL OR readiness_consented_at IS NOT NULL)`, r.mail); n != 0 {
+		t.Errorf("%d contacts rows still hold the readiness consent", n)
+	}
+	if s := r.row(r.uid); !s.Fin {
+		t.Errorf("erasure row = %+v, want finished", s)
+	}
+}

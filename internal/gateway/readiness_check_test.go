@@ -762,7 +762,7 @@ func TestRun_ForwardHoldsOneCopyOfTheFile(t *testing.T) {
 	}
 }
 
-// D6: a caller with no trustworthy address counts under one shared key, so it is still limited.
+// A caller with no trustworthy address counts under one shared key, so it is still limited.
 func TestRun_UnattributableClientIsStillLimited(t *testing.T) {
 	e := newCheckEnv(t, true)
 	for i := range ReadinessCheckPerIP {

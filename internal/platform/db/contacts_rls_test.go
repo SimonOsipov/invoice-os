@@ -1327,7 +1327,7 @@ func TestRLS_ContactsReadinessConsentMigrationDownThenUp(t *testing.T) {
 	defer contactsRollback(tx)
 	sp := contactsSavepointConn{tx}
 
-	// The FREECHK-02 trigger body, as that file's own Up creates it.
+	// The readiness-consent trigger body, as that file's own Up creates it.
 	ref, err := tx.Begin(ctx)
 	if err != nil {
 		t.Fatalf("savepoint: %v", err)

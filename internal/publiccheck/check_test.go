@@ -469,6 +469,18 @@ func TestCheck_CompanyProfileRulesAreNotChecked(t *testing.T) {
 	}
 }
 
+func TestCheck_NotCheckedHasNoEmptyKeyForRepeatedRules(t *testing.T) {
+	r := newRig()
+	r.l.rules = []validation.Rule{requiredRule("supplier-city-required", "supplier.city"), requiredRule("supplier-city-required", "supplier.city")}
+	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Date\nA,1,2026-10-01\n", "issue_date", "Date"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"supplier-city-required"}; !slices.Equal(res.NotChecked, want) {
+		t.Errorf("NotChecked = %q, want %q", res.NotChecked, want)
+	}
+}
+
 func TestCheck_NotCheckedOmitsDisabledSupplierContactRules(t *testing.T) {
 	r := newRig()
 	off := requiredRule("supplier-city-required", "supplier.city")

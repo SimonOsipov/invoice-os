@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -381,7 +382,7 @@ func holdTwo(t *testing.T, r *rig) func() []*httptest.ResponseRecorder {
 	recs := make([]*httptest.ResponseRecorder, heldRuns)
 	var wg sync.WaitGroup
 	for i := range recs {
-		body, ct := runForm(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+		body, ct := runForm(t, fmt.Sprintf("held%d@x.io", i), "csv", []byte(oneInvoice), "mapping", csvMapping)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -420,6 +421,107 @@ func TestRun_ThirdConcurrentCallIsBusy(t *testing.T) {
 		if held.Code != http.StatusOK {
 			t.Errorf("held call %d answered %d, want 200 once released", i, held.Code)
 		}
+	}
+}
+
+func TestRun_SecondRunForOneAddressInFlightIsBusy(t *testing.T) {
+	r := newRig(t)
+	r.gate = make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(r.gate) }) }
+	t.Cleanup(release)
+	body, ct := runForm(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- serve(r.svc.RunHandler(), body, ct) }()
+	select {
+	case <-r.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first run never reached the engine")
+	}
+	rec := r.run(t, " "+strings.ToUpper(visitor)+" ", "csv", []byte(oneInvoice), "mapping", csvMapping)
+	wantStatus(t, rec, http.StatusServiceUnavailable, "busy")
+	release()
+	if first := <-done; first.Code != http.StatusOK {
+		t.Errorf("first run answered %d, want 200", first.Code)
+	}
+	if n := r.loads.Load(); n != 1 {
+		t.Errorf("rule loads = %d, want 1: the busy run must not reach the engine", n)
+	}
+}
+
+func TestRun_ADifferentAddressIsNotBlockedByARunInFlight(t *testing.T) {
+	r := newRig(t)
+	r.gate = make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(r.gate) }) }
+	t.Cleanup(release)
+	body, ct := runForm(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- serve(r.svc.RunHandler(), body, ct) }()
+	select {
+	case <-r.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first run never reached the engine")
+	}
+	body2, ct2 := runForm(t, "other@x.io", "csv", []byte(oneInvoice), "mapping", csvMapping)
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- serve(r.svc.RunHandler(), body2, ct2) }()
+	select {
+	case <-r.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a run for another address was blocked")
+	}
+	release()
+	for _, ch := range []chan *httptest.ResponseRecorder{done, second} {
+		if rec := <-ch; rec.Code != http.StatusOK {
+			t.Errorf("answered %d, want 200", rec.Code)
+		}
+	}
+}
+
+func TestRun_TheAddressIsFreedAfterARun(t *testing.T) {
+	r := newRig(t)
+	for range 2 {
+		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
+	}
+}
+
+// ctxStore records the deadline left on the context Insert receives.
+type ctxStore struct {
+	*fakeStore
+	left time.Duration
+}
+
+func (s *ctxStore) Insert(ctx context.Context, m Summary) error {
+	if d, ok := ctx.Deadline(); ok {
+		s.left = time.Until(d)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return s.fakeStore.Insert(ctx, m)
+}
+
+// slowSender uses up the mail context before it returns.
+type slowSender struct{ recSender }
+
+func (s *slowSender) Send(ctx context.Context, msgs []accountmail.Message) error {
+	<-ctx.Done()
+	return nil
+}
+
+func TestRun_TheSummaryInsertHasItsOwnTimeout(t *testing.T) {
+	r := newRig(t)
+	cs := &ctxStore{fakeStore: r.store}
+	r.svc.Store = cs
+	r.svc.Sender = &slowSender{}
+	r.svc.mailTimeout = 20 * time.Millisecond
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
+	if len(r.store.rows()) != 1 {
+		t.Fatalf("rows = %d, want 1: the insert must not share the spent mail context", len(r.store.rows()))
+	}
+	if cs.left <= 0 || cs.left > InsertTimeout {
+		t.Errorf("insert deadline left = %v, want within (0, %v]", cs.left, InsertTimeout)
 	}
 }
 

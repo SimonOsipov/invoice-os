@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
@@ -22,6 +23,7 @@ const (
 	RunBudget       = 240 * time.Second
 	MappingBudget   = 60 * time.Second
 	MailTimeout     = 15 * time.Second
+	InsertTimeout   = 5 * time.Second
 	MaxConcurrent   = 2
 
 	maxFieldBytes = 1 << 20 // the largest non-file part: a mapping
@@ -34,18 +36,21 @@ type CheckStore interface {
 	Insert(ctx context.Context, m Summary) error
 }
 
-// Service runs one public check. runBudget overrides RunBudget in tests when non-zero.
+// Service runs one public check. runBudget and mailTimeout override their defaults in tests when non-zero.
 type Service struct {
-	Checker   *publiccheck.Checker
-	Store     CheckStore
-	Sender    accountmail.Sender
-	Logger    *slog.Logger
-	runBudget time.Duration
-	slots     chan struct{}
+	Checker     *publiccheck.Checker
+	Store       CheckStore
+	Sender      accountmail.Sender
+	Logger      *slog.Logger
+	runBudget   time.Duration
+	mailTimeout time.Duration
+	slots       chan struct{}
+	inFlight    map[string]struct{}
+	mu          sync.Mutex
 }
 
 func NewService(checker *publiccheck.Checker, store CheckStore, sender accountmail.Sender, logger *slog.Logger) *Service {
-	return &Service{Checker: checker, Store: store, Sender: sender, Logger: logger, slots: make(chan struct{}, MaxConcurrent)}
+	return &Service{Checker: checker, Store: store, Sender: sender, Logger: logger, slots: make(chan struct{}, MaxConcurrent), inFlight: map[string]struct{}{}}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -177,6 +182,28 @@ func (s *Service) answerEngineError(ctx context.Context, w http.ResponseWriter, 
 	writeError(w, status, word)
 }
 
+// claim marks an address as running; one run per address at a time keeps Count honest.
+func (s *Service) claim(email string) (release func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, busy := s.inFlight[email]; busy {
+		return nil, false
+	}
+	s.inFlight[email] = struct{}{}
+	return func() {
+		s.mu.Lock()
+		delete(s.inFlight, email)
+		s.mu.Unlock()
+	}, true
+}
+
+func (s *Service) mailBudget() time.Duration {
+	if s.mailTimeout != 0 {
+		return s.mailTimeout
+	}
+	return MailTimeout
+}
+
 func (s *Service) budget() time.Duration {
 	if s.runBudget != 0 {
 		return s.runBudget
@@ -205,6 +232,13 @@ func (s *Service) RunHandler() http.Handler {
 			return
 		}
 
+		releaseAddr, ok := s.claim(email)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "busy")
+			return
+		}
+		defer releaseAddr()
+
 		ctx, cancel := context.WithTimeout(r.Context(), s.budget())
 		defer cancel()
 		count, err := s.Store.Count(ctx, email)
@@ -230,7 +264,7 @@ func (s *Service) RunHandler() http.Handler {
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		mctx, mcancel := context.WithTimeout(r.Context(), MailTimeout)
+		mctx, mcancel := context.WithTimeout(r.Context(), s.mailBudget())
 		defer mcancel()
 		if err := s.Sender.Send(mctx, []accountmail.Message{{To: email, Subject: subject, HTML: html}}); err != nil {
 			s.Logger.ErrorContext(r.Context(), "readiness check: send failed", slog.String("error", err.Error()))
@@ -238,7 +272,9 @@ func (s *Service) RunHandler() http.Handler {
 			return
 		}
 		sum := Summary{Email: email, FileType: req.Format, RowCount: res.RowsTotal, FailedRuleIDs: FailedRuleIDs(res)}
-		if err := s.Store.Insert(mctx, sum); err != nil {
+		ictx, icancel := context.WithTimeout(context.WithoutCancel(r.Context()), InsertTimeout)
+		defer icancel()
+		if err := s.Store.Insert(ictx, sum); err != nil {
 			s.Logger.ErrorContext(r.Context(), "readiness check: summary not recorded", slog.String("error", err.Error()))
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"checks_left": left})

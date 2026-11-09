@@ -179,7 +179,7 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		rs, dropped := dropCompanyRules(rs)
 		slices.Sort(dropped)
 		droppedBy[d] = slices.Compact(dropped)
-		res.NotChecked = append(res.NotChecked, dropped...)
+		res.NotChecked = append(res.NotChecked, droppedBy[d]...)
 		sets[d] = rs
 	}
 	slices.Sort(res.NotChecked)

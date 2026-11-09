@@ -2237,7 +2237,7 @@ export function postLineItems(
 }
 
 // Readiness check, public gateway routes (internal/gateway/readiness_check.go). Multipart parts go in
-// the insertion order of `fields`, then the file last (D4).
+// the insertion order of `fields`, then the file last.
 export async function postCheck(
   route: 'mapping' | 'run',
   fields: Record<string, string>,

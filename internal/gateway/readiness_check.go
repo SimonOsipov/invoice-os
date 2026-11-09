@@ -54,7 +54,7 @@ var (
 	checkFormats     = map[string]string{".csv": "csv", ".xlsx": "xlsx", ".pdf": "pdf", ".docx": "docx"}
 )
 
-// ReadinessCheckSink hands a checked address and its consent text to the FREECHK-02 intake.
+// ReadinessCheckSink hands a checked address and its consent text to the notifications /internal/contacts/readiness-checks intake.
 type ReadinessCheckSink interface {
 	ReadinessCheck(ctx context.Context, email, consentText string) error
 }

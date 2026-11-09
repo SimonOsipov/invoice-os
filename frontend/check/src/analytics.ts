@@ -8,6 +8,7 @@ export { CookieNotice, type ConsentChoice } from '../../landing/src/components/C
 export { readConsent } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 export { CHECK_BASE } from '../../landing/src/sitePaths'
+export { READINESS_CONSENT_TEXT as CONSENT_TEXT } from '../../landing/src/readinessConsent'
 
 export const bootCheckAnalytics = (): boolean => bootAnalytics()
 export const bootCheckChat = (): boolean => bootChat()

@@ -1,7 +1,7 @@
 // The one seam to app source (only these three modules); the check never imports app components.
 import { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns } from '../../app/src/lib/importFlow'
 import { canSubmitMapping, toImportMapping } from '../../app/src/lib/mapping'
-import { IMPORT_KEYS, labelOf } from '../../app/src/lib/invoiceFields'
+import { IMPORT_KEYS, INVOICE_FIELDS, labelOf } from '../../app/src/lib/invoiceFields'
 import type { Mapping } from '../../app/src/types'
 
 export { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns, canSubmitMapping, toImportMapping, IMPORT_KEYS, labelOf }
@@ -29,4 +29,11 @@ export function initialMapping(s: Suggestion): Mapping {
     out[key] = header !== undefined && s.columns.includes(header) ? header : null
   }
   return out
+}
+
+// labelOf takes a field key; a line import key (line_total) has none, so find it by importKey.
+export function fieldLabel(key: string): string {
+  const f = INVOICE_FIELDS.find((x) => x.importKey === key) ?? INVOICE_FIELDS.find((x) => x.key === key)
+  if (!f) return key
+  return f.line ? `Line ${f.label.toLowerCase()}` : f.label
 }

@@ -4,7 +4,7 @@ const captureApiFailure = vi.hoisted(() => vi.fn())
 vi.mock('@invoice-os/monitoring/report', () => ({ captureApiFailure }))
 
 import { runCheck, runForm, suggestMapping } from './checkApi'
-import { CONSENT_TEXT } from './copy'
+import { CONSENT_TEXT } from './analytics'
 
 const file = (name: string) => new File(['a,b'], name)
 const sheet = (fields: Record<string, string | null>) => ({ email: 'a@example.com', file: file('a.csv'), mapping: { headerRow: 2, fields } })

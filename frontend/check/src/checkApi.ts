@@ -1,5 +1,5 @@
 import { ApiError, gatewayBase, reportApiFailure } from '@invoice-os/api-client'
-import { CONSENT_TEXT } from './copy'
+import { CONSENT_TEXT } from './analytics'
 import { toImportMapping, type Mapping, type Suggestion } from './fields'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; status: number | null; error: string | null }

@@ -47,6 +47,7 @@ describe('fields', () => {
     expect(new Set(labels).size).toBe(labels.length)
     for (const k of CHECK_FIELD_KEYS) expect(fieldLabel(k), k).not.toBe(k)
     expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')
+    expect(fieldLabel('not_a_field')).toBe('not_a_field')
   })
 
   it('fieldLabel_labelsEveryLineKeyOnceWithItsAppLabel', () => {

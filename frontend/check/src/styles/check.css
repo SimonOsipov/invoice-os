@@ -10,7 +10,7 @@ a:hover { color: var(--teal); }
 .check-link { background: none; border: 0; padding: 0; color: var(--primary); font-size: inherit; cursor: pointer; }
 .check-link:hover { color: var(--teal); }
 .check-main h1 { margin: 0 0 24px; }
-.check-card { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 24px; background: var(--card); border: 1px solid var(--surface-panel-border); border-radius: 12px; }
+.check-card { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 24px; background: var(--card); border: 1px solid var(--surface-panel-border); border-radius: var(--radius-md); }
 .check-card h2 { margin: 0; font-size: 18px; }
 .check-card p { margin: 0; }
 .check-card form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -18,9 +18,9 @@ a:hover { color: var(--teal); }
 .check-required::after { content: ' *'; color: var(--destructive); }
 .check-file, .check-columns td, .check-columns th { overflow-wrap: anywhere; }
 .check-file { font-weight: 600; }
-input[type='email'], select { width: 100%; min-width: 0; height: 44px; padding: 0 14px; border: 1px solid var(--input); border-radius: 7px; background: #fff; color: var(--ink); font: inherit; font-size: 14.5px; }
-input[type='file'] { max-width: 100%; }
-.check-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+input[type='email'], select { width: 100%; min-width: 0; height: 44px; padding: 0 14px; border: 1px solid var(--input); border-radius: var(--radius-btn); background: #fff; color: var(--ink); font: inherit; font-size: 14.5px; }
+input[type='file'] { max-width: 100%; font: inherit; }
+.check-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .check-columns { width: 100%; border-collapse: collapse; font-size: 13px; }
 .check-columns th, .check-columns td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
 .check-fields { display: flex; flex-direction: column; gap: 12px; }
@@ -30,7 +30,7 @@ input[type='file'] { max-width: 100%; }
 .check-consent input { flex: none; margin-top: 3px; }
 .check-consent span { min-width: 0; overflow-wrap: anywhere; }
 .check-actions { display: flex; flex-wrap: wrap; gap: 12px; }
-.check-btn { height: 44px; padding: 0 20px; border: 1px solid var(--primary); border-radius: 7px; background: var(--primary); color: #fff; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.check-btn { height: 44px; padding: 0 20px; border: 1px solid var(--primary); border-radius: var(--radius-btn); background: var(--primary); color: #fff; font-size: 14.5px; font-weight: 600; cursor: pointer; }
 .check-btn--outline { background: transparent; color: var(--primary); }
 .check-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .check-refusal { color: var(--destructive); font-size: 13.5px; font-weight: 600; }

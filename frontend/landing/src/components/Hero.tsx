@@ -13,7 +13,7 @@ const TILES: { icon: GlyphName; tone: 'primary' | 'accent'; title: string; capti
   { icon: 'sparkles', tone: 'accent', title: 'Regulatory intelligence', caption: 'AI-supported.' },
 ]
 
-export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
+export function Hero({ onBookDemo, checkHref = null }: { onBookDemo: () => void; checkHref?: string | null }) {
   return (
     <Section tone="dark" id="top" paddingBlock="clamp(48px, 6vw, 80px) 0">
       <div className="split" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.05fr)', gap: 64, alignItems: 'start' }}>
@@ -31,9 +31,11 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
             <Button variant="accent" onClick={onBookDemo}>
               Book a demo
             </Button>
-            <Button variant="ghostDark" href="#platform">
-              Explore the platform
-            </Button>
+            {checkHref && (
+              <Button variant="ghostDark" href={checkHref}>
+                Check your invoices
+              </Button>
+            )}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 32px', marginTop: 4 }}>
             {NOTES.map((note) => (

@@ -21,7 +21,7 @@ let mounted = false
 let onSignIn: Mock<() => void>
 let onBookDemo: Mock<() => void>
 
-const mount = (props: { hrefPrefix?: string; libraryHref?: string; blogHref?: string | null } = {}) => {
+const mount = (props: { hrefPrefix?: string; libraryHref?: string; blogHref?: string | null; checkHref?: string | null } = {}) => {
   act(() => {
     root.render(createElement(Nav, { onSignIn, onBookDemo, ...props }))
   })
@@ -431,5 +431,27 @@ describe('menu new-tab links', () => {
     for (const a of links.slice(0, -2)) expect(a.hasAttribute('target')).toBe(false)
     act(() => void lib.click())
     expect(menu()).toBeNull()
+  })
+})
+
+describe('the menu check link', () => {
+  it('Nav_menu_checkLinkAfterBlogAndCloses', () => {
+    mount({ libraryHref: 'https://lib.x', blogHref: 'https://blog.x', checkHref: 'https://c.x/check' })
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a'))
+    expect(links.map((a) => a.textContent)).toEqual([...NAV_LINKS.map((l) => l.label), 'Library', 'Blog', 'Free check'])
+    const check = links.at(-1)!
+    expect(check.getAttribute('href')).toBe('https://c.x/check')
+    expect(check.getAttribute('target')).toBe('_blank')
+    expect(check.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(check.nextElementSibling?.textContent, 'Sign in follows the check link').toBe('Sign in')
+    act(() => void check.click())
+    expect(menu()).toBeNull()
+  })
+
+  it('Nav_menu_noCheckLinkWhenUnset', () => {
+    mount({ checkHref: null })
+    toggle()
+    expect(menu()!.querySelectorAll('a')).toHaveLength(NAV_LINKS.length)
   })
 })

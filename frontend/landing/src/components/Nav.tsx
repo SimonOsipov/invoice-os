@@ -22,12 +22,14 @@ export function Nav({
   hrefPrefix = '',
   libraryHref = null,
   blogHref = null,
+  checkHref = null,
 }: {
   onSignIn: () => void
   onBookDemo: () => void
   hrefPrefix?: string
   libraryHref?: string | null
   blogHref?: string | null
+  checkHref?: string | null
 }) {
   const [activeHref, setActiveHref] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -188,6 +190,24 @@ export function Nav({
               Blog
             </a>
           )}
+          {checkHref && (
+            <a
+              href={checkHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ios-nav-link"
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--ink)',
+                borderBottom: '2px solid transparent',
+                paddingTop: 6,
+                paddingBottom: 4,
+              }}
+            >
+              Free check
+            </a>
+          )}
         </nav>
         <div className="a-actions">
           <button type="button" className="a-login a-link" onClick={onSignIn} style={{ fontSize: 14, fontWeight: 600 }}>
@@ -239,6 +259,11 @@ export function Nav({
           {blogHref && (
             <a href={blogHref} target="_blank" rel="noopener noreferrer" className="a-menu-link" onClick={() => setMenuOpen(false)}>
               Blog
+            </a>
+          )}
+          {checkHref && (
+            <a href={checkHref} target="_blank" rel="noopener noreferrer" className="a-menu-link" onClick={() => setMenuOpen(false)}>
+              Free check
             </a>
           )}
           <button

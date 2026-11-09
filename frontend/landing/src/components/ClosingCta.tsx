@@ -2,7 +2,7 @@ import { Button } from './ds/Button'
 import { Eyebrow } from './ds/Eyebrow'
 import { Section } from './ds/Section'
 
-export function ClosingCta({ onBookDemo }: { onBookDemo: () => void }) {
+export function ClosingCta({ onBookDemo, checkHref = null }: { onBookDemo: () => void; checkHref?: string | null }) {
   return (
     <Section tone="cream" paddingBlock="0 var(--section-y)">
       <div
@@ -28,7 +28,14 @@ export function ClosingCta({ onBookDemo }: { onBookDemo: () => void }) {
           <p style={{ margin: 0, fontSize: 16, lineHeight: 'var(--lh-body)', color: 'var(--accent-foreground)' }}>
             See how ASComply fits your invoices, your systems and your team.
           </p>
-          <Button onClick={onBookDemo}>Book a demo</Button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            <Button onClick={onBookDemo}>Book a demo</Button>
+            {checkHref && (
+              <Button variant="outline" href={checkHref}>
+                Check your invoices
+              </Button>
+            )}
+          </div>
         </div>
         <div
           className="cta-mark"

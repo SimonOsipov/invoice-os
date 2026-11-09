@@ -353,17 +353,49 @@ describe('NV-03 the hero Explore anchors land on Platform', () => {
     return [...slice.matchAll(/href="(#[^"]*)"/g)].map((m) => m[1])
   }
 
-  it('both in-page hrefs inside #top are #platform and resolve; the helper reports a planted #ghost', () => {
+  it('the one in-page href inside #top is the bottom #platform anchor and resolves; the helper reports a planted #ghost', () => {
     const html = renderAppAt('/')
-    expect(heroHashes(html)).toEqual(['#platform', '#platform'])
+    expect(heroHashes(html)).toEqual(['#platform'])
     expect(unresolvedHashes(html, heroHashes(html))).toEqual([])
 
     // Planted inside the #top slice: the header nav also links #platform, earlier in the markup.
     const top = html.indexOf('<section id="top"')
     const at = html.indexOf('href="#platform"', top)
     const ghost = `${html.slice(0, at)}href="#ghost"${html.slice(at + 'href="#platform"'.length)}`
-    expect(heroHashes(ghost), 'control: the ghost sits in the hero').toEqual(['#ghost', '#platform'])
+    expect(heroHashes(ghost), 'control: the ghost sits in the hero').toEqual(['#ghost'])
     expect(unresolvedHashes(ghost, heroHashes(ghost)), 'control: a ghost hero anchor is reported').toEqual(['#ghost'])
+  })
+})
+
+describe('the check link is wired from VITE_CHECK_URL', () => {
+  const CHECK = 'https://c.x/check'
+  const countOf = (html: string, href: string) => (html.match(new RegExp(`href="${href}"`, 'g')) ?? []).length
+
+  it('App_checkHref_usedByAllLinks: nav, hero and closing carry the stub', () => {
+    vi.stubEnv('VITE_CHECK_URL', CHECK)
+    const html = renderAppAt('/')
+    expect(countOf(html, CHECK)).toBe(3)
+    expect(navHrefs(html)).toContain(CHECK)
+  })
+
+  it('App_checkHref_absentWhenUnset: no check link, the hero holds Book a demo only', () => {
+    for (const unset of [false, true]) {
+      if (unset) vi.stubEnv('VITE_CHECK_URL', '')
+      else vi.unstubAllEnvs()
+      expect(import.meta.env.VITE_CHECK_URL ?? '', 'control: the var is unset or blank').toBe('')
+      const html = renderAppAt('/')
+      expect(html).not.toContain('Free check')
+      expect(html).not.toContain('Check your invoices')
+      const top = html.slice(html.indexOf('<section id="top"'), html.indexOf('</section>', html.indexOf('<section id="top"')))
+      expect(top.match(/ds-btn ds-btn--/g)).toHaveLength(1)
+    }
+  })
+
+  it('App_checkHref_onPrivacyPage: the nav check href is unprefixed', () => {
+    vi.stubEnv('VITE_CHECK_URL', CHECK)
+    const hrefs = navHrefs(renderAppAt('/privacy'))
+    expect(hrefs.filter((h) => h === CHECK)).toHaveLength(1)
+    expect(hrefs.filter((h) => h !== CHECK && !h.startsWith('/#'))).toEqual([])
   })
 })
 

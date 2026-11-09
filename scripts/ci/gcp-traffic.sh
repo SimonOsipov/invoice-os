@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SERVICES=(gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling
-  app landing library blog ops-console support-console)
+  app landing library blog check ops-console support-console)
 
 : "${PROJECT:?}" "${REGION:?}"
 gc=(--project "$PROJECT" --region "$REGION" --quiet)

@@ -12,6 +12,7 @@ const HTTPS_URLS = [
   'https://www.ascomply.com/',
   'https://www.ascomply.com/blog/',
   'https://www.ascomply.com/library/',
+  'https://www.ascomply.com/check/',
   'https://api.ascomply.com/',
   'https://api.ascomply.com/health',
   'https://app.ascomply.com/',

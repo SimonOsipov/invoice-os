@@ -189,6 +189,7 @@ jobs:
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
       blog_url: ${{ steps.urls.outputs.blog_url }}
+      check_url: ${{ steps.urls.outputs.check_url }}
       hubspot_token_version: ${{ steps.token_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
@@ -313,6 +314,7 @@ jobs:
           - { image: landing, dockerfile: frontend/landing/Dockerfile, spa: true }
           - { image: library, dockerfile: frontend/library/Dockerfile, spa: true }
           - { image: blog, dockerfile: frontend/blog/Dockerfile, spa: true }
+          - { image: check, dockerfile: frontend/check/Dockerfile, spa: true }
           - { image: ops-console, dockerfile: frontend/ops-console/Dockerfile, spa: true }
           - { image: support-console, dockerfile: frontend/support-console/Dockerfile, spa: true }
     env:
@@ -411,7 +413,7 @@ jobs:
           NIGHTLY_HUBSPOT_TOKEN_VERSION: ${{ needs.prepare-env.outputs.hubspot_token_version }}
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" gateway tenancy portfolio invoice validation dashboard submission notifications docling worker
       - name: Deploy the sites
-        run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog ops-console support-console
+        run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog check ops-console support-console
 
   # The PR gateway serves the mock issuer and trusts it and its own GoTrue.
   health-gate:
@@ -608,6 +610,7 @@ jobs:
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      CHECK_URL: ${{ needs.prepare-env.outputs.check_url }}
       ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
       E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
@@ -643,7 +646,7 @@ jobs:
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
-        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL"
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL" "$CHECK_URL"
       - name: Install Chromium
         # !cancelled(): skipping this when the wait fails makes smoke report
         # `browserType.launch: Executable doesn't exist` for what is really an unreachable SPA.
@@ -753,6 +756,7 @@ jobs:
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      CHECK_URL: ${{ needs.prepare-env.outputs.check_url }}
       # The URLs the SPAs were built with; on run.app they are the serving URLs.
       BAKED_APP_URL: ${{ needs.prepare-env.outputs.app_url }}
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
@@ -775,7 +779,7 @@ jobs:
         id: targets
         run: |
           rc=0
-          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL BAKED_BLOG_URL; do
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL CHECK_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL BAKED_BLOG_URL; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is empty — prepare-env did not publish it."
               rc=1

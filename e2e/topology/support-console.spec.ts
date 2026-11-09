@@ -857,7 +857,7 @@ const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_
 // systemhealth.ConnectionBudget
 const CONNECTION_BUDGET = 80
 // systemhealth.MetricServices
-const METRIC_SERVICES = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+const METRIC_SERVICES = ['app', 'auth', 'blog', 'check', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
 // Terraform output dashboard_urls in invoice-os-infra.
 const DASHBOARD_HREFS: Record<string, string> = {
   'Services dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod',
@@ -1277,7 +1277,7 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
     for (const [j, e] of entryRects.entries()) problems.push(...within(rects[i], e, `${key} legend entry ${j}`))
     if (want === 8) {
       await expect(legend.locator('[data-series]'), `${key} coloured entries`).toHaveCount(7)
-      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
+      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText(`+${METRIC_SERVICES_FIXTURE.length - 7} other services`)
     }
 
     const over = chart.locator('.u-over')
@@ -1363,7 +1363,7 @@ async function healthLayout(page: Page): Promise<Read> {
 const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
 const FIXTURE_STEPS = 61
 // frontend/support-console/src/metricsApi.ts METRIC_SERVICES
-const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'check', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
 
 // Wire-shaped body of systemhealth.Metrics: every Cloud Run panel full, 5xx over 1, p95 peaked then back under, CPU over 80, one gap, one deploy after the end.
 function metricsFixture() {
@@ -1386,7 +1386,7 @@ function metricsFixture() {
       panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
       panel('error_pct', '%', per(() => 2)),
       panel('latency_p50_ms', 'ms', per(() => 120)),
-      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : n === 13 ? 640 : 400))), // n 13 is support-console, the latest worst
+      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : names[n] === 'support-console' ? 640 : 400))), // support-console is the latest worst
       panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
       panel('ram_pct', '% of limit', per(() => 55)),
       panel('instances', 'count', per((i) => 1 + (i % 3))),
@@ -1650,9 +1650,9 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(tile('p95').locator('.money + span'), 'p95 unit').toHaveText('ms')
   await expect(tile('p95').locator('[data-worst]'), 'p95 worst line').toHaveText('worst support-console 640 ms')
   await expect(word('connections')).toHaveText('OK')
-  // fixture arithmetic: req sums 17 series (476 + 17 * (i % 7)): last step 544, best 578; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
-  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('544')
-  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 578 req/min')
+  // fixture arithmetic: req sums 18 series (513 + 18 * (i % 7)): last step 585, best 621; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
+  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('585')
+  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 621 req/min')
   await expect(tile('errors').locator('[data-max]'), 'errors max').toHaveText('max 2.00 %')
   await expect(tile('p95').locator('[data-max]'), 'p95 max beside PEAKED').toHaveText('max 1.50 s')
   await expect(tile('connections').locator('[data-max]'), 'connections max').toHaveText('max 23 of 80')

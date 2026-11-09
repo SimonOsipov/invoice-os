@@ -29,7 +29,7 @@ const (
 	internal = "http://notifications.internal.svc:8080/readyz"
 )
 
-// fakeProd is a recording server for the API, the landing and the six sites.
+// fakeProd is a recording server for the API, the landing and the sites.
 type fakeProd struct {
 	srv *httptest.Server
 
@@ -122,6 +122,7 @@ func newFake(t *testing.T) *fakeProd {
 		bundles: map[string]string{
 			"/assets/a.js": "nothing here", "/assets/b.js": "x=\"" + gaID + "\"",
 			"/assets/entry.js": "Km(e,``)", "/library/assets/entry.js": "Km(e,``)", "/blog/assets/entry.js": "Km(e,``)",
+			"/check/assets/entry.js": "Km(e,``)",
 		},
 	}
 	f.page = func(site string) (int, string) {
@@ -219,7 +220,7 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(f.landing))
-	case strings.HasPrefix(r.URL.Path, "/assets/"), strings.HasPrefix(r.URL.Path, "/library/assets/"), strings.HasPrefix(r.URL.Path, "/blog/assets/"):
+	case strings.HasPrefix(r.URL.Path, "/assets/"), strings.HasPrefix(r.URL.Path, "/library/assets/"), strings.HasPrefix(r.URL.Path, "/blog/assets/"), strings.HasPrefix(r.URL.Path, "/check/assets/"):
 		if c := f.bundleSt[r.URL.Path]; c != 0 {
 			w.WriteHeader(c)
 			return
@@ -1501,6 +1502,7 @@ func TestTestHook_LibraryAndBlogBundlesAreRead(t *testing.T) {
 	for path, site := range map[string]string{
 		"/library/assets/entry.js": "www.ascomply.com/library",
 		"/blog/assets/entry.js":    "www.ascomply.com/blog",
+		"/check/assets/entry.js":   "www.ascomply.com/check",
 	} {
 		t.Run(site, func(t *testing.T) {
 			f := newFake(t)
@@ -1515,6 +1517,7 @@ func TestScriptSrc_RealPagesMatch(t *testing.T) {
 		`<script type="module" crossorigin src="/assets/index-D0eqkpXs.js"></script>`:         {"/assets/index-D0eqkpXs.js"},
 		`<script type="module" crossorigin src="/library/assets/index-6g0SyIkK.js"></script>`: {"/library/assets/index-6g0SyIkK.js"},
 		`<script type="module" crossorigin src="/blog/assets/index-CkoPrfZs.js"></script>`:    {"/blog/assets/index-CkoPrfZs.js"},
+		`<script type="module" crossorigin src="/check/assets/index-X.js"></script>`:          {"/check/assets/index-X.js"},
 		`<script src="/static/x.js"></script>`:                                                nil,
 		`<script src="/other/assets/x.js"></script>`:                                          nil,
 	}

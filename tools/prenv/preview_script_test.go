@@ -202,7 +202,7 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{"gateway": "3", "auth": "1", "worker": "1", "portfolio": "2", "tenancy": "3", "docling": "3",
 		"invoice": "3", "validation": "2", "dashboard": "2", "submission": "2", "notifications": "2",
-		"app": "3", "landing": "3", "library": "3", "blog": "3", "ops-console": "3", "support-console": "3"}
+		"app": "3", "landing": "3", "library": "3", "blog": "3", "check": "3", "ops-console": "3", "support-console": "3"}
 	all := append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
 	if len(all) != len(want) {
 		t.Fatalf("preview.sh lists %d services, table has %d", len(all), len(want))
@@ -222,6 +222,112 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	}
 	if got := flagValue(calls["gateway"], "--min-instances"); got != "0" {
 		t.Errorf("gateway --min-instances = %q, want 0", got)
+	}
+}
+
+// Workflows and scripts are text no running code reads in a test; only a text read sees a site missing from a deploy list.
+func TestPreviewSites_EveryDeployListNamesEachSite(t *testing.T) {
+	t.Parallel()
+	sites := previewList(t, "SITES")
+	if len(sites) < 7 || !slices.Contains(sites, "check") || !slices.Contains(sites, "app") {
+		t.Fatalf("SITES = %v, want the seven sites, check and app among them", sites)
+	}
+	root := repoRoot(t)
+	read := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	line := func(name, text, pattern string) []string {
+		m := regexp.MustCompile(pattern).FindStringSubmatch(text)
+		if m == nil {
+			t.Fatalf("%s: no line matches %s", name, pattern)
+		}
+		return strings.Fields(m[1])
+	}
+	devEnv, prod := read(".github/workflows/dev-env.yml"), read(".github/workflows/deploy-prod.yml")
+	lists := map[string][]string{
+		"dev-env deploy sites":   line("dev-env", devEnv, `(?m)^\s+run: bash scripts/ci/preview\.sh deploy "\$PR" "\$SHA" (app [a-z -]+)$`),
+		"deploy-prod no-traffic": line("deploy-prod", prod, `(?m)^\s+(app [a-z -]+) \|$`),
+		"gcp-traffic SERVICES":   strings.Fields(strings.Join(line("gcp-traffic", read("scripts/ci/gcp-traffic.sh"), `(?s)SERVICES=\(([^)]*)\)`), " ")),
+	}
+	for name, got := range lists {
+		for _, site := range sites {
+			if !slices.Contains(got, site) {
+				t.Errorf("%s lacks %s: %v", name, site, got)
+			}
+		}
+	}
+	if !strings.Contains(prod, "www.ascomply.com/check ") || !strings.Contains(prod, "www.ascomply.com/library ") {
+		t.Errorf("deploy-prod's site wait loop lacks a /library or /check address")
+	}
+	targets := line("dev-env targets", devEnv, `(?m)^\s+for v in (GATEWAY_URL [A-Z_ ]+); do$`)
+	wait := line("dev-env wait", devEnv, `(?m)^\s+run: bash scripts/ci/wait-spa-builds\.sh (.*)$`)
+	dependabot := read(".github/dependabot.yml")
+	for _, site := range sites {
+		row := regexp.MustCompile(`\{ image: ` + site + `, dockerfile: frontend/` + site + `/Dockerfile, spa: true \}`)
+		for name, text := range map[string]string{"dev-env": devEnv, "deploy-prod": prod} {
+			if !row.MatchString(text) {
+				t.Errorf("%s build matrix has no row for %s", name, site)
+			}
+		}
+		if v := `"$` + strings.ToUpper(strings.ReplaceAll(site, "-", "_")) + `_URL"`; !slices.Contains(wait, v) {
+			t.Errorf("wait-spa-builds call lacks %s: %v", v, wait)
+		}
+		name := strings.ReplaceAll(site, "-", "_")
+		if !strings.Contains(devEnv, "      "+name+"_url: ${{ steps.urls.outputs."+name+"_url }}\n") {
+			t.Errorf("dev-env prepare-env publishes no %s_url", name)
+		}
+		if !slices.Contains(targets, strings.ToUpper(name)+"_URL") {
+			t.Errorf("dev-env topology target loop lacks %s_URL: %v", strings.ToUpper(name), targets)
+		}
+		if n := strings.Count(devEnv, "      "+strings.ToUpper(name)+"_URL: ${{ needs.prepare-env.outputs."+name+"_url }}\n"); n < 2 {
+			t.Errorf("dev-env e2e and topology jobs set %s_URL %d times, want 2", strings.ToUpper(name), n)
+		}
+		if !strings.Contains(dependabot, "\n      - /frontend/"+site+"\n") {
+			t.Errorf("dependabot docker directories lack /frontend/%s", site)
+		}
+	}
+}
+
+func TestPreviewGatewayCORSNamesTheCheckOrigin(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "deploy", "7", "abc123", "gateway")
+	env := r.file(t, "env-gateway-pr-7")
+	const origin = "https://check-pr-7-944095690109.africa-south1.run.app"
+	for _, l := range strings.Split(env, "\n") {
+		if v, ok := strings.CutPrefix(l, "CORS_ALLOWED_ORIGINS: "); ok {
+			if !slices.Contains(strings.Split(v, ","), origin) {
+				t.Errorf("CORS_ALLOWED_ORIGINS = %q, want %s in it", v, origin)
+			}
+			return
+		}
+	}
+	t.Fatalf("gateway env has no CORS_ALLOWED_ORIGINS:\n%s", env)
+}
+
+func TestPreviewCheckDeploysAsAPublicSite(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "deploy", "7", "abc123", "check")
+	call := deployCalls(t, r, "7")["check"]
+	if call == "" {
+		t.Fatalf("no check deploy call:\n%s", r.file(t, "calls"))
+	}
+	if got := flagValue(call, "--memory"); got != "256Mi" {
+		t.Errorf("--memory = %q, want 256Mi", got)
+	}
+	if got := flagValue(call, "--image"); got != "africa-south1-docker.pkg.dev/ascomply-preview/images/pr/check:pr-7-abc123" {
+		t.Errorf("--image = %q", got)
+	}
+	if !strings.Contains(call, "--no-invoker-iam-check") {
+		t.Errorf("no --no-invoker-iam-check: %s", call)
+	}
+	for _, f := range []string{"--network", "--subnet", "--vpc-egress"} {
+		if strings.Contains(call, f) {
+			t.Errorf("check call carries %s: %s", f, call)
+		}
 	}
 }
 
@@ -539,7 +645,7 @@ func TestPreviewNightlyURLsAndImage(t *testing.T) {
 	r := runPreview(t, nil, "urls", "nightly")
 	const host = "-nightly-944095690109.africa-south1.run.app"
 	want := "gateway_url=https://gateway" + host + "\napp_url=https://app" + host + "\nlanding_url=https://landing" + host +
-		"\nlibrary_url=https://library" + host + "/library\nblog_url=https://blog" + host + "/blog\nops_console_url=https://ops-console" + host +
+		"\nlibrary_url=https://library" + host + "/library\nblog_url=https://blog" + host + "/blog\ncheck_url=https://check" + host + "/check\nops_console_url=https://ops-console" + host +
 		"\nsupport_console_url=https://support-console" + host + "\n"
 	if r.stdout != want {
 		t.Errorf("urls:\n%s\nwant\n%s", r.stdout, want)

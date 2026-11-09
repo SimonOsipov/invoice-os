@@ -501,8 +501,8 @@ func TestCIResults_EveryVitestStepHasTheSuffix(t *testing.T) {
 			}
 		}
 	}
-	if count != 17 {
-		t.Fatalf("found %d vitest steps in the four jobs, want 17", count)
+	if count != 18 {
+		t.Fatalf("found %d vitest steps in the four jobs, want 18", count)
 	}
 	drop := mutateInJob(t, yml, "frontend", ciVitestSuffixFor("app"), "")
 	requireCIResultsProblem(t, drop, "frontend job app")

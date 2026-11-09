@@ -10,7 +10,7 @@ const codeLines = (dockerfile: string) =>
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'check', 'landing', 'library', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
     const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
@@ -76,7 +76,7 @@ describe('dockerfiles', () => {
 
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'check', 'landing', 'library', 'ops-console', 'support-console'])
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))

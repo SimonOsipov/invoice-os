@@ -28,6 +28,8 @@ run services describe library-pr-7 --project ascomply-preview --region africa-so
 run services delete library-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run services describe blog-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run services delete blog-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe check-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete check-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run services describe ops-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run services delete ops-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run services describe support-console-pr-7 --project ascomply-preview --region africa-south1 --quiet

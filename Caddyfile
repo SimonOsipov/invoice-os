@@ -45,9 +45,9 @@
 		redir https://www.ascomply.com/library{uri} 301
 	}
 
-	# Liveness, answered before the filesystem; /library/health is the library's under its base.
+	# Liveness, answered before the filesystem; /library/health and /check/health are under their bases.
 	# Cloud Run reserves /healthz on run.app.
-	@health path /health /library/health
+	@health path /health /library/health /check/health
 	handle @health {
 		respond "OK" 200
 	}

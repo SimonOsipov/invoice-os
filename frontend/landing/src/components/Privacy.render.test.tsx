@@ -20,6 +20,7 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { AI_PROVIDER_HOST, ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
+import { READINESS_CONSENT_TEXT } from '../readinessConsent'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
 import { APP_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
@@ -1212,7 +1213,7 @@ describe('FREECHK-03-08: the readiness check section', () => {
 
   it('FREECHK-03: the no-marketing sentence follows the store', () => {
     expect(readinessConsentIsNotMarketing()).toBe(true)
-    expect(text()).toContain('We record the sentence you ticked. It adds you to no marketing list')
+    expect(text()).toContain(`We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d It adds you to no marketing list`)
     const marketing = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, consentText: in.ConsentText, readinessConsentText: in.ConsentText})\n}\n'
     expect(readinessConsentIsNotMarketing(marketing)).toBe(false)
   })

@@ -22,7 +22,7 @@ port=$(docker port "$name" 8080/tcp | head -n1 | sed 's/.*://')
 for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$port/health" && break; sleep 0.2; done
 
 fail=0
-for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health /assets/index-abc123.js.map; do
+for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health /check/health /assets/index-abc123.js.map; do
   hdrs=$(curl -s -o /dev/null -D - "http://127.0.0.1:$port$path" | tr -d '\r')
   code=$(printf '%s\n' "$hdrs" | head -n1)
   echo "$path -> $code"
@@ -56,11 +56,12 @@ row() {
 row "$port" /invoices/42 200 'SPA-INDEX'
 row "$port" /.env 200 'SPA-INDEX'
 row "$port" /library/health 200 '^OK$'
+row "$port" /check/health 200 '^OK$'
 row "$port" /assets/index-abc123.js.map 404 -
 
 # Strict fixture (landing, library): a site that ships /404.html. docker cp, not a bind mount:
 # a macOS bind mount is case-insensitive and would serve /Privacy.
-mkdir -p "$ssite/fx/privacy" "$ssite/fx/invite" "$ssite/fx/assets" "$ssite/fx/library/invoices/import-files" "$ssite/fx/library/_landing/assets"
+mkdir -p "$ssite/fx/privacy" "$ssite/fx/invite" "$ssite/fx/assets" "$ssite/fx/library/invoices/import-files" "$ssite/fx/library/_landing/assets" "$ssite/fx/check"
 echo '<!doctype html><title>STRICT-INDEX</title>' >"$ssite/fx/index.html"
 echo '<!doctype html><meta name="robots" content="noindex"><title>NOTFOUND-PAGE</title>' >"$ssite/fx/404.html"
 echo '<!doctype html><title>PRIVACY-PAGE</title>' >"$ssite/fx/privacy/index.html"
@@ -68,6 +69,7 @@ echo '<!doctype html><title>INVITE-PAGE</title>' >"$ssite/fx/invite/index.html"
 echo '<!doctype html><title>LIBRARY-HOME</title>' >"$ssite/fx/library/index.html"
 echo '<!doctype html><title>LIBRARY-GROUP</title>' >"$ssite/fx/library/invoices/index.html"
 echo '<!doctype html><title>LIBRARY-FEATURE</title>' >"$ssite/fx/library/invoices/import-files/index.html"
+echo '<!doctype html><title>CHECK-HOME</title>' >"$ssite/fx/check/index.html"
 echo 'console.log(2)' >"$ssite/fx/library/_landing/assets/index-abc123.js"
 echo 'console.log(1)' >"$ssite/fx/assets/index-abc123.js"
 echo 'User-agent: *' >"$ssite/fx/robots.txt"
@@ -80,7 +82,7 @@ for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$sport/health" &
 # Wrong addresses: 404 with the 404.html body, never the index.html one.
 for path in /.env /nope-xyz /Privacy /sitemap.xml /404.html /index.html /privacy/index.html /privacy/x \
   /library/nope /library/invoices/nope /library/Invoices /library/index.html /library/invoices/index.html /library/_landing/ \
-  /PRIVACY /INDEX.HTML '/404.html?x=1' /library/404.html /library/INVOICES /library/invoices/import-files/x /assets/; do
+  /PRIVACY /INDEX.HTML '/404.html?x=1' /library/404.html /library/INVOICES /library/invoices/import-files/x /assets/ /check/nope; do
   row "$sport" "$path" 404 NOTFOUND-PAGE
 done
 row "$sport" /nope-xyz 404 NOTFOUND-PAGE -sI
@@ -102,7 +104,8 @@ for r in '/|STRICT-INDEX' '/?signin=ready|STRICT-INDEX' '/?verified=1|STRICT-IND
   '/assets/index-abc123.js|console.log(1)' '/library/_landing/assets/index-abc123.js|console.log(2)' \
   '/library|LIBRARY-HOME' '/library/|LIBRARY-HOME' '/library/invoices|LIBRARY-GROUP' '/library/invoices/|LIBRARY-GROUP' \
   '/library/invoices/import-files|LIBRARY-FEATURE' '/library/invoices/import-files/|LIBRARY-FEATURE' \
-  '/library//invoices|LIBRARY-GROUP' '//privacy|PRIVACY-PAGE' '/privacy?x=1|PRIVACY-PAGE' '/health|^OK$' '/library/health|^OK$'; do
+  '/library//invoices|LIBRARY-GROUP' '//privacy|PRIVACY-PAGE' '/privacy?x=1|PRIVACY-PAGE' '/health|^OK$' '/library/health|^OK$' \
+  '/check|CHECK-HOME' '/check/|CHECK-HOME' '/check/health|^OK$'; do
   row "$sport" "${r%%|*}" 200 "${r#*|}"
 done
 row "$sport" /privacy 200 PRIVACY-PAGE -sI

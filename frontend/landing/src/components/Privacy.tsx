@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
+import { READINESS_CONSENT_TEXT } from '../readinessConsent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { APP_NOTICE_BODY } from './CookieNotice'
@@ -459,7 +460,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             Your email address becomes a HubSpot contact tagged “readiness check”, with a deal. We record the sentence
-            you ticked. It adds you to no marketing list and changes nothing you agreed to on another form. The summary
+            you ticked, word for word: “{READINESS_CONSENT_TEXT}” It adds you to no marketing list and changes nothing you agreed to on another form. The summary
             rows are deleted when an ASComply account with that address is deleted, unless another account still holds
             the address.
           </p>

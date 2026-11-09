@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { CONSENT_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE } from './messages'
+import { CONSENT_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409SaysSignUpWithALink', () => {
@@ -54,5 +54,11 @@ describe('refusal', () => {
 
   it('refusal_anOversizedGatewayErrorFallsBack', () => {
     expect(refusal('run', 409, 'x'.repeat(301))).toEqual({ text: SIGN_UP_SENTENCE, signUp: true })
+  })
+
+  it('refusal_anEmptyOrBodylessGatewayErrorFallsBack', () => {
+    expect(refusal('run', 422, null).text).toBe(UNREADABLE_SENTENCE)
+    expect(refusal('run', 409, '')).toEqual({ text: SIGN_UP_SENTENCE, signUp: true })
+    expect(refusal('run', 409, 'x'.repeat(300)).text).toBe('x'.repeat(300))
   })
 })

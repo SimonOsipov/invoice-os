@@ -85,6 +85,8 @@ describe('check consent', () => {
     click(byText('Cookie choices'))
     expect(notices()).toHaveLength(1)
     expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+    click(byText('Accept'))
+    expect(notices()).toHaveLength(0)
   })
 
   it('footer_linksThePrivacyPage', async () => {

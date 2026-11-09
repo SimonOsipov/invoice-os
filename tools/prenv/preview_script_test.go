@@ -225,6 +225,73 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	}
 }
 
+// Workflows and scripts are text no running code reads in a test; only a text read sees a site missing from a deploy list.
+func TestPreviewSites_EveryDeployListNamesEachSite(t *testing.T) {
+	t.Parallel()
+	sites := previewList(t, "SITES")
+	if len(sites) < 7 || !slices.Contains(sites, "check") || !slices.Contains(sites, "app") {
+		t.Fatalf("SITES = %v, want the seven sites, check and app among them", sites)
+	}
+	root := repoRoot(t)
+	read := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	line := func(name, text, pattern string) []string {
+		m := regexp.MustCompile(pattern).FindStringSubmatch(text)
+		if m == nil {
+			t.Fatalf("%s: no line matches %s", name, pattern)
+		}
+		return strings.Fields(m[1])
+	}
+	devEnv, prod := read(".github/workflows/dev-env.yml"), read(".github/workflows/deploy-prod.yml")
+	lists := map[string][]string{
+		"dev-env deploy sites":   line("dev-env", devEnv, `(?m)^\s+run: bash scripts/ci/preview\.sh deploy "\$PR" "\$SHA" (app [a-z -]+)$`),
+		"deploy-prod no-traffic": line("deploy-prod", prod, `(?m)^\s+(app [a-z -]+) \|$`),
+		"gcp-traffic SERVICES":   strings.Fields(strings.Join(line("gcp-traffic", read("scripts/ci/gcp-traffic.sh"), `(?s)SERVICES=\(([^)]*)\)`), " ")),
+	}
+	for name, got := range lists {
+		for _, site := range sites {
+			if !slices.Contains(got, site) {
+				t.Errorf("%s lacks %s: %v", name, site, got)
+			}
+		}
+	}
+	if !strings.Contains(prod, "www.ascomply.com/check ") || !strings.Contains(prod, "www.ascomply.com/library ") {
+		t.Errorf("deploy-prod's site wait loop lacks a /library or /check address")
+	}
+	targets := line("dev-env targets", devEnv, `(?m)^\s+for v in (GATEWAY_URL [A-Z_ ]+); do$`)
+	wait := line("dev-env wait", devEnv, `(?m)^\s+run: bash scripts/ci/wait-spa-builds\.sh (.*)$`)
+	dependabot := read(".github/dependabot.yml")
+	for _, site := range sites {
+		row := regexp.MustCompile(`\{ image: ` + site + `, dockerfile: frontend/` + site + `/Dockerfile, spa: true \}`)
+		for name, text := range map[string]string{"dev-env": devEnv, "deploy-prod": prod} {
+			if !row.MatchString(text) {
+				t.Errorf("%s build matrix has no row for %s", name, site)
+			}
+		}
+		if v := `"$` + strings.ToUpper(strings.ReplaceAll(site, "-", "_")) + `_URL"`; !slices.Contains(wait, v) {
+			t.Errorf("wait-spa-builds call lacks %s: %v", v, wait)
+		}
+		name := strings.ReplaceAll(site, "-", "_")
+		if !strings.Contains(devEnv, "      "+name+"_url: ${{ steps.urls.outputs."+name+"_url }}\n") {
+			t.Errorf("dev-env prepare-env publishes no %s_url", name)
+		}
+		if !slices.Contains(targets, strings.ToUpper(name)+"_URL") {
+			t.Errorf("dev-env topology target loop lacks %s_URL: %v", strings.ToUpper(name), targets)
+		}
+		if n := strings.Count(devEnv, "      "+strings.ToUpper(name)+"_URL: ${{ needs.prepare-env.outputs."+name+"_url }}\n"); n < 2 {
+			t.Errorf("dev-env e2e and topology jobs set %s_URL %d times, want 2", strings.ToUpper(name), n)
+		}
+		if !strings.Contains(dependabot, "\n      - /frontend/"+site+"\n") {
+			t.Errorf("dependabot docker directories lack /frontend/%s", site)
+		}
+	}
+}
+
 func TestPreviewGatewayCORSNamesTheCheckOrigin(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "deploy", "7", "abc123", "gateway")

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { INVOICE_FIELDS } from '../../app/src/lib/invoiceFields'
-import { ACCEPT, CHECK_FIELD_KEYS, IMPORT_KEYS, initialMapping, labelOf, type Suggestion } from './fields'
+import { ACCEPT, CHECK_FIELD_KEYS, fieldLabel, IMPORT_KEYS, initialMapping, labelOf, type Suggestion } from './fields'
 
 const suggestion = (mapping: Record<string, string>): Suggestion => ({
   columns: ['Inv', 'STIN', 'Net'],
@@ -39,5 +39,13 @@ describe('fields', () => {
 
   it('initialMapping_dropsAKeyOutsideTheCheckList', () => {
     expect('entity_id' in initialMapping(suggestion({ entity_id: 'Inv' }))).toBe(false)
+  })
+
+  it('fieldLabel_labelsEveryCheckFieldUniquely', () => {
+    const labels = CHECK_FIELD_KEYS.map(fieldLabel)
+    expect(labels.length).toBeGreaterThan(0)
+    expect(new Set(labels).size).toBe(labels.length)
+    for (const k of CHECK_FIELD_KEYS) expect(fieldLabel(k), k).not.toBe(k)
+    expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')
   })
 })

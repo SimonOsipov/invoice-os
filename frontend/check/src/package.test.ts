@@ -3,12 +3,12 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { CHECK_BASE } from '../../landing/src/sitePaths'
 import { CHECK_DESCRIPTION, CHECK_H1, CHECK_INTRO, CHECK_TITLE } from './copy'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string) => readFileSync(p, 'utf8')
-const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
 const DS = '@invoice-os/design-tokens'
 const sideEffectImports = (src: string) =>

@@ -29,7 +29,7 @@ const (
 	internal = "http://notifications.internal.svc:8080/readyz"
 )
 
-// fakeProd is a recording server for the API, the landing and the six sites.
+// fakeProd is a recording server for the API, the landing and the sites.
 type fakeProd struct {
 	srv *httptest.Server
 

@@ -4,6 +4,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import { CONSENT_TEXT } from './analytics'
+import { CHECK_FIELD_KEYS, fieldLabel } from './fields'
 import { READING_TEXT, SENT_TEXT, SENDING_TEXT, TYPE_SENTENCE } from './copy'
 import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
@@ -230,6 +232,75 @@ describe('map step', () => {
     const body = runBody()
     expect(JSON.parse(body.get('mapping') as string)).toEqual({ invoice_number: 'No' })
     expect((body.get('file') as File).name).toBe('b.csv')
+  })
+})
+
+describe('map and details extras', () => {
+  it('map_offersExactlyTheCheckFieldsEachWithItsOwnLabel', async () => {
+    sheetStub()
+    await mount()
+    await pick(file('a.csv'))
+    const rows = [...container.querySelectorAll('.check-fields .check-field')]
+    expect(CHECK_FIELD_KEYS.length).toBeGreaterThan(0)
+    expect(rows.map((r) => r.querySelector('select')!.id)).toEqual(CHECK_FIELD_KEYS.map((k) => `check-field-${k}`))
+    const labels = rows.map((r) => r.querySelector('label')!.textContent)
+    expect(labels).toEqual(CHECK_FIELD_KEYS.map(fieldLabel))
+    expect(new Set(labels).size).toBe(labels.length)
+    for (const k of CHECK_FIELD_KEYS) expect(labels, 'a raw key shown as a label').not.toContain(k)
+  })
+
+  it('details_backFromASpreadsheetReturnsToTheMapWithTheChoicesKept', async () => {
+    sheetStub()
+    await mount()
+    await pick(file('a.csv'))
+    await choose('Supplier TIN', 'STIN')
+    await click(button('Continue'))
+    await click(button('Back'))
+    expect(container.querySelector('.check-columns')).not.toBeNull()
+    expect(byLabel<HTMLSelectElement>('Supplier TIN').value).toBe('STIN')
+  })
+
+  it('details_backFromADocumentReturnsToUploadAndForgetsTheFile', async () => {
+    stubFetch({})
+    await mount()
+    await pick(file('a.pdf'))
+    await click(button('Back'))
+    expect(fileInput()).toBeTruthy()
+    expect(text()).not.toContain('a.pdf')
+    expect(container.querySelector('form')).toBeNull()
+  })
+
+  it('upload_aDocumentAfterASpreadsheetSendsNoMapping', async () => {
+    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: SENT })
+    await mount()
+    await pick(file('a.csv'))
+    await click(button('Choose another file'))
+    await pick(file('b.pdf'))
+    await fillAndSend()
+    expect([...runBody().keys()]).toEqual(['email', 'consent_text', 'file'])
+  })
+
+  it('upload_aNewFileClearsAMappingRefusal', async () => {
+    stubFetch({ [MAPPING]: () => json(422, { error: UNREADABLE_SENTENCE }) })
+    await mount()
+    await pick(file('a.csv'))
+    expect(text()).toContain(UNREADABLE_SENTENCE)
+    await pick(file('b.pdf'))
+    expect(byLabel('Email address')).toBeTruthy()
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
+  it('details_theConsentBoxShowsAndSendsTheOneConstant', async () => {
+    stubFetch({ [RUN]: SENT })
+    await mount()
+    await pick(file('a.pdf'))
+    expect(CONSENT_TEXT.length).toBeGreaterThan(0)
+    expect(container.querySelector('.check-consent')!.textContent).toBe(CONSENT_TEXT)
+    expect(container.querySelector<HTMLInputElement>('.check-consent input')!.required).toBe(true)
+    expect(byLabel<HTMLInputElement>('Email address').required).toBe(true)
+    expect(byLabel<HTMLInputElement>('Email address').type).toBe('email')
+    await fillAndSend()
+    expect(runBody().get('consent_text')).toBe(CONSENT_TEXT)
   })
 })
 

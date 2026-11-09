@@ -49,7 +49,7 @@ resolve lazily and throw on the first test that needs them.
 Covers the SPAs — `landing`, `ops-console`,
 `support-console`, `library`, `blog` and `check`. It is no longer only a render check:
 
-- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing, library and blog are opened bare and each console on a
+- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): each public site is opened bare and each console on a
   seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`): the
@@ -93,7 +93,7 @@ GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 
 `playwright.topology.config.ts` → `testDir: './topology'`, `fullyParallel: false`,
 `workers: 1`, one Playwright project per unit in `topology/shards.ts`: `serial-lane`,
-`auth`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces`, `library` and `blog`. CI runs each unit on its own runner in parallel;
+`auth`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces`, `library`, `blog` and `check`. CI runs each unit on its own runner in parallel;
 `--project=<unit>` runs one. A spec file not assigned to exactly one unit fails the run at
 config load.
 

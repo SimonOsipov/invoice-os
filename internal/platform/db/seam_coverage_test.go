@@ -211,6 +211,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/gateway/account_events.go", fn: "Record"},                        // global outbox, no tenant data; invoice_gateway may only INSERT into it
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/readinesscheck/store.go"},                                        // readiness checks carry no tenant and no caller identity; the store reads and writes them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
 	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool

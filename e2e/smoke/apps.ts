@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import type { ConsoleTarget } from '../staffSession'
 
-// The SPAs under smoke test (landing, ops-console, support-console, library, blog). The consoles open
+// The SPAs under smoke test (landing, ops-console, support-console, library, blog, check). The consoles open
 // only on a real staff session, which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
 // so its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
 // Each PR deploys its own preview, so each URL is
@@ -78,6 +78,19 @@ export const APPS: AppTarget[] = [
       expect(res.headers()['content-type']).toContain('javascript')
       await expect(page.locator('.asc-app > aside').getByRole('button', { name: 'Subscribe' })).toBeVisible()
       await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible()
+    },
+  },  {
+    name: 'check',
+    url: resolveTarget('CHECK_URL'),
+    assertMainView: async (page) => {
+      await expect(page).toHaveTitle('Free e-invoice readiness check — ASComply Africa')
+      await expect(page.locator('#root')).toBeAttached()
+      const src = await page.locator('script[type="module"][src]').first().getAttribute('src')
+      expect(src, 'index.html has no module entry script').not.toBeNull()
+      const res = await page.request.get(new URL(src as string, page.url()).href)
+      expect(res.status()).toBe(200)
+      expect(res.headers()['content-type']).toContain('javascript')
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Check your invoices against the MBS rules')
     },
   },
 ]

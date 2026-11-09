@@ -1386,7 +1386,7 @@ function metricsFixture() {
       panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
       panel('error_pct', '%', per(() => 2)),
       panel('latency_p50_ms', 'ms', per(() => 120)),
-      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : n === 13 ? 640 : 400))), // n 13 is support-console, the latest worst
+      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : names[n] === 'support-console' ? 640 : 400))), // support-console is the latest worst
       panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
       panel('ram_pct', '% of limit', per(() => 55)),
       panel('instances', 'count', per((i) => 1 + (i % 3))),
@@ -1650,9 +1650,9 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(tile('p95').locator('.money + span'), 'p95 unit').toHaveText('ms')
   await expect(tile('p95').locator('[data-worst]'), 'p95 worst line').toHaveText('worst support-console 640 ms')
   await expect(word('connections')).toHaveText('OK')
-  // fixture arithmetic: req sums 17 series (476 + 17 * (i % 7)): last step 544, best 578; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
-  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('544')
-  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 578 req/min')
+  // fixture arithmetic: req sums 18 series (513 + 18 * (i % 7)): last step 585, best 621; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
+  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('585')
+  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 621 req/min')
   await expect(tile('errors').locator('[data-max]'), 'errors max').toHaveText('max 2.00 %')
   await expect(tile('p95').locator('[data-max]'), 'p95 max beside PEAKED').toHaveText('max 1.50 s')
   await expect(tile('connections').locator('[data-max]'), 'connections max').toHaveText('max 23 of 80')

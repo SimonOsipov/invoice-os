@@ -78,7 +78,7 @@ test('check: a visitor uploads a spreadsheet, maps it and gets the results mail'
   await page.getByRole('button', { name: 'Continue' }).click()
 
   const email = `check-${crypto.randomUUID()}@example.com`
-  await page.getByLabel('Email address').fill(email)
+  await page.getByLabel('Email address', { exact: true }).fill(email)
   await page.locator('.check-consent input').check()
   await page.getByRole('button', { name: 'Send' }).click()
   try {

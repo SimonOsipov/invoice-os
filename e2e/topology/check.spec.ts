@@ -49,7 +49,7 @@ async function toMap(page: Page, onUpload?: () => Promise<void>): Promise<void> 
   release()
   await expect(page.getByRole('heading', { name: 'Match your columns' }), 'the Map step never showed').toBeVisible()
   // The suggestion may leave the invoice number unplaced; Continue needs it.
-  await page.getByLabel('Invoice number').selectOption('invoice_number')
+  await page.getByLabel('Invoice number', { exact: true }).selectOption('invoice_number')
 }
 
 test.describe('check layout', () => {
@@ -91,7 +91,7 @@ test.describe('check layout', () => {
     await resize(page, WIDE_WIDTHS[0])
     await toMap(page)
     await page.getByRole('button', { name: 'Continue' }).click()
-    await page.getByLabel('Email address').fill(EMAIL_200)
+    await page.getByLabel('Email address', { exact: true }).fill(EMAIL_200)
     for (const width of WIDE_WIDTHS) {
       await resize(page, width)
       const label = `${width}px`
@@ -99,7 +99,7 @@ test.describe('check layout', () => {
       const box = await rectOf(page.locator('.check-consent input'), 'consent box')
       const text = await rectOf(page.locator('.check-consent span'), 'consent label')
       expect(rectsOverlap(box, text), `${label}: the consent box overlaps its label`).toBe(false)
-      expect(enclosesRect(cardRect, await rectOf(page.getByLabel('Email address'), 'email'), 1), `${label}: the email input is outside the card`).toBe(true)
+      expect(enclosesRect(cardRect, await rectOf(page.getByLabel('Email address', { exact: true }), 'email'), 1), `${label}: the email input is outside the card`).toBe(true)
       expect(enclosesRect(cardRect, await rectOf(page.getByRole('button', { name: 'Send' }), 'Send'), 1), `${label}: Send is outside the card`).toBe(true)
     }
   })

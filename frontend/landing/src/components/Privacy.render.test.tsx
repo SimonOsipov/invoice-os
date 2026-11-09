@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
-import { ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
@@ -27,6 +27,12 @@ import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
+  accountmailFrom,
+  aiModelVendors,
+  eraseDeletesReadinessChecks,
+  ipCountIsHashed,
+  readinessCheckColumns,
+  readinessConsentIsNotMarketing,
   authSmtpHost,
   clientsSendConsentTime,
   crmTags,
@@ -1153,5 +1159,71 @@ describe('AUDIT-13-08: sign-in records on the page', () => {
     expect(hits[0][0]).toBe('20261026120001_purge_tenant.sql')
     expect(hits[0][1]).toContain('tenant_id')
     expect(hits[0][1]).not.toMatch(/interval/i)
+  })
+})
+
+describe('FREECHK-03-08: the readiness check section', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const text = (): string => {
+    const part = html.split(/(?=<h2[ >])/).find((p) => p.startsWith('<h2') && p.includes('If you run the readiness check</h2>'))
+    expect(part, 'the readiness check h2').toBeDefined()
+    return part!.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
+  }
+  const GO_STORE = 'func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {\n'
+
+  it('FREECHK-03: the check section names the AI host and vendors from code', () => {
+    const t = text()
+    expect(t).toContain(AI_PROVIDER_HOST)
+    for (const v of aiModelVendors()) expect(t.toLowerCase()).toContain(v)
+  })
+
+  it('FREECHK-03: the summary sentence lists the table columns', () => {
+    const cols = readinessCheckColumns()
+    expect(cols).toHaveLength(6)
+    const words: Record<string, string> = {
+      email: 'email address',
+      file_type: 'file type',
+      row_count: 'number of rows',
+      failed_rule_ids: 'failed rules',
+      created_at: 'time',
+    }
+    expect(cols.filter((c) => c !== 'id').sort()).toEqual(Object.keys(words).sort())
+    for (const c of cols.filter((c) => c !== 'id')) expect(text()).toContain(words[c])
+  })
+
+  it('FREECHK-03: the section says the file and the IP are not kept', () => {
+    expect(text()).toContain('keeps no copy')
+    expect(text()).toContain('not your IP address')
+  })
+
+  it('FREECHK-03: the mail sentence quotes the sender address from code', () => {
+    const t = text()
+    expect(t).toContain(accountmailFrom())
+    expect(t).toContain('amounts')
+    expect(t).toContain('buyer')
+  })
+
+  it('FREECHK-03: the section names the readiness check tag', () => {
+    expect(text()).toContain(`\u201c${crmTags()[2]}\u201d`)
+    expect(text()).toContain('deal')
+  })
+
+  it('FREECHK-03: the no-marketing sentence follows the store', () => {
+    expect(readinessConsentIsNotMarketing()).toBe(true)
+    expect(text()).toContain('We record the sentence you ticked. It adds you to no marketing list')
+    const marketing = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, consentText: in.ConsentText, readinessConsentText: in.ConsentText})\n}\n'
+    expect(readinessConsentIsNotMarketing(marketing)).toBe(false)
+  })
+
+  it('FREECHK-03: the erasure sentence follows erase.go', () => {
+    expect(eraseDeletesReadinessChecks()).toBe(true)
+    expect(text()).toContain('The summary rows are deleted when an ASComply account with that address is deleted')
+    expect(eraseDeletesReadinessChecks('func (w *EraseWorker) sweep(ctx context.Context) {\n\tDELETE FROM blog_subscribers WHERE email = $1\n}\n')).toBe(false)
+  })
+
+  it('FREECHK-03: the hash sentence follows the throttle', () => {
+    expect(ipCountIsHashed()).toBe(true)
+    expect(text()).toContain('we keep a hash of your network')
+    expect(ipCountIsHashed('func (t *SignInThrottle) hashKey(email string) []byte {\n\treturn []byte(email)\n}\n')).toBe(false)
   })
 })

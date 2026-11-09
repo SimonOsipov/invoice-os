@@ -9,6 +9,7 @@
 import { apiFetch, ApiError } from '@invoice-os/api-client/client'
 import { TENANTS } from '../topology/targets'
 import { resolveTarget } from '../targets'
+import { googleIdToken, serviceUrl } from './preview'
 
 // Re-exported so specs can do `import { ApiError } from '../api/client'`
 // against this one seam, without reaching into the api-client package
@@ -2233,4 +2234,65 @@ export function postLineItems(
     `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/line-items`,
     { token, method: 'POST', body },
   )
+}
+
+// Readiness check, public gateway routes (internal/gateway/readiness_check.go). Multipart parts go in
+// the insertion order of `fields`, then the file last (D4).
+export async function postCheck(
+  route: 'mapping' | 'run',
+  fields: Record<string, string>,
+  file: { name: string; content: string },
+): Promise<{ status: number; body: any }> {
+  const form = new FormData()
+  for (const [k, v] of Object.entries(fields)) form.append(k, v)
+  form.append('file', new Blob([file.content], { type: 'text/csv' }), file.name)
+  const res = await fetch(`${apiBase()}/readiness-check/${route}`, { method: 'POST', body: form })
+  return { status: res.status, body: await res.json().catch(() => undefined) }
+}
+
+// internal/readinesscheck/handlers.go mappingResponse.
+export interface CheckMapping {
+  columns: string[]
+  sample_rows: string[][]
+  header_row: number
+  rows_total: number
+  mapping: Record<string, string>
+  source: string
+}
+
+// The worker is internal: call it with the service identity and the gateway token.
+export async function workerPost(
+  path: string,
+  body: unknown,
+  opts: { gatewayToken?: boolean } = {},
+): Promise<{ status: number; body: any }> {
+  const base = serviceUrl('worker')
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      'X-Serverless-Authorization': `Bearer ${await googleIdToken(base)}`,
+      'Content-Type': 'application/json',
+      ...(opts.gatewayToken !== false && fleetHeaders()),
+    },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, body: await res.json().catch(() => undefined) }
+}
+
+// cmd/worker/public_check_routes.go: registered only while the worker's sender captures.
+export async function capturedMail(to: string): Promise<{ subject: string; html: string }[]> {
+  const res = await workerPost('/internal/public-checks/captured-mail', { to })
+  if (res.status !== 200) throw new Error(`captured-mail answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return res.body.messages
+}
+
+// The caller's own contact row, read from notifications with the service identity (the gateway has no route).
+export async function contactsDirect(email: string): Promise<ContactMe | null> {
+  const base = serviceUrl('notifications')
+  const res = await fetch(`${base}/v1/contacts/me`, {
+    headers: { 'X-Serverless-Authorization': `Bearer ${await googleIdToken(base)}`, ...fleetHeaders(), 'X-User-Email': email },
+  })
+  if (res.status === 404) return null
+  if (res.status !== 200) throw new Error(`contacts/me answered ${res.status}`)
+  return (await res.json()) as ContactMe
 }

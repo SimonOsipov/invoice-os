@@ -138,3 +138,5 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 | **Total** | | | | **80** |
 
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.
+
+Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.

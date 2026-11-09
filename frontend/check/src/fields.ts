@@ -34,6 +34,5 @@ export function initialMapping(s: Suggestion): Mapping {
 // labelOf takes a field key; a line import key (line_total) has none, so find it by importKey.
 export function fieldLabel(key: string): string {
   const f = INVOICE_FIELDS.find((x) => x.importKey === key) ?? INVOICE_FIELDS.find((x) => x.key === key)
-  if (!f) return key
-  return f.line ? `Line ${f.label.toLowerCase()}` : f.label
+  return f ? f.label : key
 }

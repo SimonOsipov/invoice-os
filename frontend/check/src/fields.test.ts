@@ -48,4 +48,30 @@ describe('fields', () => {
     for (const k of CHECK_FIELD_KEYS) expect(fieldLabel(k), k).not.toBe(k)
     expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')
   })
+
+  it('fieldLabel_labelsEveryLineKeyOnceWithItsAppLabel', () => {
+    const lineKeys = CHECK_FIELD_KEYS.filter((k) => k.startsWith('line_'))
+    expect(lineKeys.length).toBeGreaterThan(0)
+    const want: Record<string, string> = {
+      line_description: 'Description',
+      line_quantity: 'Quantity',
+      line_unit_price: 'Unit price',
+      line_total: 'Line total',
+      line_tax: 'Line tax',
+      line_tax_category: 'Tax category',
+      line_hsn_code: 'HSN code',
+      line_isic_code: 'ISIC code',
+      line_product_category: 'Product category',
+      line_service_category: 'Service category',
+      line_sellers_item_identification: "Seller's item identification",
+      line_price_unit: 'Price unit',
+      line_tax_percent: 'Tax percent',
+      line_base_quantity: 'Base quantity',
+    }
+    expect(lineKeys.sort()).toEqual(Object.keys(want).sort())
+    for (const k of lineKeys) {
+      expect(fieldLabel(k), k).toBe(want[k])
+      expect(fieldLabel(k), k).not.toMatch(/\b(\w+)\s+\1\b/i)
+    }
+  })
 })

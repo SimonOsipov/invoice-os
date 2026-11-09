@@ -811,3 +811,31 @@ export function firstSessionIsNotASignInRow(
   const block = found(/if h\.firstSession \{([\s\S]*?)account_event_memberships\(/.exec(fn)?.[1], 'the first-session block')
   return marked.length === 2 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
 }
+
+// Column names of the CREATE TABLE in migrations/*_readiness_checks.sql, in order.
+export function readinessCheckColumns(): string[] {
+  const dir = join(REPO, 'migrations')
+  const file = found(readdirSync(dir).find((f) => f.endsWith('_readiness_checks.sql')), 'the readiness_checks migration')
+  const body = found(/CREATE TABLE public\.readiness_checks \(([\s\S]*?)\n\);/.exec(readFileSync(join(dir, file), 'utf8'))?.[1], 'the readiness_checks CREATE TABLE')
+  return Array.from(body.matchAll(/^\s{4}([a-z_]+)\s+\S/gm), (m) => m[1])
+}
+
+export function eraseDeletesReadinessChecks(src: string = readSource('internal/notifications/erase.go')): boolean {
+  return sweepDeletes(src).includes('DELETE FROM readiness_checks WHERE email = $1')
+}
+
+// The address part of accountmail.From ("Name <addr>").
+export function accountmailFrom(src: string = readSource('internal/accountmail/sender.go')): string {
+  return found(/\bFrom\s*=\s*"[^"<]*<([^>"]+)>"/.exec(src)?.[1], 'accountmail.From')
+}
+
+// ReadinessCheck passes the text as readinessConsentText and sets no marketing consentText.
+export function readinessConsentIsNotMarketing(src: string = readSource('internal/notifications/store.go')): boolean {
+  const body = goFunc(src, /func \(s \*Store\) ReadinessCheck\b/, 'Store.ReadinessCheck')
+  return /\breadinessConsentText:\s*in\.ConsentText/.test(body) && !/\bconsentText\s*:/.test(body)
+}
+
+// The per-network count keys its rows by a sha256 hash.
+export function ipCountIsHashed(src: string = readSource('internal/gateway/signin_throttle_pg.go')): boolean {
+  return goFunc(src, /func \(t \*SignInThrottle\) hashKey\b/, 'SignInThrottle.hashKey').includes('sha256.Sum256')
+}

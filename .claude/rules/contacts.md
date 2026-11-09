@@ -4,6 +4,7 @@ paths:
   - "cmd/notifications/**"
   - "internal/gateway/contacts*.go"
   - "internal/gateway/blog_subscribe*.go"
+  - "internal/gateway/readiness_check*.go"
   - "migrations/*contacts*"
 ---
 # Contact sync
@@ -38,6 +39,7 @@ paths:
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
 - Queue no Resend job for a contact whose only source is a readiness check. Add its Marketing `opt_in` with the double opt-in.
+- Store a readiness check's consent text once, in `readiness_consent_text` and `readiness_consented_at`. Never write it to `marketing_consent_*`. Its tick grants no Marketing `opt_in`, also to a registrant or a demo booker.
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
@@ -57,6 +59,8 @@ paths:
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
 - Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Log no client IP on the demo route.
+- Log no client IP, address or file name on the readiness-check routes.
+- Hand a readiness check's contact to the intake once, on a 200 from the worker, on `context.WithoutCancel`. A failed hand-off still answers 200 and logs a WARN with the status only.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.
 - Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
 - Page the deals by reading the first page again after each delete. Never follow `after` across a delete (`TestHubSpotErase_DeletesEveryDealWhenThePagesShrink`).
@@ -66,4 +70,5 @@ paths:
 - Make no Resend suppression call in an erase.
 - Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
 - The sweep deletes the person's accepted invitations and, when no other account holds the address, the pending and revoked invitations to it (`TestErase_SweepDeletesTheInvitations`).
+- The erase sweep deletes the address's `readiness_checks` rows when no other account holds the address.
 - Never put an email, a name or a user id in an erase log line or error.

@@ -46,7 +46,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `auth` admits the gateway and the worker.
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
-- Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request` and `/blog/*` per client IP. Sign-in and refresh have no per-IP limit. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request`, `/blog/*` and the two `/readiness-check/*` routes per client IP. Sign-in and refresh have no per-IP limit. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - On Cloud Run every service but the gateway and the static sites is ingress-internal and admits only a caller with a Google ID token. `platform.IDTokenTransport` adds it in `X-Serverless-Authorization`; `TraceTransport` includes it.
 
 ## Postures
@@ -60,8 +60,11 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - docling `POST /v1/read` (`sidecar/docling/app.py`): document bytes forwarded by submission.
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
 - `POST /auth/export-download` (gateway): a form body with an export code. It runs without the verifier until the code is redeemed.
-- Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
+- Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`, `/readiness-check/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
+- `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h and logs no address, IP or file name.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
+- `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data.
+- `POST /internal/public-checks/captured-mail` (worker): reads captured mail by address. It is registered only when the worker's sender is an `*accountmail.Capture` (a preview, or a nightly without the sending key). Registration on a hosted worker is HIGH.
 
 ## Accepted ceilings
 

@@ -515,7 +515,7 @@ func TestMain_PassesTheGatewayPoolToEverySharedState(t *testing.T) {
 	_, body := parseMain(t)
 
 	poolAt, sessionsAt, sessions, checkers := -1, -1, "", 0
-	builders := map[string][]string{"handoffHandlers": nil, "registrationHandlers": nil, "blogSubscribeHandlers": nil}
+	builders := map[string][]string{"handoffHandlers": nil, "registrationHandlers": nil, "blogSubscribeHandlers": nil, "readinessCheckHandlers": nil}
 	for i, st := range body.List {
 		as, ok := st.(*ast.AssignStmt)
 		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {

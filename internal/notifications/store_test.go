@@ -81,6 +81,8 @@ type contactRow struct {
 	ReadinessAt                   *time.Time
 	ConsentText                   *string
 	ConsentedAt                   *time.Time
+	ReadinessConsentText          *string
+	ReadinessConsentedAt          *time.Time
 	Version                       int64
 	HubSpotAt, ResendAt           *time.Time
 }
@@ -90,10 +92,11 @@ func readRow(t *testing.T, e env, email string) contactRow {
 	var r contactRow
 	err := e.app.QueryRow(context.Background(), `
 		SELECT user_id::text, first_name, last_name, company, registered_at, demo_requested_at, readiness_checked_at,
-		       marketing_consent_text, marketing_consented_at, version, hubspot_delivered_at, resend_delivered_at
+		       marketing_consent_text, marketing_consented_at, readiness_consent_text, readiness_consented_at,
+		       version, hubspot_delivered_at, resend_delivered_at
 		FROM contacts WHERE email = $1`, email).Scan(
 		&r.UserID, &r.First, &r.Last, &r.Company, &r.RegisteredAt, &r.DemoRequestedAt, &r.ReadinessAt,
-		&r.ConsentText, &r.ConsentedAt, &r.Version, &r.HubSpotAt, &r.ResendAt)
+		&r.ConsentText, &r.ConsentedAt, &r.ReadinessConsentText, &r.ReadinessConsentedAt, &r.Version, &r.HubSpotAt, &r.ResendAt)
 	if err != nil {
 		t.Fatalf("read contacts row %q: %v", email, err)
 	}
@@ -1366,9 +1369,15 @@ func TestStore_ReadinessCheckCreatesARowAndTwoJobs(t *testing.T) {
 	hi := dbNow(t, e)
 	r := readRow(t, e, email)
 	requireSetBetween(t, "readiness_checked_at", r.ReadinessAt, lo, hi)
-	requireSetBetween(t, "marketing_consented_at", r.ConsentedAt, lo, hi)
-	if r.RegisteredAt != nil || r.DemoRequestedAt != nil || r.Version != 1 || deref(r.ConsentText) != consentText {
-		t.Errorf("row = %+v, want only the readiness fact and consent at version 1", r)
+	if r.ConsentText != nil || r.ConsentedAt != nil {
+		t.Errorf("marketing_consent_text=%v marketing_consented_at=%v, want both NULL: a check grants no Marketing consent", r.ConsentText, r.ConsentedAt)
+	}
+	if r.RegisteredAt != nil || r.DemoRequestedAt != nil || r.Version != 1 {
+		t.Errorf("row = %+v, want only the readiness fact at version 1", r)
+	}
+	requireSetBetween(t, "readiness_consented_at", r.ReadinessConsentedAt, lo, hi)
+	if deref(r.ReadinessConsentText) != consentText {
+		t.Errorf("readiness_consent_text = %q, want %q", deref(r.ReadinessConsentText), consentText)
 	}
 	requireJobs(t, e, email, "hubspot@1")
 	want := []DemoDealArgs{{Email: email, Source: dealSourceReadinessCheck}}
@@ -1551,5 +1560,126 @@ func TestStore_MeReportsTheReadinessCheckTag(t *testing.T) {
 	}
 	if !slices.Equal(c.Tags, []string{"registered", "readiness check"}) || !c.ResendApplies {
 		t.Errorf("Me = %+v, want registered + readiness check and resend applicable", c)
+	}
+}
+
+func TestStore_SecondCheckKeepsTheFirstConsentText(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "readytwice")
+	const textA, textB = "Text A.", "Text B."
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textA}); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	first := readRow(t, e, email)
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textB}); err != nil {
+		t.Fatalf("second check: %v", err)
+	}
+	r := readRow(t, e, email)
+	if r.Version != first.Version {
+		t.Errorf("version = %d after the second check, want %d", r.Version, first.Version)
+	}
+	if deref(r.ReadinessConsentText) != textA {
+		t.Errorf("readiness_consent_text = %q, want the first %q", deref(r.ReadinessConsentText), textA)
+	}
+}
+
+func TestStore_RegistrantWithoutMarketingKeepsItAfterACheck(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "regnomkt")
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	c, err := e.store.Me(ctx, email)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if c.MarketingEligible {
+		t.Error("MarketingEligible = true after a check, want false: the check's tick is not a Marketing opt-in")
+	}
+	if r := readRow(t, e, email); r.ConsentedAt != nil || r.ConsentText != nil {
+		t.Errorf("marketing_consent_text=%v marketing_consented_at=%v, want both NULL", r.ConsentText, r.ConsentedAt)
+	}
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != consentText {
+		t.Errorf("readiness_consent_text = %q, want %q", got, consentText)
+	}
+}
+
+func TestStore_TickedDemoBookerKeepsConsentAfterACheck(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "demotickcheck")
+	const textA, textC = "Text A.", "Text C."
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", ConsentText: textA}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textC}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if r := readRow(t, e, email); deref(r.ConsentText) != textA || r.ConsentedAt == nil {
+		t.Errorf("marketing_consent_text=%q marketing_consented_at=%v, want %q and set", deref(r.ConsentText), r.ConsentedAt, textA)
+	}
+	c, err := e.store.Me(ctx, email)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if !c.MarketingEligible {
+		t.Error("MarketingEligible = false, want true: the demo form's own tick still counts")
+	}
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != textC {
+		t.Errorf("readiness_consent_text = %q, want %q", got, textC)
+	}
+}
+
+func TestStore_CheckOnlyContactWhoRegistersUntickedIsNotEligible(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "checkthenreg")
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	if r := readRow(t, e, email); r.ConsentedAt != nil || r.ConsentText != nil {
+		t.Errorf("marketing_consent_text=%v marketing_consented_at=%v, want both NULL", r.ConsentText, r.ConsentedAt)
+	}
+	c, err := e.store.Me(ctx, email)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if c.MarketingEligible {
+		t.Error("MarketingEligible = true, want false: the registrant never ticked Marketing")
+	}
+}
+
+func TestStore_CheckOnlyContactWhoRegistersTickedIsEligible(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "checkthenregtick")
+	const textC, textR = "Text C.", "Text R."
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textC}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, ConsentText: textR}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	if r := readRow(t, e, email); deref(r.ConsentText) != textR || r.ConsentedAt == nil {
+		t.Errorf("marketing_consent_text=%q marketing_consented_at=%v, want the registrant's %q and set", deref(r.ConsentText), r.ConsentedAt, textR)
+	}
+	c, err := e.store.Me(ctx, email)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if !c.MarketingEligible {
+		t.Error("MarketingEligible = false, want true: the registrant ticked")
+	}
+	requireJobs(t, e, email, "hubspot@1", "hubspot@2", "resend@2")
+	if got := deref(readRow(t, e, email).ReadinessConsentText); got != textC {
+		t.Errorf("readiness_consent_text = %q, want the check's %q", got, textC)
 	}
 }

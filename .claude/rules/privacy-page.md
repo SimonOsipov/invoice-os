@@ -63,6 +63,13 @@ paths:
   - "frontend/app/src/components/WorkspaceDeletionNotice.tsx"
   - "frontend/app/src/data.tsx"
   - "frontend/app/src/glyphs.tsx"
+  - "migrations/*readiness_checks*"
+  - "migrations/*contacts_readiness_consent*"
+  - "internal/readinesscheck/**"
+  - "internal/gateway/readiness_check*.go"
+  - "internal/gateway/signin_throttle_pg.go"
+  - "internal/accountmail/sender.go"
+  - "internal/accountmail/readiness_check.html"
 ---
 # Privacy page
 
@@ -158,3 +165,14 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 
 - `P1`..`P5` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventsRecorded()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `adminFollowsTheRole()`, `staffReadsAuditPayload()`, `staffSearchReadsAccountRows()`, `auditLogDeletes()`, `auditLogGoDeletes()`, `newDeviceMailFacts()`, `eraseDeletesKnownDevices()`, `createdAcceptedDetailKeys()`, `createdAcceptedDetailIsAdminOrSelf()` and `firstSessionIsNotASignInRow()` back them.
 - `P3`: no job prunes `audit_log` by age. The workspace purge is the only delete in `migrations/` and in non-test Go, except the PR-environment `db.Reset` truncate. Retention answer: AUDIT-13 Q1 = B.
+
+## Readiness check
+
+- Sentence 1 (file content goes to OpenRouter, then Google or TypeSafe): `AI_PROVIDER_HOST` and `aiModelVendors()`, as the upload section. No retention or training claim.
+- Sentence 2 (our server reads the file in memory, keeps no copy): `TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow` (`internal/publiccheck/check_db_test.go`), FREECHK-01 D18, and the two `NeverParse...MultipartForm` tests of FREECHK-03-06 and FREECHK-03-07.
+- Sentence 3 (the summary keeps email, file type, row count, failed rule ids, time; not the file, not the IP): `readinessCheckColumns()` reads the CREATE TABLE of `*_readiness_checks.sql`.
+- Sentence 4 (a hash of the network's IP address): Backed by `hashKey` (sha256, no secret). Do not call it one-way: an IPv4 hash can be reversed by trying every address. `ipCountIsHashed()` pins it.
+- Sentence 5 (results mail from `no-reply@ascomply.com` through Resend, carries amounts and buyer details; the address is not checked first): `accountmailFrom()` reads `accountmail.From`; `readiness_check.html` renders the amounts and `.Buyer`.
+- Sentence 6 (HubSpot contact tagged "readiness check", with a deal): `crmTags()[2]` and `dealSourceReadinessCheck` in `deal.go`.
+- Sentence 7 (the ticked sentence is recorded; no marketing list): `readinessConsentIsNotMarketing()` reads `ReadinessCheck` in `store.go`.
+- Sentence 8 (summary rows deleted with the account, unless another account holds the address): `eraseDeletesReadinessChecks()` reads `erase.go`; the `superseded` branch skips the delete.

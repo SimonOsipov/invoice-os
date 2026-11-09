@@ -11,6 +11,8 @@ export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
 // The production region; privacyCodeFacts reads it from deploy-prod.yml.
 export const HOSTING_REGION = 'africa-south1'
+// Pinned to accountmail.From (accountmailFrom in privacyCodeFacts.test.util.ts).
+export const READINESS_MAIL_FROM = 'no-reply@ascomply.com'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
@@ -435,6 +437,31 @@ export function Privacy() {
             Gemini model, not Google Analytics) or by TypeSafe. Your browser sends the document to our server only; our
             server makes the call to OpenRouter. What OpenRouter, Google and TypeSafe do with what they receive is set by
             their own terms.
+          </p>
+
+          <h2 style={H2}>If you run the readiness check</h2>
+          <p style={P}>
+            This section is about the free readiness check, where you give an email address and a file. The check sends
+            the file's content to an AI provider so that the file can be read. The provider is OpenRouter (
+            {AI_PROVIDER_HOST}). It passes each request to an AI model made by Google (the Gemini model, not Google
+            Analytics) or by TypeSafe. What OpenRouter, Google and TypeSafe do with what they receive is set by their own
+            terms.
+          </p>
+          <p style={P}>
+            Our server reads the file in memory and keeps no copy. What we keep about a check is a summary: your email
+            address, the file type, the number of rows, the ids of the failed rules and the time. It is not the file and
+            not your IP address. To count checks per network, we keep a hash of your network's IP address, not the
+            address itself.
+          </p>
+          <p style={P}>
+            The results email goes from {READINESS_MAIL_FROM} through Resend. It carries the invoice amounts and the
+            buyer details read from the file. We do not check the address first, so a mistyped address receives them.
+          </p>
+          <p style={P}>
+            Your email address becomes a HubSpot contact tagged “readiness check”, with a deal. We record the sentence
+            you ticked. It adds you to no marketing list and changes nothing you agreed to on another form. The summary
+            rows are deleted when an ASComply account with that address is deleted, unless another account still holds
+            the address.
           </p>
 
           <h2 style={H2}>If you ask for an explanation</h2>

@@ -657,7 +657,7 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 		})
 	}
 
-	t.Run("the worker is not guarded and still serves health", func(t *testing.T) {
+	t.Run("the worker refuses a request with no gateway token and still serves health", func(t *testing.T) {
 		if slices.Contains(services, "worker") {
 			t.Fatal("routedServices names the worker; D4 says the gateway gives it no proxy route")
 		}
@@ -665,8 +665,11 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 		reader := cmp.Or(os.Getenv("DATABASE_READER_URL"), os.Getenv("DATABASE_URL"))
 		p := gwStart(t, buildMain(t, "worker"), port, append(gwBootEnv("worker", port), "DATABASE_READER_URL="+reader))
 		gwWaitHealthy(t, p, 90*time.Second)
-		if code, body := p.do(t, "GET", "/v1/ping", "", gwForged()); code != http.StatusNotFound {
-			t.Errorf("GET /v1/ping, forged identity, no token = %d %q, want the mux's 404: no guard (D4)", code, body)
+		if code, body := p.do(t, "GET", "/v1/ping", "", gwForged()); code != http.StatusUnauthorized || body != gwUnauthorizedBody {
+			t.Errorf("GET /v1/ping, forged identity, no token = %d %q, want 401 %q: the public check routes put the worker behind the guard", code, body, gwUnauthorizedBody)
+		}
+		if code, _ := p.do(t, "GET", "/v1/ping", "", map[string]string{"X-Gateway-Token": "gw-token"}); code != http.StatusNotFound {
+			t.Errorf("GET /v1/ping with the gateway token = %d, want the mux's 404: the worker has no such route", code)
 		}
 	})
 }

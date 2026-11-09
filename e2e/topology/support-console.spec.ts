@@ -1277,7 +1277,7 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
     for (const [j, e] of entryRects.entries()) problems.push(...within(rects[i], e, `${key} legend entry ${j}`))
     if (want === 8) {
       await expect(legend.locator('[data-series]'), `${key} coloured entries`).toHaveCount(7)
-      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
+      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText(`+${METRIC_SERVICES_FIXTURE.length - 7} other services`)
     }
 
     const over = chart.locator('.u-over')

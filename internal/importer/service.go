@@ -208,12 +208,17 @@ var canonicalFields = func() map[string]bool {
 // mapped header string absent from header, is rejected as ErrValidation
 // BEFORE any write.
 func resolveMapping(mapping map[string]string, header []string) (map[string]int, error) {
+	return resolveMappingIn(mapping, header, canonicalFields)
+}
+
+// resolveMappingIn is resolveMapping with the allowed key set passed in.
+func resolveMappingIn(mapping map[string]string, header []string, allowed map[string]bool) (map[string]int, error) {
 	if _, ok := mapping["invoice_number"]; !ok {
 		return nil, fmt.Errorf("%w: mapping is missing required field invoice_number", ErrValidation)
 	}
 	colIndex := make(map[string]int, len(mapping))
 	for field, headerName := range mapping {
-		if !canonicalFields[field] {
+		if !allowed[field] {
 			return nil, fmt.Errorf("%w: mapping key %q is not a recognized canonical field", ErrValidation, field)
 		}
 		idx := -1
@@ -924,7 +929,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 	for _, i := range ungroupableRows {
 		errorsList = append(errorsList, RowError{
 			Row:     sheetRow(headerRow, i),
-			Message: "blank invoice number: row cannot be grouped",
+			Message: blankNumberMessage,
 		})
 		quarantinedInvoices++
 		invalidRows++
@@ -1213,3 +1218,5 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 // unvalidatedMessage is the row error of an invoice created as a draft whose rules changed twice during the
 // import. It carries the invoice id and no rule key; the SPA tells it from an unreadable row by that.
 const unvalidatedMessage = "invoice created as a draft but not validated: the validation rules changed during the import; validate it again"
+
+const blankNumberMessage = "blank invoice number: row cannot be grouped"

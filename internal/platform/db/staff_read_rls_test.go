@@ -24,7 +24,7 @@ import (
 
 const staffReadTenantsSig = "public.staff_read_tenants(uuid)"
 
-// staffReadMigrationVersions lists every migration that creates a staff_read_ function, newest first.
+// staffReadMigrationVersions lists every migration that creates or replaces a staff_read_ function, newest first.
 // The blog seed rides along: the blog Down drops the tables it fills, so it rolls back first and re-applies last.
 func staffReadMigrationVersions(t *testing.T) []int64 {
 	t.Helper()
@@ -38,7 +38,9 @@ func staffReadMigrationVersions(t *testing.T) []int64 {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		if !bytes.Contains(raw, []byte("CREATE FUNCTION public.staff_read_")) && !strings.HasSuffix(f, "_seed_blog.sql") {
+		creates := bytes.Contains(raw, []byte("CREATE FUNCTION public.staff_read_")) ||
+			bytes.Contains(raw, []byte("CREATE OR REPLACE FUNCTION public.staff_read_"))
+		if !creates && !strings.HasSuffix(f, "_seed_blog.sql") {
 			continue
 		}
 		v, err := strconv.ParseInt(strings.SplitN(f, "_", 2)[0], 10, 64)

@@ -39,11 +39,19 @@ type PDFiumReader struct {
 	// dpi overrides pdfiumRenderDPI. Only AC-4's alignment sweep sets it, through
 	// NewPDFiumReaderAtDPIForTest.
 	dpi int
+
+	// endsOnly renders and delivers only the first and last page.
+	endsOnly bool
 }
 
 var _ PageReader = (*PDFiumReader)(nil)
 
 func NewPDFiumReader() *PDFiumReader { return &PDFiumReader{} }
+
+// NewPDFiumEndsReader skips every page but the first and last: a public check needs two PNGs
+// and the upload can run to maxPages. PageResult.Pages stays the document's count; TextChars and
+// PagesWithText cover only those pages.
+func NewPDFiumEndsReader() *PDFiumReader { return &PDFiumReader{endsOnly: true} }
 
 func (r *PDFiumReader) Name() string { return pdfiumReaderName }
 
@@ -57,7 +65,7 @@ func (r *PDFiumReader) renderDPI() int {
 }
 
 // Read hands doc.Bytes to pdfium by reference and calls onPage once per page in ascending
-// order. onPage must not be nil.
+// order (an ends reader: the first and last page only). onPage must not be nil.
 //
 // ctx.Err() is tested before the pool is touched, so a cancelled call never pays the wasm
 // compile (law E12). The totals are assigned only once the whole document is through, so any
@@ -71,7 +79,7 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 	err := withPDFiumInstance(ctx, func(inst pdfium.Pdfium) error {
 		opened, err := inst.OpenDocument(&requests.OpenDocument{File: &doc.Bytes})
 		if err != nil {
-			return fmt.Errorf("pdfium: open document: %w", err)
+			return unreadableError{fmt.Errorf("pdfium: open document: %w", err)}
 		}
 		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
 
@@ -80,13 +88,16 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 			return fmt.Errorf("pdfium: page count: %w", err)
 		}
 		if count.PageCount > maxPages {
-			return fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)
+			return unreadableError{fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)}
 		}
 
 		totals := PageResult{Pages: count.PageCount}
 		for i := range count.PageCount {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			if r.endsOnly && i != 0 && i != count.PageCount-1 {
+				continue
 			}
 
 			size, err := inst.FPDF_GetPageSizeByIndex(&requests.FPDF_GetPageSizeByIndex{

@@ -1188,7 +1188,9 @@ describe('FREECHK-03-08: the readiness check section', () => {
       created_at: 'time',
     }
     expect(cols.filter((c) => c !== 'id').sort()).toEqual(Object.keys(words).sort())
-    for (const c of cols.filter((c) => c !== 'id')) expect(text()).toContain(words[c])
+    const kept = /What we keep about a check is a summary:([^.]*)\./.exec(text())?.[1]
+    expect(kept, 'the summary sentence').toBeDefined()
+    for (const c of cols.filter((c) => c !== 'id')) expect(kept).toContain(words[c])
   })
 
   it('FREECHK-03: the section says the file and the IP are not kept', () => {

@@ -368,14 +368,17 @@ func TestRun_FailedSendIs503AndWritesNoRow(t *testing.T) {
 	}
 }
 
-// holdTwo parks MaxConcurrent runs inside the engine and returns a func that releases them and returns their answers.
+// heldRuns is the documented limit of 2 concurrent checks; it is a literal so that raising MaxConcurrent fails the busy tests.
+const heldRuns = 2
+
+// holdTwo parks heldRuns runs inside the engine and returns a func that releases them and returns their answers.
 func holdTwo(t *testing.T, r *rig) func() []*httptest.ResponseRecorder {
 	t.Helper()
 	r.gate = make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(r.gate) }) }
 	t.Cleanup(release)
-	recs := make([]*httptest.ResponseRecorder, MaxConcurrent)
+	recs := make([]*httptest.ResponseRecorder, heldRuns)
 	var wg sync.WaitGroup
 	for i := range recs {
 		body, ct := runForm(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
@@ -410,8 +413,8 @@ func TestRun_ThirdConcurrentCallIsBusy(t *testing.T) {
 	finish := holdTwo(t, r)
 	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
 	wantStatus(t, rec, http.StatusServiceUnavailable, "busy")
-	if r.loads.Load() != int32(MaxConcurrent) {
-		t.Errorf("rule loads = %d, want %d: a busy call must not reach the engine", r.loads.Load(), MaxConcurrent)
+	if r.loads.Load() != heldRuns {
+		t.Errorf("rule loads = %d, want %d: a busy call must not reach the engine", r.loads.Load(), heldRuns)
 	}
 	for i, held := range finish() {
 		if held.Code != http.StatusOK {

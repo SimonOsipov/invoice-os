@@ -666,16 +666,19 @@ func holdWorker(e *checkEnv) (entered chan struct{}, release func()) {
 	return entered, func() { once.Do(func() { close(gate) }) }
 }
 
+// heldUploads is the documented limit of 4 uploads in flight; a literal, so that raising maxCheckUploads fails the busy tests.
+const heldUploads = 4
+
 // holdFour starts four runs and waits until all are inside the worker.
 func holdFour(t *testing.T, e *checkEnv) (finish func() []int) {
 	t.Helper()
 	entered, release := holdWorker(e)
 	t.Cleanup(release)
-	codes := make(chan int, maxCheckUploads)
-	for range maxCheckUploads {
+	codes := make(chan int, heldUploads)
+	for range heldUploads {
 		go func() { codes <- e.runOK(t, checkIP).Code }()
 	}
-	for range maxCheckUploads {
+	for range heldUploads {
 		select {
 		case <-entered:
 		case <-time.After(5 * time.Second):
@@ -685,7 +688,7 @@ func holdFour(t *testing.T, e *checkEnv) (finish func() []int) {
 	return func() []int {
 		release()
 		var out []int
-		for range maxCheckUploads {
+		for range heldUploads {
 			out = append(out, <-codes)
 		}
 		return out
@@ -697,8 +700,8 @@ func TestRun_FifthConcurrentUploadIsBusy(t *testing.T) {
 	finish := holdFour(t, e)
 	req, consumed := newCheckRequest(t, "/readiness-check/run", okParts("inv.csv", unreadFile)...)
 	wantRefused(t, e.run(t, req), 503, checkUnavailableSentence)
-	if consumed.Load() || ipCount(e.th, checkIP) != maxCheckUploads {
-		t.Errorf("file read %v, ip count %d, want unread and %d", consumed.Load(), ipCount(e.th, checkIP), maxCheckUploads)
+	if consumed.Load() || ipCount(e.th, checkIP) != heldUploads {
+		t.Errorf("file read %v, ip count %d, want unread and %d", consumed.Load(), ipCount(e.th, checkIP), heldUploads)
 	}
 	for _, c := range finish() {
 		if c != 200 {

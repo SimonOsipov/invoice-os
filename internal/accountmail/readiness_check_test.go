@@ -161,3 +161,16 @@ func TestRenderReadinessCheck_NoInvoiceFound(t *testing.T) {
 		t.Error("a zero blank-row count renders a rows line")
 	}
 }
+
+func TestRenderReadinessCheck_WarningsHeadingFollowsTheWarnings(t *testing.T) {
+	warn := []MailField{{"Buyer email", "looks odd"}}
+	fail := []MailField{{"Supplier TIN", "is required"}}
+	_, out := renderReadiness(t, ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{Number: "A", Passes: true, Warnings: warn}}})
+	if strings.Count(out, "Warnings") != 1 || !strings.Contains(out, "looks odd") {
+		t.Error("a warning with no failure lacks the Warnings heading or its text")
+	}
+	_, out = renderReadiness(t, ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{Number: "A", Failures: fail}}})
+	if strings.Contains(out, "Warnings") {
+		t.Error("a failure with no warning renders a Warnings heading")
+	}
+}

@@ -60,7 +60,7 @@ type Contact struct {
 	Mode               *string
 }
 
-// A fact that was NULL and is now set bumps version and clears delivery; names merge freely.
+// A delivery fact that was NULL and is now set bumps version and clears delivery; names merge freely.
 const newFactSQL = `(
         (contacts.registered_at IS NULL AND EXCLUDED.registered_at IS NOT NULL)
      OR (contacts.demo_requested_at IS NULL AND EXCLUDED.demo_requested_at IS NOT NULL)

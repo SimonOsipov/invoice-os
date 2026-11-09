@@ -734,7 +734,7 @@ func liveHeap() uint64 {
 
 // Not parallel: the heap reading counts the whole process.
 func TestRun_ForwardHoldsOneCopyOfTheFile(t *testing.T) {
-	const size = 8 << 20
+	const size = 14 << 20 // above what the loopback socket buffers absorb, so the gateway still holds its copy at the hook
 	e := newCheckEnv(t, true)
 	data := bytes.Repeat([]byte("a,b\n1,2\n"), size/8)
 	baseline := int64(liveHeap())
@@ -747,6 +747,7 @@ func TestRun_ForwardHoldsOneCopyOfTheFile(t *testing.T) {
 	}
 	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("big.csv", data)...)
 	rec := e.run(t, req)
+	runtime.KeepAlive(data) // else the baseline's copy is freed mid-run and hides the gateway's
 	if rec.Code != 200 {
 		t.Fatalf("answer = %d %s, want 200", rec.Code, rec.Body)
 	}
@@ -898,5 +899,40 @@ func TestMapping_AcceptsAnXlsxAndRefusesADocx(t *testing.T) {
 	}
 	if e.w.calls() != 2 || e.w.got[0].fields["format"] != "xlsx" {
 		t.Errorf("worker calls = %d (first format %q), want 2 xlsx calls", e.w.calls(), e.w.got[0].fields["format"])
+	}
+}
+
+type checkRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f checkRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The real socket buffers can absorb the whole body before the worker looks, so this one stops the send:
+// nothing reads the body until the heap is read, and the gateway still holds what it will send.
+func TestRun_ForwardHoldsOneCopyOfTheFileUntilTheSend(t *testing.T) {
+	const size = 8 << 20
+	e := newCheckEnv(t, true)
+	data := bytes.Repeat([]byte("a,b\n1,2\n"), size/8)
+	baseline := int64(liveHeap())
+	var delta, cl int64
+	e.rc.client = &http.Client{Transport: checkRoundTrip(func(r *http.Request) (*http.Response, error) {
+		cl = r.ContentLength
+		delta = int64(liveHeap()) - baseline
+		n, _ := io.Copy(io.Discard, r.Body)
+		if n < size {
+			t.Errorf("the forward carried %d bytes, want the %d of the file and more", n, size)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"checks_left":2}`)), Header: http.Header{}, Request: r}, nil
+	})}
+	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("big.csv", data)...)
+	rec := e.run(t, req)
+	runtime.KeepAlive(data)
+	if rec.Code != 200 {
+		t.Fatalf("answer = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if cl != -1 {
+		t.Errorf("ContentLength = %d, want -1: the body is streamed", cl)
+	}
+	if limit := int64(size + size*3/5); delta < size/2 || delta >= limit {
+		t.Errorf("heap grew %d bytes before the send, want from %d to %d: one copy of the file, no more", delta, size/2, limit)
 	}
 }

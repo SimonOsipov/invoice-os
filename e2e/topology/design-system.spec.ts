@@ -199,6 +199,7 @@ type Measured = { tag: string; text: string; left: number; right: number; top: n
 async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
   const bakedBlogUrl = resolveTarget('BAKED_BLOG_URL')
+  const bakedCheckUrl = resolveTarget('BAKED_CHECK_URL')
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
 
@@ -240,6 +241,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
         : null
       const logo = document.querySelector('header a[aria-label="ASComply Africa"]')
       const burger = document.querySelector('header button[aria-label="Menu"]')
+      const barGap = parseFloat(getComputedStyle(document.querySelector('header .a-bar')!).columnGap)
       const mark = document.querySelector('header a[aria-label="ASComply Africa"] img')
       const word = document.querySelector('header .ds-logo-word')
       let hit = null
@@ -260,6 +262,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
         content,
         inside,
         actions,
+        barGap,
         logo: logo ? measure(logo) : null,
         book: bookDemo ? measure(bookDemo) : null,
         burger: burger ? measure(burger) : null,
@@ -364,9 +367,18 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       const blog = navLinks.filter((e) => e.text === 'Blog')
       expect(blog, `${width}px: the nav "Blog" link (is landing.VITE_BLOG_URL set?)`).toHaveLength(1)
       expect(blog[0].left, `${width}px: "Blog" left vs "Library" right`).toBeGreaterThanOrEqual(library[0].right - 1)
-      expect(blog[0].right, `${width}px: "Blog" right vs "Sign in" left`).toBeLessThanOrEqual(signIn!.left + 1)
       expect(blog[0].bottom - blog[0].top, `${width}px: "Blog" wraps`).toBeLessThanOrEqual(library[0].bottom - library[0].top + 1)
       await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Blog' }), `${width}px: the Blog href`).toHaveAttribute('href', bakedBlogUrl)
+      const check = navLinks.filter((e) => e.text === 'Free check')
+      expect(check, `${width}px: one nav "Free check" link (is landing.VITE_CHECK_URL set?)`).toHaveLength(1)
+      expect(check[0].left, `${width}px: "Free check" left vs "Blog" right`).toBeGreaterThanOrEqual(blog[0].right - 1)
+      expect(check[0].right, `${width}px: "Free check" right vs "Sign in" left`).toBeLessThanOrEqual(signIn!.left + 1)
+      expect(check[0].bottom - check[0].top, `${width}px: "Free check" wraps`).toBeLessThanOrEqual(library[0].bottom - library[0].top + 1)
+      // The bar's column gap less 1px: a tighter nav crowds the logo or Sign in.
+      const firstLink = navLinks.reduce((a, b) => (b.left < a.left ? b : a))
+      expect(firstLink.left - m.logo!.right, `${width}px: logo to the first nav link`).toBeGreaterThanOrEqual(m.barGap - 1)
+      expect(signIn!.left - check[0].right, `${width}px: "Free check" to "Sign in"`).toBeGreaterThanOrEqual(m.barGap - 1)
+      await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Free check' }), `${width}px: the Free check href`).toHaveAttribute('href', bakedCheckUrl)
     }
     if (navLinks.length > 0) {
       navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
@@ -878,16 +890,23 @@ test('landing mobile menu at 834, 390 and 375', async ({ page }, testInfo) => {
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
     await expect(menu.getByRole('link', { name: 'Library' }), `${label}: one "Library" link in the menu (is landing.VITE_LIBRARY_URL set?)`).toHaveCount(1)
     await expect(menu.getByRole('link', { name: 'Blog' }), `${label}: one "Blog" link in the menu (is landing.VITE_BLOG_URL set?)`).toHaveCount(1)
-    await expect(menu.locator('a').last(), `${label}: Blog follows Library`).toHaveText('Blog')
-    await expect(menu.locator('a').nth(-2), `${label}: Library precedes Blog`).toHaveText('Library')
+    const checkLink = menu.getByRole('link', { name: 'Free check' })
+    await expect(checkLink, `${label}: one "Free check" link in the menu (is landing.VITE_CHECK_URL set?)`).toHaveCount(1)
+    await expect(menu.locator('a').last(), `${label}: Free check follows Blog`).toHaveText('Free check')
+    await expect(menu.locator('a').nth(-2), `${label}: Blog precedes Free check`).toHaveText('Blog')
+    await expect(menu.locator('a').nth(-3), `${label}: Library precedes Blog`).toHaveText('Library')
     const signIn = menu.getByRole('button', { name: 'Sign in', exact: true })
     await expect(signIn, `${label}: exactly one "Sign in" in the menu`).toHaveCount(1)
     await expect(menu.getByRole('button'), `${label}: the menu buttons`).toHaveText(['Sign in'])
+    const checkBox = await box(checkLink, `${label} menu check link`)
+    expect(enclosesRect(menuBox, checkBox, 1), `${label}: "Free check" leaves the menu`).toBe(true)
+    expect(checkBox.y + checkBox.height, `${label}: "Free check" bottom vs viewport`).toBeLessThanOrEqual(vp.height + 1)
     const signInBox = await box(signIn, `${label} menu sign in`)
+    expect(checkBox.y + checkBox.height, `${label}: "Free check" bottom vs "Sign in" top`).toBeLessThanOrEqual(signInBox.y + 1)
     expect(enclosesRect(menuBox, signInBox, 1), `${label}: "Sign in" leaves the menu`).toBe(true)
     expect(signInBox.y + signInBox.height, `${label}: "Sign in" bottom vs viewport`).toBeLessThanOrEqual(vp.height + 1)
 
-    measured.push({ width: vp.width, headerBox, menuBox, signInBox, navLinks })
+    measured.push({ width: vp.width, headerBox, menuBox, checkBox, signInBox, navLinks })
 
     await page.keyboard.press('Escape')
     await expect(menu, `${label}: menu after Escape`).toHaveCount(0)
@@ -1542,4 +1561,62 @@ test('landing faq sticky and closing panel', async ({ page }, testInfo) => {
 
   await attachJson(testInfo, 'faq-closing.json', measured)
   expect(errors, `console errors on the FAQ and closing sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing check links: hero and closing fit their panels', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  const bakedCheckUrl = resolveTarget('BAKED_CHECK_URL')
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const width of [...WIDE_WIDTHS, 834, 390, 375]) {
+    const label = `${width}px`
+    await settleFrame(page, geFrame(width))
+
+    const heroLink = page.locator('#top').getByRole('link', { name: 'Check your invoices' })
+    const heroDemo = page.locator('#top').getByRole('button', { name: 'Book a demo' })
+    await expect(heroLink, `${label}: one hero check link (is landing.VITE_CHECK_URL set?)`).toHaveCount(1)
+    await expect(heroLink, `${label}: hero check href`).toHaveAttribute('href', bakedCheckUrl)
+    const [heroCheck, heroBook, column, card] = [
+      await box(heroLink, `${label} hero check link`),
+      await box(heroDemo, `${label} hero Book a demo`),
+      await box(page.locator('#top .split > div:first-child'), `${label} hero text column`),
+      await box(page.locator('#top .hero-card'), `${label} hero card`),
+    ]
+    expect(rectsOverlap(heroCheck, heroBook), `${label}: hero check link overlaps Book a demo`).toBe(false)
+    expect(rectsOverlap(heroCheck, card), `${label}: hero check link overlaps the card`).toBe(false)
+    expect(rectsOverlap(heroBook, card), `${label}: hero Book a demo overlaps the card`).toBe(false)
+    expect(enclosesRect(column, heroCheck, 1), `${label}: hero check link outside the text column`).toBe(true)
+    expect(enclosesRect(column, heroBook, 1), `${label}: hero Book a demo outside the text column`).toBe(true)
+
+    await page.locator('[data-closing]').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    const closingLink = page.locator('[data-closing]').getByRole('link', { name: 'Check your invoices' })
+    await expect(closingLink, `${label}: one closing check link`).toHaveCount(1)
+    await expect(closingLink, `${label}: closing check href`).toHaveAttribute('href', bakedCheckUrl)
+    const [closing, copy] = await rectsOf(page, '[data-closing], [data-closing] > div:first-child')
+    const closeCheck = await box(closingLink, `${label} closing check link`)
+    const closeBook = await box(page.locator('[data-closing]').getByRole('button', { name: 'Book a demo' }), `${label} closing Book a demo`)
+    expect(rectsOverlap(closeCheck, closeBook), `${label}: closing check link overlaps Book a demo`).toBe(false)
+    for (const [name, b] of [['check link', closeCheck], ['Book a demo', closeBook]] as const) {
+      expect(enclosesRect(copy, b, 1), `${label}: closing ${name} outside the copy grid`).toBe(true)
+      expect(enclosesRect(closing, b, 1), `${label}: closing ${name} outside the panel`).toBe(true)
+    }
+    const mark = page.locator('[data-closing] .cta-mark')
+    const markShown = (await mark.evaluate((el) => getComputedStyle(el).display)) === 'block'
+    if (markShown) {
+      const m = await box(mark, `${label} .cta-mark`)
+      expect(rectsOverlap(closeCheck, m), `${label}: closing check link overlaps .cta-mark`).toBe(false)
+      expect(rectsOverlap(closeBook, m), `${label}: closing Book a demo overlaps .cta-mark`).toBe(false)
+    }
+
+    const sideways = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+    expect(sideways.scrollWidth, `${label}: the page scrolls sideways`).toBeLessThanOrEqual(sideways.clientWidth)
+    measured.push({ width, heroCheck, heroBook, column, card, closeCheck, closeBook, closing, copy, markShown })
+  }
+
+  expect(measured.length, 'widths measured').toBeGreaterThan(0)
+  await attachJson(testInfo, 'check-links.json', measured)
+  expect(errors, `console errors on the check links sweep:\n${errors.join('\n')}`).toEqual([])
 })

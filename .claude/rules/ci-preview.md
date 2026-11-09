@@ -33,6 +33,7 @@ paths:
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
 - List the library origin and the check origin in the preview gateway's `CORS_ALLOWED_ORIGINS`. The library serves the landing not-found page, which calls the gateway.
 - Print the library, blog and check addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
+- Bake `VITE_CHECK_URL` (the check address from `preview.sh urls`) into the landing, library and check images.
 - Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.

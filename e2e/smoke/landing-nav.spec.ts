@@ -279,27 +279,19 @@ test('landing nav: no link is marked current outside the nav sections', async ({
   expectNoConsoleErrors(errors)
 })
 
-// E9 - the hero's "Explore the platform" button lands the Platform heading below the header.
-test('landing nav: the hero Explore the platform button lands on Platform', async ({ page }) => {
+// E9 - the hero check link opens the check page.
+test('landing nav: the hero check link opens the check page', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 })
-  const { errors, headerH } = await openLanding(page)
+  const { errors } = await openLanding(page)
 
-  // The hero holds two #platform anchors; only the ghost button is the one under test.
-  await page.locator('#top a.ds-btn--ghostDark[href="#platform"]').click()
+  const checkUrl = resolveTarget('CHECK_URL')
+  const link = page.locator('#top').getByRole('link', { name: 'Check your invoices' })
+  await expect(link).toHaveAttribute('href', checkUrl)
+  await link.click()
 
-  await expect(page).toHaveURL(/#platform$/)
-  // Two-sided: a lower bound alone passes before the smooth scroll has moved.
-  await expect
-    .poll(async () => Math.abs((await page.locator('#platform').boundingBox())!.y - headerH), {
-      message: `#platform did not settle at the ${headerH}px header edge after the hero click`,
-    })
-    .toBeLessThanOrEqual(PX)
-  await expect
-    .poll(async () => (await page.locator('#platform h2').first().boundingBox())!.y, {
-      message: `the #platform heading is occluded by the ${headerH}px header after the hero click`,
-    })
-    .toBeGreaterThanOrEqual(headerH - PX)
-
+  await page.waitForURL((u) => u.href.replace(/\/$/, '') === checkUrl.replace(/\/$/, ''))
+  // CHECK_H1 in frontend/check/src/copy.ts.
+  await expect(page.getByRole('heading', { level: 1, name: 'Check your invoices against the MBS rules' })).toBeVisible()
   expectNoConsoleErrors(errors)
 })
 
@@ -308,5 +300,12 @@ test('landing nav: the hero Explore the platform button lands on Platform', asyn
 test('landing nav: the Library link names the baked Library URL', async ({ page }) => {
   const { errors, nav } = await openLanding(page)
   await expect(nav.getByRole('link', { name: 'Library' })).toHaveAttribute('href', resolveTarget('LIBRARY_URL'))
+  expectNoConsoleErrors(errors)
+})
+
+// The nav "Free check" link carries the Check URL the build bakes as VITE_CHECK_URL.
+test('landing nav: the Check link names the baked Check URL', async ({ page }) => {
+  const { errors, nav } = await openLanding(page)
+  await expect(nav.getByRole('link', { name: 'Free check' })).toHaveAttribute('href', resolveTarget('CHECK_URL'))
   expectNoConsoleErrors(errors)
 })

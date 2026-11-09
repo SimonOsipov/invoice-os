@@ -367,6 +367,7 @@ jobs:
               --build-arg "VITE_LANDING_URL=$landing_url"
               --build-arg "VITE_LIBRARY_URL=$library_url"
               --build-arg "VITE_BLOG_URL=$blog_url"
+              --build-arg "VITE_CHECK_URL=$check_url"
               --build-arg "VITE_OPS_URL=$ops_console_url"
               --build-arg "VITE_SUPPORT_URL=$support_console_url"
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
@@ -762,6 +763,7 @@ jobs:
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BAKED_BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      BAKED_CHECK_URL: ${{ needs.prepare-env.outputs.check_url }}
       ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
       E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
@@ -779,7 +781,7 @@ jobs:
         id: targets
         run: |
           rc=0
-          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL CHECK_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL BAKED_BLOG_URL; do
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL CHECK_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL BAKED_BLOG_URL BAKED_CHECK_URL; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is empty — prepare-env did not publish it."
               rc=1

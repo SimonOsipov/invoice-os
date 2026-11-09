@@ -113,3 +113,34 @@ describe('Nav blogHref', () => {
     expect(hrefs.filter((h) => h !== BLOG).every((h) => h.startsWith('/#'))).toBe(true)
   })
 })
+
+describe('Nav checkHref', () => {
+  const LIB = 'https://lib.x'
+  const BLOG = 'https://blog.x'
+  const CHECK = 'https://c.x/check'
+  const render = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...props }))
+  const hrefsOf = (props: Record<string, unknown>) => Array.from(render(props).matchAll(ANCHOR_HREF)).map((m) => m[1])
+
+  it('Nav_checkLink_afterBlogNewTab', () => {
+    expect(hrefsOf({ libraryHref: LIB, blogHref: BLOG, checkHref: CHECK })).toEqual(['#top', ...NAV_ONLY_TARGETS, LIB, BLOG, CHECK])
+    expect(render({ libraryHref: LIB, blogHref: BLOG, checkHref: CHECK })).toMatch(
+      /<a href="https:\/\/c\.x\/check" target="_blank" rel="noopener noreferrer" class="ios-nav-link"[^>]*>Free check<\/a>/,
+    )
+  })
+
+  it('Nav_checkLink_notPrefixed', () => {
+    const hrefs = hrefsOf({ hrefPrefix: '/', checkHref: CHECK })
+    expect(hrefs.filter((h) => h === CHECK), 'control: the check href renders once').toHaveLength(1)
+    expect(hrefs.filter((h) => h !== CHECK).every((h) => h.startsWith('/#'))).toBe(true)
+    expect(hrefs.some((h) => h.startsWith('//'))).toBe(false)
+  })
+
+  it('Nav_checkLink_absentWhenNull', () => {
+    expect(render({ checkHref: CHECK }), 'control: set renders it').toContain('Free check')
+    for (const props of [{ checkHref: null }, {}, { checkHref: '' }]) {
+      expect(hrefsOf(props)).toEqual(['#top', ...NAV_ONLY_TARGETS])
+      expect(render(props)).not.toContain('Free check')
+    }
+  })
+})

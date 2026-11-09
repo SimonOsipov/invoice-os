@@ -139,10 +139,10 @@ button {
   align-items: center;
   gap: 24px;
 }
-/* Room for the Library and Blog links before the burger edge. */
+/* Room for the Library, Blog and Free check links before the burger edge. */
 @media (max-width: 1279px) {
   .a-nav {
-    gap: 16px;
+    gap: 10px;
   }
 }
 .a-burger {

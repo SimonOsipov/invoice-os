@@ -20,7 +20,7 @@ import { Privacy } from './components/Privacy'
 import { NotFound } from './components/NotFound'
 import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
-import { blogBase, libraryBase } from './auth'
+import { blogBase, checkBase, libraryBase } from './auth'
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice, syncConsent } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
@@ -196,7 +196,7 @@ export default function App({ notFound = false }: { notFound?: boolean }) {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy || notFound ? '/' : ''} libraryHref={libraryBase()} blogHref={blogBase()} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy || notFound ? '/' : ''} libraryHref={libraryBase()} blogHref={blogBase()} checkHref={checkBase()} />
       {notice && (
         <VerifyNotice
           outcome={notice}
@@ -211,7 +211,7 @@ export default function App({ notFound = false }: { notFound?: boolean }) {
         <Privacy />
       ) : (
         <>
-          <Hero onBookDemo={book('hero')} />
+          <Hero onBookDemo={book('hero')} checkHref={checkBase()} />
           <AudienceStrip />
           <Problem />
           <Modules />
@@ -221,7 +221,7 @@ export default function App({ notFound = false }: { notFound?: boolean }) {
           <Integrations onBookDemo={book('integrations')} />
           <Api onBookDemo={book('api')} />
           <Faq onBookDemo={book('faq')} />
-          <ClosingCta onBookDemo={book('closing')} />
+          <ClosingCta onBookDemo={book('closing')} checkHref={checkBase()} />
         </>
       )}
       <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy || notFound ? '/' : ''} blogHref={blogBase()} onCookieChoices={() => {

@@ -367,6 +367,7 @@ jobs:
               --build-arg "VITE_LANDING_URL=$landing_url"
               --build-arg "VITE_LIBRARY_URL=$library_url"
               --build-arg "VITE_BLOG_URL=$blog_url"
+              --build-arg "VITE_CHECK_URL=$check_url"
               --build-arg "VITE_OPS_URL=$ops_console_url"
               --build-arg "VITE_SUPPORT_URL=$support_console_url"
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY

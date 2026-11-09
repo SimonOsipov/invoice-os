@@ -150,6 +150,7 @@ jobs:
               --build-arg VITE_LANDING_URL=https://www.ascomply.com
               --build-arg VITE_LIBRARY_URL=https://www.ascomply.com/library
               --build-arg VITE_BLOG_URL=https://www.ascomply.com/blog
+              --build-arg VITE_CHECK_URL=https://www.ascomply.com/check
               --build-arg VITE_OPS_URL=https://ops.ascomply.com
               --build-arg VITE_SUPPORT_URL=https://sup.ascomply.com
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY

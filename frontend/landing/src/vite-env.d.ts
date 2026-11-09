@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   // The Feature Library SPA. Unset or blank hides the nav's Library link.
   readonly VITE_LIBRARY_URL?: string
   // The Blog SPA. Unset or blank hides the nav, menu and footer Blog links.
+  // The Check SPA. Unset or blank means checkBase() returns null.
+  readonly VITE_CHECK_URL?: string
   readonly VITE_BLOG_URL?: string
   // The HubSpot portal that owns the Book-a-Demo form (LAND-02). Unset means
   // hubspotTarget() returns null (see hubspot.ts) and the demo form never posts —

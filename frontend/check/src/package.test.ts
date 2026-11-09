@@ -53,6 +53,17 @@ describe('check package', () => {
     expect(lines.some((l) => /^RUN pnpm --filter @invoice-os\/landing exec vite build --base=\/check\/_landing\//.test(l))).toBe(true)
   })
 
+  it('dockerfile_declaresCheckUrl', () => {
+    for (const app of ['landing', 'library', 'check']) {
+      const d = read(join(HERE, `../../${app}/Dockerfile`))
+      const stage = d.indexOf('AS build')
+      const at = d.indexOf('ARG VITE_CHECK_URL\nENV VITE_CHECK_URL=$VITE_CHECK_URL')
+      expect(stage, app).toBeGreaterThan(-1)
+      expect(at, app).toBeGreaterThan(stage)
+      expect(at, app).toBeLessThan(d.indexOf('AS serve'))
+    }
+  })
+
   it('dockerfile_bakesEveryViteVarBeforeTheBuild', () => {
     const d = read(join(HERE, '../Dockerfile'))
     const stage = d.indexOf('AS build')

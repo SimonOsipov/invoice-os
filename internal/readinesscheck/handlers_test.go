@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xuri/excelize/v2"
+
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
@@ -675,4 +677,88 @@ func TestCapturedMail_ReturnsOnlyThatAddressOldestFirst(t *testing.T) {
 	}
 
 	wantStatus(t, serve(h, strings.NewReader(`not json`), "application/json"), http.StatusBadRequest, "")
+}
+
+func xlsxOf(t *testing.T, csv string) []byte {
+	t.Helper()
+	f := excelize.NewFile()
+	for r, line := range strings.Split(strings.TrimSpace(csv), "\n") {
+		for c, cell := range strings.Split(line, ",") {
+			ref, _ := excelize.CoordinatesToCellName(c+1, r+1)
+			if err := f.SetCellValue("Sheet1", ref, cell); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestRun_AnXlsxRunIsRecordedAsXlsx(t *testing.T) {
+	r := newRig(t)
+	rec := r.run(t, visitor, "xlsx", xlsxOf(t, threeInvoice), "mapping", csvMapping)
+	wantStatus(t, rec, http.StatusOK, "")
+	rows := r.store.rows()
+	if len(rows) != 1 || rows[0].FileType != "xlsx" || rows[0].RowCount != 3 {
+		t.Errorf("summary = %+v, want one xlsx row of 3 rows", rows)
+	}
+}
+
+func TestRun_UnexpectedEngineErrorIs500WithoutPayload(t *testing.T) {
+	r := newRig(t)
+	r.svc.Checker.LoadRules = func(context.Context, []string, []validation.Rule) (map[string]validation.RuleSet, error) {
+		return nil, errors.New("rules table gone: " + visitor)
+	}
+	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	wantStatus(t, rec, http.StatusInternalServerError, "internal error")
+	r.noWrites(t)
+	if logs := r.logs.String(); !strings.Contains(logs, "level=ERROR") || strings.Contains(logs, visitor) {
+		t.Errorf("logs = %q, want an ERROR line without the error text", logs)
+	}
+}
+
+func TestRun_TheMailStatesTheChecksLeftTheAnswerReports(t *testing.T) {
+	for count, want := range map[int]string{0: "2 free checks left", 1: "1 free check left", 2: "no free checks left"} {
+		r := newRig(t)
+		r.store.count = count
+		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
+		msgs := r.send.capture.Messages()
+		if len(msgs) != 1 || !strings.Contains(msgs[0].HTML, want) {
+			t.Errorf("count %d: mail lacks %q", count, want)
+		}
+	}
+}
+
+func TestRun_RefusesAMissingEmailFileOrOversizePart(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		parts [][2]string
+		file  []byte
+	}{
+		{"no email", [][2]string{{"format", "csv"}}, []byte(oneInvoice)},
+		{"blank email", [][2]string{{"email", "  "}, {"format", "csv"}}, []byte(oneInvoice)},
+		{"no file part", [][2]string{{"email", visitor}, {"format", "csv"}}, nil},
+		{"a part over 1 MiB", [][2]string{{"email", visitor}, {"format", "csv"}, {"mapping", strings.Repeat("a", 1<<20+1)}}, []byte(oneInvoice)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			body, ct := form(t, tc.parts, tc.file)
+			wantStatus(t, serve(r.svc.RunHandler(), body, ct), http.StatusBadRequest, "invalid request body")
+			r.untouched(t)
+		})
+	}
+}
+
+func TestMapping_ShareTheTwoSlotsWithRuns(t *testing.T) {
+	r := newRig(t)
+	finish := holdTwo(t, r)
+	body, ct := mapForm(t, "csv", []byte("Inv,Total\nA,1\n"))
+	wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusServiceUnavailable, "busy")
+	if r.mapper.calls.Load() != 0 {
+		t.Errorf("mapper calls = %d, want 0: a busy mapping call must not reach the AI", r.mapper.calls.Load())
+	}
+	finish()
 }

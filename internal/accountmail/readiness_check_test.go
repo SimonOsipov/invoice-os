@@ -109,7 +109,7 @@ func TestRenderReadinessCheck_StatesChecksLeftAndLinksSignUp(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("ChecksLeft %d: mail lacks %q", left, want)
 		}
-		if !strings.Contains(out, `href="`+ReadinessCheckSignUpURL+`"`) {
+		if !strings.Contains(out, `href="`+ReadinessCheckSignUpURL+`"`) || !strings.Contains(out, "ascomply.com/?register") {
 			t.Errorf("ChecksLeft %d: no href to %s", left, ReadinessCheckSignUpURL)
 		}
 	}

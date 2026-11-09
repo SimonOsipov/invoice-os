@@ -125,3 +125,35 @@ func TestMailFor_ARuleWithNoTargetIsLabelledInvoice(t *testing.T) {
 		t.Errorf("label = %q, want Invoice", got)
 	}
 }
+
+func TestMailFor_AnInfoViolationIsAWarningAndAnErrorIsTheOnlyFailure(t *testing.T) {
+	res := publiccheck.Result{InvoicesTotal: 1, Invoices: []publiccheck.Invoice{{Number: "A", Payload: map[string]any{}, Failures: []validation.Violation{
+		viol("i", "info", "buyer.email"), viol("e", "error", "supplier.tin"),
+	}}}}
+	inv := MailFor(res, 2).Invoices[0]
+	if len(inv.Failures) != 1 || inv.Failures[0].Label != "Supplier TIN" || len(inv.Warnings) != 1 || inv.Warnings[0].Label != "Buyer email" || inv.Passes {
+		t.Errorf("invoice = %+v, want one failure on Supplier TIN, one warning on Buyer email, not Passes", inv)
+	}
+}
+
+func TestMailFor_CutsEveryFileValueButNotARuleMessage(t *testing.T) {
+	long := strings.Repeat("é", 5000)
+	res := publiccheck.Result{InvoicesTotal: 1, Invoices: []publiccheck.Invoice{
+		{Number: long, Payload: map[string]any{"issue_date": long, "currency": long}, Failures: []validation.Violation{
+			{RuleKey: "r", Severity: "error", Path: "total", Message: long},
+		}},
+		{Number: "B", Failures: []validation.Violation{{Severity: "error", Path: "issue_date", Message: long}}},
+	}}
+	m := MailFor(res, 0)
+	runes := func(s string) int { return len([]rune(s)) }
+	a := m.Invoices[0]
+	if runes(a.Number) != 120 || runes(a.IssueDate) != 120 || runes(a.Currency) != 120 {
+		t.Errorf("number, date, currency = %d, %d, %d runes, want 120 each", runes(a.Number), runes(a.IssueDate), runes(a.Currency))
+	}
+	if got := runes(a.Failures[0].Value); got != 5000 {
+		t.Errorf("a rule message was cut to %d runes, want it whole", got)
+	}
+	if got := runes(m.Invoices[1].Failures[0].Value); got != 120 {
+		t.Errorf("a read problem quoting the file is %d runes, want 120", got)
+	}
+}

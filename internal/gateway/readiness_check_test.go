@@ -757,3 +757,143 @@ func TestRun_ForwardHoldsOneCopyOfTheFile(t *testing.T) {
 		t.Errorf("worker read %d file bytes, want %d", got, size)
 	}
 }
+
+// D6: a caller with no trustworthy address counts under one shared key, so it is still limited.
+func TestRun_UnattributableClientIsStillLimited(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for i := range ReadinessCheckPerIP {
+		if rec := e.runOK(t, "not-an-ip"); rec.Code != 200 {
+			t.Fatalf("run %d = %d %s, want 200", i+1, rec.Code, rec.Body)
+		}
+	}
+	wantRefused(t, e.runOK(t, "not-an-ip"), 429, checkIPSentence)
+	if e.w.calls() != ReadinessCheckPerIP {
+		t.Errorf("worker calls = %d, want %d", e.w.calls(), ReadinessCheckPerIP)
+	}
+}
+
+func TestRun_BadPartsAreRefusedBeforeTheFile(t *testing.T) {
+	email, consent := mpPart{"email", "", []byte("a@x.co")}, mpPart{"consent_text", "", []byte(checkConsent)}
+	for _, tc := range []struct {
+		name  string
+		parts []mpPart
+	}{
+		{"repeated email", []mpPart{email, email, consent}},
+		{"unknown part", []mpPart{email, consent, {"x", "", []byte("1")}}},
+		{"email over its cap", []mpPart{{"email", "", bytes.Repeat([]byte("a"), 1025)}, consent}},
+		{"consent over its cap", []mpPart{email, {"consent_text", "", bytes.Repeat([]byte("a"), 4097)}}},
+		{"mapping over its cap", []mpPart{email, consent, {"mapping", "", append([]byte(`{"a":"`), bytes.Repeat([]byte("b"), 64<<10)...)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			req, consumed := newCheckRequest(t, "/readiness-check/run", append(tc.parts, mpPart{"file", "inv.csv", unreadFile})...)
+			wantRefused(t, e.run(t, req), 400, "invalid request body")
+			if consumed.Load() || ipCount(e.th, checkIP) != 0 || e.w.calls() != 0 {
+				t.Errorf("file read %v, ip count %d, worker calls %d; want none", consumed.Load(), ipCount(e.th, checkIP), e.w.calls())
+			}
+		})
+	}
+	t.Run("no file part", func(t *testing.T) {
+		e := newCheckEnv(t, true)
+		req, _ := newCheckRequest(t, "/readiness-check/run", email, consent)
+		wantRefused(t, e.run(t, req), 400, "invalid request body")
+		if e.w.calls() != 0 {
+			t.Error("the worker was called")
+		}
+	})
+}
+
+func TestRun_AFileOfExactlyTheCapIsAccepted(t *testing.T) {
+	e := newCheckEnv(t, true)
+	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("inv.csv", make([]byte, MaxCheckFileBytes))...)
+	if rec := e.run(t, req); rec.Code != 200 {
+		t.Fatalf("answer = %d %s, want 200 for a file of exactly 15 MiB", rec.Code, rec.Body)
+	}
+	if len(e.w.got) != 1 || len(e.w.got[0].file) != MaxCheckFileBytes {
+		t.Errorf("worker got %d calls, want 1 with the whole file", len(e.w.got))
+	}
+}
+
+func TestMapping_RefusesATextPartAndAnOversizeFile(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parts  []mpPart
+		status int
+		msg    string
+	}{
+		{"a text part before the file", []mpPart{{"email", "", []byte("a@x.co")}, {"file", "inv.csv", []byte("a\n1\n")}}, 400, "invalid request body"},
+		{"a file over 15 MiB", []mpPart{{"file", "inv.csv", make([]byte, 15<<20+1)}}, 413, checkTooLargeSentence},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			req, _ := newCheckRequest(t, "/readiness-check/mapping", tc.parts...)
+			rec := httptest.NewRecorder()
+			e.rc.mapping(rec, req)
+			wantRefused(t, rec, tc.status, tc.msg)
+			if e.w.calls() != 0 {
+				t.Error("the worker was called")
+			}
+		})
+	}
+}
+
+func TestRun_ConsentWithNULAndAnEmailWithASpaceAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, email, consent, want string
+	}{
+		{"NUL in the consent", "a@x.co", "I agree\x00", checkConsentSentence},
+		{"blank consent", "a@x.co", "   ", checkConsentSentence},
+		{"space inside the email", "a b@x.co", checkConsent, "email is invalid"},
+		{"two at signs", "a@b@x.co", checkConsent, "email is invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			req, consumed := newCheckRequest(t, "/readiness-check/run", mpPart{"email", "", []byte(tc.email)},
+				mpPart{"consent_text", "", []byte(tc.consent)}, mpPart{"file", "inv.csv", unreadFile})
+			wantRefused(t, e.run(t, req), 400, tc.want)
+			if consumed.Load() || ipCount(e.th, checkIP) != 0 || e.w.calls() != 0 {
+				t.Errorf("file read %v, ip count %d, worker calls %d; want none", consumed.Load(), ipCount(e.th, checkIP), e.w.calls())
+			}
+		})
+	}
+}
+
+func TestRun_WorkerOKWithAnInvalidChecksLeftIs502(t *testing.T) {
+	for _, reply := range []string{`{"checks_left":3}`, `{"checks_left":-1}`, `{"checks_left":"2"}`, `not json`} {
+		e := newCheckEnv(t, true)
+		e.w.answer(200, reply)
+		wantRefused(t, e.runOK(t, checkIP), 502, checkUnavailableSentence)
+		if e.sink.count() != 1 {
+			t.Errorf("reply %s: sink calls = %d, want 1: the mail went", reply, e.sink.count())
+		}
+	}
+}
+
+func TestRun_FormatComesFromTheLowercasedExtension(t *testing.T) {
+	for file, want := range map[string]string{"INV.CSV": "csv", "a.b.Xlsx": "xlsx", "scan.PDF": "pdf", "note.docx": "docx"} {
+		e := newCheckEnv(t, true)
+		req, _ := newCheckRequest(t, "/readiness-check/run", okParts(file, []byte("a\n1\n"))...)
+		if rec := e.run(t, req); rec.Code != 200 {
+			t.Fatalf("%s = %d %s, want 200", file, rec.Code, rec.Body)
+		}
+		if len(e.w.got) != 1 || e.w.got[0].fields["format"] != want {
+			t.Errorf("%s: worker got %+v, want format %s", file, e.w.got, want)
+		}
+	}
+}
+
+func TestMapping_AcceptsAnXlsxAndRefusesADocx(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.w.answer(200, `{"columns":[]}`)
+	for file, want := range map[string]int{"inv.xlsx": 200, "inv.XLSX": 200, "inv.docx": 400} {
+		req, _ := newCheckRequest(t, "/readiness-check/mapping", mpPart{"file", file, []byte("x")})
+		rec := httptest.NewRecorder()
+		e.rc.mapping(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s = %d, want %d", file, rec.Code, want)
+		}
+	}
+	if e.w.calls() != 2 || e.w.got[0].fields["format"] != "xlsx" {
+		t.Errorf("worker calls = %d (first format %q), want 2 xlsx calls", e.w.calls(), e.w.got[0].fields["format"])
+	}
+}

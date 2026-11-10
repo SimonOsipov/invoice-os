@@ -1,3 +1,11 @@
+import { ACCEPTED_PICKED_TYPES, MAX_UPLOAD_BYTES } from './fields'
+
+// Pinned to the Go constants by whatYouGet.limits.test.ts.
+export const MAX_INVOICES = 2 // publiccheck.MaxInvoices
+export const MAX_RUNS_PER_EMAIL = 3 // readinesscheck.MaxRunsPerEmail
+const MAX_MIB = MAX_UPLOAD_BYTES / 1024 / 1024
+const TYPE_NAMES = ACCEPTED_PICKED_TYPES.map((r) => r.ext.slice(1).toUpperCase())
+
 export const CHECK_TITLE = 'Free e-invoice readiness check — ASComply Africa'
 export const CHECK_DESCRIPTION =
   'Upload one invoice file and get the MBS rule results for its first 2 invoices by email. Free, no account needed.'
@@ -14,7 +22,7 @@ export const STEP_LABELS = { upload: 'Upload', map: 'Match columns', email: 'Ema
 export const CHECK_EYEBROW = 'FREE E-INVOICE READINESS CHECK'
 export const COMPANY_LINE = '© 2026 ASComply Africa Limited · Lagos, Nigeria'
 export const TRUST_CUES = [
-  { glyph: 'circle-check', title: 'Free', text: '3 checks per email address' },
+  { glyph: 'circle-check', title: 'Free', text: `${MAX_RUNS_PER_EMAIL} checks per email address` },
   { glyph: 'lock', title: 'No account', text: 'Just an email for the results' },
   { glyph: 'trash-2', title: 'File not kept', text: 'Deleted when the check finishes' },
   { glyph: 'mail', title: 'Results by email', text: 'Never shown on this page' },
@@ -30,12 +38,11 @@ export const WHAT_EMAIL = {
   title: 'What the email tells you',
   text: 'For each of the first 2 invoices in your file: every rule it fails, with the field the rule checked and the rule’s message. An invoice that fails no rule says “Passes every rule”. Rules that only warn are listed under Warnings, and rules that need your company profile are listed as Not checked. You see what to fix in your invoicing before it matters.',
 } as const
-// Numbers: MaxInvoices (publiccheck), MaxRunsPerEmail (readinesscheck), MAX_UPLOAD_BYTES and four import extensions (app importFlow).
 export const WHAT_LIMITS = [
-  { n: '2', caption: 'invoices checked per file' },
-  { n: '3', caption: 'free checks per email address' },
-  { n: '15 MiB', caption: 'largest file, one at a time' },
-  { n: '4', caption: 'file types: CSV, XLSX, PDF, DOCX' },
+  { n: String(MAX_INVOICES), caption: 'invoices checked per file' },
+  { n: String(MAX_RUNS_PER_EMAIL), caption: 'free checks per email address' },
+  { n: `${MAX_MIB} MiB`, caption: 'largest file, one at a time' },
+  { n: String(TYPE_NAMES.length), caption: `file types: ${TYPE_NAMES.join(', ')}` },
 ] as const
 export const WHAT_CTA = 'Check a file'
 // Subject, sender and pass text are the real mail's (accountmail.ReadinessCheckSubject, sender.From, readiness_check.html);

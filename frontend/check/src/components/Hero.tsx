@@ -3,7 +3,7 @@ import { CHECK_EYEBROW, CHECK_H1, CHECK_INTRO, TRUST_CUES } from '../copy'
 import { Eyebrow, GLYPHS, Icon } from '../ds'
 import { CHECK_GLYPHS } from '../glyphs'
 
-const ICONS: Record<string, readonly string[]> = { ...GLYPHS, ...CHECK_GLYPHS }
+const ICONS = { ...GLYPHS, ...CHECK_GLYPHS }
 
 // `wide` is the Map step: one column, a compact hero.
 export function Hero({ wide, children }: { wide: boolean; children: ReactNode }) {

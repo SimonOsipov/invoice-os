@@ -120,7 +120,7 @@ test.describe('check layout', () => {
     }
   })
 
-  // Frame rows (FREECHK-10-02). A pdf pick reaches the Email step with no network call.
+  // Frame rows. A pdf pick reaches the Email step with no network call.
   const PDF = { name: 'a.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') }
   const ALL_WIDTHS = [...WIDE_WIDTHS, ...PHONE_WIDTHS]
 
@@ -157,7 +157,9 @@ test.describe('check layout', () => {
     await openCheck(page, ALL_WIDTHS[0])
     for (const width of ALL_WIDTHS) {
       await resize(page, width)
-      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+      // html has scroll-behavior: smooth; an instant scroll moves before the measure.
+      await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }))
+      expect(await page.evaluate(() => window.scrollY), `${width}px: page scrolled`).toBeGreaterThan(0)
       const label = `${width}px`
       const head = await rectOf(page.locator('.check-head'), 'header')
       expect(Math.abs(head.y), `${label}: header top`).toBeLessThanOrEqual(1)
@@ -369,7 +371,7 @@ test.describe('check layout', () => {
     }
   })
 
-  // What you get (FREECHK-10-03).
+  // What you get.
   test('check layout: anchors land below the header', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     for (const width of [1280, 390]) {

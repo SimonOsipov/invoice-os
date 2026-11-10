@@ -1,6 +1,6 @@
 import type { Progress } from '../progress'
 
-// Desktop list and phone strip; CSS shows one. The phone strip stays visible to assistive tech (Decision [Phone strip]).
+// Desktop list and phone strip; CSS shows one. The phone strip stays visible to assistive tech.
 export function ProgressStrip({ progress }: { progress: Progress }) {
   const { items, phone } = progress
   return (

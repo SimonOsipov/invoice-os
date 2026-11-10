@@ -61,6 +61,11 @@ test('check: crawler reads the title, the description and the h1 without JavaScr
 
 // Writes nothing, so it runs on production too.
 test('check: the page shows the hero, the trust cues and the progress strip', async ({ page }) => {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
   await seedConsent(page, false)
   await page.goto(CHECK_URL)
   await expect(page.getByText(EYEBROW, { exact: true })).toBeVisible()
@@ -68,9 +73,10 @@ test('check: the page shows the hero, the trust cues and the progress strip', as
   const cues = page.getByRole('list', { name: 'About this check' })
   for (const title of TRUST_TITLES) await expect(cues.getByText(title, { exact: true })).toBeVisible()
   const strip = page.getByRole('list', { name: 'Check progress' })
-  await expect(strip.getByRole('listitem')).toHaveText(STEPS)
-  await expect(strip.locator('[aria-current="step"]')).toHaveText('Upload')
+  await expect(strip.locator('.check-step-lbl')).toHaveText(STEPS)
+  await expect(strip.locator('[aria-current="step"] .check-step-lbl')).toHaveText('Upload')
   await expect(page.locator('#what').getByRole('heading', { level: 2 })).toContainText(WHAT_HEADING)
+  expect(errors).toEqual([])
 })
 
 test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
@@ -90,7 +96,7 @@ test('check: a visitor uploads a spreadsheet, maps it and is told the results ar
   await page.goto(CHECK_URL)
   await page.locator('#check-file').setInputFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
   await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
-  const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"]')
+  const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"] .check-step-lbl')
   await expect(current).toHaveText('Match columns')
   // Choose every column: a preview's AI is fake, the nightly's is real, so the suggestion proves nothing.
   for (const [label, header] of COLUMNS) {

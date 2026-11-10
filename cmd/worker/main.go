@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountevents"
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
@@ -159,7 +160,7 @@ func main() {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
 	platform.Contacts = string(mode)
-	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport())
+	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport(), accountmail.PoolTokens(pool))
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}

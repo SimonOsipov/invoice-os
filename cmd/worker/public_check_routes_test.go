@@ -166,7 +166,7 @@ func TestWorkerMain_CapturedMailRouteFollowsThePosture(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := func(k string) string { return tc.vars[k] }
-			nl, err := notifications.NewsletterClients(getenv, tc.env, notifications.ModeFake, http.DefaultTransport)
+			nl, err := notifications.NewsletterClients(getenv, tc.env, notifications.ModeFake, http.DefaultTransport, nil)
 			if err != nil {
 				t.Fatalf("NewsletterClients: %v", err)
 			}

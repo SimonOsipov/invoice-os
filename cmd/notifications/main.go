@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/blog"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -24,22 +25,22 @@ func main() {
 	}
 
 	ctx := context.Background()
-	mode, _, _, err := notifications.DeliveryClients(os.Getenv, platform.DeployEnv(), notifications.RealTransport())
-	if err != nil {
-		platform.Fatal(app.Logger, "notifications: %v", err)
-	}
-	platform.Contacts = string(mode)
-	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport())
-	if err != nil {
-		platform.Fatal(app.Logger, "notifications: %v", err)
-	}
-
 	pool, err := db.NewPool(ctx, mustEnv("DATABASE_URL"))
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: db pool: %v", err)
 	}
 	defer pool.Close()
 	app.Ready("database", pool.Ping)
+
+	mode, _, _, err := notifications.DeliveryClients(os.Getenv, platform.DeployEnv(), notifications.RealTransport())
+	if err != nil {
+		platform.Fatal(app.Logger, "notifications: %v", err)
+	}
+	platform.Contacts = string(mode)
+	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport(), accountmail.PoolTokens(pool))
+	if err != nil {
+		platform.Fatal(app.Logger, "notifications: %v", err)
+	}
 
 	// Insert-only: cmd/worker delivers every contact job and purges expired blog requests.
 	q, err := queue.New(pool, queue.Config{})

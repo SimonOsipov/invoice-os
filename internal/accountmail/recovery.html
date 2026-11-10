@@ -10,4 +10,5 @@
 {{- define "details"}}<tr><td width="120" style="{{template "row_label_style_last"}}">Email</td><td style="{{template "row_value_style_last"}}">{{.Email}}</td></tr>{{end}}
 {{- define "ignore_note"}}If you did not ask for this, ignore this email. Your password stays the same.{{end}}
 {{- define "reason"}}You received this email because a password reset was requested for this address.{{end}}
+{{- define "unsubscribe_url"}}https://api.ascomply.com/unsubscribe{{with .Data}}{{with index . "unsubscribe"}}?t={{.}}{{end}}{{end}}{{end}}
 {{- template "layout" .}}

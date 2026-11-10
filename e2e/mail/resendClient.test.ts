@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { contactTopics, getContact, listSent, parseCreatedAt, waitForMail, type Fetch } from './resendClient'
+import { contactTopics, getContact, listSent, parseCreatedAt, settledMailCount, waitForMail, waitForMailCount, type Fetch } from './resendClient'
 
 const SINCE = new Date('2026-10-30T00:00:00Z')
 const NEW = '2026-10-30 12:00:00.000000+00'
@@ -220,5 +220,151 @@ describe('contactTopics', () => {
     expect(got.map((t) => t.subscription)).toEqual(['opt_in', 'opt_out', 'opt_in'])
     expect(urls[0]).not.toContain('after=')
     expect(urls[1]).toContain('after=t2')
+  })
+})
+
+describe('waitForMailCount', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const at = (ms = 0) => new Date(Date.now() + ms).toISOString().replace('T', ' ').replace('Z', '000+00')
+  const mails = (n: number, to = 'me@x.test', subject = 'S') => Array.from({ length: n }, (_, i) => item(`m${i}`, at(), to, subject))
+  const polls = (...answers: ReturnType<typeof item>[][]) => {
+    let n = 0
+    return vi.fn(async () => json({ data: answers[Math.min(n++, answers.length - 1)], has_more: false })) as unknown as Fetch
+  }
+  const since = () => new Date(Date.now() - 60_000)
+
+  it('returns once the count reaches want', async () => {
+    vi.useFakeTimers()
+    const fetchFn = polls(mails(1), mails(3))
+    const p = waitForMailCount('k', 'me@x.test', 'S', 3, since(), 120_000, fetchFn)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await p).toHaveLength(3)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts only the exact recipient and subject', async () => {
+    vi.useFakeTimers()
+    const noise = [...mails(1, 'me+1@x.test'), ...mails(1, 'me@x.test', 'other'), ...mails(1, 'ME@x.test')]
+    const p = waitForMailCount('k', 'me@x.test', 'S', 2, since(), 120_000, polls([...mails(1), ...noise]))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await p).toHaveLength(2)
+  })
+
+  it('returns more than want when more arrived', async () => {
+    const got = await waitForMailCount('k', 'me@x.test', 'S', 3, since(), 120_000, polls(mails(4)))
+    expect(got).toHaveLength(4)
+  })
+
+  it('ignores a mail from before since', async () => {
+    vi.useFakeTimers()
+    const p = waitForMailCount('k', 'me@x.test', 'S', 1, since(), 60_000, polls([item('old', at(-120_000), 'me@x.test', 'S')]))
+    const assertion = expect(p).rejects.toThrow('found 0 of 1 mails in 1 minutes')
+    await vi.advanceTimersByTimeAsync(70_000)
+    await assertion
+  })
+
+  it('throws at the deadline with the counts and no address', async () => {
+    vi.useFakeTimers()
+    const p = waitForMailCount('k', 'me@x.test', 'S', 3, since(), 120_000, polls(mails(2)))
+    const err = p.catch((e: Error) => e)
+    await vi.advanceTimersByTimeAsync(130_000)
+    const e = (await err) as Error
+    expect(e.message).toMatch(/^found 2 of 3 mails in 2 minutes$/)
+    expect(e.message).not.toContain('@')
+  })
+
+  it('keeps polling through a 429, a 503 and a dropped connection', async () => {
+    vi.useFakeTimers()
+    const answers = [
+      () => json({}, 429),
+      () => json({}, 503),
+      () => {
+        throw new TypeError('fetch failed')
+      },
+      () => json({ data: mails(1), has_more: false }),
+    ]
+    let n = 0
+    const stub = vi.fn(async () => answers[n++]()) as unknown as Fetch
+    const p = waitForMailCount('k', 'me@x.test', 'S', 1, since(), 120_000, stub)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await p).toHaveLength(1)
+  })
+
+  it('a 404 is final', async () => {
+    const stub = vi.fn(async () => json({ message: 'x@secret.test' }, 404))
+    await expect(waitForMailCount('k', 'me@x.test', 'S', 1, since(), 120_000, stub as unknown as Fetch)).rejects.toThrow(/^Resend answered 404$/)
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('settledMailCount', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const at = () => new Date().toISOString().replace('T', ' ').replace('Z', '000+00')
+  const mails = (n: number) => Array.from({ length: n }, (_, i) => item(`m${i}`, at(), 'me@x.test', 'S'))
+  const since = () => new Date(Date.now() - 60_000)
+  // Answers by elapsed time; the last rule that has started wins.
+  const timeline = (...rules: [number, () => Response][]) => {
+    const t0 = Date.now()
+    return vi.fn(async () => {
+      const el = Date.now() - t0
+      return [...rules].reverse().find(([from]) => el >= from)![1]()
+    }) as unknown as Fetch
+  }
+
+  it('waits the whole hold before it returns', async () => {
+    vi.useFakeTimers()
+    let done = false
+    const p = settledMailCount('k', 'me@x.test', 'S', since(), 120_000, timeline([0, () => json({ data: mails(3), has_more: false })])).then((r) => {
+      done = true
+      return r
+    })
+    await vi.advanceTimersByTimeAsync(119_000)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await p).toHaveLength(3)
+  })
+
+  it('counts a mail that lands during the hold', async () => {
+    vi.useFakeTimers()
+    const fetchFn = timeline([0, () => json({ data: mails(3), has_more: false })], [60_000, () => json({ data: mails(4), has_more: false })])
+    const p = settledMailCount('k', 'me@x.test', 'S', since(), 120_000, fetchFn)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await p).toHaveLength(4)
+  })
+
+  it('retries a transient error at the end of the hold', async () => {
+    vi.useFakeTimers()
+    const fetchFn = timeline(
+      [0, () => json({ data: mails(3), has_more: false })],
+      [120_000, () => json({}, 503)],
+      [125_000, () => json({ data: mails(3), has_more: false })],
+    )
+    const p = settledMailCount('k', 'me@x.test', 'S', since(), 120_000, fetchFn)
+    await vi.advanceTimersByTimeAsync(125_000)
+    expect(await p).toHaveLength(3)
+  })
+
+  it('throws when no read succeeds after the hold', async () => {
+    vi.useFakeTimers()
+    const stub = vi.fn(async () => json({}, 503)) as unknown as Fetch
+    const p = settledMailCount('k', 'me@x.test', 'S', since(), 120_000, stub)
+    const err = p.catch((e: Error) => e)
+    await vi.advanceTimersByTimeAsync(149_000)
+    let settled = false
+    void err.then(() => (settled = true))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const e = (await err) as Error
+    expect(e.message).toMatch(/^no inbox read after 2\.5 minutes \(last: Resend answered 503\)$/)
+    expect(e.message).not.toContain('@')
+  })
+
+  it('a 404 is final', async () => {
+    const stub = vi.fn(async () => json({}, 404))
+    await expect(settledMailCount('k', 'me@x.test', 'S', since(), 120_000, stub as unknown as Fetch)).rejects.toThrow(/^Resend answered 404$/)
+    expect(stub).toHaveBeenCalledTimes(1)
   })
 })

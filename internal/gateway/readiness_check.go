@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -32,12 +33,14 @@ const (
 	unattributableIPKey     = "unattributable"
 	readinessRunTimeout     = 295 * time.Second
 	readinessMappingTimeout = 70 * time.Second
+	readinessUploadTimeout  = 90 * time.Second
 	checkBodySlack          = 1 << 20
 	maxCheckAnswerBytes     = 4096
 	maxCheckErrorBytes      = 1024
 	maxMappingAnswerBytes   = 256 << 10
 
 	checkIPSentence          = "This network has run 10 checks today. Try again tomorrow."
+	checkSlowUploadSentence  = "The upload took too long. Try again on a faster connection."
 	checkUnavailableSentence = "The check is unavailable. Try again in a few minutes."
 	checkSignUpSentence      = "This address has used its 3 free checks. Sign up to check every invoice."
 	checkUnreadableSentence  = "We could not read this file."
@@ -105,12 +108,14 @@ type readinessCheck struct {
 	log                        *slog.Logger
 	slots                      chan struct{}
 	runTimeout, mappingTimeout time.Duration
+	uploadTimeout              time.Duration
 }
 
 func newReadinessCheck(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) *readinessCheck {
 	return &readinessCheck{worker: worker, client: client, token: gatewayToken, sink: sink, perIP: perIP, enforce: enforce,
 		posture: posture, log: log, slots: make(chan struct{}, maxCheckUploads),
-		runTimeout: readinessRunTimeout, mappingTimeout: readinessMappingTimeout}
+		runTimeout: readinessRunTimeout, mappingTimeout: readinessMappingTimeout,
+		uploadTimeout: readinessUploadTimeout}
 }
 
 // readFields reads the parts that precede the file part, each under its cap, and returns the file part unread.
@@ -189,13 +194,19 @@ func (c *readinessCheck) acquire() (release func(), ok bool) {
 	}
 }
 
-// readFile reads the file part once, in memory; it writes the refusal and reports false on failure.
-func readFile(w http.ResponseWriter, file *multipart.Part) ([]byte, bool) {
+// readFile reads the file part once, in memory, within d; it writes the refusal and reports false on failure.
+// The timer ends the read through the connection's read deadline; it is stopped so the deadline never reaches the worker call.
+func readFile(w http.ResponseWriter, file *multipart.Part, d time.Duration) ([]byte, bool) {
+	rc := http.NewResponseController(w)
+	t := time.AfterFunc(d, func() { _ = rc.SetReadDeadline(time.Now()) })
 	data, err := io.ReadAll(io.LimitReader(file, MaxCheckFileBytes+1))
+	t.Stop()
 	var tooBig *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooBig) || len(data) > MaxCheckFileBytes:
 		writeError(w, http.StatusRequestEntityTooLarge, checkTooLargeSentence)
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		writeError(w, http.StatusRequestTimeout, checkSlowUploadSentence)
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid request body")
 	default:
@@ -257,7 +268,7 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file)
+	data, ok := readFile(w, file, c.uploadTimeout)
 	if !ok {
 		refund()
 		return
@@ -326,7 +337,7 @@ func (c *readinessCheck) mapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file)
+	data, ok := readFile(w, file, c.uploadTimeout)
 	if !ok {
 		return
 	}

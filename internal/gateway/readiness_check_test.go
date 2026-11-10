@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1024,5 +1026,249 @@ func TestRun_ForwardHoldsOneCopyOfTheFileUntilTheSend(t *testing.T) {
 	}
 	if limit := int64(size + size*3/5); delta < size/2 || delta >= limit {
 		t.Errorf("heap grew %d bytes before the send, want from %d to %d: one copy of the file, no more", delta, size/2, limit)
+	}
+}
+
+// rawUpload is a hand-written multipart request on a real connection, so a test can stall or trickle it.
+type rawUpload struct {
+	conn      net.Conn
+	body      []byte
+	fileStart int // offset of the first file byte
+}
+
+func dialUpload(t *testing.T, srv *httptest.Server, path string, parts ...mpPart) *rawUpload {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for _, p := range parts {
+		var w io.Writer
+		if p.file != "" {
+			w, _ = mw.CreateFormFile(p.name, p.file)
+		} else {
+			w, _ = mw.CreateFormField(p.name)
+		}
+		_, _ = w.Write(p.data)
+	}
+	_ = mw.Close()
+	body := buf.Bytes()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	head := "POST " + path + " HTTP/1.1\r\nHost: check\r\nContent-Type: " + mw.FormDataContentType() +
+		"\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n"
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	start := bytes.Index(body, []byte(`name="file"`))
+	start += bytes.Index(body[start:], []byte("\r\n\r\n")) + 4
+	return &rawUpload{conn: conn, body: body, fileStart: start}
+}
+
+func (u *rawUpload) send(t *testing.T, b []byte) {
+	t.Helper()
+	if _, err := u.conn.Write(b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// answer reads the response, waiting at most 5 s.
+func (u *rawUpload) answer() (status int, errText string, err error) {
+	_ = u.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(u.conn), nil)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var in struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(b, &in)
+	return resp.StatusCode, in.Error, nil
+}
+
+func (u *rawUpload) wantAnswer(t *testing.T, status int, errText string) {
+	t.Helper()
+	got, text, err := u.answer()
+	if err != nil || got != status || (errText != "" && text != errText) {
+		t.Fatalf("answer = %d %q (err %v), want %d %q", got, text, err, status, errText)
+	}
+}
+
+func waitSlotsFree(t *testing.T, e *checkEnv) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(e.rc.slots) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d slots still held", len(e.rc.slots))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+var slowFile = bytes.Repeat([]byte("a,b\n1,2\n"), 8192)
+
+func TestRun_AStalledUploadIs408AndRefunded(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = 300 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
+	u.send(t, u.body[:u.fileStart+len(slowFile)/2])
+	u.wantAnswer(t, 408, checkSlowUploadSentence)
+	waitSlotsFree(t, e)
+	if n := ipCount(e.th, "127.0.0.1"); n != 0 || e.w.calls() != 0 {
+		t.Errorf("ip count %d, worker calls %d, want 0 and 0", n, e.w.calls())
+	}
+}
+
+func TestMapping_AStalledUploadIs408(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = 300 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.mapping))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/mapping", mpPart{"file", "inv.csv", slowFile})
+	u.send(t, u.body[:u.fileStart+len(slowFile)/2])
+	u.wantAnswer(t, 408, checkSlowUploadSentence)
+	waitSlotsFree(t, e)
+	if e.w.calls() != 0 {
+		t.Errorf("worker calls = %d, want 0", e.w.calls())
+	}
+}
+
+func TestRun_StalledUploadsFreeEverySlot(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = 300 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
+	defer srv.Close()
+	var ups []*rawUpload
+	for range heldUploads {
+		u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
+		u.send(t, u.body[:u.fileStart+len(slowFile)/2])
+		ups = append(ups, u)
+	}
+	for _, u := range ups {
+		u.wantAnswer(t, 408, checkSlowUploadSentence)
+	}
+	waitSlotsFree(t, e)
+	if rec := e.runOK(t, checkIP); rec.Code != 200 {
+		t.Fatalf("next visitor = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRun_TheDeadlineStartsAtTheSlot(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = time.Second
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
+	consent := bytes.Index(u.body, []byte(`name="consent_text"`))
+	file := bytes.Index(u.body, []byte(`name="file"`))
+	u.send(t, u.body[:consent])
+	time.Sleep(750 * time.Millisecond)
+	u.send(t, u.body[consent:file])
+	time.Sleep(750 * time.Millisecond)
+	u.send(t, u.body[file:])
+	u.wantAnswer(t, 200, "")
+}
+
+func TestRun_ASlowWorkerAfterAFastUploadStillAnswers200(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = time.Second
+	_, release := holdWorker(e)
+	t.Cleanup(release)
+	time.AfterFunc(1500*time.Millisecond, release)
+	var ctxErr atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		e.rc.run(w, r)
+		ctxErr.Store(struct{ err error }{r.Context().Err()})
+	}))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
+	u.send(t, u.body)
+	u.wantAnswer(t, 200, "")
+	if e.sink.count() != 1 {
+		t.Errorf("hand-offs = %d, want 1", e.sink.count())
+	}
+	if got, _ := ctxErr.Load().(struct{ err error }); got.err != nil {
+		t.Errorf("request context after run = %v, want nil", got.err)
+	}
+}
+
+func TestReadinessCheck_UploadTimeoutIs90Seconds(t *testing.T) {
+	e := newCheckEnv(t, true)
+	if e.rc.uploadTimeout != 90*time.Second {
+		t.Errorf("uploadTimeout = %v, want 90s", e.rc.uploadTimeout)
+	}
+}
+
+func TestRun_AnUploadStillTricklingAtTheLimitIs408(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = 300 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", make([]byte, 1<<20))...)
+	u.send(t, u.body[:u.fileStart])
+	type answer struct {
+		status int
+		text   string
+		err    error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		s, text, err := u.answer()
+		got <- answer{s, text, err}
+	}()
+	chunk := make([]byte, 1024)
+	for sent, stop := 0, time.After(5*time.Second); sent < len(u.body)-u.fileStart; sent += len(chunk) {
+		select {
+		case a := <-got:
+			if a.err != nil || a.status != 408 || a.text != checkSlowUploadSentence {
+				t.Fatalf("answer = %d %q (err %v), want 408", a.status, a.text, a.err)
+			}
+			waitSlotsFree(t, e)
+			if n := ipCount(e.th, "127.0.0.1"); n != 0 || e.w.calls() != 0 {
+				t.Errorf("ip count %d, worker calls %d, want 0 and 0", n, e.w.calls())
+			}
+			return
+		case <-stop:
+			t.Fatal("no answer within 5 s of trickling")
+		case <-time.After(50 * time.Millisecond):
+		}
+		if _, err := u.conn.Write(chunk); err != nil {
+			break
+		}
+	}
+	a := <-got
+	if a.err != nil || a.status != 408 || a.text != checkSlowUploadSentence {
+		t.Fatalf("answer = %d %q (err %v), want 408", a.status, a.text, a.err)
+	}
+	waitSlotsFree(t, e)
+	if n := ipCount(e.th, "127.0.0.1"); n != 0 || e.w.calls() != 0 {
+		t.Errorf("ip count %d, worker calls %d, want 0 and 0", n, e.w.calls())
+	}
+}
+
+func TestRun_ASlowUploadThatFinishesInTimeIs200(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.rc.uploadTimeout = time.Second
+	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
+	defer srv.Close()
+	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
+	piece := (len(u.body) - u.fileStart) / 5
+	u.send(t, u.body[:u.fileStart])
+	for i := range 5 {
+		end := u.fileStart + (i+1)*piece
+		if i == 4 {
+			end = len(u.body)
+		}
+		u.send(t, u.body[u.fileStart+i*piece:end])
+		time.Sleep(50 * time.Millisecond)
+	}
+	u.wantAnswer(t, 200, "")
+	if e.w.calls() != 1 {
+		t.Errorf("worker calls = %d, want 1", e.w.calls())
 	}
 }

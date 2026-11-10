@@ -97,7 +97,7 @@ func rulesAppPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		t.Skip("PAY-18 (DB-backed) skipped: set DATABASE_URL (or run `make test-rls`)")
+		t.Skip("PAY-18 (DB-backed) skipped: set DATABASE_URL (or run `make test-invoice`)")
 	}
 	pool, err := pgxpool.New(context.Background(), url)
 	if err != nil {

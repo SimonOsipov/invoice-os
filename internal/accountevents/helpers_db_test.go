@@ -33,7 +33,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	appURL, adminURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || adminURL == "" {
-		t.Skip("accountevents db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("accountevents db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./internal/accountevents/...`)")
 	}
 	ctx := context.Background()
 	cfg, err := pgxpool.ParseConfig(appURL)

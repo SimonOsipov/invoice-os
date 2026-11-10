@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/repotest"
 )
 
 // sgFakeAnswer calls mappingSchema through a real *ai.Client in fake mode and returns the
@@ -708,10 +709,6 @@ var sgScanSkip = map[string]bool{
 
 var sgScanDirs = []string{"internal", "cmd", filepath.Join("frontend", "app", "src"), "e2e"}
 
-// sgScanSkipDir prunes sibling worktrees, RALPH logs and vendored/build trees that would fail
-// the scan for reasons unrelated to this repo's own source (static-scans-walk-sibling-worktrees).
-var sgScanSkipDir = map[string]bool{".claude": true, ".ralph": true, "node_modules": true, ".git": true}
-
 // sgScanControl must be found by the same walk: zero needle hits reads exactly like a broken
 // scan, so an absence assertion is worthless without a planted positive.
 var sgScanControl = regexp.MustCompile(`canonicalFields`)
@@ -736,7 +733,7 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 				return err
 			}
 			if d.IsDir() {
-				if sgScanSkipDir[d.Name()] {
+				if repotest.SkipDirs[d.Name()] {
 					return filepath.SkipDir
 				}
 				return nil

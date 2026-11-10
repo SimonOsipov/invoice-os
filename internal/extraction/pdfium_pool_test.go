@@ -5,7 +5,7 @@
 // fence moved here from EXTR-02-01: there nothing imported go-pdfium, so its positive half had
 // nothing to find and its absence report covered an empty set.
 //
-// Stdlib only. deps_test.go scan B walks test imports too, and any in-module import outside
+// Stdlib and internal/platform/... only. deps_test.go scan B walks test imports too, and any in-module import outside
 // internal/platform/... fails it.
 package extraction_test
 
@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/repotest"
 )
 
 const (
@@ -84,8 +86,7 @@ func TestPDFium_UsesTheWebAssemblyBackendOnly(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch filepath.Base(path) {
-			case ".git", ".claude", "node_modules", "frontend", "testdata":
+			if n := filepath.Base(path); repotest.SkipDirs[n] || n == "frontend" || n == "testdata" {
 				return filepath.SkipDir
 			}
 			return nil

@@ -16,7 +16,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		t.Skip("readinesscheck db test skipped: set DATABASE_URL (or run `make test-rls`)")
+		t.Skip("readinesscheck db test skipped: set DATABASE_URL (or run `make test-db PKGS=./internal/readinesscheck/...`)")
 	}
 	pool, err := pgxpool.New(context.Background(), url)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestStore_InsertOfADocumentHasRowCountZero(t *testing.T) {
 func TestFieldLabel_EveryGlobalRuleTargetHasALabel(t *testing.T) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		t.Skip("readinesscheck db test skipped: set DATABASE_URL (or run `make test-rls`)")
+		t.Skip("readinesscheck db test skipped: set DATABASE_URL (or run `make test-db PKGS=./internal/readinesscheck/...`)")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, url)

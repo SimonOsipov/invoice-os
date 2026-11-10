@@ -24,8 +24,8 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.49.0
 	github.com/riverqueue/river/rivertype v0.49.0
 	github.com/shopspring/decimal v1.6.0
-	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
-	golang.org/x/net v0.61.0
+	github.com/xuri/excelize/v2 v2.11.1
+	golang.org/x/net v0.62.0
 	golang.org/x/text v0.43.0
 	rsc.io/qr v0.2.0
 )
@@ -79,7 +79,7 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/richardlehane/mscfb v1.0.8 // indirect
+	github.com/richardlehane/mscfb v1.0.9 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/riverqueue/river/cmd/river v0.40.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.49.0 // indirect
@@ -98,7 +98,7 @@ require (
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
 	github.com/vertica/vertica-sql-go v1.3.8 // indirect
-	github.com/xuri/efp v0.0.2 // indirect
+	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/yandex-cloud/go-genproto v0.126.0 // indirect
 	github.com/ydb-platform/ydb-go-genproto v0.0.0-20260810123728-f0c151ab31b9 // indirect

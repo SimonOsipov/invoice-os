@@ -109,7 +109,7 @@ type statusRecorder struct {
 	wroteHeader bool
 }
 
-// Unwrap lets http.ResponseController reach the connection (write deadline, flush).
+// Unwrap lets http.ResponseController reach the connection (read and write deadlines, flush).
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {

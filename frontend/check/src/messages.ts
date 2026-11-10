@@ -5,6 +5,7 @@ export const SIGN_UP_SENTENCE = 'This address has used its 3 free checks. Sign u
 export const IP_SENTENCE = 'This network has run 10 checks today. Try again tomorrow.' // checkIPSentence
 export const UNREADABLE_SENTENCE = 'We could not read this file.' // checkUnreadableSentence
 export const UNAVAILABLE_SENTENCE = 'The check is unavailable. Try again in a few minutes.' // checkUnavailableSentence
+export const SLOW_UPLOAD_SENTENCE = 'The upload took too long. Try again on a faster connection.' // checkSlowUploadSentence
 export const ARMOR_SENTENCE = 'Too many checks from this network. Try again in an hour.'
 export const EMAIL_SENTENCE = 'Enter a valid email address.'
 export const CONSENT_SENTENCE = 'Tick the box to get your results by email.'
@@ -31,6 +32,8 @@ function text(route: Route, status: number | null, error: string | null): string
       return sentence(error, ARMOR_SENTENCE)
     case 422:
       return sentence(error, UNREADABLE_SENTENCE)
+    case 408:
+      return sentence(error, SLOW_UPLOAD_SENTENCE)
     case 413:
       return SIZE_SENTENCE
     case 400:

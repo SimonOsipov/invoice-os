@@ -61,7 +61,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
 - `POST /auth/export-download` (gateway): a form body with an export code. It runs without the verifier until the code is redeemed.
 - Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`, `/readiness-check/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
-- `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h and logs no address, IP or file name.
+- `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h (IPv6 per /64), holds an upload slot at most 90 s and logs no address, IP or file name.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
 - `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data.
 
@@ -74,4 +74,5 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `ceiling:` in `internal/platform/auth/gotrueadmin`: the worker holds GoTrue's signing key.
 - `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.
+- The production edge buffers the whole upload before the gateway reads it. The 90 s upload limit on `/readiness-check/*` guards local runs and a future HTTP/2 end-to-end port.
 - Any other `ceiling:` comment on a path above. List them with `git grep -n "ceiling:"`.

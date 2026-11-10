@@ -33,7 +33,7 @@ import {
   eraseDeletesReadinessChecks,
   ipCountIsHashed,
   readinessCheckColumns,
-  readinessConsentIsNotMarketing,
+  readinessConsentIsMarketing,
   authSmtpHost,
   clientsSendConsentTime,
   crmTags,
@@ -45,6 +45,7 @@ import {
   hubspotFormsKeys,
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
+  ruleMarketingBroadcastCarriesUnsubscribe,
   BLOG_CHAT_PARAGRAPH,
   ACCOUNT_RECORD_SENTENCES,
   auditLogDeletes,
@@ -1211,11 +1212,34 @@ describe('FREECHK-03-08: the readiness check section', () => {
     expect(text()).toContain('deal')
   })
 
-  it('FREECHK-03: the no-marketing sentence follows the store', () => {
-    expect(readinessConsentIsNotMarketing()).toBe(true)
-    expect(text()).toContain(`We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d It adds you to no marketing list`)
-    const marketing = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, consentText: in.ConsentText, readinessConsentText: in.ConsentText})\n}\n'
-    expect(readinessConsentIsNotMarketing(marketing)).toBe(false)
+  it('FREECHK-06: the marketing sentence follows the store', () => {
+    expect(readinessConsentIsMarketing()).toBe(true)
+    const t = text()
+    expect(t).toContain(
+      `We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email.`,
+    )
+    expect(t).not.toContain('It adds you to no marketing list')
+    const noTick = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, readiness: true, readinessConsentText: in.ConsentText})\n}\n'
+    expect(readinessConsentIsMarketing(noTick)).toBe(false)
+    const body = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, readiness: true, consentText: in.ConsentText})\n}\n'
+    expect(readinessConsentIsMarketing(body + 'RETURNING (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL)'), 'control: a passing source').toBe(true)
+    expect(readinessConsentIsMarketing(body + 'RETURNING (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))')).toBe(false)
+  })
+
+  it('FREECHK-06: the demo and registration sections name the check as a route to Resend', () => {
+    expect(readinessConsentIsMarketing()).toBe(true)
+    const t = html.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
+    expect(t).toContain('A ticked marketing box, or a readiness check run with the same email address, sends your email address and your first and last name to Resend.')
+    expect(t).toContain(
+      'Only a ticked marketing box, or the ticked box of a readiness check run with the same email address, makes you eligible for marketing email; with neither box ticked, Resend holds you for product and service email only.',
+    )
+    expect(t).not.toContain('Leave it unticked and Resend never receives them.')
+    expect(t).not.toContain('with the box unticked, Resend holds you')
+  })
+
+  it('FREECHK-06: the unsubscribe sentence follows the contacts rule', () => {
+    expect(ruleMarketingBroadcastCarriesUnsubscribe()).toBe(true)
+    expect(text()).toContain('You can unsubscribe from any email.')
   })
 
   it('FREECHK-03: the erasure sentence follows erase.go', () => {

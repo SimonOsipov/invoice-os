@@ -185,6 +185,11 @@ export function rulePutsUnsubscribeInEveryBroadcast(): boolean {
   return readFileSync(join(REPO, '.claude/rules/contacts.md'), 'utf8').includes('Put `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast.')
 }
 
+// contacts.md tells staff to put the unsubscribe merge tag in every Marketing broadcast.
+export function ruleMarketingBroadcastCarriesUnsubscribe(): boolean {
+  return readFileSync(join(REPO, '.claude/rules/contacts.md'), 'utf8').includes('Put `{{{RESEND_UNSUBSCRIBE_URL}}}` in every Marketing broadcast.')
+}
+
 // The blog confirm page tells the subscriber every email has a one-click unsubscribe.
 export function confirmPageSaysOneClickUnsubscribe(): boolean {
   return readFileSync(join(REPO, 'frontend/blog/src/components/Confirm.tsx'), 'utf8').includes('Every email has a one-click unsubscribe.')
@@ -829,10 +834,14 @@ export function accountmailFrom(src: string = readSource('internal/accountmail/s
   return found(/\bFrom\s*=\s*"[^"<]*<([^>"]+)>"/.exec(src)?.[1], 'accountmail.From')
 }
 
-// ReadinessCheck passes the text as readinessConsentText and sets no marketing consentText.
-export function readinessConsentIsNotMarketing(src: string = readSource('internal/notifications/store.go')): boolean {
+// ReadinessCheck passes the text as the marketing consentText, and the Resend queue fires for a marketing tick.
+export function readinessConsentIsMarketing(src: string = readSource('internal/notifications/store.go')): boolean {
   const body = goFunc(src, /func \(s \*Store\) ReadinessCheck\b/, 'Store.ReadinessCheck')
-  return /\breadinessConsentText:\s*in\.ConsentText/.test(body) && !/\bconsentText\s*:/.test(body)
+  return (
+    /\bconsentText:\s*in\.ConsentText/.test(body) &&
+    !/\breadinessConsentText\b/.test(body) &&
+    src.includes('registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL')
+  )
 }
 
 // The per-network count keys its rows by a sha256 hash.

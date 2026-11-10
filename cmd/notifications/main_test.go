@@ -602,6 +602,38 @@ func TestNotificationsMain_RealModeHonoursTheProxy(t *testing.T) {
 	}
 }
 
+// The unsubscribe routes sit behind the gateway token, refuse X-User-ID, and in mode off record a press locally.
+func TestNotificationsMain_ServesTheUnsubscribeRoutes(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	p := qaStart(t, bin, map[string]string{"DATABASE_URL": appURL})
+	p.waitFor(t, "/readyz")
+	email := fmt.Sprintf("unsub-%s@worker.example", uuid.NewString()[:8])
+	var token string
+	if err := admin.QueryRow(t.Context(), `SELECT public.mail_unsubscribe_token($1)::text`, email).Scan(&token); err != nil {
+		t.Fatalf("mint token: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM mail_unsubscribes WHERE email = $1`, email)
+	})
+
+	body := fmt.Sprintf(`{"token":%q}`, token)
+	for _, path := range []string{"/internal/contacts/unsubscribe/lookup", "/internal/contacts/unsubscribe"} {
+		if code, out := p.call(t, http.MethodPost, path, body, nil); code != http.StatusUnauthorized {
+			t.Errorf("POST %s without the gateway token: status %d (%s), want 401", path, code, out)
+		}
+		if code, out := p.call(t, http.MethodPost, path, body, qaMerge(qaViaGateway, map[string]string{"X-User-ID": uuid.NewString()})); code != http.StatusNotFound {
+			t.Errorf("POST %s with X-User-ID: status %d (%s), want 404", path, code, out)
+		}
+	}
+	if code, out := p.call(t, http.MethodPost, "/internal/contacts/unsubscribe/lookup", body, qaViaGateway); code != http.StatusOK || !strings.Contains(out, `"unsubscribed":false`) {
+		t.Errorf("lookup: status %d (%s), want 200 with unsubscribed false", code, out)
+	}
+	if code, out := p.call(t, http.MethodPost, "/internal/contacts/unsubscribe", body, qaViaGateway); code != http.StatusOK || !strings.Contains(out, `"unsubscribed"`) {
+		t.Errorf("press: status %d (%s), want 200 unsubscribed\n%s", code, out, p.out)
+	}
+}
+
 // Every contact route is served by the binary behind the gateway token, in any mode.
 func TestNotificationsMain_ServesTheContactRoutes(t *testing.T) {
 	admin, appURL := qaAdminPool(t)

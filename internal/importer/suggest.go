@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
@@ -22,6 +23,11 @@ const (
 	mappingSchemaName      = "column_mapping"                                              // csvrun.py's call: response_format json_schema name
 	mappingIntro           = "The first rows of the file, as CSV. Row numbers start at 1." // csvrun.py's user_text: intro
 	mappingRowFmt          = "Row %d: %s"                                                  // csvrun.py's user_text: row join
+
+	// Prompt bounds; a normal file is under all of them, so its prompt is unchanged.
+	maxPromptCellBytes    = 200
+	maxPromptColumns      = 100
+	maxMappingPromptBytes = 48_000
 )
 
 // mappingFields is the import keys of internal/invoicefields, in csvrun.py's FIELDS order.
@@ -118,16 +124,47 @@ func suggestWindow(header []string, rows [][]string) [][]string {
 	return append(append(out, header), rows[:n]...)
 }
 
-// mappingPromptText renders csvrun.py's `rows` user text (:60-61,:66).
+// mappingPromptText renders csvrun.py's `rows` user text (:60-61,:66), bounded: each cell is
+// cut at maxPromptCellBytes, each row keeps maxPromptColumns columns, and rows are added whole
+// while the joined rows text stays within maxMappingPromptBytes. Row 1 is always kept.
+// ceiling: a header cell over maxPromptCellBytes loses its tail, so the AI sees a truncated name.
 func mappingPromptText(rows [][]string) string {
 	if len(rows) == 0 {
 		return mappingIntro
 	}
-	lines := make([]string, len(rows))
+	var lines []string
+	size := 0
 	for i, r := range rows {
-		lines[i] = fmt.Sprintf(mappingRowFmt, i+1, csvLine(r))
+		if len(r) > maxPromptColumns {
+			r = r[:maxPromptColumns]
+		}
+		cut := make([]string, len(r))
+		for j, c := range r {
+			cut[j] = cutBytes(c, maxPromptCellBytes)
+		}
+		line := fmt.Sprintf(mappingRowFmt, i+1, csvLine(cut))
+		next := size + len(line)
+		if i > 0 {
+			next++ // the joining newline
+		}
+		if i > 0 && next > maxMappingPromptBytes {
+			break
+		}
+		lines = append(lines, line)
+		size = next
 	}
 	return mappingIntro + "\n" + strings.Join(lines, "\n")
+}
+
+// cutBytes returns s cut to at most n bytes, never splitting a rune.
+func cutBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // csvLine renders one row the way csvrun.py's csv_line does.

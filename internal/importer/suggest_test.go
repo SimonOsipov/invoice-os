@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/format"
 	"io/fs"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/repotest"
@@ -819,5 +821,104 @@ func TestDateFormatAndDecimalSeparator_StayInsideEachSteeredAnswerFixture(t *tes
 				t.Errorf("%s: a mention of %q falls outside its steered-answer fixture -- the whole-file exemption no longer holds", c.path, text[m[0]:m[1]])
 			}
 		}
+	}
+}
+
+func mpBody(prompt string) string { return strings.TrimPrefix(prompt, mappingIntro+"\n") }
+
+func TestMappingPromptText_CutsALongCellAt200Bytes(t *testing.T) {
+	got := mappingPromptText([][]string{{"a"}, {strings.Repeat("x", 10_000)}})
+	lines := strings.Split(got, "\n")
+	if want := "Row 2: " + strings.Repeat("x", 200); lines[2] != want {
+		t.Errorf("line 2 = %d bytes, want %d", len(lines[2]), len(want))
+	}
+}
+
+func TestMappingPromptText_CutsOnARuneBoundary(t *testing.T) {
+	got := mappingPromptText([][]string{{strings.Repeat("a", 199) + "₦"}})
+	cell := strings.TrimPrefix(mpBody(got), "Row 1: ")
+	if len(cell) != 199 || !utf8.ValidString(cell) {
+		t.Errorf("cell = %d bytes, valid %v; want 199 valid", len(cell), utf8.ValidString(cell))
+	}
+}
+
+func TestMappingPromptText_KeepsTheFirstHundredColumns(t *testing.T) {
+	header := make([]string, 150)
+	for i := range header {
+		header[i] = "c" + strconv.Itoa(i+1)
+	}
+	row1 := strings.Split(mappingPromptText([][]string{header}), "\n")[1]
+	if !strings.HasSuffix(row1, ",c100") || strings.Contains(row1, "c101") {
+		t.Errorf("row 1 = %q, want it to end at c100", row1)
+	}
+}
+
+func TestMappingPromptText_AWindowOfMaximalCellsStaysWithinTheBound(t *testing.T) {
+	row := make([]string, 1000)
+	for i := range row {
+		row[i] = strings.Repeat("y", 10_000)
+	}
+	window := make([][]string, 10)
+	for i := range window {
+		window[i] = row
+	}
+	got := mappingPromptText(window)
+	if n := len(got) - len(mappingIntro) - 1; n > maxMappingPromptBytes {
+		t.Errorf("rows text = %d bytes, want <= %d", n, maxMappingPromptBytes)
+	}
+	if !strings.HasPrefix(mpBody(got), "Row 1: ") {
+		t.Errorf("row 1 missing")
+	}
+}
+
+func TestMappingPromptText_AWorstCaseHeaderRowAloneIsKept(t *testing.T) {
+	row := make([]string, 100)
+	for i := range row {
+		row[i] = strings.Repeat(`"`, 200)
+	}
+	got := mappingPromptText([][]string{row, {"next"}})
+	if !strings.HasPrefix(mpBody(got), "Row 1: ") {
+		t.Fatalf("row 1 missing")
+	}
+	if len(got) > maxMappingPromptBytes {
+		t.Errorf("prompt = %d bytes, want <= %d", len(got), maxMappingPromptBytes)
+	}
+}
+
+func TestMappingPromptText_DropsWholeRowsFromTheEnd(t *testing.T) {
+	// Each row renders to ~10,000 bytes (50 cells of 198 bytes), so four fit in 48,000 and a fifth does not.
+	window := make([][]string, 10)
+	for i := range window {
+		cols := make([]string, 50)
+		for j := range cols {
+			cols[j] = strings.Repeat("z", 198)
+		}
+		window[i] = cols
+	}
+	lines := strings.Split(mappingPromptText(window), "\n")[1:]
+	if len(lines) != 4 {
+		t.Fatalf("kept %d rows, want 4", len(lines))
+	}
+	for i, l := range lines {
+		if !strings.HasPrefix(l, "Row "+strconv.Itoa(i+1)+": ") || len(l) != 50*198+49+7 {
+			t.Errorf("row %d is cut or misnumbered: %d bytes", i+1, len(l))
+		}
+	}
+}
+
+func TestMappingPromptText_ANormalWindowIsUnchanged(t *testing.T) {
+	window := make([][]string, 10)
+	wantLines := make([]string, 10)
+	for i := range window {
+		row := make([]string, 36)
+		for j := range row {
+			row[j] = strings.Repeat("v", 20)
+		}
+		window[i] = row
+		wantLines[i] = fmt.Sprintf("Row %d: %s", i+1, csvLine(row))
+	}
+	want := mappingIntro + "\n" + strings.Join(wantLines, "\n")
+	if got := mappingPromptText(window); got != want {
+		t.Errorf("a normal window changed")
 	}
 }

@@ -5,7 +5,7 @@ a { color: var(--primary); text-decoration: none; }
 a:hover { color: var(--teal); }
 :root { --check-header-h: 72px; }
 html { scroll-padding-top: var(--check-header-h); scroll-behavior: smooth; }
-.check-page { min-height: 100vh; display: flex; flex-direction: column; font-family: var(--font-sans); color: var(--ink); background: var(--background); }
+.check-page { --gutter: 64px; /* the design fixes 64 until 600 px; the shared token drops to 24 at 767 */ min-height: 100vh; display: flex; flex-direction: column; font-family: var(--font-sans); color: var(--ink); background: var(--background); }
 .check-card { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 24px; background: var(--card); border: 1px solid var(--surface-panel-border); border-radius: var(--radius-md); }
 .check-card h2 { margin: 0; font-size: 18px; }
 .check-card p { margin: 0; }
@@ -126,7 +126,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 }
 @media (max-width: 600px) {
   :root { --check-header-h: 64px; }
-  .check-wrap { padding-inline: 16px; }
+  .check-page { --gutter: 16px; --section-y: 56px; } /* the design's 600 px values */
   .check-nav-desk { display: none; }
   .check-hero-pad { padding-top: 28px; padding-bottom: 32px; }
   .check-h1, .check-split--wide .check-h1 { font-size: 34px; letter-spacing: -0.04em; }

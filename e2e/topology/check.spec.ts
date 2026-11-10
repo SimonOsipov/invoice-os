@@ -296,6 +296,9 @@ test.describe('check layout', () => {
     expect(await css(page.locator('.check-trust'), 'display')).toBe('grid')
     expect(await tracks(page.locator('.check-trust'))).toBe(2)
     expect(await css(page.locator('.check-foot-row'), 'flex-direction')).toBe('row')
+    await resize(page, 700)
+    near(await px(page.locator('.check-wrap').first(), 'padding-left'), 64, '700 gutter left')
+    near(await px(page.locator('.check-wrap').first(), 'padding-right'), 64, '700 gutter right')
     for (const width of [900, 767]) {
       await resize(page, width)
       expect(await css(page.locator('.check-trust'), 'display'), `${width}px`).toBe('flex')
@@ -303,6 +306,9 @@ test.describe('check layout', () => {
     }
     await resize(page, 390)
     near(await px(page.locator('.check-head'), 'height'), 64, '390 header')
+    near(await px(page.locator('.check-what'), 'padding-top'), 56, '390 what top')
+    near(await px(page.locator('.check-what'), 'padding-bottom'), 56, '390 what bottom')
+    near(await px(page.locator('.check-wrap').first(), 'padding-left'), 16, '390 gutter')
     near(await px(page.locator('.check-h1'), 'font-size'), 34, '390 h1')
     near(await px(page.locator('.check-lead'), 'font-size'), 15, '390 lead')
     near(await px(page.locator('.check-hero-pad'), 'padding-top'), 28, '390 hero top')

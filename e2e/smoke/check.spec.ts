@@ -12,6 +12,11 @@ const LIVE = new URL(CHECK_URL).host === 'www.ascomply.com'
 const TITLE = 'Free e-invoice readiness check — ASComply Africa'
 const DESCRIPTION = 'Upload one invoice file and get the MBS rule results for its first 2 invoices by email. Free, no account needed.'
 const H1 = 'Check your invoices against the MBS rules'
+// frontend/check/src/copy.ts: CHECK_EYEBROW, TRUST_CUES titles, STEP_LABELS, WHAT_H2[0].
+const EYEBROW = 'FREE E-INVOICE READINESS CHECK'
+const TRUST_TITLES = ['Free', 'No account', 'File not kept', 'Results by email']
+const STEPS = ['Upload', 'Match columns', 'Email', 'Sent']
+const WHAT_HEADING = 'Two invoices, checked rule by rule.'
 // frontend/check/src/copy.ts: SENT_TEXT.
 const sentText = (email: string) => `Your results are on their way to ${email}.`
 // internal/gateway/readiness_check.go: checkIPSentence.
@@ -54,6 +59,26 @@ test('check: crawler reads the title, the description and the h1 without JavaScr
   expect(html).toContain(`<h1>${H1}</h1>`)
 })
 
+// Writes nothing, so it runs on production too.
+test('check: the page shows the hero, the trust cues and the progress strip', async ({ page }) => {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+  await seedConsent(page, false)
+  await page.goto(CHECK_URL)
+  await expect(page.getByText(EYEBROW, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: H1 })).toBeVisible()
+  const cues = page.getByRole('list', { name: 'About this check' })
+  for (const title of TRUST_TITLES) await expect(cues.getByText(title, { exact: true })).toBeVisible()
+  const strip = page.getByRole('list', { name: 'Check progress' })
+  await expect(strip.locator('.check-step-lbl')).toHaveText(STEPS)
+  await expect(strip.locator('[aria-current="step"] .check-step-lbl')).toHaveText('Upload')
+  await expect(page.locator('#what').getByRole('heading', { level: 2 })).toContainText(WHAT_HEADING)
+  expect(errors).toEqual([])
+})
+
 test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
   test.skip(LIVE, 'www.ascomply.com is production: the send writes a contact and a mail')
   test.setTimeout(180_000)
@@ -71,12 +96,15 @@ test('check: a visitor uploads a spreadsheet, maps it and is told the results ar
   await page.goto(CHECK_URL)
   await page.locator('#check-file').setInputFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
   await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+  const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"] .check-step-lbl')
+  await expect(current).toHaveText('Match columns')
   // Choose every column: a preview's AI is fake, the nightly's is real, so the suggestion proves nothing.
   for (const [label, header] of COLUMNS) {
     await page.getByLabel(label, { exact: true }).selectOption(header)
   }
   await page.getByRole('button', { name: 'Continue' }).click()
 
+  await expect(current).toHaveText('Email')
   const email = `check-${crypto.randomUUID()}@example.com`
   await page.getByLabel('Email address', { exact: true }).fill(email)
   await expect(page.locator('.check-consent')).toHaveText(CONSENT)
@@ -89,5 +117,6 @@ test('check: a visitor uploads a spreadsheet, maps it and is told the results ar
     throw e
   }
 
+  await expect(current).toHaveCount(0)
   expect(errors, `console errors on the check:\n${errors.join('\n')}`).toEqual([])
 })

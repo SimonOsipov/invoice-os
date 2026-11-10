@@ -1,4 +1,4 @@
-// The landing's consent and GA4 code, bound to this host. The only importer of landing source.
+// The landing's consent and GA4 code, bound to this host.
 import { bootAnalytics } from '../../landing/src/analytics'
 import { applyChoice, syncConsent } from '../../landing/src/consentActions'
 import { bootChat } from '../../landing/src/hubspotChat'

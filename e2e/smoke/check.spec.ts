@@ -23,6 +23,9 @@ const TWO_OF_THREE = '2 of 3 invoices checked'
 // internal/invoicefields/fields.go: Label of supplier_tin.
 const SUPPLIER_TIN_LABEL = 'Supplier TIN'
 
+// frontend/landing/src/readinessConsent.ts: READINESS_CONSENT_TEXT.
+const CONSENT = 'Email me the results of this check. I agree that ASComply Africa keeps my email address as a contact and may email me product news and offers. I can unsubscribe at any time.'
+
 // Field label (internal/invoicefields/fields.go) -> the CSV header that holds it.
 const COLUMNS: [string, string][] = [
   ['Invoice number', 'Inv'],
@@ -79,6 +82,7 @@ test('check: a visitor uploads a spreadsheet, maps it and gets the results mail'
 
   const email = `check-${crypto.randomUUID()}@example.com`
   await page.getByLabel('Email address', { exact: true }).fill(email)
+  await expect(page.locator('.check-consent')).toHaveText(CONSENT)
   await page.locator('.check-consent input').check()
   await page.getByRole('button', { name: 'Send' }).click()
   try {

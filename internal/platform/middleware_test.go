@@ -171,13 +171,15 @@ func TestStatusRecorder(t *testing.T) {
 	}
 }
 
-func TestApp_AHandlerCanExtendItsWriteDeadline(t *testing.T) {
+func TestApp_AHandlerCanSetItsReadAndWriteDeadlines(t *testing.T) {
 	app, _ := leakApp(t)
-	var got error
+	var got, gotRead error
 	called := false
 	app.Mux.HandleFunc("GET /v1/long", func(w http.ResponseWriter, _ *http.Request) {
 		called = true
-		got = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Hour))
+		rc := http.NewResponseController(w)
+		got = rc.SetWriteDeadline(time.Now().Add(time.Hour))
+		gotRead = rc.SetReadDeadline(time.Now().Add(time.Hour))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	srv := httptest.NewServer(app.Handler())
@@ -189,10 +191,13 @@ func TestApp_AHandlerCanExtendItsWriteDeadline(t *testing.T) {
 	}
 	res.Body.Close()
 	if !called {
-		t.Fatal("the route never ran, so its SetWriteDeadline result proves nothing")
+		t.Fatal("the route never ran, so its deadline results prove nothing")
 	}
 	if got != nil {
 		t.Errorf("SetWriteDeadline through the middleware chain = %v, want nil", got)
+	}
+	if gotRead != nil {
+		t.Errorf("SetReadDeadline through the middleware chain = %v, want nil", gotRead)
 	}
 }
 

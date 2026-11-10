@@ -729,9 +729,41 @@ func TestPressUnsubscribe_AHeldDeliveryLockCountsAgainstTheBudget(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	start := time.Now()
 	usWantPress(t, usCall(t, r.press, token, "", nil), http.StatusServiceUnavailable, "")
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("the press took %v, want it cut at the budget", d)
+	}
 	r.requireNoVendorCall(t)
 	if at := usUnsubscribedAt(t, r.e, email); at != nil {
 		t.Errorf("unsubscribed_at = %v, want NULL", at)
+	}
+}
+
+// The row lock stands on its own: a writer that holds the row but not the delivery lock still
+// makes a press wait.
+func TestPressUnsubscribe_WaitsForAHolderOfTheRowLock(t *testing.T) {
+	usShortBudget(t)
+	r := usNewRig(t)
+	email, token := usAddress(t, r.e, "rowheld")
+	ctx := context.Background()
+	tx, err := r.e.app.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT email FROM mail_unsubscribes WHERE token = $1 FOR UPDATE`, token); err != nil {
+		t.Fatal(err)
+	}
+
+	usWantPress(t, usCall(t, r.press, token, "", nil), http.StatusServiceUnavailable, "")
+	r.requireNoVendorCall(t)
+
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	usWantPress(t, usCall(t, r.press, token, "", nil), http.StatusOK, "unsubscribed")
+	if at := usUnsubscribedAt(t, r.e, email); at == nil {
+		t.Error("unsubscribed_at is NULL after the row lock was released")
 	}
 }

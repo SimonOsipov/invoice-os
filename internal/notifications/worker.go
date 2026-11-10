@@ -64,7 +64,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		delivered, optInSent                 bool
 		first, last, company                 string
 	)
-	// ceiling: the lock and its connection are held across the vendor call (10 s timeout, MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
+	// ceiling: the lock and its connection are held across the vendor calls (MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("notifications: begin delivery: %w", err)
@@ -110,8 +110,16 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 			return nil
 		}
 		sendOptIn := consent && !optInSent
-		if err = w.Resend.Sync(ctx, c, sendOptIn); err == nil && sendOptIn {
-			_, err = tx.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1 AND resend_opt_in_sent_at IS NULL`, c.Email)
+		if sendOptIn {
+			var st ResendState
+			st, err = w.Resend.ContactState(ctx, c.Email)
+			// Only the global unsubscribe refuses: a Marketing opt_out is Resend's default.
+			sendOptIn = err == nil && !st.Unsubscribed
+		}
+		if err == nil {
+			if err = w.Resend.Sync(ctx, c, sendOptIn); err == nil && sendOptIn {
+				_, err = tx.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1 AND resend_opt_in_sent_at IS NULL`, c.Email)
+			}
 		}
 	}
 	if err != nil {

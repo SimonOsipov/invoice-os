@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -28,7 +30,7 @@ import (
 const (
 	checkIP      = "203.0.113.7"
 	checkRemote  = checkIP + ":4000"
-	checkConsent = "I agree to the check terms."
+	checkConsent = checkConsentText
 )
 
 type workerGot struct {
@@ -240,17 +242,45 @@ func TestRun_InvalidEmailIsRefusedBeforeTheFile(t *testing.T) {
 	}
 }
 
-func TestRun_ConsentOver500CharactersIsRefused(t *testing.T) {
+func TestRun_OnlyTheCurrentConsentSentenceIsTaken(t *testing.T) {
 	for _, tc := range []struct {
-		n    int
-		want int
-	}{{501, 400}, {500, 200}} {
-		e := newCheckEnv(t, true)
-		text := strings.Repeat("é", tc.n)
-		req, _ := newCheckRequest(t, "/readiness-check/run", mpPart{"email", "", []byte("a@x.co")}, mpPart{"consent_text", "", []byte(text)}, mpPart{"file", "inv.csv", []byte("a\n1\n")})
-		if rec := e.run(t, req); rec.Code != tc.want {
-			t.Errorf("consent of %d characters = %d, want %d", tc.n, rec.Code, tc.want)
-		}
+		name, text string
+		want       int
+	}{
+		{"current sentence", checkConsentText, 200},
+		{"sentence of an earlier deploy", "Email me the results of this check. I agree that ASComply Africa keeps my email address and may contact me about the check.", 400},
+		{"arbitrary string", "I agree to the check terms.", 400},
+		{"current sentence with a trailing space", checkConsentText + " ", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			req, consumed := newCheckRequest(t, "/readiness-check/run", mpPart{"email", "", []byte("a@x.co")}, mpPart{"consent_text", "", []byte(tc.text)}, mpPart{"file", "inv.csv", []byte("a\n1\n")})
+			rec := e.run(t, req)
+			if rec.Code != tc.want {
+				t.Fatalf("answer = %d %s, want %d", rec.Code, rec.Body, tc.want)
+			}
+			if tc.want == 400 {
+				wantRefused(t, rec, 400, checkConsentSentence)
+				if consumed.Load() || ipCount(e.th, checkIP) != 0 || e.w.calls() != 0 || e.sink.count() != 0 {
+					t.Errorf("file read %v, ip count %d, worker calls %d, sink calls %d; want none", consumed.Load(), ipCount(e.th, checkIP), e.w.calls(), e.sink.count())
+				}
+			}
+		})
+	}
+}
+
+// The sentence is read from the landing source: a change on either side fails here.
+func TestCheckConsentText_EqualsTheLandingSentence(t *testing.T) {
+	src, err := os.ReadFile("../../frontend/landing/src/readinessConsent.ts")
+	if err != nil {
+		t.Fatalf("read the landing sentence: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^export const READINESS_CONSENT_TEXT =\s*'([^'\\\n]+)'`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("readinessConsent.ts: no exported single-quoted READINESS_CONSENT_TEXT literal")
+	}
+	if string(m[1]) != checkConsentText {
+		t.Errorf("landing sentence %q, gateway checkConsentText %q", m[1], checkConsentText)
 	}
 }
 

@@ -23,6 +23,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 })
 
+const STORY_CONSENT = 'Email me the results of this check. I agree that ASComply Africa keeps my email address as a contact and may email me product news and offers. I can unsubscribe at any time.'
 const MAPPING = '/readiness-check/mapping'
 const RUN = '/readiness-check/run'
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -294,13 +295,13 @@ describe('map and details extras', () => {
     stubFetch({ [RUN]: SENT })
     await mount()
     await pick(file('a.pdf'))
-    expect(CONSENT_TEXT.length).toBeGreaterThan(0)
-    expect(container.querySelector('.check-consent')!.textContent).toBe(CONSENT_TEXT)
+    expect(CONSENT_TEXT).toBe(STORY_CONSENT)
+    expect(container.querySelector('.check-consent')!.textContent).toBe(STORY_CONSENT)
     expect(container.querySelector<HTMLInputElement>('.check-consent input')!.required).toBe(true)
     expect(byLabel<HTMLInputElement>('Email address').required).toBe(true)
     expect(byLabel<HTMLInputElement>('Email address').type).toBe('email')
     await fillAndSend()
-    expect(runBody().get('consent_text')).toBe(CONSENT_TEXT)
+    expect(runBody().get('consent_text')).toBe(STORY_CONSENT)
   })
 })
 

@@ -10,6 +10,7 @@ import (
 
 type ResendClient interface {
 	Sync(ctx context.Context, c Contact, sendOptIn bool) error
+	ContactState(ctx context.Context, email string) (ResendState, error)
 }
 
 type Resend struct {

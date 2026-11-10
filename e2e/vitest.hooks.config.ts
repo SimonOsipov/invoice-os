@@ -3,6 +3,6 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['gitHistoryGuard.test.ts'],
+    include: ['gitHistoryGuard.test.ts', 'mutationReplayGuard.test.ts'],
   },
 })

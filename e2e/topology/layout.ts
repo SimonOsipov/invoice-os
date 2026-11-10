@@ -19,12 +19,14 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
- * Waits until every finite animation on each element and its ancestors has finished.
+ * Waits until web fonts have loaded and every finite animation on each element and its ancestors has finished.
  * A rect read mid-animation is the animation's geometry, and an ancestor's slide moves its children.
+ * A rect read before fonts load is the fallback font's geometry.
  */
 export async function settleAnimations(...targets: Locator[]): Promise<void> {
   for (const target of targets) {
-    await target.evaluate((el) => {
+    await target.evaluate(async (el) => {
+      await el.ownerDocument.fonts.ready
       const running = el.ownerDocument.getAnimations().filter((a) => {
         const on = (a.effect as KeyframeEffect | null)?.target
         // An infinite loop (spinner, shimmer) never finishes.
@@ -38,8 +40,8 @@ export async function settleAnimations(...targets: Locator[]): Promise<void> {
 /** Widest first — see the file header for why the order is load-bearing. */
 export const WIDE_WIDTHS = [2560, 1920, 1440, 1280] as const
 
-/** Phone widths; 767 is the library's PHONE_MAX_WIDTH. */
-export const PHONE_WIDTHS = [375, 414, 767] as const
+/** Phone widths; 320 is the narrowest phone in use, 767 is the library's PHONE_MAX_WIDTH. */
+export const PHONE_WIDTHS = [320, 375, 390, 414, 767] as const
 
 /** The horizontal extent of a rendered element. Playwright's boundingBox() shape. */
 export type Box = { x: number; width: number }
@@ -223,11 +225,60 @@ export async function assertSameHeight(
 export async function assertPageDoesNotScrollSideways(page: Page, label: string): Promise<{ scrollWidth: number; clientWidth: number }> {
   const reading = await page
     .locator('main.pf-main .pf-scroll')
-    .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    .evaluate(async (el) => {
+      await el.ownerDocument.fonts.ready
+      return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }
+    })
   expect(reading.clientWidth, `${label}: the page column (.pf-scroll) has no box`).toBeGreaterThan(0)
   expect(
     reading.scrollWidth - reading.clientWidth,
     `${label}: the page column scrolls sideways (scrollWidth ${reading.scrollWidth} vs clientWidth ${reading.clientWidth})`,
   ).toBeLessThanOrEqual(1)
   return reading
+}
+
+/** What one width contributed to a narrow fit sweep. */
+export type NarrowFit = { width: number; scrollWidth: number; clientWidth: number }
+
+/**
+ * Asserts `container` does not scroll sideways (scrollWidth <= clientWidth) at every width
+ * in `widths`, and returns what it measured. The entry viewport is restored afterwards.
+ */
+export async function assertFitsNarrow(
+  page: Page,
+  container: Locator,
+  label: string,
+  widths: readonly number[] = PHONE_WIDTHS,
+): Promise<NarrowFit[]> {
+  const entry = page.viewportSize()
+  const measured: NarrowFit[] = []
+
+  try {
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 844 })
+
+      const read = async (): Promise<NarrowFit | null> => {
+        await settleAnimations(container)
+        const r = await container.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return r.clientWidth > 0 ? { width, ...r } : null
+      }
+
+      await expect
+        .poll(async () => {
+          const fit = await read()
+          return fit === null ? null : fit.scrollWidth - fit.clientWidth
+        }, {
+          message: `${label} must not scroll sideways at ${width}px wide (a null here means the container has no box)`,
+          timeout: 10_000,
+        })
+        .toBeLessThanOrEqual(0)
+
+      const fit = await read()
+      if (fit) measured.push(fit)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  return measured
 }

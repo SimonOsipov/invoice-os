@@ -115,6 +115,7 @@ jobs:
             hooks:
               - '.claude/hooks/**'
               - 'e2e/gitHistoryGuard.test.ts'
+              - 'e2e/mutationReplayGuard.test.ts'
               - 'e2e/vitest.hooks.config.ts'
             sidecar:
               - 'sidecar/**'

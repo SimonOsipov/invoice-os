@@ -21,7 +21,7 @@ def test_t03_1_ocr_options_is_rapidocr_onnxruntime():
 
 
 def test_t03_2_lang_is_exactly_en_not_the_chinese_default():
-    # RapidOcrOptions().lang defaults to ["ch"] -- confirmed against docling==2.132.0.
+    # RapidOcrOptions().lang defaults to ["ch"].
     # docling's own _DOCLING_LANG_NORMALIZE maps "english"->"en" before RapidOCR resolves it,
     # so ["en"] and ["english"] are equivalent; ["en"] is the AC's literal value and needs no
     # alias step, so that's what's asserted here.

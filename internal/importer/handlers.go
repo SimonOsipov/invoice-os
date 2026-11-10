@@ -443,7 +443,7 @@ func CreateHandler(
 // 200 previewResponse. See handlers_preview_test.go for the PRV-01..PRV-16 map.
 //
 // The store call sits after r.FormFile, so an oversized body 413s before any
-// object is written. The two 4xx paths BELOW it carry the document id
+// object is written. The 4xx paths BELOW it carry the document id
 // (previewError); those above it, and the new 500, do not.
 //
 // It reuses detectFormat/DecodeFrom/maxUploadBytes/maxMultipartMemory/nilIfEmpty/

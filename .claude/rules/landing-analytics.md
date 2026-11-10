@@ -27,9 +27,9 @@ paths:
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
-- Pass `VITE_GA_MEASUREMENT_ID` as a build arg of the `landing`, `library`, `blog` and `app` images in `deploy-prod.yml` and `dev-env.yml`. Previews carry the production id, so the hostname gate keeps them dark.
-- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile`, `frontend/blog/Dockerfile` and `frontend/app/Dockerfile`. Docker drops a build arg that has no `ARG`.
-- Rebuild the `landing`, `library`, `blog` or `app` image to change its `VITE_*` value. Vite bakes it at build time.
+- Pass `VITE_GA_MEASUREMENT_ID` as a build arg of the `landing`, `library`, `blog`, `check` and `app` images in `deploy-prod.yml` and `dev-env.yml`. Previews carry the production id, so the hostname gate keeps them dark.
+- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile`, `frontend/blog/Dockerfile`, `frontend/check/Dockerfile` and `frontend/app/Dockerfile`. Docker drops a build arg that has no `ARG`.
+- Rebuild the `landing`, `library`, `blog`, `check` or `app` image to change its `VITE_*` value. Vite bakes it at build time.
 - Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
 - Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id`, `group_id` and, in the app only, `page_location`. Never send form data. `page_location` is the bounded route pattern from `routeName`, never the live URL.

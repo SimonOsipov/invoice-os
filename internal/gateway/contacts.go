@@ -214,9 +214,15 @@ func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
 	})
 }
 
+// invalidEmail is the demo route's email clause; the caller trims email first.
+func invalidEmail(email string) bool {
+	n := len(email)
+	return n < 3 || n > 254 || strings.Count(email, "@") != 1 || strings.IndexFunc(email, unicode.IsSpace) >= 0 || strings.ContainsRune(email, 0)
+}
+
 // validateDemoRequest returns the 400 message for the first bad field, or "".
 func validateDemoRequest(d DemoRequest, text *string) string {
-	if n := len(d.Email); n < 3 || n > 254 || strings.Count(d.Email, "@") != 1 || strings.IndexFunc(d.Email, unicode.IsSpace) >= 0 || strings.ContainsRune(d.Email, 0) {
+	if invalidEmail(d.Email) {
 		return "email is invalid"
 	}
 	for _, f := range []struct{ label, v string }{{"name", d.Name}, {"company", d.Company}} {

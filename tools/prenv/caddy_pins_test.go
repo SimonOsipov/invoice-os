@@ -1,4 +1,4 @@
-// caddy_pins_test.go pins the Caddy image of the five frontend Dockerfiles and scripts/ci/caddy-headers.sh to one digest-pinned reference.
+// caddy_pins_test.go pins the Caddy image of every Caddy frontend Dockerfile and scripts/ci/caddy-headers.sh to one digest-pinned reference.
 package main
 
 import (
@@ -21,6 +21,7 @@ var (
 		"frontend/app/Dockerfile",
 		"frontend/landing/Dockerfile",
 		"frontend/library/Dockerfile",
+		"frontend/check/Dockerfile",
 		"frontend/support-console/Dockerfile",
 		"frontend/ops-console/Dockerfile",
 		"scripts/ci/caddy-headers.sh",
@@ -112,8 +113,8 @@ func TestCaddyPins_RepoPinned(t *testing.T) {
 		files[p] = string(b)
 	}
 	refs := caddyRefs(files)
-	if len(refs) != 6 {
-		t.Fatalf("found %d Caddy references %v, want exactly 6", len(refs), refs)
+	if len(refs) != 7 {
+		t.Fatalf("found %d Caddy references %v, want exactly 7", len(refs), refs)
 	}
 	if p := caddyPinProblems(files); len(p) != 0 {
 		t.Errorf("caddy pin problems: %q", p)
@@ -127,8 +128,8 @@ func TestCaddyPins_RepoPinned(t *testing.T) {
 
 func TestCaddyPins_AllPinnedPasses(t *testing.T) {
 	files := pinnedCaddyFiles()
-	if n := len(caddyRefs(files)); n != 6 {
-		t.Fatalf("control: found %d references, want 6", n)
+	if n := len(caddyRefs(files)); n != 7 {
+		t.Fatalf("control: found %d references, want 7", n)
 	}
 	if p := caddyPinProblems(files); len(p) != 0 {
 		t.Errorf("caddyPinProblems = %q, want none", p)
@@ -196,8 +197,8 @@ func TestCaddyPins_EveryCaddyDockerfileIsListed(t *testing.T) {
 			t.Errorf("%s has %d Caddy FROM lines, the pin test reads the first only", rel, n)
 		}
 	}
-	if found != 5 {
-		t.Errorf("found %d Dockerfiles with a Caddy FROM, want 5", found)
+	if found != 6 {
+		t.Errorf("found %d Dockerfiles with a Caddy FROM, want 6", found)
 	}
 }
 

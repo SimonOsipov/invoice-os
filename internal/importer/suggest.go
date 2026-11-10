@@ -81,16 +81,18 @@ Also return:
 var mappingSchema = mappingSchemaJSON()
 
 // mappingSchemaJSON mirrors aiSchemaFor: csvrun.py's SCHEMA, transcribed.
-func mappingSchemaJSON() json.RawMessage {
-	props := make(map[string]any, len(mappingFields)+3)
-	for _, f := range mappingFields {
+func mappingSchemaJSON() json.RawMessage { return mappingSchemaFor(mappingFields) }
+
+func mappingSchemaFor(keys []string) json.RawMessage {
+	props := make(map[string]any, len(keys)+3)
+	for _, f := range keys {
 		props[f] = map[string]any{"type": []string{"string", "null"}}
 	}
 	props["header_row"] = map[string]any{"type": "integer"}
 	props["date_format"] = map[string]any{"type": []string{"string", "null"}}
 	props["decimal_separator"] = map[string]any{"type": []string{"string", "null"}}
 
-	required := append(append([]string{}, mappingFields...), "header_row", "date_format", "decimal_separator")
+	required := append(append([]string{}, keys...), "header_row", "date_format", "decimal_separator")
 
 	schema := map[string]any{
 		"type":                 "object",
@@ -156,6 +158,11 @@ func guardHeaderRow(ans map[string]any, windowLen int) int {
 // guardPlacements validates the AI's field->header claims against the re-decoded header
 // (§6 rules 3-5). Always returns a non-nil map: a nil map marshals to null, which §2 forbids.
 func guardPlacements(ans map[string]any, header []string) map[string]string {
+	return guardPlacementsIn(ans, header, canonicalFields)
+}
+
+// guardPlacementsIn is guardPlacements over an explicit set of allowed field keys.
+func guardPlacementsIn(ans map[string]any, header []string, allowed map[string]bool) map[string]string {
 	inHeader := make(map[string]bool, len(header))
 	for _, h := range header {
 		inHeader[h] = true
@@ -163,7 +170,7 @@ func guardPlacements(ans map[string]any, header []string) map[string]string {
 	placed := make(map[string]string, len(header))
 	claims := make(map[string]int, len(header))
 	for field, raw := range ans {
-		if !canonicalFields[field] { // rule 3
+		if !allowed[field] { // rule 3
 			continue
 		}
 		name, ok := raw.(string) // rule 4

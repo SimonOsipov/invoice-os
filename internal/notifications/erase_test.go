@@ -121,6 +121,7 @@ func (r *eraseRig) track(email, uid string) {
 			{`DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, []any{uid, email}},
 			{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},
 			{`DELETE FROM blog_subscription_requests WHERE email = $1`, []any{email}},
+			{`DELETE FROM readiness_checks WHERE email = $1`, []any{email}},
 		} {
 			if _, err := r.e.admin.Exec(ctx, c.q, c.args...); err != nil {
 				r.t.Errorf("cleanup: %v", err)
@@ -451,6 +452,45 @@ func TestErase_SweepDeletesTheLocalCopies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func (r *eraseRig) readiness(email string, n int) {
+	r.t.Helper()
+	for range n {
+		r.exec(`INSERT INTO readiness_checks (email, file_type, row_count) VALUES ($1, 'csv', 1)`, email)
+	}
+}
+
+func TestErase_SweepDeletesTheReadinessChecks(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	_, omail := r.person()
+	r.readiness(r.mail, 2)
+	r.readiness(omail, 1)
+	r.failAll()
+	_ = r.work(gen)
+	q := `SELECT count(*) FROM readiness_checks WHERE email = $1`
+	if n := r.count(q, r.mail); n != 0 {
+		t.Errorf("%d readiness rows left", n)
+	}
+	if n := r.count(q, omail); n != 1 {
+		t.Errorf("another address has %d rows", n)
+	}
+}
+
+func TestErase_SupersededAddressKeepsItsReadinessChecks(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.exec(`UPDATE person_erasures SET account_erased_at = now() WHERE user_id = $1`, r.uid)
+	buid := uuid.NewString()
+	r.contact(r.mail, &buid, 1)
+	r.readiness(r.mail, 2)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.count(`SELECT count(*) FROM readiness_checks WHERE email = $1`, r.mail); n != 2 {
+		t.Fatalf("%d readiness rows left, want 2", n)
 	}
 }
 
@@ -1731,5 +1771,25 @@ func TestErase_SweepDeletesKnownDevicesAndAccountEventRows(t *testing.T) {
 		if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, id) != 1 {
 			t.Errorf("another person's job %d was touched", id)
 		}
+	}
+}
+
+func TestErase_ClearsTheReadinessConsent(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.exec(`INSERT INTO contacts (email, readiness_checked_at, readiness_consent_text, readiness_consented_at) VALUES ($1, now(), $2, now())`,
+		r.mail, consentText)
+	if n := r.count(`SELECT count(*) FROM contacts WHERE email = $1 AND readiness_consent_text IS NOT NULL`, r.mail); n != 1 {
+		t.Fatalf("seeded rows holding a readiness consent = %d, want 1", n)
+	}
+	if err := r.work(gen); err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+	if n := r.count(`SELECT count(*) FROM contacts WHERE email = $1
+		AND (readiness_consent_text IS NOT NULL OR readiness_consented_at IS NOT NULL)`, r.mail); n != 0 {
+		t.Errorf("%d contacts rows still hold the readiness consent", n)
+	}
+	if s := r.row(r.uid); !s.Fin {
+		t.Errorf("erasure row = %+v, want finished", s)
 	}
 }

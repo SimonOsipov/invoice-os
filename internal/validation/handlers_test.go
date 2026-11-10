@@ -153,3 +153,21 @@ func assertFlatErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Errorf(`body["error"] = %#v, want a non-empty string`, body["error"])
 	}
 }
+
+func TestRuleSetDate_PicksTheIssueDateOrToday(t *testing.T) {
+	const today = "2026-11-08"
+	cases := map[string]map[string]any{
+		"2026-03-01": {"issue_date": "2026-03-01"},
+		today:        {},
+	}
+	for want, inv := range cases {
+		if got := RuleSetDate(inv, today); got != want {
+			t.Errorf("RuleSetDate(%v) = %q, want %q", inv, got, want)
+		}
+	}
+	for _, v := range []any{nil, "0000-01-01", "01/03/2026", 5} {
+		if got := RuleSetDate(map[string]any{"issue_date": v}, today); got != today {
+			t.Errorf("RuleSetDate(issue_date %v) = %q, want today", v, got)
+		}
+	}
+}

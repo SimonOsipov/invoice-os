@@ -211,10 +211,12 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/gateway/account_events.go", fn: "Record"},                        // global outbox, no tenant data; invoice_gateway may only INSERT into it
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/readinesscheck/store.go"},                                        // readiness checks carry no tenant and no caller identity; the store reads and writes them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
 	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
+	{file: "internal/aicalls/recorder.go", fn: "writePublicCheck"},                    // a public check has no tenant to bind: the NULL-tenant INSERT is the one write invoice_app may make with no GUC
 	{file: "internal/notifications/erase.go"},                                         // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
 	{file: "internal/accountevents/new_device.go"},                                    // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
 	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
@@ -1075,6 +1077,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"OPTIONS /blog/subscriptions":                            {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /blog/subscriptions/confirm":                    {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /contacts/demo-request":                         {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /readiness-check/mapping":                       {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /readiness-check/run":                           {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"PATCH /v1/customers/{id}":                               {verdict: scCovered},
 	"PATCH /v1/entities/{id}":                                {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                                {verdict: scCovered},
@@ -1161,9 +1165,12 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/sign-out":                                    {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/verify":                                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /contacts/demo-request":                            {verdict: scExempt, reason: "no database; hands the form to notifications"},
+	"POST /readiness-check/mapping":                          {verdict: scExempt, reason: "no database; forwards the file to the worker"},
+	"POST /readiness-check/run":                              {verdict: scExempt, reason: "counts the per-IP limit in gateway_throttle_counts (global, hashed); forwards the file to the worker"},
 	"POST /blog/subscriptions":                               {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /blog/subscriptions/confirm":                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /internal/contacts/demo-requests":                  {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/contacts/readiness-checks":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                    {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
 	"POST /internal/invitations/preview":                     {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /internal/invitations/pending":                     {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
@@ -1204,6 +1211,9 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/send-again":                      {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                     {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                        {verdict: scCovered},
+	"POST /internal/public-checks/run":                       {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
+	"POST /internal/public-checks/mapping":                   {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
+	"POST /internal/public-checks/captured-mail":             {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /v1/validate/batch":                                {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/custom-rules/check":                            {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/workflow-roles":                                {verdict: scCovered},

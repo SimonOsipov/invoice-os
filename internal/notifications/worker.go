@@ -59,10 +59,10 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	}
 
 	var (
-		version                   int64
-		registered, demo, consent bool
-		delivered, optInSent      bool
-		first, last, company      string
+		version                              int64
+		registered, demo, readiness, consent bool
+		delivered, optInSent                 bool
+		first, last, company                 string
 	)
 	// ceiling: the lock and its connection are held across the vendor call (10 s timeout, MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
 	tx, err := w.Pool.Begin(ctx)
@@ -76,11 +76,12 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 
 	err = tx.QueryRow(ctx, `
 		SELECT version, COALESCE(first_name, ''), COALESCE(last_name, ''), COALESCE(company, ''),
-		       registered_at IS NOT NULL, demo_requested_at IS NOT NULL, marketing_consented_at IS NOT NULL,
+		       registered_at IS NOT NULL, demo_requested_at IS NOT NULL, readiness_checked_at IS NOT NULL,
+		       marketing_consented_at IS NOT NULL,
 		       CASE WHEN $2::text = 'hubspot' THEN hubspot_delivered_at ELSE resend_delivered_at END IS NOT NULL,
 		       resend_opt_in_sent_at IS NOT NULL
 		FROM contacts WHERE email = $1`, job.Args.Email, dest).Scan(
-		&version, &first, &last, &company, &registered, &demo, &consent, &delivered, &optInSent)
+		&version, &first, &last, &company, &registered, &demo, &readiness, &consent, &delivered, &optInSent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -97,6 +98,9 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	}
 	if demo {
 		c.Tags = append(c.Tags, "demo request")
+	}
+	if readiness {
+		c.Tags = append(c.Tags, "readiness check")
 	}
 
 	if dest == destHubSpot {

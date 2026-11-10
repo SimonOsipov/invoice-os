@@ -37,7 +37,7 @@ LABEL=preview-pr
 gc=(--project "$PROJECT" --region "$REGION" --quiet)
 
 BACKENDS=(gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling)
-SITES=(app landing library blog ops-console support-console)
+SITES=(app landing library blog check ops-console support-console)
 # The secrets each PR generates or composes; preview.tf holds the shared ones.
 PR_SECRETS=(gateway-token s2s-token gotrue-jwt-keys gotrue-jwt-secret database-superuser-url database-migration-url
   database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key)
@@ -77,6 +77,7 @@ cmd_urls() {
   echo "landing_url=$(url landing "$pr")"
   echo "library_url=$(url library "$pr")/library"
   echo "blog_url=$(url blog "$pr")/blog"
+  echo "check_url=$(url check "$pr")/check"
   echo "ops_console_url=$(url ops-console "$pr")"
   echo "support_console_url=$(url support-console "$pr")"
 }
@@ -188,7 +189,7 @@ env_file() {
         echo "AUTH_JWKS_URL: http://127.0.0.1:8080/.well-known/jwks.json"
         echo "AUTH_ADDITIONAL_ISSUERS: '$issuers'"
         echo "AUTH_SITE_URL: $(url landing "$pr")"
-        echo "CORS_ALLOWED_ORIGINS: $(url app "$pr"),$(url landing "$pr"),$(url ops-console "$pr"),$(url support-console "$pr"),$(url blog "$pr"),$(url library "$pr")"
+        echo "CORS_ALLOWED_ORIGINS: $(url app "$pr"),$(url landing "$pr"),$(url ops-console "$pr"),$(url support-console "$pr"),$(url blog "$pr"),$(url library "$pr"),$(url check "$pr")"
         for callee in tenancy portfolio invoice validation submission dashboard notifications docling auth worker; do
           echo "$(tr 'a-z-' 'A-Z_' <<<"$callee")_URL: $(url "$callee" "$pr")"
         done
@@ -267,7 +268,7 @@ deploy_one() {
   case "$svc" in
     worker) min=1 memory=768Mi ;;
     docling) cpu=2 memory=4Gi ;;
-    app | landing | library | blog | ops-console | support-console) memory=256Mi ;;
+    app | landing | library | blog | check | ops-console | support-console) memory=256Mi ;;
   esac
   envf=$(mktemp)
   env_file "$pr" "$svc" "$envf"
@@ -278,11 +279,11 @@ deploy_one() {
   [ -z "$secrets" ] || args+=(--set-secrets "$secrets")
   case "$svc" in
     # The gateway checks GATEWAY_TOKEN and JWTs itself; the sites are public.
-    gateway | app | landing | library | blog | ops-console | support-console) args+=(--no-invoker-iam-check) ;;
+    gateway | app | landing | library | blog | check | ops-console | support-console) args+=(--no-invoker-iam-check) ;;
     *) args+=(--no-allow-unauthenticated) ;;
   esac
   case "$svc" in
-    docling | app | landing | library | blog | ops-console | support-console) ;;
+    docling | app | landing | library | blog | check | ops-console | support-console) ;;
     *) args+=(--network preview --subnet run --vpc-egress private-ranges-only) ;;
   esac
   # The worker runs River and the sweepers between requests.

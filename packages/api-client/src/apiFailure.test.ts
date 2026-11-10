@@ -361,6 +361,7 @@ describe('transport inventory', () => {
       'frontend/app/src/lib/extractionReview.ts': 1,
       'frontend/app/src/lib/importApi.ts': 4, // XhrCtor type + three xhrCtor defaults
       'frontend/app/src/lib/sourceDocument.ts': 1,
+      'frontend/check/src/checkApi.ts': 1,
       'frontend/landing/src/hubspot.ts': 1,
       'frontend/landing/src/signIn.ts': 1,
       'frontend/support-console/src/auditApi.ts': 1,
@@ -369,7 +370,7 @@ describe('transport inventory', () => {
     })
 
     const reported = Object.keys(hits)
-    expect(reported.length).toBe(9)
+    expect(reported.length).toBe(10)
     expect(reported.filter((f) => !code[f].includes('reportApiFailure('))).toEqual([])
   })
 })

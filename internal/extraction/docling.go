@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,8 +120,8 @@ func (r *DoclingReader) Read(ctx context.Context, doc Document, onPage func(Page
 	return totals, nil
 }
 
-// doclingStatusError names the status and the service's own reason, so a 422 (unreadable
-// document) is distinguishable from a 500 without a sentinel error type.
+// doclingStatusError names the status and the service's own reason. Only a 422 (unreadable
+// document) matches ErrDocumentUnreadable.
 func doclingStatusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, doclingErrBodyMax))
 
@@ -134,8 +135,20 @@ func doclingStatusError(resp *http.Response) error {
 	if reason == "" {
 		reason = http.StatusText(resp.StatusCode)
 	}
-	return fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
+	err := fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		return unreadableError{err}
+	}
+	return err
 }
+
+// ErrDocumentUnreadable marks a read that failed on the file: a sidecar 422, a pdfium open failure or the page cap.
+var ErrDocumentUnreadable = errors.New("docling: document unreadable")
+
+type unreadableError struct{ error }
+
+func (e unreadableError) Unwrap() error      { return e.error }
+func (unreadableError) Is(target error) bool { return target == ErrDocumentUnreadable }
 
 // doclingTokens converts one page's wire tokens and counts the non-whitespace runes they carry,
 // the same predicate pdfiumTokens uses.

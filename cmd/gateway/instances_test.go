@@ -407,3 +407,68 @@ func TestBuilders_NilPoolKeepsTheLimitsInProcess(t *testing.T) {
 		t.Errorf("notifications calls = %d, want %d", n, gateway.BlogSubscribePerEmail)
 	}
 }
+
+// The per-IP check limit built by main's own builder counts across instances under scope readiness-check-ip, for 24 h, and stores a hash.
+func TestTwoInstances_TheReadinessCheckIPLimitCountsAcrossInstances(t *testing.T) {
+	gw, super := os.Getenv("DATABASE_GATEWAY_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
+	if gw == "" || super == "" {
+		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+	}
+	t.Setenv("DEPLOY_ENV", "")
+	ctx := context.Background()
+	open := func(dsn string) *pgxpool.Pool {
+		p, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatalf("open pool: %v", err)
+		}
+		t.Cleanup(p.Close)
+		return p
+	}
+	poolA, poolB, superPool := open(gw), open(gw), open(super)
+	const ip = "198.51.100.77"
+	sum := sha256.Sum256([]byte(ip))
+	clean := func() {
+		_, _ = superPool.Exec(ctx, `DELETE FROM gateway_throttle_counts WHERE key_hash = $1`, sum[:])
+	}
+	clean()
+	t.Cleanup(clean)
+
+	wu, nu := readinessStubs(t)
+	log := slog.New(slog.DiscardHandler)
+	a := readinessCheckHandlers(wu, nu, "gw-token", log, poolA).Run
+	b := readinessCheckHandlers(wu, nu, "gw-token", log, poolB).Run
+	run := func(h http.Handler) int {
+		req := readinessRunRequest(t, "")
+		req.RemoteAddr = ip + ":4000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range gateway.ReadinessCheckPerIP {
+		h := a
+		if i%2 == 1 {
+			h = b
+		}
+		if code := run(h); code != http.StatusOK {
+			t.Fatalf("run %d = %d, want 200", i+1, code)
+		}
+	}
+	for name, h := range map[string]http.Handler{"A": a, "B": b} {
+		if code := run(h); code != http.StatusTooManyRequests {
+			t.Errorf("11th run on %s = %d, want 429: the count is not shared", name, code)
+		}
+	}
+
+	var row string
+	var hours float64
+	if err := superPool.QueryRow(ctx, `SELECT t::text, extract(epoch FROM expires_at - now()) / 3600 FROM gateway_throttle_counts t
+		WHERE scope = 'readiness-check-ip' AND key_hash = $1`, sum[:]).Scan(&row, &hours); err != nil {
+		t.Fatalf("no row of scope readiness-check-ip keyed by sha256(%q): %v", ip, err)
+	}
+	if strings.Contains(row, ip) {
+		t.Errorf("a column holds the address text: %s", row)
+	}
+	if hours < 23 || hours > 24.01 {
+		t.Errorf("the count expires in %.2f h, want a 24 h window", hours)
+	}
+}

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html recovery.html stranded_alert.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html readiness_check.html recovery.html stranded_alert.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -20,7 +20,7 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
 	switch name {
-	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "recovery", "stranded_alert":
+	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "readiness_check", "recovery", "stranded_alert":
 	default:
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
@@ -310,4 +310,81 @@ func RenderStrandedAlert(m StrandedAlertMail) (subject, html string, err error) 
 		return "", "", err
 	}
 	return StrandedAlertSubject, buf.String(), nil
+}
+
+const (
+	ReadinessCheckSubject   = "Your ASComply readiness check results"
+	ReadinessCheckSignUpURL = "https://www.ascomply.com/?register"
+)
+
+// MailField is a label and a value; Value may be file text, so the template escapes it.
+type MailField struct{ Label, Value string }
+
+// ReadinessCheckInvoice is one checked invoice. A problem invoice has only Failures.
+type ReadinessCheckInvoice struct {
+	Number, IssueDate, Currency, Subtotal, VAT, Total string
+	Buyer, Failures, Warnings                         []MailField
+	NotChecked                                        []string
+	Passes                                            bool
+}
+
+// ReadinessCheckMail is the data of one readiness-check results mail; Total counts invoices, not rows.
+type ReadinessCheckMail struct {
+	Invoices        []ReadinessCheckInvoice
+	Checked, Total  int
+	ChecksLeft      int
+	DocumentType    string
+	BlankNumberRows int
+}
+
+type readinessCheckView struct {
+	ReadinessCheckMail
+	SignUpURL, Heading, Accent, Intro, ChecksLine string
+	Details                                       []MailField
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// RenderReadinessCheck renders the results mail; the subject is fixed so it never carries file text.
+func RenderReadinessCheck(m ReadinessCheckMail) (subject, html string, err error) {
+	v := readinessCheckView{ReadinessCheckMail: m, SignUpURL: ReadinessCheckSignUpURL,
+		Heading: "Here is what we found.", Accent: "Fix it before you submit."}
+	switch {
+	case len(m.Invoices) == 0:
+		v.Heading, v.Accent = "We found no invoice", "in this file."
+		v.Intro = "We found no invoice in this file."
+		if m.BlankNumberRows > 0 {
+			v.Intro += fmt.Sprintf(" %d %s no invoice number.", m.BlankNumberRows, plural(m.BlankNumberRows, "row has", "rows have"))
+		}
+	case m.Total > m.Checked:
+		v.Intro = fmt.Sprintf("%d of %d invoices checked. Sign up to check the rest.", m.Checked, m.Total)
+	default:
+		v.Intro = fmt.Sprintf("%d %s checked.", m.Checked, plural(m.Checked, "invoice", "invoices"))
+	}
+	if m.DocumentType != "" {
+		v.Intro = "This looks like a " + m.DocumentType + "; it was checked as an invoice. " + v.Intro
+	}
+	if m.ChecksLeft > 0 {
+		v.ChecksLine = fmt.Sprintf("You have %d free %s left.", m.ChecksLeft, plural(m.ChecksLeft, "check", "checks"))
+	} else {
+		v.ChecksLine = "You have no free checks left. Sign up to keep checking."
+	}
+	src, err := Template("readiness_check")
+	if err != nil {
+		return "", "", err
+	}
+	tpl, err := template.New("readiness_check").Parse(string(src))
+	if err != nil {
+		return "", "", err
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, v); err != nil {
+		return "", "", err
+	}
+	return ReadinessCheckSubject, buf.String(), nil
 }

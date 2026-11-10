@@ -60,6 +60,7 @@ updates:
       - /
       - /frontend/app
       - /frontend/blog
+      - /frontend/check
       - /frontend/landing
       - /frontend/library
       - /frontend/ops-console

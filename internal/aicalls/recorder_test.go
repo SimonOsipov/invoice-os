@@ -576,3 +576,95 @@ func TestWait_ReturnsWithinTheTimeoutAgainstAHungDatabase(t *testing.T) {
 		t.Errorf("Wait took %v, want about the 200ms timeout", d)
 	}
 }
+
+// dbNow reads the database clock, so created_at >= start holds whatever the host clock says.
+func (e env) dbNow(t *testing.T) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := e.super.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("read the db clock: %v", err)
+	}
+	return now
+}
+
+// publicRows reads the tenantless rows of purpose, as the superuser: RLS hides them from invoice_app.
+func (e env) publicRows(t *testing.T, start time.Time, purpose string) []aiRow {
+	t.Helper()
+	rs, err := e.super.Query(context.Background(),
+		`SELECT client, purpose, model, input_tokens, output_tokens, cost::text,
+		        latency_ms, attempts, outcome, id IS NOT NULL, created_at IS NOT NULL
+		   FROM ai_calls WHERE tenant_id IS NULL AND created_at >= $1 AND purpose = $2`, start, purpose)
+	if err != nil {
+		t.Fatalf("read tenantless ai_calls: %v", err)
+	}
+	defer rs.Close()
+	var out []aiRow
+	for rs.Next() {
+		var r aiRow
+		if err := rs.Scan(&r.Client, &r.Purpose, &r.Model, &r.In, &r.Out, &r.Cost,
+			&r.LatencyMS, &r.Attempts, &r.Outcome, &r.HasID, &r.HasCreatedAt); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		out = append(out, r)
+	}
+	if err := rs.Err(); err != nil {
+		t.Fatalf("read tenantless ai_calls: %v", err)
+	}
+	return out
+}
+
+// deletePublicRowsOnCleanup removes the tenantless rows of one unique purpose; no tenant delete reaches them.
+func (e env) deletePublicRowsOnCleanup(t *testing.T, purpose string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = e.super.Exec(context.Background(), `DELETE FROM ai_calls WHERE tenant_id IS NULL AND purpose = $1`, purpose)
+	})
+}
+
+func TestWrite_StoresAPublicCheckRowWithNoTenant(t *testing.T) {
+	e := newEnv(t)
+	logger, buf := newLogger()
+	c := fullCall("", uniquePurpose())
+	c.PublicCheck = true
+	e.deletePublicRowsOnCleanup(t, c.Purpose)
+	start := e.dbNow(t)
+
+	NewRecorder(e.app, logger).write(c)
+
+	got := e.publicRows(t, start, c.Purpose)
+	if len(got) != 1 {
+		t.Fatalf("%d tenantless rows, want 1 (log: %v)", len(got), buf.lines(t))
+	}
+	wantRow(t, got[0], c, "0.0014741")
+	if l := buf.lines(t); len(l) != 0 {
+		t.Errorf("healthy public-check write logged %v", l)
+	}
+}
+
+func TestWrite_APublicCheckRowOnADownDatabaseLogsOnceWithoutATenant(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/d?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	logger, buf := newLogger()
+	c := fullCall("", uniquePurpose())
+	c.PublicCheck = true
+
+	NewRecorder(pool, logger).write(c)
+
+	lines := buf.lines(t)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines, want exactly 1: %v", len(lines), lines)
+	}
+	m := lines[0]
+	if m["level"] != "WARN" || m["msg"] != "ai call not recorded" || m["client"] != c.Client || m["purpose"] != c.Purpose {
+		t.Errorf("line = %v, want WARN \"ai call not recorded\" with the client and purpose", m)
+	}
+	if _, has := m["tenant_id"]; has {
+		t.Errorf("line carries a tenant_id key: %v", m)
+	}
+	if e, _ := m["err"].(string); !strings.Contains(e, "closed") {
+		t.Errorf("err = %q, want the closed-pool error from the INSERT", e)
+	}
+}

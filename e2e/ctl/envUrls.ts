@@ -1,7 +1,7 @@
 import { CtlError } from './main'
 
-export type ServiceLabel = 'gateway' | 'app' | 'landing' | 'ops-console' | 'support-console' | 'library' | 'blog'
-export type UrlVar = 'GATEWAY_URL' | 'APP_URL' | 'LANDING_URL' | 'OPS_CONSOLE_URL' | 'SUPPORT_CONSOLE_URL' | 'LIBRARY_URL' | 'BLOG_URL'
+export type ServiceLabel = 'gateway' | 'app' | 'landing' | 'ops-console' | 'support-console' | 'library' | 'blog' | 'check'
+export type UrlVar = 'GATEWAY_URL' | 'APP_URL' | 'LANDING_URL' | 'OPS_CONSOLE_URL' | 'SUPPORT_CONSOLE_URL' | 'LIBRARY_URL' | 'BLOG_URL' | 'CHECK_URL'
 
 export const URL_VAR: Record<ServiceLabel, UrlVar> = {
   gateway: 'GATEWAY_URL',
@@ -11,6 +11,7 @@ export const URL_VAR: Record<ServiceLabel, UrlVar> = {
   'support-console': 'SUPPORT_CONSOLE_URL',
   library: 'LIBRARY_URL',
   blog: 'BLOG_URL',
+  check: 'CHECK_URL',
 }
 
 export interface EnvResult {
@@ -28,15 +29,16 @@ const PRODUCTION_HOST: Record<ServiceLabel, string> = {
   'support-console': 'sup',
   library: 'www',
   blog: 'www',
+  check: 'www',
 }
 
-// The library and the blog are served under a base path.
-const SITE_BASE: Partial<Record<ServiceLabel, string>> = { library: '/library', blog: '/blog' }
+// The library, the blog and the check are served under a base path.
+const SITE_BASE: Partial<Record<ServiceLabel, string>> = { library: '/library', blog: '/blog', check: '/check' }
 
 // The preview project's number; scripts/ci/preview.sh builds the same run.app URLs.
 const PREVIEW_PROJECT_NUMBER = '944095690109'
 
-// resolveEnv names the seven URLs: production's hosts, or a PR preview's run.app services.
+// resolveEnv names the service URLs: production's hosts, or a PR preview's run.app services.
 // A preview's database is recreated on every deploy, so environmentId carries the env name only.
 export function resolveEnv(name: string): EnvResult {
   const urls: EnvResult['urls'] = {}

@@ -2,7 +2,7 @@
 // or scales to zero holds none: the River queues of submission, extraction and contact delivery,
 // the person erase job, the reconciliation sweep, the two custom-rule re-checks, the daily rollup snapshot, the
 // system-health sampler, the newsletter purge, the workspace purge and the code-list sync. The other services only
-// enqueue. It serves /healthz and /readyz and no other route.
+// enqueue. It serves /healthz and /readyz and, behind the gateway token, the public check routes.
 package main
 
 import (
@@ -33,9 +33,12 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/publiccheck"
+	"github.com/SimonOsipov/invoice-os/internal/readinesscheck"
 	"github.com/SimonOsipov/invoice-os/internal/reconciliation"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
+	"github.com/SimonOsipov/invoice-os/internal/validation"
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 	"github.com/SimonOsipov/invoice-os/internal/workspacepurge"
 )
@@ -236,6 +239,16 @@ func main() {
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, leader.Lead("rollup-snapshot", snap.RunOnce)))
 	app.AddBackgroundWorker(leader) // last: Stop releases the locks after every task has stopped
+
+	checker := &publiccheck.Checker{
+		LoadRules: validation.NewStore(pool).LoadForBatch,
+		Engine:    validation.NewDefaultEngine(),
+		Mapper:    aiClient,
+		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumReader(),
+			AI: aiClient, Jev: jevClient},
+	}
+	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool}, nl.Sender, app.Logger), nl.Sender)
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)

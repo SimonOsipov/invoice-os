@@ -34,7 +34,7 @@ afterEach(() => {
 // jsdom drops shorthands such as padding-block, so inline styles are read from the SSR markup.
 function ssrTop(): HTMLElement {
   const ssr = document.createElement('template')
-  ssr.innerHTML = renderToStaticMarkup(createElement(Hero, { onBookDemo: () => undefined }))
+  ssr.innerHTML = renderToStaticMarkup(createElement(Hero, { onBookDemo: () => undefined, checkHref: CHECK }))
   return ssr.content.querySelector<HTMLElement>('#top')!
 }
 
@@ -47,9 +47,11 @@ const styleOf = (el: Element | null | undefined): Record<string, string> => {
   return out
 }
 
-async function mountHero(onBookDemo: () => void = () => undefined): Promise<HTMLElement> {
+const CHECK = 'https://c.x/check'
+
+async function mountHero(onBookDemo: () => void = () => undefined, props: { checkHref?: string | null } = { checkHref: CHECK }): Promise<HTMLElement> {
   await act(async () => {
-    root.render(createElement(Hero, { onBookDemo }))
+    root.render(createElement(Hero, { onBookDemo, ...props }))
   })
   const top = document.querySelector<HTMLElement>('#top')
   expect(top, 'expected #top to render').not.toBeNull()
@@ -117,23 +119,42 @@ describe('HB-05 the accent CTA books a demo', () => {
   })
 })
 
-describe('HB-06 Explore the platform is an anchor to #platform', () => {
-  it('is a ghostDark <a href="#platform"> and does not book a demo', async () => {
+describe('HB-06 the check link replaces the Explore button; the bottom anchor stays on #platform', () => {
+  it('Hero_checkLink_isGhostLinkToCheckHref: a ghostDark <a> to the check href that does not book a demo', async () => {
     const onBookDemo = vi.fn()
     const top = await mountHero(onBookDemo)
-    const matches = [...top.querySelectorAll('a, button')].filter((el) => textOf(el) === 'Explore the platform')
-    expect(matches.length, 'expected exactly one "Explore the platform" control').toBe(1)
+    const matches = [...top.querySelectorAll('a, button')].filter((el) => textOf(el) === 'Check your invoices')
+    expect(matches.length, 'expected exactly one "Check your invoices" control').toBe(1)
     const el = matches[0]
     expect(el.tagName).toBe('A')
-    expect(el.getAttribute('href')).toBe('#platform')
+    expect(el.getAttribute('href')).toBe(CHECK)
     expect(el.classList.contains('ds-btn--ghostDark')).toBe(true)
-    // D-40: no hrefPrefix on either hero anchor.
-    expect([...top.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['#platform', '#platform'])
+    expect(el.hasAttribute('target'), 'same tab (D10)').toBe(false)
+    const explore = [...top.querySelectorAll('a, button')].filter((c) => textOf(c).startsWith('Explore the platform'))
+    expect(explore.map((c) => c.getAttribute('href')), 'only the bottom anchor is left').toEqual(['#platform'])
+    expect(explore[0].classList.contains('ds-btn')).toBe(false)
 
     await act(async () => {
       ;(el as HTMLElement).click()
     })
     expect(onBookDemo).not.toHaveBeenCalled()
+  })
+
+  it('Hero_bottomAnchorStillPlatform: the hero anchors are the check href then #platform', async () => {
+    const top = await mountHero()
+    expect([...top.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual([CHECK, '#platform'])
+  })
+
+  it('Hero_checkLink_absentWhenNull: omitted or null leaves Book a demo only', async () => {
+    for (const props of [{}, { checkHref: null }]) {
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      const top = await mountHero(undefined, props)
+      const ctas = top.querySelector('.ds-btn--accent')!.parentElement!
+      expect([...ctas.children].map(textOf)).toEqual(['Book a demo'])
+      expect(top.querySelector('.ds-btn--ghostDark')).toBeNull()
+      expect([...top.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['#platform'])
+    }
   })
 })
 
@@ -204,7 +225,7 @@ describe('HB-15 the band lays out as the v2 prototype', () => {
     expect(lead.className).toBe('t-lead')
     expect(styleOf(lead)).toEqual({ margin: '0', 'max-width': '480px', color: 'var(--surface-body)' })
     expect(styleOf(ctas)).toEqual({ display: 'flex', 'flex-wrap': 'wrap', 'align-items': 'center', gap: '16px 28px' })
-    expect([...ctas.children].map(textOf)).toEqual(['Book a demo', 'Explore the platform'])
+    expect([...ctas.children].map(textOf)).toEqual(['Book a demo', 'Check your invoices'])
     expect(styleOf(notes)).toEqual({ display: 'flex', 'flex-wrap': 'wrap', gap: '12px 32px', 'margin-top': '4px' })
 
     expect(notes.children.length).toBe(2)

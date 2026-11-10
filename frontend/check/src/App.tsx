@@ -1,0 +1,147 @@
+import { useEffect, useState } from 'react'
+import { Footer } from './components/Footer'
+import { chooseConsent, CookieNotice, readConsent, syncCheckConsent } from './analytics'
+import { runCheck, suggestMapping } from './checkApi'
+import { CHECK_H1 } from './copy'
+import { DetailsStep } from './components/DetailsStep'
+import { MapStep } from './components/MapStep'
+import { SentPanel } from './components/SentPanel'
+import { UploadStep } from './components/UploadStep'
+import { canSend, fileVerdict, kindOf } from './flow'
+import { initialMapping, type Mapping, type Suggestion } from './fields'
+import { landingHref } from './links'
+import { COLUMNS_SENTENCE, refusal as refuse, type Refusal } from './messages'
+
+type Step = 'upload' | 'map' | 'details' | 'sent'
+
+export function App() {
+  const [consent, setConsent] = useState(() => readConsent())
+  const [reopened, setReopened] = useState(false)
+  const [step, setStep] = useState<Step>('upload')
+  const [file, setFile] = useState<File | null>(null)
+  const [verdict, setVerdict] = useState('')
+  const [refusal, setRefusal] = useState<Refusal | null>(null)
+  const [reading, setReading] = useState(false)
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
+  const [fields, setFields] = useState<Mapping | null>(null)
+  const [email, setEmail] = useState('')
+  const [ticked, setTicked] = useState(false)
+  const [sending, setSending] = useState(false)
+
+  // A new pick drops everything the previous file left behind.
+  const pick = async (picked: File) => {
+    setStep('upload')
+    setFile(null)
+    setSuggestion(null)
+    setFields(null)
+    setRefusal(null)
+    setTicked(false)
+    const v = fileVerdict(picked)
+    setVerdict(v)
+    if (v) return
+    if (kindOf(picked) !== 'spreadsheet') {
+      setFile(picked)
+      setStep('details')
+      return
+    }
+    setFile(picked)
+    setReading(true)
+    const res = await suggestMapping(picked)
+    setReading(false)
+    if (res.ok && res.value.columns.length > 0) {
+      setSuggestion(res.value)
+      setFields(initialMapping(res.value))
+      setStep('map')
+      return
+    }
+    setFile(null)
+    setRefusal(res.ok ? { text: COLUMNS_SENTENCE, signUp: false } : refuse('mapping', res.status, res.error))
+  }
+
+  const backToUpload = () => {
+    setStep('upload')
+    setFile(null)
+    setSuggestion(null)
+    setFields(null)
+    setRefusal(null)
+    setTicked(false)
+    setVerdict('')
+  }
+
+  const send = async () => {
+    if (!file) return
+    setSending(true)
+    setRefusal(null)
+    const res = await runCheck({ email, file, mapping: suggestion && fields ? { headerRow: suggestion.header_row, fields } : undefined })
+    setSending(false)
+    if (res.ok) setStep('sent')
+    else setRefusal(refuse(suggestion ? 'run' : 'document', res.status, res.error))
+  }
+
+  // A choice made in another tab applies here when this tab is shown again.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const next = syncCheckConsent()
+      if (next) setConsent(next)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+
+  return (
+    <div className="check-page">
+      <header className="check-header">
+        <a href={landingHref('/')}>ASComply Africa</a>
+      </header>
+      <main className="check-main">
+        <h1>{CHECK_H1}</h1>
+        <div className="check-steps">
+          {step === 'upload' && <UploadStep fileName={file?.name ?? null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
+          {step === 'map' && file && suggestion && fields && (
+            <MapStep
+              fileName={file.name}
+              suggestion={suggestion}
+              fields={fields}
+              onField={(key, header) => setFields({ ...fields, [key]: header })}
+              onBack={backToUpload}
+              onContinue={() => setStep('details')}
+            />
+          )}
+          {step === 'details' && file && (
+            <DetailsStep
+              fileName={file.name}
+              email={email}
+              ticked={ticked}
+              sending={sending}
+              canSend={canSend({ file, email, ticked, fields })}
+              refusal={refusal}
+              onEmail={setEmail}
+              onTick={setTicked}
+              onBack={() => {
+                setRefusal(null)
+                if (suggestion) setStep('map')
+                else backToUpload()
+              }}
+              onSend={send}
+            />
+          )}
+          {step === 'sent' && <SentPanel email={email.trim()} />}
+        </div>
+      </main>
+      <Footer onCookieChoices={() => setReopened(true)} />
+      {(consent === null || reopened) && (
+        <CookieNotice
+          current={consent}
+          suppressed={false}
+          privacyHref={landingHref('/privacy')}
+          onChoose={(c) => {
+            setConsent(chooseConsent(c))
+            setReopened(false)
+          }}
+        />
+      )}
+      <style>{__COOKIE_NOTICE_CSS__}</style>
+    </div>
+  )
+}

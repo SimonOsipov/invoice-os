@@ -61,7 +61,7 @@ func TestRun_NamesEachFailedTarget(t *testing.T) {
 		switch {
 		case svc == "docling" && path == "/health":
 			fmt.Fprint(w, `{"build":"old"}`)
-		case svc == "blog" && path == "/build.txt":
+		case (svc == "blog" || svc == "check") && path == "/build.txt":
 			fmt.Fprintln(w, "old")
 		case svc == "auth":
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -78,7 +78,7 @@ func TestRun_NamesEachFailedTarget(t *testing.T) {
 		names = append(names, strings.SplitN(f, ":", 2)[0])
 	}
 	slices.Sort(names)
-	if want := []string{"app", "auth", "blog", "docling"}; !slices.Equal(names, want) {
+	if want := []string{"app", "auth", "blog", "check", "docling"}; !slices.Equal(names, want) {
 		t.Fatalf("failed targets = %v (%v), want %v", names, failed, want)
 	}
 }

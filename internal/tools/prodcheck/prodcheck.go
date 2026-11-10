@@ -43,9 +43,9 @@ var workspaceReads = []string{"/api/tenancy/v1/me", "/api/portfolio/v1/entities"
 
 var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
-	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "ops.ascomply.com", "sup.ascomply.com"}
+	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "www.ascomply.com/check", "ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog)?/assets/[^"]*\.js)"`)
+	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog|/check)?/assets/[^"]*\.js)"`)
 	// ceiling: an unrelated quoted 64-hex string in a bundle fails the step, narrow the pattern then
 	digestLiteral = regexp.MustCompile(`["'` + "`" + `]\s*[0-9a-fA-F]{64}\s*["'` + "`" + `]`)
 	hstsURLs      = []string{
@@ -54,6 +54,7 @@ var (
 		"https://www.ascomply.com/",
 		"https://www.ascomply.com/blog/",
 		"https://www.ascomply.com/library/",
+		"https://www.ascomply.com/check/",
 		"https://api.ascomply.com/",
 		"https://api.ascomply.com/health",
 		"https://app.ascomply.com/",

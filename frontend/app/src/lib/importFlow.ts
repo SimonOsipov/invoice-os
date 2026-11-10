@@ -234,7 +234,7 @@ export interface PreviewColumn {
 // samples = preview.sample_rows.slice(0, sampleCount).map(row => row[ci] ?? '') — rows
 // are ragged/unpadded ([preview-samples], PRV-09), so a short row reads as '', never
 // undefined.
-export function previewColumns(preview: ImportPreview, sampleCount: number): PreviewColumn[] {
+export function previewColumns(preview: Pick<ImportPreview, 'columns' | 'sample_rows'>, sampleCount: number): PreviewColumn[] {
   const rows = preview.sample_rows.slice(0, sampleCount)
   return preview.columns.map((header, ci) => ({
     header,

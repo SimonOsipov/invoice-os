@@ -11,9 +11,11 @@ const V_H2 = 'A better way to move forward.'
 const V452 = 'See how ASComply fits your invoices, your systems and your team.'
 const V_FONT = 'clamp(35px, 4vw, 52px)'
 
-function ssr(): DocumentFragment {
+const CHECK = 'https://c.x/check'
+
+function ssr(props: { checkHref?: string | null } = { checkHref: CHECK }): DocumentFragment {
   const tpl = document.createElement('template')
-  tpl.innerHTML = renderToStaticMarkup(createElement(ClosingCta, { onBookDemo: () => undefined }))
+  tpl.innerHTML = renderToStaticMarkup(createElement(ClosingCta, { onBookDemo: () => undefined, ...props }))
   return tpl.content
 }
 
@@ -71,5 +73,28 @@ describe('CL-03 the mark is hidden from assistive technology', () => {
     expect(marks[0].querySelectorAll('br'), 'one break').toHaveLength(1)
     expect(spaced(marks[0])).toBe('All clear.')
     expect(marks[0].closest('[data-closing]'), 'the mark is inside the panel').not.toBeNull()
+  })
+})
+
+describe('CL-04 the check link sits beside Book a demo', () => {
+  it('ClosingCta_checkLink_besideBookDemo: one outline link in one wrapping row with the button', () => {
+    const panel = ssr().querySelector('[data-closing]')!
+    const buttons = panel.querySelectorAll('button')
+    expect(buttons, 'Book a demo stays the only button').toHaveLength(1)
+    expect(norm(buttons[0].textContent)).toBe('Book a demo')
+    const links = panel.querySelectorAll('a.ds-btn--outline')
+    expect(links, 'one outline link').toHaveLength(1)
+    expect(links[0].getAttribute('href')).toBe(CHECK)
+    expect(norm(links[0].textContent)).toBe('Check your invoices')
+    expect(links[0].parentElement).toBe(buttons[0].parentElement)
+    expect(style(links[0].parentElement!, 'flex-wrap')).toBe('wrap')
+  })
+
+  it('ClosingCta_checkLink_absentWhenNull: omitted or null leaves Book a demo only', () => {
+    for (const props of [{}, { checkHref: null }]) {
+      const panel = ssr(props).querySelector('[data-closing]')!
+      expect(panel.querySelectorAll('button')).toHaveLength(1)
+      expect(panel.querySelectorAll('a'), 'no link').toHaveLength(0)
+    }
   })
 })

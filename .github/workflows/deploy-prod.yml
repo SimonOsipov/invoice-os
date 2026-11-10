@@ -105,6 +105,7 @@ jobs:
           - { image: landing, dockerfile: frontend/landing/Dockerfile, spa: true }
           - { image: library, dockerfile: frontend/library/Dockerfile, spa: true }
           - { image: blog, dockerfile: frontend/blog/Dockerfile, spa: true }
+          - { image: check, dockerfile: frontend/check/Dockerfile, spa: true }
           - { image: ops-console, dockerfile: frontend/ops-console/Dockerfile, spa: true }
           - { image: support-console, dockerfile: frontend/support-console/Dockerfile, spa: true }
     env:
@@ -149,6 +150,7 @@ jobs:
               --build-arg VITE_LANDING_URL=https://www.ascomply.com
               --build-arg VITE_LIBRARY_URL=https://www.ascomply.com/library
               --build-arg VITE_BLOG_URL=https://www.ascomply.com/blog
+              --build-arg VITE_CHECK_URL=https://www.ascomply.com/check
               --build-arg VITE_OPS_URL=https://ops.ascomply.com
               --build-arg VITE_SUPPORT_URL=https://sup.ascomply.com
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
@@ -216,7 +218,7 @@ jobs:
           failed=0
           # shellcheck disable=SC2016 # the child sh expands the job's env
           printf '%s\n' gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
-            app landing library blog ops-console support-console |
+            app landing library blog check ops-console support-console |
             xargs -P 4 -I{} sh -c 'gcloud run deploy {} --image "$REGISTRY/{}:$SHA" --no-traffic --tag "$TAG" \
               --project "$PROJECT" --region "$REGION" --quiet >"deploy-{}.log" 2>&1' || failed=1
           for log in deploy-*.log; do echo "--- $log"; cat "$log"; done
@@ -297,7 +299,7 @@ jobs:
           echo "Every backend serves $SHA."
       - name: Wait for each site to serve the commit
         run: |
-          for site in app.ascomply.com www.ascomply.com www.ascomply.com/library www.ascomply.com/blog ops.ascomply.com sup.ascomply.com; do
+          for site in app.ascomply.com www.ascomply.com www.ascomply.com/library www.ascomply.com/blog www.ascomply.com/check ops.ascomply.com sup.ascomply.com; do
             host=${site%%/*}
             seen=""
             for _ in $(seq 1 60); do

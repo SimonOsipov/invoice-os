@@ -1350,7 +1350,7 @@ func TestDemoDeal_JobWithoutSignUpKeyIsADemoDeal(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "dealnokey")
 	qaRegistrant(t, r.e, email, "Ada Lovelace", "Navy", "")
-	if _, err := r.e.app.Exec(context.Background(), `UPDATE river_job SET args = args - 'sign_up' WHERE kind = 'demo_deal' AND args->>'email' = $1`, email); err != nil {
+	if _, err := r.e.app.Exec(context.Background(), `UPDATE river_job SET args = args - 'source' - 'sign_up' WHERE kind = 'demo_deal' AND args->>'email' = $1`, email); err != nil {
 		t.Fatalf("strip sign_up: %v", err)
 	}
 
@@ -1358,6 +1358,90 @@ func TestDemoDeal_JobWithoutSignUpKeyIsADemoDeal(t *testing.T) {
 	qaRequireCompleted(t, res, err, "deal job without sign_up")
 	if calls := r.hs.dealCalls(); len(calls) != 1 || calls[0].Name != "Navy — demo request" {
 		t.Errorf("OpenDemoDeal calls = %+v, want one named %q", calls, "Navy — demo request")
+	}
+}
+
+func TestReadinessCheckDealName(t *testing.T) {
+	for _, c := range []struct{ company, name, want string }{
+		{"Navy", "Grace Hopper", "Navy — readiness check"},
+		{"", "Grace Hopper", "Grace Hopper — readiness check"},
+		{"", "", "Readiness check"},
+	} {
+		if got := dealName(c.company, c.name, "readiness check", "Readiness check"); got != c.want {
+			t.Errorf("dealName(%q, %q, readiness check) = %q, want %q", c.company, c.name, got, c.want)
+		}
+	}
+}
+
+// insertDeal queues a demo_deal job from raw args, as an older build would have.
+func (r *qaRig) insertDeal(t *testing.T, args string) *rivertype.JobRow {
+	t.Helper()
+	var id int64
+	err := r.e.app.QueryRow(context.Background(), `INSERT INTO river_job (kind, queue, args, state, max_attempts, priority)
+		VALUES ('demo_deal', $1, $2::jsonb, 'available', 25, 1) RETURNING id`, QueueContacts, args).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert demo_deal %s: %v", args, err)
+	}
+	row, err := r.e.store.river.JobGet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get job %d: %v", id, err)
+	}
+	return row
+}
+
+func TestDemoDeal_WorkerNamesTheDealBySource(t *testing.T) {
+	for _, c := range []struct{ tag, extra, want string }{
+		{"demo", ``, "Navy — demo request"},
+		{"signup", `,"source":"sign_up"`, "Navy — sign-up"},
+		{"readiness", `,"source":"readiness_check"`, "Navy — readiness check"},
+		{"legacy", `,"sign_up":true`, "Navy — sign-up"},
+	} {
+		t.Run(c.tag, func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "dealsrc"+c.tag)
+			row := r.insertDeal(t, fmt.Sprintf(`{"email":%q,"company":"Navy"%s}`, email, c.extra))
+			res, err := r.dealWork(t, row)
+			qaRequireCompleted(t, res, err, "deal job")
+			if calls := r.hs.dealCalls(); len(calls) != 1 || calls[0].Name != c.want {
+				t.Errorf("OpenDemoDeal calls = %+v, want one named %q", calls, c.want)
+			}
+		})
+	}
+}
+
+func TestDemoDeal_UnknownSourceIsCancelled(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealbadsrc")
+	res, err := r.dealWork(t, r.insertDeal(t, fmt.Sprintf(`{"email":%q,"source":"newsletter"}`, email)))
+	if res.EventKind != river.EventKindJobCancelled || res.Job.State != rivertype.JobStateCancelled {
+		t.Fatalf("err = %v, event %q, job state %q, want the job cancelled", err, res.EventKind, res.Job.State)
+	}
+	if n := len(r.hs.dealCalls()); n != 0 {
+		t.Errorf("OpenDemoDeal called %d times, want 0", n)
+	}
+	// River records a cancel in the job's errors, not in the returned err.
+	if len(res.Job.Errors) == 0 || !strings.Contains(res.Job.Errors[0].Error, "newsletter") {
+		t.Fatalf("job errors = %+v, want one naming the source", res.Job.Errors)
+	}
+	for _, e := range res.Job.Errors {
+		if strings.Contains(e.Error, email) {
+			t.Errorf("recorded error %q holds the email", e.Error)
+		}
+	}
+	qaRequireNoLeak(t, nil, r.sinks(), email)
+}
+
+func TestDemoDeal_ReadinessCheckDealRespectsAnOpenDeal(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	v := dealVendor(t, `"false"`)
+	email := uniqueEmail(t, r.e, "dealready")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "Navy", "")
+	hs := hubspotAt(v, nil)
+	for range 2 {
+		r.dealWorkOn(t, r.insertDeal(t, fmt.Sprintf(`{"email":%q,"company":"Navy","source":"readiness_check"}`, email)), hs)
+	}
+	if n := len(dealPosts(v)); n != 1 {
+		t.Errorf("deal POSTs = %d, want 1 (requests %v)", n, v.labels())
 	}
 }
 
@@ -1593,5 +1677,59 @@ func TestDemoDealWorker_TimeoutCoversSixVendorCalls(t *testing.T) {
 	}
 	if got <= river.JobTimeoutDefault {
 		t.Errorf("Timeout = %v, want above River's default %v", got, river.JobTimeoutDefault)
+	}
+}
+
+func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	ctx := context.Background()
+	only := uniqueEmail(t, r.e, "tagready")
+	all := uniqueEmail(t, r.e, "tagall")
+	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: only, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	qaRegistrant(t, r.e, all, "Ada Lovelace", "", "")
+	if err := r.e.store.DemoRequest(ctx, DemoIntake{Email: all, Name: "Ada Lovelace"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: all, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, only, "hubspot", 1))
+	qaRequireCompleted(t, res, err, "readiness-only hubspot job")
+	res, err = r.work(t, r.jobRow(t, all, "hubspot", 3))
+	qaRequireCompleted(t, res, err, "three-source hubspot job")
+	calls := r.hs.got()
+	if len(calls) != 2 {
+		t.Fatalf("HubSpot.Upsert called %d times, want 2", len(calls))
+	}
+	if want := []string{"readiness check"}; !slices.Equal(calls[0].Tags, want) {
+		t.Errorf("readiness-only tags = %v, want %v", calls[0].Tags, want)
+	}
+	if want := []string{"registered", "demo request", "readiness check"}; !slices.Equal(calls[1].Tags, want) {
+		t.Errorf("three-source tags = %v, want %v", calls[1].Tags, want)
+	}
+}
+
+func TestDeliver_RegistrantWhoRanACheckGetsNoMarketingOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "chkoptin")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", "")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "resend job after the check")
+	calls := r.rs.got()
+	if len(calls) != 1 {
+		t.Fatalf("Sync called %d times, want 1", len(calls))
+	}
+	if calls[0].OptIn {
+		t.Error("Sync sendOptIn = true for a registrant whose only tick was on a readiness check")
+	}
+	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
 	}
 }

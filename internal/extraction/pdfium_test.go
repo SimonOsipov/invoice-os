@@ -8,8 +8,10 @@ package extraction_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -334,6 +336,28 @@ func TestPDFiumReader_RejectsAMalformedPDF(t *testing.T) {
 				t.Errorf("Read(%s) failed but called onPage %d time(s)", tc.name, pages)
 			}
 		})
+	}
+}
+
+// TestPDFiumReader_ABadFileIsErrDocumentUnreadable: a corrupt PDF and one over the page cap are
+// the file's fault; a cancelled context is not.
+func TestPDFiumReader_ABadFileIsErrDocumentUnreadable(t *testing.T) {
+	read := func(ctx context.Context, b []byte) error {
+		_, err := extraction.NewPDFiumReader().Read(ctx, extraction.Document{Bytes: b, ContentType: "application/pdf"}, func(extraction.Page) error { return nil })
+		return err
+	}
+	for name, b := range map[string][]byte{
+		"corrupt":  []byte("%PDF-1.4 not really a pdf"),
+		"over-cap": fxBuildNPage(prOverCap),
+	} {
+		if err := read(t.Context(), b); !errors.Is(err, extraction.ErrDocumentUnreadable) {
+			t.Errorf("%s: err = %v, want ErrDocumentUnreadable", name, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := read(ctx, []byte("%PDF-1.4 not really a pdf")); errors.Is(err, extraction.ErrDocumentUnreadable) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: err = %v, want context.Canceled and not ErrDocumentUnreadable", err)
 	}
 }
 

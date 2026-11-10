@@ -6,13 +6,14 @@ describe('resolveEnv', () => {
     const r = resolveEnv('pr-12')
     expect(r.urls.GATEWAY_URL).toBe('https://gateway-pr-12-944095690109.africa-south1.run.app')
     expect(r.urls.SUPPORT_CONSOLE_URL).toBe('https://support-console-pr-12-944095690109.africa-south1.run.app')
-    expect(Object.keys(r.urls)).toHaveLength(7)
+    expect(Object.keys(r.urls)).toHaveLength(8)
   })
 
   it('names a preview\'s site addresses', () => {
     const r = resolveEnv('pr-12')
     expect(r.urls.LIBRARY_URL).toBe('https://library-pr-12-944095690109.africa-south1.run.app/library')
     expect(r.urls.BLOG_URL).toBe('https://blog-pr-12-944095690109.africa-south1.run.app/blog')
+    expect(r.urls.CHECK_URL).toBe('https://check-pr-12-944095690109.africa-south1.run.app/check')
     expect(r.urls.LANDING_URL).toBe('https://landing-pr-12-944095690109.africa-south1.run.app')
     expect(r.urls.APP_URL).toBe('https://app-pr-12-944095690109.africa-south1.run.app')
   })
@@ -28,6 +29,7 @@ describe('resolveEnv', () => {
     const r = resolveEnv('production')
     expect(r.urls.LIBRARY_URL).toBe('https://www.ascomply.com/library')
     expect(r.urls.BLOG_URL).toBe('https://www.ascomply.com/blog')
+    expect(r.urls.CHECK_URL).toBe('https://www.ascomply.com/check')
     expect(r.urls.LANDING_URL).toBe('https://www.ascomply.com')
   })
 })

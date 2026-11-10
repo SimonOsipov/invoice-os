@@ -22,6 +22,7 @@ type qaIntakeStore struct {
 	mu          sync.Mutex
 	registrants []RegistrantIntake
 	demos       []DemoIntake
+	readiness   []ReadinessIntake
 	meEmails    []string
 	me          Contact
 	meErr       error
@@ -42,6 +43,13 @@ func (f *qaIntakeStore) DemoRequest(_ context.Context, in DemoIntake) error {
 	return f.writeErr
 }
 
+func (f *qaIntakeStore) ReadinessCheck(_ context.Context, in ReadinessIntake) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readiness = append(f.readiness, in)
+	return f.writeErr
+}
+
 func (f *qaIntakeStore) Me(_ context.Context, email string) (Contact, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,7 +60,7 @@ func (f *qaIntakeStore) Me(_ context.Context, email string) (Contact, error) {
 func (f *qaIntakeStore) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.registrants) + len(f.demos) + len(f.meEmails)
+	return len(f.registrants) + len(f.demos) + len(f.readiness) + len(f.meEmails)
 }
 
 func qaServe(h http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -68,6 +76,7 @@ func qaServe(h http.Handler, method, path, body string, headers map[string]strin
 const (
 	qaRegistrantsPath = "/internal/contacts/registrants"
 	qaDemosPath       = "/internal/contacts/demo-requests"
+	qaReadinessPath   = "/internal/contacts/readiness-checks"
 )
 
 func qaRegistrantBody(userID, email string, consent string) string {
@@ -96,6 +105,41 @@ func qaIntakeRoutes(store IntakeStore, log *qaLogSink) map[string]qaIntakeRoute 
 	return map[string]qaIntakeRoute{
 		qaRegistrantsPath: {RegistrantsHandler(store, log.logger()), qaRegistrantBody(uuid.NewString(), "ada@corp.example", "")},
 		qaDemosPath:       {DemoRequestsHandler(store, log.logger()), qaDemoBody("grace@navy.example", "")},
+		qaReadinessPath:   {ReadinessChecksHandler(store, log.logger()), `{"email":"lin@corp.example","marketing_consent_text":"Yes."}`},
+	}
+}
+
+func TestIntake_ReadinessCheckAccepted(t *testing.T) {
+	store := &qaIntakeStore{}
+	h := ReadinessChecksHandler(store, (&qaLogSink{}).logger())
+	rec := qaServe(h, "POST", qaReadinessPath, `{"email":"ada@corp.example","marketing_consent_text":"Yes."}`, nil)
+	if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"accepted"}` {
+		t.Fatalf("status %d body %q, want 202 accepted", rec.Code, rec.Body)
+	}
+	if want := []ReadinessIntake{{Email: "ada@corp.example", ConsentText: "Yes."}}; !slices.Equal(store.readiness, want) {
+		t.Errorf("ReadinessCheck calls = %+v, want %+v", store.readiness, want)
+	}
+}
+
+func TestIntake_ReadinessCheckNeedsEmailAndConsent(t *testing.T) {
+	cases := map[string]struct{ body, want string }{
+		"blank email":     {`{"email":"   ","marketing_consent_text":"Yes."}`, "email is required"},
+		"consent missing": {`{"email":"ada@corp.example"}`, "marketing_consent_text is required"},
+		"consent empty":   {`{"email":"ada@corp.example","marketing_consent_text":""}`, "marketing_consent_text is required"},
+		"consent blank":   {`{"email":"ada@corp.example","marketing_consent_text":"  "}`, "marketing_consent_text is required"},
+	}
+	store := &qaIntakeStore{}
+	h := ReadinessChecksHandler(store, (&qaLogSink{}).logger())
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := qaServe(h, "POST", qaReadinessPath, c.body, nil)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"`+c.want+`"`) {
+				t.Errorf("status %d body %q, want 400 %q", rec.Code, rec.Body, c.want)
+			}
+		})
+	}
+	if n := store.calls(); n != 0 {
+		t.Errorf("the store was called %d times, want 0", n)
 	}
 }
 
@@ -184,8 +228,8 @@ func TestIntake_MalformedIs400(t *testing.T) {
 			t.Errorf("%s: valid body status %d, want 202", path, rec.Code)
 		}
 	}
-	if n := store.calls(); n != 2 {
-		t.Errorf("the store was called %d times for the two valid bodies, want 2", n)
+	if n := store.calls(); n != 3 {
+		t.Errorf("the store was called %d times for the three valid bodies, want 3", n)
 	}
 }
 
@@ -210,8 +254,8 @@ func TestIntake_ProxiedRequestIs404(t *testing.T) {
 			t.Errorf("%s: the same body without X-User-ID: status %d, want 202", path, rec.Code)
 		}
 	}
-	if n := store.calls(); n != 2 {
-		t.Errorf("the store was called %d times for the two direct requests, want 2", n)
+	if n := store.calls(); n != 3 {
+		t.Errorf("the store was called %d times for the three direct requests, want 3", n)
 	}
 }
 
@@ -370,6 +414,9 @@ func TestIntake_BodyCapIsSixteenKiB(t *testing.T) {
 		if route == qaRegistrantsPath {
 			head = `{"email":"ada@corp.example","display_name":"`
 		}
+		if route == qaReadinessPath {
+			head = `{"email":"ada@corp.example","marketing_consent_text":"`
+		}
 		return head + strings.Repeat("a", size-len(head)-len(tail)) + tail
 	}
 	store := &qaIntakeStore{}
@@ -383,8 +430,8 @@ func TestIntake_BodyCapIsSixteenKiB(t *testing.T) {
 			}
 		})
 	}
-	if n := store.calls(); n != 2 {
-		t.Errorf("the store was called %d times, want 2: only the bodies at the cap", n)
+	if n := store.calls(); n != 3 {
+		t.Errorf("the store was called %d times, want 3: only the bodies at the cap", n)
 	}
 }
 
@@ -396,6 +443,7 @@ func TestIntake_StoreErrorIs500(t *testing.T) {
 	routes := map[string]qaIntakeRoute{
 		qaRegistrantsPath: {RegistrantsHandler(store, sink.logger()), qaRegistrantBody(uuid.NewString(), email, "")},
 		qaDemosPath:       {DemoRequestsHandler(store, sink.logger()), `{"email":"` + email + `","name":"Zelda Quuxington","company":"Zeta Holdings"}`},
+		qaReadinessPath:   {ReadinessChecksHandler(store, sink.logger()), `{"email":"` + email + `","marketing_consent_text":"Yes."}`},
 	}
 	for path, r := range routes {
 		t.Run(strings.TrimPrefix(path, "/internal/contacts/"), func(t *testing.T) {
@@ -408,10 +456,10 @@ func TestIntake_StoreErrorIs500(t *testing.T) {
 			}
 		})
 	}
-	if n := store.calls(); n != 2 {
-		t.Fatalf("the store was called %d times, want 2", n)
+	if n := store.calls(); n != 3 {
+		t.Fatalf("the store was called %d times, want 3", n)
 	}
-	if len(sink.at(slog.LevelError)) != 2 {
+	if len(sink.at(slog.LevelError)) != 3 {
 		t.Errorf("ERROR lines = %+v, want one per failed intake", sink.snapshot())
 	}
 	qaRequireNoLeak(t, nil, []*qaLogSink{sink}, email, "Zelda", "Quuxington", "Zeta Holdings")
@@ -505,8 +553,8 @@ func TestIntake_TrailingWhitespaceIsAccepted(t *testing.T) {
 			})
 		}
 	}
-	if n := store.calls(); n != 6 {
-		t.Errorf("the store was called %d times, want 6", n)
+	if n := store.calls(); n != 9 {
+		t.Errorf("the store was called %d times, want 9", n)
 	}
 }
 

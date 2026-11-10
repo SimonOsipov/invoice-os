@@ -17,9 +17,11 @@ paths:
 - Run `library.spec.ts` in the `library` unit. It reads the public Library and uses no tenant.
 - Run `blog.spec.ts` in the `blog` unit. It reads the public blog and uses no tenant.
 - Run `blog-subscribe.spec.ts` in the `blog` unit. It submits the newsletter form to the fork gateway and uses no tenant.
+- Run `check.spec.ts` in the `check` unit.
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token. `e2e/mail/` is the one exception: it reads real mail on the nightly.
+- Read a readiness-check mail through the worker's `POST /internal/public-checks/captured-mail`. It exists only while the worker captures.
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
@@ -36,13 +38,14 @@ paths:
 - Test the `library` SPA for render, navigation, the demo player, Open in Platform and consent. The SPA bundle is static content with no backend. The library image also serves the landing-built not-found page (`/srv/404.html`); only its assets and favicon sit under `/library/_landing/`.
 - Test the `blog` SPA for render, layout, navigation, search, the article contents list and demo, the load-failure state and consent. It reads published posts from the gateway's public blog routes and its newsletter form posts to the gateway's public subscribe routes.
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`. Cover the `www` robots there too.
-- Set `LIBRARY_URL` and `BLOG_URL` to each site's home, base path included.
+- Set `LIBRARY_URL`, `BLOG_URL` and `CHECK_URL` to each site's home, base path included.
 - Take `new URL(...).origin` of `BLOG_URL` for an `Origin` header.
 - Print the same site addresses from `ctl env` as `preview.sh urls` prints.
 - Run `old-addresses.spec.ts` and `transport-security.spec.ts` against production after a load-balancer change.
 - Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
 - Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag, the GA4 events on the routed production host and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
+- Skip the `send` test of `e2e/smoke/check.spec.ts` on `www.ascomply.com`. It writes a contact and a mail; the `crawler` test runs everywhere.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
 - Cover the app cookie notice, its layout, the PR-host chat gate, the sign-out cookie wipe, the routed production-host tag, `invoice_validated` and the app funnel events `email_verified`, `workspace_created` and `client_added` in `e2e/topology/app-consent.spec.ts`.
 - Cover `sign_up` and `email_verified` on the routed landing in `e2e/smoke/landing-analytics.spec.ts`.
@@ -59,7 +62,7 @@ paths:
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` on the nightly, through `expectedContactsMode()`.
 - Write the fork's URL variables, `WORKER_URL` and `GATEWAY_TOKEN`, the worker's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
-- Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `landing` on each fork.
+- Write `VITE_LIBRARY_URL`, `VITE_BLOG_URL` and `VITE_CHECK_URL` on `landing` on each fork.
 - Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `app` on each fork.
 - Write `VITE_APP_URL` and `VITE_LANDING_URL` on `library` on each fork.
 - Write `VITE_GATEWAY_URL` and `VITE_LANDING_URL` on `blog` on each fork.

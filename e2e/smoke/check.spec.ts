@@ -59,6 +59,58 @@ test('check: crawler reads the title, the description and the h1 without JavaScr
   expect(html).toContain(`<h1>${H1}</h1>`)
 })
 
+// Writes nothing, so it runs on production too.
+test('check: the page shows the hero, the trust cues and the progress strip', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(CHECK_URL)
+  await expect(page.getByText(EYEBROW, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: H1 })).toBeVisible()
+  const cues = page.getByRole('list', { name: 'About this check' })
+  for (const title of TRUST_TITLES) await expect(cues.getByText(title, { exact: true })).toBeVisible()
+  const strip = page.getByRole('list', { name: 'Check progress' })
+  await expect(strip.getByRole('listitem')).toHaveText(STEPS)
+  await expect(strip.locator('[aria-current="step"]')).toHaveText('Upload')
+  await expect(page.locator('#what').getByRole('heading', { level: 2 })).toContainText(WHAT_HEADING)
+})
+
+test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
+  test.skip(LIVE, 'www.ascomply.com is production: the send writes a contact and a mail')
+  test.setTimeout(180_000)
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+  let limited = false
+  page.on('response', (res) => {
+    if (res.url().endsWith('/readiness-check/run') && res.status() === 429) limited = true
+  })
+
+  await seedConsent(page, false)
+  await page.goto(CHECK_URL)
+  await page.locator('#check-file').setInputFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
+  await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+  const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"]')
+  await expect(current).toHaveText('Match columns')
+  // Choose every column: a preview's AI is fake, the nightly's is real, so the suggestion proves nothing.
+  for (const [label, header] of COLUMNS) {
+    await page.getByLabel(label, { exact: true }).selectOption(header)
+  }
+  await page.getByRole('button', { name: 'Continue' }).click()
+
+  await expect(current).toHaveText('Email')
+  const email = `check-${crypto.randomUUID()}@example.com`
+  await page.getByLabel('Email address', { exact: true }).fill(email)
+  await expect(page.locator('.check-consent')).toHaveText(CONSENT)
+  await page.locator('.check-consent input').check()
+  await page.getByRole('button', { name: 'Send' }).click()
+  try {
+    await expect(page.getByText(sentText(email))).toBeVisible({ timeout: 120_000 })
+  } catch (e) {
+    if (limited) throw new Error(`environment: ${IP_SENTENCE} The nightly enforces 10 checks a day per network; wait for the window to clear.`)
+    throw e
+  }
+
   await expect(current).toHaveCount(0)
   expect(errors, `console errors on the check:\n${errors.join('\n')}`).toEqual([])
 })

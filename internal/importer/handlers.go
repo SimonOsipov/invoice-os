@@ -28,6 +28,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/filesig"
 )
 
 // maxUploadBytes is the whole-request upload cap ([upload-cap]): a request
@@ -515,6 +516,23 @@ func PreviewHandler(
 		format := detectFormat(fh.Filename, fh.Header.Get("Content-Type"))
 		if format == "" {
 			writeJSON(w, http.StatusBadRequest, previewError{Error: "unrecognized file format", DocumentID: doc.ID})
+			return
+		}
+
+		head := make([]byte, filesig.HeadLen)
+		n, err := io.ReadFull(file, head)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			log.ErrorContext(r.Context(), "importer: read upload head", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		if !filesig.Matches(format, head[:n]) {
+			writeJSON(w, http.StatusBadRequest, previewError{Error: "unrecognized file format", DocumentID: doc.ID})
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			log.ErrorContext(r.Context(), "importer: rewind upload", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 

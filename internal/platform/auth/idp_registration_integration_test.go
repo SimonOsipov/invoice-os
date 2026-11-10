@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	xhtml "golang.org/x/net/html"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -91,7 +92,7 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool)))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
 	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log, nil))
@@ -835,5 +836,24 @@ func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
 		if stored[k] != want {
 			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
 		}
+	}
+}
+
+func TestIdP_ConfirmationMailCarriesTheAddressUnsubscribeLink(t *testing.T) {
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
+	u := registrant(t, gw)
+	var token string
+	if err := superConn(t).QueryRow(context.Background(), `SELECT public.mail_unsubscribe_token($1)::text`, u.email).Scan(&token); err != nil {
+		t.Fatalf("read the address's token: %v", err)
+	}
+
+	mail := mailFor(t, u.email)
+
+	anchors := anchorRe.FindAllStringSubmatch(mail.HTML, -1)
+	if len(anchors) == 0 {
+		t.Fatalf("confirmation mail has no anchors: %s", mail.HTML)
+	}
+	if got, want := html.UnescapeString(anchors[len(anchors)-1][1]), accountmail.UnsubscribeURL+"?t="+token; got != want {
+		t.Errorf("last link = %q, want %q", got, want)
 	}
 }

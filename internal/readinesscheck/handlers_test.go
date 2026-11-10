@@ -838,3 +838,41 @@ func TestMapping_ShareTheTwoSlotsWithRuns(t *testing.T) {
 	}
 	finish()
 }
+
+func TestEngineStatus_ATooLongDocumentIs400WithTheSentence(t *testing.T) {
+	err := fmt.Errorf("%w: %w", publiccheck.ErrDocumentTooLong, extraction.ErrCheckDocumentTooLong)
+	status, word := engineStatus(err)
+	if status != http.StatusBadRequest || word != DocumentTooLongSentence {
+		t.Errorf("engineStatus = %d %q, want 400 %q", status, word, DocumentTooLongSentence)
+	}
+}
+
+// bigText reads one page whose prompt is over the bound: 6,000 tokens of about 50 bytes.
+type bigText struct{}
+
+func (bigText) Name() string    { return "stub" }
+func (bigText) Version() string { return "1" }
+func (bigText) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	p := extraction.Page{Number: 1}
+	for i := 0; i < 6_000; i++ {
+		p.Tokens = append(p.Tokens, extraction.Token{
+			Text:   fmt.Sprintf("row%05d %s", i, strings.Repeat("a", 40)),
+			Region: extraction.Region{Page: 1, X0: 0.1, Y0: float64(i) / 7000, X1: 0.3, Y1: 0.9},
+		})
+	}
+	return extraction.PageResult{Pages: 1, TextChars: 20}, onPage(p)
+}
+
+func TestRunHandler_ATooLongDocumentWritesNoSummary(t *testing.T) {
+	r := newRig()
+	r.svc.Checker.Readers.Text = bigText{}
+	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF"), "consent_text", "ok")
+	wantStatus(t, rec, http.StatusBadRequest, DocumentTooLongSentence)
+	if n := len(r.store.rows()); n != 0 {
+		t.Errorf("summary rows = %d, want 0", n)
+	}
+	if ai := r.ai.calls.Load(); ai != 0 {
+		t.Errorf("AI calls = %d, want 0", ai)
+	}
+	r.noWrites(t)
+}

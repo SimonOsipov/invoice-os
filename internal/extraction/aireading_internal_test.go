@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
@@ -733,5 +734,156 @@ func TestMergeAI_TheOriginalNumberMustBePrinted(t *testing.T) {
 	got = mergeWith([]FieldResult{mgMissing("original_invoice_number")}, map[string]any{"original_invoice_number": "INV-78"}, pages, nil)
 	if r := got[0]; r.Value != nil || r.Region != nil {
 		t.Errorf("an unprinted answer = %+v, want no value and no region", r)
+	}
+}
+
+// dpRows is the rendered lines after the intro.
+func dpRows(text string) string { return strings.TrimPrefix(text, aiTextIntro+"\n\n") }
+
+func dpPages(pages, perPage, size int) []TokenPage {
+	out := make([]TokenPage, pages)
+	for i := range out {
+		out[i].Number = i + 1
+		for j := 0; j < perPage; j++ {
+			out[i].Tokens = append(out[i].Tokens, tok(fmt.Sprintf("p%dt%d", i+1, j)+strings.Repeat("a", size), i+1, 0.1, 0.2, 0.3, 0.4))
+		}
+	}
+	return out
+}
+
+func TestDoclingPromptCut_ANormalDocumentIsNotCut(t *testing.T) {
+	pages := aitGoldenPages(t, "rich_invoice")
+	var lines []string
+	for _, p := range pages {
+		lines = append(lines, fmt.Sprintf("--- page %d ---", p.Number))
+		for _, tk := range p.Tokens {
+			lines = append(lines, fmt.Sprintf("y=%.3f | x=%.2f %s", tk.Region.Y0, tk.Region.X0, tk.Text))
+		}
+	}
+	want := aiTextIntro + "\n\n" + strings.Join(lines, "\n")
+	if got := DoclingPromptText(pages); got != want {
+		t.Error("prompt differs from the pre-change rendering")
+	}
+	if DoclingPromptCut(pages) {
+		t.Error("DoclingPromptCut = true, want false")
+	}
+}
+
+func TestDoclingPromptCut_TheLongestMeasuredInvoiceIsNotCut(t *testing.T) {
+	// A page of 40 tokens of 195 bytes renders to 8,535 bytes, the densest measured page (8,537).
+	pages := dpPages(29, 40, 0)
+	for i := range pages {
+		for j := range pages[i].Tokens {
+			pages[i].Tokens[j].Text = strings.Repeat("a", 195)
+		}
+	}
+	page := len(DoclingPromptText(pages[:2])) - len(DoclingPromptText(pages[:1]))
+	if page < 8_400 || page > 8_600 {
+		t.Fatalf("page renders %d bytes, want about 8,537", page)
+	}
+	text := DoclingPromptText(pages)
+	if DoclingPromptCut(pages) || strings.Contains(text, aiPromptOmitted) {
+		t.Error("29 dense pages were cut")
+	}
+}
+
+func TestDoclingPromptCut_AParagraphTokenIsNotCut(t *testing.T) {
+	para := strings.Repeat("w", 4_000)
+	pages := onePage(1, tok(para, 1, 0.1, 0.2, 0.3, 0.4))
+	if DoclingPromptCut(pages) {
+		t.Error("DoclingPromptCut = true for a 4,000-byte token")
+	}
+	if !strings.Contains(DoclingPromptText(pages), "x=0.10 "+para) {
+		t.Error("the token's text changed")
+	}
+}
+
+func TestDoclingPromptText_KeepsHeadAndTailWithinTheBound(t *testing.T) {
+	pages := dpPages(800, 50, 30) // "p800t49" + 30 "a" = under 40 bytes of text
+	text := DoclingPromptText(pages)
+	rows := dpRows(text)
+	last := pages[799].Tokens[49].Text
+	if !strings.Contains(text, "--- page 1 ---") || !strings.HasSuffix(text, last) {
+		t.Error("head or tail missing")
+	}
+	if n := strings.Count(text, aiPromptOmitted); n != 1 {
+		t.Errorf("marker count = %d, want 1", n)
+	}
+	if len(rows) > maxDoclingPromptBytes+len(aiPromptOmitted)+2 {
+		t.Errorf("rows = %d bytes, over the bound plus marker", len(rows))
+	}
+	if !DoclingPromptCut(pages) {
+		t.Error("DoclingPromptCut = false, want true")
+	}
+}
+
+func TestDoclingPromptText_KeepsWholeLinesInReaderOrder(t *testing.T) {
+	pages := dpPages(40, 200, 20)
+	var whole = map[string]bool{aiPromptOmitted: true}
+	for _, p := range pages {
+		whole[fmt.Sprintf("--- page %d ---", p.Number)] = true
+		for _, tk := range p.Tokens {
+			whole[fmt.Sprintf("y=%.3f | x=%.2f %s", tk.Region.Y0, tk.Region.X0, tk.Text)] = true
+		}
+	}
+	lines := strings.Split(dpRows(DoclingPromptText(pages)), "\n")
+	mark := slices.Index(lines, aiPromptOmitted)
+	if mark <= 0 || mark == len(lines)-1 {
+		t.Fatalf("marker at %d of %d lines, want head, marker, tail", mark, len(lines))
+	}
+	re := regexp.MustCompile(`p(\d+)t(\d+)`)
+	prev := [2]int{0, -1}
+	for i, l := range lines {
+		if !whole[l] {
+			t.Fatalf("line %q is not a whole rendered line", l)
+		}
+		m := re.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		var cur [2]int
+		fmt.Sscan(m[1], &cur[0])
+		fmt.Sscan(m[2], &cur[1])
+		if i == mark+1 {
+			prev = [2]int{0, -1}
+		}
+		if cur[0] < prev[0] || (cur[0] == prev[0] && cur[1] <= prev[1]) {
+			t.Fatalf("line %d %q is out of order after %v", i, l, prev)
+		}
+		prev = cur
+	}
+}
+
+func TestDoclingPromptText_JustUnderTheBoundIsNotCut(t *testing.T) {
+	build := func(target int) []TokenPage {
+		pages := dpPages(1, 50, 5_000)
+		rows := len(dpRows(DoclingPromptText(pages)))
+		last := &pages[0].Tokens[49]
+		last.Text += strings.Repeat("b", target-rows)
+		return pages
+	}
+	at := build(maxDoclingPromptBytes)
+	if rows := len(dpRows(DoclingPromptText(at))); rows != maxDoclingPromptBytes {
+		t.Fatalf("rows = %d, want exactly %d", rows, maxDoclingPromptBytes)
+	}
+	if DoclingPromptCut(at) || strings.Contains(DoclingPromptText(at), aiPromptOmitted) {
+		t.Error("the exact bound was cut")
+	}
+	over := build(maxDoclingPromptBytes + 1)
+	if !DoclingPromptCut(over) || !strings.Contains(DoclingPromptText(over), aiPromptOmitted) {
+		t.Error("one byte over the bound was not cut")
+	}
+}
+
+func TestDoclingPromptText_CutsALongTokenOnARuneBoundary(t *testing.T) {
+	pages := onePage(1, tok(strings.Repeat("a", 15_999)+"₦", 1, 0.1, 0.2, 0.3, 0.4))
+	text := DoclingPromptText(pages)
+	line := strings.Split(dpRows(text), "\n")[1]
+	run := strings.TrimPrefix(line, "y=0.200 | x=0.10 ")
+	if len(run) != 15_999 || strings.Contains(run, "₦") || !utf8.ValidString(text) {
+		t.Errorf("run = %d bytes, valid = %v, want 15,999 and valid UTF-8", len(run), utf8.ValidString(text))
+	}
+	if !DoclingPromptCut(pages) {
+		t.Error("DoclingPromptCut = false, want true")
 	}
 }

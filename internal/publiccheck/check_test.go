@@ -698,3 +698,31 @@ func TestCheck_AProblemInvoiceHasNoNotCheckedList(t *testing.T) {
 		t.Errorf("checked invoice NotChecked = %v, want one key", res.Invoices[1].NotChecked)
 	}
 }
+
+// bigText reads one page whose prompt is over the bound: 6,000 tokens of about 50 bytes.
+type bigText struct{}
+
+func (bigText) Name() string    { return "stub" }
+func (bigText) Version() string { return "1" }
+func (bigText) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	p := extraction.Page{Number: 1}
+	for i := 0; i < 6_000; i++ {
+		p.Tokens = append(p.Tokens, extraction.Token{
+			Text:   fmt.Sprintf("row%05d %s", i, strings.Repeat("a", 40)),
+			Region: extraction.Region{Page: 1, X0: 0.1, Y0: float64(i) / 7000, X1: 0.3, Y1: 0.9},
+		})
+	}
+	return extraction.PageResult{Pages: 1, TextChars: 20}, onPage(p)
+}
+
+func TestCheck_ATooLongDocumentWrapsErrDocumentTooLong(t *testing.T) {
+	r := newRig()
+	r.c.Readers.Text = bigText{}
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrDocumentTooLong) || errors.Is(err, publiccheck.ErrReadUnavailable) {
+		t.Fatalf("err = %v, want ErrDocumentTooLong and not ErrReadUnavailable", err)
+	}
+	if r.ai.calls != 0 || len(r.l.calls) != 0 {
+		t.Errorf("AI calls %d, loader calls %d, want 0", r.ai.calls, len(r.l.calls))
+	}
+}

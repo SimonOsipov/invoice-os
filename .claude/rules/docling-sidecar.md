@@ -43,3 +43,4 @@ paths:
 - Scrub locals, request bodies, quoted text and third-party log records in `sentryfilter.py`.
 - Make no transaction for `/healthz`, `/readyz` or `/healthz/*`.
 - Send a test event only when `SENTRY_TEST_EVENT` is exactly `true`.
+- Keep `allowed_formats` to PDF and DOCX in `convert.py`. `stub_read` refuses a body that starts with neither `%PDF-` nor `PK\x03\x04`.

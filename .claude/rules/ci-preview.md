@@ -24,11 +24,12 @@ paths:
 - Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
 - The nightly's `nightly-ai` job runs after `contacts` and before `email`.
 - The nightly's `email` job runs `preview.sh mail-on nightly` after E2E ends. It mounts `GOTRUE_SMTP_PASS` on `auth-nightly`, turns auto-confirm off there and mounts `RESEND_SENDING_KEY` on `tenancy-nightly`. It also mounts `RESEND_SENDING_KEY` and `RESEND_RECEIVING_DOMAIN` on `notifications-nightly`, `RESEND_RECEIVING_DOMAIN` on `worker-nightly`, and sets `RESEND_BLOG_TOPIC_ID` and `RESEND_BLOG_SEGMENT_ID` on both. `mail-off` removes them.
+- The nightly's `e2e` job runs `preview.sh check-mail-on nightly` around `API E2E` and `check-mail-off` after it. They mount `RESEND_SENDING_KEY` and `RESEND_RECEIVING_DOMAIN` on `worker-nightly` only.
 - Finish every other nightly job before `email`. Only `nightly-teardown` and `contacts-cleanup` follow it, and `contacts-cleanup` needs `nightly-teardown`.
 - The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing. `nightlycontacts` refuses the portal whose id is in `HUBSPOT_LIVE_PORTAL_ID`, and refuses to run without it.
 - `notifications-nightly` and `worker-nightly` mount `nightly-resend-read-key` as `RESEND_API_KEY`.
 - The `email` job resolves the two Blog ids in `Read the Resend read key and receiving domain` with `preview.sh mail-blog-ids` (GET `/topics` and `/segments` by name `Blog`, key on stdin) and writes them to `GITHUB_ENV`. `mail-on` refuses an empty or non-UUID id.
-- The `email` job needs four secrets: `nightly-gotrue-smtp-pass`, `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`.
+- The `email` job needs four secrets: `nightly-gotrue-smtp-pass`, `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`. The `e2e` job's worker window needs three of them: `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.

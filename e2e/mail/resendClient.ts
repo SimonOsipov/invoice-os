@@ -4,6 +4,7 @@ const POLL_MS = 5_000
 const LOOKBACK_MS = 60_000
 const LIST_RETRIES = 3
 const RETRY_MS = 2_000
+const SETTLE_GRACE_MS = 30_000
 
 export type Fetch = typeof fetch
 export type MailItem = { id: string; to: string[]; subject: string; created_at: string }
@@ -63,7 +64,7 @@ export const listReceived = (key: string, since: Date, fetchFn: Fetch = fetch) =
   listFrom('/emails/receiving', key, since, fetchFn)
 
 export const getReceived = (key: string, id: string, fetchFn: Fetch = fetch) =>
-  getJson<ReceivedMail>(key, `/emails/receiving/${encodeURIComponent(id)}`, fetchFn)
+  getJson<ReceivedMail>(key, `/emails/receiving/${encodeURIComponent(id)}`, fetchFn, LIST_RETRIES)
 
 // Status only: 404 means no such contact. Any other non-2xx throws.
 export async function getContact(key: string, email: string, fetchFn: Fetch = fetch): Promise<number> {
@@ -87,8 +88,13 @@ export async function contactTopics(key: string, email: string, fetchFn: Fetch =
   }
 }
 
+// Exact recipient and subject: the invite address gets two mails.
+const matcher = (to: string, subject: string) => {
+  const want = to.toLowerCase()
+  return (m: MailItem) => m.subject === subject && m.to.some((a) => a.toLowerCase() === want)
+}
+
 // A transient error inside the deadline is polled through; the deadline error names the last one.
-// Matches the exact recipient and subject: the invite address gets two mails.
 export async function waitForMail(
   key: string,
   to: string,
@@ -98,13 +104,11 @@ export async function waitForMail(
 ): Promise<MailItem> {
   const start = Date.now()
   const since = new Date(start - LOOKBACK_MS)
-  const want = to.toLowerCase()
+  const isMatch = matcher(to, subject)
   let last = ''
   for (;;) {
     try {
-      const hit = (await listReceived(key, since, fetchFn)).find(
-        (m) => m.subject === subject && m.to.some((a) => a.toLowerCase() === want),
-      )
+      const hit = (await listReceived(key, since, fetchFn)).find(isMatch)
       if (hit) return hit
       last = ''
     } catch (e) {
@@ -112,6 +116,62 @@ export async function waitForMail(
       last = ` (last: ${e.message})`
     }
     if (Date.now() - start >= deadlineMs) throw new Error(`no mail in ${deadlineMs / 60_000} minutes${last}`)
+    await sleep(POLL_MS)
+  }
+}
+
+// Polls until `want` mails match; returns all matches, which may exceed `want`.
+// Messages never name the address.
+export async function waitForMailCount(
+  key: string,
+  to: string,
+  subject: string,
+  want: number,
+  since: Date,
+  deadlineMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<MailItem[]> {
+  const start = Date.now()
+  const isMatch = matcher(to, subject)
+  let found = 0
+  let last = ''
+  for (;;) {
+    try {
+      const hits = (await listReceived(key, since, fetchFn)).filter(isMatch)
+      if (hits.length >= want) return hits
+      found = hits.length
+      last = ''
+    } catch (e) {
+      if (!(e instanceof ResendError && e.transient)) throw e
+      last = ` (last: ${e.message})`
+    }
+    if (Date.now() - start >= deadlineMs) throw new Error(`found ${found} of ${want} mails in ${deadlineMs / 60_000} minutes${last}`)
+    await sleep(POLL_MS)
+  }
+}
+
+// Holds `holdMs` so a late extra mail is seen, then returns the matches of the first good read.
+// A transient error after the hold is retried for up to 30 s more.
+export async function settledMailCount(
+  key: string,
+  to: string,
+  subject: string,
+  since: Date,
+  holdMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<MailItem[]> {
+  const start = Date.now()
+  const isMatch = matcher(to, subject)
+  let last = ''
+  for (;;) {
+    try {
+      const hits = (await listReceived(key, since, fetchFn)).filter(isMatch)
+      if (Date.now() - start >= holdMs) return hits
+    } catch (e) {
+      if (!(e instanceof ResendError && e.transient)) throw e
+      last = ` (last: ${e.message})`
+    }
+    if (Date.now() - start >= holdMs + SETTLE_GRACE_MS) throw new Error(`no inbox read after ${(holdMs + SETTLE_GRACE_MS) / 60_000} minutes${last}`)
     await sleep(POLL_MS)
   }
 }

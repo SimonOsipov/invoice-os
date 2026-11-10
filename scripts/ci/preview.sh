@@ -15,6 +15,8 @@
 #   preview.sh mail-preflight nightly     fail when a nightly mail secret is missing or not enabled
 #   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
+#   preview.sh check-mail-on nightly      mount the sending key and receiving domain on the worker
+#   preview.sh check-mail-off nightly     unmount them from the worker
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
@@ -503,6 +505,18 @@ cmd_mail_off() {
   [ "$failed" = 0 ] || die "mail-off left real mail mounted on the nightly; the errors are above"
 }
 
+# check-mail-on: the e2e job's worker window. Secret names only in argv.
+cmd_check_mail_on() {
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest,RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest
+}
+
+cmd_check_mail_off() {
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --remove-secrets RESEND_SENDING_KEY,RESEND_RECEIVING_DOMAIN \
+    || die "check-mail-off left real mail mounted on the nightly worker"
+}
+
 # prs: every preview (a PR number or nightly) that owns a service, a job, a bucket or a secret, with the oldest creation time.
 cmd_prs() {
   {
@@ -610,6 +624,8 @@ case "${1:-}" in
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
+  check-mail-on) mail_arg "${2:-}"; cmd_check_mail_on ;;
+  check-mail-off) mail_arg "${2:-}"; cmd_check_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
@@ -621,5 +637,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
 esac

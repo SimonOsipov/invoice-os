@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { brandLayoutFacts, CheckSteps, isFakeAddress, judgeBrandLayout, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, readAccounts, requireEnv, scrub, writeAccounts, type Section } from './mailChecks'
+import { brandLayoutFacts, CheckSteps, isFakeAddress, judgeBrandLayout, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, overBudgetFor, readAccounts, readinessBudgetProblem, readinessMailEnv, requireEnv, scrub, writeAccounts, type Section } from './mailChecks'
 
 const NOW = new Date('2026-10-30T13:00:00Z')
 const DOMAIN = 'inbox.mailbox.app'
@@ -38,6 +38,63 @@ describe('overBudget', () => {
 
   it('ignores mail from before 00:00 UTC', () => {
     expect(overBudget(nightly(30, YESTERDAY), DOMAIN, NOW)).toBe(false)
+  })
+})
+
+describe('overBudgetFor', () => {
+  it('leaves room for a readiness run and the email run', () => {
+    expect([17, 18].map((n) => overBudgetFor(nightly(n), DOMAIN, 8, NOW))).toEqual([false, true])
+  })
+
+  it('a readiness run at the threshold leaves the email run inside its budget', () => {
+    expect(overBudget(nightly(17 + 3), DOMAIN, NOW)).toBe(false)
+    expect(overBudget(nightly(18 + 3), DOMAIN, NOW)).toBe(true)
+  })
+})
+
+describe('readinessMailEnv', () => {
+  it('returns the three values', () => {
+    vi.stubEnv('RESEND_READ_KEY', ' k ')
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', ' d.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '1-1 ')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', 'success')
+    expect(readinessMailEnv()).toEqual({ RESEND_READ_KEY: 'k', RESEND_RECEIVING_DOMAIN: 'd.resend.app', NIGHTLY_RUN_ID: '1-1' })
+    vi.unstubAllEnvs()
+  })
+
+  it('names every missing variable as an environment error', () => {
+    vi.stubEnv('RESEND_READ_KEY', undefined)
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', 'd.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '  ')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', 'success')
+    expect(() => readinessMailEnv()).toThrow(/^environment: not set: RESEND_READ_KEY, NIGHTLY_RUN_ID$/)
+    vi.unstubAllEnvs()
+  })
+
+  it.each(['failure', 'skipped', ''])('is an environment error when the mail window outcome is %j', (outcome) => {
+    vi.stubEnv('RESEND_READ_KEY', 'k')
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', 'd.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '1-1')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', outcome)
+    expect(() => readinessMailEnv()).toThrow(/^environment: the real check mail window did not open$/)
+    vi.unstubAllEnvs()
+  })
+})
+
+describe('readinessBudgetProblem', () => {
+  it('is null under the threshold', () => {
+    expect(readinessBudgetProblem(nightly(17), DOMAIN, NOW)).toBeNull()
+  })
+
+  it('names the count and the cap when spent', () => {
+    expect(readinessBudgetProblem(nightly(18), DOMAIN, NOW)).toBe(
+      'environment: 18 nightly mails went out today; a readiness run and the email run need 8 and the day stops at 25',
+    )
+  })
+
+  it("counts only today's nightly run sends", () => {
+    const sends = [...nightly(17), send('a@example.com'), send(`customer@${DOMAIN}`), send(`customer2@${DOMAIN}`), ...nightly(1, YESTERDAY)]
+    expect(readinessBudgetProblem(sends, DOMAIN, NOW)).toBeNull()
   })
 })
 

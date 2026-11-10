@@ -1,12 +1,14 @@
-// Rules of the nightly mail check: budget, fake addresses, scrubbing, text diff and the section file.
+// Rules of the nightly mail checks (readiness run and email run): budget, fake addresses, scrubbing, text diff and the section file.
 import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import { parseCreatedAt } from './resendClient'
 
 export type Sent = { to: string[]; created_at: string }
 
-// A run sends 5 mails and the day stops at 25.
-const BUDGET_BEFORE_RUN = 20
+// The day stops at 25; the email run sends 5 and the readiness run 3, both on one nightly.
+export const DAY_CAP = 25
+export const EMAIL_RUN_SENDS = 5
+export const READINESS_RUN_SENDS = 3
 const SPEC_FILE = 'e2e/mail/real-mail.spec.ts'
 
 export function nightlySendsToday(sends: Sent[], domain: string, now: Date = new Date()): number {
@@ -20,8 +22,18 @@ export function nightlySendsToday(sends: Sent[], domain: string, now: Date = new
   return today.length
 }
 
+export const overBudgetFor = (sends: Sent[], domain: string, runSends: number, now: Date = new Date()): boolean =>
+  nightlySendsToday(sends, domain, now) > DAY_CAP - runSends
+
 export const overBudget = (sends: Sent[], domain: string, now: Date = new Date()): boolean =>
-  nightlySendsToday(sends, domain, now) > BUDGET_BEFORE_RUN
+  overBudgetFor(sends, domain, EMAIL_RUN_SENDS, now)
+
+// The email job runs after the readiness run on the same nightly, so both must fit.
+export function readinessBudgetProblem(sends: Sent[], domain: string, now: Date = new Date()): string | null {
+  const need = READINESS_RUN_SENDS + EMAIL_RUN_SENDS
+  if (!overBudgetFor(sends, domain, need, now)) return null
+  return `environment: ${nightlySendsToday(sends, domain, now)} nightly mails went out today; a readiness run and the email run need ${need} and the day stops at ${DAY_CAP}`
+}
 
 export function isFakeAddress(address: string): boolean {
   const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase()
@@ -184,7 +196,19 @@ export function readAccounts(file: string): MailAccounts {
 
 // Names the missing variables, never a value.
 export function requireEnv<K extends string>(...names: K[]): Record<K, string> {
-  const missing = names.filter((n) => !process.env[n]?.trim())
+  const env = process.env
+  const missing = names.filter((n) => !env[n]?.trim())
   if (missing.length > 0) throw new Error(`not set: ${missing.join(', ')}`)
-  return Object.fromEntries(names.map((n) => [n, process.env[n]!.trim()])) as Record<K, string>
+  return Object.fromEntries(names.map((n) => [n, env[n]!.trim()])) as Record<K, string>
+}
+
+// An unset variable, or a worker that never got real mail on, is an environment error, not a skip.
+export function readinessMailEnv() {
+  try {
+    const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID')
+    if (process.env.CHECK_MAIL_ON_OUTCOME !== 'success') throw new Error('the real check mail window did not open')
+    return env
+  } catch (e) {
+    throw new Error(`environment: ${(e as Error).message}`)
+  }
 }

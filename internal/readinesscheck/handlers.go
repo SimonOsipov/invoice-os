@@ -315,28 +315,3 @@ func (s *Service) MappingHandler() http.Handler {
 			HeaderRow: sug.HeaderRow, RowsTotal: sug.RowsTotal, Mapping: sug.Mapping, Source: sug.Source})
 	})
 }
-
-// CapturedMailHandler lists the captured mail for one address, oldest first.
-func (s *Service) CapturedMailHandler(c *accountmail.Capture) http.Handler {
-	type mail struct {
-		Subject string `json:"subject"`
-		HTML    string `json:"html"`
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			To string `json:"to"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, badBody)
-			return
-		}
-		to := strings.ToLower(strings.TrimSpace(in.To))
-		out := []mail{}
-		for _, m := range c.Messages() {
-			if strings.ToLower(m.To) == to {
-				out = append(out, mail{m.Subject, m.HTML})
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"messages": out})
-	})
-}

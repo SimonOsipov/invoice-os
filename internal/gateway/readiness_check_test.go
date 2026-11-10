@@ -452,6 +452,7 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 		{"413", 413, `{"error":"too large"}`, false},
 		{"503 busy", 503, `{"error":"busy"}`, false},
 		{"503 unavailable", 503, `{"error":"unavailable"}`, false},
+		{"503 ceiling", 503, `{"error":"ceiling"}`, false},
 		{"connection refused", 0, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -464,6 +465,31 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 			if n := ipCount(e.th, checkIP); n != 0 {
 				t.Errorf("ip count = %d, want 0: the engine did not start", n)
 			}
+		})
+	}
+}
+
+// wantCeilingSentence is D17's sentence copied from the decision; checkCeilingSentence must equal it.
+const wantCeilingSentence = "The free check has reached its limit for today. Try again tomorrow."
+
+func TestRun_WorkerCeilingIsTheCeilingSentence(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.w.answer(503, `{"error":"ceiling"}`)
+	wantRefused(t, e.runOK(t, checkIP), 503, wantCeilingSentence)
+	if e.w.calls() != 1 {
+		t.Errorf("worker calls = %d, want 1: the refusal must come from the worker", e.w.calls())
+	}
+	if n := ipCount(e.th, checkIP); n != 0 {
+		t.Errorf("ip count = %d, want 0: the slot comes back", n)
+	}
+}
+
+func TestRun_WorkerUnavailableStaysTheUnavailableSentence(t *testing.T) {
+	for _, reply := range []string{`{"error":"unavailable"}`, `{"error":"failed"}`, `{"error":"busy"}`, ``} {
+		t.Run(reply, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			e.w.answer(503, reply)
+			wantRefused(t, e.runOK(t, checkIP), 503, checkUnavailableSentence)
 		})
 	}
 }
@@ -702,6 +728,30 @@ func TestMapping_ForwardsAndRelaysTheSuggestion(t *testing.T) {
 	wantRefused(t, rec, 400, checkSheetSentence)
 	if e.w.calls() != 1 {
 		t.Errorf("worker calls = %d, want 1", e.w.calls())
+	}
+}
+
+func TestMapping_WorkerCeilingIsTheCeilingSentence(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply string
+		want        string
+	}{
+		{"ceiling", `{"error":"ceiling"}`, wantCeilingSentence},
+		{"unavailable", `{"error":"unavailable"}`, checkUnavailableSentence},
+		{"failed", `{"error":"failed"}`, checkUnavailableSentence},
+		{"no word", ``, checkUnavailableSentence},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckEnv(t, true)
+			e.w.answer(503, tc.reply)
+			req, _ := newCheckRequest(t, "/readiness-check/mapping", mpPart{"file", "inv.csv", []byte("a\n1\n")})
+			rec := httptest.NewRecorder()
+			e.rc.mapping(rec, req)
+			wantRefused(t, rec, 503, tc.want)
+			if n := ipCount(e.th, checkIP); n != 0 {
+				t.Errorf("ip count = %d, want 0: /mapping holds no IP slot", n)
+			}
+		})
 	}
 }
 

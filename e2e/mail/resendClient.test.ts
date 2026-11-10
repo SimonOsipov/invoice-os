@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { contactTopics, getContact, listSent, parseCreatedAt, settledMailCount, waitForMail, waitForMailCount, type Fetch } from './resendClient'
+import { contactTopics, getContact, getReceived, listSent, parseCreatedAt, settledMailCount, waitForMail, waitForMailCount, type Fetch } from './resendClient'
 
 const SINCE = new Date('2026-10-30T00:00:00Z')
 const NEW = '2026-10-30 12:00:00.000000+00'
@@ -160,6 +160,32 @@ describe('listSent retries', () => {
   it('does not retry a 401', async () => {
     const stub = vi.fn(async () => json({}, 401))
     await expect(listSent('k', SINCE, stub as unknown as Fetch)).rejects.toThrow('401')
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('getReceived retries', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('retries a 503 and a dropped connection, then returns the mail', async () => {
+    vi.useFakeTimers()
+    const answers = [
+      () => json({}, 503),
+      () => {
+        throw new TypeError('fetch failed')
+      },
+      () => json({ ...item('a', NEW), html: '<p>x</p>', text: null }),
+    ]
+    let n = 0
+    const stub = vi.fn(async () => answers[n++]()) as unknown as Fetch
+    const p = getReceived('k', 'a', stub)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect((await p).html).toBe('<p>x</p>')
+  })
+
+  it('a 404 is final', async () => {
+    const stub = vi.fn(async () => json({}, 404))
+    await expect(getReceived('k', 'a', stub as unknown as Fetch)).rejects.toThrow('404')
     expect(stub).toHaveBeenCalledTimes(1)
   })
 })

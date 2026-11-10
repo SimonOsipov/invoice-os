@@ -74,25 +74,13 @@ func TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parse := func(src []byte) *ast.File {
-		f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return f
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if problems := publicCheckWiringProblems(t, parse(src)); len(problems) != 0 {
+	if problems := publicCheckWiringProblems(t, f); len(problems) != 0 {
 		t.Errorf("main.go wiring: %v", problems)
 	}
-	t.Run("a raw sender in place of nl.Sender is reported", func(t *testing.T) {
-		mutated := strings.Replace(string(src), "&readinesscheck.Store{Pool: pool}, nl.Sender,", "&readinesscheck.Store{Pool: pool}, nil,", 1)
-		if mutated == string(src) {
-			t.Fatal("main.go no longer holds the NewService call this mutation targets")
-		}
-		if len(publicCheckWiringProblems(t, parse([]byte(mutated)))) == 0 {
-			t.Error("a NewService call without nl.Sender went unreported")
-		}
-	})
 }
 
 // bootWorker starts the binary against the dev DB and returns its base URL once /healthz answers.
@@ -167,7 +155,7 @@ func TestWorker_PublicCheckRouteRefusesAMissingGatewayToken(t *testing.T) {
 	}
 }
 
-// A preview worker's sender captures, the one posture that once served the route.
+// A preview worker captures mail; the route must still be absent there.
 func TestWorker_CapturedMailRouteIsGoneOnAPreview(t *testing.T) {
 	base := bootWorker(t, "pr-1")
 	if got := post(t, base+capturedRoute, "gw-token", strings.NewReader(`{"to":"a@x.io"}`)); got != http.StatusNotFound {

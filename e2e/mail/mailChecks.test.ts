@@ -54,13 +54,30 @@ describe('overBudgetFor', () => {
 
 describe('readinessMailEnv', () => {
   it('returns the three values', () => {
-    const env = { RESEND_READ_KEY: ' k ', RESEND_RECEIVING_DOMAIN: ' d.resend.app', NIGHTLY_RUN_ID: '1-1 ' }
-    expect(readinessMailEnv(env)).toEqual({ RESEND_READ_KEY: 'k', RESEND_RECEIVING_DOMAIN: 'd.resend.app', NIGHTLY_RUN_ID: '1-1' })
+    vi.stubEnv('RESEND_READ_KEY', ' k ')
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', ' d.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '1-1 ')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', 'success')
+    expect(readinessMailEnv()).toEqual({ RESEND_READ_KEY: 'k', RESEND_RECEIVING_DOMAIN: 'd.resend.app', NIGHTLY_RUN_ID: '1-1' })
+    vi.unstubAllEnvs()
   })
 
   it('names every missing variable as an environment error', () => {
-    const env = { RESEND_RECEIVING_DOMAIN: 'd.resend.app', NIGHTLY_RUN_ID: '  ' }
-    expect(() => readinessMailEnv(env)).toThrow(/^environment: not set: RESEND_READ_KEY, NIGHTLY_RUN_ID$/)
+    vi.stubEnv('RESEND_READ_KEY', undefined)
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', 'd.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '  ')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', 'success')
+    expect(() => readinessMailEnv()).toThrow(/^environment: not set: RESEND_READ_KEY, NIGHTLY_RUN_ID$/)
+    vi.unstubAllEnvs()
+  })
+
+  it.each(['failure', 'skipped', ''])('is an environment error when the mail window outcome is %j', (outcome) => {
+    vi.stubEnv('RESEND_READ_KEY', 'k')
+    vi.stubEnv('RESEND_RECEIVING_DOMAIN', 'd.resend.app')
+    vi.stubEnv('NIGHTLY_RUN_ID', '1-1')
+    vi.stubEnv('CHECK_MAIL_ON_OUTCOME', outcome)
+    expect(() => readinessMailEnv()).toThrow(/^environment: the real check mail window did not open$/)
+    vi.unstubAllEnvs()
   })
 })
 

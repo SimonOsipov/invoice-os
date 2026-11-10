@@ -1581,6 +1581,9 @@ func e2eMailWindowProblems(jobs map[string]workflowJob) []string {
 	if st, ok := nlStep(e2e, "API E2E (typed contract suite)"); !ok || st.env["NIGHTLY_RUN_ID"] != "${{ github.run_id }}-${{ github.run_attempt }}" {
 		bad("e2e API E2E env lacks NIGHTLY_RUN_ID")
 	}
+	if st, ok := nlStep(e2e, "API E2E (typed contract suite)"); !ok || st.env["CHECK_MAIL_ON_OUTCOME"] != "${{ steps.checkmailon.outcome }}" {
+		bad("e2e API E2E env lacks CHECK_MAIL_ON_OUTCOME")
+	}
 	return p
 }
 
@@ -1607,7 +1610,8 @@ func TestDevEnvNightly_E2EWorkerMailWindow(t *testing.T) {
 		{read, "      - name: Read the Resend read key and receiving domain\n", "Read the Resend read key and receiving domain is not nightly only"},
 		{"      - name: Turn real check mail on\n        id: checkmailon\n" + ifLine, "      - name: Turn real check mail on\n        id: checkmailon\n", "Turn real check mail on is not nightly only"},
 		{"          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY", "masks the key and domain"},
-		{"          NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n          NIGHTLY_HUBSPOT", "          NIGHTLY_HUBSPOT", "NIGHTLY_RUN_ID"},
+		{"          NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n", "", "NIGHTLY_RUN_ID"},
+		{"          CHECK_MAIL_ON_OUTCOME: ${{ steps.checkmailon.outcome }}\n", "", "CHECK_MAIL_ON_OUTCOME"},
 		{on, on + "      - name: Turn mail on\n        run: bash scripts/ci/preview.sh mail-on \"$PR\"\n", "runs mail-on"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))

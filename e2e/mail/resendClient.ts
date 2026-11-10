@@ -64,7 +64,7 @@ export const listReceived = (key: string, since: Date, fetchFn: Fetch = fetch) =
   listFrom('/emails/receiving', key, since, fetchFn)
 
 export const getReceived = (key: string, id: string, fetchFn: Fetch = fetch) =>
-  getJson<ReceivedMail>(key, `/emails/receiving/${encodeURIComponent(id)}`, fetchFn)
+  getJson<ReceivedMail>(key, `/emails/receiving/${encodeURIComponent(id)}`, fetchFn, LIST_RETRIES)
 
 // Status only: 404 means no such contact. Any other non-2xx throws.
 export async function getContact(key: string, email: string, fetchFn: Fetch = fetch): Promise<number> {

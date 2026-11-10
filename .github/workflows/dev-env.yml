@@ -755,6 +755,7 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft == true }}
           SPECS: ${{ needs.changes.outputs.draft_api }}
           NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          CHECK_MAIL_ON_OUTCOME: ${{ steps.checkmailon.outcome }}
           NIGHTLY_HUBSPOT_TOKEN_VERSION: ${{ needs.prepare-env.outputs.hubspot_token_version }}
         run: bash scripts/ci/e2e-suite.sh test:api
       - name: Turn real check mail off

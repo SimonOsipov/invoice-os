@@ -195,20 +195,19 @@ export function readAccounts(file: string): MailAccounts {
 }
 
 // Names the missing variables, never a value.
-export function requireEnv<K extends string>(env: NodeJS.ProcessEnv, ...names: K[]): Record<K, string>
-export function requireEnv<K extends string>(...names: K[]): Record<K, string>
-export function requireEnv(...args: (string | NodeJS.ProcessEnv)[]): Record<string, string> {
-  const env = typeof args[0] === 'object' ? args[0] : process.env
-  const names = args.filter((a): a is string => typeof a === 'string')
+export function requireEnv<K extends string>(...names: K[]): Record<K, string> {
+  const env = process.env
   const missing = names.filter((n) => !env[n]?.trim())
   if (missing.length > 0) throw new Error(`not set: ${missing.join(', ')}`)
-  return Object.fromEntries(names.map((n) => [n, env[n]!.trim()]))
+  return Object.fromEntries(names.map((n) => [n, env[n]!.trim()])) as Record<K, string>
 }
 
-// An unset variable on the nightly is an environment error, not a skip.
-export function readinessMailEnv(env: NodeJS.ProcessEnv = process.env) {
+// An unset variable, or a worker that never got real mail on, is an environment error, not a skip.
+export function readinessMailEnv() {
   try {
-    return requireEnv(env, 'RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID')
+    const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID')
+    if (process.env.CHECK_MAIL_ON_OUTCOME !== 'success') throw new Error('the real check mail window did not open')
+    return env
   } catch (e) {
     throw new Error(`environment: ${(e as Error).message}`)
   }

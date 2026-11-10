@@ -110,3 +110,11 @@ def test_sentry_sdk_is_exact_pinned():
     assert re.fullmatch(r"sentry-sdk==\S+", sentry_lines[0]), (
         f"{sentry_lines[0]!r} is not an exact == pin"
     )
+
+
+def test_pillow_pin_is_present_at_13_or_later():
+    pillow_lines = [line for line in _requirement_lines() if re.match(r"pillow\b", line, re.I)]
+    assert len(pillow_lines) == 1, f"want one pillow line in {REQUIREMENTS}, got {pillow_lines}"
+    match = re.fullmatch(r"pillow==(\d+)\.\S+", pillow_lines[0], re.I)
+    assert match, f"{pillow_lines[0]!r} is not an exact == pin"
+    assert int(match.group(1)) >= 13, f"{pillow_lines[0]!r} is below Pillow 13"

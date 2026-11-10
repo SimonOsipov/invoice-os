@@ -16,7 +16,7 @@ const (
 	nlOn        = "needs.changes.outputs.nightly == 'true'"
 	nlOff       = "needs.changes.outputs.nightly != 'true'"
 	nlTarget    = "E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}"
-	nlTopoIf    = "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && " + authorCond
+	nlTopoIf    = "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && needs.changes.outputs.shards != '[]' && " + authorCond
 	nlTeardown  = "always() && " + nlOn + " && " + authorCond
 	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
@@ -264,6 +264,7 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	p = append(p, contactProblems(jobs)...)
 	p = append(p, aiCheckProblems(jobs)...)
+	p = append(p, e2eMailWindowProblems(jobs)...)
 	return append(p, emailProblems(jobs)...)
 }
 
@@ -613,10 +614,10 @@ func TestDevEnvNightly_RealFileHasNoProblems(t *testing.T) {
 
 // The job if: and needs of dev-env.yml at 7b01a4bf.
 var nlGolden = map[string][2]string{
-	"ci-watch":    {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"ci-watch":    {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
 	"invariants":  {"[commit-authors]", authorCond},
-	"prepare-env": {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
-	"build":       {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"prepare-env": {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"build":       {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
 	"deploy":      {"[prepare-env, build]", "!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'"},
 	"health-gate": {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
 	"fleet-gate":  {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
@@ -882,7 +883,7 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1 $2\" in\n\"cap 9\") printf '"+capOut+"' ;;\n*) exit 1 ;;\nesac\n")
-		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9\n"+step.keys["run"])
+		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9 CAP_TRIES=2 CAP_SLEEP=0\n"+step.keys["run"])
 		return out + errOut, code
 	}
 	t.Run("a refused PR fails prepare-env with one error naming the cap", func(t *testing.T) {
@@ -896,6 +897,21 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 		t.Parallel()
 		if out, code := runStep(t, "open=1\\nfull=false\\n"); code != 0 {
 			t.Errorf("exit %d, output %q, want 0", code, out)
+		}
+	})
+	t.Run("a PR waits for a slot that frees", func(t *testing.T) {
+		t.Parallel()
+		st, _ := nlStep(devEnvJob(t, "prepare-env"), "preview cap for a PR")
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		calls := filepath.Join(dir, "calls")
+		writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "echo x >>'"+calls+"'\nif [ \"$(wc -l <'"+calls+"')\" -le 1 ]; then printf 'open=2\\nfull=true\\n'; else printf 'open=1\\nfull=false\\n'; fi\n")
+		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9 CAP_TRIES=3 CAP_SLEEP=0\n"+st.keys["run"])
+		b, _ := os.ReadFile(calls)
+		if n := strings.Count(string(b), "\n"); code != 0 || n != 2 {
+			t.Errorf("exit %d after %d cap calls, want 0 after 2; output %q", code, n, out+errOut)
 		}
 	})
 }
@@ -927,20 +943,22 @@ func TestDevEnvNightly_CapStepEdges(t *testing.T) {
 func TestDevEnvNightly_CapWaitFitsThePrepareEnvTimeout(t *testing.T) {
 	t.Parallel()
 	pe := devEnvJob(t, "prepare-env")
-	s, ok := nlStep(pe, "preview cap reached")
-	if !ok {
-		t.Fatal("no cap step")
-	}
-	tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
-	sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
-	limit, _ := jobKey(pe, "timeout-minutes")
-	mins, err4 := strconv.Atoi(limit)
-	if err1 != nil || err2 != nil || err4 != nil {
-		t.Fatalf("CAP_TRIES %q, CAP_SLEEP %q, timeout %q do not parse", s.env["CAP_TRIES"], s.env["CAP_SLEEP"], limit)
-	}
-	const capCall, restOfJob = 8, 180
-	if secs := (tries-1)*sleep + tries*capCall + restOfJob; secs > mins*60 {
-		t.Errorf("worst case %d s (%d tries, %d s sleep) exceeds the %d min prepare-env timeout", secs, tries, sleep, mins)
+	for _, name := range []string{"preview cap reached", "preview cap for a PR"} {
+		s, ok := nlStep(pe, name)
+		if !ok {
+			t.Fatalf("no step %q", name)
+		}
+		tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
+		sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
+		limit, _ := jobKey(pe, "timeout-minutes")
+		mins, err4 := strconv.Atoi(limit)
+		if err1 != nil || err2 != nil || err4 != nil {
+			t.Fatalf("%s: CAP_TRIES %q, CAP_SLEEP %q, timeout %q do not parse", name, s.env["CAP_TRIES"], s.env["CAP_SLEEP"], limit)
+		}
+		const capCall, restOfJob = 8, 180
+		if secs := (tries-1)*sleep + tries*capCall + restOfJob; secs > mins*60 {
+			t.Errorf("%s: worst case %d s (%d tries, %d s sleep) exceeds the %d min prepare-env timeout", name, secs, tries, sleep, mins)
+		}
 	}
 }
 
@@ -1280,8 +1298,8 @@ func TestDevEnvNightly_GuardAndServicesUseOneTokenVersion(t *testing.T) {
 		{read, `preview.sh contact-token "$PR"`, "start reads the token without"},
 		{"hubspot_token_version: " + nlTokenVersionStep, "hubspot_token_version: ${{ steps.urls.outputs.gateway_url }}", "output hubspot_token_version"},
 		{ver + "\n        run: bash scripts/ci/preview.sh deploy", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: bash scripts/ci/preview.sh deploy", "deploy backends env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
-		{ver + "\n        run: pnpm", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
-		{"\n          " + ver + "\n        run: pnpm", "\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{ver + "\n        run: bash scripts/ci/e2e-suite.sh test:api", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: bash scripts/ci/e2e-suite.sh test:api", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{"\n          " + ver + "\n        run: bash scripts/ci/e2e-suite.sh test:api", "\n        run: bash scripts/ci/e2e-suite.sh test:api", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
@@ -1306,7 +1324,7 @@ func TestDevEnvNightly_ContactsJobRunsWhenE2EFails(t *testing.T) {
 		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && needs.deploy.result == 'success'"`, "contacts if"},
 		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && ` + nlOn + ` && needs.e2e.result == 'success'"`, "contacts if"},
 		{"needs: [changes, prepare-env, deploy, e2e, topology]", "needs: [changes, prepare-env, deploy, e2e]", "contacts needs"},
-		{"NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}", "NIGHTLY_RUN_ID: ${{ github.run_id }}", "NIGHTLY_RUN_ID"},
+		{"      NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n    steps:", "      NIGHTLY_RUN_ID: ${{ github.run_id }}\n    steps:", "NIGHTLY_RUN_ID"},
 		{"    name: Real contact reaches HubSpot and Resend\n", "    name: Contacts\n", "contacts name"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
@@ -1518,4 +1536,92 @@ func TestDevEnvNightly_AICheckRefusesARerun(t *testing.T) {
 		{"DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}", "DEPLOYED_ATTEMPT: ${{ needs.build.outputs.attempt }}", "nightly-ai lacks the re-run guard"},
 		{"      - name: Refuse a re-run that skipped the deploy\n", "      - name: Skip the guard\n", "nightly-ai lacks the re-run guard"},
 	})
+}
+
+const nlWindowIf = "!cancelled() && steps.attempt.outcome == 'success' && " + nlOn
+
+// e2eMailWindowProblems names each clause of the e2e job's nightly-only worker mail window.
+func e2eMailWindowProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+	e2e := jobs["e2e"]
+	idx := func(sub string) int {
+		for i, s := range e2e.steps() {
+			if strings.Contains(nlCode(s.keys["run"]), sub) {
+				return i
+			}
+		}
+		return -1
+	}
+	read, on, api, off := idx("preview.sh mail-read-key"), idx("preview.sh check-mail-on"), idx("test:api"), idx("preview.sh check-mail-off")
+	if !(0 <= read && read < on && on < api && api < off) {
+		bad("e2e mail window is out of order: read, check-mail-on, API E2E, check-mail-off")
+	}
+	if idx("preview.sh mail-on") >= 0 || idx("preview.sh mail-off") >= 0 {
+		bad("e2e runs mail-on or mail-off")
+	}
+	for _, name := range []string{"Read the Resend read key and receiving domain", "Turn real check mail on"} {
+		if st, ok := nlStep(e2e, name); !ok || strings.Trim(strings.TrimSpace(st.keys["if"]), `"`) != nlWindowIf {
+			bad("e2e " + name + " is not nightly only")
+		}
+	}
+	if st, ok := nlStep(e2e, "Read the Resend read key and receiving domain"); ok {
+		r := nlCode(st.keys["run"])
+		env := strings.Index(r, "GITHUB_ENV")
+		if strings.Count(r, "::add-mask::") != 2 || strings.Index(r, "::add-mask::$key") > env || strings.Index(r, "::add-mask::$domain") > env {
+			bad("e2e masks the key and domain after writing GITHUB_ENV")
+		}
+	}
+	if st, ok := nlStep(e2e, "Turn real check mail on"); !ok || st.keys["id"] != "checkmailon" {
+		bad("e2e check-mail-on step lacks id checkmailon")
+	}
+	if st, ok := nlStep(e2e, "Turn real check mail off"); !ok || strings.TrimSpace(nlCode(st.keys["if"])) != "always() && steps.checkmailon.outcome != 'skipped'" {
+		bad("e2e check-mail-off step does not run if always() once check-mail-on ran")
+	}
+	if st, ok := nlStep(e2e, "API E2E (typed contract suite)"); !ok || st.env["NIGHTLY_RUN_ID"] != "${{ github.run_id }}-${{ github.run_attempt }}" {
+		bad("e2e API E2E env lacks NIGHTLY_RUN_ID")
+	}
+	if st, ok := nlStep(e2e, "API E2E (typed contract suite)"); !ok || st.env["CHECK_MAIL_ON_OUTCOME"] != "${{ steps.checkmailon.outcome }}" {
+		bad("e2e API E2E env lacks CHECK_MAIL_ON_OUTCOME")
+	}
+	return p
+}
+
+func TestDevEnvNightly_E2EWorkerMailWindow(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := e2eMailWindowProblems(nlJobs(yml)); len(got) > 0 {
+		t.Fatalf("problems %q", got)
+	}
+	ifLine := "        if: \"" + nlWindowIf + "\"\n"
+	read := "      - name: Read the Resend read key and receiving domain\n" + ifLine
+	on := "      - name: Turn real check mail on\n        id: checkmailon\n" + ifLine + "        run: bash scripts/ci/preview.sh check-mail-on \"$PR\"\n"
+	offIf := "        if: always() && steps.checkmailon.outcome != 'skipped'\n"
+	off := "      - name: Turn real check mail off\n" + offIf + "        run: bash scripts/ci/preview.sh check-mail-off \"$PR\"\n"
+	api := "        run: bash scripts/ci/e2e-suite.sh test:api\n"
+	for _, c := range []struct{ old, repl, want string }{
+		{api + off, api, "out of order"},
+		{off, "", "out of order"},
+		{on + "      - name: API E2E (typed contract suite)\n", "      - name: API E2E (typed contract suite)\n", "out of order"},
+		{offIf, "        if: always()\n", "check-mail-off step does not run"},
+		{offIf, "        if: success() && steps.checkmailon.outcome == 'success'\n", "check-mail-off step does not run"},
+		{offIf, "        if: always() && steps.checkmailon.outcome == 'success'\n", "check-mail-off step does not run"},
+		{offIf, "", "check-mail-off step does not run"},
+		{read, "      - name: Read the Resend read key and receiving domain\n", "Read the Resend read key and receiving domain is not nightly only"},
+		{"      - name: Turn real check mail on\n        id: checkmailon\n" + ifLine, "      - name: Turn real check mail on\n        id: checkmailon\n", "Turn real check mail on is not nightly only"},
+		{"          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY", "masks the key and domain"},
+		{"          NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n", "", "NIGHTLY_RUN_ID"},
+		{"          CHECK_MAIL_ON_OUTCOME: ${{ steps.checkmailon.outcome }}\n", "", "CHECK_MAIL_ON_OUTCOME"},
+		{on, on + "      - name: Turn mail on\n        run: bash scripts/ci/preview.sh mail-on \"$PR\"\n", "runs mail-on"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+	// A mask after GITHUB_ENV, and the read moved after the on step.
+	moved := mutateOnce(t, mutateOnce(t, yml, "          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY"), "          } >>\"$GITHUB_ENV\"\n      - name: Turn real check mail on", "          } >>\"$GITHUB_ENV\"\n          echo \"::add-mask::$domain\"\n      - name: Turn real check mail on")
+	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "masks the key and domain after") }) {
+		t.Errorf("late mask: problems %q", got)
+	}
 }

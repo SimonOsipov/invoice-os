@@ -4,7 +4,7 @@
 // document.Service over the real documents table with an in-memory object
 // store; the fake-driven handler specs live in handlers_upload_once_test.go.
 //
-// Run with DATABASE_URL + DATABASE_SUPERUSER_URL set (make test-rls).
+// Run with DATABASE_URL + DATABASE_SUPERUSER_URL set (make test-db PKGS=./internal/importer/...).
 package importer
 
 import (

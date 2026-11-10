@@ -6,11 +6,13 @@ import { describe, expect, it } from 'vitest'
 import * as layout from './layout'
 import {
   assertFillsColumn,
+  assertFitsNarrow,
   assertPageDoesNotScrollSideways,
   assertSameHeight,
   enclosesRect,
   gaps,
   inflateRect,
+  PHONE_WIDTHS,
   settleAnimations,
   WIDE_WIDTHS,
   type Box,
@@ -316,6 +318,7 @@ function slidingPage() {
     },
   })
   const doc = {
+    fonts: { ready: Promise.resolve() },
     getAnimations: () => [
       animation(ancestor, SLIDE_MS, () => slide),
       animation(ancestor, Infinity, () => never), // a spinner: waiting on it hangs
@@ -391,7 +394,7 @@ function scrollerPage(reading: { scrollWidth: number; clientWidth: number }) {
       return {
         evaluate: (fn: (el: unknown) => unknown) => {
           calls.evaluate++
-          return Promise.resolve(fn({ ...reading }))
+          return Promise.resolve(fn({ ...reading, ownerDocument: { fonts: { ready: Promise.resolve() } } }))
         },
       } as unknown as Locator
     },
@@ -480,4 +483,57 @@ describe('assertPageDoesNotScrollSideways — edges', () => {
     expect(fake.selectors).toHaveLength(1)
     expect(fake.calls.evaluate).toBe(1)
   })
+})
+
+// --- web fonts and the narrow fit sweep ----------------------------------------
+//
+// A container whose scrollWidth comes from `overflowAt(width)` until fonts load, then fits.
+function narrowPage(overflowAt: (width: number) => number, fontsLoadMs = 0) {
+  let viewport = { width: 1280, height: 1080 }
+  let fontsLoaded = false
+  const ready = new Promise<void>((r) => setTimeout(() => ((fontsLoaded = true), r()), fontsLoadMs))
+  const el = {
+    ownerDocument: { fonts: { ready }, getAnimations: () => [] },
+    contains: (n: unknown) => n === el,
+    clientWidth: 300,
+    get scrollWidth() {
+      return 300 + (fontsLoaded ? overflowAt(viewport.width) : 50)
+    },
+  }
+  const container = { evaluate: (fn: (e: unknown) => unknown) => Promise.resolve(fn(el)) } as unknown as Locator
+  const page = {
+    viewportSize: () => viewport,
+    setViewportSize: async (v: { width: number; height: number }) => void (viewport = v),
+  } as unknown as Page
+  return { page, container, fontsLoaded: () => fontsLoaded }
+}
+
+describe('web fonts load before a read', () => {
+  it('settleAnimations waits for document.fonts.ready', async () => {
+    const fake = narrowPage(() => 0, 50)
+    await settleAnimations(fake.container)
+    expect(fake.fontsLoaded(), 'settleAnimations returned before fonts loaded').toBe(true)
+  })
+})
+
+describe('assertFitsNarrow', () => {
+  it('sweeps 320 and 390 among the phone widths', () => {
+    expect(PHONE_WIDTHS).toEqual(expect.arrayContaining([320, 390]))
+  })
+
+  it('measures every phone width after fonts load, and restores the viewport', async () => {
+    const fake = narrowPage(() => 0, 50)
+    const fits = await assertFitsNarrow(fake.page, fake.container, 'fake')
+    expect(fits.map((f) => f.width)).toEqual([...PHONE_WIDTHS])
+    for (const fit of fits) expect(fit.scrollWidth).toBe(fit.clientWidth)
+    expect(fake.page.viewportSize()).toEqual({ width: 1280, height: 1080 })
+  })
+
+  it('fails on 1px of sideways scroll at one width, naming the label and the width', async () => {
+    const fake = narrowPage((w) => (w === 320 ? 1 : 0))
+    const err = await assertFitsNarrow(fake.page, fake.container, 'the card').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toContain('the card must not scroll sideways at 320px wide')
+    expect(fake.page.viewportSize()).toEqual({ width: 1280, height: 1080 })
+  }, 20_000)
 })

@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -30,12 +32,14 @@ const (
 	unattributableIPKey     = "unattributable"
 	readinessRunTimeout     = 295 * time.Second
 	readinessMappingTimeout = 70 * time.Second
+	readinessUploadTimeout  = 90 * time.Second
 	checkBodySlack          = 1 << 20
 	maxCheckAnswerBytes     = 4096
 	maxCheckErrorBytes      = 1024
 	maxMappingAnswerBytes   = 256 << 10
 
 	checkIPSentence          = "This network has run 10 checks today. Try again tomorrow."
+	checkSlowUploadSentence  = "The upload took too long. Try again on a faster connection."
 	checkUnavailableSentence = "The check is unavailable. Try again in a few minutes."
 	checkSignUpSentence      = "This address has used its 3 free checks. Sign up to check every invoice."
 	checkUnreadableSentence  = "We could not read this file."
@@ -53,6 +57,19 @@ var (
 	mappingFieldCaps = map[string]int{}
 	checkFormats     = map[string]string{".csv": "csv", ".xlsx": "xlsx", ".pdf": "pdf", ".docx": "docx"}
 )
+
+// checkIPKey keys an IPv6 address by its /64 and an IPv4 address by itself; clientIP has already unmapped.
+// ceiling: a /56 or /48 holder still gets 10 runs per /64, widen the prefix if that is abused
+func checkIPKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return unattributableIPKey
+	}
+	if a.Is4() {
+		return a.String()
+	}
+	return netip.PrefixFrom(a, 64).Masked().String()
+}
 
 // ReadinessCheckSink hands a checked address and its consent text to the notifications /internal/contacts/readiness-checks intake.
 type ReadinessCheckSink interface {
@@ -74,7 +91,7 @@ func (k readinessSink) ReadinessCheck(ctx context.Context, email, consentText st
 type ReadinessCheckRoutes struct{ Mapping, Run http.Handler }
 
 // ReadinessCheckHandlers serves POST /readiness-check/run and /mapping by streaming the visitor's file to the worker.
-// A run is counted per client IP in perIP before the file is read. No log line carries the address, the IP or the file name.
+// A run is counted per client IP (IPv6 per /64) in perIP before the file is read. No log line carries the address, the IP or the file name.
 func ReadinessCheckHandlers(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) ReadinessCheckRoutes {
 	c := newReadinessCheck(worker, client, gatewayToken, sink, perIP, enforce, posture, log)
 	return ReadinessCheckRoutes{Mapping: http.HandlerFunc(c.mapping), Run: http.HandlerFunc(c.run)}
@@ -91,12 +108,14 @@ type readinessCheck struct {
 	log                        *slog.Logger
 	slots                      chan struct{}
 	runTimeout, mappingTimeout time.Duration
+	uploadTimeout              time.Duration
 }
 
 func newReadinessCheck(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) *readinessCheck {
 	return &readinessCheck{worker: worker, client: client, token: gatewayToken, sink: sink, perIP: perIP, enforce: enforce,
 		posture: posture, log: log, slots: make(chan struct{}, maxCheckUploads),
-		runTimeout: readinessRunTimeout, mappingTimeout: readinessMappingTimeout}
+		runTimeout: readinessRunTimeout, mappingTimeout: readinessMappingTimeout,
+		uploadTimeout: readinessUploadTimeout}
 }
 
 // readFields reads the parts that precede the file part, each under its cap, and returns the file part unread.
@@ -174,16 +193,34 @@ func (c *readinessCheck) acquire() (release func(), ok bool) {
 	}
 }
 
-// readFile reads the file part once, in memory; it writes the refusal and reports false on failure.
-func readFile(w http.ResponseWriter, file *multipart.Part) ([]byte, bool) {
+// readFile reads the file part once, in memory, within d; it writes the refusal and reports false on failure.
+// The timer ends the read through the connection's read deadline; a deadline that fired is cleared on success so it never reaches the worker call.
+func readFile(ctx context.Context, log *slog.Logger, w http.ResponseWriter, file *multipart.Part, d time.Duration) ([]byte, bool) {
+	rc := http.NewResponseController(w)
+	fired := make(chan struct{})
+	t := time.AfterFunc(d, func() {
+		defer close(fired)
+		if err := rc.SetReadDeadline(time.Now()); err != nil {
+			log.ErrorContext(ctx, "readiness-check: upload deadline not supported", slog.String("error", err.Error()))
+		}
+	})
 	data, err := io.ReadAll(io.LimitReader(file, MaxCheckFileBytes+1))
+	expired := !t.Stop()
+	if expired {
+		<-fired
+	}
 	var tooBig *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooBig) || len(data) > MaxCheckFileBytes:
 		writeError(w, http.StatusRequestEntityTooLarge, checkTooLargeSentence)
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		writeError(w, http.StatusRequestTimeout, checkSlowUploadSentence)
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid request body")
 	default:
+		if expired {
+			_ = rc.SetReadDeadline(time.Time{})
+		}
 		return data, true
 	}
 	return nil, false
@@ -212,10 +249,7 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r, c.posture)
-	if ip == "" {
-		ip = unattributableIPKey
-	}
+	ip := checkIPKey(clientIP(r, c.posture))
 	held, admitErr := c.perIP.Admit(ip)
 	if !held {
 		// A database error is already logged by the throttle.
@@ -245,7 +279,7 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file)
+	data, ok := readFile(r.Context(), c.log, w, file, c.uploadTimeout)
 	if !ok {
 		refund()
 		return
@@ -314,7 +348,7 @@ func (c *readinessCheck) mapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file)
+	data, ok := readFile(r.Context(), c.log, w, file, c.uploadTimeout)
 	if !ok {
 		return
 	}

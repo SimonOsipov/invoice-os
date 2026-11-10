@@ -2301,13 +2301,6 @@ export async function workerPost(
   return { status: res.status, body: await res.json().catch(() => undefined) }
 }
 
-// cmd/worker/public_check_routes.go: registered only while the worker's sender captures.
-export async function capturedMail(to: string): Promise<{ subject: string; html: string }[]> {
-  const res = await workerPost('/internal/public-checks/captured-mail', { to })
-  if (res.status !== 200) throw new Error(`captured-mail answered ${res.status}: ${JSON.stringify(res.body)}`)
-  return res.body.messages
-}
-
 // The caller's own contact row, read from notifications with the service identity (the gateway has no route).
 export async function contactsDirect(email: string): Promise<ContactMe | null> {
   const base = serviceUrl('notifications')

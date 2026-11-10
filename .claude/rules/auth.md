@@ -94,7 +94,7 @@ paths:
 - Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict (FLAKE-00 Q4).
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address (FLAKE-00 Q5).
-- Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h. A preview logs and admits.
+- Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
 - Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429.
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.

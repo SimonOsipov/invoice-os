@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
-	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/publiccheck"
 	"github.com/SimonOsipov/invoice-os/internal/readinesscheck"
 )
@@ -42,30 +41,45 @@ func callIndexes(body []ast.Stmt, want string) (idx []int, calls []*ast.CallExpr
 	return idx, calls
 }
 
-func TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// publicCheckWiringProblems reports how main() in f departs from the public-check wiring: routes before the
+// gateway guard before Run, two arguments, and the guarded sender (nl.Sender) as the service's third.
+func publicCheckWiringProblems(t *testing.T, f *ast.File) []string {
+	t.Helper()
 	body := wtMainBody(t, f)
 	reg, regCalls := callIndexes(body, "registerPublicCheckRoutes")
 	gate, gateCalls := callIndexes(body, "app.RequireGateway")
 	run, _ := callIndexes(body, "app.Run")
 	if len(reg) != 1 || len(gate) != 1 || len(run) != 1 {
-		t.Fatalf("main() has %d registerPublicCheckRoutes, %d app.RequireGateway and %d app.Run statements, want 1 each", len(reg), len(gate), len(run))
+		return []string{"main() must hold exactly one registerPublicCheckRoutes, app.RequireGateway and app.Run statement"}
 	}
+	var problems []string
 	if !(reg[0] < gate[0] && gate[0] < run[0]) {
-		t.Errorf("statement order: routes %d, RequireGateway %d, Run %d; want routes, then the guard, then Run", reg[0], gate[0], run[0])
+		problems = append(problems, "statement order must be routes, then the guard, then Run")
 	}
-	if args := regCalls[0].Args; len(args) != 3 || wtExprString(args[2]) != "nl.Sender" {
-		t.Errorf("registerPublicCheckRoutes must take the newsletter wiring's sender (nl.Sender) as its last argument, so the capture gate reads the sender that sends")
+	if args := regCalls[0].Args; len(args) != 2 {
+		problems = append(problems, "registerPublicCheckRoutes must take the mux and the service only")
+	} else if c, ok := args[1].(*ast.CallExpr); !ok || wtCallName(c.Fun) != "readinesscheck.NewService" || len(c.Args) != 4 || wtExprString(c.Args[2]) != "nl.Sender" {
+		problems = append(problems, "the service must be readinesscheck.NewService(..., nl.Sender, ...): the guarded sender")
 	}
-	args := gateCalls[0].Args
-	if len(args) != 1 {
-		t.Fatalf("app.RequireGateway has %d arguments, want only the token: the worker has no open peer route", len(args))
+	if args := gateCalls[0].Args; len(args) != 1 {
+		problems = append(problems, "app.RequireGateway must take only the token")
+	} else if c, ok := args[0].(*ast.CallExpr); !ok || wtCallName(c.Fun) != "mustEnv" || len(c.Args) != 1 || wtExprString(c.Args[0]) != `"GATEWAY_TOKEN"` {
+		problems = append(problems, `app.RequireGateway token must be mustEnv("GATEWAY_TOKEN")`)
 	}
-	if c, ok := args[0].(*ast.CallExpr); !ok || wtCallName(c.Fun) != "mustEnv" || len(c.Args) != 1 || wtExprString(c.Args[0]) != `"GATEWAY_TOKEN"` {
-		t.Errorf(`app.RequireGateway token is %s, want mustEnv("GATEWAY_TOKEN")`, wtExprString(args[0]))
+	return problems
+}
+
+func TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := publicCheckWiringProblems(t, f); len(problems) != 0 {
+		t.Errorf("main.go wiring: %v", problems)
 	}
 }
 
@@ -74,7 +88,7 @@ func bootWorker(t *testing.T, deployEnv string) string {
 	t.Helper()
 	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || readerURL == "" {
-		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL (or run `make test-db PKGS=./cmd/worker/...`)")
 	}
 	port := freePort(t)
 	vars := map[string]string{"PORT": strconv.Itoa(port), "DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL,
@@ -124,15 +138,15 @@ func post(t *testing.T, url, token string, body io.Reader) int {
 
 // The ID token is checked by Cloud Run before the request reaches the worker, so only the gateway token is observable here.
 func TestWorker_PublicCheckRouteRefusesAMissingGatewayToken(t *testing.T) {
-	base := bootWorker(t, "pr-1") // a preview captures mail, so all three routes exist
-	for _, route := range []string{runRoute, mappingRoute, capturedRoute} {
+	base := bootWorker(t, "pr-1")
+	for _, route := range []string{runRoute, mappingRoute} {
 		for name, tok := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
-			if got := post(t, base+route, tok, strings.NewReader(`{"to":"a@x.io"}`)); got != http.StatusUnauthorized {
+			if got := post(t, base+route, tok, strings.NewReader(`{}`)); got != http.StatusUnauthorized {
 				t.Errorf("POST %s with %s = %d, want 401", route, name, got)
 			}
 		}
 		// The control: past the guard the route exists, so the 401 above came from the guard and not from a missing route.
-		if got := post(t, base+route, "gw-token", strings.NewReader(`{"to":"a@x.io"}`)); got == http.StatusUnauthorized || got == http.StatusNotFound {
+		if got := post(t, base+route, "gw-token", strings.NewReader(`{}`)); got == http.StatusUnauthorized || got == http.StatusNotFound {
 			t.Errorf("POST %s with the gateway token = %d, want the route to answer", route, got)
 		}
 	}
@@ -141,67 +155,32 @@ func TestWorker_PublicCheckRouteRefusesAMissingGatewayToken(t *testing.T) {
 	}
 }
 
-func TestWorker_CapturedMailRouteIsAbsentWhenTheWorkerDoesNotCapture(t *testing.T) {
-	base := bootWorker(t, "")
+// A preview worker captures mail; the route must still be absent there.
+func TestWorker_CapturedMailRouteIsGoneOnAPreview(t *testing.T) {
+	base := bootWorker(t, "pr-1")
 	if got := post(t, base+capturedRoute, "gw-token", strings.NewReader(`{"to":"a@x.io"}`)); got != http.StatusNotFound {
-		t.Errorf("POST %s on a worker with no sending key = %d, want 404", capturedRoute, got)
+		t.Errorf("POST %s = %d, want 404", capturedRoute, got)
 	}
 	if got := post(t, base+runRoute, "gw-token", strings.NewReader(`{}`)); got == http.StatusNotFound || got == http.StatusUnauthorized {
 		t.Errorf("POST %s with the gateway token = %d, want the route to answer", runRoute, got)
 	}
 }
 
-func TestWorkerMain_CapturedMailRouteFollowsThePosture(t *testing.T) {
-	nightlyKey := map[string]string{"RESEND_SENDING_KEY": "sk", "RESEND_RECEIVING_DOMAIN": "x.resend.app"}
-	for _, tc := range []struct {
-		name, env string
-		vars      map[string]string
-		capture   bool
-	}{
-		{"preview", "pr-7", nil, true},
-		{"nightly with no sending key", "nightly", nil, true},
-		{"production with a sending key", "production", map[string]string{"RESEND_SENDING_KEY": "sk"}, false},
-		{"production with no sending key", "production", nil, false},
-		{"nightly with a key and a receiving domain", "nightly", nightlyKey, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			getenv := func(k string) string { return tc.vars[k] }
-			nl, err := notifications.NewsletterClients(getenv, tc.env, notifications.ModeFake, http.DefaultTransport, nil)
-			if err != nil {
-				t.Fatalf("NewsletterClients: %v", err)
-			}
-			_, isCapture := nl.Sender.(*accountmail.Capture)
-			if isCapture != tc.capture {
-				t.Fatalf("setup: sender is %T, capture = %v, want capture = %v", nl.Sender, isCapture, tc.capture)
-			}
-			svc := readinesscheck.NewService(&publiccheck.Checker{}, nil, nl.Sender, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			mux := http.NewServeMux()
-			registerPublicCheckRoutes(mux, svc, nl.Sender)
-
-			if c, ok := nl.Sender.(*accountmail.Capture); ok {
-				_ = c.Send(t.Context(), []accountmail.Message{{To: "a@x.io", Subject: "subject-one", HTML: "html-one"}})
-			}
-			get := func(route, body string) *httptest.ResponseRecorder {
-				rec := httptest.NewRecorder()
-				req := httptest.NewRequest(http.MethodPost, route, strings.NewReader(body))
-				mux.ServeHTTP(rec, req)
-				return rec
-			}
-			for _, route := range []string{runRoute, mappingRoute} {
-				if rec := get(route, ""); rec.Code == http.StatusNotFound {
-					t.Errorf("POST %s = 404 on %s, want the route registered in every posture", route, tc.name)
-				}
-			}
-			rec := get(capturedRoute, `{"to":"a@x.io"}`)
-			if !tc.capture {
-				if rec.Code != http.StatusNotFound {
-					t.Errorf("POST %s = %d on %s, want 404", capturedRoute, rec.Code, tc.name)
-				}
-				return
-			}
-			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "subject-one") {
-				t.Errorf("POST %s = %d %q on %s, want 200 with the captured mail", capturedRoute, rec.Code, rec.Body.String(), tc.name)
-			}
-		})
+func TestWorkerMain_CapturedMailRouteIsGone(t *testing.T) {
+	svc := readinesscheck.NewService(&publiccheck.Checker{}, nil, &accountmail.Capture{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	mux := http.NewServeMux()
+	registerPublicCheckRoutes(mux, svc)
+	post := func(route, body string) int {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, route, strings.NewReader(body)))
+		return rec.Code
+	}
+	if got := post(capturedRoute, `{"to":"a@x.io"}`); got != http.StatusNotFound {
+		t.Errorf("POST %s = %d, want 404", capturedRoute, got)
+	}
+	for _, route := range []string{runRoute, mappingRoute} {
+		if got := post(route, ""); got == http.StatusNotFound {
+			t.Errorf("POST %s = 404, want the route registered", route)
+		}
 	}
 }

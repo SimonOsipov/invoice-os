@@ -250,7 +250,7 @@ func main() {
 		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumReader(),
 			AI: aiClient, Jev: jevClient},
 	}
-	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool}, nl.Sender, app.Logger), nl.Sender)
+	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool}, nl.Sender, app.Logger))
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {

@@ -19,6 +19,7 @@ type suitesRun struct {
 	staleLogs             map[string]string
 	cores                 string // getconf _NPROCESSORS_ONLN output; "" means 12
 	noCores               bool   // getconf prints nothing
+	setup                 func(t *testing.T, tree string)
 }
 
 type suitesResult struct {
@@ -80,6 +81,9 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		if err := os.WriteFile(filepath.Join(tree, ".ralph", name+".log"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if r.setup != nil {
+		r.setup(t, tree)
 	}
 	cores := r.cores
 	if cores == "" {
@@ -223,7 +227,7 @@ func TestSuites_NoReportSummaryFlag(t *testing.T) {
 func TestSuites_AGreenRunPrintsOneLinePerSuiteAndNothingElse(t *testing.T) {
 	t.Parallel()
 	res := runSuites(t, suitesRun{})
-	wantOut(t, res.stdout, "fmt=0", "go=0", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0")
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0")
 	if res.code != 0 {
 		t.Fatalf("exit %d", res.code)
 	}
@@ -232,8 +236,8 @@ func TestSuites_AGreenRunPrintsOneLinePerSuiteAndNothingElse(t *testing.T) {
 func TestSuites_TheDBSuiteRunsWithTheWorkersPort(t *testing.T) {
 	t.Parallel()
 	res := runSuites(t, suitesRun{port: "5466"})
-	wantOut(t, res.stdout, "fmt=0", "go=0", "db=0", "spa=0", "unit=0")
-	if !strings.Contains(readFx(t, res, "make.argv"), "test-rls test-queue test-audit DEV_DB_PORT=5466\n") {
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=0", "spa=0", "unit=0")
+	if got := readFx(t, res, "make.argv"); !strings.Contains(got, "test-rls test-queue test-audit test-approvals DEV_DB_PORT=5466\n") || strings.Contains(got, "test-db") {
 		t.Fatalf("make argv:\n%s", readFx(t, res, "make.argv"))
 	}
 }
@@ -267,7 +271,7 @@ func TestSuites_ARedRunPrintsEverySuiteLineBeforeTheSummary(t *testing.T) {
 		rOut: fl + " FAIL  src/a.test.tsx > t\n", rRC: 1,
 	})
 	wantOut(t, res.stdout,
-		"fmt=0", "go=1", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=1",
+		"fmt=0", "go=1", "gates=skipped: no origin/main", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=1",
 		"go package: github.com/x/bad",
 		"unit file: frontend/landing src/a.test.tsx")
 	if res.code != 1 {
@@ -309,9 +313,76 @@ func TestSuites_ASuiteThatFailsWithNothingNamedPointsAtItsLog(t *testing.T) {
 	t.Parallel()
 	res := runSuites(t, suitesRun{fmtOut: "gofmt: not formatted:\ninternal/x.go\n", fmtRC: 1})
 	wantOut(t, res.stdout,
-		"fmt=1", "go=0", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0",
+		"fmt=1", "go=0", "gates=skipped: no origin/main", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0",
 		"fmt: no failing file, package or test named, see .ralph/fmt.log")
 	if res.code != 1 {
 		t.Fatalf("exit %d", res.code)
+	}
+}
+
+// suitesGitTree makes tree a repo whose origin/main is its first commit, then writes files untracked.
+func suitesGitTree(t *testing.T, tree string, files map[string]string) {
+	t.Helper()
+	prodShaGit(t, tree, "init", "-q", "-b", "work")
+	prodShaGit(t, tree, "commit", "-q", "--allow-empty", "-m", "base")
+	prodShaGit(t, tree, "update-ref", "refs/remotes/origin/main", "HEAD")
+	for name, body := range files {
+		p := filepath.Join(tree, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSuites_ATrackedIgnoredFileStopsBeforeAnySuite(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{setup: func(t *testing.T, tree string) {
+		suitesGitTree(t, tree, map[string]string{"scratch.go": "package x\n"})
+		prodShaGit(t, tree, "add", "scratch.go")
+		prodShaGit(t, tree, "commit", "-q", "-m", "scratch")
+		if err := os.WriteFile(filepath.Join(tree, ".gitignore"), []byte("scratch.go\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}})
+	wantOut(t, res.stdout, "ignored=1: tracked files match .gitignore (git rm --cached each); no suite ran", "scratch.go")
+	if res.code != 1 {
+		t.Fatalf("exit %d", res.code)
+	}
+	if _, err := os.Stat(filepath.Join(res.tree, ".ralph/fmt.log")); !os.IsNotExist(err) {
+		t.Fatalf("fmt.log exists (stat err %v)", err)
+	}
+}
+
+func TestSuites_TheGatesRunAgainstOriginMain(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{setup: func(t *testing.T, tree string) { suitesGitTree(t, tree, nil) }})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=0", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0")
+	argv := readFx(t, res, "go.argv")
+	for _, want := range []string{
+		"run ./internal/tools/citegate -base origin/main -head HEAD\n",
+		"run ./internal/tools/stalerefs -base origin/main -head HEAD\n",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("go argv lacks %q:\n%s", want, argv)
+		}
+	}
+}
+
+func TestSuites_TheDBSuiteRunsTheChangedDBPackagesOnly(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", setup: func(t *testing.T, tree string) {
+		suitesGitTree(t, tree, map[string]string{
+			"internal/dbpkg/x_test.go":  `var _ = os.Getenv("DATABASE_URL")` + "\n",
+			"internal/plain/x_test.go":  "package plain\n",
+			"internal/dbpkg2/x.go":      "package dbpkg2\n",
+			"internal/dbpkg2/x_test.go": `var _ = "DATABASE_SUPERUSER_URL"` + "\n",
+		})
+	}})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=0", "db=0", "spa=0", "unit=0")
+	if got := readFx(t, res, "make.argv"); !strings.Contains(got, "test-db PKGS=./internal/dbpkg ./internal/dbpkg2 DEV_DB_PORT=5466\n") {
+		t.Fatalf("make argv:\n%s", got)
 	}
 }

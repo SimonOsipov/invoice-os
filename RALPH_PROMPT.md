@@ -162,10 +162,12 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
 Runs only when `PLANNING_REQUIRED=true`, inside the worktree.
 
 #### a. Architecture — finalize the story
+**A UI story starts from the prototype.** Subagents cannot call `DesignSync`. Before you spawn the architect, run `DesignSync get_file` in your own session for each prototype file that holds a touched screen (project ids: "Design references" above). Write each screen's part to `.ralph/design/<file>` in the worktree. `get_file` returns at most 256 KiB; when a file is cut, record the cut in `## Decisions`. Give the paths to the architect and to QA. Copy that the prototype does not hold goes in `## Decisions` as `copy — invented`.
+
 Spawn `product-architecture-spec` with the full basic story and its Obsidian path, per its "Expanding a basic story" section. It rewrites the story in place: design, `## Implementation Subtasks`, and `## Decisions`. Pass these rules:
 
 - **Diff every new control against its siblings.** A control added to an existing bar or panel matches the siblings' visibility and disabled treatment. A sibling's shipped decision is the spec.
-- **A layout constant ships a relationship assertion.** When a subtask adds or changes a width, grid track, clearance, overflow or alignment, name a topology layout assertion as its deliverable. It asserts a relationship: the element fits, aligns or does not overlap. It never asserts a raw dimension. Phase 3.5 step 4 owns the rule "Assert the relationship, not the dimension". `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560/1920/1440/1280); `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Planning it here puts it in the first deploy-gate run.
+- **A layout constant ships a relationship assertion.** When a subtask adds or changes a width, grid track, clearance, overflow or alignment, name a topology layout assertion as its deliverable. It asserts a relationship: the element fits, aligns or does not overlap. It never asserts a raw dimension. Phase 3.5 step 4 owns the rule "Assert the relationship, not the dimension". The assertion sweeps both `WIDE_WIDTHS` and `PHONE_WIDTHS` from `e2e/topology/layout.ts`; `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Planning it here puts it in the first deploy-gate run.
 - **Re-measure every fact the story asserts** — a root cause, a mechanism, a count, another PR's state, whether the prescribed fix can work. Measure it in the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`.
 - **Measure a fact about the deployed app on the deployed app** (browser output, sidecar responses, production data): Playwright MCP, Sentry, or Cloud Logging (`gcloud logging read`; previews live in project `ascomply-preview`). Paste the output into the same `premise —` entry. Never escalate an unmeasured premise.
 - **An AC that already holds at head is not work.** Record the proving test in `## Decisions`; write no subtask.
@@ -319,6 +321,7 @@ Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every s
   Prove it with one break: delete the guarded code, keep its comment, run the scan, and it must go red. Record that as a mutation row.
 - **An absence scan** also needs a control needle that must be found and a floor on the population scanned. Offer no "zero hits" as evidence until the same command has found a planted hit.
 - **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff "origin/$BASE...HEAD" -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every rule file in `.claude/rules/` whose `paths:` glob matches a file your diff changed. Treat your own earlier future-tense notes as suspects.
+- **Trace every user-facing sentence.** List each user-facing sentence, privacy claim and `frontend/library/src/content.ts` line that the diff adds or changes. For each, name the `file:symbol` that makes it true in each state. An untraced sentence is a QA failure, and its fix deletes the clause.
 - **State a shared fact in one place** and cite that place.
 - **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
@@ -338,7 +341,7 @@ Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every s
   - Never click a control that writes data on production.
   - On a PR environment, restore each member, role or membership that you change, in the same run.
 
-When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`. It edits source in place and restores the exact bytes. Run it without `--changed`. Start and stop it by the replay rules in the QA list above. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`. A row is a claim; the replay is the evidence.
+When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`. It edits source in place and restores the exact bytes. Run it without `--changed`. Start and stop it by the replay rules in the QA list above. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`. A row is a claim; the replay is the evidence. The replay writes `.ralph/replay-<STORY>.json`. A hook refuses `gh pr create` and `gh pr ready` unless that file names the current HEAD with 0 `NOT-PROVEN` and 0 `INVALID` rows. Run the replay again after each later commit.
 
 When QA finds issues, send all findings of one round to one `product-executor` fix spawn, as one batch. For each finding, use the subtask that the finding names:
 1. Run `hm subtask stage <SUBTASK-ID> Execution` before the fix spawn.
@@ -389,6 +392,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 2. **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them and push. A base missing main's migrations crash-loops the gateway.
 3. **Ready flip and gate:**
    - First, wait for `CI` on the PR head: `hm ci wait <PR>`.
+   - A draft that changes a spec in `e2e/smoke`, `e2e/api` or `e2e/topology` deploys a preview and runs only those specs, with no retries. Read that run before the ready flip: `gh run list --workflow dev-env.yml --commit "$(git rev-parse HEAD)" --json status,conclusion,url`. Fix a failed spec first. This is the one `gh run list` call that Phase 3.5 allows.
    - Then, if `gh pr view <PR> --json isDraft -q .isDraft` prints `true`, run `gh pr ready <PR>`.
    - Then wait for the gate: `hm ci wait <PR> --gate` (CI Monitoring Protocol).
    - A `no-run` verdict on a docs-only PR is expected: `dev-env.yml` is paths-filtered. Escalate to the user rather than faking it green.
@@ -428,7 +432,7 @@ Push HEAD before you start each wait. Read the verdict from the exit code in the
 - Another exit code: read the last 40 lines of the output file once. The verdict line names a short SHA after `at`. If it is not the start of `git rev-parse HEAD`, push HEAD, then run the wait again. Otherwise act on the verdict.
 
 While you wait in Phases 3 and 3.5, `hm ci wait` is the only source of CI and gate status:
-- Do not run `gh pr checks`, `gh run list` or `gh run watch`.
+- Do not run `gh pr checks`, `gh run list` or `gh run watch`. Exception: the draft spec run in Phase 3.5 step 3.
 - Run `gh run view` only to read the logs of a run with the verdict `failed`.
 - Do not read whether the PR merged. The coordinator's `merged:` message says it.
 - Do not read the state of the preview teardown. The repository runs it.

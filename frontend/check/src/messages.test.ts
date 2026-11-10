@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409SaysSignUpWithALink', () => {
@@ -13,6 +13,15 @@ describe('refusal', () => {
 
   it('refusal_armor429WithNoBodySaysTryInAnHour', () => {
     expect(refusal('run', 429, null).text).toBe('Too many checks from this network. Try again in an hour.')
+  })
+
+  it('refusal_408KeepsTheGatewaySentence', () => {
+    expect(refusal('run', 408, 'The gateway said this.')).toEqual({ text: 'The gateway said this.', signUp: false })
+    expect(refusal('mapping', 408, SLOW_UPLOAD_SENTENCE).text).toBe(SLOW_UPLOAD_SENTENCE)
+  })
+
+  it('refusal_408WithNoBodySaysTryAFasterConnection', () => {
+    expect(refusal('mapping', 408, null).text).toBe('The upload took too long. Try again on a faster connection.')
   })
 
   it('refusal_413IsPlain', () => {

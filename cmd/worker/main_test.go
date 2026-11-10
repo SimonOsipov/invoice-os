@@ -154,7 +154,7 @@ func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
 func TestWorkerMain_TicksTheCustomRuleRecheck(t *testing.T) {
 	appURL, adminURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || adminURL == "" || readerURL == "" {
-		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/worker/...`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestWorkerMain_TicksTheCustomRuleRecheck(t *testing.T) {
 func TestWorkerMain_SnapshotsAtBoot(t *testing.T) {
 	appURL, adminURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || adminURL == "" || readerURL == "" {
-		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/worker/...`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {

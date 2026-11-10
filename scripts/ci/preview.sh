@@ -15,6 +15,8 @@
 #   preview.sh mail-preflight nightly     fail when a nightly mail secret is missing or not enabled
 #   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
+#   preview.sh check-mail-on nightly      mount the sending key and receiving domain on the worker
+#   preview.sh check-mail-off nightly     unmount them from the worker
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
@@ -168,9 +170,39 @@ cmd_bucket() {
   echo "created $(bucket "$pr")"
 }
 
+# too_many_connections <execution>: its log shows SQLSTATE 53300; psql prints only the message text.
+too_many_connections() {
+  local logs
+  sleep 10 # log ingestion lag
+  logs=$(gcloud logging read "resource.type=\"cloud_run_job\" AND labels.\"run.googleapis.com/execution_name\"=\"$1\"" \
+    --project "$PROJECT" --freshness 1h --format 'value(textPayload,jsonPayload)') || return 1
+  grep -qE 'SQLSTATE 53300|too many clients already|remaining connection slots are reserved' <<<"$logs"
+}
+
+# job_execute <job> <arg>...: runs the job; retries twice, with backoff, only on SQLSTATE 53300.
+job_execute() {
+  local job=$1 try err exe
+  shift
+  err=$(mktemp)
+  for try in 1 2 3; do
+    if gcloud run jobs execute "$job" "${gc[@]}" --wait "$@" 2>"$err"; then
+      cat "$err" >&2
+      rm -f "$err"
+      return 0
+    fi
+    cat "$err" >&2
+    exe=$(sed -n 's/.*executions describe \([a-z0-9-]*\).*/\1/p' "$err")
+    if [ "$try" -ge 3 ] || [ -z "$exe" ] || ! too_many_connections "$exe"; then break; fi
+    echo "::warning::$exe hit SQLSTATE 53300 (too many connections); try $((try + 1)) of 3 in $((try * 30)) s" >&2
+    sleep $((try * 30))
+  done
+  rm -f "$err"
+  return 1
+}
+
 # database <name> <action>: the preview-db job drops the database WITH (FORCE), then creates it for recreate.
 database() {
-  gcloud run jobs execute preview-db "${gc[@]}" --wait --update-env-vars "PR_DB=$(dbname "$1"),ACTION=$2"
+  job_execute preview-db --update-env-vars "PR_DB=$(dbname "$1"),ACTION=$2"
 }
 
 # env_file <pr> <svc> <file>: the plain environment of one service, as gcloud --env-vars-file YAML.
@@ -339,7 +371,7 @@ migrate_job() {
 # grant <name>: GoTrue creates auth.users on its first boot, after the migrate job; the
 # second run migrates nothing, seeds nothing and grants.
 cmd_grant() {
-  gcloud run jobs execute "migrate-$(suffix "$1")" "${gc[@]}" --wait --update-env-vars GATEWAY_DB_BOOTSTRAP=false
+  job_execute "migrate-$(suffix "$1")" --update-env-vars GATEWAY_DB_BOOTSTRAP=false
 }
 
 cmd_teardown() {
@@ -473,6 +505,18 @@ cmd_mail_off() {
   [ "$failed" = 0 ] || die "mail-off left real mail mounted on the nightly; the errors are above"
 }
 
+# check-mail-on: the e2e job's worker window. Secret names only in argv.
+cmd_check_mail_on() {
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest,RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest
+}
+
+cmd_check_mail_off() {
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --remove-secrets RESEND_SENDING_KEY,RESEND_RECEIVING_DOMAIN \
+    || die "check-mail-off left real mail mounted on the nightly worker"
+}
+
 # prs: every preview (a PR number or nightly) that owns a service, a job, a bucket or a secret, with the oldest creation time.
 cmd_prs() {
   {
@@ -580,6 +624,8 @@ case "${1:-}" in
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
+  check-mail-on) mail_arg "${2:-}"; cmd_check_mail_on ;;
+  check-mail-off) mail_arg "${2:-}"; cmd_check_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
@@ -591,5 +637,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
 esac

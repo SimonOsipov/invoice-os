@@ -266,7 +266,7 @@ func TestNotificationsMain_ModeErrorIsFatal(t *testing.T) {
 func TestNotificationsMain_WorkerRunsOnlyWhenDelivering(t *testing.T) {
 	appURL, adminURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || adminURL == "" {
-		t.Skip("notifications boot test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("notifications boot test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/notifications/...`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {
@@ -459,7 +459,7 @@ func qaAdminPool(t *testing.T) (admin *pgxpool.Pool, appURL string) {
 	t.Helper()
 	appURL, adminURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || adminURL == "" {
-		t.Skip("notifications boot test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("notifications boot test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/notifications/...`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {

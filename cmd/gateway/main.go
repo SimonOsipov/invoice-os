@@ -151,6 +151,9 @@ func main() {
 	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
 	app.Mux.Handle("OPTIONS /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
+	unsubscribePage := gateway.UnsubscribePageHandler(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, app.Logger)
+	app.Mux.Handle("GET /unsubscribe", unsubscribePage)
+	app.Mux.Handle("POST /unsubscribe", unsubscribePage)
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.

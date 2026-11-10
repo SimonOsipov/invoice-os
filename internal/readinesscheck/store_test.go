@@ -134,11 +134,6 @@ func TestFieldLabel_EveryGlobalRuleTargetHasALabel(t *testing.T) {
 	}
 }
 
-// spendReacher is the method under test; asserted on an interface so the package compiles before it exists.
-type spendReacher interface {
-	AISpendReached(ctx context.Context, ceiling string) (bool, error)
-}
-
 func TestStore_AISpendReachedAtTheCeilingNotBelow(t *testing.T) {
 	pool := testPool(t)
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
@@ -169,10 +164,7 @@ func TestStore_AISpendReachedAtTheCeilingNotBelow(t *testing.T) {
 		t.Fatalf("read public.public_check_ai_cost_today as invoice_app: %v", err)
 	}
 
-	store, ok := any(&Store{Pool: pool}).(spendReacher)
-	if !ok {
-		t.Fatal("Store has no AISpendReached(ctx, ceiling string) (bool, error)")
-	}
+	store := &Store{Pool: pool}
 	for _, c := range []struct {
 		ceiling string
 		want    bool

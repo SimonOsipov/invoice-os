@@ -16,7 +16,7 @@ const (
 	nlOn        = "needs.changes.outputs.nightly == 'true'"
 	nlOff       = "needs.changes.outputs.nightly != 'true'"
 	nlTarget    = "E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}"
-	nlTopoIf    = "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && " + authorCond
+	nlTopoIf    = "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && needs.changes.outputs.shards != '[]' && " + authorCond
 	nlTeardown  = "always() && " + nlOn + " && " + authorCond
 	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
@@ -613,10 +613,10 @@ func TestDevEnvNightly_RealFileHasNoProblems(t *testing.T) {
 
 // The job if: and needs of dev-env.yml at 7b01a4bf.
 var nlGolden = map[string][2]string{
-	"ci-watch":    {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"ci-watch":    {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
 	"invariants":  {"[commit-authors]", authorCond},
-	"prepare-env": {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
-	"build":       {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"prepare-env": {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"build":       {"[changes, commit-authors]", "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond},
 	"deploy":      {"[prepare-env, build]", "!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'"},
 	"health-gate": {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
 	"fleet-gate":  {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
@@ -882,7 +882,7 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1 $2\" in\n\"cap 9\") printf '"+capOut+"' ;;\n*) exit 1 ;;\nesac\n")
-		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9\n"+step.keys["run"])
+		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9 CAP_TRIES=2 CAP_SLEEP=0\n"+step.keys["run"])
 		return out + errOut, code
 	}
 	t.Run("a refused PR fails prepare-env with one error naming the cap", func(t *testing.T) {
@@ -896,6 +896,21 @@ func TestDevEnvNightly_PRsLeaveTheNightlyItsSlot(t *testing.T) {
 		t.Parallel()
 		if out, code := runStep(t, "open=1\\nfull=false\\n"); code != 0 {
 			t.Errorf("exit %d, output %q, want 0", code, out)
+		}
+	})
+	t.Run("a PR waits for a slot that frees", func(t *testing.T) {
+		t.Parallel()
+		st, _ := nlStep(devEnvJob(t, "prepare-env"), "preview cap for a PR")
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		calls := filepath.Join(dir, "calls")
+		writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "echo x >>'"+calls+"'\nif [ \"$(wc -l <'"+calls+"')\" -le 1 ]; then printf 'open=2\\nfull=true\\n'; else printf 'open=1\\nfull=false\\n'; fi\n")
+		out, errOut, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9 CAP_TRIES=3 CAP_SLEEP=0\n"+st.keys["run"])
+		b, _ := os.ReadFile(calls)
+		if n := strings.Count(string(b), "\n"); code != 0 || n != 2 {
+			t.Errorf("exit %d after %d cap calls, want 0 after 2; output %q", code, n, out+errOut)
 		}
 	})
 }
@@ -927,20 +942,22 @@ func TestDevEnvNightly_CapStepEdges(t *testing.T) {
 func TestDevEnvNightly_CapWaitFitsThePrepareEnvTimeout(t *testing.T) {
 	t.Parallel()
 	pe := devEnvJob(t, "prepare-env")
-	s, ok := nlStep(pe, "preview cap reached")
-	if !ok {
-		t.Fatal("no cap step")
-	}
-	tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
-	sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
-	limit, _ := jobKey(pe, "timeout-minutes")
-	mins, err4 := strconv.Atoi(limit)
-	if err1 != nil || err2 != nil || err4 != nil {
-		t.Fatalf("CAP_TRIES %q, CAP_SLEEP %q, timeout %q do not parse", s.env["CAP_TRIES"], s.env["CAP_SLEEP"], limit)
-	}
-	const capCall, restOfJob = 8, 180
-	if secs := (tries-1)*sleep + tries*capCall + restOfJob; secs > mins*60 {
-		t.Errorf("worst case %d s (%d tries, %d s sleep) exceeds the %d min prepare-env timeout", secs, tries, sleep, mins)
+	for _, name := range []string{"preview cap reached", "preview cap for a PR"} {
+		s, ok := nlStep(pe, name)
+		if !ok {
+			t.Fatalf("no step %q", name)
+		}
+		tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
+		sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
+		limit, _ := jobKey(pe, "timeout-minutes")
+		mins, err4 := strconv.Atoi(limit)
+		if err1 != nil || err2 != nil || err4 != nil {
+			t.Fatalf("%s: CAP_TRIES %q, CAP_SLEEP %q, timeout %q do not parse", name, s.env["CAP_TRIES"], s.env["CAP_SLEEP"], limit)
+		}
+		const capCall, restOfJob = 8, 180
+		if secs := (tries-1)*sleep + tries*capCall + restOfJob; secs > mins*60 {
+			t.Errorf("%s: worst case %d s (%d tries, %d s sleep) exceeds the %d min prepare-env timeout", name, secs, tries, sleep, mins)
+		}
 	}
 }
 
@@ -1280,8 +1297,8 @@ func TestDevEnvNightly_GuardAndServicesUseOneTokenVersion(t *testing.T) {
 		{read, `preview.sh contact-token "$PR"`, "start reads the token without"},
 		{"hubspot_token_version: " + nlTokenVersionStep, "hubspot_token_version: ${{ steps.urls.outputs.gateway_url }}", "output hubspot_token_version"},
 		{ver + "\n        run: bash scripts/ci/preview.sh deploy", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: bash scripts/ci/preview.sh deploy", "deploy backends env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
-		{ver + "\n        run: pnpm", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
-		{"\n          " + ver + "\n        run: pnpm", "\n        run: pnpm", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{ver + "\n        run: bash scripts/ci/e2e-suite.sh test:api", "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest\n        run: bash scripts/ci/e2e-suite.sh test:api", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+		{"\n          " + ver + "\n        run: bash scripts/ci/e2e-suite.sh test:api", "\n        run: bash scripts/ci/e2e-suite.sh test:api", "api e2e env NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {

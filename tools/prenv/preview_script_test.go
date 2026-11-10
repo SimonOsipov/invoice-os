@@ -69,6 +69,14 @@ case "$1 $2 $3" in
   done
   cat "$D/access-$name" 2>/dev/null || printf pw ;;
 "sql instances describe") echo 10.0.0.1 ;;
+"run jobs execute")
+  n=$(cat "$D/execfails" 2>/dev/null || echo 0)
+  if [ "$n" -gt 0 ]; then
+    echo $((n - 1)) >"$D/execfails"
+    printf 'ERROR: (gcloud.run.jobs.execute) The execution failed.\nView details about this execution by running:\ngcloud run jobs executions describe %s-x%s\n' "$4" "$n" >&2
+    exit 1
+  fi ;;
+"logging read "*) cat "$D/logs" 2>/dev/null || : ;;
 esac
 `
 
@@ -1713,5 +1721,37 @@ func TestPreviewBlogIDRetriesA5xxButNotA401(t *testing.T) {
 	}
 	if n := strings.Count(bad.file(t, "curl-calls"), "/topics"); n != 1 {
 		t.Errorf("401 topics calls = %d, want 1", n)
+	}
+}
+
+// A preview-db or grant execution is retried only when its log shows SQLSTATE 53300.
+func TestPreviewJobRetriesOnlyOnTooManyConnections(t *testing.T) {
+	t.Parallel()
+	const full = `psql: error: connection to server at "10.20.0.3", port 5432 failed: FATAL:  remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role`
+	for _, c := range []struct {
+		name, fails, logs string
+		args              []string
+		wantOK            bool
+		wantRuns          int
+	}{
+		{"database: 53300 once, then success", "1", full, []string{"database", "7"}, true, 2},
+		{"grant: pgx 53300 once, then success", "1", "failed to connect: FATAL: sorry, too many clients already (SQLSTATE 53300)", []string{"grant", "7"}, true, 2},
+		{"database: 53300 every time stops after 3 tries", "9", full, []string{"database", "7"}, false, 3},
+		{"database: any other failure is not retried", "1", "ERROR:  syntax error", []string{"database", "7"}, false, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "execfails", c.fails)
+				writeIn(t, dir, "logs", c.logs)
+			}, c.args...)
+			runs := strings.Count(r.file(t, "calls"), "run jobs execute ")
+			if (r.code == 0) != c.wantOK || runs != c.wantRuns {
+				t.Errorf("exit %d after %d executions, want ok=%v after %d; stderr %q", r.code, runs, c.wantOK, c.wantRuns, r.stderr)
+			}
+			if c.wantRuns > 1 && !strings.Contains(r.file(t, "order"), "sleep 30") {
+				t.Errorf("no 30 s backoff before the retry: %q", r.file(t, "order"))
+			}
+		})
 	}
 }

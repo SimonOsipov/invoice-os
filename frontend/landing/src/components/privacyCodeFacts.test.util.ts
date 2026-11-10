@@ -834,13 +834,15 @@ export function accountmailFrom(src: string = readSource('internal/accountmail/s
   return found(/\bFrom\s*=\s*"[^"<]*<([^>"]+)>"/.exec(src)?.[1], 'accountmail.From')
 }
 
-// ReadinessCheck passes the text as the marketing consentText, and the Resend queue fires for a marketing tick.
-export function readinessConsentIsMarketing(src: string = readSource('internal/notifications/store.go')): boolean {
+// ReadinessCheck passes the text as the marketing consentText, and the RETURNING term of mergeSQL queues Resend for a marketing tick.
+export function readinessConsentIsMarketing(source: string = readSource('internal/notifications/store.go')): boolean {
+  const src = stripComments(source)
   const body = goFunc(src, /func \(s \*Store\) ReadinessCheck\b/, 'Store.ReadinessCheck')
+  const returning = found(/const mergeSQL = `[\s\S]*?\bRETURNING\b([^`]*)`/.exec(src)?.[1], 'the RETURNING clause of mergeSQL')
   return (
     /\bconsentText:\s*in\.ConsentText/.test(body) &&
     !/\breadinessConsentText\b/.test(body) &&
-    src.includes('registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL')
+    returning.includes('registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL')
   )
 }
 

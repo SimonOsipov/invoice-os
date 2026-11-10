@@ -64,7 +64,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		delivered, optInSent                 bool
 		first, last, company                 string
 	)
-	// ceiling: the lock and its connection are held across the vendor call (10 s timeout, MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
+	// ceiling: the lock and its connection are held across the vendor calls (MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("notifications: begin delivery: %w", err)

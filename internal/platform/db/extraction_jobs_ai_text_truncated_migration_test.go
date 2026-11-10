@@ -60,7 +60,7 @@ func aiTextTruncatedValue(t *testing.T, ctx context.Context, tx pgx.Tx, jobID st
 }
 
 // A job row older than the Up reads false, and the column is boolean NOT NULL DEFAULT false.
-func TestMigration_ExtractionJobsAITextTruncatedIsNotNullDefaultFalse(t *testing.T) {
+func TestExtractionJobsAITextTruncated_IsNotNullDefaultFalse(t *testing.T) {
 	ctx := t.Context()
 	tx := migratorTx(t, ctx) // rolled back on cleanup
 
@@ -93,7 +93,7 @@ func TestMigration_ExtractionJobsAITextTruncatedIsNotNullDefaultFalse(t *testing
 }
 
 // The shipped Down drops only its column, and the Up re-adds it with existing rows false.
-func TestMigration_ExtractionJobsAITextTruncatedDownAndUp(t *testing.T) {
+func TestExtractionJobsAITextTruncated_DownAndUp(t *testing.T) {
 	ctx := t.Context()
 	tx := migratorTx(t, ctx) // rolled back on cleanup
 

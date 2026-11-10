@@ -221,6 +221,9 @@ func TestUnsubscribe_ABadTokenIsRefusedBeforeAnyRead(t *testing.T) {
 		{"empty", "", "", http.StatusBadRequest},
 		{"almost a uuid", "00000000-0000-0000-0000-00000000000g", "", http.StatusBadRequest},
 		{"no token field", "", `{}`, http.StatusBadRequest},
+		{"urn form", "urn:uuid:" + unknown, "", http.StatusBadRequest},
+		{"braced", "{" + unknown + "}", "", http.StatusBadRequest},
+		{"no dashes", strings.ReplaceAll(unknown, "-", ""), "", http.StatusBadRequest},
 		{"unknown uuid", unknown, "", http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,6 +245,24 @@ func TestUnsubscribe_ABadTokenIsRefusedBeforeAnyRead(t *testing.T) {
 	var rowsAfter int
 	if err := r.e.admin.QueryRow(context.Background(), `SELECT count(*) FROM mail_unsubscribes WHERE token = $1`, unknown).Scan(&rowsAfter); err != nil || rowsAfter != rowsBefore {
 		t.Errorf("rows for the unknown token = %d (err %v), want %d: a refused call created a row", rowsAfter, err, rowsBefore)
+	}
+}
+
+// A mail client or a person may upper-case the link: the same row answers.
+func TestUnsubscribe_AnUpperCaseTokenResolvesTheSameRow(t *testing.T) {
+	r := usNewRig(t)
+	email, token := usAddress(t, r.e, "upper")
+	up := strings.ToUpper(token)
+	if up == token {
+		t.Fatalf("control: token %q has no letter to upper-case", token)
+	}
+	w := usCall(t, r.lookup, up, "", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"unsubscribed":false`) {
+		t.Errorf("lookup of the upper-case token: %d %s, want 200 for the same row", w.Code, w.Body.String())
+	}
+	usWantPress(t, usCall(t, r.press, up, "", nil), http.StatusOK, "unsubscribed")
+	if usUnsubscribedAt(t, r.e, email) == nil {
+		t.Error("the press of the upper-case token left unsubscribed_at NULL")
 	}
 }
 

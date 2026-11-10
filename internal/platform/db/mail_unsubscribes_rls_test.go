@@ -147,6 +147,23 @@ func TestRLS_MailUnsubscribesTwoAddressesGetTwoTokens(t *testing.T) {
 	}
 }
 
+// A refused address makes no row, so a caller's lookup error never leaves a token for a bad address.
+func TestRLS_MailUnsubscribesTokenFunctionRefusesABadAddress(t *testing.T) {
+	muRequireTable(t)
+	ctx := context.Background()
+	long := strings.Repeat("a", 255-len("@x.test")) + "@x.test"
+	for name, arg := range map[string]any{"NULL": nil, "empty": "", "blank": "   ", "two bytes": "ab", "255 bytes": long} {
+		var token *string
+		err := h.app.QueryRow(ctx, `SELECT public.mail_unsubscribe_token($1)::text`, arg).Scan(&token)
+		if err == nil {
+			t.Errorf("%s: mail_unsubscribe_token returned %v, want a refusal", name, token)
+		}
+	}
+	if after := mustCount(t, h.super, `SELECT count(*) FROM mail_unsubscribes WHERE email = ANY($1)`, []string{"", "ab", long}); after != 0 {
+		t.Errorf("refused addresses left %d row(s), want 0", after)
+	}
+}
+
 func TestRLS_MailUnsubscribesGrantsAreExact(t *testing.T) {
 	muRequireTable(t)
 	ctx := context.Background()

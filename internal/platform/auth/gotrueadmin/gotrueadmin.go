@@ -172,10 +172,11 @@ func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser,
 	}
 	var out struct {
 		Users []struct {
-			ID           string `json:"id"`
-			Email        string `json:"email"`
+			ID    string `json:"id"`
+			Email string `json:"email"`
+			// Raw: an account can write any JSON into its own user_metadata; a non-string value reads as absent.
 			UserMetadata struct {
-				Unsubscribe string `json:"unsubscribe"`
+				Unsubscribe json.RawMessage `json:"unsubscribe"`
 			} `json:"user_metadata"`
 		} `json:"users"`
 	}
@@ -184,7 +185,9 @@ func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser,
 	}
 	users := make([]AdminUser, len(out.Users))
 	for i, u := range out.Users {
-		users[i] = AdminUser{ID: u.ID, Email: u.Email, Unsubscribe: u.UserMetadata.Unsubscribe}
+		var unsub string
+		_ = json.Unmarshal(u.UserMetadata.Unsubscribe, &unsub)
+		users[i] = AdminUser{ID: u.ID, Email: u.Email, Unsubscribe: unsub}
 	}
 	return users, nil
 }

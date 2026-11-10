@@ -725,14 +725,16 @@ func TestListUsers_DecodesTheUnsubscribeKey(t *testing.T) {
 	var method, path, query, auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, path, query, auth = r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
-		_, _ = io.WriteString(w, `{"users":[{"id":"a","email":"a@x.test","user_metadata":{"unsubscribe":"tok","registration":{}}},{"id":"b","email":"b@x.test"}],"aud":"authenticated"}`)
+		_, _ = io.WriteString(w, `{"users":[{"id":"a","email":"a@x.test","user_metadata":{"unsubscribe":"tok","registration":{}}},{"id":"b","email":"b@x.test"},{"id":"c","email":"c@x.test","user_metadata":{"unsubscribe":{"own":"edit"}}},{"id":"d","email":"d@x.test","user_metadata":{"unsubscribe":5}}],"aud":"authenticated"}`)
 	}))
 	t.Cleanup(srv.Close)
 	got, err := newClient(t, srv.URL, k).ListUsers(context.Background(), 1, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []gotrueadmin.AdminUser{{ID: "a", Email: "a@x.test", Unsubscribe: "tok"}, {ID: "b", Email: "b@x.test"}}
+	want := []gotrueadmin.AdminUser{{ID: "a", Email: "a@x.test", Unsubscribe: "tok"}, {ID: "b", Email: "b@x.test"},
+		// GoTrue lets an account write any JSON into its own user_metadata; one odd value must not fail the page.
+		{ID: "c", Email: "c@x.test"}, {ID: "d", Email: "d@x.test"}}
 	if !slices.Equal(got, want) {
 		t.Errorf("users = %v, want %v", got, want)
 	}

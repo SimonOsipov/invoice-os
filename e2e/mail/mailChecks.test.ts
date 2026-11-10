@@ -76,7 +76,7 @@ describe('readinessBudgetProblem', () => {
   })
 
   it("counts only today's nightly run sends", () => {
-    const sends = [...nightly(15), send('a@example.com'), send('b@example.com'), ...nightly(1, YESTERDAY)]
+    const sends = [...nightly(17), send('a@example.com'), send(`customer@${DOMAIN}`), send(`customer2@${DOMAIN}`), ...nightly(1, YESTERDAY)]
     expect(readinessBudgetProblem(sends, DOMAIN, NOW)).toBeNull()
   })
 })

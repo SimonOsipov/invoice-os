@@ -46,7 +46,7 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.
-	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "document", "pages", "fields"}},
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "ai_text_truncated", "document", "pages", "fields"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
 }
 
@@ -1876,7 +1876,7 @@ func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
 		gotKeys = append(gotKeys, k)
 	}
 	slices.Sort(gotKeys)
-	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1896,7 +1896,7 @@ func TestExtractionDetail_DocumentTypeMarshalsAsExplicitNull(t *testing.T) {
 		t.Fatalf("unmarshal the detail: %v", err)
 	}
 	gotKeys := slices.Sorted(maps.Keys(decoded))
-	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1932,6 +1932,47 @@ func TestRLS_ExtractionDetailServesTheDocumentType(t *testing.T) {
 			}
 			if got := rvdJSONKey(t, w.Body.Bytes(), "document_type"); got != tc.want {
 				t.Errorf("GET /v1/extractions/%s serves document_type %s, want %s", tc.jobID, got, tc.want)
+			}
+		})
+	}
+}
+
+// SECAUD-05-04: the flag rides the detail wire as a boolean, never null; the default row is false.
+func TestReaderDetail_ReturnsAITextTruncated(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	reqCtx, tenantID, docA := rdTenant(t, ctx, "active")
+	docB := rdSeedDocument(t, ctx, tenantID)
+	flagged := rdSeedJob(t, ctx, tenantID, docA, "succeeded", time.Now().UTC(), nil)
+	plain := rdSeedJob(t, ctx, tenantID, docB, "succeeded", time.Now().UTC(), nil)
+	ct, err := stRequire(t).super.Exec(ctx, `UPDATE extraction_jobs SET ai_text_truncated = true WHERE id = $1`, flagged)
+	if err != nil || ct.RowsAffected() != 1 {
+		t.Fatalf("plant ai_text_truncated on job %s: rows %d, err %v", flagged, ct.RowsAffected(), err)
+	}
+
+	for _, tc := range []struct {
+		name, jobID, want string
+		wantField         bool
+	}{
+		{"a cut read", flagged, "true", true},
+		{"a default row", plain, "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.Detail(reqCtx, tc.jobID)
+			if err != nil {
+				t.Fatalf("Detail(%s): %v", tc.jobID, err)
+			}
+			// By name, so the package still compiles before the field exists.
+			f := reflect.ValueOf(got).FieldByName("AITextTruncated")
+			if !f.IsValid() || f.Kind() != reflect.Bool || f.Bool() != tc.wantField {
+				t.Errorf("Detail(%s).AITextTruncated = %v (valid %v), want bool %v", tc.jobID, f, f.IsValid(), tc.wantField)
+			}
+			b, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal the detail: %v", err)
+			}
+			if k := rvdJSONKey(t, b, "ai_text_truncated"); k != tc.want {
+				t.Errorf("the detail wire carries ai_text_truncated %s, want %s", k, tc.want)
 			}
 		})
 	}

@@ -30,9 +30,7 @@ func NewUnsubscribeStore(pool *pgxpool.Pool) *UnsubscribeStore { return &Unsubsc
 func (s *UnsubscribeStore) Lookup(ctx context.Context, token string) (string, bool, error) {
 	var email string
 	var done bool
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT email, unsubscribed_at IS NOT NULL FROM mail_unsubscribes WHERE token = $1`, token).Scan(&email, &done)
-	})
+	err := s.pool.QueryRow(ctx, `SELECT email, unsubscribed_at IS NOT NULL FROM mail_unsubscribes WHERE token = $1`, token).Scan(&email, &done)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, errUnknownToken
 	}

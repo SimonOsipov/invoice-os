@@ -131,7 +131,9 @@ export function shardTenantError(project: string, tenantId: string | undefined):
   return `${project} is a dedicated shard: sign in on ${t.firm} or ${t.inHouse}, not ${tenantId ?? 'the 1111 / 2222 default'}`
 }
 
-// Script entry: the CI matrix is this line. import.meta.main needs Node >= 22.18.
+// Script entry: the CI matrix is this line; spec arguments keep only the units that own them. import.meta.main needs Node >= 22.18.
 if (import.meta.main) {
-  console.log(JSON.stringify(UNITS.map((u) => u.name)))
+  const only = process.argv.slice(2)
+  const units = only.length > 0 ? UNITS.filter((u) => u.specs.some((s) => only.includes(s))) : UNITS
+  console.log(JSON.stringify(units.map((u) => u.name)))
 }

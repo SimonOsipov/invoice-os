@@ -195,12 +195,21 @@ func (c *readinessCheck) acquire() (release func(), ok bool) {
 }
 
 // readFile reads the file part once, in memory, within d; it writes the refusal and reports false on failure.
-// The timer ends the read through the connection's read deadline; it is stopped so the deadline never reaches the worker call.
-func readFile(w http.ResponseWriter, file *multipart.Part, d time.Duration) ([]byte, bool) {
+// The timer ends the read through the connection's read deadline; a deadline that fired is cleared on success so it never reaches the worker call.
+func readFile(ctx context.Context, log *slog.Logger, w http.ResponseWriter, file *multipart.Part, d time.Duration) ([]byte, bool) {
 	rc := http.NewResponseController(w)
-	t := time.AfterFunc(d, func() { _ = rc.SetReadDeadline(time.Now()) })
+	fired := make(chan struct{})
+	t := time.AfterFunc(d, func() {
+		defer close(fired)
+		if err := rc.SetReadDeadline(time.Now()); err != nil {
+			log.ErrorContext(ctx, "readiness-check: upload deadline not supported", slog.String("error", err.Error()))
+		}
+	})
 	data, err := io.ReadAll(io.LimitReader(file, MaxCheckFileBytes+1))
-	t.Stop()
+	expired := !t.Stop()
+	if expired {
+		<-fired
+	}
 	var tooBig *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooBig) || len(data) > MaxCheckFileBytes:
@@ -210,6 +219,9 @@ func readFile(w http.ResponseWriter, file *multipart.Part, d time.Duration) ([]b
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid request body")
 	default:
+		if expired {
+			_ = rc.SetReadDeadline(time.Time{})
+		}
 		return data, true
 	}
 	return nil, false
@@ -268,7 +280,7 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file, c.uploadTimeout)
+	data, ok := readFile(r.Context(), c.log, w, file, c.uploadTimeout)
 	if !ok {
 		refund()
 		return
@@ -337,7 +349,7 @@ func (c *readinessCheck) mapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	data, ok := readFile(w, file, c.uploadTimeout)
+	data, ok := readFile(r.Context(), c.log, w, file, c.uploadTimeout)
 	if !ok {
 		return
 	}

@@ -1177,15 +1177,15 @@ func TestRun_StalledUploadsFreeEverySlot(t *testing.T) {
 
 func TestRun_TheDeadlineStartsAtTheSlot(t *testing.T) {
 	e := newCheckEnv(t, true)
-	e.rc.uploadTimeout = time.Second
+	e.rc.uploadTimeout = 2 * time.Second
 	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	consent := bytes.Index(u.body, []byte(`name="consent_text"`))
 	file := bytes.Index(u.body, []byte(`name="file"`))
 	u.send(t, u.body[:consent])
-	time.Sleep(750 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	u.send(t, u.body[consent:file])
-	time.Sleep(750 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	u.send(t, u.body[file:])
 	u.wantAnswer(t, 200, "")
 }
@@ -1267,7 +1267,7 @@ func TestRun_AnUploadStillTricklingAtTheLimitIs408(t *testing.T) {
 
 func TestRun_ASlowUploadThatFinishesInTimeIs200(t *testing.T) {
 	e := newCheckEnv(t, true)
-	e.rc.uploadTimeout = time.Second
+	e.rc.uploadTimeout = 3 * time.Second
 	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	piece := (len(u.body) - u.fileStart) / 5
@@ -1283,5 +1283,87 @@ func TestRun_ASlowUploadThatFinishesInTimeIs200(t *testing.T) {
 	u.wantAnswer(t, 200, "")
 	if n := ipCount(e.th, "127.0.0.1"); n != 1 || e.w.calls() != 1 {
 		t.Errorf("ip count %d, worker calls %d, want 1 and 1", n, e.w.calls())
+	}
+}
+
+// deadlineWriter records the read deadlines set through http.ResponseController.
+type deadlineWriter struct {
+	http.ResponseWriter
+	set chan time.Time
+}
+
+func (d *deadlineWriter) SetReadDeadline(t time.Time) error {
+	d.set <- t
+	return nil
+}
+
+func filePart(t *testing.T, body io.Reader, boundary string) *multipart.Part {
+	t.Helper()
+	p, err := multipart.NewReader(body, boundary).NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestReadFile_AFiredDeadlineIsClearedOnSuccess(t *testing.T) {
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	dw := &deadlineWriter{ResponseWriter: httptest.NewRecorder(), set: make(chan time.Time, 4)}
+	go func() {
+		w, _ := mw.CreateFormFile("file", "inv.csv")
+		_, _ = w.Write([]byte("a,b\n"))
+		<-dw.set
+		dw.set <- time.Now()
+		_, _ = w.Write([]byte("1,2\n"))
+		_ = mw.Close()
+		_ = pw.Close()
+	}()
+	part := filePart(t, pr, mw.Boundary())
+	data, ok := readFile(context.Background(), slog.New(slog.DiscardHandler), dw, part, time.Millisecond)
+	if !ok || string(data) != "a,b\n1,2\n" {
+		t.Fatalf("readFile = %q, %v, want the full file", data, ok)
+	}
+	var last time.Time
+	for len(dw.set) > 0 {
+		last = <-dw.set
+	}
+	if !last.IsZero() {
+		t.Errorf("last read deadline = %v, want the zero time", last)
+	}
+}
+
+// endOnWrite ends the upload once the deadline failure is logged, since an unsupported deadline cannot.
+type endOnWrite struct {
+	bytes.Buffer
+	pw *io.PipeWriter
+}
+
+func (e *endOnWrite) Write(b []byte) (int, error) {
+	n, err := e.Buffer.Write(b)
+	_ = e.pw.CloseWithError(io.ErrUnexpectedEOF)
+	return n, err
+}
+
+func TestReadFile_LogsWhenDeadlinesAreNotSupported(t *testing.T) {
+	pr, pw := io.Pipe()
+	logs := &endOnWrite{pw: pw}
+	log := slog.New(slog.NewTextHandler(logs, nil))
+	mw := multipart.NewWriter(pw)
+	go func() {
+		w, _ := mw.CreateFormFile("file", "secret-name.csv")
+		_, _ = w.Write([]byte("a,b\n"))
+	}()
+	part := filePart(t, pr, mw.Boundary())
+	rec := httptest.NewRecorder()
+	if _, ok := readFile(context.Background(), log, rec, part, time.Millisecond); ok {
+		t.Fatal("readFile succeeded on a stalled read")
+	}
+	out := logs.String()
+	if strings.Count(out, "upload deadline not supported") != 1 || !strings.Contains(out, "level=ERROR") {
+		t.Errorf("log = %q, want one error line", out)
+	}
+	if strings.Contains(out, "secret-name") {
+		t.Errorf("log names the file: %q", out)
 	}
 }

@@ -41,6 +41,7 @@ const (
 	checkIPSentence          = "This network has run 10 checks today. Try again tomorrow."
 	checkSlowUploadSentence  = "The upload took too long. Try again on a faster connection."
 	checkUnavailableSentence = "The check is unavailable. Try again in a few minutes."
+	checkCeilingSentence     = "The free check has reached its limit for today. Try again tomorrow."
 	checkSignUpSentence      = "This address has used its 3 free checks. Sign up to check every invoice."
 	checkUnreadableSentence  = "We could not read this file."
 	checkTooLargeSentence    = "file is over 15 MiB"
@@ -437,6 +438,9 @@ func workerRefusal(status int, body []byte) (out int, word, text string) {
 	case http.StatusUnprocessableEntity:
 		return status, word, checkUnreadableSentence
 	case http.StatusServiceUnavailable:
+		if word == "ceiling" {
+			return status, word, checkCeilingSentence
+		}
 		return status, word, checkUnavailableSentence
 	}
 	return http.StatusBadGateway, word, checkUnavailableSentence
@@ -448,7 +452,7 @@ func engineNotStarted(status int, word string) bool {
 	case http.StatusConflict, http.StatusBadRequest, http.StatusRequestEntityTooLarge:
 		return true
 	case http.StatusServiceUnavailable:
-		return word == "busy" || word == "unavailable"
+		return word == "busy" || word == "unavailable" || word == "ceiling"
 	}
 	return false
 }

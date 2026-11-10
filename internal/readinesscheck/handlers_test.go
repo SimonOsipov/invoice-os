@@ -1021,7 +1021,10 @@ func TestMappingHandler_AFailedSpendReadIsUnavailable(t *testing.T) {
 }
 
 func TestHandlers_PassTheDailyCeiling(t *testing.T) {
-	// The ceiling is D14's $2.00; once AISpendCeilingUSD exists, also assert it equals dailyCeiling.
+	if AISpendCeilingUSD != dailyCeiling {
+		t.Errorf("AISpendCeilingUSD = %q, want %q", AISpendCeilingUSD, dailyCeiling)
+	}
+	// The handlers must pass the constant itself.
 	r := newRig(t)
 	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
 	body, ct := mapForm(t, "csv", []byte("Inv,Total\nA,1\n"))
@@ -1031,8 +1034,8 @@ func TestHandlers_PassTheDailyCeiling(t *testing.T) {
 		t.Fatalf("spend reads = %v, want one per route", got)
 	}
 	for i, c := range got {
-		if c != dailyCeiling {
-			t.Errorf("read %d ceiling = %q, want %q", i, c, dailyCeiling)
+		if c != AISpendCeilingUSD {
+			t.Errorf("read %d ceiling = %q, want %q", i, c, AISpendCeilingUSD)
 		}
 	}
 }

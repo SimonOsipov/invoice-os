@@ -473,6 +473,9 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 const wantCeilingSentence = "The free check has reached its limit for today. Try again tomorrow."
 
 func TestRun_WorkerCeilingIsTheCeilingSentence(t *testing.T) {
+	if checkCeilingSentence != wantCeilingSentence {
+		t.Fatalf("checkCeilingSentence = %q, want %q", checkCeilingSentence, wantCeilingSentence)
+	}
 	e := newCheckEnv(t, true)
 	e.w.answer(503, `{"error":"ceiling"}`)
 	wantRefused(t, e.runOK(t, checkIP), 503, wantCeilingSentence)

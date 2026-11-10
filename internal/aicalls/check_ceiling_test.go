@@ -45,6 +45,9 @@ func TestCeiling_ATenantAICallProceedsPastTheCheckCeiling(t *testing.T) {
 
 	// D14's $2.00 copied from the decision; readinesscheck.AISpendCeilingUSD must equal it.
 	const ceiling = "2.00"
+	if readinesscheck.AISpendCeilingUSD != ceiling {
+		t.Fatalf("AISpendCeilingUSD = %q, want %q", readinesscheck.AISpendCeilingUSD, ceiling)
+	}
 	id := uuid.NewString()
 	t.Cleanup(func() { _, _ = e.super.Exec(context.Background(), `DELETE FROM ai_calls WHERE id = $1`, id) })
 	if _, err := e.super.Exec(ctx,

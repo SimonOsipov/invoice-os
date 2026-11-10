@@ -6050,22 +6050,12 @@ const EXTR09_PNG_BYTES = new Uint8Array(
   ),
 )
 
-// A well-formed EMPTY zip: the 22-byte end-of-central-directory record with a comment. A .docx
-// IS a zip. The comment carries the uniqueness.
-//
-// NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
-// these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
-// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard-2.spec.ts rebuilds it as
-// uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
-// path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
+// A .docx with the zip signature and unreadable content; the uuid carries the uniqueness.
+// EXTR-15-02 made DOCX boxless, so the worker hands these bytes to the reader, which refuses
+// them: the job dead-letters at text_not_read (import-wizard-2.spec.ts rebuilds it as
+// uniqueEmptyDocxBytes() for EXTR15-E2E-04). The previewer path still reaches `unrenderable`.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
-  const comment = new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)
-  const out = new Uint8Array(22 + comment.length)
-  out.set([0x50, 0x4b, 0x05, 0x06], 0) // PK\x05\x06; the 16 bytes that follow are all zero
-  out[20] = comment.length & 0xff
-  out[21] = (comment.length >> 8) & 0xff
-  out.set(comment, 22)
-  return out
+  return new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)])
 }
 
 // Fresh bytes per upload, contract-document-upload.spec.ts's recipe. Without it the

@@ -273,18 +273,10 @@ function uniqueGoldenDocxBytes(): Buffer {
   return out
 }
 
-// A well-formed but EMPTY zip named *.docx -- invoice-surfaces.spec.ts's extr09Docx recipe,
-// rebuilt here because importing it would re-register that file's own tests. 22 bytes of EOCD
-// (PK\x05\x06 then 16 zero bytes) plus a comment that carries the uniqueness. A DOCX is
-// boxless, so the worker skips the render entirely (EXTR-15-02) and this reaches the reader,
-// which cannot convert it: docling answers 422 and the job dead-letters at text_not_read.
+// A *.docx with the zip signature and unreadable content: it uploads, the worker skips the
+// render (EXTR-15-02), and docling answers 422, so the job dead-letters at text_not_read.
 function uniqueEmptyDocxBytes(): Buffer {
-  const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
-  const out = Buffer.alloc(22 + comment.length)
-  out.set([0x50, 0x4b, 0x05, 0x06], 0)
-  out.writeUInt16LE(comment.length, 20)
-  out.set(comment, 22)
-  return out
+  return Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')])
 }
 
 // Steps the viewport down until the pane stops shrinking and returns that viewport width.

@@ -65,7 +65,7 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	appURL := os.Getenv("DATABASE_URL")
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || superURL == "" {
-		t.Skip("invoice db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("invoice db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-invoice`)")
 	}
 	ctx := context.Background()
 

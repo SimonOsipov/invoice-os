@@ -9,6 +9,9 @@ paths:
 # PR previews on Google Cloud
 
 - `dev-env.yml` deploys each ready PR, except a Dependabot-only one, to `ascomply-preview` as `<svc>-pr-<N>` on run.app.
+- A draft PR deploys only when it changes a spec under `e2e/smoke/`, `e2e/api/` or `e2e/topology/`. It runs only those specs, with `--retries=0`, through `scripts/ci/e2e-suite.sh`. `draft-teardown` deletes its preview after the run.
+- `changes` fails a PR whose head does not contain `origin/main`, or `origin/<base>` for another base. No preview job runs.
+- `preview.sh` retries a `preview-db` or `grant` execution up to 3 times only when its log shows SQLSTATE 53300 (`TestPreviewJobRetriesOnlyOnTooManyConnections`).
 - Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
 - A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
 - A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.
@@ -40,5 +43,5 @@ paths:
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
 - Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
 - Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and hold at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Past the cap, any open preview's services can fail with 53300.
-- PR previews hold at most 2 slots. The third is the nightly's. A new PR past 2 fails in `prepare-env` with one `::error::` from `preview cap for a PR`, before it creates anything. A PR that already holds a preview is not refused. A nightly entry never counts against a PR. `preview.sh cap <pr|nightly>` decides (`TestDevEnvNightly_PRsLeaveTheNightlyItsSlot`, `TestPreviewCapAllowsNoMixOverTheBudget`).
+- PR previews hold at most 2 slots. The third is the nightly's. A new PR past 2 polls in `preview cap for a PR` like the nightly step below, then fails with one `::error::`, before it creates anything. A PR that already holds a preview is not refused. A nightly entry never counts against a PR. `preview.sh cap <pr|nightly>` decides (`TestDevEnvNightly_PRsLeaveTheNightlyItsSlot`, `TestPreviewCapAllowsNoMixOverTheBudget`).
 - In a nightly run, `preview cap reached` polls `preview.sh cap nightly` and fails only if 3 PR previews stay open (`TestDevEnvNightly_CapStepWaitsForASlot`).

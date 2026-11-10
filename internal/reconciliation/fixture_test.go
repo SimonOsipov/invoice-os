@@ -150,7 +150,7 @@ func requireHarness(t *testing.T) *harness {
 	t.Helper()
 	if h == nil {
 		t.Skip("reconciliation suite skipped: set DATABASE_URL, DATABASE_MIGRATION_URL, " +
-			"DATABASE_SUPERUSER_URL and DATABASE_READER_URL (the same four `make test-rls` uses)")
+			"DATABASE_SUPERUSER_URL and DATABASE_READER_URL (or run `make test-db PKGS=./internal/reconciliation/...`)")
 	}
 	return h
 }

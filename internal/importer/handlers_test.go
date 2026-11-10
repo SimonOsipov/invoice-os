@@ -22,7 +22,7 @@
 //	IMP-API-06 TestCreateHandler_EntityNotFound404
 //	IMP-API-07 TestCreateHandler_XLSX201
 //
-// Run: `make test-rls` (or `make test-audit`) for the DB-backed cases, or
+// Run: `make test-db PKGS=./internal/importer/...` for the DB-backed cases, or
 // directly, e.g.:
 //
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable" \

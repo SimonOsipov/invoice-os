@@ -358,6 +358,46 @@ func (rc *Receipts) Update(root string, r Row, v Verdict) error {
 	return os.WriteFile(rc.path, b, 0o644)
 }
 
+// Summary is the full-run proof that .claude/hooks/require-mutation-replay.py reads before a PR opens.
+type Summary struct {
+	SHA        string `json:"sha"`
+	Rows       int    `json:"rows"`
+	RowsSHA256 string `json:"rows_sha256"`
+	Proven     int    `json:"proven"`
+	NotProven  int    `json:"not_proven"`
+	Invalid    int    `json:"invalid"`
+}
+
+var mutationsName = regexp.MustCompile(`^mutations-(.+)\.jsonl$`)
+
+// SummaryPath maps <dir>/mutations-<STORY>.jsonl to <dir>/replay-<STORY>.json; any other name gives "".
+func SummaryPath(rowsFile string) string {
+	m := mutationsName.FindStringSubmatch(filepath.Base(rowsFile))
+	if m == nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(rowsFile), "replay-"+m[1]+".json")
+}
+
+// NewSummary hashes the rows file bytes, so an edited row invalidates the proof.
+func NewSummary(sha string, rows []byte, total int, counts map[Verdict]int) Summary {
+	sum := sha256.Sum256(rows)
+	return Summary{sha, total, hex.EncodeToString(sum[:]), counts[Proven], counts[NotProven], counts[Invalid]}
+}
+
+// WriteSummary writes through a rename, so the hook never reads a half-written file.
+func WriteSummary(path string, s Summary) error {
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // LockFile holds the lock of the worktree's running replay.
 const LockFile = ".ralph/mutation-replay.lock"
 

@@ -88,7 +88,7 @@ describe('parseMeasureArgs', () => {
 type Rect = { x: number; y: number; width: number; height: number }
 type Anim = { effect: { target: unknown; getComputedTiming: () => { endTime: number } }; finished: Promise<unknown> }
 type FakeEl = {
-  ownerDocument: { getAnimations: () => Anim[] }
+  ownerDocument: { fonts: { ready: Promise<void> }; getAnimations: () => Anim[] }
   contains: (n: unknown) => boolean
   getBoundingClientRect: () => Rect
   styles: Record<string, string>
@@ -105,7 +105,7 @@ const KNOWN = new Set(['width', 'height', 'padding-left'])
 
 function fakeDoc() {
   const animations: Anim[] = []
-  return { animations, doc: { getAnimations: () => animations } }
+  return { animations, doc: { fonts: { ready: Promise.resolve() }, getAnimations: () => animations } }
 }
 
 function fakeElement(doc: FakeEl['ownerDocument'], rect: () => Rect, styles: Record<string, string> = {}): FakeEl {

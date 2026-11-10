@@ -63,6 +63,16 @@ func main() {
 		os.Exit(2)
 	}
 
+	// HEAD before any mutation: the proof names the commit the rows ran on.
+	head := ""
+	if !*changed {
+		out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mutationreplay: WARNING no HEAD sha, no replay summary: %v\n", err)
+		}
+		head = strings.TrimSpace(string(out))
+	}
+
 	counts := map[Verdict]int{}
 	total, unchanged := 0, 0
 	control := OnceControl(runTest)
@@ -106,6 +116,11 @@ func main() {
 		summary += fmt.Sprintf(", %d unchanged", unchanged)
 	}
 	fmt.Println(summary)
+	if path := SummaryPath(rowsFile); head != "" && path != "" {
+		if err := WriteSummary(path, NewSummary(head, data, total, counts)); err != nil {
+			fmt.Fprintf(os.Stderr, "mutationreplay: WARNING replay summary not saved: %v\n", err)
+		}
+	}
 	// Zero rows proves nothing, so it is not a pass.
 	if total == 0 || counts[Proven]+unchanged != total {
 		os.Exit(1)

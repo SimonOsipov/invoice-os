@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -454,4 +457,52 @@ func TestLock_RefusesASecondRunUntilTheFirstEnds(t *testing.T) {
 		t.Fatalf("Lock after release = %v", err)
 	}
 	again.Close()
+}
+
+func TestSummaryPath(t *testing.T) {
+	for in, want := range map[string]string{
+		".ralph/mutations-AUTH-18.jsonl":  filepath.Join(".ralph", "replay-AUTH-18.json"),
+		"/w/.ralph/mutations-F-192.jsonl": "/w/.ralph/replay-F-192.json",
+		".ralph/rows.jsonl":               "",
+		".ralph/mutations-.jsonl":         "",
+		".ralph/mutations-X.jsonl.proven": "",
+	} {
+		if got := SummaryPath(in); got != want {
+			t.Errorf("SummaryPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWriteSummary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "replay-X-1.json")
+	rows := []byte("{\"ac\":\"a\"}\n{\"ac\":\"b\"}\n{\"ac\":\"c\"}\n")
+	counts := map[Verdict]int{Proven: 1, NotProven: 1, Invalid: 1}
+	if err := WriteSummary(path, NewSummary("abc123", rows, 3, counts)); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, b)
+	}
+	sum := sha256.Sum256(rows)
+	// The hook reads these keys by name.
+	want := map[string]any{
+		"sha": "abc123", "rows": 3.0, "rows_sha256": hex.EncodeToString(sum[:]),
+		"proven": 1.0, "not_proven": 1.0, "invalid": 1.0,
+	}
+	if len(got) != len(want) {
+		t.Errorf("summary = %v, want keys %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("summary[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind: %v", err)
+	}
 }

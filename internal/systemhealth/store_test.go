@@ -25,7 +25,7 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	t.Helper()
 	appURL, superURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || superURL == "" {
-		t.Skip("systemhealth db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("systemhealth db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./internal/systemhealth/...`)")
 	}
 	ctx := context.Background()
 	super, err := pgxpool.New(ctx, superURL)

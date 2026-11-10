@@ -316,7 +316,7 @@ func TestDevEnvDependabot_CommitAuthorsHoldsNoIDToken(t *testing.T) {
 
 func TestDevEnvDependabot_RootJobsKeepTheirOtherConditions(t *testing.T) {
 	t.Parallel()
-	ready := "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond
+	ready := "needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && " + authorCond
 	for _, c := range []struct {
 		id    string
 		needs []string

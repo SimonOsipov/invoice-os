@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { flakyInChangedFiles, readFlakyDir } from './flakyGate'
+import { commentOnlyDiff, flakyInChangedFiles, gateHits, readFlakyDir } from './flakyGate'
 import FlakyReporter, { type FlakySpec, type TestLike } from './flakyReporter'
 
 const ROOT = '/home/runner/work/invoice-os/invoice-os'
@@ -109,5 +109,33 @@ describe('flakyGate CLI', () => {
 
   it('exits 0 when the flaky spec was not changed by the PR', () => {
     expect(cli([local], ['e2e/api/import.spec.ts']).code).toBe(0)
+  })
+})
+
+describe('comment-only exemption', () => {
+  const diff = (...lines: string[]) =>
+    ['diff --git a/e2e/x.spec.ts b/e2e/x.spec.ts', '--- a/e2e/x.spec.ts', '+++ b/e2e/x.spec.ts', '@@ -3,0 +4,2 @@', ...lines].join('\n')
+
+  it('exempts a diff of comments and blank lines only', () => {
+    expect(commentOnlyDiff(diff('+// why the wait', '-  // old note', '+', '+/** doc */', '+ * block line', '+ */'))).toBe(true)
+  })
+
+  it('keeps a diff that changes a code line', () => {
+    expect(commentOnlyDiff(diff('+// note', "+  await page.click('#go')"))).toBe(false)
+    expect(commentOnlyDiff(diff("+/* note */ await page.click('#go')"))).toBe(false)
+    expect(commentOnlyDiff(diff('-  expect(x).toBe(1) // was'))).toBe(false)
+  })
+
+  it('drops only the comment-only hit, and keeps a hit whose diff git could not produce', () => {
+    const comments = spec('e2e/smoke/a.spec.ts')
+    const code = spec('e2e/smoke/b.spec.ts')
+    const unknown = spec('e2e/smoke/c.spec.ts')
+    const diffs: Record<string, string | undefined> = {
+      'e2e/smoke/a.spec.ts': diff('+// only a comment'),
+      'e2e/smoke/b.spec.ts': diff('+  await page.reload()'),
+      'e2e/smoke/c.spec.ts': undefined,
+    }
+    expect(gateHits([comments, code, unknown], ROOT, (f) => diffs[f])).toEqual([code, unknown])
+    expect(gateHits([comments], ROOT)).toEqual([comments])
   })
 })

@@ -712,13 +712,14 @@ func TestXLSXRows_DeadlineStopsDecodeMidSheet(t *testing.T) {
 		t.Fatalf("WriteToBuffer: %v", err)
 	}
 
+	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+	xlsxDecodeTimeout = time.Hour // the baseline must finish on a loaded machine, past the 30 s production cap
 	start := time.Now()
 	if _, err := xlsxRows(context.Background(), bytes.NewReader(buf.Bytes()), 1); err != nil {
 		t.Fatalf("full decode: %v", err)
 	}
 	full := time.Since(start)
 
-	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
 	xlsxDecodeTimeout = max(full/20, time.Millisecond)
 	start = time.Now()
 	_, err = xlsxRows(context.Background(), bytes.NewReader(buf.Bytes()), 1)

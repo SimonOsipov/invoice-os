@@ -25,7 +25,7 @@
 //	IB-STORE-05 TestStoreEntitySupplier_ReturnsNameAndNilTIN
 //	IB-STORE-06 TestStoreEntitySupplier_NotFoundOutsideTenant
 //
-// Run: `make test-rls` (or `make test-audit`), or directly, e.g.:
+// Run: `make test-db PKGS=./internal/importer/...`, or directly, e.g.:
 //
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable" \
 //	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable" \
@@ -60,7 +60,7 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	appURL := os.Getenv("DATABASE_URL")
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || superURL == "" {
-		t.Skip("importer db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("importer db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./internal/importer/...`)")
 	}
 	ctx := context.Background()
 

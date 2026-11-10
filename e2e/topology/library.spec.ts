@@ -483,7 +483,7 @@ test.describe('library layout at wide widths', () => {
     const text = [aside(page).getByText('ASComply', { exact: true }), aside(page).getByText('AFRICA', { exact: true }), aside(page).getByText('LIBRARY', { exact: true })]
     for (const t of text) await expect(t, 'lockup text never drew').toBeVisible()
     const measured: Record<string, unknown>[] = []
-    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS, 390]) {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
       await resize(page, width, 1080)
       const read = async (): Promise<{ problems: string[]; reading: unknown }> => {
         await settleAnimations(aside(page), mark)

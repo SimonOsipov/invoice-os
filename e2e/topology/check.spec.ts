@@ -285,8 +285,9 @@ test.describe('check layout', () => {
     const near = (a: number, b: number, what: string) => expect(Math.abs(a - b), `${what}: ${a} vs ${b}`).toBeLessThanOrEqual(0.5)
     await openCheck(page, 1280)
     near(await px(page.locator('.check-head'), 'height'), 72, '1280 header')
-    near((await rectOf(page.locator('.check-head .ds-logo-mark'), 'mark')).width, 30, '1280 header mark')
-    near((await rectOf(page.locator('.check-foot .ds-logo-mark'), 'mark')).width, 24, '1280 footer mark')
+    // Computed width, not the box: .asc-mark scales the drawn mark by 128/144.
+    near(await px(page.locator('.check-head .ds-logo-mark'), 'width'), 30, '1280 header mark')
+    near(await px(page.locator('.check-foot .ds-logo-mark'), 'width'), 24, '1280 footer mark')
     near(await px(page.locator('.check-hero-pad'), 'padding-top'), 64, '1280 hero top')
     near(await px(page.locator('.check-hero-pad'), 'padding-bottom'), 76.8, '1280 hero bottom')
     near(await px(page.locator('.check-lead'), 'font-size'), 16, '1280 lead')
@@ -402,6 +403,17 @@ test.describe('check layout', () => {
       for (const r of rects) expect(enclosesRect(limits, r, 1), `${label}: a limit cell is outside the grid`).toBe(true)
       noOverlap(rects, label)
       expect(example.x >= 0 && example.x + example.width <= width + 1, `${label}: the example is outside the viewport`).toBe(true)
+      // The fixed label column: each label fits it in full and ends before its message.
+      const labels = page.locator('.check-mail-row b')
+      expect(await labels.count(), `${label}: no example rows`).toBeGreaterThan(0)
+      for (let i = 0; i < (await labels.count()); i++) {
+        const b = labels.nth(i)
+        expect(await b.evaluate((el) => el.scrollWidth <= el.clientWidth), `${label}: example label ${i} is clipped`).toBe(true)
+        const row = b.locator('xpath=..')
+        const [lr, vr, rr] = [await rectOf(b, 'label'), await rectOf(row.locator('span'), 'message'), await rectOf(row, 'row')]
+        expect(rectsOverlap(lr, vr), `${label}: example label ${i} overlaps its message`).toBe(false)
+        expect(enclosesRect(rr, lr, 1) && enclosesRect(rr, vr, 1), `${label}: example row ${i} content leaves the row`).toBe(true)
+      }
       await noSidewaysScroll(page, label)
     }
     for (const width of WIDE_WIDTHS) await check(width, false)

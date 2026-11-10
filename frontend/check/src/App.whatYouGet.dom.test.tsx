@@ -56,6 +56,17 @@ describe('what you get', () => {
     expect(cells.map((c) => [text(c.querySelector('b')!), text(c.querySelector('span')!)])).toEqual(WHAT_LIMITS.map((l) => [l.n, l.caption]))
     const cta = [...s.querySelectorAll('a')].find((a) => text(a) === WHAT_CTA)!
     expect(cta.getAttribute('href')).toBe('#check')
+    // Literal numbers and words: the comparisons above restate WHAT_*.
+    expect(cells.map((c) => text(c.querySelector('b')!))).toEqual(['2', '3', '15 MiB', '4'])
+    expect(cells.map((c) => text(c.querySelector('span')!))).toEqual([
+      'invoices checked per file',
+      'free checks per email address',
+      'largest file, one at a time',
+      'file types: CSV, XLSX, PDF, DOCX',
+    ])
+    expect(text(s.querySelector('.t-eyebrow')!)).toBe('WHAT YOU GET')
+    expect(text(h2)).toBe('Two invoices, checked rule by rule.The results land in your inbox.')
+    expect(text(cta)).toBe('Check a file')
   })
 
   it('whatYouGet_exampleFollowsTheRealMail', () => {

@@ -96,6 +96,13 @@ describe('check page frame', () => {
       TRUST_CUES.map((c) => [c.title, c.title + c.text]),
     )
     expect(container.textContent!.split(CHECK_INTRO)).toHaveLength(2)
+    // The design's words, literal: the comparison above restates TRUST_CUES.
+    expect(lis.map((li) => li.textContent)).toEqual([
+      'Free3 checks per email address',
+      'No accountJust an email for the results',
+      'File not keptDeleted when the check finishes',
+      'Results by emailNever shown on this page',
+    ])
   })
 
   it('frame_stripFollowsASpreadsheet', async () => {

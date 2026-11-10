@@ -1,6 +1,7 @@
 // A readiness check through the deployed gateway: the worker mails the results, the spec reads the
 // captured mail. The nightly enforces the per-IP limit of 10 a day: the group makes 4 checks per attempt.
 import { test, expect } from '@playwright/test'
+import { nightlyTarget } from '../targets'
 import { capturedMail, contactsDirect, postCheck, workerPost, type CheckMapping } from './client'
 
 // internal/gateway/readiness_check.go: checkConsentSentence, checkSignUpSentence, checkIPSentence.
@@ -44,6 +45,8 @@ const FIRST_BUYER = 'Beta Ltd'
 
 const freshEmail = () => `readiness-${crypto.randomUUID()}@example.com`
 const POLL = { timeout: 30_000, intervals: [500, 1000, 2000] }
+// The nightly delivers to the real vendors, which is slower than a PR's fake mode.
+const DELIVERY_POLL = { timeout: nightlyTarget() ? 120_000 : 30_000, intervals: [500, 1000, 2000] }
 
 // ceiling: a third attempt in one window can meet the 429; it is an environment failure, not a product one.
 async function run(email: string) {
@@ -90,11 +93,13 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
       }
     })
 
-    test('the address becomes a readiness check contact with no marketing', async () => {
+    test('the address becomes a readiness check contact opted in to Marketing', async () => {
+      test.setTimeout(nightlyTarget() ? 180_000 : 60_000)
       let row: Awaited<ReturnType<typeof contactsDirect>> = null
-      await expect.poll(async () => (row = await contactsDirect(email)) !== null, POLL).toBe(true)
+      await expect.poll(async () => ((row = await contactsDirect(email))?.resend.delivered_at ?? null) !== null, DELIVERY_POLL).toBe(true)
       expect(row!.tags).toContain(TAG)
-      expect(row!.marketing_eligible).toBe(false)
+      expect(row!.marketing_eligible).toBe(true)
+      expect(row!.resend.applies).toBe(true)
     })
 
     test('the fourth run on one address is told to sign up', async () => {

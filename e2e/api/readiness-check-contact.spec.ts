@@ -2,7 +2,7 @@
 // the nightly reaches the test HubSpot portal. Fresh @example.com addresses; the nightly sweep deletes them.
 import { test, expect } from '@playwright/test'
 import { expectedContactsMode, nightlyTarget } from '../targets'
-import { fleetHeaders, type ContactMe } from './client'
+import { contactsMe, fleetHeaders, registerFormAccount, type ContactMe } from './client'
 import { googleIdToken, previewSecret, serviceUrl } from './preview'
 
 const CONSENT = 'Yes, send me product news and offers.'
@@ -11,6 +11,8 @@ const POLL = { timeout: nightlyTarget() ? 120_000 : 30_000, intervals: [500, 100
 // The tag contacts/me returns (internal/notifications/store.go); HubSpot's option is readiness_check (dealSourceReadinessCheck).
 const TAG = 'readiness check'
 const HS_OPTION = 'readiness_check'
+// The registrant tag contacts/me returns (internal/notifications/store.go).
+const REGISTERED = 'registered'
 // internal/notifications/deal.go: the fallback deal name.
 const DEAL_NAME = 'Readiness check'
 // cmd/notifications/main.go route; internal/notifications/intake.go ReadinessChecksHandler error.
@@ -54,7 +56,7 @@ const freshEmail = () => `readiness-check-${crypto.randomUUID()}@example.com`
 test.describe('readiness check contact (API E2E, notifications intake)', () => {
   if (nightlyTarget()) test.describe.configure({ timeout: 240_000 })
 
-  test('a readiness check makes a consented contact tagged readiness check', async () => {
+  test('a readiness check makes a consented contact tagged readiness check and opted in to Marketing', async () => {
     const email = freshEmail()
     const res = await readiness(email, CONSENT)
     expect(res.status, JSON.stringify(res.body)).toBe(202)
@@ -64,16 +66,44 @@ test.describe('readiness check contact (API E2E, notifications intake)', () => {
       .poll(
         async () => {
           row = await me(email)
-          return row?.hubspot.delivered_at != null
+          return row?.hubspot.delivered_at != null && row.resend.delivered_at != null
         },
         POLL,
       )
       .toBe(true)
     expect(row!.tags).toEqual([TAG])
-    expect(row!.marketing_eligible).toBe(false)
-    expect(row!.resend.applies).toBe(false)
-    expect(row!.resend.delivered_at).toBeNull()
+    expect(row!.marketing_eligible).toBe(true)
+    expect(row!.resend.applies).toBe(true)
     expect(row!.mode).toBe(expectedContactsMode())
+  })
+
+  test('an unticked registrant who runs a check becomes marketing-eligible', async () => {
+    test.setTimeout(nightlyTarget() ? 360_000 : 120_000)
+    const { account, token } = await registerFormAccount('readiness-reg')
+    let row: ContactMe | null = null
+    await expect
+      .poll(
+        async () => {
+          row = await contactsMe(token)
+          return row?.hubspot.delivered_at != null && row.resend.delivered_at != null
+        },
+        POLL,
+      )
+      .toBe(true)
+    expect(row!.marketing_eligible).toBe(false)
+
+    const res = await readiness(account.email, CONSENT)
+    expect(res.status, JSON.stringify(res.body)).toBe(202)
+    await expect
+      .poll(
+        async () => {
+          row = await contactsMe(token)
+          return row?.marketing_eligible === true && row.resend.delivered_at != null
+        },
+        POLL,
+      )
+      .toBe(true)
+    expect(row!.tags).toEqual([REGISTERED, TAG])
   })
 
   test('a readiness check without consent is refused and stores nothing', async () => {

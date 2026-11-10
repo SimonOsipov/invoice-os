@@ -133,3 +133,58 @@ func TestFieldLabel_EveryGlobalRuleTargetHasALabel(t *testing.T) {
 		t.Fatal("no rule targets: the migrated database has no global rules")
 	}
 }
+
+// spendReacher is the method under test; asserted on an interface so the package compiles before it exists.
+type spendReacher interface {
+	AISpendReached(ctx context.Context, ceiling string) (bool, error)
+}
+
+func TestStore_AISpendReachedAtTheCeilingNotBelow(t *testing.T) {
+	pool := testPool(t)
+	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
+	if superURL == "" {
+		t.Skip("readinesscheck spend test skipped: set DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./internal/readinesscheck/...`)")
+	}
+	ctx := context.Background()
+	super, err := pgxpool.New(ctx, superURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(super.Close)
+
+	// A NULL-tenant row of today, so the sum is above 0 and a stub that returns 0 fails the ceiling at S.
+	id := uuid.NewString()
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM ai_calls WHERE id = $1`, id) })
+	if _, err := super.Exec(ctx,
+		`INSERT INTO ai_calls (id, tenant_id, client, purpose, model, input_tokens, output_tokens, cost, latency_ms, attempts, outcome)
+		 VALUES ($1, NULL, 'ai', 'public-check', 'test/model', 1, 1, 0.25, 1, 1, 'ok')`, id); err != nil {
+		t.Fatalf("seed a NULL-tenant ai_calls row: %v", err)
+	}
+
+	var s, above, below string
+	if err := pool.QueryRow(ctx,
+		`SELECT public.public_check_ai_cost_today()::text,
+		        (public.public_check_ai_cost_today() + 0.000001)::text,
+		        (public.public_check_ai_cost_today() - 0.000001)::text`).Scan(&s, &above, &below); err != nil {
+		t.Fatalf("read public.public_check_ai_cost_today as invoice_app: %v", err)
+	}
+
+	store, ok := any(&Store{Pool: pool}).(spendReacher)
+	if !ok {
+		t.Fatal("Store has no AISpendReached(ctx, ceiling string) (bool, error)")
+	}
+	for _, c := range []struct {
+		ceiling string
+		want    bool
+	}{
+		{s, true},      // at the ceiling: reached
+		{above, false}, // 0.000001 above: not reached
+		{below, true},
+		{"0", true},
+	} {
+		got, err := store.AISpendReached(ctx, c.ceiling)
+		if err != nil || got != c.want {
+			t.Errorf("AISpendReached(%q) with spend %s = %v, %v; want %v", c.ceiling, s, got, err, c.want)
+		}
+	}
+}

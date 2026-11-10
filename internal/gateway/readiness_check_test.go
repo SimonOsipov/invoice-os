@@ -338,6 +338,14 @@ func TestRun_AMappedIPv6AddressCountsAsItsIPv4(t *testing.T) {
 	wantRefused(t, e.runOK(t, "::ffff:"+checkIP), 429, checkIPSentence)
 }
 
+func TestRun_AZonedIPv6AddressCountsPerSlash64WithoutItsZone(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for range ReadinessCheckPerIP {
+		e.runOK(t, "fe80::1%eth0")
+	}
+	wantRefused(t, e.runOK(t, "fe80::2%eth1"), 429, checkIPSentence)
+}
+
 func TestRun_RefundReturnsTheSlash64Count(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.w.answer(409, `{"error":"sign_up"}`)
@@ -1036,6 +1044,14 @@ type rawUpload struct {
 	fileStart int // offset of the first file byte
 }
 
+// uploadServer closes after the test's connections: Close waits for handlers, so a handler that never returns would hang the test.
+func uploadServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func dialUpload(t *testing.T, srv *httptest.Server, path string, parts ...mpPart) *rawUpload {
 	t.Helper()
 	var buf bytes.Buffer
@@ -1073,9 +1089,9 @@ func (u *rawUpload) send(t *testing.T, b []byte) {
 	}
 }
 
-// answer reads the response, waiting at most 5 s.
+// answer reads the response, waiting at most 3 s.
 func (u *rawUpload) answer() (status int, errText string, err error) {
-	_ = u.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = u.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(u.conn), nil)
 	if err != nil {
 		return 0, "", err
@@ -1112,37 +1128,38 @@ var slowFile = bytes.Repeat([]byte("a,b\n1,2\n"), 8192)
 
 func TestRun_AStalledUploadIs408AndRefunded(t *testing.T) {
 	e := newCheckEnv(t, true)
+	e.runOK(t, "127.0.0.1")
+	calls := e.w.calls()
 	e.rc.uploadTimeout = 300 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	u.send(t, u.body[:u.fileStart+len(slowFile)/2])
 	u.wantAnswer(t, 408, checkSlowUploadSentence)
 	waitSlotsFree(t, e)
-	if n := ipCount(e.th, "127.0.0.1"); n != 0 || e.w.calls() != 0 {
-		t.Errorf("ip count %d, worker calls %d, want 0 and 0", n, e.w.calls())
+	if n := ipCount(e.th, "127.0.0.1"); n != 1 || e.w.calls() != calls {
+		t.Errorf("ip count %d, new worker calls %d, want 1 (the earlier run only: one refund) and 0", n, e.w.calls()-calls)
 	}
 }
 
 func TestMapping_AStalledUploadIs408(t *testing.T) {
 	e := newCheckEnv(t, true)
+	e.runOK(t, "127.0.0.1")
+	calls := e.w.calls()
 	e.rc.uploadTimeout = 300 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.mapping))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.mapping))
 	u := dialUpload(t, srv, "/readiness-check/mapping", mpPart{"file", "inv.csv", slowFile})
 	u.send(t, u.body[:u.fileStart+len(slowFile)/2])
 	u.wantAnswer(t, 408, checkSlowUploadSentence)
 	waitSlotsFree(t, e)
-	if e.w.calls() != 0 {
-		t.Errorf("worker calls = %d, want 0", e.w.calls())
+	if n := ipCount(e.th, "127.0.0.1"); n != 1 || e.w.calls() != calls {
+		t.Errorf("ip count %d, new worker calls %d, want 1 (mapping neither counts nor refunds) and 0", n, e.w.calls()-calls)
 	}
 }
 
 func TestRun_StalledUploadsFreeEverySlot(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.rc.uploadTimeout = 300 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	var ups []*rawUpload
 	for range heldUploads {
 		u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
@@ -1161,8 +1178,7 @@ func TestRun_StalledUploadsFreeEverySlot(t *testing.T) {
 func TestRun_TheDeadlineStartsAtTheSlot(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.rc.uploadTimeout = time.Second
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	consent := bytes.Index(u.body, []byte(`name="consent_text"`))
 	file := bytes.Index(u.body, []byte(`name="file"`))
@@ -1181,11 +1197,10 @@ func TestRun_ASlowWorkerAfterAFastUploadStillAnswers200(t *testing.T) {
 	t.Cleanup(release)
 	time.AfterFunc(1500*time.Millisecond, release)
 	var ctxErr atomic.Value
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := uploadServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.rc.run(w, r)
 		ctxErr.Store(struct{ err error }{r.Context().Err()})
 	}))
-	defer srv.Close()
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	u.send(t, u.body)
 	u.wantAnswer(t, 200, "")
@@ -1207,8 +1222,7 @@ func TestReadinessCheck_UploadTimeoutIs90Seconds(t *testing.T) {
 func TestRun_AnUploadStillTricklingAtTheLimitIs408(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.rc.uploadTimeout = 300 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", make([]byte, 1<<20))...)
 	u.send(t, u.body[:u.fileStart])
 	type answer struct {
@@ -1254,8 +1268,7 @@ func TestRun_AnUploadStillTricklingAtTheLimitIs408(t *testing.T) {
 func TestRun_ASlowUploadThatFinishesInTimeIs200(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.rc.uploadTimeout = time.Second
-	srv := httptest.NewServer(http.HandlerFunc(e.rc.run))
-	defer srv.Close()
+	srv := uploadServer(t, http.HandlerFunc(e.rc.run))
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	piece := (len(u.body) - u.fileStart) / 5
 	u.send(t, u.body[:u.fileStart])
@@ -1268,7 +1281,7 @@ func TestRun_ASlowUploadThatFinishesInTimeIs200(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	u.wantAnswer(t, 200, "")
-	if e.w.calls() != 1 {
-		t.Errorf("worker calls = %d, want 1", e.w.calls())
+	if n := ipCount(e.th, "127.0.0.1"); n != 1 || e.w.calls() != 1 {
+		t.Errorf("ip count %d, worker calls %d, want 1 and 1", n, e.w.calls())
 	}
 }

@@ -68,7 +68,7 @@ func checkIPKey(ip string) string {
 	if a.Is4() {
 		return a.String()
 	}
-	return netip.PrefixFrom(a.WithZone(""), 64).Masked().String()
+	return netip.PrefixFrom(a, 64).Masked().String()
 }
 
 // ReadinessCheckSink hands a checked address and its consent text to the notifications /internal/contacts/readiness-checks intake.

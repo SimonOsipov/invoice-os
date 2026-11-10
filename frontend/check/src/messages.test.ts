@@ -16,7 +16,8 @@ describe('refusal', () => {
   })
 
   it('refusal_408KeepsTheGatewaySentence', () => {
-    expect(refusal('run', 408, SLOW_UPLOAD_SENTENCE)).toEqual({ text: SLOW_UPLOAD_SENTENCE, signUp: false })
+    expect(refusal('run', 408, 'The gateway said this.')).toEqual({ text: 'The gateway said this.', signUp: false })
+    expect(refusal('mapping', 408, SLOW_UPLOAD_SENTENCE).text).toBe(SLOW_UPLOAD_SENTENCE)
   })
 
   it('refusal_408WithNoBodySaysTryAFasterConnection', () => {

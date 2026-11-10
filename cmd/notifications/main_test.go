@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"net"
 	"net/http"
@@ -1009,5 +1010,25 @@ func TestNotificationsMain_PurgesExpiredRequestsWhileNewsletterIsOff(t *testing.
 		if time.Now().After(deadline) {
 			t.Fatalf("newsletter off: the expired request was never purged\n%s", p.out)
 		}
+	}
+}
+
+// A nil TokenFunc sends every blog-confirm mail with the bare unsubscribe link and fails nothing else.
+func TestNotificationsMain_HandsThePoolTokensToTheMailSender(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/notifications/main.go: %v", err)
+	}
+	var got []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewsletterClients" && len(c.Args) == 5 {
+				got = append(got, types.ExprString(c.Args[4]))
+			}
+		}
+		return true
+	})
+	if !slices.Equal(got, []string{"accountmail.PoolTokens(pool)"}) {
+		t.Errorf("NewsletterClients calls in main.go pass %v as the TokenFunc, want one call with accountmail.PoolTokens(pool)", got)
 	}
 }

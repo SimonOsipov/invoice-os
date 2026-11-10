@@ -7,10 +7,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -314,5 +316,25 @@ func TestInviteSender_PassesTheTokenFunc(t *testing.T) {
 	}
 	if got := spy.body.String(); !strings.Contains(got, "?t=tok") || strings.Contains(got, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
 		t.Errorf("posted body = %s, want ?t=tok", got)
+	}
+}
+
+// A nil TokenFunc sends every invite and deletion mail with the bare unsubscribe link and fails nothing else.
+func TestTenancyMain_HandsThePoolTokensToTheMailSender(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "inviteSender" && len(c.Args) == 4 {
+				got = append(got, types.ExprString(c.Args[3]))
+			}
+		}
+		return true
+	})
+	if !slices.Equal(got, []string{"accountmail.PoolTokens(pool)"}) {
+		t.Errorf("inviteSender calls in main.go pass %v as the TokenFunc, want one call with accountmail.PoolTokens(pool)", got)
 	}
 }

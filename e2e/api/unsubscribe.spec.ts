@@ -152,7 +152,8 @@ test.describe('unsubscribe link (API E2E)', () => {
 
     test('a later tick is skipped', async () => {
       test.setTimeout(nightlyTarget() ? 240_000 : 60_000)
-      const at = Date.now()
+      // Compare with the earlier delivery, not a clock: the test host and the server disagree on time.
+      const before = (await contactsMe(access))?.resend.delivered_at ?? null
       const res = await notificationsPost(INTAKE, { email: account.email, marketing_consent_text: CONSENT })
       expect(res.status, JSON.stringify(res.body)).toBe(202)
 
@@ -161,7 +162,7 @@ test.describe('unsubscribe link (API E2E)', () => {
         .poll(async () => {
           row = await contactsMe(access)
           const delivered = row?.resend.delivered_at
-          return delivered != null && Date.parse(delivered) >= at
+          return delivered != null && delivered !== before
         }, POLL)
         .toBe(true)
       expect(row!.marketing_unsubscribed).toBe(true)

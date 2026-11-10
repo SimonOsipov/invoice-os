@@ -15,14 +15,18 @@ type metaPut struct{ id, token string }
 
 // fakeAccounts serves the users in pages of perPage and records each PUT; failID makes that PUT fail.
 type fakeAccounts struct {
-	users  []gotrueadmin.AdminUser
-	pages  []int
-	puts   []metaPut
-	failID string
+	users   []gotrueadmin.AdminUser
+	pages   []int
+	puts    []metaPut
+	failID  string
+	listErr error
 }
 
 func (f *fakeAccounts) ListUsers(_ context.Context, page, perPage int) ([]gotrueadmin.AdminUser, error) {
 	f.pages = append(f.pages, page)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	lo, hi := (page-1)*perPage, min(page*perPage, len(f.users))
 	if lo >= len(f.users) {
 		return nil, nil
@@ -116,5 +120,16 @@ func TestUnsubscribeMetadata_AFailedPutRetriesWithoutRewriting(t *testing.T) {
 	}
 	if len(acct.puts) != 2 || acct.puts[0].id != u1.ID || acct.puts[1].id != u2.ID {
 		t.Errorf("puts = %v, want user 1 once then user 2 once", acct.puts)
+	}
+}
+
+func TestUnsubscribeMetadata_AFailedListReturnsTheError(t *testing.T) {
+	e := newEnv(t)
+	acct := &fakeAccounts{users: []gotrueadmin.AdminUser{metaUser(t, e, "")}, listErr: errors.New("list failed")}
+	if err := (&UnsubscribeMetadata{Pool: e.app, Account: acct}).RunOnce(context.Background()); err == nil {
+		t.Error("RunOnce = nil, want the list error")
+	}
+	if len(acct.puts) != 0 {
+		t.Errorf("puts = %v, want none after a failed list", acct.puts)
 	}
 }

@@ -922,7 +922,8 @@ describe('unsubscribeTokenOf', () => {
 
   it('unsubscribeTokenOf refuses a token without a UUID', async () => {
     const { unsubscribeTokenOf } = await import('./client')
-    for (const payload of [{}, { user_metadata: {} }, { user_metadata: { unsubscribe: 'abc' } }]) {
+    const uuid = randomUUID()
+    for (const payload of [{}, { user_metadata: {} }, { user_metadata: { unsubscribe: 'abc' } }, { user_metadata: { unsubscribe: `${uuid}x` } }, { user_metadata: { unsubscribe: `x${uuid}` } }, { user_metadata: { unsubscribe: uuid.toUpperCase() } }, { user_metadata: { unsubscribe: 5 } }]) {
       expect(() => unsubscribeTokenOf(jwtOf(payload))).toThrow(/^the access token holds no unsubscribe token$/)
     }
   })

@@ -260,6 +260,7 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		{`DELETE FROM account_known_devices WHERE user_id::text = $1`, []any{uid}},
 		{`DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, []any{uid, email}},
 	}
+	// ceiling: an address's unsubscribe row is deleted here, so a mail already sent carries a link that then answers 404; revisit if that link must outlive the erase.
 	if !res.superseded {
 		deletes = append(deletes,
 			del{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},

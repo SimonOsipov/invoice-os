@@ -405,3 +405,36 @@ func TestRLS_MailUnsubscribesAppCanLockARow(t *testing.T) {
 		t.Errorf("FOR UPDATE NOWAIT after the lock was released: %v", err)
 	}
 }
+
+// Two rows holding one token would make a link unsubscribe the wrong address.
+func TestRLS_MailUnsubscribesTokenIsUnique(t *testing.T) {
+	muRequireTable(t)
+	ctx := context.Background()
+	a, b := muEmail(t), muEmail(t)
+	token := muAppToken(t, a)
+	if muRowCount(t, a) != 1 {
+		t.Fatalf("the token call for %q left no row", a)
+	}
+	_, err := h.super.Exec(ctx, `INSERT INTO mail_unsubscribes (email, token) VALUES ($1, $2)`, b, token)
+	assertPgRefusal(t, "INSERT of a second row with the same token", err, pgUniqueViolation, "mail_unsubscribes_token_key")
+	if n := muRowCount(t, b); n != 0 {
+		t.Errorf("the refused insert left %d row(s)", n)
+	}
+}
+
+// A definer function with a writable search_path lets a caller shadow now(), lower() or the table.
+func TestRLS_MailUnsubscribesTokenFunctionIsAPinnedDefiner(t *testing.T) {
+	muRequireTable(t)
+	var definer bool
+	var config []string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT prosecdef, coalesce(proconfig, '{}') FROM pg_proc WHERE oid = $1::regprocedure`, muTokenFn).Scan(&definer, &config); err != nil {
+		t.Fatalf("read pg_proc: %v", err)
+	}
+	if !definer {
+		t.Errorf("%s is not SECURITY DEFINER: the gateway has no table privilege and could not call it", muTokenFn)
+	}
+	if !reflect.DeepEqual(config, []string{"search_path=\"\""}) {
+		t.Errorf("%s proconfig = %v, want exactly [search_path=\"\"]", muTokenFn, config)
+	}
+}

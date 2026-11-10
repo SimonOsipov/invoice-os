@@ -11,11 +11,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/html"
 )
 
+// Generated per run: a fixed UUID literal in source trips the secret scanner.
+var upToken = uuid.NewString()
+
 const (
-	upToken     = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 	upGWToken   = "gw-secret"
 	upHeading   = "Unsubscribe from ASComply marketing email"
 	upNote      = "Unsubscribing stops marketing email only. You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results."

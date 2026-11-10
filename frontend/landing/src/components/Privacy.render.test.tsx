@@ -543,6 +543,9 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
 // Every fact below is read from the Go and TS that sends it (privacyCodeFacts.test.util.ts).
 // A key table is the page's words for each code key; its keys must equal the code's, so a new
 // property forces both the table and the page to follow.
+// U1 names invitations and email; DEL-13-03 exempts exactly this paragraph, and the FREECHK-09-08 test pins its words.
+const UNSUBSCRIBE_U1 = `Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes nothing. If a link cannot carry its code, the page it opens asks you to email ${PRIVACY_CONTACT}, and we unsubscribe you.`
+
 describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   const html = renderToStaticMarkup(createElement(Privacy))
   const plain = (s: string): string =>
@@ -823,8 +826,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
     expect(paras.length).toBeGreaterThan(10)
     const p5 = ACCOUNT_RECORD_SENTENCES.find((x) => x.id === 'P5')!.text
-    const unsubscribeLead = 'Every email we send from our own templates ends with a link to unsubscribe'
-    expect(paras.filter((t) => t !== p5 && !t.startsWith(unsubscribeLead) && /invitation/i.test(t) && /email/i.test(t))).toEqual([])
+    expect(paras.filter((t) => t !== p5 && t !== UNSUBSCRIBE_U1 && /invitation/i.test(t) && /email/i.test(t))).toEqual([])
   })
 
   it('DEL-10-03 R1 promises no completeness', () => {
@@ -1279,7 +1281,7 @@ describe('FREECHK-09-08: the unsubscribe section', () => {
   it('the page says every template mail has an unsubscribe link and what it stops', () => {
     expect(section()).toBe(
       [
-        `Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes nothing. If a link cannot carry its code, the page it opens asks you to email ${PRIVACY_CONTACT}, and we unsubscribe you.`,
+        UNSUBSCRIBE_U1,
         'Pressing the button stops all marketing email to that address. We record the unsubscribe on our own server. When Resend holds the address as a contact, we also opt it out of our marketing email there. While we hold that record, no later form, demo request or readiness check opts the address back in.',
         'You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.',
         'To make each link work, we keep a random code on our own server for each address we email and for each address entered in the create-an-account form. We delete that record when an ASComply account with that address is deleted, unless another account still holds the address.',

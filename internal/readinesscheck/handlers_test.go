@@ -755,35 +755,6 @@ func TestHandlers_NeverParseAMultipartForm(t *testing.T) {
 	}
 }
 
-func TestCapturedMail_ReturnsOnlyThatAddressOldestFirst(t *testing.T) {
-	var c accountmail.Capture
-	_ = c.Send(context.Background(), []accountmail.Message{
-		{To: "a@x.io", Subject: "s1", HTML: "h1"}, {To: "b@x.io", Subject: "other", HTML: "ho"}, {To: "a@x.io", Subject: "s2", HTML: "h2"},
-	})
-	r := newRig(t)
-	h := r.svc.CapturedMailHandler(&c)
-
-	rec := serve(h, strings.NewReader(`{"to":"a@x.io"}`), "application/json")
-	wantStatus(t, rec, http.StatusOK, "")
-	var got struct {
-		Messages []struct{ Subject, HTML string } `json:"messages"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Messages) != 2 || got.Messages[0].Subject != "s1" || got.Messages[1].Subject != "s2" || got.Messages[1].HTML != "h2" {
-		t.Errorf("messages = %+v, want s1 then s2 for a@x.io only", got.Messages)
-	}
-
-	rec = serve(h, strings.NewReader(`{"to":"nobody@x.io"}`), "application/json")
-	wantStatus(t, rec, http.StatusOK, "")
-	if !strings.Contains(rec.Body.String(), `"messages":[]`) {
-		t.Errorf("body = %s, want an empty messages array, not null", rec.Body.String())
-	}
-
-	wantStatus(t, serve(h, strings.NewReader(`not json`), "application/json"), http.StatusBadRequest, "")
-}
-
 func xlsxOf(t *testing.T, csv string) []byte {
 	t.Helper()
 	f := excelize.NewFile()

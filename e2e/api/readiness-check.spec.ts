@@ -96,16 +96,25 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
   test.describe.serial('one address, four runs', () => {
     test.describe.configure({ retries: 0 })
     // The nightly reads the real inbox; a preview captures the mail and nothing reads it.
-    const mailEnv = nightlyTarget() ? readinessMailEnv() : null
-    const email = mailEnv
-      ? `nightly-${mailEnv.NIGHTLY_RUN_ID}-readiness-${randomUUID().slice(0, 8)}@${mailEnv.RESEND_RECEIVING_DOMAIN}`
-      : freshEmail()
-    const label = mailEnv ? `${email.split('@')[0]}@${mailEnv.RESEND_RECEIVING_DOMAIN}` : email
+    // Resolved in the tests, so a missing variable fails these and not the whole file.
+    let cached: { mailEnv: ReturnType<typeof readinessMailEnv> | null; email: string } | undefined
+    const inbox = () =>
+      (cached ??= (() => {
+        const mailEnv = nightlyTarget() ? readinessMailEnv() : null
+        const email = mailEnv
+          ? `nightly-${mailEnv.NIGHTLY_RUN_ID}-readiness-${randomUUID().slice(0, 8)}@${mailEnv.RESEND_RECEIVING_DOMAIN}`
+          : freshEmail()
+        return { mailEnv, email }
+      })())
+    // Never names the real address or domain: matchers print their received value into the report.
+    const countError = (email: string, want: number, found: number) =>
+      new Error(`${email.split('@')[0]}@<receiving domain>: want exactly ${want} mails, found ${found} after ${RECEIVE_MS / 60_000} minutes`)
     // Slack for clock skew; the address is unique to this attempt.
     const since = new Date(Date.now() - 60_000)
 
     test('a run mails the results to the address', async () => {
       test.setTimeout(180_000)
+      const { mailEnv, email } = inbox()
       if (mailEnv) {
         const problem = readinessBudgetProblem(
           await listSent(mailEnv.RESEND_READ_KEY, new Date(Date.now() - 24 * HOUR_MS)),
@@ -119,9 +128,9 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
       if (!mailEnv) return
 
       const items = await waitForMailCount(mailEnv.RESEND_READ_KEY, email, MAIL_SUBJECT, 1, since, RECEIVE_MS)
-      expect(items, label).toHaveLength(1)
+      if (items.length !== 1) throw countError(email, 1, items.length)
       const mail = await getReceived(mailEnv.RESEND_READ_KEY, items[0].id)
-      expect(mail.subject, label).toBe(MAIL_SUBJECT)
+      expect(mail.subject === MAIL_SUBJECT, `the mail subject is not "${MAIL_SUBJECT}"`).toBe(true)
       const html = mail.html ?? ''
       for (const want of [TWO_OF_THREE, SUPPLIER_TIN_LABEL, FIRST_TOTAL, FIRST_BUYER, TWO_LEFT]) {
         expect(html.includes(want), want).toBe(true)
@@ -130,6 +139,7 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
 
     test('the address becomes a readiness check contact opted in to Marketing', async () => {
       test.setTimeout(nightlyTarget() ? 180_000 : 60_000)
+      const { email } = inbox()
       let row: Awaited<ReturnType<typeof contactsDirect>> = null
       await expect.poll(async () => ((row = await contactsDirect(email))?.resend.delivered_at ?? null) !== null, DELIVERY_POLL).toBe(true)
       expect(row!.tags).toContain(TAG)
@@ -140,6 +150,7 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
     test('the fourth run on one address is told to sign up', async () => {
       // Runs 2-4, then the fixed 2-minute hold on the inbox.
       test.setTimeout(300_000)
+      const { mailEnv, email } = inbox()
       const second = await run(email)
       expect(second.body).toEqual({ status: 'sent', checks_left: 1 })
       const third = await run(email)
@@ -151,7 +162,7 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
       if (!mailEnv) return
 
       const items = await settledMailCount(mailEnv.RESEND_READ_KEY, email, MAIL_SUBJECT, since, RECEIVE_MS)
-      expect(items, label).toHaveLength(3)
+      if (items.length !== 3) throw countError(email, 3, items.length)
     })
   })
 })

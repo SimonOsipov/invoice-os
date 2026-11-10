@@ -1962,10 +1962,8 @@ func TestReaderDetail_ReturnsAITextTruncated(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Detail(%s): %v", tc.jobID, err)
 			}
-			// By name, so the package still compiles before the field exists.
-			f := reflect.ValueOf(got).FieldByName("AITextTruncated")
-			if !f.IsValid() || f.Kind() != reflect.Bool || f.Bool() != tc.wantField {
-				t.Errorf("Detail(%s).AITextTruncated = %v (valid %v), want bool %v", tc.jobID, f, f.IsValid(), tc.wantField)
+			if got.AITextTruncated != tc.wantField {
+				t.Errorf("Detail(%s).AITextTruncated = %v, want %v", tc.jobID, got.AITextTruncated, tc.wantField)
 			}
 			b, err := json.Marshal(got)
 			if err != nil {

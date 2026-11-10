@@ -95,3 +95,4 @@ paths:
 - Re-measure a Jev threshold on real documents before you trust it in production.
 - Leave the Jev data terms to the user. They are unresolved, and nothing enforces zero data retention per call.
 - Cut each mapping prompt cell at `maxPromptCellBytes`, keep the first `maxPromptColumns` columns, and add rows whole within `maxMappingPromptBytes`. Always keep row 1.
+- Set `extraction_jobs.ai_text_truncated` only when both AI calls of a tenant text read answered from cut text.

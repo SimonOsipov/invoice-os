@@ -90,12 +90,12 @@ describe('check package', () => {
     expect(/<p>([^<]*)<\/p>/.exec(root)?.[1]).toBe(CHECK_INTRO)
   })
 
-  it('seam_onlyAnalyticsImportsLandingSource', () => {
+  it('seam_onlyAnalyticsAndDsImportLandingSource', () => {
     expect(
       sources()
         .filter(({ src }) => landingImports(src).length > 0)
         .map(({ f }) => f),
-    ).toEqual(['analytics.ts'])
+    ).toEqual(['analytics.ts', 'ds.ts'])
     const seam = sources().find(({ f }) => f === 'analytics.ts')!
     expect(landingImports(seam.src).length).toBeGreaterThanOrEqual(4)
   })

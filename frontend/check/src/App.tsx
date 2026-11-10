@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react'
 import { Footer } from './components/Footer'
+import { Header } from './components/Header'
+import { Hero } from './components/Hero'
+import { ProgressStrip } from './components/ProgressStrip'
 import { chooseConsent, CookieNotice, readConsent, syncCheckConsent } from './analytics'
 import { runCheck, suggestMapping } from './checkApi'
-import { CHECK_H1 } from './copy'
 import { DetailsStep } from './components/DetailsStep'
 import { MapStep } from './components/MapStep'
 import { SentPanel } from './components/SentPanel'
 import { UploadStep } from './components/UploadStep'
+import { WhatYouGet } from './components/WhatYouGet'
 import { canSend, fileVerdict, kindOf } from './flow'
 import { initialMapping, type Mapping, type Suggestion } from './fields'
 import { landingHref } from './links'
 import { COLUMNS_SENTENCE, refusal as refuse, type Refusal } from './messages'
-
-type Step = 'upload' | 'map' | 'details' | 'sent'
+import { progress, type Step } from './progress'
 
 export function App() {
   const [consent, setConsent] = useState(() => readConsent())
@@ -91,43 +93,44 @@ export function App() {
 
   return (
     <div className="check-page">
-      <header className="check-header">
-        <a href={landingHref('/')}>ASComply Africa</a>
-      </header>
+      <Header />
       <main className="check-main">
-        <h1>{CHECK_H1}</h1>
-        <div className="check-steps">
-          {step === 'upload' && <UploadStep fileName={file?.name ?? null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
-          {step === 'map' && file && suggestion && fields && (
-            <MapStep
-              fileName={file.name}
-              suggestion={suggestion}
-              fields={fields}
-              onField={(key, header) => setFields({ ...fields, [key]: header })}
-              onBack={backToUpload}
-              onContinue={() => setStep('details')}
-            />
-          )}
-          {step === 'details' && file && (
-            <DetailsStep
-              fileName={file.name}
-              email={email}
-              ticked={ticked}
-              sending={sending}
-              canSend={canSend({ file, email, ticked, fields })}
-              refusal={refusal}
-              onEmail={setEmail}
-              onTick={setTicked}
-              onBack={() => {
-                setRefusal(null)
-                if (suggestion) setStep('map')
-                else backToUpload()
-              }}
-              onSend={send}
-            />
-          )}
-          {step === 'sent' && <SentPanel email={email.trim()} />}
-        </div>
+        <Hero wide={step === 'map'}>
+          <ProgressStrip progress={progress(step, file?.name ?? null)} />
+          <div className="check-steps">
+            {step === 'upload' && <UploadStep fileName={file?.name ?? null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
+            {step === 'map' && file && suggestion && fields && (
+              <MapStep
+                fileName={file.name}
+                suggestion={suggestion}
+                fields={fields}
+                onField={(key, header) => setFields({ ...fields, [key]: header })}
+                onBack={backToUpload}
+                onContinue={() => setStep('details')}
+              />
+            )}
+            {step === 'details' && file && (
+              <DetailsStep
+                fileName={file.name}
+                email={email}
+                ticked={ticked}
+                sending={sending}
+                canSend={canSend({ file, email, ticked, fields })}
+                refusal={refusal}
+                onEmail={setEmail}
+                onTick={setTicked}
+                onBack={() => {
+                  setRefusal(null)
+                  if (suggestion) setStep('map')
+                  else backToUpload()
+                }}
+                onSend={send}
+              />
+            )}
+            {step === 'sent' && <SentPanel email={email.trim()} />}
+          </div>
+        </Hero>
+        <WhatYouGet />
       </main>
       <Footer onCookieChoices={() => setReopened(true)} />
       {(consent === null || reopened) && (

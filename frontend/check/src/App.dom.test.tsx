@@ -383,7 +383,7 @@ describe('details and sent', () => {
     await pick(file('a.pdf'))
     await fillAndSend()
     expect(text()).toContain(SENT_TEXT('a@example.com'))
-    expect(container.querySelector('.check-steps')!.textContent).not.toMatch(/checks_left|rule|\d/i)
+    expect(container.querySelector('.check-tool [role="status"]')!.textContent).not.toMatch(/checks_left|rule|\d/i)
     expect(container.querySelector('form')).toBeNull()
   })
 
@@ -402,7 +402,7 @@ describe('details and sent', () => {
     await pick(file('a.pdf'))
     await fillAndSend()
     expect(text()).toContain(SIGN_UP_SENTENCE)
-    expect(container.querySelector<HTMLAnchorElement>('a[href$="/?register"]')?.textContent).toBe('Sign up')
+    expect(container.querySelector<HTMLAnchorElement>('[role="alert"] a[href$="/?register"]')?.textContent).toBe('Sign up')
   })
 
   it('send_429FromTheGatewayShowsItsSentence', async () => {

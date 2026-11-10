@@ -60,10 +60,11 @@ const byText = (text: string) =>
 const click = (el: Element) => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
 describe('check consent', () => {
-  it('app_rendersTheSameHeading', async () => {
+  it('app_rendersOneH1First', async () => {
     await mount()
-    const h = container.querySelectorAll('h1,h2,h3,h4,h5,h6')
-    expect([...h].map((e) => e.tagName)).toEqual(['H1'])
+    const h = [...container.querySelectorAll('h1,h2,h3,h4,h5,h6')]
+    expect(h.filter((e) => e.tagName === 'H1')).toHaveLength(1)
+    expect(h[0].tagName).toBe('H1')
     expect(h[0].textContent).toBe(CHECK_H1)
   })
 

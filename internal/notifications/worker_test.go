@@ -162,6 +162,26 @@ type qaRecResend struct {
 	fn    func(n int, c Contact, optIn bool) error
 	reads int
 	state func(n int) (ResendState, error) // nil: the zero state
+
+	optOuts  []string
+	optOutFn func(n int, email string) error
+}
+
+func (r *qaRecResend) OptOutMarketing(_ context.Context, email string) error {
+	r.mu.Lock()
+	r.optOuts = append(r.optOuts, email)
+	n, fn := len(r.optOuts), r.optOutFn
+	r.mu.Unlock()
+	if fn != nil {
+		return fn(n, email)
+	}
+	return nil
+}
+
+func (r *qaRecResend) optOutCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.optOuts)
 }
 
 func (r *qaRecResend) ContactState(context.Context, string) (ResendState, error) {

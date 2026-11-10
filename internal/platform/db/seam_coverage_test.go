@@ -1172,6 +1172,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /internal/contacts/demo-requests":                  {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/readiness-checks":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                    {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
+	"POST /internal/contacts/unsubscribe":                    {verdict: scExempt, reason: "gateway-token call with no caller; an address carries no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/contacts/unsubscribe/lookup":             {verdict: scExempt, reason: "gateway-token call with no caller; an address carries no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/invitations/preview":                     {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /internal/invitations/pending":                     {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
 	"POST /internal/invitations/register":                    {verdict: scExempt, reason: "no caller; the token names the invite"},

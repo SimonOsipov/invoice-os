@@ -32,6 +32,8 @@ paths:
 - Refuse `JEV_FAKE=true` with a key set. `jev.FromEnv` returns an error naming both variables.
 - Let `FromEnv` return errors and never exit the process. Callers treat the error as fatal at boot.
 - Call `ai.FromEnv` and `jev.FromEnv` in `cmd/worker` and `cmd/invoice`. A client error stops boot.
+- Send `max_tokens` from `maxTokens` on every request. A purpose without a cap is refused.
+- Return `refused` for an answer cut at `max_tokens` (`finish_reason: "length"`). Never retry it.
 - Send `json_schema` output with `strict: true` and `provider.require_parameters: true` and `temperature: 0`. Send no `usage: {include: true}`.
 - Put the text part first in a message, then the page images. Encode each PNG as `data:image/png;base64,` with padded standard base64.
 - Decode the AI answer with `json.Number`. Integer and enum comparisons stay exact.

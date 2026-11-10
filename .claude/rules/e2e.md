@@ -46,7 +46,7 @@ paths:
 - Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
 - Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag, the GA4 events on the routed production host and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
-- Skip the `send` test of `e2e/smoke/check.spec.ts` on `www.ascomply.com`. It writes a contact and a mail; the `crawler` test runs everywhere.
+- Skip the `send` test of `e2e/smoke/check.spec.ts` on `www.ascomply.com`. It writes a contact and a mail; the other tests run everywhere.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
 - Cover the app cookie notice, its layout, the PR-host chat gate, the sign-out cookie wipe, the routed production-host tag, `invoice_validated` and the app funnel events `email_verified`, `workspace_created` and `client_added` in `e2e/topology/app-consent.spec.ts`.
 - Cover `sign_up` and `email_verified` on the routed landing in `e2e/smoke/landing-analytics.spec.ts`.

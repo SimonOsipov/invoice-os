@@ -45,7 +45,7 @@ async function toMap(page: Page, onUpload?: () => Promise<void>): Promise<void> 
   const response = await page.goto(`${CHECK_URL}/`)
   expect(response?.ok(), '/check did not answer 2xx').toBeTruthy()
   await page.locator('#check-file').setInputFiles({ name: FILE_NAME, mimeType: 'text/csv', buffer: FIXTURE })
-  await expect(page.locator('.check-file')).toBeVisible()
+  await expect(page.locator('.check-upload-name')).toBeVisible()
   await onUpload?.()
   release()
   await expect(page.getByRole('heading', { name: 'Match your columns' }), 'the Map step never showed').toBeVisible()
@@ -57,7 +57,7 @@ test.describe('check layout', () => {
   test('check layout: the page and the Map step fit at wide widths', async ({ page }) => {
     await resize(page, WIDE_WIDTHS[0])
     await toMap(page, async () => {
-      expect(enclosesRect(await rectOf(card(page), 'card'), await rectOf(page.locator('.check-file'), 'file name'), 1), 'Upload: the file name is outside the card').toBe(true)
+      expect(enclosesRect(await rectOf(card(page), 'card'), await rectOf(page.locator('.check-upload-name'), 'file name'), 1), 'Upload: the file name is outside the card').toBe(true)
     })
     for (const width of WIDE_WIDTHS) {
       await resize(page, width)

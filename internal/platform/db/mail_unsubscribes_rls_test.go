@@ -438,3 +438,48 @@ func TestRLS_MailUnsubscribesTokenFunctionIsAPinnedDefiner(t *testing.T) {
 		t.Errorf("%s proconfig = %v, want exactly [search_path=\"\"]", muTokenFn, config)
 	}
 }
+
+// A read of a known address must write no tuple and wait on no row lock: it runs for every mail and
+// every backfilled account, and a press holds the row FOR UPDATE.
+func TestRLS_MailUnsubscribesTokenReadOfAKnownAddressWritesAndWaitsOnNothing(t *testing.T) {
+	muRequireTable(t)
+	ctx := context.Background()
+	email := muEmail(t)
+	token := muAppToken(t, email)
+	xmin := func() string {
+		var x string
+		if err := h.super.QueryRow(ctx, `SELECT xmin::text FROM mail_unsubscribes WHERE email = $1`, email).Scan(&x); err != nil {
+			t.Fatalf("read xmin: %v", err)
+		}
+		return x
+	}
+	before := xmin()
+
+	holder, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT email FROM mail_unsubscribes WHERE token = $1 FOR UPDATE`, token); err != nil {
+		t.Fatalf("lock the row: %v", err)
+	}
+
+	reader, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = reader.Rollback(ctx) }()
+	if _, err := reader.Exec(ctx, `SET LOCAL lock_timeout = '1s'`); err != nil {
+		t.Fatalf("set lock_timeout: %v", err)
+	}
+	var got string
+	if err := reader.QueryRow(ctx, `SELECT public.mail_unsubscribe_token($1)::text`, email).Scan(&got); err != nil {
+		t.Fatalf("token read while the row is locked: %v", err)
+	}
+	if got != token {
+		t.Errorf("token = %s, want the existing %s", got, token)
+	}
+	if after := xmin(); after != before {
+		t.Errorf("xmin = %s after the read, want %s: the read wrote a tuple", after, before)
+	}
+}

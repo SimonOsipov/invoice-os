@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -30,13 +31,15 @@ type UnsubscribeMetadata struct {
 	Logger  *slog.Logger
 }
 
-// RunOnce pages the accounts and PUTs the key where it is absent or differs. It logs no address.
+// RunOnce pages the accounts and PUTs the key where it is absent or differs. A failing account is
+// skipped and its error joined into the result. It logs no address.
 // ceiling: O(accounts/100) list calls per run, move to a cursor above ~5k accounts.
 func (u *UnsubscribeMetadata) RunOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, unsubscribeMetadataTimeout)
 	defer cancel()
 	tokens := accountmail.PoolTokens(u.Pool)
 	written := 0
+	var failed []error
 	for page := 1; ; page++ {
 		users, err := u.Account.ListUsers(ctx, page, unsubscribeMetadataPage)
 		if err != nil {
@@ -48,13 +51,15 @@ func (u *UnsubscribeMetadata) RunOnce(ctx context.Context) error {
 			}
 			token, err := tokens(ctx, user.Email)
 			if err != nil {
-				return err
+				failed = append(failed, err)
+				continue
 			}
 			if user.Unsubscribe == token {
 				continue
 			}
 			if err := u.Account.SetUserMetadata(ctx, user.ID, map[string]any{accountmail.UnsubscribeMetadataKey: token}); err != nil {
-				return err
+				failed = append(failed, err)
+				continue
 			}
 			written++
 		}
@@ -65,5 +70,5 @@ func (u *UnsubscribeMetadata) RunOnce(ctx context.Context) error {
 	if written > 0 && u.Logger != nil {
 		u.Logger.InfoContext(ctx, "notifications: unsubscribe metadata written", "accounts", written)
 	}
-	return nil
+	return errors.Join(failed...)
 }

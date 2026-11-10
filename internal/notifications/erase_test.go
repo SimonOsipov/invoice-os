@@ -1832,3 +1832,28 @@ func TestErase_DeletesTheUnsubscribeRowWithTheAddress(t *testing.T) {
 		t.Fatalf("mail_unsubscribes rows for the erased address = %d, want 0", n)
 	}
 }
+
+// A token row minted between the steps (the hourly backfill, a mail) is no copy the vendor steps must redo.
+func TestErase_AReMintedUnsubscribeRowDoesNotRedoTheVendors(t *testing.T) {
+	r := newEraseRig(t)
+	t.Cleanup(func() {
+		_, _ = r.e.admin.Exec(context.Background(), `DELETE FROM mail_unsubscribes WHERE email = $1`, r.mail)
+	})
+	gen := r.start()
+	r.acct.fn = func(int, string) error {
+		r.exec(`SELECT public.mail_unsubscribe_token($1)`, r.mail)
+		return nil
+	}
+	if err := r.work(gen); err != nil {
+		t.Fatalf("work = %v, want nil: a fresh token row is not a copy that came back", err)
+	}
+	if s := r.row(r.uid); !s.Fin || !s.HubSpot || !s.Resend {
+		t.Fatalf("row = %+v, want finished with both vendor stamps", s)
+	}
+	if n := len(r.hs.got()); n != 1 {
+		t.Errorf("HubSpot erase calls = %d, want 1", n)
+	}
+	if n := r.count(`SELECT count(*) FROM mail_unsubscribes WHERE email = $1`, r.mail); n != 0 {
+		t.Errorf("mail_unsubscribes rows = %d, want the sweep to delete the fresh row", n)
+	}
+}

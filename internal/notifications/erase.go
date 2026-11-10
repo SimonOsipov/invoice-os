@@ -250,30 +250,33 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 
 	// Cancelled first, so the jobs just cancelled go too; a running job stays, marked.
 	type del struct {
-		sql  string
-		args []any
+		sql       string
+		args      []any
+		uncounted bool // not a copy of user data: a fresh row is no reason to rerun the vendor steps
 	}
 	deletes := []del{
-		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + byEmail, byEmailArgs},
-		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
-		{`DELETE FROM contacts WHERE email = $1 AND (user_id IS NULL OR user_id::text = $2)`, []any{email, uid}},
-		{`DELETE FROM account_known_devices WHERE user_id::text = $1`, []any{uid}},
-		{`DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, []any{uid, email}},
+		{sql: `DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + byEmail, args: byEmailArgs},
+		{sql: `DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, args: []any{uid}},
+		{sql: `DELETE FROM contacts WHERE email = $1 AND (user_id IS NULL OR user_id::text = $2)`, args: []any{email, uid}},
+		{sql: `DELETE FROM account_known_devices WHERE user_id::text = $1`, args: []any{uid}},
+		{sql: `DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, args: []any{uid, email}},
 	}
 	// ceiling: an address's unsubscribe row is deleted here, so a mail already sent carries a link that then answers 404; revisit if that link must outlive the erase.
 	if !res.superseded {
 		deletes = append(deletes,
-			del{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},
-			del{`DELETE FROM blog_subscription_requests WHERE email = $1`, []any{email}},
-			del{`DELETE FROM readiness_checks WHERE email = $1`, []any{email}},
-			del{`DELETE FROM mail_unsubscribes WHERE email = $1`, []any{email}})
+			del{sql: `DELETE FROM blog_subscribers WHERE email = $1`, args: []any{email}},
+			del{sql: `DELETE FROM blog_subscription_requests WHERE email = $1`, args: []any{email}},
+			del{sql: `DELETE FROM readiness_checks WHERE email = $1`, args: []any{email}},
+			del{sql: `DELETE FROM mail_unsubscribes WHERE email = $1`, args: []any{email}, uncounted: true})
 	}
 	for _, d := range deletes {
 		tag, err := tx.Exec(ctx, d.sql, d.args...)
 		if err != nil {
 			return res, fmt.Errorf("notifications: delete copies: %w", err)
 		}
-		res.count += int(tag.RowsAffected())
+		if !d.uncounted {
+			res.count += int(tag.RowsAffected())
+		}
 	}
 	// Not in res.count: an invitation made between steps 1 and 5 is removed here without a rerun (TestErase_AnInvitationCreatedMidRunIsRemovedWithoutARerun).
 	if _, err := tx.Exec(ctx, `SELECT public.erase_invitation_emails($1::uuid, $2, $3)`, uid, email, !res.superseded); err != nil {

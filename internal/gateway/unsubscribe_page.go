@@ -23,8 +23,8 @@ const unsubscribeContact = "sam@ascomply.com"
 
 const (
 	unsubscribeLookupTimeout = 5 * time.Second
-	// Above the 10 s Resend timeout: a press makes one Resend call under a row lock.
-	unsubscribePressTimeout = 15 * time.Second
+	// Above notifications' 40 s press budget: the lock wait, a Resend read of up to 21 calls, and the PATCH.
+	unsubscribePressTimeout = 45 * time.Second
 	maxUnsubscribeAnswer    = 4096
 )
 

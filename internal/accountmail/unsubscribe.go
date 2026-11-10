@@ -37,7 +37,7 @@ func PoolTokens(q interface {
 
 // fillUnsubscribe replaces the placeholder with the token of m.To. It returns the new HTML and the
 // token, or "" when the mail has no placeholder or the token is unavailable: that mail keeps the
-// bare link (D23), and the WARN names no address.
+// bare link, and the WARN names no address.
 func fillUnsubscribe(ctx context.Context, tokens TokenFunc, m Message) (html, token string) {
 	if !strings.Contains(m.HTML, unsubscribeQuery) {
 		return m.HTML, ""

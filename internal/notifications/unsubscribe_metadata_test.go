@@ -123,6 +123,27 @@ func TestUnsubscribeMetadata_AFailedPutRetriesWithoutRewriting(t *testing.T) {
 	}
 }
 
+func TestUnsubscribeMetadata_AFailingAccountDoesNotStopTheLaterOnes(t *testing.T) {
+	e := newEnv(t)
+	first, bad, last := metaUser(t, e, ""), metaUser(t, e, ""), metaUser(t, e, "")
+	badTokenFails := &fakeAccounts{users: []gotrueadmin.AdminUser{first, bad, last}, failID: bad.ID}
+	// A one-character address fails the table's CHECK at the token lookup, not at the PUT.
+	checkFails := &fakeAccounts{users: []gotrueadmin.AdminUser{first, {ID: uuid.NewString(), Email: "a"}, last}}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `DELETE FROM mail_unsubscribes WHERE email = ANY($1)`, []string{first.Email, last.Email})
+	})
+	for name, acct := range map[string]*fakeAccounts{"a failed PUT": badTokenFails, "a refused address": checkFails} {
+		t.Run(name, func(t *testing.T) {
+			if err := (&UnsubscribeMetadata{Pool: e.app, Account: acct}).RunOnce(context.Background()); err == nil {
+				t.Fatal("RunOnce = nil, want the joined error")
+			}
+			if len(acct.puts) != 2 || acct.puts[0].id != first.ID || acct.puts[1].id != last.ID {
+				t.Errorf("puts = %v, want the first and the last user", acct.puts)
+			}
+		})
+	}
+}
+
 func TestUnsubscribeMetadata_AFailedListReturnsTheError(t *testing.T) {
 	e := newEnv(t)
 	acct := &fakeAccounts{users: []gotrueadmin.AdminUser{metaUser(t, e, "")}, listErr: errors.New("list failed")}

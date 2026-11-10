@@ -1649,8 +1649,12 @@ test('unsubscribe page: the button says Unsubscribing… and one press sends one
     // The mouse API does not wait for the held navigation the way a locator click would.
     const box = await boxOf('the button', button, 0)
     await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
-    await expect(button).toHaveText('Unsubscribing…')
-    await expect(button).toBeDisabled()
+    // A locator assertion waits for the held navigation to finish; evaluate reads the page as it is.
+    await expect
+      .poll(() => page.evaluate(() => { const b = document.querySelector('button'); return [b?.textContent?.trim(), b?.disabled] }), {
+        message: 'the button while the POST is held',
+      })
+      .toEqual(['Unsubscribing…', true])
     expect(posts.length, 'POST /unsubscribe requests sent by the double-click').toBe(1)
   } finally {
     release()

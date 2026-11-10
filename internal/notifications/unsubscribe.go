@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -20,6 +21,10 @@ var (
 	// because a database message can hold the address.
 	errUnavailable = errors.New("unsubscribe: unavailable")
 )
+
+// pressBudget bounds a whole press: the wait for the address lock, then the Resend reads and the PATCH.
+// The gateway's press timeout must exceed it (unsubscribePressTimeout).
+var pressBudget = 40 * time.Second
 
 // UnsubscribeStore reads and updates mail_unsubscribes. An address carries no tenant.
 type UnsubscribeStore struct{ pool *pgxpool.Pool }
@@ -41,16 +46,30 @@ func (s *UnsubscribeStore) Lookup(ctx context.Context, token string) (string, bo
 }
 
 // Press records the unsubscribe and opts the address out of Marketing, in one transaction that
-// locks the row (D4). A nil rs (mode off) records locally only. It returns "unsubscribed" or "already".
+// holds the address's Resend delivery lock and the row lock. A nil rs (mode off) records locally only.
+// It returns "unsubscribed" or "already".
 //
+// The delivery lock makes a racing opt-in delivery finish first, so no opt_in follows the opt_out.
 // ceiling: a COMMIT failure after a sent PATCH leaves Resend opted out and no local record; the retry records it.
-// ceiling: the row lock is held across one Resend call, bounded by the Resend client timeout.
+// ceiling: the locks are held across the Resend calls, bounded by pressBudget.
 func (s *UnsubscribeStore) Press(ctx context.Context, token string, rs ResendClient) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, pressBudget)
+	defer cancel()
 	status := "unsubscribed"
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var email string
+		err := tx.QueryRow(ctx, `SELECT email FROM mail_unsubscribes WHERE token = $1`, token).Scan(&email)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errUnknownToken
+		}
+		if err != nil {
+			return err
+		}
+		if err := lockDelivery(ctx, tx, destResend, email); err != nil {
+			return err
+		}
 		var done bool
-		err := tx.QueryRow(ctx, `SELECT email, unsubscribed_at IS NOT NULL FROM mail_unsubscribes WHERE token = $1 FOR UPDATE`, token).Scan(&email, &done)
+		err = tx.QueryRow(ctx, `SELECT unsubscribed_at IS NOT NULL FROM mail_unsubscribes WHERE token = $1 FOR UPDATE`, token).Scan(&done)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errUnknownToken
 		}
@@ -78,6 +97,9 @@ func (s *UnsubscribeStore) Press(ctx context.Context, token string, rs ResendCli
 		return nil
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", errUnavailable
+		}
 		return "", err
 	}
 	return status, nil

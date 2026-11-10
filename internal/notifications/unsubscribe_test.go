@@ -625,3 +625,113 @@ func TestPressUnsubscribe_TwoTabsSendOneOptOut(t *testing.T) {
 		t.Error("unsubscribed_at is NULL, want set")
 	}
 }
+
+// A delivery that read "not unsubscribed" and then sends the opt_in must finish before the press
+// writes its opt_out, or the person ends up in Marketing.
+func TestPressUnsubscribe_WaitsForARacingOptInDelivery(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "pressrace")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	t.Cleanup(func() {
+		_, _ = r.e.admin.Exec(context.Background(), `DELETE FROM mail_unsubscribes WHERE email = $1`, email)
+	})
+	var token string
+	if err := r.e.app.QueryRow(context.Background(), `SELECT public.mail_unsubscribe_token($1)::text`, email).Scan(&token); err != nil {
+		t.Fatalf("mint token: %v", err)
+	}
+
+	var mu sync.Mutex
+	var events []string
+	record := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, s)
+	}
+	gate := qaNewBlockOnce(t, r, 1)
+	r.rs.state = func(n int) (ResendState, error) { return ResendState{}, gate.wait(n) }
+	r.rs.fn = func(_ int, _ Contact, optIn bool) error {
+		record(fmt.Sprintf("sync opt_in=%t", optIn))
+		return nil
+	}
+	ps := &qaRecResend{optOutFn: func(int, string) error { record("opt_out"); return nil }}
+
+	delivery := r.workAsync(t, r.jobRow(t, email, "resend", 1))
+	gate.awaitEntered(t)
+
+	press := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		press <- usCall(t, UnsubscribeHandler(NewUnsubscribeStore(r.e.app), ps, r.worker.logger()), token, "", nil)
+	}()
+	time.Sleep(500 * time.Millisecond)
+	if got := ps.optOutCalls(); len(got) != 0 {
+		t.Fatalf("opt_out calls while the delivery holds the address lock = %d, want 0", len(got))
+	}
+	gate.open()
+
+	a := qaAwaitAttempt(t, delivery)
+	qaRequireCompleted(t, a.res, a.err, "the racing delivery")
+	select {
+	case w := <-press:
+		usWantPress(t, w, http.StatusOK, "unsubscribed")
+	case <-time.After(qaHoldFor):
+		t.Fatal("the press never answered after the delivery finished")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"sync opt_in=true", "opt_out"}; !slices.Equal(events, want) {
+		t.Errorf("vendor calls = %v, want %v: the opt_out must come last", events, want)
+	}
+}
+
+// hangingResend never answers a read until its context ends.
+type hangingResend struct{ qaRecResend }
+
+func (h *hangingResend) ContactState(ctx context.Context, _ string) (ResendState, error) {
+	<-ctx.Done()
+	return ResendState{}, ctx.Err()
+}
+
+func usShortBudget(t *testing.T) {
+	t.Helper()
+	old := pressBudget
+	pressBudget = 300 * time.Millisecond
+	t.Cleanup(func() { pressBudget = old })
+}
+
+func TestPressUnsubscribe_AHangingResendAnswers503WithinTheBudget(t *testing.T) {
+	usShortBudget(t)
+	e := newEnv(t)
+	email, token := usAddress(t, e, "hang")
+	hs := &hangingResend{}
+	press := UnsubscribeHandler(NewUnsubscribeStore(e.app), hs, (&qaLogSink{}).logger())
+
+	start := time.Now()
+	usWantPress(t, usCall(t, press, token, "", nil), http.StatusServiceUnavailable, "")
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("the press took %v, want it cut at the budget", d)
+	}
+	if at := usUnsubscribedAt(t, e, email); at != nil {
+		t.Errorf("unsubscribed_at = %v, want NULL after a cut press", at)
+	}
+}
+
+func TestPressUnsubscribe_AHeldDeliveryLockCountsAgainstTheBudget(t *testing.T) {
+	usShortBudget(t)
+	r := usNewRig(t)
+	email, token := usAddress(t, r.e, "lockheld")
+	ctx := context.Background()
+	tx, err := r.e.app.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if err := lockDelivery(ctx, tx, destResend, email); err != nil {
+		t.Fatal(err)
+	}
+
+	usWantPress(t, usCall(t, r.press, token, "", nil), http.StatusServiceUnavailable, "")
+	r.requireNoVendorCall(t)
+	if at := usUnsubscribedAt(t, r.e, email); at != nil {
+		t.Errorf("unsubscribed_at = %v, want NULL", at)
+	}
+}

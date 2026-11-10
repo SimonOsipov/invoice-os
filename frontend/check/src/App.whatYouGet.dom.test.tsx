@@ -84,6 +84,7 @@ describe('what you get', () => {
     expect(text(good.querySelector('.check-mail-no')!)).toBe('INV-1042')
     expect(text(good)).toContain('Passes every rule')
     expect(t).toContain(EXAMPLE_MAIL.line)
+    expect(EXAMPLE_MAIL.line).toBe('Each failed rule shows its field and the rule’s message.')
     expect(text(fig.querySelector('figcaption')!)).toBe(EXAMPLE_MAIL.caption)
   })
 

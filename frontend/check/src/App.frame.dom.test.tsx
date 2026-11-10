@@ -123,6 +123,7 @@ describe('check page frame', () => {
     expect(current()).toEqual(['Email'])
     const m = q('.check-progress-m')
     expect(m.textContent).toContain('Step 2 of 3')
+    expect(m.querySelectorAll('.check-segs > span')).toHaveLength(3)
     expect(m.querySelector('.check-progress-m-name')!.textContent).toBe('Email')
   })
 
@@ -152,6 +153,7 @@ describe('check page frame', () => {
     const foot = q('footer')
     expect(foot.querySelector('.ds-logo')).not.toBeNull()
     expect(foot.textContent).toContain(COMPANY_LINE)
+    expect(COMPANY_LINE).toBe('© 2026 ASComply Africa Limited · Lagos, Nigeria') // the landing's line, literal
     expect(foot.querySelector('a')!.getAttribute('href')).toBe('https://www.ascomply.com/privacy')
     expect(foot.querySelector('a')!.textContent).toBe('Privacy')
     expect([...foot.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Cookie choices'])

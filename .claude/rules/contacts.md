@@ -33,14 +33,20 @@ paths:
 - Delete unconfirmed blog requests within an hour of expiry.
 - A Resend broadcast cannot filter on a contact property. Send every blog broadcast to all of segment "Blog". Use `blog_categories` and `blog_frequency` to choose content only.
 - Ask the PM before adding per-category segments.
-- Set the Marketing topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`. Before it, read the Resend contact with `ContactState`. Send no `opt_in` and write no stamp when the contact is unsubscribed. A Marketing `opt_out` alone is Resend's default, not a refusal. A failed read retries the job; a missing contact gets the `opt_in`.
+- Set the Marketing topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
+- Before the first `opt_in`, read the Resend contact with `ContactState`.
+- Send no `opt_in` and write no stamp when the contact is unsubscribed.
+- Treat a Marketing `opt_out` alone as Resend's default, not a refusal.
+- Retry the job when the read fails. Send the `opt_in` when the contact is missing.
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
 - Exception: the erase deleted the Resend contact of an address that another account holds. The rebuild clears `resend_opt_in_sent_at`, so the next delivery sends the `opt_in` once more (`TestErase_ACleanContactGetsItsMarketingOptInBack`).
 - Keep the stamp when the contact was unsubscribed or opted out of Marketing (`TestErase_AnUnsubscribedContactStaysUnsubscribed`, `TestErase_AMarketingOptOutStaysOptedOut`).
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
 - Queue a Resend job for a readiness-check contact. Its required tick is Marketing consent.
-- Store a readiness check's consent text once, in `marketing_consent_text` and `marketing_consented_at`. A first consent stays. The tick sets the Marketing `opt_in` once, also for a registrant or a demo booker.
+- Store a readiness check's consent text once, in `marketing_consent_text` and `marketing_consented_at`.
+- Keep the first consent.
+- Set the Marketing `opt_in` once for the tick, also for a registrant or a demo booker.
 - Write nothing new to `readiness_consent_*`. Those columns hold ticks of the old wording, which grant no Marketing `opt_in`.
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.

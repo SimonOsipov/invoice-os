@@ -1959,3 +1959,73 @@ func TestDeliver_FailedStateReadRetriesWithoutAnOptIn(t *testing.T) {
 		t.Error("resend_opt_in_sent_at = NULL after the retry, want set")
 	}
 }
+
+func TestDeliver_UnreadableContactStateRetriesWithoutAnOptIn(t *testing.T) {
+	cases := []struct {
+		name         string
+		contact      int
+		contactBody  string
+		topicsStatus int
+	}{
+		{"contact read 500", 500, `{"message":"boom"}`, 200},
+		{"contact read 429", 429, `{"message":"slow down"}`, 200},
+		{"contact body is not JSON", 200, `not json`, 200},
+		{"topics read 500", 200, `{"object":"contact","unsubscribed":false}`, 500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "unread")
+			if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+				t.Fatalf("ReadinessCheck: %v", err)
+			}
+			v := newVendor(t, func(s seenReq) (int, string) {
+				if s.Method == http.MethodGet && strings.HasSuffix(s.path(), "/topics") {
+					return tc.topicsStatus, `{"object":"list","has_more":false,"data":[]}`
+				}
+				if s.Method == http.MethodGet {
+					return tc.contact, tc.contactBody
+				}
+				return resendPresent.respond(s)
+			})
+			r.w.Resend = resendAt(v, nil)
+
+			res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+			qaRequireRetryable(t, res, err, "resend job with an unreadable contact state")
+			if n := countCalls(v, http.MethodPatch, ""); n != 0 {
+				t.Errorf("PATCH requests = %d, want 0", n)
+			}
+			if n := countCalls(v, http.MethodGet, ""); n == 0 {
+				t.Error("GET requests = 0, want the state read to run")
+			}
+			if d := r.delivery(t, email); d.In != nil || d.ResendAt != nil {
+				t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL, NULL", d.In, d.ResendAt)
+			}
+		})
+	}
+}
+
+func TestDeliver_UnsubscribedRegistrantWhoTickedStaysInTheSegmentWithNoOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "unsubreg")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	v := stateVendor(t, true, `[]`)
+	r.w.Resend = resendAt(v, nil)
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job of an unsubscribed registrant")
+	if n := countCalls(v, http.MethodPost, "/segments/seg-1"); n != 1 {
+		t.Errorf("segment POSTs = %d, want 1: the registrant still joins the product segment", n)
+	}
+	if n := countCalls(v, http.MethodPatch, ""); n != 0 {
+		t.Errorf("PATCH requests = %d, want 0", n)
+	}
+	for _, s := range v.calls() {
+		if b := string(s.Body); strings.Contains(b, "unsubscribed") || strings.Contains(b, "opt_out") {
+			t.Errorf("%s sent %s: never unsubscribe or opt out", s.label(), b)
+		}
+	}
+	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+	}
+}

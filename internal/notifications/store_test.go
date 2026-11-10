@@ -1704,6 +1704,24 @@ func TestStore_CheckThenTickedRegistrationKeepsTheCheckConsent(t *testing.T) {
 	requireJobs(t, e, email, "hubspot@1", "resend@1", "hubspot@2", "resend@2")
 }
 
+func TestStore_CheckThenTickedDemoAndMixedCaseCheckKeepOneConsent(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "checkthendemo")
+	const textC, textD = "Text C.", "Text D."
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: " " + strings.ToUpper(email) + " ", ConsentText: textC}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", ConsentText: textD}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	r := readRow(t, e, email)
+	if deref(r.ConsentText) != textC || r.ConsentedAt == nil {
+		t.Errorf("marketing_consent_text=%q marketing_consented_at=%v, want the check's %q and set", deref(r.ConsentText), r.ConsentedAt, textC)
+	}
+	requireJobs(t, e, email, "hubspot@1", "resend@1", "hubspot@2", "resend@2")
+}
+
 const oldWording = "Old wording."
 
 func seedOldWordingRow(t *testing.T, e env, email string) {

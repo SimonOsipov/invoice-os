@@ -264,7 +264,8 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		deletes = append(deletes,
 			del{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},
 			del{`DELETE FROM blog_subscription_requests WHERE email = $1`, []any{email}},
-			del{`DELETE FROM readiness_checks WHERE email = $1`, []any{email}})
+			del{`DELETE FROM readiness_checks WHERE email = $1`, []any{email}},
+			del{`DELETE FROM mail_unsubscribes WHERE email = $1`, []any{email}})
 	}
 	for _, d := range deletes {
 		tag, err := tx.Exec(ctx, d.sql, d.args...)

@@ -198,8 +198,9 @@ export interface ContactMe {
   email: string
   tags: string[]
   marketing_eligible: boolean
+  marketing_unsubscribed: boolean
   hubspot: { delivered_at: string | null }
-  resend: { delivered_at: string | null; applies: boolean }
+  resend: { delivered_at: string | null; applies: boolean; opt_in_sent: boolean }
   mode: string
 }
 

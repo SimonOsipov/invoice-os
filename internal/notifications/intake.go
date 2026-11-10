@@ -153,6 +153,7 @@ func ReadinessChecksHandler(store IntakeStore, log *slog.Logger) http.HandlerFun
 type destination struct {
 	DeliveredAt *time.Time `json:"delivered_at"`
 	Applies     *bool      `json:"applies,omitempty"`
+	OptInSent   *bool      `json:"opt_in_sent,omitempty"`
 }
 
 // MeHandler reads the caller's own row by the token's email, which the gateway sets.
@@ -173,12 +174,13 @@ func MeHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
 			tags = []string{}
 		}
 		writeJSONBody(w, http.StatusOK, map[string]any{
-			"email":              c.Email,
-			"tags":               tags,
-			"marketing_eligible": c.MarketingEligible,
-			"hubspot":            destination{DeliveredAt: c.HubSpotDeliveredAt},
-			"resend":             destination{DeliveredAt: c.ResendDeliveredAt, Applies: &c.ResendApplies},
-			"mode":               c.Mode,
+			"email":                  c.Email,
+			"tags":                   tags,
+			"marketing_eligible":     c.MarketingEligible,
+			"marketing_unsubscribed": c.MarketingUnsubscribed,
+			"hubspot":                destination{DeliveredAt: c.HubSpotDeliveredAt},
+			"resend":                 destination{DeliveredAt: c.ResendDeliveredAt, Applies: &c.ResendApplies, OptInSent: &c.ResendOptInSent},
+			"mode":                   c.Mode,
 		})
 	}
 }

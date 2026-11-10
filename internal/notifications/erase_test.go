@@ -1793,3 +1793,42 @@ func TestErase_ClearsTheReadinessConsent(t *testing.T) {
 		t.Errorf("erasure row = %+v, want finished", s)
 	}
 }
+
+// eraseSharedAddress erases the rig's person while another account already holds the address, with an unsubscribe recorded first.
+func eraseSharedAddress(t *testing.T) *eraseRig {
+	r := newEraseRig(t)
+	recordUnsubscribe(t, r.e, r.mail)
+	buid, _ := r.person()
+	r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, marketing_consented_at, marketing_consent_text, version, hubspot_delivered_at, resend_delivered_at, resend_opt_in_sent_at)
+		VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), now(), 'ok', 3, now(), now(), now())`, r.mail, buid)
+	if err := r.work(r.start()); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestErase_AnUnsubscribeSurvivesTheRebuild(t *testing.T) {
+	r := eraseSharedAddress(t)
+	if r.count(`SELECT count(*) FROM mail_unsubscribes WHERE email = $1 AND unsubscribed_at IS NOT NULL`, r.mail) != 1 {
+		t.Fatal("the unsubscribe row was deleted while another account holds the address")
+	}
+	rs := &qaRecResend{}
+	dw := &DeliverWorker{Pool: r.e.app, HubSpot: &qaRecHubSpot{}, Resend: rs, Mode: ModeReal, Logger: r.sink.logger()}
+	if err := dw.Work(context.Background(), &river.Job[DeliverArgs]{Args: DeliverArgs{Email: r.mail, Destination: "resend", Version: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := rs.got(); len(calls) != 1 || calls[0].OptIn {
+		t.Fatalf("resend = %+v, want one Sync with sendOptIn false", calls)
+	}
+}
+
+func TestErase_DeletesTheUnsubscribeRowWithTheAddress(t *testing.T) {
+	r := newEraseRig(t)
+	recordUnsubscribe(t, r.e, r.mail)
+	if err := r.work(r.start()); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.count(`SELECT count(*) FROM mail_unsubscribes WHERE email = $1`, r.mail); n != 0 {
+		t.Fatalf("mail_unsubscribes rows for the erased address = %d, want 0", n)
+	}
+}

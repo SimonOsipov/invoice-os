@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) gate: `gh pr create` needs a passing full mutation replay of HEAD.
+"""PreToolUse(Bash) gate: `gh pr create` and `gh pr ready` need a passing full mutation replay of HEAD.
 
 Reads .ralph/mutations-<STORY>.jsonl and the .ralph/replay-<STORY>.json that a run of
 `go run ./internal/tools/mutationreplay` (without --changed) writes beside it.
@@ -14,7 +14,8 @@ import re
 import subprocess
 import sys
 
-PR_CREATE = re.compile(r"\bgh\s+pr\s+create\b")
+# Ralph opens the draft before QA writes rows; the ready flip is when the replay must be clean.
+PR_GATED = re.compile(r"\bgh\s+pr\s+(create|ready)\b")
 
 
 def git(cwd, *args):
@@ -60,7 +61,9 @@ def problem(path, head):
 def check(payload):
     if payload.get("tool_name") != "Bash":
         return None
-    if not PR_CREATE.search((payload.get("tool_input") or {}).get("command") or ""):
+    cmd = (payload.get("tool_input") or {}).get("command") or ""
+    m = PR_GATED.search(cmd)
+    if not m or (m.group(1) == "ready" and "--undo" in cmd):  # back to draft needs no proof
         return None
     cwd = payload.get("cwd") or "."
     root = git(cwd, "rev-parse", "--show-toplevel")
@@ -71,13 +74,13 @@ def check(payload):
     for f in files:
         reason = problem(f, head)
         if reason:
-            return reason
+            return "gh pr %s: %s" % (m.group(1), reason)
     return None
 
 
 def main():
     raw = sys.stdin.read()
-    if "pr" not in raw or "create" not in raw:
+    if "pr" not in raw or ("create" not in raw and "ready" not in raw):
         return 0
     try:
         reason = check(json.loads(raw))
@@ -85,7 +88,7 @@ def main():
         sys.stderr.write("require-mutation-replay: skipped after error: %r\n" % exc)
         return 0
     if reason:
-        sys.stderr.write("Blocked gh pr create: %s\n" % reason)
+        sys.stderr.write("Blocked %s\n" % reason)
         return 2
     return 0
 

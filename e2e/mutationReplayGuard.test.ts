@@ -125,6 +125,25 @@ describe('require-mutation-replay hook', () => {
     expect(runHook(PR).code, 'off a story branch, every mutations file must pass').toBe(2)
   })
 
+  it.each(['gh pr ready', 'gh pr ready 123', 'gh pr ready --repo SimonOsipov/invoice-os 123'])(
+    'gates `%s` like gh pr create',
+    (command) => {
+      writeRows('A-1')
+      const missing = runHook(command)
+      expect(missing.code).toBe(2)
+      expect(missing.stderr).toMatch(/^Blocked gh pr ready: no replay proof for A-1/)
+      writeReplay('A-1', { not_proven: 1, proven: 1 })
+      expect(runHook(command).code).toBe(2)
+      writeReplay('A-1')
+      expect(runHook(command).code).toBe(0)
+    },
+  )
+
+  it('lets a PR go back to draft without a proof', () => {
+    writeRows('A-1')
+    expect(runHook('gh pr ready 123 --undo').code).toBe(0)
+  })
+
   it('fails open on its own error', () => {
     writeRows('A-1')
     writeFileSync(join(repo, '.ralph', 'replay-A-1.json'), '{not json')

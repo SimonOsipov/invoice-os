@@ -21,7 +21,7 @@ const SCREENS = [
   ...['overview', 'submissions', 'evidence', 'api', 'billing', 'status'].map((s) => `ops/${s}`),
   ...['submissions', 'rules', 'audit', 'tenants', 'system-health', 'ai-usage', 'blog'].map((s) => `support/${s}`),
   ...['home', 'privacy', 'invite'].map((s) => `landing/${s}`),
-  ...['upload', 'map'].map((s) => `check/${s}`),
+  ...['upload', 'map', 'upload-drag', 'upload-reading', 'upload-error-type'].map((s) => `check/${s}`),
   ...['home', 'group', 'feature'].map((s) => `library/${s}`),
   ...['home', 'search', 'subscribe', 'confirm', 'category', 'post', 'not-found'].map((s) => `blog/${s}`),
 ]

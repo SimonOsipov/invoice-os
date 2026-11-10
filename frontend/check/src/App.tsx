@@ -11,8 +11,7 @@ import { canSend, fileVerdict, kindOf } from './flow'
 import { initialMapping, type Mapping, type Suggestion } from './fields'
 import { landingHref } from './links'
 import { COLUMNS_SENTENCE, refusal as refuse, type Refusal } from './messages'
-
-type Step = 'upload' | 'map' | 'details' | 'sent'
+import type { Step } from './progress'
 
 export function App() {
   const [consent, setConsent] = useState(() => readConsent())

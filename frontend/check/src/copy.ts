@@ -10,3 +10,4 @@ export const SENDING_TEXT = 'Checking your file. This can take a minute or two.'
 export const READING_TEXT = 'Reading the columns…'
 export const TYPE_SENTENCE = 'Choose a CSV, XLSX, PDF or DOCX file.'
 export const SIZE_SENTENCE = 'This file is over 15 MiB. Choose a smaller file.'
+export const STEP_LABELS = { upload: 'Upload', map: 'Match columns', email: 'Email', sent: 'Sent' } as const

@@ -9,6 +9,7 @@ import { DetailsStep } from './components/DetailsStep'
 import { MapStep } from './components/MapStep'
 import { SentPanel } from './components/SentPanel'
 import { UploadStep } from './components/UploadStep'
+import { WhatYouGet } from './components/WhatYouGet'
 import { canSend, fileVerdict, kindOf } from './flow'
 import { initialMapping, type Mapping, type Suggestion } from './fields'
 import { landingHref } from './links'
@@ -129,6 +130,7 @@ export function App() {
             {step === 'sent' && <SentPanel email={email.trim()} />}
           </div>
         </Hero>
+        <WhatYouGet />
       </main>
       <Footer onCookieChoices={() => setReopened(true)} />
       {(consent === null || reopened) && (

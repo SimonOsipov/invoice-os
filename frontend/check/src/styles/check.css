@@ -59,6 +59,31 @@ html { scroll-padding-top: var(--check-header-h); scroll-behavior: smooth; }
 .check-segs { display: grid; gap: 4px; }
 .check-segs span { height: 4px; border-radius: 2px; background: var(--primary-10); }
 .check-segs .is-filled { background: var(--teal); }
+/* what you get */
+.check-what { padding-block: var(--section-y); }
+.check-what-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 64px; align-items: start; }
+.check-what-copy { display: grid; gap: 28px; align-content: start; justify-items: start; min-width: 0; }
+.check-what-h { margin: 0; font-size: clamp(32px, 3.4vw, 46px); }
+.check-what-accent { color: var(--teal); }
+.check-what-block { display: grid; gap: 10px; }
+.check-what-block h3, .check-what-block p { margin: 0; }
+.check-what-block p { max-width: 540px; }
+.check-limits { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.check-limits > div { background: var(--card); padding: 18px 18px 16px; display: grid; gap: 4px; }
+.check-limits b { font-size: 26px; font-weight: 800; letter-spacing: -0.04em; color: var(--ink); line-height: 1.1; }
+.check-example { margin: 0; display: grid; gap: 12px; min-width: 0; }
+.check-mail { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden; }
+.check-mail-head { display: grid; gap: 6px; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--background); font-size: 13px; color: var(--muted-foreground); }
+.check-mail-head b { color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+.check-mail-from { display: flex; justify-content: space-between; gap: 12px; }
+.check-mail-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.check-mail-subject { font-size: 15px; font-weight: 700; color: var(--ink); }
+.check-mail-inv { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.check-mail-no { padding: 12px 20px 6px; font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+.check-mail-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 6px 20px; font-size: 13.5px; }
+.check-mail-row b { font-weight: 700; color: var(--ink); }
+.check-mail-row span { color: var(--foreground); overflow-wrap: anywhere; }
+.check-mail-line { padding: 14px 20px; font-size: 13px; color: var(--muted-foreground); background: var(--background); }
 /* footer */
 .check-foot { border-top: 1px solid var(--header-border); background: var(--background); }
 .check-foot-row { padding-block: 28px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px 24px; font-size: 13px; color: var(--muted-foreground); }
@@ -93,6 +118,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 @media (max-width: 980px) {
   .check-split { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .check-trust { display: flex; flex-wrap: wrap; gap: 10px 28px; }
+  .check-what-grid { grid-template-columns: minmax(0, 1fr); gap: 40px; }
 }
 @media (max-width: 760px) {
   .check-progress { display: none; }
@@ -109,6 +135,8 @@ input[type='file'] { max-width: 100%; font: inherit; }
   .check-split--wide .check-trust { display: flex; flex-wrap: wrap; gap: 10px 28px; }
   .check-trust li { font-size: 13px; }
   .check-tool .check-card { padding: 20px 16px; }
+  .check-limits b { font-size: 22px; }
+  .check-mail-head, .check-mail-no, .check-mail-row, .check-mail-line { padding-inline: 14px; }
   .check-foot-row { flex-direction: column; align-items: flex-start; }
   .check-card { padding: 16px; }
   .check-field { grid-template-columns: minmax(0, 1fr); gap: 6px; }

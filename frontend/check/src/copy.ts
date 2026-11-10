@@ -19,3 +19,42 @@ export const TRUST_CUES = [
   { glyph: 'trash-2', title: 'File not kept', text: 'Deleted when the check finishes' },
   { glyph: 'mail', title: 'Results by email', text: 'Never shown on this page' },
 ] as const
+
+export const WHAT_EYEBROW = 'WHAT YOU GET'
+export const WHAT_H2 = ['Two invoices, checked rule by rule.', 'The results land in your inbox.'] as const
+export const WHAT_RULES = {
+  title: 'What the MBS rules are',
+  text: "MBS is the e-invoicing system Nigeria's tax authority uses to receive and validate invoices. To be accepted, an invoice has to carry a set of required fields in a set format: the supplier's and buyer's details and TINs, the invoice number and dates, the amounts and the VAT.",
+} as const
+export const WHAT_EMAIL = {
+  title: 'What the email tells you',
+  text: 'For each of the first 2 invoices in your file: every rule it fails, with the field the rule checked and the rule’s message. An invoice that fails no rule says “Passes every rule”. Rules that only warn are listed under Warnings, and rules that need your company profile are listed as Not checked. You see what to fix in your invoicing before it matters.',
+} as const
+// Numbers: MaxInvoices (publiccheck), MaxRunsPerEmail (readinesscheck), MAX_UPLOAD_BYTES and four import extensions (app importFlow).
+export const WHAT_LIMITS = [
+  { n: '2', caption: 'invoices checked per file' },
+  { n: '3', caption: 'free checks per email address' },
+  { n: '15 MiB', caption: 'largest file, one at a time' },
+  { n: '4', caption: 'file types: CSV, XLSX, PDF, DOCX' },
+] as const
+export const WHAT_CTA = 'Check a file'
+// Subject, sender and pass text are the real mail's (accountmail.ReadinessCheckSubject, sender.From, readiness_check.html);
+// labels and messages are fields.go and the last rule-set migration. whatYouGet.mail.test.ts pins each.
+export const EXAMPLE_MAIL = {
+  from: 'no-reply@ascomply.com',
+  subject: 'Your ASComply readiness check results',
+  pass: 'Passes every rule',
+  invoices: [
+    {
+      number: 'INV-1041',
+      rows: [
+        { label: 'Supplier TIN', value: 'Supplier TIN is required.' },
+        { label: 'Buyer TIN', value: 'Buyer TIN, when present, must be NNNNNNNN-NNNN or an RN- incorporation number.' },
+      ],
+    },
+    { number: 'INV-1042', rows: [] },
+  ],
+  line: 'Each failed rule shows its field and the rule’s message.',
+  caption:
+    'Illustrative. The real email also lists each invoice’s date, amounts and buyer from your file, and any warnings or rules not checked.',
+} as const

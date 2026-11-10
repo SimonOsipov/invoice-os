@@ -368,6 +368,57 @@ test.describe('check layout', () => {
     }
   })
 
+  // What you get (FREECHK-10-03).
+  test('check layout: anchors land below the header', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    for (const width of [1280, 390]) {
+      await openCheck(page, width)
+      const headBottom = async () => (await rectOf(page.locator('.check-head'), 'header')).y + (await rectOf(page.locator('.check-head'), 'header')).height
+      if (width === 1280) {
+        await page.locator('.check-head').getByRole('link', { name: 'What you get', exact: true }).click()
+        await expect.poll(async () => (await page.locator('#check-what-h').boundingBox())!.y, `${width}px: #what heading`).toBeGreaterThanOrEqual(await headBottom() - 1)
+        const h = await rectOf(page.locator('#check-what-h'), 'what heading')
+        expect(h.y + h.height, `${width}px: #what heading is outside the viewport`).toBeLessThanOrEqual(1080)
+      }
+      await page.locator('#what').getByRole('link', { name: 'Check a file' }).click()
+      await expect.poll(async () => (await page.locator('#check').boundingBox())!.y, `${width}px: #check`).toBeGreaterThanOrEqual((await headBottom()) - 1)
+    }
+  })
+
+  test('check layout: What you get side by side, stacked on a phone', async ({ page }) => {
+    await openCheck(page, WIDE_WIDTHS[0])
+    const check = async (width: number, stacked: boolean) => {
+      await resize(page, width)
+      const label = `${width}px`
+      const copy = await rectOf(page.locator('.check-what-copy'), 'copy')
+      const example = await rectOf(page.locator('.check-example'), 'example')
+      if (stacked) expect(copy.y + copy.height, `${label}: copy not above the example`).toBeLessThanOrEqual(example.y + 1)
+      else expect(copy.x + copy.width, `${label}: copy right edge past the example`).toBeLessThanOrEqual(example.x)
+      const limits = await rectOf(page.locator('.check-limits'), 'limits')
+      const cells = page.locator('.check-limits > div')
+      const rects: Rect[] = []
+      for (let i = 0; i < (await cells.count()); i++) rects.push(await rectOf(cells.nth(i), `limit ${i}`))
+      expect(rects).toHaveLength(4)
+      for (const r of rects) expect(enclosesRect(limits, r, 1), `${label}: a limit cell is outside the grid`).toBe(true)
+      noOverlap(rects, label)
+      expect(example.x >= 0 && example.x + example.width <= width + 1, `${label}: the example is outside the viewport`).toBe(true)
+      await noSidewaysScroll(page, label)
+    }
+    for (const width of WIDE_WIDTHS) await check(width, false)
+    for (const width of PHONE_WIDTHS) await check(width, true)
+  })
+
+  test('check layout: What you get takes the design\'s phone values', async ({ page }) => {
+    const side = async (loc: Locator) => [await px(loc, 'padding-left'), await px(loc, 'padding-right')]
+    for (const [width, num, pad] of [[390, 22, 14], [1280, 26, 20]] as const) {
+      await openCheck(page, width)
+      expect(await px(page.locator('.check-limits b').first(), 'font-size'), `${width}px limit number`).toBe(num)
+      for (const part of ['.check-mail-head', '.check-mail-row', '.check-mail-no']) {
+        expect(await side(page.locator(part).first()), `${width}px ${part} side padding`).toEqual([pad, pad])
+      }
+    }
+  })
+
   test('check layout: the Argos shots of the Upload and Map steps', async ({ page }) => {
     test.skip(!argosOn(), 'Argos shots are taken on the nightly only')
     await openCheck(page, 1440)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/filesig"
 )
 
 // maxUploadBytes bounds the whole request body; documents.size_bytes CHECKs <= 15728640.
@@ -50,7 +51,7 @@ type uploadResponse struct {
 // rather than a second seam (TestExtractionExposesExactlyOneEnqueueSeam).
 //
 // The ordering is the contract: identity 401 -> MaxBytesReader -> ParseMultipartForm ->
-// FormFile -> classify -> refuse -> store -> enqueue -> 201. Classification sits ABOVE the
+// FormFile -> classify -> refuse -> head check -> store -> enqueue -> 201. Classification sits ABOVE the
 // store, inverting POST /v1/imports/preview (handlers.go:397,416), which stores bytes it then
 // refuses to read (TestUploadHandler_ClassifyPrecedesStore).
 func UploadHandler(
@@ -90,6 +91,18 @@ func UploadHandler(
 		contentType := classifyDocumentType(fh.Filename, fh.Header.Get("Content-Type"))
 		if contentType == "" {
 			writeError(w, http.StatusBadRequest, uploadRefusalMessage)
+			return
+		}
+
+		head := make([]byte, filesig.HeadLen)
+		n, _ := io.ReadFull(file, head)
+		if !contentMatches(contentType, head[:n]) {
+			writeError(w, http.StatusBadRequest, uploadRefusalMessage)
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			log.ErrorContext(r.Context(), "extraction: rewind upload", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 

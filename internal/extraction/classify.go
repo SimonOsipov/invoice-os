@@ -3,10 +3,11 @@
 package extraction
 
 import (
-	"bytes"
 	"mime"
 	"path/filepath"
 	"strings"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/filesig"
 )
 
 // acceptedDocumentTypes maps a lowercased filename extension to the canonical content type
@@ -35,7 +36,18 @@ func RendersPageImages(contentType string) bool { return pageImageFormats[conten
 // looksLikePDF reports whether the bytes carry the PDF header at offset zero. Deliberately
 // narrower than a content-type sniff: it is an escape hatch for one poisoned column, not a
 // classifier.
-func looksLikePDF(b []byte) bool { return bytes.HasPrefix(b, []byte("%PDF-")) }
+func looksLikePDF(b []byte) bool { return filesig.Matches("pdf", b) }
+
+// contentMatches reports whether head carries the signature of the accepted type contentType.
+// An unknown type returns false.
+func contentMatches(contentType string, head []byte) bool {
+	for ext, ct := range acceptedDocumentTypes {
+		if ct == contentType {
+			return filesig.Matches(strings.TrimPrefix(ext, "."), head)
+		}
+	}
+	return false
+}
 
 // RendersPageImagesForDocument is RendersPageImages plus a header sniff, for the one column that
 // a client header can poison permanently (documents is append-only by grant). The name carries

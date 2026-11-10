@@ -43,6 +43,9 @@ const (
 	upMsgUnauthorized = "unauthorized"
 	upMsgTooLarge     = "request body exceeds the upload size limit"
 
+	upPDFBody = "%PDF-1.7 fake"
+	upZipBody = "PK\x03\x04 fake"
+
 	upPDF  = "application/pdf"
 	upPNG  = "image/png"
 	upJPEG = "image/jpeg"
@@ -70,6 +73,7 @@ type upSpy struct {
 	gotFilename    string
 	gotContentType string
 	gotSize        int64
+	gotBody        []byte
 	gotEnqueueID   string
 
 	id       string
@@ -87,7 +91,7 @@ func (s *upSpy) store(_ context.Context, filename, contentType string, size int6
 	s.gotFilename, s.gotContentType, s.gotSize = filename, contentType, size
 	// Drained to EOF, as document.Service.Store drains it.
 	if body != nil {
-		_, _ = io.Copy(io.Discard, body)
+		s.gotBody, _ = io.ReadAll(body)
 	}
 	if s.storeErr != nil {
 		return extraction.StoredDocument{}, s.storeErr
@@ -265,12 +269,13 @@ func TestUploadHandler_AcceptsEveryTypeInTheAcceptedTable(t *testing.T) {
 		filename    string
 		partType    string
 		wantContent string
+		body        string
 	}{
-		{"pdf by extension", "scan.pdf", "", upPDF},
-		{"docx by extension, upper case", "scan.DOCX", "", upDOCX},
+		{"pdf by extension", "scan.pdf", "", upPDF, upPDFBody},
+		{"docx by extension, upper case", "scan.DOCX", "", upDOCX, upZipBody},
 
-		{"pdf by content type", "scan.bin", upPDF + "; charset=utf-8", upPDF},
-		{"docx by content type", "scan.bin", upDOCX + "; charset=utf-8", upDOCX},
+		{"pdf by content type", "scan.bin", upPDF + "; charset=utf-8", upPDF, upPDFBody},
+		{"docx by content type", "scan.bin", upDOCX + "; charset=utf-8", upDOCX, upZipBody},
 	}
 	// Relational: the population follows the accepted table rather than a literal typed here.
 	if want := 2 * len(upNarrowedInTypes); len(cases) < want {
@@ -280,7 +285,7 @@ func TestUploadHandler_AcceptsEveryTypeInTheAcceptedTable(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			spy := newUpSpy()
-			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte("bytes"))
+			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte(c.body))
 
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201 for %s/%q (body=%s)", rec.Code, c.filename, c.partType, raw)
@@ -805,7 +810,11 @@ func TestUploadHandler_RefusesTheNarrowedOutImageTypes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			spy := newUpSpy()
-			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte("bytes"))
+			content := upPDFBody
+			if c.wantType == upDOCX {
+				content = upZipBody
+			}
+			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte(content))
 
 			if rec.Code != c.wantCode {
 				t.Fatalf("status = %d, want %d for %s declared %q (body=%s)", rec.Code, c.wantCode, c.filename, c.partType, raw)
@@ -831,5 +840,19 @@ func TestUploadHandler_RefusesTheNarrowedOutImageTypes(t *testing.T) {
 				t.Errorf("a refused %s declared %q ran %v, want neither seam -- accept-then-dead-letter is the outcome this refusal replaces", c.filename, c.partType, spy.order)
 			}
 		})
+	}
+}
+
+// TestUploadHandler_StoresEveryByteAfterTheHeadCheck: the head read is rewound, so the store
+// sees the whole part from offset 0.
+func TestUploadHandler_StoresEveryByteAfterTheHeadCheck(t *testing.T) {
+	want := append([]byte("%PDF-1.7 fake"), bytes.Repeat([]byte("y"), 100<<10)...)
+	spy := newUpSpy()
+	rec, raw, _ := upPost(t, spy, "scan.pdf", "", want)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, raw)
+	}
+	if !bytes.Equal(spy.gotBody, want) {
+		t.Errorf("the store read %d byte(s), want all %d from offset 0", len(spy.gotBody), len(want))
 	}
 }

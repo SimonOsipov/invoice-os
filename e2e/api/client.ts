@@ -193,27 +193,6 @@ export async function registerFormAccount(
   return { account, token: (await signInSession(account.email, account.password)).access_token }
 }
 
-// The first device is recorded by a job and two jobs can run together, so one new User-Agent may send no mail.
-// Each agent gets 30 s of polling before the next is tried.
-const NEW_DEVICE_AGENTS = ['E2E-Device-A/1.0', 'E2E-Device-B/1.0', 'E2E-Device-C/1.0']
-
-// Signs in from a new User-Agent until the capture holds the new-device mail for the account.
-export async function newDeviceMail(account: RealAccount): Promise<{ subject: string; html: string }> {
-  for (const agent of NEW_DEVICE_AGENTS) {
-    const state = mintSignInState()
-    const headers = { 'User-Agent': agent }
-    const signIn = await rawFetch('/auth/sign-in', { method: 'POST', headers, body: { email: account.email, password: account.password, state } })
-    if (signIn.status !== 200) throw new Error(`sign-in answered ${signIn.status}: ${JSON.stringify(signIn.body)}`)
-    const exchange = await rawFetch('/auth/exchange', { method: 'POST', headers, body: { code: (signIn.body as { code: string }).code, state } })
-    if (exchange.status !== 200) throw new Error(`exchange answered ${exchange.status}: ${JSON.stringify(exchange.body)}`)
-    for (const deadline = Date.now() + 30_000; Date.now() < deadline; await new Promise((r) => setTimeout(r, 1000))) {
-      const mail = (await capturedMail(account.email)).find((m) => m.subject === 'New sign-in to your ASComply account')
-      if (mail) return mail
-    }
-  }
-  throw new Error(`no new-device mail was captured for ${account.email} after ${NEW_DEVICE_AGENTS.length} new User-Agents`)
-}
-
 // GET /api/notifications/v1/contacts/me: the caller's own contact row.
 export interface ContactMe {
   email: string
@@ -266,6 +245,13 @@ export async function refreshSession(refreshToken: string): Promise<string> {
 // Unverified payload of a JWT the gateway just minted.
 export function claimsOf(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
+// The token the account's mails carry (D2); a preview reads no mail.
+export function unsubscribeTokenOf(accessToken: string): string {
+  const token = (claimsOf(accessToken).user_metadata as { unsubscribe?: unknown } | undefined)?.unsubscribe
+  if (typeof token === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(token)) return token
+  throw new Error('the access token holds no unsubscribe token')
 }
 
 // Unverified header of a JWT.

@@ -27,7 +27,6 @@ import {
   setMembershipStatus,
   me,
   mintSignInState,
-  newDeviceMail,
   provisionRealAccount,
   provisionStaffAccount,
   registerFresh,
@@ -36,6 +35,7 @@ import {
   signInForCode,
   signInSession,
   subjectOf,
+  unsubscribeTokenOf,
   type Me,
   type RealAccount,
   type TenantKind,
@@ -1626,17 +1626,14 @@ test('the emailed link reaches the confirm page through the app, and a bogus cli
 const UNSUBSCRIBE_DONE =
   'You are unsubscribed. We will send you no more marketing email. You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.'
 
-// The unsubscribe link of a fresh registrant's captured new-device mail, on this environment's gateway.
+// A fresh registrant's link: the token its access token carries (D30).
 async function unsubscribeLink(): Promise<string> {
-  const { account } = await registerFormAccount('unsub-page')
-  const mail = await newDeviceMail(account)
-  const token = /\/unsubscribe\?t=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(mail.html)?.[1]
-  if (!token) throw new Error('the new-device mail holds no unsubscribe link')
-  return `${GATEWAY_URL}/unsubscribe?t=${token}`
+  const { token } = await registerFormAccount('unsub-page')
+  return `${GATEWAY_URL}/unsubscribe?t=${unsubscribeTokenOf(token)}`
 }
 
 test('unsubscribe page: the button says Unsubscribing… and one press sends one POST', async ({ page }) => {
-  test.setTimeout(180_000)
+  test.setTimeout(60_000)
   const link = await unsubscribeLink()
   const posts = recordPosts(page, '/unsubscribe')
   let release!: () => void
@@ -1664,7 +1661,7 @@ test('unsubscribe page: the button says Unsubscribing… and one press sends one
 })
 
 test('unsubscribe page layout: the card and button fit at every width', async ({ page }, testInfo) => {
-  test.setTimeout(180_000)
+  test.setTimeout(60_000)
   const link = await unsubscribeLink()
   const readings: { width: number; fontSize: string; fontWeight: string }[] = []
   for (const width of [...WIDE_WIDTHS, 375]) {

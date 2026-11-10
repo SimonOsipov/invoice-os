@@ -64,7 +64,6 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h (IPv6 per /64), holds an upload slot at most 90 s and logs no address, IP or file name.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
 - `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data.
-- `POST /internal/public-checks/captured-mail` (worker): reads captured mail by address. It is registered only when the worker's sender is an `*accountmail.Capture` (a preview, or a nightly without the sending key). Registration on a hosted worker is HIGH.
 
 ## Accepted ceilings
 

@@ -1241,7 +1241,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -1721,6 +1721,50 @@ func TestPreviewBlogIDRetriesA5xxButNotA401(t *testing.T) {
 	}
 	if n := strings.Count(bad.file(t, "curl-calls"), "/topics"); n != 1 {
 		t.Errorf("401 topics calls = %d, want 1", n)
+	}
+}
+
+func TestPreviewCheckMailOnMountsOnlyTheWorkersSendingKeyAndDomain(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "check-mail-on", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	want := "--update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest,RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest"
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "run services update worker-nightly ") || !strings.Contains(lines[0], want) {
+		t.Fatalf("calls = %v", lines)
+	}
+	if strings.Contains(r.file(t, "calls"), "versions access") {
+		t.Errorf("check-mail-on read a secret value")
+	}
+}
+
+func TestPreviewCheckMailOffUnmountsTheWorkersMail(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "check-mail-off", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "run services update worker-nightly ") || !strings.Contains(lines[0], "--remove-secrets RESEND_SENDING_KEY,RESEND_RECEIVING_DOMAIN") {
+		t.Fatalf("calls = %v", lines)
+	}
+}
+
+func TestPreviewCheckMailOffFailsWhenTheUpdateFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", "worker-nightly\n") }, "check-mail-off", "nightly")
+	if r.code == 0 || !strings.Contains(r.stderr, "check-mail-off left real mail mounted") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestPreviewCheckMailOnFailsWhenTheUpdateFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", "worker-nightly\n") }, "check-mail-on", "nightly")
+	if r.code == 0 {
+		t.Fatalf("exit 0, stderr %q", r.stderr)
 	}
 }
 

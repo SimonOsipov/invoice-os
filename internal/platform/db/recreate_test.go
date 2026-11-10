@@ -476,8 +476,10 @@ func TestProvisionRecreateDDLFailureRollsBack(t *testing.T) {
 	}
 }
 
-func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
-	superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+// connectionCheck reads the scratch database's connection count as the baseline
+// and returns a check that the count is back to it and the advisory lock is free.
+func connectionCheck(t *testing.T, superDSN string) func(label string) {
+	t.Helper()
 	baseSuper, _ := requireProvisionDSNs(t)
 	name := strings.TrimPrefix(func() string { u, _ := url.Parse(superDSN); return u.Path }(), "/")
 	ctx := context.Background()
@@ -486,7 +488,7 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer counter.Close(ctx)
+	t.Cleanup(func() { counter.Close(ctx) })
 	count := func() int {
 		var n int
 		if err := counter.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = $1`, name).Scan(&n); err != nil {
@@ -496,7 +498,7 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 	}
 	before := count()
 
-	check := func(label string) {
+	return func(label string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
 		for count() != before && time.Now().Before(deadline) {
@@ -515,6 +517,31 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 			t.Errorf("%s: advisory lock not free (ok=%v, err=%v)", label, ok, err)
 		}
 	}
+}
+
+// A backend the test does not own is open at the baseline and gone at the check.
+func TestProvisionRecreateConnectionBaselineIgnoresUnownedBackend(t *testing.T) {
+	superDSN, _ := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+	ctx := context.Background()
+
+	unowned, err := pgx.Connect(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("connect unowned: %v", err)
+	}
+	defer unowned.Close(ctx)
+	if _, err := unowned.Exec(ctx, `SELECT 1`); err != nil {
+		t.Fatalf("unowned backend: %v", err)
+	}
+	check := connectionCheck(t, superDSN)
+	if err := unowned.Close(ctx); err != nil {
+		t.Fatalf("close unowned: %v", err)
+	}
+	check("after an unowned backend exits")
+}
+
+func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
+	superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+	check := connectionCheck(t, superDSN)
 
 	if got, err := recreate(t, superDSN, fstest.MapFS{}, nil); err == nil || got {
 		t.Fatalf("empty migration set: got %v, %v, want false and an error", got, err)

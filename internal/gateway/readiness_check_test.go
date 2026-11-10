@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -201,7 +202,7 @@ func (e *checkEnv) run(t *testing.T, req *http.Request) *httptest.ResponseRecord
 func (e *checkEnv) runOK(t *testing.T, ip string) *httptest.ResponseRecorder {
 	t.Helper()
 	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("inv.csv", []byte("a,b\n1,2\n"))...)
-	req.RemoteAddr = ip + ":4000"
+	req.RemoteAddr = net.JoinHostPort(ip, "4000")
 	return e.run(t, req)
 }
 
@@ -286,6 +287,76 @@ func TestRun_EleventhRunFromOneIPIs429(t *testing.T) {
 	wantRefused(t, e.runOK(t, checkIP), 429, checkIPSentence)
 	if e.w.calls() != ReadinessCheckPerIP {
 		t.Errorf("worker calls = %d, want %d", e.w.calls(), ReadinessCheckPerIP)
+	}
+}
+
+func TestRun_TwoAddressesInOneSlash64ShareTheDailyCount(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for i := range ReadinessCheckPerIP {
+		ip := []string{"2001:db8:1:2::1", "2001:db8:1:2:ffff::9"}[i%2]
+		if rec := e.runOK(t, ip); rec.Code != 200 {
+			t.Fatalf("run %d = %d %s, want 200", i+1, rec.Code, rec.Body)
+		}
+	}
+	wantRefused(t, e.runOK(t, "2001:db8:1:2::abcd"), 429, checkIPSentence)
+	if e.w.calls() != ReadinessCheckPerIP {
+		t.Errorf("worker calls = %d, want %d", e.w.calls(), ReadinessCheckPerIP)
+	}
+	if n := ipCount(e.th, "2001:db8:1:2::/64"); n != ReadinessCheckPerIP {
+		t.Errorf("/64 count = %d, want %d", n, ReadinessCheckPerIP)
+	}
+}
+
+func TestRun_AnotherSlash64HasItsOwnCount(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for range ReadinessCheckPerIP {
+		e.runOK(t, "2001:db8:1:2::1")
+	}
+	if rec := e.runOK(t, "2001:db8:1:3::1"); rec.Code != 200 {
+		t.Fatalf("other /64 run = %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestRun_IPv4KeepsItsExactAddressKey(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for range ReadinessCheckPerIP {
+		e.runOK(t, checkIP)
+	}
+	if rec := e.runOK(t, "203.0.113.8"); rec.Code != 200 {
+		t.Fatalf("neighbouring IPv4 run = %d %s, want 200", rec.Code, rec.Body)
+	}
+	wantRefused(t, e.runOK(t, checkIP), 429, checkIPSentence)
+}
+
+func TestRun_AMappedIPv6AddressCountsAsItsIPv4(t *testing.T) {
+	e := newCheckEnv(t, true)
+	for range ReadinessCheckPerIP {
+		e.runOK(t, checkIP)
+	}
+	wantRefused(t, e.runOK(t, "::ffff:"+checkIP), 429, checkIPSentence)
+}
+
+func TestRun_RefundReturnsTheSlash64Count(t *testing.T) {
+	e := newCheckEnv(t, true)
+	e.w.answer(409, `{"error":"sign_up"}`)
+	e.runOK(t, "2001:db8:1:2::1")
+	if n := ipCount(e.th, "2001:db8:1:2::/64"); n != 0 {
+		t.Errorf("/64 count = %d, want 0: the engine did not start", n)
+	}
+}
+
+func TestCheckIPKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"2001:db8:1:2::1":                  "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff:ffff:ffff:ffff": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":                  "2001:db8:1:3::/64",
+		"203.0.113.7":                      "203.0.113.7",
+		"":                                 unattributableIPKey,
+		"fe80::1%eth0":                     "fe80::/64",
+	} {
+		if got := checkIPKey(in); got != want {
+			t.Errorf("checkIPKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

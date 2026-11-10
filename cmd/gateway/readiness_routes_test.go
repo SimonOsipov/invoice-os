@@ -102,21 +102,25 @@ func TestGatewayRoutes_ReadinessCheckRoutesAreCORSWrapped(t *testing.T) {
 // Production and nightly count the per-IP limit; a preview logs and admits.
 func TestReadinessCheckPosture_EnforcesOffAPreview(t *testing.T) {
 	for _, tc := range []struct {
-		env, xff string
-		want429  bool
+		name, env string
+		xffs      []string
+		want429   bool
 	}{
-		{"production", "203.0.113.7, 34.1.2.3", true},
-		{"nightly", "203.0.113.7", true},
-		{"ascomply-pr-1", "203.0.113.7", false},
+		{"production", "production", []string{"203.0.113.7, 34.1.2.3"}, true},
+		{"nightly", "nightly", []string{"203.0.113.7"}, true},
+		{"ascomply-pr-1", "ascomply-pr-1", []string{"203.0.113.7"}, false},
+		{"production IPv6 one /64", "production", []string{"2001:db8:1:2::1, 34.1.2.3", "2001:db8:1:2:ffff::9, 34.1.2.3"}, true},
+		{"production IPv6 two /64s", "production", []string{"2001:db8:1:2::1, 34.1.2.3", "2001:db8:1:3::1, 34.1.2.3"}, false},
+		{"production mapped IPv4", "production", []string{"::ffff:203.0.113.7, 34.1.2.3", "203.0.113.7, 34.1.2.3"}, true},
 	} {
-		t.Run(tc.env, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", tc.env)
 			wu, nu := readinessStubs(t)
 			rt := readinessCheckHandlers(wu, nu, "gw-token", slog.New(slog.DiscardHandler), nil)
 			var last int
 			for i := 0; i < 11; i++ {
 				rec := httptest.NewRecorder()
-				rt.Run.ServeHTTP(rec, readinessRunRequest(t, tc.xff))
+				rt.Run.ServeHTTP(rec, readinessRunRequest(t, tc.xffs[i%len(tc.xffs)]))
 				last = rec.Code
 				if i < 10 && last != http.StatusOK {
 					t.Fatalf("run %d = %d, want 200", i+1, last)

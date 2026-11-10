@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"regexp"
@@ -54,6 +55,19 @@ var (
 	checkFormats     = map[string]string{".csv": "csv", ".xlsx": "xlsx", ".pdf": "pdf", ".docx": "docx"}
 )
 
+// checkIPKey keys an IPv6 address by its /64 and an IPv4 address by itself; clientIP has already unmapped.
+// ceiling: a /56 or /48 holder still gets 10 runs per /64, widen the prefix if that is abused
+func checkIPKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return unattributableIPKey
+	}
+	if a.Is4() {
+		return a.String()
+	}
+	return netip.PrefixFrom(a.WithZone(""), 64).Masked().String()
+}
+
 // ReadinessCheckSink hands a checked address and its consent text to the notifications /internal/contacts/readiness-checks intake.
 type ReadinessCheckSink interface {
 	ReadinessCheck(ctx context.Context, email, consentText string) error
@@ -74,7 +88,7 @@ func (k readinessSink) ReadinessCheck(ctx context.Context, email, consentText st
 type ReadinessCheckRoutes struct{ Mapping, Run http.Handler }
 
 // ReadinessCheckHandlers serves POST /readiness-check/run and /mapping by streaming the visitor's file to the worker.
-// A run is counted per client IP in perIP before the file is read. No log line carries the address, the IP or the file name.
+// A run is counted per client IP (IPv6 per /64) in perIP before the file is read. No log line carries the address, the IP or the file name.
 func ReadinessCheckHandlers(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) ReadinessCheckRoutes {
 	c := newReadinessCheck(worker, client, gatewayToken, sink, perIP, enforce, posture, log)
 	return ReadinessCheckRoutes{Mapping: http.HandlerFunc(c.mapping), Run: http.HandlerFunc(c.run)}
@@ -213,10 +227,7 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r, c.posture)
-	if ip == "" {
-		ip = unattributableIPKey
-	}
+	ip := checkIPKey(clientIP(r, c.posture))
 	held, admitErr := c.perIP.Admit(ip)
 	if !held {
 		// A database error is already logged by the throttle.

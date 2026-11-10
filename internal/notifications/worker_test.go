@@ -160,6 +160,25 @@ type qaRecResend struct {
 	mu    sync.Mutex
 	calls []qaResendCall
 	fn    func(n int, c Contact, optIn bool) error
+	reads int
+	state func(n int) (ResendState, error) // nil: the zero state
+}
+
+func (r *qaRecResend) ContactState(context.Context, string) (ResendState, error) {
+	r.mu.Lock()
+	r.reads++
+	n, state := r.reads, r.state
+	r.mu.Unlock()
+	if state != nil {
+		return state(n)
+	}
+	return ResendState{}, nil
+}
+
+func (r *qaRecResend) readCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
 }
 
 func (r *qaRecResend) Sync(_ context.Context, c Contact, optIn bool) error {
@@ -850,6 +869,9 @@ func TestDeliver_UntickedRegistrantNeverOptsIn(t *testing.T) {
 	}
 	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
 		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+	}
+	if n := r.rs.readCount(); n != 0 {
+		t.Errorf("state reads = %d, want 0: no opt-in is due", n)
 	}
 }
 
@@ -1712,24 +1734,228 @@ func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
 	}
 }
 
-func TestDeliver_RegistrantWhoRanACheckGetsNoMarketingOptIn(t *testing.T) {
+func TestDeliver_ReadinessOnlyContactGetsTheMarketingOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
-	email := uniqueEmail(t, r.e, "chkoptin")
-	qaRegistrant(t, r.e, email, "Ada Lovelace", "", "")
+	email := uniqueEmail(t, r.e, "chkonly")
 	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 
-	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job of a check-only contact")
+	calls := r.rs.got()
+	if len(calls) != 1 || !calls[0].OptIn {
+		t.Fatalf("Sync calls = %+v, want one with sendOptIn true", calls)
+	}
+	if want := []string{"readiness check"}; !slices.Equal(calls[0].C.Tags, want) {
+		t.Errorf("tags = %v, want %v: no registered tag, so no segment", calls[0].C.Tags, want)
+	}
+	if d := r.delivery(t, email); d.In == nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want both set", d.In, d.ResendAt)
+	}
+}
+
+func TestDeliver_RegistrantWhoRanACheckGetsTheMarketingOptInOnce(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	ctx := context.Background()
+	email := uniqueEmail(t, r.e, "chkoptin")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", "")
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job before the check")
+	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "resend job after the check")
+	in := r.delivery(t, email).In
+	if in == nil {
+		t.Fatal("resend_opt_in_sent_at = NULL after the check, want set")
+	}
+	if err := r.e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Ada Lovelace", ConsentText: consentText}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	res, err = r.work(t, r.jobRow(t, email, "resend", 3))
+	qaRequireCompleted(t, res, err, "resend job after the ticked demo request")
+
+	calls := r.rs.got()
+	if len(calls) != 3 || calls[0].OptIn || !calls[1].OptIn || calls[2].OptIn {
+		t.Fatalf("Sync sendOptIn = %+v, want [false true false]", calls)
+	}
+	requireSameTime(t, "resend_opt_in_sent_at", r.delivery(t, email).In, in)
+}
+
+func TestDeliver_OptedInContactGetsNoSecondOptInAfterACheck(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "optcheck")
+	if err := r.e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: "Grace Hopper", ConsentText: consentText}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "first resend job")
+	in := r.delivery(t, email).In
+	if in == nil || r.rs.readCount() != 1 {
+		t.Fatalf("resend_opt_in_sent_at = %v, reads = %d, want set and 1", in, r.rs.readCount())
+	}
+
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
 	qaRequireCompleted(t, res, err, "resend job after the check")
 	calls := r.rs.got()
-	if len(calls) != 1 {
-		t.Fatalf("Sync called %d times, want 1", len(calls))
+	if len(calls) != 2 || !calls[0].OptIn || calls[1].OptIn {
+		t.Fatalf("Sync sendOptIn = %+v, want [true false]", calls)
 	}
-	if calls[0].OptIn {
-		t.Error("Sync sendOptIn = true for a registrant whose only tick was on a readiness check")
+	requireSameTime(t, "resend_opt_in_sent_at", r.delivery(t, email).In, in)
+	if n := r.rs.readCount(); n != 1 {
+		t.Errorf("state reads = %d, want 1: a stamped contact is not read", n)
+	}
+}
+
+// stateVendor answers the contact read with the given flag and topic list; other calls follow resendPresent.
+func stateVendor(t *testing.T, unsubscribed bool, topics string) *fakeVendor {
+	t.Helper()
+	return newVendor(t, func(s seenReq) (int, string) {
+		if s.Method == http.MethodGet && strings.HasSuffix(s.path(), "/topics") {
+			return 200, `{"object":"list","has_more":false,"data":` + topics + `}`
+		}
+		if s.Method == http.MethodGet {
+			return 200, fmt.Sprintf(`{"object":"contact","unsubscribed":%t}`, unsubscribed)
+		}
+		return resendPresent.respond(s)
+	})
+}
+
+func countCalls(v *fakeVendor, method, suffix string) (n int) {
+	for _, s := range v.calls() {
+		if s.Method == method && strings.HasSuffix(s.path(), suffix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestDeliver_UnsubscribedContactGetsNoOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "unsub")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	v := stateVendor(t, true, `[]`)
+	r.w.Resend = resendAt(v, nil)
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job of an unsubscribed contact")
+	if n := countCalls(v, http.MethodPatch, ""); n != 0 {
+		t.Errorf("PATCH requests = %d, want 0", n)
 	}
 	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
 		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+	}
+
+	if err := r.e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: "Grace Hopper"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "second resend job")
+	if n := countCalls(v, http.MethodPatch, ""); n != 0 {
+		t.Errorf("PATCH requests = %d after the second job, want 0", n)
+	}
+	if d := r.delivery(t, email); d.In != nil {
+		t.Errorf("resend_opt_in_sent_at = %v, want NULL: a skip is not stamped", d.In)
+	}
+	if n := countCalls(v, http.MethodGet, "/topics"); n != 2 {
+		t.Errorf("GET topics requests = %d, want 2: the new version reads again", n)
+	}
+}
+
+func TestDeliver_DefaultMarketingOptOutStillGetsTheOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dfltout")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	v := stateVendor(t, false, `[{"id":"top-1","subscription":"opt_out"}]`)
+	r.w.Resend = resendAt(v, nil)
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job")
+	var patches []seenReq
+	for _, s := range v.calls() {
+		if s.Method == http.MethodPatch {
+			patches = append(patches, s)
+		}
+	}
+	if len(patches) != 1 || !strings.HasSuffix(patches[0].path(), "/topics") || string(patches[0].Body) != `[{"id":"top-1","subscription":"opt_in"}]` {
+		t.Fatalf("PATCH requests = %+v, want one opt_in to the topics", patches)
+	}
+	if d := r.delivery(t, email); d.In == nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want both set", d.In, d.ResendAt)
+	}
+}
+
+func TestDeliver_MissingResendContactGetsTheOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "missing")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	v := newVendor(t, resendAbsent.respond)
+	r.w.Resend = resendAt(v, nil)
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job")
+	var order []string
+	for _, s := range v.calls() {
+		if s.Method == http.MethodPost && s.path() == "/contacts" {
+			order = append(order, "create")
+		}
+		if s.Method == http.MethodPatch && strings.HasSuffix(s.path(), "/topics") && strings.Contains(string(s.Body), "opt_in") {
+			order = append(order, "opt_in")
+		}
+	}
+	if !slices.Equal(order, []string{"create", "opt_in"}) {
+		t.Errorf("create/opt_in order = %v, want [create opt_in]", order)
+	}
+	if d := r.delivery(t, email); d.In == nil {
+		t.Error("resend_opt_in_sent_at = NULL, want set")
+	}
+}
+
+func TestDeliver_FailedStateReadRetriesWithoutAnOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "readfail")
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	r.rs.state = func(n int) (ResendState, error) {
+		if n == 1 {
+			return ResendState{}, &DeliveryError{Status: 503}
+		}
+		return ResendState{}, nil
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireRetryable(t, res, err, "resend job with a failing state read")
+	if got := r.rs.got(); len(got) != 0 {
+		t.Fatalf("Sync calls = %+v, want none", got)
+	}
+	if d := r.delivery(t, email); d.In != nil || d.ResendAt != nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL, NULL", d.In, d.ResendAt)
+	}
+	warns := r.worker.at(slog.LevelWarn)
+	if len(warns) == 0 || !strings.Contains(warns[0].Text, "resend") || !strings.Contains(warns[0].Text, "503") {
+		t.Errorf("WARN lines = %+v, want one naming resend and 503", warns)
+	}
+	qaRequireNoLeak(t, nil, r.sinks(), email)
+
+	res, err = r.work(t, res.Job)
+	qaRequireCompleted(t, res, err, "retry")
+	if got := r.rs.got(); len(got) != 1 || !got[0].OptIn {
+		t.Fatalf("Sync calls = %+v, want one with sendOptIn true", got)
+	}
+	if d := r.delivery(t, email); d.In == nil {
+		t.Error("resend_opt_in_sent_at = NULL after the retry, want set")
 	}
 }

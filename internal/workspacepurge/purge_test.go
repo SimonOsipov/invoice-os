@@ -270,7 +270,7 @@ func newRig(t *testing.T) *rig {
 	t.Helper()
 	appURL, superURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || superURL == "" || readerURL == "" {
-		t.Skip("workspacepurge db-integration test skipped: set DATABASE_URL, DATABASE_SUPERUSER_URL and DATABASE_READER_URL (or run `make test-rls`)")
+		t.Skip("workspacepurge db-integration test skipped: set DATABASE_URL, DATABASE_SUPERUSER_URL and DATABASE_READER_URL (or run `make test-db PKGS=./internal/workspacepurge/...`)")
 	}
 	ctx := context.Background()
 	open := func(url string) *pgxpool.Pool {

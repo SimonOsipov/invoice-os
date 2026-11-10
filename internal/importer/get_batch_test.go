@@ -24,8 +24,7 @@
 // that exercises GetBatch's own 22P02->ErrValidation mapping directly
 // (every handler-level malformed-id test uses a fake store closure).
 //
-// Run (`make test-rls` does NOT cover this package -- it targets
-// ./internal/platform/db/... at port 5432):
+// Run: `make test-db PKGS=./internal/importer/...`, or directly:
 //
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5434/invoice_os?sslmode=disable" \
 //	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5434/invoice_os?sslmode=disable" \

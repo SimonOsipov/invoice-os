@@ -129,7 +129,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 	t.Helper()
 	gw, super := os.Getenv("DATABASE_GATEWAY_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if gw == "" || super == "" {
-		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/gateway/...`)")
 	}
 	t.Setenv("DEPLOY_ENV", "") // limits enforce only outside a preview
 	ctx := context.Background()
@@ -412,7 +412,7 @@ func TestBuilders_NilPoolKeepsTheLimitsInProcess(t *testing.T) {
 func TestTwoInstances_TheReadinessCheckIPLimitCountsAcrossInstances(t *testing.T) {
 	gw, super := os.Getenv("DATABASE_GATEWAY_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if gw == "" || super == "" {
-		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/gateway/...`)")
 	}
 	t.Setenv("DEPLOY_ENV", "")
 	ctx := context.Background()

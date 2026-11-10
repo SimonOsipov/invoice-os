@@ -21,7 +21,7 @@ import (
 func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 	gw, super := os.Getenv("DATABASE_GATEWAY_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
 	if gw == "" || super == "" {
-		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/gateway/...`)")
 	}
 	t.Setenv("DEPLOY_ENV", "")
 	ctx := context.Background()

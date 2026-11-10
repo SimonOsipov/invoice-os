@@ -23,7 +23,7 @@ func dbChecker(t *testing.T) *publiccheck.Checker {
 	t.Helper()
 	appURL := os.Getenv("DATABASE_URL")
 	if appURL == "" || os.Getenv("DATABASE_SUPERUSER_URL") == "" {
-		t.Skip("publiccheck db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("publiccheck db test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./internal/publiccheck/...`)")
 	}
 	pool, err := pgxpool.New(context.Background(), appURL)
 	if err != nil {

@@ -74,7 +74,7 @@ func bootWorker(t *testing.T, deployEnv string) string {
 	t.Helper()
 	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || readerURL == "" {
-		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL (or run `make test-db PKGS=./cmd/worker/...`)")
 	}
 	port := freePort(t)
 	vars := map[string]string{"PORT": strconv.Itoa(port), "DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL,

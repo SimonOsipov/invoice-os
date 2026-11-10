@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/repotest"
 )
 
 // rxRepoRoot locates the worktree root. go test runs with cwd set to this package directory.
@@ -63,8 +65,7 @@ func TestNoNonTestCodeNamesTheExtractionArgsType(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch filepath.Base(path) {
-			case ".git", ".claude", "node_modules", "frontend", "testdata":
+			if n := filepath.Base(path); repotest.SkipDirs[n] || n == "frontend" || n == "testdata" {
 				return filepath.SkipDir
 			}
 			return nil

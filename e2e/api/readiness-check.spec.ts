@@ -1,6 +1,8 @@
 // A readiness check through the deployed gateway: the worker mails the results, the spec reads the
 // captured mail. The nightly enforces the per-IP limit of 10 a day: the group makes 4 checks per attempt.
+import { readFileSync } from 'node:fs'
 import { test, expect } from '@playwright/test'
+import { nightlyTarget } from '../targets'
 import { capturedMail, contactsDirect, postCheck, workerPost, type CheckMapping } from './client'
 
 // internal/gateway/readiness_check.go: checkConsentSentence, checkSignUpSentence, checkIPSentence.
@@ -16,7 +18,11 @@ const TWO_LEFT = 'You have 2 free checks left.'
 const SUPPLIER_TIN_LABEL = 'Supplier TIN'
 // internal/notifications/store.go: the tag contacts/me returns.
 const TAG = 'readiness check'
-const CONSENT = 'Yes, send me product news and offers.'
+// Read from the landing source, not retyped: the gateway takes only the sentence the box shows.
+const CONSENT_SRC = new URL('../../frontend/landing/src/readinessConsent.ts', import.meta.url)
+const CONSENT_MATCH = /export const READINESS_CONSENT_TEXT =\s*'((?:[^'\\]|\\.)*)'/.exec(readFileSync(CONSENT_SRC, 'utf8'))
+if (CONSENT_MATCH == null) throw new Error(`${CONSENT_SRC.pathname}: no READINESS_CONSENT_TEXT literal`)
+const CONSENT = CONSENT_MATCH[1] as string
 
 const HEADER = ['Inv', 'Date', 'Cur', 'Net', 'Tax', 'Gross', 'Buyer', 'BTIN', 'Seller', 'STIN']
 // The second invoice has no supplier TIN (rule supplier-tin-required).
@@ -44,6 +50,8 @@ const FIRST_BUYER = 'Beta Ltd'
 
 const freshEmail = () => `readiness-${crypto.randomUUID()}@example.com`
 const POLL = { timeout: 30_000, intervals: [500, 1000, 2000] }
+// The nightly delivers to the real vendors, which is slower than a PR's fake mode.
+const DELIVERY_POLL = { timeout: nightlyTarget() ? 120_000 : 30_000, intervals: [500, 1000, 2000] }
 
 // ceiling: a third attempt in one window can meet the 429; it is an environment failure, not a product one.
 async function run(email: string) {
@@ -90,11 +98,13 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
       }
     })
 
-    test('the address becomes a readiness check contact with no marketing', async () => {
+    test('the address becomes a readiness check contact opted in to Marketing', async () => {
+      test.setTimeout(nightlyTarget() ? 180_000 : 60_000)
       let row: Awaited<ReturnType<typeof contactsDirect>> = null
-      await expect.poll(async () => (row = await contactsDirect(email)) !== null, POLL).toBe(true)
+      await expect.poll(async () => ((row = await contactsDirect(email))?.resend.delivered_at ?? null) !== null, DELIVERY_POLL).toBe(true)
       expect(row!.tags).toContain(TAG)
-      expect(row!.marketing_eligible).toBe(false)
+      expect(row!.marketing_eligible).toBe(true)
+      expect(row!.resend.applies).toBe(true)
     })
 
     test('the fourth run on one address is told to sign up', async () => {

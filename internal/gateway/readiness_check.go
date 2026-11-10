@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
@@ -46,6 +45,7 @@ const (
 	checkUnreadableSentence  = "We could not read this file."
 	checkTooLargeSentence    = "file is over 15 MiB"
 	checkConsentSentence     = "consent_text must be 1 to 500 characters"
+	checkConsentText         = "Email me the results of this check. I agree that ASComply Africa keeps my email address as a contact and may email me product news and offers. I can unsubscribe at any time."
 	checkFormatSentence      = "file must be CSV, XLSX, PDF or DOCX"
 	checkSheetSentence       = "file must be a CSV or XLSX spreadsheet"
 )
@@ -169,8 +169,7 @@ func validateRunFields(fields map[string]string) (email, msg string) {
 	if invalidEmail(email) {
 		return "", "email is invalid"
 	}
-	text := fields["consent_text"]
-	if n := utf8.RuneCountInString(text); strings.TrimSpace(text) == "" || n > maxConsentTextChars || strings.ContainsRune(text, 0) {
+	if fields["consent_text"] != checkConsentText {
 		return "", checkConsentSentence
 	}
 	if hr, ok := fields["header_row"]; ok && !headerRowRE.MatchString(hr) {

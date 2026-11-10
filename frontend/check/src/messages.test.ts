@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { CONSENT_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409SaysSignUpWithALink', () => {
@@ -33,7 +33,7 @@ describe('refusal', () => {
   })
 
   it('refusal_400ConsentIsPlain', () => {
-    expect(refusal('run', 400, 'consent_text must be 1 to 500 characters').text).toBe(CONSENT_SENTENCE)
+    expect(refusal('run', 400, 'consent_text must be 1 to 500 characters').text).toBe('Tick the box to get your results by email.')
   })
 
   it('refusal_400FormatIsPlain', () => {

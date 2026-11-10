@@ -303,8 +303,9 @@ export function Privacy() {
             for word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
           <p style={P}>
-            Resend is the service we use to send email. Only a ticked marketing box sends your email address and your
-            first and last name to Resend from a demo request. Leave it unticked and Resend never receives them.
+            Resend is the service we use to send email. A ticked marketing box, or a readiness check run with the same
+            email address, sends your email address and your first and last name to Resend. If the marketing box is not
+            ticked and no readiness check ran with that address, Resend never receives them from a demo request.
           </p>
           <p style={P}>HubSpot holds what it receives from you on their EU servers.</p>
           <p style={P}>
@@ -351,8 +352,9 @@ export function Privacy() {
           </p>
           <p style={P}>
             Every verified registrant becomes a contact in Resend, so that we can send you product and service email. Resend
-            receives your email address and your first and last name. Only a ticked marketing box makes you eligible for
-            marketing email; with the box unticked, Resend holds you for product and service email only.
+            receives your email address and your first and last name. Only a ticked marketing box, or the ticked box of a
+            readiness check run with the same email address, makes you eligible for marketing email; with neither box
+            ticked, Resend holds you for product and service email only.
           </p>
           <p style={P}>The registration form tells you about that email: “{PRODUCT_EMAIL_NOTICE}”</p>
           <p style={P}>
@@ -460,7 +462,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             Your email address becomes a HubSpot contact tagged “readiness check”, with a deal. We record the sentence
-            you ticked, word for word: “{READINESS_CONSENT_TEXT}” It adds you to no marketing list and changes nothing you agreed to on another form. The summary
+            you ticked, word for word: “{READINESS_CONSENT_TEXT}” Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email. The summary
             rows are deleted when an ASComply account with that address is deleted, unless another account still holds
             the address.
           </p>

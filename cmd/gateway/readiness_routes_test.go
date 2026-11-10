@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -35,12 +36,26 @@ func readinessStubs(t *testing.T) (worker, notifications *url.URL) {
 	return wu, nu
 }
 
+// The landing's sentence is read from its source: the gateway takes no other.
+func landingReadinessConsent(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../frontend/landing/src/readinessConsent.ts")
+	if err != nil {
+		t.Fatalf("read the landing sentence: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^export const READINESS_CONSENT_TEXT =\s*'([^'\\\n]+)'`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("readinessConsent.ts: no exported single-quoted READINESS_CONSENT_TEXT literal")
+	}
+	return string(m[1])
+}
+
 func readinessRunRequest(t *testing.T, xff string) *http.Request {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("email", "a@x.co")
-	_ = mw.WriteField("consent_text", "I agree")
+	_ = mw.WriteField("consent_text", landingReadinessConsent(t))
 	fw, _ := mw.CreateFormFile("file", "inv.csv")
 	_, _ = fw.Write([]byte("a,b\n1,2\n"))
 	_ = mw.Close()

@@ -33,7 +33,7 @@ import {
   eraseDeletesReadinessChecks,
   ipCountIsHashed,
   readinessCheckColumns,
-  readinessConsentIsNotMarketing,
+  readinessConsentIsMarketing,
   authSmtpHost,
   clientsSendConsentTime,
   crmTags,
@@ -45,6 +45,7 @@ import {
   hubspotFormsKeys,
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
+  ruleMarketingBroadcastCarriesUnsubscribe,
   BLOG_CHAT_PARAGRAPH,
   ACCOUNT_RECORD_SENTENCES,
   auditLogDeletes,
@@ -1170,7 +1171,10 @@ describe('FREECHK-03-08: the readiness check section', () => {
     expect(part, 'the readiness check h2').toBeDefined()
     return part!.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
   }
-  const GO_STORE = 'func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {\n'
+  const goStore = (returning: string, intake: string) =>
+    `const mergeSQL = \`\nINSERT INTO contacts\nRETURNING email, ${returning},\n  version\`\n\nfunc (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {\n\treturn s.merge(ctx, intake{email: in.Email, readiness: true, ${intake}})\n}\n`
+  const TERM = 'resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL)'
+  const TICK = 'consentText: in.ConsentText'
 
   it('FREECHK-03: the check section names the AI host and vendors from code', () => {
     const t = text()
@@ -1211,11 +1215,36 @@ describe('FREECHK-03-08: the readiness check section', () => {
     expect(text()).toContain('deal')
   })
 
-  it('FREECHK-03: the no-marketing sentence follows the store', () => {
-    expect(readinessConsentIsNotMarketing()).toBe(true)
-    expect(text()).toContain(`We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d It adds you to no marketing list`)
-    const marketing = GO_STORE + '\treturn s.merge(ctx, intake{email: in.Email, consentText: in.ConsentText, readinessConsentText: in.ConsentText})\n}\n'
-    expect(readinessConsentIsNotMarketing(marketing)).toBe(false)
+  it('FREECHK-06: the marketing sentence follows the store', () => {
+    expect(readinessConsentIsMarketing()).toBe(true)
+    const t = text()
+    expect(t).toContain(
+      `We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email.`,
+    )
+    expect(t).not.toContain('It adds you to no marketing list')
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK)), 'control: a passing source').toBe(true)
+    expect(readinessConsentIsMarketing(goStore('resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))', TICK)), 'RETURNING term reverted').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'readinessConsentText: in.ConsentText')), 'readinessConsentText set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, `${TICK}, readinessConsentText: in.ConsentText`)), 'both set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'consentText: ""')), 'consentText not passed').toBe(false)
+    const elsewhere = goStore('resend_delivered_at IS NULL', TICK) + `// ${TERM}\nvar other = "${TERM}"\n`
+    expect(readinessConsentIsMarketing(elsewhere), 'the term outside mergeSQL does not count').toBe(false)
+  })
+
+  it('FREECHK-06: the demo and registration sections name the check as a route to Resend', () => {
+    expect(readinessConsentIsMarketing()).toBe(true)
+    const t = html.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
+    expect(t).toContain('A ticked marketing box, or a readiness check run with the same email address, sends your email address and your first and last name to Resend.')
+    expect(t).toContain(
+      'Only a ticked marketing box, or the ticked box of a readiness check run with the same email address, makes you eligible for marketing email; with neither box ticked, Resend holds you for product and service email only.',
+    )
+    expect(t).not.toContain('Leave it unticked and Resend never receives them.')
+    expect(t).not.toContain('with the box unticked, Resend holds you')
+  })
+
+  it('FREECHK-06: the unsubscribe sentence follows the contacts rule', () => {
+    expect(ruleMarketingBroadcastCarriesUnsubscribe()).toBe(true)
+    expect(text()).toContain('You can unsubscribe from any email.')
   })
 
   it('FREECHK-03: the erasure sentence follows erase.go', () => {

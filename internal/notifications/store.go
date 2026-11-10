@@ -67,19 +67,15 @@ const newFactSQL = `(
      OR (contacts.readiness_checked_at IS NULL AND EXCLUDED.readiness_checked_at IS NOT NULL)
      OR (contacts.marketing_consented_at IS NULL AND EXCLUDED.marketing_consented_at IS NOT NULL))`
 
-// ceiling: a readiness-only contact skips Resend; add it with the double opt-in.
 const mergeSQL = `
 INSERT INTO contacts (email, user_id, first_name, last_name, company,
-                      registered_at, demo_requested_at, readiness_checked_at, marketing_consent_text, marketing_consented_at,
-                      readiness_consent_text, readiness_consented_at)
+                      registered_at, demo_requested_at, readiness_checked_at, marketing_consent_text, marketing_consented_at)
 VALUES (lower(btrim($1)), $2::uuid, $3, $4, $5,
         CASE WHEN $6 THEN now() END,
         CASE WHEN $7 THEN now() END,
         CASE WHEN $10 THEN now() END,
         $8::text,
-        CASE WHEN $8::text IS NOT NULL THEN COALESCE($9::timestamptz, now()) END,
-        $11::text,
-        CASE WHEN $11::text IS NOT NULL THEN now() END)
+        CASE WHEN $8::text IS NOT NULL THEN COALESCE($9::timestamptz, now()) END)
 ON CONFLICT (email) DO UPDATE SET
     user_id                = COALESCE(contacts.user_id, EXCLUDED.user_id),
     first_name             = COALESCE(NULLIF(EXCLUDED.first_name, ''), contacts.first_name),
@@ -90,14 +86,12 @@ ON CONFLICT (email) DO UPDATE SET
     readiness_checked_at   = COALESCE(contacts.readiness_checked_at, EXCLUDED.readiness_checked_at),
     marketing_consent_text = COALESCE(contacts.marketing_consent_text, EXCLUDED.marketing_consent_text),
     marketing_consented_at = COALESCE(contacts.marketing_consented_at, EXCLUDED.marketing_consented_at),
-    readiness_consent_text = COALESCE(contacts.readiness_consent_text, EXCLUDED.readiness_consent_text),
-    readiness_consented_at = COALESCE(contacts.readiness_consented_at, EXCLUDED.readiness_consented_at),
     version                = contacts.version + CASE WHEN ` + newFactSQL + ` THEN 1 ELSE 0 END,
     hubspot_delivered_at   = CASE WHEN ` + newFactSQL + ` THEN NULL ELSE contacts.hubspot_delivered_at END,
     resend_delivered_at    = CASE WHEN ` + newFactSQL + ` THEN NULL ELSE contacts.resend_delivered_at END,
     updated_at             = now()
 RETURNING email, version, hubspot_delivered_at IS NULL,
-          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL)),
+          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL),
           old.registered_at IS NULL AND new.registered_at IS NOT NULL`
 
 type intake struct {
@@ -106,7 +100,6 @@ type intake struct {
 	registered, demo, readiness         bool
 	consentText                         string
 	consentAt                           time.Time
-	readinessConsentText                string
 }
 
 func (s *Store) Registrant(ctx context.Context, in RegistrantIntake) error {
@@ -126,7 +119,7 @@ func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 }
 
 func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {
-	return s.merge(ctx, intake{email: in.Email, readiness: true, readinessConsentText: in.ConsentText})
+	return s.merge(ctx, intake{email: in.Email, readiness: true, consentText: in.ConsentText})
 }
 
 func (s *Store) merge(ctx context.Context, in intake) error {
@@ -136,7 +129,7 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var userID, consentText, readinessConsentText *string
+	var userID, consentText *string
 	if in.userID != "" {
 		userID = &in.userID
 	}
@@ -148,15 +141,11 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		}
 	}
 
-	if in.readinessConsentText != "" {
-		readinessConsentText = &in.readinessConsentText
-	}
-
 	var email string
 	var version int64
 	var hubspotPending, resendPending, newlyRegistered bool
 	err = tx.QueryRow(ctx, mergeSQL, in.email, userID, in.first, in.last, in.company,
-		in.registered, in.demo, consentText, consentAt, in.readiness, readinessConsentText).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
+		in.registered, in.demo, consentText, consentAt, in.readiness).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
 	if err != nil {
 		return fmt.Errorf("notifications: merge contact: %w", err)
 	}
@@ -226,8 +215,7 @@ func (s *Store) Me(ctx context.Context, email string) (Contact, error) {
 	if readiness {
 		c.Tags = append(c.Tags, "readiness check")
 	}
-	eligible := consented && (registered || demo)
-	c.MarketingEligible = eligible
-	c.ResendApplies = registered || eligible
+	c.MarketingEligible = consented
+	c.ResendApplies = registered || consented
 	return c, nil
 }

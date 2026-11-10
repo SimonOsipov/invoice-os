@@ -208,6 +208,8 @@ func main() {
 	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
+		um := &notifications.UnsubscribeMetadata{Pool: pool, Account: account, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("unsubscribe-metadata", um.RunOnce)))
 	}
 	pjw.Purger = purger
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))

@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	xhtml "golang.org/x/net/html"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
+	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
@@ -852,6 +854,62 @@ func TestIdP_ConfirmationMailCarriesTheAddressUnsubscribeLink(t *testing.T) {
 	anchors := anchorRe.FindAllStringSubmatch(mail.HTML, -1)
 	if len(anchors) == 0 {
 		t.Fatalf("confirmation mail has no anchors: %s", mail.HTML)
+	}
+	if got, want := html.UnescapeString(anchors[len(anchors)-1][1]), accountmail.UnsubscribeURL+"?t="+token; got != want {
+		t.Errorf("last link = %q, want %q", got, want)
+	}
+}
+
+func TestIdP_RecoveryMailCarriesTheLinkAfterTheBackfill(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw, map[string]string{"workspace_name": "Backfill Co", "display_name": "Ada", "kind": "in_house"})
+	conn := superConn(t)
+	// Simulate an account created before the key shipped: drop only the key.
+	if _, err := conn.Exec(context.Background(),
+		`UPDATE auth.users SET raw_user_meta_data = raw_user_meta_data - 'unsubscribe' WHERE email = $1`, u.email); err != nil {
+		t.Fatal(err)
+	}
+	appPool, err := pgxpool.New(context.Background(), requireEnv(t, "DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(appPool.Close)
+
+	um := &notifications.UnsubscribeMetadata{Pool: appPool, Account: adminClient(t, base)}
+	if err := um.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	var token string
+	var meta []byte
+	if err := conn.QueryRow(context.Background(), `SELECT public.mail_unsubscribe_token($1)::text`, u.email).Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(context.Background(), `SELECT raw_user_meta_data FROM auth.users WHERE email = $1`, u.email).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(meta, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["unsubscribe"] != token {
+		t.Errorf("user_metadata.unsubscribe = %v, want the DB token", stored["unsubscribe"])
+	}
+	if _, ok := stored["registration"]; !ok {
+		t.Errorf("user_metadata lost registration: %s", meta)
+	}
+
+	requestResetAccepted(t, gw, u.email)
+	var recovery mailpitMessage
+	for _, m := range mailsFor(t, u.email, 2) {
+		if m.Subject == recoverySubject {
+			recovery = m
+		}
+	}
+	anchors := anchorRe.FindAllStringSubmatch(recovery.HTML, -1)
+	if len(anchors) == 0 {
+		t.Fatalf("recovery mail has no anchors: %q", recovery.HTML)
 	}
 	if got, want := html.UnescapeString(anchors[len(anchors)-1][1]), accountmail.UnsubscribeURL+"?t="+token; got != want {
 		t.Errorf("last link = %q, want %q", got, want)

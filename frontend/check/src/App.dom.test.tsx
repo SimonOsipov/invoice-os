@@ -328,6 +328,35 @@ describe('details and sent', () => {
     expect(text()).not.toContain(MAPPING_SENTENCE)
   })
 
+  it('send_aTooLongDocumentShowsTheTooMuchTextSentence', async () => {
+    const sentence = 'This document has too much text for the free check. Try a shorter invoice.' // readinesscheck.DocumentTooLongSentence
+    stubFetch({ [RUN]: () => json(400, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
+  it('send_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [RUN]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
+  })
+
+  it('suggest_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [MAPPING]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.csv'))
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
+  })
+
   it('send_aSpreadsheet400IsTheMappingSentence', async () => {
     stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'invalid request body' }) })
     await mount()

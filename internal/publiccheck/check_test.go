@@ -246,7 +246,7 @@ func TestCheck_ADocumentIsOneInvoice(t *testing.T) {
 	r := newRig()
 	r.ai.header = map[string]any{"invoice_number": "INV-9", "supplier_tin": "12345678-0001"}
 	r.c.Readers.Jev = &fakeJev{choice: "credit note"}
-	res, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	res, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,10 +315,51 @@ func TestCheck_RefusesAnUnknownFormat(t *testing.T) {
 	r.untouched(t)
 }
 
+func TestCheck_RefusesBytesThatAreNotTheirFormat(t *testing.T) {
+	cfb := []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+	png := []byte("\x89PNG\r\n\x1a\n0000")
+	for _, tc := range []struct {
+		name, format string
+		file         []byte
+	}{
+		{"pdf with PNG bytes", "pdf", png},
+		{"pdf with a short magic", "pdf", []byte("%PDF")},
+		{"docx with PDF bytes", "docx", []byte("%PDF-1.4")},
+		{"xlsx not a zip", "xlsx", []byte("not a zip")},
+		{"docx with a CFB header", "docx", cfb},
+		{"xlsx with a CFB header", "xlsx", cfb},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig()
+			_, err := r.c.Check(context.Background(), publiccheck.Request{File: tc.file, Format: tc.format})
+			if !errors.Is(err, publiccheck.ErrFormat) {
+				t.Fatalf("err = %v, want ErrFormat", err)
+			}
+			r.untouched(t)
+		})
+	}
+}
+
+func TestCheck_ACsvIsNotSignatureChecked(t *testing.T) {
+	r := newRig()
+	_, err := r.c.Check(context.Background(), csvReq("invoice_number,Total\nINV-1,100\n"))
+	if errors.Is(err, publiccheck.ErrFormat) {
+		t.Fatalf("err = %v, a csv must not be refused for its bytes", err)
+	}
+}
+
+func TestSuggestMapping_RefusesAnXlsxThatIsNotAZip(t *testing.T) {
+	r := newRig()
+	if _, err := r.c.SuggestMapping(context.Background(), []byte("not a zip"), "xlsx"); !errors.Is(err, publiccheck.ErrFormat) {
+		t.Fatalf("err = %v, want ErrFormat", err)
+	}
+	r.untouched(t)
+}
+
 func TestCheck_ACorruptSpreadsheetIsBadFile(t *testing.T) {
 	r := newRig()
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("not a zip"), Format: "xlsx", Mapping: map[string]string{"invoice_number": "Inv"}})
-	if !errors.Is(err, publiccheck.ErrBadFile) {
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("PK\x03\x04 not a workbook"), Format: "xlsx", Mapping: map[string]string{"invoice_number": "Inv"}})
+	if !errors.Is(err, publiccheck.ErrBadFile) || errors.Is(err, publiccheck.ErrFormat) {
 		t.Fatalf("err = %v, want ErrBadFile", err)
 	}
 	r.untouched(t)
@@ -327,7 +368,7 @@ func TestCheck_ACorruptSpreadsheetIsBadFile(t *testing.T) {
 func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.ai.fail = true
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if !errors.Is(err, publiccheck.ErrReadUnavailable) {
 		t.Fatalf("err = %v, want ErrReadUnavailable", err)
 	}
@@ -339,7 +380,7 @@ func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {
 func TestCheck_ADoclingRefusalOfTheFileIsBadFile(t *testing.T) {
 	r := newRig()
 	r.tx.err = fmt.Errorf("docling: /v1/read returned 422: encrypted: %w", extraction.ErrDocumentUnreadable)
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if !errors.Is(err, publiccheck.ErrBadFile) || errors.Is(err, publiccheck.ErrReadUnavailable) {
 		t.Fatalf("err = %v, want ErrBadFile and not ErrReadUnavailable", err)
 	}
@@ -359,7 +400,7 @@ func TestCheck_ARenderFailureInTheImagePathIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.tx.chars = 0
 	r.rd.err = errors.New("pdfium: get instance: pool closed")
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if !errors.Is(err, publiccheck.ErrReadUnavailable) || errors.Is(err, publiccheck.ErrBadFile) {
 		t.Fatalf("err = %v, want ErrReadUnavailable and not ErrBadFile", err)
 	}
@@ -368,7 +409,7 @@ func TestCheck_ARenderFailureInTheImagePathIsReadUnavailable(t *testing.T) {
 func TestCheck_ADoclingErrorIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.tx.err = errors.New("docling 500")
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if !errors.Is(err, publiccheck.ErrReadUnavailable) {
 		t.Fatalf("err = %v, want ErrReadUnavailable", err)
 	}
@@ -384,7 +425,7 @@ func TestCheck_MarksItsAICallsAsPublicCheck(t *testing.T) {
 
 	r := newRig()
 	r.ai.run = record
-	if _, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"}); err != nil {
+	if _, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) == 0 || slices.ContainsFunc(got, func(c airecord.Call) bool { return !c.PublicCheck }) {
@@ -423,7 +464,7 @@ func TestCheck_APoorScanDocumentIsAProblemWithThePoorScanSentence(t *testing.T) 
 	r := newRig()
 	r.tx.chars = 0
 	r.c.Readers.AI = nil
-	res, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	res, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +592,7 @@ func TestCheck_ACancelledContextStopsBeforeTheDecodeAndBeforeTheRuleLoad(t *test
 	if _, err := r.c.Check(ctx, csvReq(threeInvoices)); !errors.Is(err, context.Canceled) {
 		t.Errorf("(a) err = %v, want context.Canceled", err)
 	}
-	if _, err := r.c.Check(ctx, publiccheck.Request{File: []byte("%PDF"), Format: "pdf"}); !errors.Is(err, context.Canceled) {
+	if _, err := r.c.Check(ctx, publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("(a) pdf err = %v, want context.Canceled", err)
 	}
 	r.untouched(t)
@@ -625,12 +666,12 @@ func TestCheck_AContextEndedDuringTheReadIsNotAnOutage(t *testing.T) {
 	defer cancel()
 	r.tx.err = errors.New("docling: request aborted")
 	r.tx.onRun = cancel
-	_, err := r.c.Check(ctx, publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(ctx, publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if err != context.Canceled || errors.Is(err, publiccheck.ErrReadUnavailable) {
 		t.Errorf("pdf err = %v, want context.Canceled itself, not ErrReadUnavailable", err)
 	}
 	r.tx.err, r.tx.onRun = nil, nil
-	_, err = r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err = r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if err != nil {
 		t.Fatalf("control: the same read with a live context failed: %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
+	"github.com/SimonOsipov/invoice-os/internal/platform/filesig"
 	"github.com/SimonOsipov/invoice-os/internal/validation"
 )
 
@@ -86,6 +87,9 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 	}
 	doc := req.Format == "pdf" || req.Format == "docx"
 	if !doc && !spreadsheet(req.Format) {
+		return Result{}, ErrFormat
+	}
+	if !filesig.Matches(req.Format, req.File) {
 		return Result{}, ErrFormat
 	}
 	if err := ctx.Err(); err != nil {
@@ -234,6 +238,9 @@ func (c *Checker) SuggestMapping(ctx context.Context, file []byte, format string
 		return importer.CheckSuggestion{}, err
 	}
 	if !spreadsheet(format) {
+		return importer.CheckSuggestion{}, ErrFormat
+	}
+	if !filesig.Matches(format, file) {
 		return importer.CheckSuggestion{}, ErrFormat
 	}
 	if err := ctx.Err(); err != nil {

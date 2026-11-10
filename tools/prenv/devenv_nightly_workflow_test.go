@@ -264,6 +264,7 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	p = append(p, contactProblems(jobs)...)
 	p = append(p, aiCheckProblems(jobs)...)
+	p = append(p, e2eMailWindowProblems(jobs)...)
 	return append(p, emailProblems(jobs)...)
 }
 
@@ -1306,7 +1307,7 @@ func TestDevEnvNightly_ContactsJobRunsWhenE2EFails(t *testing.T) {
 		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && needs.deploy.result == 'success'"`, "contacts if"},
 		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && ` + nlOn + ` && needs.e2e.result == 'success'"`, "contacts if"},
 		{"needs: [changes, prepare-env, deploy, e2e, topology]", "needs: [changes, prepare-env, deploy, e2e]", "contacts needs"},
-		{"NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}", "NIGHTLY_RUN_ID: ${{ github.run_id }}", "NIGHTLY_RUN_ID"},
+		{"      NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n    steps:", "      NIGHTLY_RUN_ID: ${{ github.run_id }}\n    steps:", "NIGHTLY_RUN_ID"},
 		{"    name: Real contact reaches HubSpot and Resend\n", "    name: Contacts\n", "contacts name"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
@@ -1518,4 +1519,88 @@ func TestDevEnvNightly_AICheckRefusesARerun(t *testing.T) {
 		{"DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}", "DEPLOYED_ATTEMPT: ${{ needs.build.outputs.attempt }}", "nightly-ai lacks the re-run guard"},
 		{"      - name: Refuse a re-run that skipped the deploy\n", "      - name: Skip the guard\n", "nightly-ai lacks the re-run guard"},
 	})
+}
+
+const nlWindowIf = "!cancelled() && steps.attempt.outcome == 'success' && " + nlOn
+
+// e2eMailWindowProblems names each clause of the e2e job's nightly-only worker mail window.
+func e2eMailWindowProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+	e2e := jobs["e2e"]
+	idx := func(sub string) int {
+		for i, s := range e2e.steps() {
+			if strings.Contains(nlCode(s.keys["run"]), sub) {
+				return i
+			}
+		}
+		return -1
+	}
+	read, on, api, off := idx("preview.sh mail-read-key"), idx("preview.sh check-mail-on"), idx("test:api"), idx("preview.sh check-mail-off")
+	if !(0 <= read && read < on && on < api && api < off) {
+		bad("e2e mail window is out of order: read, check-mail-on, API E2E, check-mail-off")
+	}
+	if idx("preview.sh mail-on") >= 0 || idx("preview.sh mail-off") >= 0 {
+		bad("e2e runs mail-on or mail-off")
+	}
+	for _, name := range []string{"Read the Resend read key and receiving domain", "Turn real check mail on"} {
+		if st, ok := nlStep(e2e, name); !ok || strings.Trim(strings.TrimSpace(st.keys["if"]), `"`) != nlWindowIf {
+			bad("e2e " + name + " is not nightly only")
+		}
+	}
+	if st, ok := nlStep(e2e, "Read the Resend read key and receiving domain"); ok {
+		r := nlCode(st.keys["run"])
+		env := strings.Index(r, "GITHUB_ENV")
+		if strings.Count(r, "::add-mask::") != 2 || strings.Index(r, "::add-mask::$key") > env || strings.Index(r, "::add-mask::$domain") > env {
+			bad("e2e masks the key and domain after writing GITHUB_ENV")
+		}
+	}
+	if st, ok := nlStep(e2e, "Turn real check mail on"); !ok || st.keys["id"] != "checkmailon" {
+		bad("e2e check-mail-on step lacks id checkmailon")
+	}
+	if st, ok := nlStep(e2e, "Turn real check mail off"); !ok || strings.TrimSpace(nlCode(st.keys["if"])) != "always() && steps.checkmailon.outcome != 'skipped'" {
+		bad("e2e check-mail-off step does not run if always() once check-mail-on ran")
+	}
+	if st, ok := nlStep(e2e, "API E2E (typed contract suite)"); !ok || st.env["NIGHTLY_RUN_ID"] != "${{ github.run_id }}-${{ github.run_attempt }}" {
+		bad("e2e API E2E env lacks NIGHTLY_RUN_ID")
+	}
+	return p
+}
+
+func TestDevEnvNightly_E2EWorkerMailWindow(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := e2eMailWindowProblems(nlJobs(yml)); len(got) > 0 {
+		t.Fatalf("problems %q", got)
+	}
+	ifLine := "        if: \"" + nlWindowIf + "\"\n"
+	read := "      - name: Read the Resend read key and receiving domain\n" + ifLine
+	on := "      - name: Turn real check mail on\n        id: checkmailon\n" + ifLine + "        run: bash scripts/ci/preview.sh check-mail-on \"$PR\"\n"
+	offIf := "        if: always() && steps.checkmailon.outcome != 'skipped'\n"
+	off := "      - name: Turn real check mail off\n" + offIf + "        run: bash scripts/ci/preview.sh check-mail-off \"$PR\"\n"
+	api := "        run: pnpm --filter @invoice-os/e2e test:api\n"
+	for _, c := range []struct{ old, repl, want string }{
+		{api + off, api, "out of order"},
+		{off, "", "out of order"},
+		{on + "      - name: API E2E (typed contract suite)\n", "      - name: API E2E (typed contract suite)\n", "out of order"},
+		{offIf, "        if: always()\n", "check-mail-off step does not run"},
+		{offIf, "        if: success() && steps.checkmailon.outcome == 'success'\n", "check-mail-off step does not run"},
+		{offIf, "        if: always() && steps.checkmailon.outcome == 'success'\n", "check-mail-off step does not run"},
+		{offIf, "", "check-mail-off step does not run"},
+		{read, "      - name: Read the Resend read key and receiving domain\n", "Read the Resend read key and receiving domain is not nightly only"},
+		{"      - name: Turn real check mail on\n        id: checkmailon\n" + ifLine, "      - name: Turn real check mail on\n        id: checkmailon\n", "Turn real check mail on is not nightly only"},
+		{"          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY", "masks the key and domain"},
+		{"          NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n          NIGHTLY_HUBSPOT", "          NIGHTLY_HUBSPOT", "NIGHTLY_RUN_ID"},
+		{on, on + "      - name: Turn mail on\n        run: bash scripts/ci/preview.sh mail-on \"$PR\"\n", "runs mail-on"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+	// A mask after GITHUB_ENV, and the read moved after the on step.
+	moved := mutateOnce(t, mutateOnce(t, yml, "          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY"), "          } >>\"$GITHUB_ENV\"\n      - name: Turn real check mail on", "          } >>\"$GITHUB_ENV\"\n          echo \"::add-mask::$domain\"\n      - name: Turn real check mail on")
+	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "masks the key and domain after") }) {
+		t.Errorf("late mask: problems %q", got)
+	}
 }

@@ -11,3 +11,11 @@ export const READING_TEXT = 'Reading the columns…'
 export const TYPE_SENTENCE = 'Choose a CSV, XLSX, PDF or DOCX file.'
 export const SIZE_SENTENCE = 'This file is over 15 MiB. Choose a smaller file.'
 export const STEP_LABELS = { upload: 'Upload', map: 'Match columns', email: 'Email', sent: 'Sent' } as const
+export const CHECK_EYEBROW = 'FREE E-INVOICE READINESS CHECK'
+export const COMPANY_LINE = '© 2026 ASComply Africa Limited · Lagos, Nigeria'
+export const TRUST_CUES = [
+  { glyph: 'circle-check', title: 'Free', text: '3 checks per email address' },
+  { glyph: 'lock', title: 'No account', text: 'Just an email for the results' },
+  { glyph: 'trash-2', title: 'File not kept', text: 'Deleted when the check finishes' },
+  { glyph: 'mail', title: 'Results by email', text: 'Never shown on this page' },
+] as const

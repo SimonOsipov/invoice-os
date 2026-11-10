@@ -1,6 +1,7 @@
-// The /check page layout on the PR preview. Each case asserts a relationship, never a raw dimension.
+// The /check page layout on the PR preview: relationships, plus the design's computed values per breakpoint.
 // It never presses Send: no run, no IP count, no mail.
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { argosOn, shoot } from '../argos'
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { enclosesRect, gaps, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -117,5 +118,261 @@ test.describe('check layout', () => {
       await resize(page, width)
       await noSidewaysScroll(page, `Map at ${width}px`)
     }
+  })
+
+  // Frame rows (FREECHK-10-02). A pdf pick reaches the Email step with no network call.
+  const PDF = { name: 'a.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') }
+  const ALL_WIDTHS = [...WIDE_WIDTHS, ...PHONE_WIDTHS]
+
+  async function openCheck(page: Page, width: number): Promise<void> {
+    await seedConsent(page, false)
+    await resize(page, width)
+    const response = await page.goto(`${CHECK_URL}/`)
+    expect(response?.ok(), '/check did not answer 2xx').toBeTruthy()
+    await expect(page.locator('.check-tool')).toBeVisible()
+    await settleAnimations(page.locator('.check-tool .check-card'))
+  }
+
+  const css = (loc: Locator, prop: string) => loc.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop)
+  const px = async (loc: Locator, prop: string) => parseFloat(await css(loc, prop))
+  const tracks = async (loc: Locator) => (await css(loc, 'grid-template-columns')).trim().split(/\s+/).length
+  const resolved = (page: Page, token: string, prop: 'color' | 'outline-color') =>
+    page.evaluate(
+      ([t, p]) => {
+        const el = document.createElement('i')
+        el.style.setProperty(p, `var(${t})`)
+        document.body.appendChild(el)
+        const v = getComputedStyle(el).getPropertyValue(p)
+        el.remove()
+        return v
+      },
+      [token, prop],
+    )
+  const noOverlap = (rects: Rect[], label: string) => {
+    for (let i = 0; i < rects.length; i++)
+      for (let j = i + 1; j < rects.length; j++) expect(rectsOverlap(rects[i], rects[j]), `${label}: items ${i} and ${j} overlap`).toBe(false)
+  }
+
+  test('check layout: the header stays on top and fits', async ({ page }) => {
+    await openCheck(page, ALL_WIDTHS[0])
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+      const label = `${width}px`
+      const head = await rectOf(page.locator('.check-head'), 'header')
+      expect(Math.abs(head.y), `${label}: header top`).toBeLessThanOrEqual(1)
+      const logo = await rectOf(page.getByRole('link', { name: 'ASComply Africa home' }), 'logo')
+      const signUp = await rectOf(page.locator('.check-head').getByRole('link', { name: 'Sign up' }), 'Sign up')
+      expect(enclosesRect(head, logo, 1), `${label}: logo outside the header`).toBe(true)
+      expect(enclosesRect(head, signUp, 1), `${label}: Sign up outside the header`).toBe(true)
+      const rects = [logo, signUp]
+      for (const name of ['What you get', 'Platform']) {
+        const l = page.locator('.check-head').getByRole('link', { name, exact: true })
+        if (await l.isVisible()) rects.push(await rectOf(l, name))
+      }
+      noOverlap(rects, label)
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  test('check layout: a phone shows only the logo and Sign up', async ({ page }) => {
+    await openCheck(page, PHONE_WIDTHS[0])
+    const nav = page.locator('.check-head nav')
+    for (const width of [320, 375, 390, 414]) {
+      await resize(page, width)
+      await expect(nav.getByRole('link', { name: 'What you get' }), `${width}px`).toBeHidden()
+      await expect(nav.getByRole('link', { name: 'Platform' }), `${width}px`).toBeHidden()
+      await expect(nav.getByRole('link', { name: 'Sign up' }), `${width}px`).toBeVisible()
+    }
+    for (const width of [767, ...WIDE_WIDTHS]) {
+      await resize(page, width)
+      await expect(nav.getByRole('link', { name: 'What you get' }), `${width}px`).toBeVisible()
+      await expect(nav.getByRole('link', { name: 'Platform' }), `${width}px`).toBeVisible()
+    }
+  })
+
+  test('check layout: the strip fits the card', async ({ page }) => {
+    await openCheck(page, WIDE_WIDTHS[0])
+    for (const width of [...WIDE_WIDTHS, 767]) {
+      await resize(page, width)
+      const tool = await rectOf(page.locator('.check-tool'), 'tool card')
+      const lis = page.locator('.check-progress li')
+      const rects: Rect[] = []
+      for (let i = 0; i < (await lis.count()); i++) rects.push(await rectOf(lis.nth(i), `item ${i}`))
+      expect(rects).toHaveLength(4)
+      for (const r of rects) {
+        expect(enclosesRect(tool, r, 1), `${width}px: an item is outside the card`).toBe(true)
+        expect(Math.abs(r.y - rects[0].y), `${width}px: items share no top`).toBeLessThanOrEqual(1)
+      }
+      noOverlap(rects, `${width}px`)
+    }
+    for (const width of PHONE_WIDTHS.filter((w) => w < 760)) {
+      await resize(page, width)
+      await expect(page.locator('.check-progress'), `${width}px`).toBeHidden()
+      const tool = await rectOf(page.locator('.check-tool'), 'tool card')
+      expect(enclosesRect(tool, await rectOf(page.locator('.check-progress-m'), 'phone strip'), 1), `${width}px: phone strip`).toBe(true)
+      const segs = page.locator('.check-segs span')
+      for (let i = 0; i < (await segs.count()); i++) expect(enclosesRect(tool, await rectOf(segs.nth(i), `segment ${i}`), 1), `${width}px: segment ${i}`).toBe(true)
+    }
+  })
+
+  test('check layout: copy left, card right, stacked on a phone', async ({ page }) => {
+    await openCheck(page, WIDE_WIDTHS[0])
+    for (const width of WIDE_WIDTHS) {
+      await resize(page, width)
+      const copy = await rectOf(page.locator('.check-copy'), 'copy')
+      const tool = await rectOf(page.locator('.check-tool'), 'card')
+      expect(copy.x + copy.width, `${width}px: copy right edge past the card`).toBeLessThanOrEqual(tool.x)
+      expect(Math.abs(copy.y - tool.y), `${width}px: tops`).toBeLessThanOrEqual(1)
+    }
+    for (const width of PHONE_WIDTHS) {
+      await resize(page, width)
+      const copy = await rectOf(page.locator('.check-copy'), 'copy')
+      const tool = await rectOf(page.locator('.check-tool'), 'card')
+      expect(copy.y + copy.height, `${width}px: copy not above the card`).toBeLessThanOrEqual(tool.y + 1)
+      await noSidewaysScroll(page, `${width}px`)
+    }
+  })
+
+  test('check layout: the Map step widens the card and lines up the trust cues', async ({ page }) => {
+    await resize(page, WIDE_WIDTHS[0])
+    await toMap(page)
+    for (const width of WIDE_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const tool = await rectOf(page.locator('.check-tool'), 'card')
+      const h1 = await rectOf(page.locator('.check-h1'), 'h1')
+      expect(Math.abs(tool.x - h1.x), `${label}: card and h1 left edges`).toBeLessThanOrEqual(1)
+      const vw = await page.evaluate(() => document.documentElement.clientWidth)
+      const g = gaps(tool, { x: 0, width: vw })
+      expect(Math.abs(g.left - g.right), `${label}: card gutters ${g.left} / ${g.right}`).toBeLessThanOrEqual(1)
+      const cues = page.locator('.check-trust li')
+      expect(await cues.count()).toBe(4)
+      const tops: number[] = []
+      for (let i = 0; i < 4; i++) tops.push((await rectOf(cues.nth(i), `cue ${i}`)).y)
+      expect(Math.max(...tops) - Math.min(...tops), `${label}: trust cues share no top`).toBeLessThanOrEqual(1)
+    }
+  })
+
+  test('check layout: the footer items do not overlap', async ({ page }) => {
+    await openCheck(page, ALL_WIDTHS[0])
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const foot = page.locator('.check-foot')
+      const rects = [
+        await rectOf(foot.locator('.ds-logo'), 'logo'),
+        await rectOf(foot.locator('.check-foot-id > span').last(), 'company line'),
+        await rectOf(foot.getByRole('link', { name: 'Privacy' }), 'Privacy'),
+        await rectOf(foot.getByRole('button', { name: 'Cookie choices' }), 'Cookie choices'),
+      ]
+      noOverlap(rects, `${width}px`)
+      for (const r of rects) expect(r.x >= 0 && r.x + r.width <= width + 1, `${width}px: outside the viewport`).toBe(true)
+    }
+  })
+
+  test('check layout: reduced motion stops the frame\'s motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await resize(page, WIDE_WIDTHS[0])
+    await toMap(page)
+    await expect(page.locator('.check-card')).toHaveCSS('animation-name', 'none')
+    await expect(page.locator('html')).toHaveCSS('scroll-behavior', 'auto')
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    expect(await css(page.locator('.check-card'), 'animation-name')).not.toBe('none')
+    await expect(page.locator('html')).toHaveCSS('scroll-behavior', 'smooth')
+  })
+
+  test('check layout: the frame takes the design\'s values at each breakpoint', async ({ page }) => {
+    const near = (a: number, b: number, what: string) => expect(Math.abs(a - b), `${what}: ${a} vs ${b}`).toBeLessThanOrEqual(0.5)
+    await openCheck(page, 1280)
+    near(await px(page.locator('.check-head'), 'height'), 72, '1280 header')
+    near((await rectOf(page.locator('.check-head .ds-logo-mark'), 'mark')).width, 30, '1280 header mark')
+    near((await rectOf(page.locator('.check-foot .ds-logo-mark'), 'mark')).width, 24, '1280 footer mark')
+    near(await px(page.locator('.check-hero-pad'), 'padding-top'), 64, '1280 hero top')
+    near(await px(page.locator('.check-hero-pad'), 'padding-bottom'), 76.8, '1280 hero bottom')
+    near(await px(page.locator('.check-lead'), 'font-size'), 16, '1280 lead')
+    expect(await css(page.locator('.check-trust'), 'display')).toBe('grid')
+    expect(await tracks(page.locator('.check-trust'))).toBe(2)
+    expect(await css(page.locator('.check-foot-row'), 'flex-direction')).toBe('row')
+    for (const width of [900, 767]) {
+      await resize(page, width)
+      expect(await css(page.locator('.check-trust'), 'display'), `${width}px`).toBe('flex')
+      expect(await css(page.locator('.check-trust'), 'flex-wrap'), `${width}px`).toBe('wrap')
+    }
+    await resize(page, 390)
+    near(await px(page.locator('.check-head'), 'height'), 64, '390 header')
+    near(await px(page.locator('.check-h1'), 'font-size'), 34, '390 h1')
+    near(await px(page.locator('.check-lead'), 'font-size'), 15, '390 lead')
+    near(await px(page.locator('.check-hero-pad'), 'padding-top'), 28, '390 hero top')
+    near(await px(page.locator('.check-hero-pad'), 'padding-bottom'), 32, '390 hero bottom')
+    expect(await css(page.locator('.check-trust'), 'display')).toBe('grid')
+    expect(await tracks(page.locator('.check-trust'))).toBe(2)
+    near(await px(page.locator('.check-trust li').first(), 'font-size'), 13, '390 cue')
+    expect(await css(page.locator('.check-foot-row'), 'flex-direction')).toBe('column')
+    const logo = await rectOf(page.locator('.check-foot .ds-logo'), 'footer logo')
+    const privacy = await rectOf(page.locator('.check-foot').getByRole('link', { name: 'Privacy' }), 'Privacy')
+    expect(Math.abs(logo.x - privacy.x), 'footer: Privacy left vs logo left').toBeLessThanOrEqual(1)
+
+    // Map at 390: the Map rule outranks the 600 px trust-cue rule.
+    await page.setViewportSize({ width: 390, height: 1080 })
+    await page.locator('#check-file').setInputFiles({ name: 'm.csv', mimeType: 'text/csv', buffer: FIXTURE })
+    await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+    near(await px(page.locator('.check-h1'), 'font-size'), 34, '390 Map h1')
+    expect(await css(page.locator('.check-trust'), 'display')).toBe('flex')
+  })
+
+  test('check layout: the header links show the design\'s focus ring', async ({ page }) => {
+    await openCheck(page, 1280)
+    const ring = await resolved(page, '--ring', 'outline-color')
+    await page.keyboard.press('Tab')
+    for (const target of [page.getByRole('link', { name: 'ASComply Africa home' }), page.locator('.check-head').getByRole('link', { name: 'What you get' })]) {
+      await expect(target).toBeFocused()
+      expect(await css(target, 'outline-style')).toBe('solid')
+      expect(await css(target, 'outline-width')).toBe('2px')
+      expect(await css(target, 'outline-offset')).toBe('2px')
+      expect(await css(target, 'outline-color')).toBe(ring)
+      await page.keyboard.press('Tab')
+    }
+  })
+
+  test('check layout: the hero eyebrow takes the dark-band colour', async ({ page }) => {
+    await openCheck(page, 1280)
+    const color = await css(page.locator('.check-hero .t-eyebrow'), 'color')
+    expect(color).toBe(await resolved(page, '--text-eyebrow-dark', 'color'))
+    expect(color).not.toBe(await resolved(page, '--text-eyebrow', 'color'))
+  })
+
+  test('check layout: every strip label shows in full', async ({ page }) => {
+    await openCheck(page, 1440)
+    for (const pdf of [false, true]) {
+      if (pdf) {
+        await page.locator('#check-file').setInputFiles(PDF)
+        await expect(page.locator('.check-progress li.is-skipped')).toBeVisible()
+      }
+      for (const width of [1440, 1280, 1100, 1024, 981, 900, 761]) {
+        await resize(page, width)
+        const label = `${width}px${pdf ? ' pdf' : ''}`
+        const lis = page.locator('.check-progress li')
+        const rects: Rect[] = []
+        for (let i = 0; i < (await lis.count()); i++) {
+          const li = await rectOf(lis.nth(i), `item ${i}`)
+          rects.push(li)
+          const texts = lis.nth(i).locator('.check-step-lbl, .check-step-sub')
+          for (let j = 0; j < (await texts.count()); j++) {
+            const t = texts.nth(j)
+            expect(await t.evaluate((el) => el.scrollWidth <= el.clientWidth), `${label}: item ${i} text is clipped`).toBe(true)
+            expect(enclosesRect(li, await rectOf(t, `item ${i} text`), 1), `${label}: item ${i} text outside its item`).toBe(true)
+          }
+        }
+        noOverlap(rects, label)
+      }
+    }
+  })
+
+  test('check layout: the Argos shots of the Upload and Map steps', async ({ page }) => {
+    test.skip(!argosOn(), 'Argos shots are taken on the nightly only')
+    await openCheck(page, 1440)
+    await shoot(page, 'check', 'upload')
+    await toMap(page)
+    await shoot(page, 'check', 'map')
   })
 })

@@ -17,7 +17,10 @@ type CheckReaders struct {
 	Jev    JevAsker
 }
 
-var ErrCheckAIUnavailable = errors.New("extraction: AI reading unavailable for a check")
+var (
+	ErrCheckAIUnavailable   = errors.New("extraction: AI reading unavailable for a check")
+	ErrCheckDocumentTooLong = errors.New("extraction: the document text is over the prompt bound")
+)
 
 // ReadForCheck reads one PDF or DOCX as worker.go's text and no-text arms do, storing nothing.
 // ceiling: the two sequences can drift; extract one helper when the worker's text arm next changes.
@@ -59,6 +62,9 @@ func ReadForCheck(ctx context.Context, r CheckReaders, file []byte, format strin
 		return fields, "", nil
 	}
 
+	if aiOn && DoclingPromptCut(tokens) {
+		return nil, "", ErrCheckDocumentTooLong
+	}
 	answer, failed := askAI(actx, r.AI, tokens)
 	var lineAnswer []AILine
 	if !failed {

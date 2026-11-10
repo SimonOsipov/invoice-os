@@ -157,6 +157,9 @@ func (u upload) request() (publiccheck.Request, bool) {
 	return req, true
 }
 
+// DocumentTooLongSentence is the error word of a check document whose text is over the prompt bound.
+const DocumentTooLongSentence = "This document has too much text for the free check. Try a shorter invoice."
+
 // engineStatus maps an engine error to its status and error word.
 func engineStatus(err error) (status int, word string) {
 	switch {
@@ -166,6 +169,8 @@ func engineStatus(err error) (status int, word string) {
 		return http.StatusBadRequest, "unsupported format"
 	case errors.Is(err, importer.ErrValidation):
 		return http.StatusBadRequest, strings.TrimPrefix(err.Error(), importer.ErrValidation.Error()+": ")
+	case errors.Is(err, publiccheck.ErrDocumentTooLong):
+		return http.StatusBadRequest, DocumentTooLongSentence
 	case errors.Is(err, publiccheck.ErrBadFile):
 		return http.StatusUnprocessableEntity, "unreadable"
 	case errors.Is(err, publiccheck.ErrReadUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):

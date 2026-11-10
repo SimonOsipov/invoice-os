@@ -76,6 +76,8 @@ paths:
 - Call the AI once on a PDF with no text and rendered pages. Send the first and last page images and the intro only.
 - Treat a blank AI answer on a text read as no change. The engine's own reading stands.
 - Never trust the model's mapping answer. Accept `header_row` only as a `json.Number` inside the window.
+- Bound the document prompt at `maxDoclingPromptBytes`. Keep the first and last whole lines, half the bound each, joined by `--- rows omitted ---`. Cut one token's text at `maxPromptRunBytes`.
+- Refuse a check document whose prompt was cut, before any AI call, with `DocumentTooLongSentence`. A tenant job sends the cut text.
 - Place a field only when the answer is a non-blank string that equals a header cell exactly. Compare against the header re-decoded at the answered row.
 - Place nothing for a header string that two fields claim.
 - Drop every key outside `canonicalFields` from a mapping answer. `date_format` and `decimal_separator` are never read.

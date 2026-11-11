@@ -83,19 +83,47 @@ type relCall struct {
 type confirmCall struct{ token, consent string }
 
 type fakeStore struct {
-	ev        *events
-	count     int
-	countErr  error
-	holdErr   error
-	mu        sync.Mutex
-	helds     []Held
-	releases  []relCall
-	confirms  []confirmCall
-	holdFn    func(ctx context.Context) error
-	confirmFn func(ctx context.Context, token, consent string, send func(context.Context, Held, int) error) (Held, bool, error)
+	ev         *events
+	count      int
+	countErr   error
+	holdErr    error
+	reached    bool
+	reachedErr error
+	mu         sync.Mutex
+	helds      []Held
+	releases   []relCall
+	confirms   []confirmCall
+	ceilings   []string // each ceiling AISpendReached was called with
+	counts     int
+	holdFn     func(ctx context.Context) error
+	confirmFn  func(ctx context.Context, token, consent string, send func(context.Context, Held, int) error) (Held, bool, error)
 }
 
-func (s *fakeStore) Count(context.Context, string) (int, error) { return s.count, s.countErr }
+func (s *fakeStore) Count(context.Context, string) (int, error) {
+	s.mu.Lock()
+	s.counts++
+	s.mu.Unlock()
+	return s.count, s.countErr
+}
+
+func (s *fakeStore) AISpendReached(_ context.Context, ceiling string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ceilings = append(s.ceilings, ceiling)
+	return s.reached, s.reachedErr
+}
+
+func (s *fakeStore) spendReads() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.ceilings)
+}
+
+func (s *fakeStore) countCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.counts
+}
 
 func (s *fakeStore) Hold(ctx context.Context, h Held) (string, error) {
 	s.ev.add("hold")
@@ -1264,5 +1292,195 @@ func TestConfirmAndRun_LogNoAddressOrToken(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEngineStatus_ATooLongDocumentIs400WithTheSentence(t *testing.T) {
+	err := fmt.Errorf("%w: %w", publiccheck.ErrDocumentTooLong, extraction.ErrCheckDocumentTooLong)
+	status, word := engineStatus(err)
+	// The literal is what the check app matches (frontend/check TOO_MUCH_TEXT_SENTENCE).
+	const want = "This document has too much text for the free check. Try a shorter invoice."
+	if status != http.StatusBadRequest || word != want || DocumentTooLongSentence != want {
+		t.Errorf("engineStatus = %d %q (DocumentTooLongSentence %q), want 400 %q", status, word, DocumentTooLongSentence, want)
+	}
+}
+
+// bigText reads one page whose prompt is over the bound: 6,000 tokens of about 50 bytes.
+type bigText struct{}
+
+func (bigText) Name() string    { return "stub" }
+func (bigText) Version() string { return "1" }
+func (bigText) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	p := extraction.Page{Number: 1}
+	for i := 0; i < 6_000; i++ {
+		p.Tokens = append(p.Tokens, extraction.Token{
+			Text:   fmt.Sprintf("row%05d %s", i, strings.Repeat("a", 40)),
+			Region: extraction.Region{Page: 1, X0: 0.1, Y0: float64(i) / 7000, X1: 0.3, Y1: 0.9},
+		})
+	}
+	return extraction.PageResult{Pages: 1, TextChars: 20}, onPage(p)
+}
+
+func TestRunHandler_ATooLongDocumentHoldsAndMailsNothing(t *testing.T) {
+	r := newRig(t)
+	r.svc.Checker.Readers.Text = bigText{}
+	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF-1.4"), "consent_text", "ok")
+	wantStatus(t, rec, http.StatusBadRequest, DocumentTooLongSentence)
+	if n := len(r.store.holds()); n != 0 {
+		t.Errorf("holds = %d, want 0", n)
+	}
+	if n := len(r.send.capture.Messages()); n != 0 {
+		t.Errorf("mails sent = %d, want 0", n)
+	}
+	if ai := r.ai.calls.Load(); ai != 0 {
+		t.Errorf("AI calls = %d, want 0", ai)
+	}
+	r.noWrites(t)
+}
+
+// dailyCeiling is the agreed $2.00; AISpendCeilingUSD must equal it.
+const dailyCeiling = "2.00"
+
+func TestRunHandler_PastTheCeilingAnswersCeilingAndRunsNothing(t *testing.T) {
+	// The ceiling comes before Count, so it wins over a full address and a failed Count.
+	for _, tc := range []struct {
+		name     string
+		count    int
+		countErr error
+		format   string
+		file     []byte
+		kv       []string
+	}{
+		{"csv", 0, nil, "csv", []byte(oneInvoice), []string{"mapping", csvMapping}},
+		{"pdf", 0, nil, "pdf", []byte("%PDF-1.4"), nil},
+		{"address already at its limit", 3, nil, "csv", []byte(oneInvoice), []string{"mapping", csvMapping}},
+		{"count would fail", 0, errors.New("db down"), "csv", []byte(oneInvoice), []string{"mapping", csvMapping}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.store.reached, r.store.count, r.store.countErr = true, tc.count, tc.countErr
+			rec := r.run(t, visitor, tc.format, tc.file, tc.kv...)
+			wantStatus(t, rec, http.StatusServiceUnavailable, "ceiling")
+			r.untouched(t)
+			if n := r.store.countCalls(); n != 0 {
+				t.Errorf("Count calls = %d, want 0: the ceiling comes before Count", n)
+			}
+			if n := len(r.send.capture.Messages()); n != 0 {
+				t.Errorf("mails sent = %d, want 0", n)
+			}
+			if held := r.store.holds(); len(held) != 0 {
+				t.Errorf("holds = %d, want 0: a refused run holds nothing and the address keeps its checks", len(held))
+			}
+		})
+	}
+}
+
+func TestRunHandler_TheCeilingAnswerIsTheSameForAFreshAndAUsedAddress(t *testing.T) {
+	var want string
+	for i, count := range []int{0, 3} {
+		r := newRig(t)
+		r.store.reached, r.store.count = true, count
+		rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+		wantStatus(t, rec, http.StatusServiceUnavailable, "ceiling")
+		if i == 0 {
+			want = rec.Body.String()
+		} else if got := rec.Body.String(); got != want {
+			t.Errorf("used-address body = %q, want the fresh-address body %q: the ceiling must not reveal the used-checks state", got, want)
+		}
+	}
+}
+
+func TestMappingHandler_PastTheCeilingAnswersCeiling(t *testing.T) {
+	// Every format: the check sits before SuggestMapping, so a document answers ceiling too.
+	for _, tc := range []struct {
+		format string
+		file   []byte
+	}{
+		{"csv", []byte("Inv,Seller,Seller TIN,Total\nINV-1,Acme Ltd,12345678-0001,100.00\n")},
+		{"pdf", []byte("%PDF-1.4")},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			r := newRig(t)
+			r.store.reached = true
+			body, ct := mapForm(t, tc.format, tc.file)
+			wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusServiceUnavailable, "ceiling")
+			r.untouched(t)
+		})
+	}
+}
+
+func TestRunHandler_UnderTheCeilingRunsAsBefore(t *testing.T) {
+	r := newRig(t)
+	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	runBody(t, rec)
+	if ev := r.ev.all(); !slices.Equal(ev, []string{"hold", "send"}) {
+		t.Errorf("events = %v, want hold then send", ev)
+	}
+	// Proves the spend was read and passed, so a handler that never asks cannot go green here.
+	if n := len(r.store.spendReads()); n != 1 {
+		t.Errorf("spend reads = %d, want 1", n)
+	}
+}
+
+func TestMappingHandler_UnderTheCeilingSuggestsAsBefore(t *testing.T) {
+	r := newRig(t)
+	body, ct := mapForm(t, "csv", []byte("Inv,Seller,Seller TIN,Total\nINV-1,Acme Ltd,12345678-0001,100.00\n"))
+	rec := serve(r.svc.MappingHandler(), body, ct)
+	wantStatus(t, rec, http.StatusOK, "")
+	if out := decode(t, rec); out["source"] != "ai" || out["rows_total"] != float64(1) {
+		t.Errorf("mapping body = %v, want source ai and 1 row", out)
+	}
+	if r.mapper.calls.Load() != 1 {
+		t.Errorf("mapper calls = %d, want 1", r.mapper.calls.Load())
+	}
+	if n := len(r.store.spendReads()); n != 1 {
+		t.Errorf("spend reads = %d, want 1", n)
+	}
+}
+
+func TestRunHandler_AFailedSpendReadIsUnavailable(t *testing.T) {
+	r := newRig(t)
+	r.store.reachedErr = errors.New("db down")
+	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	wantStatus(t, rec, http.StatusServiceUnavailable, "unavailable")
+	r.untouched(t)
+	logs := r.logs.String()
+	if n := strings.Count(logs, "level=ERROR"); n != 1 || !strings.Contains(logs, "readiness check: spend read failed") {
+		t.Errorf("logs = %q, want exactly one ERROR line %q", logs, "readiness check: spend read failed")
+	}
+	if strings.Contains(logs, visitor) {
+		t.Errorf("logs carry the address: %q", logs)
+	}
+}
+
+func TestMappingHandler_AFailedSpendReadIsUnavailable(t *testing.T) {
+	r := newRig(t)
+	r.store.reachedErr = errors.New("db down")
+	body, ct := mapForm(t, "csv", []byte("Inv,Total\nA,1\n"))
+	wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusServiceUnavailable, "unavailable")
+	r.untouched(t)
+	logs := r.logs.String()
+	if n := strings.Count(logs, "level=ERROR"); n != 1 || !strings.Contains(logs, "readiness check: spend read failed") {
+		t.Errorf("logs = %q, want exactly one ERROR line %q", logs, "readiness check: spend read failed")
+	}
+}
+
+func TestHandlers_PassTheDailyCeiling(t *testing.T) {
+	if AISpendCeilingUSD != dailyCeiling {
+		t.Errorf("AISpendCeilingUSD = %q, want %q", AISpendCeilingUSD, dailyCeiling)
+	}
+	// The handlers must pass the constant itself.
+	r := newRig(t)
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
+	body, ct := mapForm(t, "csv", []byte("Inv,Total\nA,1\n"))
+	wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusOK, "")
+	got := r.store.spendReads()
+	if len(got) != 2 {
+		t.Fatalf("spend reads = %v, want one per route", got)
+	}
+	for i, c := range got {
+		if c != AISpendCeilingUSD {
+			t.Errorf("read %d ceiling = %q, want %q", i, c, AISpendCeilingUSD)
+		}
 	}
 }

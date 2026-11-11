@@ -620,6 +620,7 @@ describe('getExtractionDetail', () => {
       state: 'succeeded',
       failure_kind: null,
       document_type: null,
+      ai_text_truncated: false,
       document: mkDocument(),
       pages: [],
       fields: [],

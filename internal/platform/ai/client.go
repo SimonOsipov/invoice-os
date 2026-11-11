@@ -35,6 +35,14 @@ const (
 	PurposeExplain     Purpose = "explain"
 )
 
+// maxTokens is the output-token cap sent per purpose; a purpose without one is refused.
+var maxTokens = map[Purpose]int{
+	PurposeDocument:    2048,
+	PurposeSpreadsheet: 4096,
+	PurposeLineItems:   32768,
+	PurposeExplain:     1024,
+}
+
 // Request is one call's input. FakeHint and FakeScope are read only in fake
 // mode; neither is ever sent on the wire or logged. A non-empty FakeScope
 // narrows the fake's steering marker to that scope's own spelling
@@ -121,6 +129,7 @@ type responseEnvelope struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *usage          `json:"usage"`
 	Error json.RawMessage `json:"error"`
@@ -219,7 +228,7 @@ func realSleep(ctx context.Context, d time.Duration) error {
 var fakeScopeRE = regexp.MustCompile(`^[A-Z]+$`)
 
 func validateRequest(req Request) error {
-	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet && req.Purpose != PurposeLineItems && req.Purpose != PurposeExplain {
+	if _, ok := maxTokens[req.Purpose]; !ok {
 		return fmt.Errorf("ai: invalid request: unsupported purpose %q", req.Purpose)
 	}
 	if req.Text == "" && len(req.Pages) == 0 {
@@ -259,7 +268,8 @@ func buildWireRequest(req Request) wireRequest {
 				Schema: req.Schema,
 			},
 		},
-		Provider: wireProvider{RequireParameters: true},
+		Provider:  wireProvider{RequireParameters: true},
+		MaxTokens: maxTokens[req.Purpose],
 	}
 }
 
@@ -321,6 +331,11 @@ func classify(status int, body []byte, postErr error, schema map[string]any) (cl
 		return classifyRetry, nil, errors.New("ai: response had no choices")
 	}
 
+	// Cut at max_tokens: refuse before decoding, since a retry would be cut again.
+	if env.Choices[0].FinishReason == "length" {
+		return classifyRefused, nil, errors.New("ai: refused: answer cut at max_tokens")
+	}
+
 	answer, err := decodeAnswer(env.Choices[0].Message.Content)
 	if err != nil {
 		return classifyRetry, nil, fmt.Errorf("ai: response content is not a JSON object: %v", err)
@@ -364,6 +379,7 @@ type wireRequest struct {
 	ResponseFormat wireFormat    `json:"response_format"`
 	Provider       wireProvider  `json:"provider"`
 	Temperature    float64       `json:"temperature"`
+	MaxTokens      int           `json:"max_tokens"`
 }
 
 type wireMessage struct {

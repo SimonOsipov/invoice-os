@@ -141,6 +141,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 
 	var results []FieldResult
 	var docType string // a non-invoice verdict, or empty
+	var truncated bool // both AI calls answered from cut text
 	var images []PageImage
 	var tokenPages []TokenPage // PDFium's, from Pages.Ingest: the fingerprint source
 	var textPages []Page       // Text's, for LineItems
@@ -260,11 +261,13 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				// octx, not ctx: the client's ai call log line reads tenant_id off it.
 				// Sequential, header first: the line call only runs once the header call has
 				// not failed, so ErrOff still reaches it but a real failure spends one call.
+				cut := w.AI != nil && w.AI.Enabled() && DoclingPromptCut(textTokens)
 				answer, failed := askAI(octx, w.AI, textTokens)
 				var lineAnswer []AILine
 				if !failed {
 					lineAnswer, failed = askAILines(octx, w.AI, textTokens)
 				}
+				truncated = cut && !failed
 				if failed {
 					// Q9: no engine fallback -- one policy for both calls.
 					results = aiUnavailableResults()
@@ -327,6 +330,11 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			}
 			if docType != "" {
 				if err := writeDocumentTypeTx(ctx, tx, args.TenantID, row.ID, docType); err != nil {
+					return err
+				}
+			}
+			if truncated {
+				if err := writeAITextTruncatedTx(ctx, tx, args.TenantID, row.ID); err != nil {
 					return err
 				}
 			}

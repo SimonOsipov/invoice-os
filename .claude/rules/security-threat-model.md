@@ -65,7 +65,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `GET` and `POST /readiness-check/confirm` (gateway) and `POST /internal/public-checks/confirm` (worker): a 256-bit confirm token. The GET changes nothing; the POST consumes the link once within 24 hours and sends the held results. Accepted ceiling: no Armor rule covers the route, since a random token cannot be enumerated.
 - The held results (`readiness_check_requests`): invoice amounts and buyer details of an unconfirmed address, kept at most 25 hours. The file and the client IP are never stored. `invoice_gateway` has no grant on the table.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
-- `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data.
+- `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data. They answer 503 `ceiling` once the day's NULL-tenant AI spend reaches `AISpendCeilingUSD`.
 
 ## Accepted ceilings
 

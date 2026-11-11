@@ -417,12 +417,12 @@ func TestFake_HintSteersAnImagesOnlyCall(t *testing.T) {
 
 // -- T16 --
 
-func TestFake_TextMarkerWinsOverHint(t *testing.T) {
-	t.Run("text_unavailable_hint_answer", func(t *testing.T) {
+func TestFake_HintMarkerWinsOverText(t *testing.T) {
+	t.Run("hint_unavailable_text_answer", func(t *testing.T) {
 		c := fakeModeClient(t)
 		req := baseReq()
-		req.Text = markerUnavailable
-		req.FakeHint = answerMarker(validContent)
+		req.Text = answerMarker(validContent)
+		req.FakeHint = markerUnavailable
 
 		answer, err := fakeCallWithin(t, c, req)
 		if !errors.Is(err, ErrUnavailable) {
@@ -434,11 +434,11 @@ func TestFake_TextMarkerWinsOverHint(t *testing.T) {
 	})
 
 	// Reverse row: pins the precedence rather than a coincidence.
-	t.Run("text_answer_hint_unavailable", func(t *testing.T) {
+	t.Run("hint_answer_text_unavailable", func(t *testing.T) {
 		c := fakeModeClient(t)
 		req := baseReq()
-		req.Text = answerMarker(validContent)
-		req.FakeHint = markerUnavailable
+		req.Text = markerUnavailable
+		req.FakeHint = answerMarker(validContent)
 
 		answer, err := fakeCallWithin(t, c, req)
 		if err != nil {

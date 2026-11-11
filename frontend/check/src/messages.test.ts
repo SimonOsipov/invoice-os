@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { CEILING_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, TOO_MUCH_TEXT_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409MapsLikeAnyUnknownStatus', () => {
@@ -50,6 +50,26 @@ describe('refusal', () => {
   it('refusal_400OnADocumentRunIsTheFileSentenceNotTheMappingOne', () => {
     expect(refusal('document', 400, 'invalid request body').text).toBe(UNREADABLE_SENTENCE)
     expect(refusal('run', 400, 'invalid request body').text).toBe(MAPPING_SENTENCE)
+  })
+
+  it('refusal_400TooMuchTextKeepsItsSentence', () => {
+    expect(refusal('document', 400, TOO_MUCH_TEXT_SENTENCE)).toEqual({ text: TOO_MUCH_TEXT_SENTENCE })
+  })
+
+  it('refusal_400OtherWordOnADocumentIsUnreadable', () => {
+    expect(refusal('document', 400, 'invalid request body').text).toBe(UNREADABLE_SENTENCE)
+  })
+
+  it('refusal_503CeilingKeepsItsSentence', () => {
+    for (const route of ['run', 'mapping'] as const) {
+      expect(refusal(route, 503, CEILING_SENTENCE)).toEqual({ text: CEILING_SENTENCE })
+    }
+  })
+
+  it('refusal_503OtherWordOrNoneIsUnavailable', () => {
+    for (const [route, e] of [['run', 'busy'], ['mapping', 'unavailable'], ['run', null]] as const) {
+      expect(refusal(route, 503, e).text).toBe(UNAVAILABLE_SENTENCE)
+    }
   })
 
   it('refusal_400OnTheMappingRouteIsTheColumnsSentence', () => {

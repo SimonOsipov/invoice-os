@@ -32,6 +32,8 @@ paths:
 - Refuse `JEV_FAKE=true` with a key set. `jev.FromEnv` returns an error naming both variables.
 - Let `FromEnv` return errors and never exit the process. Callers treat the error as fatal at boot.
 - Call `ai.FromEnv` and `jev.FromEnv` in `cmd/worker` and `cmd/invoice`. A client error stops boot.
+- Send `max_tokens` from `maxTokens` on every request. A purpose without a cap is refused.
+- Return `refused` for an answer cut at `max_tokens` (`finish_reason: "length"`). Never retry it.
 - Send `json_schema` output with `strict: true` and `provider.require_parameters: true` and `temperature: 0`. Send no `usage: {include: true}`.
 - Put the text part first in a message, then the page images. Encode each PNG as `data:image/png;base64,` with padded standard base64.
 - Decode the AI answer with `json.Number`. Integer and enum comparisons stay exact.
@@ -60,7 +62,7 @@ paths:
 - Answer an off, failed, blank or dropped explain answer with 200 `status: "unavailable"`. Never 5xx.
 - Take the fix target from the violation path. For a bare line path, take the field from the violation's `field`. Propose no fix for a bare line path without `field`.
 - Drop the fix when the model names a `fix_field` other than the bound target field.
-- Search an AI fake marker in `Request.Text`, then in `Request.FakeHint`. Never scan `Request.System`.
+- Search an AI fake marker in `Request.FakeHint`, then in `Request.Text`. Never scan `Request.System`.
 - Match fake markers case-sensitively with no word boundary. The first match in a field wins.
 - A scoped request matches only its own `AIFAKE-<SCOPE>-` spelling. It never falls back to an unscoped marker.
 - Encode a fake answer payload with `base64.RawURLEncoding`. The payload class is `[A-Za-z0-9_-]+`.
@@ -74,6 +76,8 @@ paths:
 - Call the AI once on a PDF with no text and rendered pages. Send the first and last page images and the intro only.
 - Treat a blank AI answer on a text read as no change. The engine's own reading stands.
 - Never trust the model's mapping answer. Accept `header_row` only as a `json.Number` inside the window.
+- Bound the document prompt at `maxDoclingPromptBytes`. Keep the first and last whole lines, half the bound each, joined by `--- rows omitted ---`. Cut one token's text at `maxPromptRunBytes`.
+- Refuse a check document whose prompt was cut, before any AI call, with `DocumentTooLongSentence`. A tenant job sends the cut text.
 - Place a field only when the answer is a non-blank string that equals a header cell exactly. Compare against the header re-decoded at the answered row.
 - Place nothing for a header string that two fields claim.
 - Drop every key outside `canonicalFields` from a mapping answer. `date_format` and `decimal_separator` are never read.
@@ -90,3 +94,5 @@ paths:
 - Count a call as failed when its outcome is not `ok`. A `fake` row counts as failed.
 - Re-measure a Jev threshold on real documents before you trust it in production.
 - Leave the Jev data terms to the user. They are unresolved, and nothing enforces zero data retention per call.
+- Cut each mapping prompt cell at `maxPromptCellBytes`, keep the first `maxPromptColumns` columns, and add rows whole within `maxMappingPromptBytes`. Always keep row 1.
+- Set `extraction_jobs.ai_text_truncated` only when both AI calls of a tenant text read answered from cut text.

@@ -191,10 +191,12 @@ type ExtractionDetail struct {
 	// omitempty (TestExtractionDetail_FailureKindMarshalsAsExplicitNull).
 	FailureKind *string `json:"failure_kind"`
 	// NULL on the wire unless the worker recorded a non-invoice verdict.
-	DocumentType *string                `json:"document_type"`
-	Document     ExtractionDocument     `json:"document"`
-	Pages        []ExtractionPage       `json:"pages"`
-	Fields       []ExtractionFieldState `json:"fields"`
+	DocumentType *string `json:"document_type"`
+	// False, never null, unless both AI calls answered from cut text.
+	AITextTruncated bool                   `json:"ai_text_truncated"`
+	Document        ExtractionDocument     `json:"document"`
+	Pages           []ExtractionPage       `json:"pages"`
+	Fields          []ExtractionFieldState `json:"fields"`
 }
 
 // emptyDetail is what every failure path returns: a nil slice marshals to JSON null and every
@@ -238,12 +240,12 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 
 	var storedAt time.Time
 	err := tx.QueryRow(ctx,
-		`SELECT j.id, j.document_id, j.state, j.failure_kind, j.document_type,
+		`SELECT j.id, j.document_id, j.state, j.failure_kind, j.document_type, j.ai_text_truncated,
 		        d.filename, d.declared_content_type, d.size_bytes, d.created_at
 		   FROM extraction_jobs j
 		   JOIN documents d ON d.id = j.document_id
 		  WHERE j.id = $1`,
-		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind, &out.DocumentType,
+		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind, &out.DocumentType, &out.AITextTruncated,
 		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

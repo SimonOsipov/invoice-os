@@ -204,3 +204,10 @@ func (s *Store) Count(ctx context.Context, email string) (int, error) {
 	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM readiness_checks WHERE email = lower(btrim($1))`, email).Scan(&n)
 	return n, err
 }
+
+// AISpendReached reports whether the check's AI spend for the UTC day has reached the ceiling.
+func (s *Store) AISpendReached(ctx context.Context, ceiling string) (bool, error) {
+	var reached bool
+	err := s.Pool.QueryRow(ctx, `SELECT public.public_check_ai_cost_today() >= $1::numeric`, ceiling).Scan(&reached)
+	return reached, err
+}

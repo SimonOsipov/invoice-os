@@ -124,8 +124,8 @@ func TestSuggestCheckMapping_SendsABoundedPrompt(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", len(f.calls))
 	}
 	req := f.calls[0]
-	if n := len(req.Text) - len(mappingIntro) - 1; n > maxMappingPromptBytes {
-		t.Errorf("Text rows = %d bytes, want <= %d", n, maxMappingPromptBytes)
+	if n := len(req.Text) - len(mappingIntro) - 1; n <= 0 || n > maxMappingPromptBytes {
+		t.Errorf("Text rows = %d bytes, want 1 to %d", n, maxMappingPromptBytes)
 	}
 	if req.Purpose != ai.PurposeSpreadsheet {
 		t.Errorf("Purpose = %q", req.Purpose)

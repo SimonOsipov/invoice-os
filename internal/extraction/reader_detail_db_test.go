@@ -222,9 +222,17 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
 	rvdSeedField(t, ctx, tenantB, jobB, "supplier_tin", rvdStr("B-TIN"), nil, 0, nil, now)
 
+	// B's job carries the SECAUD-05 flag: A's refused read must not return it.
+	if ct, err := stRequire(t).super.Exec(ctx, `UPDATE extraction_jobs SET ai_text_truncated = true WHERE id = $1`, jobB); err != nil || ct.RowsAffected() != 1 {
+		t.Fatalf("plant ai_text_truncated on job %s: rows %d, err %v", jobB, ct.RowsAffected(), err)
+	}
+
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
 		t.Fatalf("A reading its own job %s: %v", jobA, err)
+	}
+	if got.AITextTruncated {
+		t.Errorf("A's own job reads ai_text_truncated true, want false: only B's job is flagged")
 	}
 	if got.ID != jobA || got.DocumentID != docA {
 		t.Fatalf("A reading its own job got id %q / document %q, want %q / %q", got.ID, got.DocumentID, jobA, docA)
@@ -244,6 +252,9 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	got, err = r.Detail(ctxA, jobB)
 	if !errors.Is(err, extraction.ErrNotFound) {
 		t.Errorf("A reading B's job %s returned %v, want %v", jobB, err, extraction.ErrNotFound)
+	}
+	if got.AITextTruncated {
+		t.Errorf("the refused read of B's flagged job returned ai_text_truncated true, want the zero value")
 	}
 	if got.ID != "" || got.DocumentID != "" || got.State != "" {
 		t.Errorf("the refused read carried id %q / document %q / state %q, want the zero values", got.ID, got.DocumentID, got.State)

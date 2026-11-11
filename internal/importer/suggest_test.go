@@ -904,6 +904,44 @@ func TestMappingPromptText_DropsWholeRowsFromTheEnd(t *testing.T) {
 			t.Errorf("row %d is cut or misnumbered: %d bytes", i+1, len(l))
 		}
 	}
+
+	// The bound itself: a third row that brings the rows text to exactly 48,000 bytes is kept,
+	// one byte more is dropped whole (the literal is the AC's number, not the constant).
+	fixed := func(n int) []string {
+		cols := make([]string, 100)
+		for j := range cols {
+			cols[j] = strings.Repeat("a", n)
+		}
+		return cols
+	}
+	full := len(fmt.Sprintf(mappingRowFmt, 1, csvLine(fixed(200))))
+	third := func(total int) []string { // a row whose line is `total` bytes, in 39 cells of at most 200 bytes
+		const m = 39
+		rest := total - len("Row 3: ") - (m - 1)
+		cols := make([]string, m)
+		for j := range cols {
+			n := rest / m
+			if j < rest%m {
+				n++
+			}
+			cols[j] = strings.Repeat("c", n)
+		}
+		return cols
+	}
+	rowsText := func(p string) string { return strings.TrimPrefix(p, mappingIntro+"\n") }
+	for _, tc := range []struct {
+		total int
+		keep  bool
+	}{{48_000 - 2*full - 2, true}, {48_000 - 2*full - 1, false}} {
+		got := mappingPromptText([][]string{fixed(200), fixed(200), third(tc.total)})
+		has := strings.Contains(got, "\nRow 3: ")
+		if has != tc.keep {
+			t.Errorf("row 3 of %d bytes (rows text %d): kept = %v, want %v", tc.total, len(rowsText(got)), has, tc.keep)
+		}
+		if n := len(rowsText(got)); n > 48_000 || (tc.keep && n != 48_000) {
+			t.Errorf("rows text = %d bytes, want %v", n, map[bool]string{true: "exactly 48000", false: "at most 48000"}[tc.keep])
+		}
+	}
 }
 
 func TestMappingPromptText_ANormalWindowIsUnchanged(t *testing.T) {

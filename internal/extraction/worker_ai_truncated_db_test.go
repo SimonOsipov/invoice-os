@@ -64,6 +64,12 @@ func TestExtractWorker_AnOverBoundTextSetsAITextTruncated(t *testing.T) {
 	if !atFlag(t, ctx, jobID) {
 		t.Errorf("job %s read an over-bound text with the AI enabled and recorded ai_text_truncated false, want true", jobID)
 	}
+	// Both AI calls (header, lines) send the cut text: one marker, under the 256,000-byte bound plus the intro.
+	for i, req := range stub.reqs {
+		if n := strings.Count(req.Text, "--- rows omitted ---"); n != 1 || len(req.Text) > 258_000 {
+			t.Errorf("AI request %d (%s): %d marker(s), %d bytes; want 1 marker and at most 258,000 bytes", i, req.Purpose, n, len(req.Text))
+		}
+	}
 }
 
 func TestExtractWorker_ANormalTextLeavesAITextTruncatedFalse(t *testing.T) {

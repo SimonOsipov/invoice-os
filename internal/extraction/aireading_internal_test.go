@@ -815,6 +815,16 @@ func TestDoclingPromptText_KeepsHeadAndTailWithinTheBound(t *testing.T) {
 	if !DoclingPromptCut(pages) {
 		t.Error("DoclingPromptCut = false, want true")
 	}
+	// Half the bound each side, whole lines of under 100 bytes: both halves are within 100 bytes of 128,000.
+	head, tail, found := strings.Cut(rows, aiPromptOmitted)
+	if !found {
+		t.Fatal("no marker")
+	}
+	for name, half := range map[string]string{"head": head, "tail": tail} {
+		if n := len(half); n > 128_000 || n < 127_900 {
+			t.Errorf("%s = %d bytes, want 127,900 to 128,000", name, n)
+		}
+	}
 }
 
 func TestDoclingPromptText_KeepsWholeLinesInReaderOrder(t *testing.T) {
@@ -855,6 +865,7 @@ func TestDoclingPromptText_KeepsWholeLinesInReaderOrder(t *testing.T) {
 }
 
 func TestDoclingPromptText_JustUnderTheBoundIsNotCut(t *testing.T) {
+	// The literal is the AC's number, not the constant.
 	build := func(target int) []TokenPage {
 		pages := dpPages(1, 50, 5_000)
 		rows := len(dpRows(DoclingPromptText(pages)))
@@ -862,14 +873,14 @@ func TestDoclingPromptText_JustUnderTheBoundIsNotCut(t *testing.T) {
 		last.Text += strings.Repeat("b", target-rows)
 		return pages
 	}
-	at := build(maxDoclingPromptBytes)
-	if rows := len(dpRows(DoclingPromptText(at))); rows != maxDoclingPromptBytes {
-		t.Fatalf("rows = %d, want exactly %d", rows, maxDoclingPromptBytes)
+	at := build(256_000)
+	if rows := len(dpRows(DoclingPromptText(at))); rows != 256_000 {
+		t.Fatalf("rows = %d, want exactly %d", rows, 256_000)
 	}
 	if DoclingPromptCut(at) || strings.Contains(DoclingPromptText(at), aiPromptOmitted) {
 		t.Error("the exact bound was cut")
 	}
-	over := build(maxDoclingPromptBytes + 1)
+	over := build(256_000 + 1)
 	if !DoclingPromptCut(over) || !strings.Contains(DoclingPromptText(over), aiPromptOmitted) {
 		t.Error("one byte over the bound was not cut")
 	}

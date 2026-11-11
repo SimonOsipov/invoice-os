@@ -31,7 +31,7 @@ const (
 )
 
 // AISpendCeilingUSD is the check's AI spend per UTC day; past it both routes answer 503 ceiling.
-// ceiling: the spend is read before a request, so runs in flight finish past it (about $0.34 with 2 runs per worker instance).
+// ceiling: the spend is read before a request, so runs in flight finish past it (at most MaxConcurrent per worker instance).
 const AISpendCeilingUSD = "2.00"
 
 // spendReached answers 503 ceiling past the daily ceiling and 503 unavailable when the read fails.

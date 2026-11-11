@@ -870,8 +870,10 @@ func TestMapping_ShareTheTwoSlotsWithRuns(t *testing.T) {
 func TestEngineStatus_ATooLongDocumentIs400WithTheSentence(t *testing.T) {
 	err := fmt.Errorf("%w: %w", publiccheck.ErrDocumentTooLong, extraction.ErrCheckDocumentTooLong)
 	status, word := engineStatus(err)
-	if status != http.StatusBadRequest || word != DocumentTooLongSentence {
-		t.Errorf("engineStatus = %d %q, want 400 %q", status, word, DocumentTooLongSentence)
+	// The literal is what the check app matches (frontend/check TOO_MUCH_TEXT_SENTENCE).
+	const want = "This document has too much text for the free check. Try a shorter invoice."
+	if status != http.StatusBadRequest || word != want || DocumentTooLongSentence != want {
+		t.Errorf("engineStatus = %d %q (DocumentTooLongSentence %q), want 400 %q", status, word, DocumentTooLongSentence, want)
 	}
 }
 

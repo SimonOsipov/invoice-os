@@ -490,7 +490,7 @@ func TestMappingCheck_AWideWindowSendsABoundedState(t *testing.T) {
 	if len(s.calls) != 1 {
 		t.Fatalf("Ask called %d times, want 1", len(s.calls))
 	}
-	if n := len(s.calls[0].State) - len(mappingIntro) - 1; n > maxMappingPromptBytes {
-		t.Errorf("State rows text = %d bytes, want <= %d", n, maxMappingPromptBytes)
+	if n := len(s.calls[0].State) - len(mappingIntro) - 1; n <= 0 || n > maxMappingPromptBytes {
+		t.Errorf("State rows text = %d bytes, want 1 to %d", n, maxMappingPromptBytes)
 	}
 }

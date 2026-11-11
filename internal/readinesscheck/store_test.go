@@ -658,6 +658,22 @@ func TestStore_HoldExpiresInTwentyFourHours(t *testing.T) {
 	}
 }
 
+// A submit holds the result and nothing more: the summary row waits for the press.
+func TestStore_HoldWritesNoSummaryRow(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	a := addr(t, pool)
+	if _, err := (&Store{Pool: pool}).Hold(ctx, heldFor(a, "csv", 4, []string{"r1"})); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, pool, heldCount, a); n != 1 {
+		t.Fatalf("held rows = %d, want 1", n)
+	}
+	if n := count(t, pool, rowCount, a); n != 0 {
+		t.Errorf("summary rows after a hold = %d, want 0: only the press records a check", n)
+	}
+}
+
 // The merge a registrant gets at the press is the one the intake gives; both write one marketing consent and queue the same jobs.
 func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
 	pool := testPool(t)

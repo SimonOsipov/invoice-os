@@ -20,7 +20,7 @@ ARG SERVICE
 # Pinned to the go.mod version; TestGoPins_RepoAgree fails when the two differ.
 # Go never downloads a toolchain at build time.
 # Pulled through mirror.gcr.io, not docker.io: no Docker Hub rate limit.
-FROM mirror.gcr.io/library/golang:1.26.10-alpine AS build
+FROM mirror.gcr.io/library/golang:1.26.11-alpine AS build
 WORKDIR /src
 # Modules first: this COPY+download layer is reused across source-only changes.
 COPY go.mod go.sum ./

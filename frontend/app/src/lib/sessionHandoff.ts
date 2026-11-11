@@ -269,7 +269,7 @@ async function renewAndRead(base: string, auth: { token: string; refreshToken: u
   const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
   auth.token = access
   auth.refreshToken = refresh
-  const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token: access, signal })
+  const me = await readMeRetrying(base, access, signal)
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
   }

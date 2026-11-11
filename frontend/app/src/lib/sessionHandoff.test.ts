@@ -275,6 +275,49 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
         vi.unstubAllGlobals()
       }
     })
+
+    // Hand-off chain with a refresh; /me takes the next status, the last repeats.
+    function stubRenewal(first: string, meStatuses: number[]) {
+      let me = 0
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.endsWith('/auth/exchange')) {
+            return reply(200, { access_token: first, refresh_token: 'R0' })
+          }
+          if (url.endsWith('/auth/refresh')) {
+            return reply(200, { access_token: LIVE, refresh_token: 'R1' })
+          }
+          if (url.endsWith('/invitations/mine')) {
+            return reply(200, { invitations: [] })
+          }
+          if (url.endsWith('/workspaces') || url.endsWith('/invitations/accept')) {
+            return reply(200, { tenant: ME.tenant })
+          }
+          me += 1
+          const status = meStatuses[Math.min(me, meStatuses.length) - 1]
+          return status === 200 ? reply(200, ME) : reply(status, { error: 'x' })
+        }),
+      )
+    }
+    const verified = (s: unknown) => expect(s).toMatchObject({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
+
+    it('redeemHandoff_withInviteRetriesA503OnTheReadAfterRenewal', async () => {
+      stubRenewal(LIVE, [503, 200])
+      vi.useFakeTimers()
+      const pending = redeemHandoff(GATEWAY, CODE, STATE, NOW, { token: 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE', name: null }).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      verified(await pending)
+    })
+
+    it('redeemHandoff_registrationRetriesA503OnTheReadAfterRenewal', async () => {
+      const registered = tokenWith({ user_metadata: { registration: { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' } } })
+      stubRenewal(registered, [403, 503, 200])
+      vi.useFakeTimers()
+      const pending = redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      verified(await pending)
+    })
   })
 
   function stubExchange(answer: unknown) {

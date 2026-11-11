@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS } from './fields'
 import { MAPPING_SENTENCE } from './messages'
-import { FIELDS_LEGEND, FIELDS_TITLE, MAP_ALL_USED, MAP_SUMMARY, NEED_INVOICE_NO, SUPPLIER_HINT } from './copy'
+import { MAP_SUMMARY, NEED_INVOICE_NO } from './copy'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -96,8 +96,8 @@ const INVOICE_DATES = { invoice_number: 'Inv', issue_date: 'Date', due_date: 'Du
 describe('map groups', () => {
   it('map_showsTheFiveGroupsUnderTheLegend', async () => {
     await toMap(suggestion(COLS, INVOICE_DATES))
-    expect(container.querySelector('.check-groups-head .check-sub')!.textContent).toBe(FIELDS_TITLE)
-    expect(container.querySelector('.check-legend')!.textContent).toBe(`* ${FIELDS_LEGEND}`)
+    expect(container.querySelector('.check-groups-head .check-sub')!.textContent).toBe('Invoice fields')
+    expect(container.querySelector('.check-legend')!.textContent).toBe('* Required. Leave a field on “Not in this file” if your file has no column for it.')
     expect(container.querySelector('.check-legend .check-req')!.textContent).toBe('*')
     expect([...container.querySelectorAll('.check-acc-title')].map((t) => t.textContent)).toEqual(['Invoice', 'Amounts', 'Line items', 'Buyer', 'Supplier'])
     for (const b of container.querySelectorAll('.check-acc')) {
@@ -105,6 +105,11 @@ describe('map groups', () => {
       expect(['true', 'false']).toContain(b.getAttribute('aria-expanded'))
       if (open) expect(container.querySelector(`#${b.getAttribute('aria-controls')}`)).not.toBeNull()
     }
+    const chevrons = [...container.querySelectorAll('.check-chev svg')].map((c) => c.innerHTML)
+    expect(chevrons.length).toBe(5)
+    expect(chevrons[0]).not.toBe(chevrons[1])
+    expect(chevrons[0]).toBe(chevrons[4])
+    expect(chevrons[1]).toBe(chevrons[2])
   })
 
   it('map_invoiceAndSupplierOpenOnArrival', async () => {
@@ -112,6 +117,8 @@ describe('map groups', () => {
     const state = ['invoice', 'amounts', 'line', 'buyer', 'supplier'].map((g) => header(g).getAttribute('aria-expanded'))
     expect(state).toEqual(['true', 'false', 'false', 'false', 'true'])
     for (const k of ['currency', 'line_total', 'buyer_name']) expect(sel(k), k).toBeNull()
+    for (const g of ['amounts', 'line', 'buyer']) expect(panel(g), g).toBeNull()
+    expect(panel('invoice')).not.toBeNull()
   })
 
   it('map_aHeaderPressTogglesItsGroup', async () => {
@@ -220,6 +227,9 @@ describe('map lists follow the match', () => {
     await choose('issue_date', 'Date')
     expect(listIds('invoice')).toContain('issue_date')
     expect(tag()!.textContent).toBe('Suggested')
+    await choose('issue_date', 'Note')
+    expect(tag()).toBeNull()
+    expect(must('issue_date').hasAttribute('aria-describedby')).toBe(false)
   })
 
   it('map_invoiceNumberOnTheSuggestionIsTagged', async () => {
@@ -296,7 +306,7 @@ describe('map head and summary', () => {
     await toMap(suggestion(['Inv'], toAll(...CHECK_FIELD_KEYS)))
     expect(container.querySelector('.check-sum-n')!.textContent).toBe('38 of 38')
     expect(fill().style.width).toBe('100%')
-    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(unusedLine()).toBe('Every column in your file is matched to a field.')
     for (const g of ['amounts', 'line', 'buyer']) await click(header(g))
     expect(listIds('invoice')).toEqual(['invoice_number'])
     expect(subheadText('invoice')).toBe('6 matched from your file')
@@ -319,12 +329,13 @@ describe('map unused line', () => {
     await toMap(suggestion(['Inv', 'Date', 'Note'], { invoice_number: 'Inv', issue_date: 'Date' }))
     expect(unusedLine()).toBe('1 of your 3 columns is not used yet: C Note. Fields with no column stay on “Not in this file”.')
     await choose('invoice_kind', 'Note')
-    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(unusedLine()).toBe('Every column in your file is matched to a field.')
   })
 
   it('map_aBlankHeaderIsNeverNamedUnused', async () => {
     await toMap(suggestion(['Inv', '', 'Date'], { invoice_number: 'Inv', issue_date: 'Date' }))
-    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(unusedLine()).toBe('Every column in your file is matched to a field.')
+    expect(container.querySelector('.check-map-file')!.textContent).toContain('· 3 columns')
     expect(rows()[1].querySelector('td:nth-child(4)')!.textContent).toBe('')
     expect(statusTags()).toEqual([])
     await click(reviewButton('invoice'))
@@ -350,6 +361,7 @@ describe('map columns preview', () => {
   it('map_previewShowsFourColumnsThenAll', async () => {
     await toMap(six())
     expect(rows().length).toBe(4)
+    expect(container.querySelector('.check-preview-head .check-sub')!.textContent).toBe('Your columns')
     expect(button('Show all 6 columns')!.getAttribute('aria-expanded')).toBe('false')
     await click(button('Show all 6 columns')!)
     expect(rows().length).toBe(6)
@@ -437,7 +449,7 @@ describe('map options and hint', () => {
     await toMap(suggestion(['Amount', 'Inv', 'Amount'], { invoice_number: 'Inv', total: 'Amount' }))
     await openAll()
     for (const o of optionsOf()) expect(o).toEqual([['', 'Not in this file'], ['Amount', 'A · Amount'], ['Inv', 'B · Inv']])
-    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(unusedLine()).toBe('Every column in your file is matched to a field.')
     expect(statusTags()).toEqual([])
     await click(reviewButton('amounts'))
     await choose('total', '')
@@ -449,10 +461,12 @@ describe('map options and hint', () => {
 
   it('map_supplierGroupCarriesTheHint', async () => {
     await toMap(suggestion(COLS, INVOICE_DATES))
-    expect(panel('supplier')!.textContent).toContain(SUPPLIER_HINT)
-    expect(container.textContent!.split(SUPPLIER_HINT).length).toBe(2)
+    const HINT = 'A supplier name or TIN that is not in this file fails its rule in your results.'
+    expect(panel('supplier')!.textContent).toContain(HINT)
+    expect(panel('supplier')!.querySelector('.check-hint svg')).not.toBeNull()
+    expect(container.textContent!.split(HINT).length).toBe(2)
     await click(header('supplier'))
-    expect(container.textContent).not.toContain(SUPPLIER_HINT)
+    expect(container.textContent).not.toContain(HINT)
   })
 })
 

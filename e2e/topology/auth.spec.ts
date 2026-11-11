@@ -1636,6 +1636,16 @@ test('unsubscribe page: the button says Unsubscribing… and one press sends one
   test.setTimeout(60_000)
   const link = await unsubscribeLink()
   const posts = recordPosts(page, '/unsubscribe')
+  // The page reports its button on submit: a test call into a page with a held navigation never returns.
+  const reports: unknown[] = []
+  await page.exposeBinding('__unsubReport', (_source, value) => reports.push(value))
+  // A window listener runs after the form's own submit handler, so it sees the pressed state.
+  await page.addInitScript(() => {
+    window.addEventListener('submit', () => {
+      const b = document.querySelector('button')
+      ;(window as unknown as { __unsubReport: (v: unknown) => void }).__unsubReport([b?.textContent?.trim(), b?.disabled])
+    })
+  })
   let release!: () => void
   const held = new Promise<void>((r) => (release = r))
   await page.route((u) => u.pathname === '/unsubscribe', async (route) => {
@@ -1649,12 +1659,7 @@ test('unsubscribe page: the button says Unsubscribing… and one press sends one
     // The mouse API does not wait for the held navigation the way a locator click would.
     const box = await boxOf('the button', button, 0)
     await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
-    // A locator assertion waits for the held navigation to finish; evaluate reads the page as it is.
-    await expect
-      .poll(() => page.evaluate(() => { const b = document.querySelector('button'); return [b?.textContent?.trim(), b?.disabled] }), {
-        message: 'the button while the POST is held',
-      })
-      .toEqual(['Unsubscribing…', true])
+    await expect.poll(() => reports[0], { message: 'the button as the first submit left it' }).toEqual(['Unsubscribing…', true])
     expect(posts.length, 'POST /unsubscribe requests sent by the double-click').toBe(1)
   } finally {
     release()

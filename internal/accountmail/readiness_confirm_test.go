@@ -30,6 +30,32 @@ func TestRenderReadinessConfirm_LinksTheTokenTwice(t *testing.T) {
 	}
 }
 
+// Every file type the engine takes has a label; the copy is the decision's text.
+func TestRenderReadinessConfirm_NamesEveryFileTypeAndCarriesTheCopy(t *testing.T) {
+	for ft, label := range map[string]string{"csv": "CSV", "xlsx": "XLSX", "pdf": "PDF", "docx": "DOCX"} {
+		_, out, err := RenderReadinessConfirm(ReadinessConfirmMail{Email: "ada@obi.test", Token: "tok", FileType: ft})
+		if err != nil {
+			t.Fatalf("%s: %v", ft, err)
+		}
+		if !strings.Contains(out, ">"+label+"<") {
+			t.Errorf("%s: the details row lacks %q", ft, label)
+		}
+	}
+	_, out, err := RenderReadinessConfirm(ReadinessConfirmMail{Email: "ada@obi.test", Token: "tok", FileType: "csv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Confirm your email.", "Then we send your results.", "Get my results",
+		"Someone ran the ASComply readiness check and asked for the results at ada@obi.test. Confirm that this is your address and we will email them. Nothing more is sent until you do.",
+		"If you did not ask for this, ignore this email. We will not send the results or keep your address as a contact.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("confirmation mail lacks %q", want)
+		}
+	}
+}
+
 func TestRenderReadinessConfirm_EscapesTheAddressAndStatesTheExpiry(t *testing.T) {
 	_, out, err := RenderReadinessConfirm(ReadinessConfirmMail{Email: "<x>@a.io", Token: "tok", FileType: "pdf"})
 	if err != nil {
@@ -58,6 +84,15 @@ func TestRenderReadinessUsed_SaysThreeChecksAndLinksSignUp(t *testing.T) {
 	}
 	if strings.Contains(out, ReadinessConfirmURL) {
 		t.Error("used mail holds a confirm link")
+	}
+	for _, want := range []string{
+		"This address has used its 3 free checks.", "Sign up to check every invoice.", "Create your account",
+		"Someone ran the ASComply readiness check for ada@obi.test. This address has used its 3 free checks, so we sent no results.",
+		"Free checks are 3 per email address.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("used mail lacks %q", want)
+		}
 	}
 }
 

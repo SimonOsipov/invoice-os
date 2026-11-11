@@ -1028,7 +1028,7 @@ func TestConfirm_SendsTheResultsWithTheChecksLeftAtThePress(t *testing.T) {
 }
 
 func TestConfirm_PassesTheGatewaySentenceAndRefusesABadOne(t *testing.T) {
-	for _, tc := range []struct{ name, consent string }{{"a sentence", consentS}, {"500 characters", strings.Repeat("a", 500)}} {
+	for _, tc := range []struct{ name, consent string }{{"a sentence", consentS}, {"500 characters", strings.Repeat("a", 500)}, {"500 two-byte characters", strings.Repeat("é", 500)}} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
 			r.store.confirmFn = sendsAt(0, true)
@@ -1042,6 +1042,7 @@ func TestConfirm_PassesTheGatewaySentenceAndRefusesABadOne(t *testing.T) {
 		{"missing", `{"token":"` + holdToken + `"}`},
 		{"blank", confirmJSON(holdToken, "  \t ")},
 		{"501 characters", confirmJSON(holdToken, strings.Repeat("a", 501))},
+		{"501 two-byte characters", confirmJSON(holdToken, strings.Repeat("é", 501))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)

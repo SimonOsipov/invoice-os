@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -751,5 +752,35 @@ func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
 	pj, ij := jobs(viaPress), jobs(viaIntake)
 	if !slices.Equal(pj, ij) || len(pj) == 0 {
 		t.Errorf("jobs after the press = %v, after the intake = %v; want the same, not empty", pj, ij)
+	}
+}
+
+// Hold folds the address; a check with no failed rules keeps an empty, non-null rule list through the press.
+func TestStore_ConfirmFoldsTheAddressAndKeepsAnEmptyRuleList(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	a := addr(t, pool)
+	m := &recMerger{}
+	s := &Store{Pool: pool, Contacts: m}
+	token, err := s.Hold(ctx, heldFor("  "+strings.ToUpper(a)+" ", "csv", 2, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, pool, heldCount, a); n != 1 {
+		t.Fatalf("held rows for the folded address = %d, want 1", n)
+	}
+	got, fresh, err := s.Confirm(ctx, token, "the gateway sentence", (&sender{}).send)
+	if err != nil || !fresh || got.Email != a {
+		t.Fatalf("Confirm = %q, fresh %v, %v; want the folded address, fresh, no error", got.Email, fresh, err)
+	}
+	if calls := m.got(); len(calls) != 1 || calls[0].email != a {
+		t.Errorf("merges = %+v, want one for the folded address", calls)
+	}
+	var ids []string
+	if err := pool.QueryRow(ctx, `SELECT failed_rule_ids FROM readiness_checks WHERE email = $1`, a).Scan(&ids); err != nil {
+		t.Fatalf("no summary row for the folded address: %v", err)
+	}
+	if ids == nil || len(ids) != 0 {
+		t.Errorf("failed_rule_ids = %#v, want an empty list", ids)
 	}
 }

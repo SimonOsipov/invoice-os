@@ -165,6 +165,26 @@ func TestRLS_ReadinessCheckRequestsGatewayRoleHasNoAccess(t *testing.T) {
 	if got, want := aeVerbs(t, "invoice_app", "readiness_check_requests"), []string{"DELETE", "INSERT", "SELECT", "UPDATE"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("invoice_app privileges on readiness_check_requests = %v, want exactly %v", got, want)
 	}
+
+	// The cross-tenant reader and the sign-in service have no business with held results either.
+	err = func() error {
+		_, err := h.reader.Exec(context.Background(), `SELECT 1 FROM readiness_check_requests`)
+		return err
+	}()
+	assertPgRefusal(t, "SELECT as invoice_tenant_reader", err, pgInsufficientPriv, "permission denied for table readiness_check_requests")
+	for _, role := range []string{"invoice_tenant_reader", "supabase_auth_admin"} {
+		if got := aeVerbs(t, role, "readiness_check_requests"); len(got) != 0 {
+			t.Errorf("%s privileges on readiness_check_requests = %v, want none", role, got)
+		}
+	}
+	var publicGrants int
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT count(*) FROM information_schema.role_table_grants WHERE table_name = 'readiness_check_requests' AND grantee = 'PUBLIC'`).Scan(&publicGrants); err != nil {
+		t.Fatalf("read PUBLIC grants: %v", err)
+	}
+	if publicGrants != 0 {
+		t.Errorf("PUBLIC grants on readiness_check_requests = %d, want 0", publicGrants)
+	}
 }
 
 func TestRLS_ReadinessCheckRequestsRefusesAnUnfoldedEmail(t *testing.T) {

@@ -177,7 +177,7 @@ describe('deletion notice', () => {
     await screen.findByTestId('sidebar')
     expect(calls.some((c) => isCancel(c.url) && c.method === 'POST')).toBe(true)
     expect(notice()).toBeNull()
-    expect(stored().me.tenant.deletion_due_at).toBeNull()
+    await waitFor(() => expect(stored().me.tenant.deletion_due_at).toBeNull())
   })
 
   it('deletion notice: a failed cancel keeps the notice and shows why', async () => {

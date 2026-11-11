@@ -18,7 +18,7 @@ const TRUST_TITLES = ['Free', 'No account', 'File not kept', 'Results by email']
 const STEPS = ['Upload', 'Match columns', 'Email', 'Sent']
 const WHAT_HEADING = 'Two invoices, checked rule by rule.'
 // frontend/check/src/copy.ts: SENT_TEXT.
-const sentText = (email: string) => `Your results are on their way to ${email}.`
+const sentText = (email: string) => `Check your inbox at ${email}.`
 // internal/gateway/readiness_check.go: checkIPSentence.
 const IP_SENTENCE = 'This network has run 10 checks today. Try again tomorrow.'
 
@@ -79,7 +79,7 @@ test('check: the page shows the hero, the trust cues and the progress strip', as
   expect(errors).toEqual([])
 })
 
-test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
+test('check: a visitor uploads a spreadsheet, maps it and is told to check the inbox to confirm', async ({ page }) => {
   test.skip(LIVE, 'www.ascomply.com is production: the send writes a contact and a mail')
   test.setTimeout(180_000)
   const errors: string[] = []

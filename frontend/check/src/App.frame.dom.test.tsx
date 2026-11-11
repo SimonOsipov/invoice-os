@@ -128,7 +128,7 @@ describe('check page frame', () => {
   })
 
   it('frame_sentLeavesNoCurrentStep', async () => {
-    await mount({ '/readiness-check/run': () => json(200, { status: 'sent', checks_left: 2 }) })
+    await mount({ '/readiness-check/run': () => json(200, { status: 'confirm' }) })
     await pick(new File(['a'], 'a.pdf'))
     await type(q<HTMLInputElement>('input[type="email"]'), 'a@example.com')
     await click(q('input[type="checkbox"]'))

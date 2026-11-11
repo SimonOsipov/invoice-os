@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SIGN_UP_SENTENCE, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { IP_SENTENCE, MAPPING_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
-  it('refusal_409SaysSignUpWithALink', () => {
-    expect(refusal('run', 409, SIGN_UP_SENTENCE)).toEqual({ text: SIGN_UP_SENTENCE, signUp: true })
+  it('refusal_409MapsLikeAnyUnknownStatus', () => {
+    expect(refusal('run', 409, 'This address has used its 3 free checks. Sign up to check every invoice.')).toEqual({ text: UNAVAILABLE_SENTENCE })
   })
 
   it('refusal_gatewayDaily429KeepsItsSentence', () => {
-    expect(refusal('run', 429, IP_SENTENCE)).toEqual({ text: IP_SENTENCE, signUp: false })
+    expect(refusal('run', 429, IP_SENTENCE)).toEqual({ text: IP_SENTENCE })
   })
 
   it('refusal_armor429WithNoBodySaysTryInAnHour', () => {
@@ -16,7 +16,7 @@ describe('refusal', () => {
   })
 
   it('refusal_408KeepsTheGatewaySentence', () => {
-    expect(refusal('run', 408, 'The gateway said this.')).toEqual({ text: 'The gateway said this.', signUp: false })
+    expect(refusal('run', 408, 'The gateway said this.')).toEqual({ text: 'The gateway said this.' })
     expect(refusal('mapping', 408, SLOW_UPLOAD_SENTENCE).text).toBe(SLOW_UPLOAD_SENTENCE)
   })
 
@@ -62,17 +62,17 @@ describe('refusal', () => {
 
   it('refusal_networkAnd5xxAreUnavailable', () => {
     for (const [s, e] of [[null, null], [502, 'x'], [503, null], [418, null]] as const) {
-      expect(refusal('run', s, e)).toEqual({ text: UNAVAILABLE_SENTENCE, signUp: false })
+      expect(refusal('run', s, e)).toEqual({ text: UNAVAILABLE_SENTENCE })
     }
   })
 
   it('refusal_anOversizedGatewayErrorFallsBack', () => {
-    expect(refusal('run', 409, 'x'.repeat(301))).toEqual({ text: SIGN_UP_SENTENCE, signUp: true })
+    expect(refusal('run', 422, 'x'.repeat(301))).toEqual({ text: UNREADABLE_SENTENCE })
   })
 
   it('refusal_anEmptyOrBodylessGatewayErrorFallsBack', () => {
     expect(refusal('run', 422, null).text).toBe(UNREADABLE_SENTENCE)
-    expect(refusal('run', 409, '')).toEqual({ text: SIGN_UP_SENTENCE, signUp: true })
-    expect(refusal('run', 409, 'x'.repeat(300)).text).toBe('x'.repeat(300))
+    expect(refusal('run', 422, '')).toEqual({ text: UNREADABLE_SENTENCE })
+    expect(refusal('run', 422, 'x'.repeat(300)).text).toBe('x'.repeat(300))
   })
 })

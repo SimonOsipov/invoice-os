@@ -53,9 +53,14 @@ describe('calls', () => {
     expect(init.headers).toBeUndefined()
   })
 
+  it('runCheck_returnsTheConfirmAnswer', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(200, '{"status":"confirm"}')))
+    expect(await runCheck(sheet({}))).toEqual({ ok: true, value: { status: 'confirm' } })
+  })
+
   it('runCheck_readsTheErrorWordOfARefusal', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(409, '{"error":"This address used its checks."}')))
-    expect(await runCheck(sheet({}))).toEqual({ ok: false, status: 409, error: 'This address used its checks.' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(422, '{"error":"We could not read this file."}')))
+    expect(await runCheck(sheet({}))).toEqual({ ok: false, status: 422, error: 'We could not read this file.' })
   })
 
   it('runCheck_aBodylessRefusalHasNoError', async () => {

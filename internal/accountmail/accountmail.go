@@ -398,8 +398,8 @@ func RenderReadinessCheck(m ReadinessCheckMail) (subject, html string, err error
 }
 
 const (
-	// ReadinessConfirmURL is the confirm page; the page POSTs the token, so a mail scanner's GET confirms nothing.
-	ReadinessConfirmURL        = "https://www.ascomply.com/readiness-check/confirm"
+	// ReadinessConfirmURL is the gateway confirm page; the page POSTs the token, so a mail scanner's GET confirms nothing.
+	ReadinessConfirmURL        = "https://api.ascomply.com/readiness-check/confirm"
 	ReadinessConfirmSubject    = "Confirm your email to get your readiness check results"
 	ReadinessConfirmValidHours = 24
 	ReadinessUsedSubject       = "This address has used its free readiness checks"

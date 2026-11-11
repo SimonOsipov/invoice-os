@@ -39,6 +39,12 @@ describe('workflow Chromium install', () => {
     )
     expect(installs.length).toBeGreaterThanOrEqual(3)
     expect(installs.filter((l) => l.includes('--with-deps'))).toEqual([])
+    const depsAnywhere = files.flatMap((f) =>
+      lines(readFileSync(join(WORKFLOWS, f), 'utf8'))
+        .filter((l) => /--with-deps|install-deps/i.test(l))
+        .map((l) => `${f}: ${l.trim()}`),
+    )
+    expect(depsAnywhere).toEqual([])
   })
 
   it('dev-env.yml has at least 3 playwright install commands', () => {
@@ -54,9 +60,9 @@ describe('workflow Chromium install', () => {
       expect(block.some((l) => /playwright install/.test(l))).toBe(true)
     })
 
-    it('runs no apt-get or apt install step', () => {
+    it('runs no apt or apt-get step', () => {
       expect(block.length).toBeGreaterThan(0)
-      expect(block.filter((l) => /apt-get|apt\s+install/i.test(l))).toEqual([])
+      expect(block.filter((l) => /\bapt(-get)?\b/i.test(l))).toEqual([])
     })
   })
 })

@@ -905,7 +905,7 @@ func (bigText) Read(_ context.Context, _ extraction.Document, onPage func(extrac
 func TestRunHandler_ATooLongDocumentWritesNoSummary(t *testing.T) {
 	r := newRig(t)
 	r.svc.Checker.Readers.Text = bigText{}
-	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF"), "consent_text", "ok")
+	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF-1.4"), "consent_text", "ok")
 	wantStatus(t, rec, http.StatusBadRequest, DocumentTooLongSentence)
 	if n := len(r.store.rows()); n != 0 {
 		t.Errorf("summary rows = %d, want 0", n)

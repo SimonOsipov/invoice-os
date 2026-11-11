@@ -759,7 +759,7 @@ func (bigText) Read(_ context.Context, _ extraction.Document, onPage func(extrac
 func TestCheck_ATooLongDocumentWrapsErrDocumentTooLong(t *testing.T) {
 	r := newRig()
 	r.c.Readers.Text = bigText{}
-	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF"), Format: "pdf"})
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
 	if !errors.Is(err, publiccheck.ErrDocumentTooLong) || errors.Is(err, publiccheck.ErrReadUnavailable) {
 		t.Fatalf("err = %v, want ErrDocumentTooLong and not ErrReadUnavailable", err)
 	}

@@ -173,15 +173,3 @@ func (s *Store) Count(ctx context.Context, email string) (int, error) {
 	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM readiness_checks WHERE email = lower(btrim($1))`, email).Scan(&n)
 	return n, err
 }
-
-// Insert records one check; created_at is the database time.
-func (s *Store) Insert(ctx context.Context, m Summary) error {
-	ids := m.FailedRuleIDs
-	if ids == nil {
-		ids = []string{}
-	}
-	_, err := s.Pool.Exec(ctx,
-		`INSERT INTO readiness_checks (email, file_type, row_count, failed_rule_ids) VALUES (lower(btrim($1)), $2, $3, $4)`,
-		m.Email, m.FileType, m.RowCount, ids)
-	return err
-}

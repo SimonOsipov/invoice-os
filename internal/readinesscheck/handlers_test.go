@@ -88,7 +88,6 @@ type fakeStore struct {
 	countErr  error
 	holdErr   error
 	mu        sync.Mutex
-	inserts   []Summary
 	helds     []Held
 	releases  []relCall
 	confirms  []confirmCall
@@ -96,14 +95,6 @@ type fakeStore struct {
 }
 
 func (s *fakeStore) Count(context.Context, string) (int, error) { return s.count, s.countErr }
-
-func (s *fakeStore) Insert(_ context.Context, m Summary) error {
-	s.ev.add("insert")
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.inserts = append(s.inserts, m)
-	return nil
-}
 
 func (s *fakeStore) Hold(_ context.Context, h Held) (string, error) {
 	s.ev.add("hold")
@@ -137,12 +128,6 @@ func (s *fakeStore) Confirm(ctx context.Context, token, consent string, send fun
 }
 
 func (s *fakeStore) PurgeExpired(context.Context) error { return nil }
-
-func (s *fakeStore) rows() []Summary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return slices.Clone(s.inserts)
-}
 
 func (s *fakeStore) holds() []Held {
 	s.mu.Lock()

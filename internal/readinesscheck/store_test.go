@@ -55,11 +55,8 @@ func TestStore_CountFoldsTheAddress(t *testing.T) {
 	a, b := addr(t, pool), addr(t, pool)
 	s := &Store{Pool: pool}
 	ctx := context.Background()
-	for _, e := range []string{a, a, b} {
-		if err := s.Insert(ctx, Summary{Email: e, FileType: "csv"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedChecks(t, pool, a, 2)
+	seedChecks(t, pool, b, 1)
 	n, err := s.Count(ctx, " "+a[:1]+"C"+a[2:]+" ")
 	if err != nil || n != 2 {
 		t.Fatalf("Count = %d, %v; want 2", n, err)
@@ -74,43 +71,14 @@ func TestStore_CountOfANewAddressIsZero(t *testing.T) {
 	}
 }
 
-func TestStore_InsertWritesTheSummary(t *testing.T) {
-	pool := testPool(t)
-	a := addr(t, pool)
-	before := time.Now().Add(-time.Minute)
-	if err := (&Store{Pool: pool}).Insert(context.Background(), Summary{Email: " " + a + " ", FileType: "csv", RowCount: 7, FailedRuleIDs: []string{"a", "b"}}); err != nil {
-		t.Fatal(err)
-	}
-	var email, ft string
-	var rc int
-	var ids []string
-	var at time.Time
-	if err := pool.QueryRow(context.Background(),
-		`SELECT email, file_type, row_count, failed_rule_ids, created_at FROM readiness_checks WHERE email = $1`, a).
-		Scan(&email, &ft, &rc, &ids, &at); err != nil {
-		t.Fatal(err)
-	}
-	if email != a || ft != "csv" || rc != 7 || !slices.Equal(ids, []string{"a", "b"}) {
-		t.Fatalf("row = %q %q %d %v", email, ft, rc, ids)
-	}
-	if at.Before(before) || at.After(time.Now().Add(time.Minute)) {
-		t.Fatalf("created_at = %v", at)
-	}
-}
-
-func TestStore_InsertOfADocumentHasRowCountZero(t *testing.T) {
-	pool := testPool(t)
-	a := addr(t, pool)
-	if err := (&Store{Pool: pool}).Insert(context.Background(), Summary{Email: a, FileType: "pdf"}); err != nil {
-		t.Fatal(err)
-	}
-	var rc int
-	var ids []string
-	if err := pool.QueryRow(context.Background(), `SELECT row_count, failed_rule_ids FROM readiness_checks WHERE email = $1`, a).Scan(&rc, &ids); err != nil {
-		t.Fatal(err)
-	}
-	if rc != 0 || len(ids) != 0 {
-		t.Fatalf("row_count = %d, ids = %v", rc, ids)
+// seedChecks writes n summary rows for the address.
+func seedChecks(t *testing.T, pool *pgxpool.Pool, email string, n int) {
+	t.Helper()
+	for range n {
+		if _, err := pool.Exec(context.Background(),
+			`INSERT INTO readiness_checks (email, file_type, row_count, failed_rule_ids) VALUES (lower(btrim($1)), 'csv', 0, '{}')`, email); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -249,11 +217,7 @@ func TestStore_ConfirmInsertsTheSummaryAndConsumesTheRow(t *testing.T) {
 			pool := testPool(t)
 			ctx := context.Background()
 			a := addr(t, pool)
-			for range prior {
-				if err := (&Store{Pool: pool}).Insert(ctx, Summary{Email: a, FileType: "csv"}); err != nil {
-					t.Fatal(err)
-				}
-			}
+			seedChecks(t, pool, a, prior)
 			m := &recMerger{}
 			s := &Store{Pool: pool, Contacts: m}
 			held := heldFor(a, "xlsx", 5, []string{"r1", "r2"})
@@ -316,11 +280,7 @@ func TestStore_ConfirmPassesTheRecordedCount(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	a := addr(t, pool)
-	for range 3 {
-		if err := (&Store{Pool: pool}).Insert(ctx, Summary{Email: a, FileType: "csv"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedChecks(t, pool, a, 3)
 	m := &recMerger{}
 	s := &Store{Pool: pool, Contacts: m}
 	token, err := s.Hold(ctx, heldFor(a, "csv", 1, nil))
@@ -569,11 +529,7 @@ func TestStore_TwoLinksPressedTogetherRecordAtMostThree(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	a := addr(t, pool)
-	for range 2 {
-		if err := (&Store{Pool: pool}).Insert(ctx, Summary{Email: a, FileType: "csv"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedChecks(t, pool, a, 2)
 	s := &Store{Pool: pool, Contacts: &recMerger{}}
 	var tokens []string
 	for range 2 {

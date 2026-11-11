@@ -35,7 +35,6 @@ const (
 // CheckStore is what the handlers need of the summary store; *Store satisfies it.
 type CheckStore interface {
 	Count(ctx context.Context, email string) (int, error)
-	Insert(ctx context.Context, m Summary) error
 	Hold(ctx context.Context, h Held) (token string, err error)
 	Release(ctx context.Context, token string) error
 	Confirm(ctx context.Context, token, consentText string, send func(ctx context.Context, h Held, count int) error) (h Held, fresh bool, err error)

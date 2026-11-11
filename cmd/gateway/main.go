@@ -131,11 +131,14 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
-	readiness := readinessCheckHandlers(probed["worker"], routed["notifications"], gatewayToken, app.Logger, gwPool)
+	readiness := readinessCheckHandlers(probed["worker"], gatewayToken, app.Logger, gwPool)
 	app.Mux.Handle("POST /readiness-check/mapping", withCORS(readiness.Mapping))
 	app.Mux.Handle("OPTIONS /readiness-check/mapping", withCORS(readiness.Mapping))
 	app.Mux.Handle("POST /readiness-check/run", withCORS(readiness.Run))
 	app.Mux.Handle("OPTIONS /readiness-check/run", withCORS(readiness.Run))
+	// A same-origin form and a mail link: no CORS.
+	app.Mux.Handle("GET /readiness-check/confirm", readiness.Confirm)
+	app.Mux.Handle("POST /readiness-check/confirm", readiness.Confirm)
 	blogRead := blogHandlers(routed["notifications"], gatewayToken, app.Logger)
 	app.Mux.Handle("GET /blog/categories", withCORS(blogRead.Categories))
 	app.Mux.Handle("OPTIONS /blog/categories", withCORS(blogRead.Categories))
@@ -315,13 +318,12 @@ func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minRespo
 }
 
 // readinessCheckHandlers builds the public check routes; a preview logs the per-IP limit and admits.
-func readinessCheckHandlers(worker, notifications *url.URL, gatewayToken string, log *slog.Logger, pool *pgxpool.Pool) gateway.ReadinessCheckRoutes {
+func readinessCheckHandlers(worker *url.URL, gatewayToken string, log *slog.Logger, pool *pgxpool.Pool) gateway.ReadinessCheckRoutes {
 	posture := platform.Posture(platform.DeployEnv())
 	perIP := gateway.NewSignInThrottle("readiness-check-ip", gateway.ReadinessCheckPerIP, gateway.ReadinessCheckMaxKeys, gateway.ReadinessCheckIPWindow, time.Now)
 	perIP.Shared(pool, log)
 	client := &http.Client{Transport: platform.TraceTransport(nil)}
-	sink := gateway.NewHTTPReadinessCheckSink(notifications, client, gatewayToken)
-	return gateway.ReadinessCheckHandlers(worker, client, gatewayToken, sink, perIP, posture != platform.PosturePreview, posture, log)
+	return gateway.ReadinessCheckHandlers(worker, client, gatewayToken, perIP, posture != platform.PosturePreview, posture, log)
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.

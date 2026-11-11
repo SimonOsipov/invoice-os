@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
-import { DROP_HELP, DROP_TITLE, DROP_TITLE_OVER, FILE_PRIVACY, READING_TEXT, SIZE_SENTENCE, TYPE_SENTENCE, UPLOAD_STEP_NO, UPLOAD_TITLE } from './copy'
+import { DROP_HELP, DROP_TITLE, FILE_PRIVACY, READING_TEXT, SIZE_SENTENCE, TYPE_SENTENCE, UPLOAD_STEP_NO, UPLOAD_TITLE } from './copy'
 import { MAX_UPLOAD_BYTES } from './fields'
 import { ARMOR_SENTENCE, COLUMNS_SENTENCE, SLOW_UPLOAD_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
@@ -118,6 +118,7 @@ describe('upload step', () => {
     expect(DROP_HELP).toBe('One file, up to 15 MiB. We check its first 2 invoices.')
     expect(z).toContain(DROP_HELP)
     expect(q('.check-fake-btn')!.getAttribute('aria-hidden')).toBe('true')
+    expect(zone().querySelector('.check-drop-icon svg')).not.toBeNull()
   })
 
   it('upload_dropTakesTheFile', async () => {
@@ -157,7 +158,7 @@ describe('upload step', () => {
     await mount()
     fire(zone(), 'dragenter')
     expect(zone().classList.contains('is-drag')).toBe(true)
-    expect(zone().textContent).toContain(DROP_TITLE_OVER)
+    expect(zone().textContent).toContain('Drop it here to start')
     expect(zone().textContent).not.toContain(DROP_TITLE)
     fire(zone(), 'dragleave')
     expect(zone().classList.contains('is-drag')).toBe(false)
@@ -178,7 +179,11 @@ describe('upload step', () => {
   it('upload_dropClearsTheDragState', async () => {
     stubFetch({})
     await mount()
+    await pick(file('first.txt'))
+    expect(zone().classList.contains('is-err')).toBe(true)
     fire(zone(), 'dragenter')
+    expect(zone().classList.contains('is-drag')).toBe(true)
+    expect(zone().classList.contains('is-err')).toBe(false)
     await drop([file('notes.txt')])
     expect(zone().classList.contains('is-err')).toBe(true)
     expect(zone().classList.contains('is-drag')).toBe(false)
@@ -189,6 +194,7 @@ describe('upload step', () => {
     await mount()
     await pick(file('notes.txt'))
     expect(slot()!.textContent).toBe(TYPE_SENTENCE)
+    expect(TYPE_SENTENCE).toBe('Choose a CSV, XLSX, PDF or DOCX file.')
     expect(slot()!.getAttribute('role')).toBe('alert')
     expect(zone().nextElementSibling).toBe(slot())
     expect(zone().classList.contains('is-err')).toBe(true)
@@ -200,7 +206,8 @@ describe('upload step', () => {
     stubFetch({})
     await mount()
     await pick(file('a.csv', MAX_UPLOAD_BYTES + 1))
-    expect(slot()!.textContent).toBe(SIZE_SENTENCE)
+    expect(slot()!.textContent).toBe('This file is over 15 MiB. Choose a smaller file.')
+    expect(SIZE_SENTENCE).toBe(slot()!.textContent)
     await pick(file('a.pdf', MAX_UPLOAD_BYTES))
     expect(slot()).toBeNull()
   })
@@ -244,7 +251,8 @@ describe('upload step', () => {
     expect(row.textContent).toContain('184 KB')
     expect(q('.check-spinner')).not.toBeNull()
     expect(q('.check-bar')).not.toBeNull()
-    expect(q('[role="status"]')!.textContent).toBe(READING_TEXT)
+    expect(q('[role="status"]')!.textContent).toBe('Reading the columns…')
+    expect(READING_TEXT).toBe('Reading the columns…')
     expect(q('.check-drop')).toBeNull()
     expect(q('input[type="file"]')).toBeNull()
   })
@@ -268,6 +276,8 @@ describe('upload step', () => {
     expect(zone().textContent).toContain(DROP_TITLE)
     expect(e.defaultPrevented).toBe(false)
     fire(zone(), 'dragenter')
+    fire(zone(), 'dragleave', [], ['text/plain'])
+    expect(zone().classList.contains('is-drag')).toBe(true)
     fire(zone(), 'dragleave')
     expect(zone().classList.contains('is-drag')).toBe(false)
   })
@@ -279,6 +289,8 @@ describe('upload step', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(slot()).toBeNull()
     expect(fire(document.body, 'drop', [], ['text/plain']).defaultPrevented).toBe(false)
+    expect(fire(document.body, 'dragover', [file('a.pdf')]).defaultPrevented).toBe(true)
+    expect(fire(document.body, 'dragover', [], ['text/plain']).defaultPrevented).toBe(false)
   })
 
   it('upload_aStrayFileDropDuringTheReadIsPrevented', async () => {
@@ -294,12 +306,14 @@ describe('upload step', () => {
     await mount()
     await pick(file('a.pdf'))
     expect(fire(document.body, 'drop', [file('b.pdf')]).defaultPrevented).toBe(false)
+    expect(fire(document.body, 'dragover', [file('b.pdf')]).defaultPrevented).toBe(false)
   })
 
   it('upload_theNoteShowsInEveryState', async () => {
     const answer = held()
     await mount()
     expect(text()).toContain(FILE_PRIVACY)
+    expect(FILE_PRIVACY).toBe('Your file is used only for this check and deleted when it finishes.')
     await pick(file('notes.txt'))
     expect(text()).toContain(FILE_PRIVACY)
     await pick(file('a.csv'))

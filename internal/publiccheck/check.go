@@ -14,6 +14,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
+	"github.com/SimonOsipov/invoice-os/internal/platform/filesig"
 	"github.com/SimonOsipov/invoice-os/internal/validation"
 )
 
@@ -24,9 +25,10 @@ const (
 
 var (
 	ErrTooLarge        = errors.New("publiccheck: file is over 15 MiB")
-	ErrFormat          = errors.New("publiccheck: format is not csv, xlsx, pdf or docx")
+	ErrFormat          = errors.New("publiccheck: file is not csv, xlsx, pdf or docx")
 	ErrBadFile         = errors.New("publiccheck: the file is empty or cannot be read")
 	ErrReadUnavailable = errors.New("publiccheck: the document cannot be read now")
+	ErrDocumentTooLong = errors.New("publiccheck: the document has too much text")
 )
 
 type Request struct {
@@ -88,6 +90,9 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 	if !doc && !spreadsheet(req.Format) {
 		return Result{}, ErrFormat
 	}
+	if !filesig.Matches(req.Format, req.File) {
+		return Result{}, ErrFormat
+	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -105,6 +110,9 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 			}
 			if errors.Is(err, extraction.ErrDocumentUnreadable) {
 				return Result{}, fmt.Errorf("%w: %w", ErrBadFile, err)
+			}
+			if errors.Is(err, extraction.ErrCheckDocumentTooLong) {
+				return Result{}, fmt.Errorf("%w: %w", ErrDocumentTooLong, err)
 			}
 			return Result{}, fmt.Errorf("%w: %w", ErrReadUnavailable, err)
 		}
@@ -234,6 +242,9 @@ func (c *Checker) SuggestMapping(ctx context.Context, file []byte, format string
 		return importer.CheckSuggestion{}, err
 	}
 	if !spreadsheet(format) {
+		return importer.CheckSuggestion{}, ErrFormat
+	}
+	if !filesig.Matches(format, file) {
 		return importer.CheckSuggestion{}, ErrFormat
 	}
 	if err := ctx.Err(); err != nil {

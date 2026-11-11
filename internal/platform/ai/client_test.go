@@ -1438,3 +1438,114 @@ func TestCall_NearMissPurposeIsStillRefused(t *testing.T) {
 		}
 	}
 }
+
+// -- output-token cap --
+
+func TestBuildWireRequest_SetsTheOutputCapOfEachPurpose(t *testing.T) {
+	want := map[Purpose]int{PurposeDocument: 2048, PurposeSpreadsheet: 4096, PurposeLineItems: 32768, PurposeExplain: 1024}
+	for p, n := range want {
+		req := baseReq()
+		req.Purpose = p
+		if got := buildWireRequest(req).MaxTokens; got != n {
+			t.Errorf("%s: MaxTokens = %d, want %d", p, got, n)
+		}
+	}
+}
+
+func TestCall_EveryAcceptedPurposeSendsMaxTokens(t *testing.T) {
+	for p, n := range maxTokens {
+		t.Run(string(p), func(t *testing.T) {
+			var cap capture
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cap.record(r)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(envelope(validContent, "")))
+			}))
+			t.Cleanup(srv.Close)
+			c, _ := fakeClient(t, srv.URL, 15*time.Second)
+			req := baseReq()
+			req.Purpose = p
+			if _, err := c.Call(t.Context(), req); err != nil {
+				t.Fatalf("Call() err = %v", err)
+			}
+			_, body, _ := cap.snapshot()
+			got, ok := body["max_tokens"].(float64)
+			if !ok || got <= 0 || int(got) != n {
+				t.Errorf("max_tokens = %v, want %d", body["max_tokens"], n)
+			}
+		})
+	}
+}
+
+func TestCall_APurposeWithNoCapIsRefusedBeforeSending(t *testing.T) {
+	srv, hits := okServer(t, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Purpose = Purpose("other")
+
+	r := c.call(t.Context(), req)
+
+	if r.err == nil || !strings.Contains(r.err.Error(), "unsupported purpose") {
+		t.Errorf("err = %v, want unsupported purpose", r.err)
+	}
+	if r.outcome != "refused" {
+		t.Errorf("outcome = %q, want refused", r.outcome)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("hits = %d, want 0", hits.Load())
+	}
+}
+
+func cutServer(t *testing.T, content string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		b, _ := json.Marshal(content)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"length"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+func TestCall_AnAnswerCutAtTheCapIsRefusedNotRetried(t *testing.T) {
+	srv, hits := cutServer(t, `{"total":"19`)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	r := c.call(t.Context(), baseReq())
+
+	if r.outcome != "refused" || r.attempts != 1 || hits.Load() != 1 {
+		t.Errorf("outcome=%q attempts=%d hits=%d, want refused 1 1", r.outcome, r.attempts, hits.Load())
+	}
+	if r.err == nil || errors.Is(r.err, ErrUnavailable) {
+		t.Errorf("err = %v, want a non-ErrUnavailable error", r.err)
+	}
+}
+
+func TestCall_ACutAnswerWithValidJSONIsStillRefused(t *testing.T) {
+	srv, hits := cutServer(t, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	r := c.call(t.Context(), baseReq())
+
+	if r.outcome != "refused" || r.attempts != 1 || hits.Load() != 1 || r.answer != nil {
+		t.Errorf("outcome=%q attempts=%d hits=%d answer=%v, want refused 1 1 nil", r.outcome, r.attempts, hits.Load(), r.answer)
+	}
+}
+
+func TestCall_AStopAnswerDecodesAsBefore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := json.Marshal(validContent)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	r := c.call(t.Context(), baseReq())
+
+	if r.outcome != "ok" || r.answer == nil {
+		t.Errorf("outcome=%q answer=%v, want ok with an answer", r.outcome, r.answer)
+	}
+}

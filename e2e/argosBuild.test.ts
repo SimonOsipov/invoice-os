@@ -286,7 +286,7 @@ describe('changed', () => {
 
 describe('check shots', () => {
   it('argosScreens_registersTheCheckShots', () => {
-    expect(ARGOS_SCREENS).toEqual(expect.arrayContaining(['check/upload', 'check/map']))
+    expect(ARGOS_SCREENS).toEqual(expect.arrayContaining(['check/upload', 'check/map', 'check/upload-drag', 'check/upload-reading', 'check/upload-error-type']))
     expect(allNames().length).toBeLessThanOrEqual(ARGOS_MAX_SHOTS)
   })
 })

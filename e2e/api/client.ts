@@ -2156,6 +2156,7 @@ export interface ExtractionDetail {
   state: string
   failure_kind: string | null
   document_type: string | null
+  ai_text_truncated: boolean
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

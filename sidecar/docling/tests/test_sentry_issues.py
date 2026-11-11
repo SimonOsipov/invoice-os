@@ -144,7 +144,7 @@ def test_two_failures_are_two_events(sentry_capture, monkeypatch):
 
 def test_converter_construction_failure_on_a_request_opens_one_issue(sentry_capture, monkeypatch):
     _fail_construct(monkeypatch, RuntimeError("model missing"))
-    resp = TestClient(app_module.app).post("/v1/read", content=b"x", headers={"content-type": DOCX})
+    resp = TestClient(app_module.app).post("/v1/read", content=b"PK\x03\x04x", headers={"content-type": DOCX})
     assert resp.status_code == 500
     assert resp.json() == {"error": "internal error"}
     events = sentry_capture.events()

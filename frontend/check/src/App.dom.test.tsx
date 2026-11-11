@@ -148,12 +148,12 @@ describe('upload step', () => {
     expect(byLabel('Email address')).toBeTruthy()
   })
 
-  it('upload_thePickerIsDisabledWhileReadingColumns', async () => {
+  it('upload_theZoneGivesWayWhileReadingColumns', async () => {
     let release!: (r: Response) => void
     stubFetch({ [MAPPING]: () => new Promise<Response>((r) => (release = r)) })
     await mount()
     await pick(file('a.csv'))
-    expect(fileInput().disabled).toBe(true)
+    expect(container.querySelector('input[type="file"]')).toBeNull()
     expect(text()).toContain(READING_TEXT)
     await act(async () => release(json(422, { error: UNREADABLE_SENTENCE })))
     await settle()
@@ -326,6 +326,35 @@ describe('details and sent', () => {
     await fillAndSend()
     expect(text()).toContain(UNREADABLE_SENTENCE)
     expect(text()).not.toContain(MAPPING_SENTENCE)
+  })
+
+  it('send_aTooLongDocumentShowsTheTooMuchTextSentence', async () => {
+    const sentence = 'This document has too much text for the free check. Try a shorter invoice.' // readinesscheck.DocumentTooLongSentence
+    stubFetch({ [RUN]: () => json(400, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
+  it('send_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [RUN]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
+  })
+
+  it('suggest_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [MAPPING]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.csv'))
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
   })
 
   it('send_aSpreadsheet400IsTheMappingSentence', async () => {

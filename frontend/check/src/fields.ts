@@ -1,10 +1,11 @@
-// The one seam to app source (only these three modules); the check never imports app components.
+// The one seam to app source (only these four modules); the check never imports app components.
 import { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns } from '../../app/src/lib/importFlow'
 import { canSubmitMapping, toImportMapping } from '../../app/src/lib/mapping'
 import { IMPORT_KEYS, INVOICE_FIELDS, labelOf } from '../../app/src/lib/invoiceFields'
+import { formatBytes } from '../../app/src/lib/sourceDocument'
 import type { Mapping } from '../../app/src/types'
 
-export { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns, canSubmitMapping, toImportMapping, IMPORT_KEYS, labelOf }
+export { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns, canSubmitMapping, toImportMapping, IMPORT_KEYS, labelOf, formatBytes }
 export type { Mapping }
 
 export const ACCEPT = ACCEPTED_PICKED_TYPES.map((r) => r.ext).join(',')

@@ -30,8 +30,27 @@ const (
 	bodySlack     = 1 << 20 // multipart framing and fields around a 15 MiB file
 )
 
+// AISpendCeilingUSD is the check's AI spend per UTC day; past it both routes answer 503 ceiling.
+// ceiling: the spend is read before a request, so runs in flight finish past it (at most MaxConcurrent per worker instance).
+const AISpendCeilingUSD = "2.00"
+
+// spendReached answers 503 ceiling past the daily ceiling and 503 unavailable when the read fails.
+func (s *Service) spendReached(ctx context.Context, w http.ResponseWriter) bool {
+	reached, err := s.Store.AISpendReached(ctx, AISpendCeilingUSD)
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "readiness check: spend read failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return true
+	}
+	if reached {
+		writeError(w, http.StatusServiceUnavailable, "ceiling")
+	}
+	return reached
+}
+
 // CheckStore is what the handlers need of the summary store; *Store satisfies it.
 type CheckStore interface {
+	AISpendReached(ctx context.Context, ceiling string) (bool, error)
 	Count(ctx context.Context, email string) (int, error)
 	Insert(ctx context.Context, m Summary) error
 }
@@ -157,15 +176,23 @@ func (u upload) request() (publiccheck.Request, bool) {
 	return req, true
 }
 
+// DocumentTooLongSentence is the error word of a check document whose text is over the prompt bound.
+const DocumentTooLongSentence = "This document has too much text for the free check. Try a shorter invoice."
+
+// FormatRefusal is the gateway's checkFormatSentence; a test keeps them equal.
+const FormatRefusal = "file must be CSV, XLSX, PDF or DOCX"
+
 // engineStatus maps an engine error to its status and error word.
 func engineStatus(err error) (status int, word string) {
 	switch {
 	case errors.Is(err, publiccheck.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, "too large"
 	case errors.Is(err, publiccheck.ErrFormat):
-		return http.StatusBadRequest, "unsupported format"
+		return http.StatusBadRequest, FormatRefusal
 	case errors.Is(err, importer.ErrValidation):
 		return http.StatusBadRequest, strings.TrimPrefix(err.Error(), importer.ErrValidation.Error()+": ")
+	case errors.Is(err, publiccheck.ErrDocumentTooLong):
+		return http.StatusBadRequest, DocumentTooLongSentence
 	case errors.Is(err, publiccheck.ErrBadFile):
 		return http.StatusUnprocessableEntity, "unreadable"
 	case errors.Is(err, publiccheck.ErrReadUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
@@ -241,6 +268,9 @@ func (s *Service) RunHandler() http.Handler {
 
 		ctx, cancel := context.WithTimeout(r.Context(), s.budget())
 		defer cancel()
+		if s.spendReached(ctx, w) {
+			return
+		}
 		count, err := s.Store.Count(ctx, email)
 		if err != nil {
 			s.Logger.ErrorContext(r.Context(), "readiness check: count failed", slog.String("error", err.Error()))
@@ -306,6 +336,9 @@ func (s *Service) MappingHandler() http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), MappingBudget)
 		defer cancel()
+		if s.spendReached(ctx, w) {
+			return
+		}
 		sug, err := s.Checker.SuggestMapping(ctx, u.file, u.format)
 		if err != nil {
 			s.answerEngineError(r.Context(), w, err)

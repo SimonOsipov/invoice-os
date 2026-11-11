@@ -70,10 +70,10 @@ export function uniqueHonestReceiptPdfBytes(): Buffer {
   return Buffer.concat([HONEST_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// A *.pdf whose bytes are not a PDF: it uploads, then dead-letters in the worker.
+// A *.pdf with the PDF signature and unreadable content: it uploads, then dead-letters in the worker.
 // Fresh bytes per call, for the same enqueue-key reason as uniquePdfBytes().
 export function uniqueGarbageBytes(): Buffer {
-  return Buffer.concat([Buffer.from('not a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+  return Buffer.concat([Buffer.from('%PDF-1.4\nnot a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // The CONTENT box, not the border box, so a row overflowing the card's gutter fails.

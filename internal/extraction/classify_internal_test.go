@@ -176,3 +176,28 @@ func TestRendersPageImagesForDocument_KeepsTheDeclaredTypeAuthoritativeOnItsOwn(
 		t.Errorf("RendersPageImagesForDocument(%+v) = false, want true", doc)
 	}
 }
+
+func TestContentMatches_FollowsTheAcceptedTable(t *testing.T) {
+	heads := map[string][2]string{
+		"application/pdf": {"%PDF-1.7", "PK\x03\x04"},
+		cxDocxType:        {"PK\x03\x04", "%PDF-1.7"},
+	}
+	for ext, ct := range acceptedDocumentTypes {
+		h, ok := heads[ct]
+		if !ok {
+			t.Fatalf("accepted type %q (%s) has no head rows here", ct, ext)
+		}
+		if !contentMatches(ct, []byte(h[0])) {
+			t.Errorf("contentMatches(%q, %q) = false, want true", ct, h[0])
+		}
+		if contentMatches(ct, []byte(h[1])) {
+			t.Errorf("contentMatches(%q, %q) = true, want false", ct, h[1])
+		}
+		if contentMatches(ct, nil) {
+			t.Errorf("contentMatches(%q, nil) = true, want false", ct)
+		}
+	}
+	if contentMatches("text/csv", []byte("a,b")) {
+		t.Error(`contentMatches("text/csv", "a,b") = true, want false`)
+	}
+}

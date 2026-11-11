@@ -80,6 +80,7 @@ def _construct_converter():
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     return DocumentConverter(
+        allowed_formats=[InputFormat.PDF, InputFormat.DOCX],
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pipeline_options(),
@@ -331,12 +332,13 @@ _CONTENT_TYPE_EXTENSIONS = {
 
 
 def _stream_name(content_type: str) -> str:
-    """DocumentStream needs a filename for format detection. Docling sniffs the true format
-    from content regardless, so a missing/unrecognised Content-Type (T-01's own tests post
-    both) safely falls back to .pdf rather than rejecting the request.
-    """
+    """The name picks the backend when docling finds no signature; the check in stub_read
+    keeps that fallback safe."""
     ext = _CONTENT_TYPE_EXTENSIONS.get(content_type.split(";")[0].strip().lower(), "pdf")
     return f"document.{ext}"
+
+
+_ACCEPTED_SIGNATURES = (b"%PDF-", b"PK\x03\x04")
 
 
 def stub_read(body: bytes, content_type: str) -> dict:
@@ -349,6 +351,8 @@ def stub_read(body: bytes, content_type: str) -> dict:
     from docling.datamodel.base_models import DocumentStream
     from docling.exceptions import ConversionError
 
+    if not body.startswith(_ACCEPTED_SIGNATURES):
+        raise DocumentUnreadable("unsupported format")
     converter = get_converter()
     stream = DocumentStream(name=_stream_name(content_type), stream=BytesIO(body))
     try:

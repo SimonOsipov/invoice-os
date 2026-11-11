@@ -193,7 +193,7 @@ func TestNewDocumentStorer_ProjectsTheStoredRowNotTheDeclaredValues(t *testing.T
 // pointers come back nil. Dereferencing either unguarded is a 500 on a request that succeeded.
 func TestNewDocumentStorer_NullFilenameAndContentTypeAreEmptyNotAPanic(t *testing.T) {
 	s := &dsScript{doc: document.Document{ID: "doc-null", SizeBytes: 3}}
-	code, raw, decoded := dsPost(t, s, "scan.pdf", []byte("abc"))
+	code, raw, decoded := dsPost(t, s, "scan.pdf", []byte("%PDF-abc"))
 
 	if code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 for a row whose filename and declared_content_type are NULL (body=%s)", code, raw)
@@ -218,7 +218,7 @@ func TestNewDocumentStorer_NullFilenameAndContentTypeAreEmptyNotAPanic(t *testin
 // caller's 403 into a 500 -- and the handler's own spec, driven by its own spy, cannot see it.
 func TestNewDocumentStorer_StoreErrorReachesTheHandlerUnwrapped(t *testing.T) {
 	control := &dsScript{doc: dsRow("doc-1", "scan.pdf", "application/pdf", 3)}
-	if code, raw, _ := dsPost(t, control, "scan.pdf", []byte("abc")); code != http.StatusCreated {
+	if code, raw, _ := dsPost(t, control, "scan.pdf", []byte("%PDF-abc")); code != http.StatusCreated {
 		t.Fatalf("control: a successful store returned %d, want 201 (body=%s); the status assertions below would not be about the error path", code, raw)
 	}
 
@@ -232,7 +232,7 @@ func TestNewDocumentStorer_StoreErrorReachesTheHandlerUnwrapped(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := &dsScript{err: c.err}
-			code, raw, _ := dsPost(t, s, "scan.pdf", []byte("abc"))
+			code, raw, _ := dsPost(t, s, "scan.pdf", []byte("%PDF-abc"))
 			if code != c.want {
 				t.Errorf("status = %d, want %d for %v (body=%s)", code, c.want, c.err, raw)
 			}

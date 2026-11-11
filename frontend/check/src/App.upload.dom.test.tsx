@@ -242,6 +242,17 @@ describe('upload step', () => {
     expect(q('.is-err')).toBeNull()
   })
 
+  it('upload_aNewPickDropsTheLastFilesSentence', async () => {
+    stubFetch({ [MAPPING]: () => json(422, { error: UNREADABLE_SENTENCE }) })
+    await mount()
+    await pick(file('notes.txt'))
+    await pick(file('a.csv'))
+    expect(slot()!.textContent).toBe(UNREADABLE_SENTENCE)
+    await pick(file('b.pdf'))
+    expect(q('input[type="email"]')).not.toBeNull()
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
   it('upload_readingShowsTheFileRowAndBar', async () => {
     held()
     await mount()

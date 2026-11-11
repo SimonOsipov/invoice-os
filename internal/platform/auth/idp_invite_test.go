@@ -58,7 +58,7 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 		Release: store.ReleaseInvitationRegistration,
 	}
 	mux.Handle("POST /auth/invitation", gateway.InvitationHandler(preview, log))
-	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, log, preview, registrations))
+	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, log, preview, registrations, nil))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, true, log, preview))
 	return serveGateway(t, mux)

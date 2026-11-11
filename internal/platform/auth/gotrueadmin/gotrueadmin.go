@@ -1,7 +1,8 @@
-// Package gotrueadmin reads and deletes accounts through GoTrue's admin API.
+// Package gotrueadmin reads, lists, tags and deletes accounts through GoTrue's admin API.
 package gotrueadmin
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -25,6 +26,8 @@ const (
 	tokenTTL    = 60 * time.Second
 	callTimeout = 10 * time.Second
 	maxAnswer   = 16 << 10
+	// maxListAnswer bounds one page of 100 accounts.
+	maxListAnswer = 4 << 20
 )
 
 var errKeys = errors.New("gotrueadmin: GOTRUE_JWT_KEYS must be a JSON array with exactly one ES256 P-256 signing key")
@@ -112,11 +115,8 @@ func FromEnv(getenv func(string) string, onCloudRun bool, rt http.RoundTripper) 
 	return New(url, keys, &http.Client{Transport: rt, Timeout: callTimeout})
 }
 
-// call sends an authenticated request for one account and returns the response with its body unread.
-func (c *Client) call(ctx context.Context, method, userID string) (*http.Response, error) {
-	if id, err := uuid.Parse(userID); err != nil || id.String() != userID {
-		return nil, errors.New("gotrueadmin: user id is not a canonical UUID")
-	}
+// do sends an authenticated request to an admin path and returns the response with its body unread.
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	now := time.Now()
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
 		"role": "service_role", "iat": now.Unix(), "exp": now.Add(tokenTTL).Unix(),
@@ -126,16 +126,91 @@ func (c *Client) call(ctx context.Context, method, userID string) (*http.Respons
 	if err != nil {
 		return nil, errors.New("gotrueadmin: signing failed")
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+"/admin/users/"+userID, nil)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return nil, &StatusError{}
 	}
 	req.Header.Set("Authorization", "Bearer "+signed)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, &StatusError{}
 	}
 	return resp, nil
+}
+
+func checkUserID(userID string) error {
+	if id, err := uuid.Parse(userID); err != nil || id.String() != userID {
+		return errors.New("gotrueadmin: user id is not a canonical UUID")
+	}
+	return nil
+}
+
+// call sends a bodiless request for one account.
+func (c *Client) call(ctx context.Context, method, userID string) (*http.Response, error) {
+	if err := checkUserID(userID); err != nil {
+		return nil, err
+	}
+	return c.do(ctx, method, "/admin/users/"+userID, nil)
+}
+
+// AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe.
+type AdminUser struct{ ID, Email, Unsubscribe string }
+
+// ListUsers reads one page of accounts. A non-2xx answer is a *StatusError with the status only.
+func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/admin/users?page="+strconv.Itoa(page)+"&per_page="+strconv.Itoa(perPage), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return nil, &StatusError{Status: resp.StatusCode}
+	}
+	var out struct {
+		Users []struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+			// Raw: an account can write any JSON into its own user_metadata; a non-string value reads as absent.
+			UserMetadata struct {
+				Unsubscribe json.RawMessage `json:"unsubscribe"`
+			} `json:"user_metadata"`
+		} `json:"users"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, maxListAnswer)).Decode(&out) != nil {
+		return nil, &StatusError{Status: resp.StatusCode}
+	}
+	users := make([]AdminUser, len(out.Users))
+	for i, u := range out.Users {
+		var unsub string
+		_ = json.Unmarshal(u.UserMetadata.Unsubscribe, &unsub)
+		users[i] = AdminUser{ID: u.ID, Email: u.Email, Unsubscribe: unsub}
+	}
+	return users, nil
+}
+
+// SetUserMetadata merges meta into the account's user_metadata; GoTrue keeps the other keys.
+func (c *Client) SetUserMetadata(ctx context.Context, userID string, meta map[string]any) error {
+	if err := checkUserID(userID); err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{"user_metadata": meta})
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(ctx, http.MethodPut, "/admin/users/"+userID, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+	if resp.StatusCode/100 != 2 {
+		return &StatusError{Status: resp.StatusCode}
+	}
+	return nil
 }
 
 // DeleteUser deletes the account; 200 and 404 are success.

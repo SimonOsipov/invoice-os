@@ -1882,7 +1882,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		return true
 	})
 	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
-		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`}
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}
@@ -2293,5 +2293,62 @@ func TestWorkerMain_WiresTheAccountEventMover(t *testing.T) {
 	})
 	if ticks != 1 {
 		t.Fatalf("%d account-event-handoff registration(s), want 1", ticks)
+	}
+}
+
+// The metadata backfill needs the GoTrue admin client, so its registration sits under `account != nil`.
+func TestWorkerMain_RunsTheMetadataBackfillOnlyWithAnAdminClient(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	accountName, _ := wtOneCall(t, f, "gotrueadmin.FromEnv")
+	isBackfill := func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || wtCallName(c.Fun) != "leader.Lead" || len(c.Args) != 2 {
+			return false
+		}
+		return wtExprString(c.Args[0]) == `"unsubscribe-metadata"`
+	}
+	total, guarded := 0, 0
+	ast.Inspect(f, func(n ast.Node) bool {
+		if isBackfill(n) {
+			total++
+		}
+		if s, ok := n.(*ast.IfStmt); ok && wtExprString(s.Cond) == accountName+" != nil" {
+			ast.Inspect(s.Body, func(m ast.Node) bool {
+				if isBackfill(m) {
+					guarded++
+				}
+				return true
+			})
+		}
+		return true
+	})
+	if total != 1 || guarded != 1 {
+		t.Errorf("leader.Lead(\"unsubscribe-metadata\", ...): %d registration(s), %d under `if %s != nil`, want 1 and 1", total, guarded, accountName)
+	}
+	var interval []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && wtCallName(c.Fun) == "codelist.NewWorker" && len(c.Args) == 2 && isBackfill(c.Args[1]) {
+			interval = append(interval, wtExprString(c.Args[0]))
+		}
+		return true
+	})
+	if !slices.Equal(interval, []string{"time.Hour"}) {
+		t.Errorf("the unsubscribe-metadata task runs every %v, want one task every time.Hour", interval)
+	}
+}
+
+// A nil TokenFunc sends every worker mail (results, new device, stranded alert) with the bare unsubscribe link and fails nothing else.
+func TestWorkerMain_HandsThePoolTokensToTheMailSender(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	poolName := wtAppPool(t, f)
+	_, args := wtOneCall(t, f, "notifications.NewsletterClients")
+	if want := "accountmail.PoolTokens(" + poolName + ")"; len(args) != 5 || wtExprString(args[4]) != want {
+		t.Errorf("notifications.NewsletterClients arguments = %d, last %q; want 5, last %q", len(args), wtRender(args[len(args)-1]), want)
 	}
 }

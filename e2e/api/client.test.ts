@@ -18,6 +18,7 @@
 // touching the four pre-existing listInvoices assertions.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ApprovalRun } from './client'
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
@@ -907,5 +908,23 @@ describe('getAuditLog', () => {
     expect(await urlFor({ limit: 5, exclude_account_events: true })).toContain('exclude_account_events=true')
     expect(await urlFor({ limit: 5 })).not.toContain('exclude_account_events')
     expect(await urlFor({ exclude_account_events: false })).not.toContain('exclude_account_events')
+  })
+})
+
+describe('unsubscribeTokenOf', () => {
+  const jwtOf = (payload: object) => ['x', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'y'].join('.')
+
+  it('unsubscribeTokenOf reads the metadata token', async () => {
+    const { unsubscribeTokenOf } = await import('./client')
+    const token = randomUUID()
+    expect(unsubscribeTokenOf(jwtOf({ user_metadata: { unsubscribe: token } }))).toBe(token)
+  })
+
+  it('unsubscribeTokenOf refuses a token without a UUID', async () => {
+    const { unsubscribeTokenOf } = await import('./client')
+    const uuid = randomUUID()
+    for (const payload of [{}, { user_metadata: {} }, { user_metadata: { unsubscribe: 'abc' } }, { user_metadata: { unsubscribe: `${uuid}x` } }, { user_metadata: { unsubscribe: `x${uuid}` } }, { user_metadata: { unsubscribe: uuid.toUpperCase() } }, { user_metadata: { unsubscribe: 5 } }]) {
+      expect(() => unsubscribeTokenOf(jwtOf(payload))).toThrow(/^the access token holds no unsubscribe token$/)
+    }
   })
 })

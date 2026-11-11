@@ -21,6 +21,8 @@ import (
 	"testing"
 	"testing/cryptotest"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
 // Copied from internal/tenancy/accept.go (msgInviteNotValid); the gateway does not import tenancy.
@@ -486,7 +488,7 @@ func (r *recordingRegistrations) releases() []string {
 
 func inviteeHandler(authURL *url.URL, floor time.Duration, p *recordingPreviewer, r *recordingRegistrations) http.Handler {
 	log, _ := captureLog()
-	return InvitationRegisterHandler(authURL, testClient(), floor, log, p.preview, r.registrations())
+	return InvitationRegisterHandler(authURL, testClient(), floor, log, p.preview, r.registrations(), nil)
 }
 
 // newDroppingGoTrue records the request, then closes the connection without answering.
@@ -632,7 +634,7 @@ func TestInvitationRegister_GeneratedPasswordIsNeverEchoedOrLogged(t *testing.T)
 			fake := c.fake(t)
 			log, buf := captureLog()
 			r := claiming("e@x.test", true, nil)
-			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations(), nil)
 
 			rec, _ := postInvitee(h, inviteeBody(inviteToken, "body-pw", nil))
 
@@ -761,7 +763,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			log, _ := captureLog()
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
-			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite).ServeHTTP(reg, regReq)
+			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
 			inv, _ := postInvitee(inviteeHandler(authURL, 0, p, claiming(regEmail, true, nil)), tokenBody(inviteToken))
@@ -882,7 +884,7 @@ func TestInvitationRegister_RefusesBeforeGoTrue(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			r := claiming("e@x.test", true, c.result)
 			log, buf := captureLog()
-			h := InvitationRegisterHandler(fake.URL, testClient(), floor, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), floor, log, previewing(liveInvite, nil).preview, r.registrations(), nil)
 
 			rec, elapsed := postInvitee(h, c.body)
 
@@ -927,7 +929,7 @@ func TestInvitationRegister_NilClaimOrReleaseIsNotConfigured(t *testing.T) {
 			strip(&regs)
 			log, _ := captureLog()
 
-			rec, _ := postInvitee(InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, regs), tokenBody(inviteToken))
+			rec, _ := postInvitee(InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, regs, nil), tokenBody(inviteToken))
 
 			if rec.Code != http.StatusServiceUnavailable || errorBody(t, rec) != "registration is not configured" {
 				t.Errorf("answer = %d %s, want 503 registration is not configured", rec.Code, rec.Body.String())
@@ -1033,7 +1035,7 @@ func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
 				authURL = newFakeGoTrue(t, c.status, c.body).URL
 			}
 			log, buf := captureLog()
-			h := InvitationRegisterHandler(authURL, testClient(), 0, log, previewing(liveInvite, nil).preview, claiming("e@x.test", true, nil).registrations())
+			h := InvitationRegisterHandler(authURL, testClient(), 0, log, previewing(liveInvite, nil).preview, claiming("e@x.test", true, nil).registrations(), nil)
 			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(inviteeBody(inviteToken, password, nil)))
 			rec := httptest.NewRecorder()
 
@@ -1167,7 +1169,7 @@ func TestInvitationRegister_ReleasesTheClaimWhenNoAccountWasCreated(t *testing.T
 				return nil
 			}
 			log, _ := captureLog()
-			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations(), nil)
 
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken))))
 
@@ -1305,7 +1307,7 @@ func TestInvitationRegister_ReleaseFailureIsLoggedAndTheAnswerStands(t *testing.
 		r := claiming("e@x.test", true, nil)
 		r.release = release
 		log, buf := captureLog()
-		h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
+		h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations(), nil)
 		rec, _ := postInvitee(h, tokenBody(inviteToken))
 		return rec, buf, r
 	}
@@ -1412,7 +1414,7 @@ func TestInvitationRegister_UnroutedTenancyIsUnavailableNotInvalid(t *testing.T)
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, _ := captureLog()
 	h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview,
-		NewHTTPInvitationRegistrations(base, &http.Client{}, inviteGatewayToken))
+		NewHTTPInvitationRegistrations(base, &http.Client{}, inviteGatewayToken), nil)
 
 	rec, elapsed := postInvitee(h, tokenBody(inviteToken))
 
@@ -1882,5 +1884,40 @@ func TestHTTPPendingInviteLookup_GivesUpAfterTheDeadline(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), inviteAddress) || strings.Contains(err.Error(), base.Host) {
 		t.Errorf("error text %q holds the address or the URL", err.Error())
+	}
+}
+
+func inviteeHandlerWithTokens(authURL *url.URL, r *recordingRegistrations, tokens accountmail.TokenFunc) http.Handler {
+	log, _ := captureLog()
+	return InvitationRegisterHandler(authURL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations(), tokens)
+}
+
+func TestInvitationRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	tok := fixedToken("tok-2")
+
+	rec, _ := postInvitee(inviteeHandlerWithTokens(fake.URL, claiming("e@x.test", true, nil), tok.lookup), tokenBody(inviteToken))
+
+	requirePending202(t, rec)
+	if got, want := signupData(t, fake), (map[string]any{"invited": true, accountmail.UnsubscribeMetadataKey: "tok-2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("signup data = %v, want %v", got, want)
+	}
+	if got := tok.calls(); !slices.Equal(got, []string{"e@x.test"}) {
+		t.Errorf("token asked for %v, want the claimed address", got)
+	}
+}
+
+func TestInvitationRegister_TheShortCircuitLooksUpNoToken(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	tok := fixedToken("tok-2")
+
+	rec, _ := postInvitee(inviteeHandlerWithTokens(fake.URL, claiming("e@x.test", false, nil), tok.lookup), tokenBody(inviteToken))
+
+	requirePending202(t, rec)
+	if got := tok.calls(); len(got) != 0 {
+		t.Errorf("token asked for %v, want no lookup for a repeat claim", got)
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
 	}
 }

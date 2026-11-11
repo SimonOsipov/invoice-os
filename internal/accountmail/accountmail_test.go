@@ -85,6 +85,9 @@ var (
 	introRe  = regexp.MustCompile(`(?s)<td\b([^>]*)>\s*(Hi[,\s].*?)</td>`)
 )
 
+// unsubscribeRowRe matches the footer row layout.html adds below Privacy; the goldens predate it.
+var unsubscribeRowRe = regexp.MustCompile(`<tr><td height="8"[^>]*>&nbsp;</td></tr><tr><td class="px"[^>]*>Don't want marketing email from ASComply\? <a href="[^"]*"[^>]*>Unsubscribe</a>\.</td></tr>`)
+
 type anchor struct{ href, text string }
 
 func anchors(out string) []anchor {
@@ -251,8 +254,8 @@ func TestTemplate_ActionURLIsTheButtonAndTheFallbackLink(t *testing.T) {
 	if strings.Contains(bad, "<script") || strings.Contains(bad, "<i>") {
 		t.Error("a hostile ConfirmationURL injects markup")
 	}
-	if n := len(anchorRe.FindAllString(bad, -1)); n != 3 {
-		t.Errorf("hostile URL changed the anchor count to %d, want 3 (button, fallback, Privacy)", n)
+	if n := len(anchorRe.FindAllString(bad, -1)); n != 4 {
+		t.Errorf("hostile URL changed the anchor count to %d, want 4 (button, fallback, Privacy, Unsubscribe)", n)
 	}
 }
 
@@ -330,8 +333,9 @@ func TestTemplate_CarriesTheQ12Corrections(t *testing.T) {
 			others = append(others, a)
 		}
 	}
-	if len(others) != 1 || others[0].href != "https://www.ascomply.com/privacy" || others[0].text != "Privacy" {
-		t.Errorf("footer anchors = %+v, want only Privacy -> https://www.ascomply.com/privacy", others)
+	if len(others) != 2 || others[0].href != "https://www.ascomply.com/privacy" || others[0].text != "Privacy" ||
+		others[1].href != UnsubscribeURL || others[1].text != "Unsubscribe" {
+		t.Errorf("footer anchors = %+v, want Privacy then Unsubscribe", others)
 	}
 }
 
@@ -437,6 +441,7 @@ func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
 {{define "details"}}<tr><td>Stub label</td><td>Stub value</td></tr>{{end}}
 {{define "ignore_note"}}Stub ignore{{end}}
 {{define "reason"}}Stub reason{{end}}
+{{define "unsubscribe_url"}}Stub unsub{{end}}
 `
 	const call = `{{template "layout" .}}`
 	data := gotrueData(adaEmail, jsonMap{}, true)
@@ -555,8 +560,8 @@ func TestConfirmation_InviteeBranchLinksToTheSetPasswordPage(t *testing.T) {
 	if len(fallback) != 1 || fallback[0].href != want {
 		t.Errorf("fallback anchors = %+v, want one whose href and text are %s", fallback, want)
 	}
-	if n := len(anchors(out)); n != 3 {
-		t.Errorf("anchors = %d, want 3 (button, fallback, Privacy): one action link only", n)
+	if n := len(anchors(out)); n != 4 {
+		t.Errorf("anchors = %d, want 4 (button, fallback, Privacy, Unsubscribe): one action link only", n)
 	}
 
 	got := text(out)
@@ -595,7 +600,7 @@ func TestConfirmation_RegistrantBranchIsUnchanged(t *testing.T) {
 			if len(golden) == 0 {
 				t.Fatal("golden is empty")
 			}
-			out := renderSrc(t, confirmationSrc(t), c.data)
+			out := unsubscribeRowRe.ReplaceAllString(renderSrc(t, confirmationSrc(t), c.data), "")
 			if out != string(golden) {
 				t.Errorf("registrant render differs from the pre-change golden (%d bytes, golden %d)", len(out), len(golden))
 			}
@@ -611,5 +616,118 @@ func TestConfirmation_RegistrantBranchIsUnchanged(t *testing.T) {
 	}
 	if invited := renderConfirmation(t, adaEmail, jsonMap{"invited": true}); invited == string(golden) {
 		t.Error("an invited account renders the registrant mail")
+	}
+}
+
+const unsubscribeLine = "Don't want marketing email from ASComply? Unsubscribe."
+
+var tagRe = regexp.MustCompile(`<[^>]*>`)
+
+// goMails renders each Go mail through its Render* function.
+func goMails(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	add := func(name string, f func() (string, string, error)) {
+		_, h, err := f()
+		if err != nil {
+			t.Fatalf("render %s: %v", name, err)
+		}
+		out[name] = h
+	}
+	add("blog_confirm", func() (string, string, error) { return RenderBlogConfirm(blogMail) })
+	add("deletion_cancelled", func() (string, string, error) { return RenderDeletionCancelled(okaforCancelled) })
+	add("deletion_notice", func() (string, string, error) { return RenderDeletionNotice(okaforNotice) })
+	add("invite", func() (string, string, error) {
+		return RenderInvite(InviteMail{Workspace: "W", Inviter: "I", Email: adaEmail, Role: "admin", Token: "t0k"})
+	})
+	add("new_device", func() (string, string, error) {
+		return RenderNewDevice(NewDeviceMail{Device: "Chrome on macOS", IP: "203.0.113.7", At: newDeviceAt})
+	})
+	add("readiness_check", func() (string, string, error) {
+		return RenderReadinessCheck(ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{Number: "A1", Passes: true}}})
+	})
+	add("stranded_alert", func() (string, string, error) { return RenderStrandedAlert(okaforStranded) })
+	return out
+}
+
+func goTrueMails(t *testing.T, data jsonMap) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, name := range []string{"confirmation", "recovery"} {
+		src, err := Template(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[name] = renderSrc(t, src, gotrueData(adaEmail, data, true))
+	}
+	invited := jsonMap{"invited": true}
+	for k, v := range data {
+		invited[k] = v
+	}
+	out["confirmation_invited"] = renderConfirmation(t, adaEmail, invited)
+	return out
+}
+
+func TestTemplates_EveryMailHasTheUnsubscribeLine(t *testing.T) {
+	all := goMails(t)
+	for k, v := range goTrueMails(t, jsonMap{}) {
+		all[k] = v
+	}
+	if len(all) != 10 {
+		t.Fatalf("rendered %d mails, want 9 template names plus the invited confirmation", len(all))
+	}
+	for name, out := range all {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(text(tagRe.ReplaceAllString(out, "")), unsubscribeLine) {
+				t.Errorf("visible text lacks %q", unsubscribeLine)
+			}
+			as := anchors(out)
+			n := len(as)
+			if n < 2 || as[n-2].text != "Privacy" || as[n-1].text != "Unsubscribe" {
+				t.Errorf("last anchors = %+v, want Privacy then Unsubscribe", as)
+			}
+		})
+	}
+}
+
+func TestTemplates_GoMailsCarryThePlaceholderLink(t *testing.T) {
+	for name, out := range goMails(t) {
+		as := anchors(out)
+		if got := as[len(as)-1].href; got != UnsubscribeURL+"?t=ASCOMPLY_UNSUBSCRIBE_TOKEN" {
+			t.Errorf("%s: unsubscribe href = %q", name, got)
+		}
+	}
+}
+
+func TestTemplates_GoTrueMailsReadTheTokenFromMetadata(t *testing.T) {
+	const token = "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
+	for name, out := range goTrueMails(t, jsonMap{UnsubscribeMetadataKey: token}) {
+		as := anchors(out)
+		if got := as[len(as)-1].href; got != UnsubscribeURL+"?t="+token {
+			t.Errorf("%s: href = %q", name, got)
+		}
+	}
+}
+
+func TestTemplates_GoTrueMailsFallBackToTheBarePage(t *testing.T) {
+	for label, data := range map[string]jsonMap{"nil Data": nil, "no key": {"other": "x"}} {
+		for name, out := range goTrueMails(t, data) {
+			as := anchors(out)
+			if got := as[len(as)-1].href; got != UnsubscribeURL {
+				t.Errorf("%s, %s: href = %q, want %q", label, name, got, UnsubscribeURL)
+			}
+		}
+	}
+}
+
+func TestTemplates_AMetadataTokenIsEscaped(t *testing.T) {
+	for name, out := range goTrueMails(t, jsonMap{UnsubscribeMetadataKey: `a"><script>`}) {
+		if strings.Contains(out, "<script") {
+			t.Errorf("%s: raw <script> in the render", name)
+		}
+		as := anchors(out)
+		if got := as[len(as)-1].href; got != UnsubscribeURL+"?t=a%22%3e%3cscript%3e" {
+			t.Errorf("%s: href = %q, want the query-escaped token", name, got)
+		}
 	}
 }

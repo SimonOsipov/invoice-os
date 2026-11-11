@@ -162,6 +162,26 @@ type qaRecResend struct {
 	fn    func(n int, c Contact, optIn bool) error
 	reads int
 	state func(n int) (ResendState, error) // nil: the zero state
+
+	optOuts  []string
+	optOutFn func(n int, email string) error
+}
+
+func (r *qaRecResend) OptOutMarketing(_ context.Context, email string) error {
+	r.mu.Lock()
+	r.optOuts = append(r.optOuts, email)
+	n, fn := len(r.optOuts), r.optOutFn
+	r.mu.Unlock()
+	if fn != nil {
+		return fn(n, email)
+	}
+	return nil
+}
+
+func (r *qaRecResend) optOutCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.optOuts)
 }
 
 func (r *qaRecResend) ContactState(context.Context, string) (ResendState, error) {
@@ -2027,5 +2047,113 @@ func TestDeliver_UnsubscribedRegistrantWhoTickedStaysInTheSegmentWithNoOptIn(t *
 	}
 	if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
 		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+	}
+}
+
+// recordUnsubscribe records a pressed unsubscribe for email and removes it at cleanup.
+func recordUnsubscribe(t *testing.T, e env, email string) {
+	t.Helper()
+	if _, err := e.admin.Exec(context.Background(), `INSERT INTO mail_unsubscribes (email, unsubscribed_at) VALUES ($1, now())`, email); err != nil {
+		t.Fatalf("record unsubscribe: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `DELETE FROM mail_unsubscribes WHERE email = $1`, email)
+	})
+}
+
+// consentedIntakes are the three sources of a Marketing tick; each leaves a version 1 Resend job.
+var consentedIntakes = []struct {
+	name string
+	run  func(t *testing.T, e env, email string)
+}{
+	{"registration", func(t *testing.T, e env, email string) { qaRegistrant(t, e, email, "Ada Lovelace", "", consentText) }},
+	{"demo request", func(t *testing.T, e env, email string) {
+		if err := e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: "Grace Hopper", ConsentText: consentText}); err != nil {
+			t.Fatalf("DemoRequest: %v", err)
+		}
+	}},
+	{"readiness check", func(t *testing.T, e env, email string) {
+		if err := e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+			t.Fatalf("ReadinessCheck: %v", err)
+		}
+	}},
+}
+
+func TestDeliver_AnUnsubscribedAddressGetsNoOptInFromALaterTick(t *testing.T) {
+	for _, in := range consentedIntakes {
+		t.Run(in.name, func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "unsubtick")
+			recordUnsubscribe(t, r.e, email)
+			in.run(t, r.e, email)
+
+			res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+			qaRequireCompleted(t, res, err, "resend job of an unsubscribed address")
+			if calls := r.rs.got(); len(calls) != 1 || calls[0].OptIn {
+				t.Fatalf("Sync calls = %+v, want one with sendOptIn false", calls)
+			}
+			if n := r.rs.readCount(); n != 0 {
+				t.Errorf("ContactState reads = %d, want 0", n)
+			}
+			if d := r.delivery(t, email); d.In != nil || d.ResendAt == nil {
+				t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL and set", d.In, d.ResendAt)
+			}
+		})
+	}
+}
+
+func TestDeliver_ASecondTickAfterAnUnsubscribeSendsNoOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "unsub2")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	recordUnsubscribe(t, r.e, email)
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "resend job after the second tick")
+	if calls := r.rs.got(); len(calls) != 1 || calls[0].OptIn {
+		t.Fatalf("Sync calls = %+v, want one with sendOptIn false", calls)
+	}
+	if d := r.delivery(t, email); d.In != nil {
+		t.Errorf("resend_opt_in_sent_at = %v, want NULL", d.In)
+	}
+}
+
+func TestDeliver_WithoutAnUnsubscribeTheTickStillOptsIn(t *testing.T) {
+	for _, in := range consentedIntakes {
+		t.Run(in.name, func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "nounsub")
+			in.run(t, r.e, email)
+
+			res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+			qaRequireCompleted(t, res, err, "resend job without an unsubscribe")
+			if calls := r.rs.got(); len(calls) != 1 || !calls[0].OptIn {
+				t.Fatalf("Sync calls = %+v, want one with sendOptIn true", calls)
+			}
+			if d := r.delivery(t, email); d.In == nil {
+				t.Error("resend_opt_in_sent_at = NULL, want set")
+			}
+		})
+	}
+}
+
+func TestDeliver_AnUnsubscribeRecordedBeforeTheContactExistsStillSkips(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "unsubfirst")
+	recordUnsubscribe(t, r.e, email)
+	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireCompleted(t, res, err, "resend job")
+	if calls := r.rs.got(); len(calls) != 1 || calls[0].OptIn {
+		t.Fatalf("Sync calls = %+v, want one with sendOptIn false", calls)
+	}
+	if d := r.delivery(t, email); d.In != nil {
+		t.Errorf("resend_opt_in_sent_at = %v, want NULL", d.In)
 	}
 }

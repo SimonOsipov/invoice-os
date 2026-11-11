@@ -35,6 +35,7 @@ import {
   signInForCode,
   signInSession,
   subjectOf,
+  unsubscribeTokenOf,
   type Me,
   type RealAccount,
   type TenantKind,
@@ -1619,6 +1620,83 @@ test('the emailed link reaches the confirm page through the app, and a bogus cli
     await page.setViewportSize({ width, height: 1080 })
     await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')
   }
+})
+
+// internal/gateway/unsubscribe_page.go unsubscribeDoneCopy.
+const UNSUBSCRIBE_DONE =
+  'You are unsubscribed. We will send you no more marketing email. You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.'
+
+// A fresh registrant's link: the token its access token carries (D30).
+async function unsubscribeLink(): Promise<string> {
+  const { token } = await registerFormAccount('unsub-page')
+  return `${GATEWAY_URL}/unsubscribe?t=${unsubscribeTokenOf(token)}`
+}
+
+test('unsubscribe page: the button says Unsubscribing… and one press sends one POST', async ({ page }) => {
+  test.setTimeout(60_000)
+  const link = await unsubscribeLink()
+  const posts = recordPosts(page, '/unsubscribe')
+  // The page reports its button on submit: a test call into a page with a held navigation never returns.
+  const reports: unknown[] = []
+  await page.exposeBinding('__unsubReport', (_source, value) => reports.push(value))
+  // A window listener runs after the form's own submit handler, so it sees the pressed state.
+  await page.addInitScript(() => {
+    window.addEventListener('submit', () => {
+      const b = document.querySelector('button')
+      ;(window as unknown as { __unsubReport: (v: unknown) => void }).__unsubReport([b?.textContent?.trim(), b?.disabled])
+    })
+  })
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  await page.route((u) => u.pathname === '/unsubscribe', async (route) => {
+    if (route.request().method() === 'POST') await held
+    await route.continue()
+  })
+  try {
+    await page.goto(link)
+    const button = page.getByRole('button')
+    await expect(button).toHaveText('Unsubscribe')
+    // The mouse API does not wait for the held navigation the way a locator click would.
+    const box = await boxOf('the button', button, 0)
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
+    await expect.poll(() => reports[0], { message: 'the button as the first submit left it' }).toEqual(['Unsubscribing…', true])
+    await expect.poll(() => posts.length, { message: 'POST /unsubscribe requests sent by the double-click' }).toBe(1)
+  } finally {
+    release()
+  }
+  await expect(page.getByText(UNSUBSCRIBE_DONE)).toBeVisible()
+  await expect(page.getByRole('button')).toHaveCount(0)
+  expect(posts.length, 'POST /unsubscribe requests after the page answered').toBe(1)
+})
+
+test('unsubscribe page layout: the card and button fit at every width', async ({ page }, testInfo) => {
+  test.setTimeout(60_000)
+  const link = await unsubscribeLink()
+  const readings: { width: number; fontSize: string; fontWeight: string }[] = []
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    const height = 1080
+    await page.setViewportSize({ width, height })
+    await page.goto(link)
+    const button = page.getByRole('button')
+    await expect(button, `one button at ${width}px`).toHaveCount(1)
+    const card = page.locator('main')
+    const [cardBox, buttonBox] = await Promise.all([boxOf('the card', card, width), boxOf('the button', button, width)])
+
+    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
+    expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
+    const paragraphs = card.locator('p')
+    for (let i = 0; i < (await paragraphs.count()); i++) {
+      const p = await boxOf(`paragraph ${i}`, paragraphs.nth(i), width)
+      expect(enclosesRect(cardBox, p, 1), `paragraph ${i} leaves the card at ${width}px (${JSON.stringify({ cardBox, p })})`).toBe(true)
+    }
+    // The card is centred in the viewport, as the verify page's card is.
+    expect(Math.abs(cardBox.x - (width - cardBox.x - cardBox.width)), `the card is off-centre at ${width}px`).toBeLessThanOrEqual(1)
+    await noSidewaysScroll(page, 'the unsubscribe page', width)
+    const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
+    expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
+    readings.push({ width, ...reading })
+  }
+  await testInfo.attach('button-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
 })
 
 test('the failed verify notice\'s Sign in opens the sign-in window', async ({ page }) => {

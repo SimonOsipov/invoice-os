@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -120,7 +121,7 @@ func main() {
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
-	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, previewer, registrations, app.Logger)
+	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, previewer, registrations, poolTokens(gwPool), app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
@@ -150,6 +151,9 @@ func main() {
 	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
 	app.Mux.Handle("OPTIONS /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
+	unsubscribePage := gateway.UnsubscribePageHandler(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, app.Logger)
+	app.Mux.Handle("GET /unsubscribe", unsubscribePage)
+	app.Mux.Handle("POST /unsubscribe", unsubscribePage)
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
@@ -238,7 +242,7 @@ type registration struct {
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
 // Registration answers 503 while any of authURL, siteURL, registrations.Claim or registrations.Release is nil; the preview needs none of them.
-func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, log *slog.Logger) (invitation, register http.Handler) {
+func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, tokens accountmail.TokenFunc, log *slog.Logger) (invitation, register http.Handler) {
 	invitation = gateway.InvitationHandler(preview, log)
 	if authURL == nil || siteURL == nil || registrations.Claim == nil || registrations.Release == nil {
 		return invitation, gateway.RegistrationNotConfigured()
@@ -248,7 +252,7 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pr
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
-	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, log, preview, registrations)
+	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, log, preview, registrations, tokens)
 }
 
 // invitationResendHandler builds POST /auth/invitation/resend on the resend budget that ResendVerification shares.
@@ -289,7 +293,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perAddress.Shared(pool, log)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool)),
 		ResendByAddress:      perAddress,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),
@@ -328,6 +332,14 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 		Transport:     platform.IDTokenTransport(nil),
 	}
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log, events)
+}
+
+// poolTokens reads unsubscribe tokens through pool; nil without a pool, so a registration signs up without one.
+func poolTokens(pool *pgxpool.Pool) accountmail.TokenFunc {
+	if pool == nil {
+		return nil
+	}
+	return accountmail.PoolTokens(pool)
 }
 
 // gatewayPool connects as invoice_gateway when DATABASE_GATEWAY_URL is set, else nil.

@@ -405,3 +405,41 @@ func TestClients_EscapeTheEmailInPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestResendOptOutMarketing_PatchesOnlyTheMarketingTopic(t *testing.T) {
+	v := newVendor(t, resendPresent.respond)
+	if err := resendAt(v, nil).OptOutMarketing(t.Context(), adaEmail); err != nil {
+		t.Fatalf("OptOutMarketing() err = %v, want nil", err)
+	}
+	calls := v.calls()
+	if len(calls) != 1 {
+		t.Fatalf("requests = %v, want exactly one PATCH", v.labels())
+	}
+	c := calls[0]
+	if want := "PATCH /contacts/" + adaEmail + "/topics"; c.label() != want {
+		t.Errorf("request = %q, want %q", c.label(), want)
+	}
+	if c.Auth != "Bearer rs-key" {
+		t.Errorf("Authorization = %q, want %q", c.Auth, "Bearer rs-key")
+	}
+	if !strings.HasPrefix(c.CType, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", c.CType)
+	}
+	var body []map[string]string
+	if err := json.Unmarshal(c.Body, &body); err != nil {
+		t.Fatalf("body %q: %v", c.Body, err)
+	}
+	if want := []map[string]string{{"id": "top-1", "subscription": "opt_out"}}; !reflect.DeepEqual(body, want) {
+		t.Errorf("body = %v, want %v", body, want)
+	}
+
+	// A failing PATCH is an error that never carries the address.
+	bad := newVendor(t, resendStatus{get: 200, topics: 500}.respond)
+	err := resendAt(bad, nil).OptOutMarketing(t.Context(), adaEmail)
+	if err == nil {
+		t.Fatal("OptOutMarketing() on a 500 returned nil, want an error")
+	}
+	if strings.Contains(err.Error(), adaEmail) || strings.Contains(err.Error(), "ada") {
+		t.Errorf("error %q holds the address", err)
+	}
+}

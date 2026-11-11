@@ -49,7 +49,7 @@ def _page_images_by_number(monkeypatch=None, order=None):
         orig = ThreadedDoclingParseDocumentBackend.iter_pages
 
         def shuffled(self):
-            pages = list(orig(self))
+            pages = sorted(orig(self), key=lambda p: p.page_no)
             for i in order:
                 yield pages[i]
 
@@ -83,6 +83,21 @@ def test_each_page_image_is_its_own_pdfium_page():
 
 
 def test_each_page_image_is_its_own_pdfium_page_when_pages_arrive_out_of_order(monkeypatch):
+    seen, images = _page_images_by_number(monkeypatch, order=[2, 0, 1])
+    assert seen == [3, 1, 2]
+    assert len(set(images.values())) == 3, "the three page images must differ pairwise"
+
+
+@pytest.mark.parametrize("completed", [(2, 1, 3), (3, 2, 1), (1, 3, 2)])
+def test_page_order_override_holds_when_the_parser_completes_pages_out_of_order(monkeypatch, completed):
+    real = ThreadedDoclingParseDocumentBackend.iter_pages
+
+    def completed_out_of_order(self):
+        by_no = {p.page_no: p for p in real(self)}
+        for no in completed:
+            yield by_no[no]
+
+    monkeypatch.setattr(ThreadedDoclingParseDocumentBackend, "iter_pages", completed_out_of_order)
     seen, images = _page_images_by_number(monkeypatch, order=[2, 0, 1])
     assert seen == [3, 1, 2]
     assert len(set(images.values())) == 3, "the three page images must differ pairwise"

@@ -89,7 +89,7 @@ paths:
 - `db.Reset` accepts a `pr-<N>` name only. The shard seeds also accept the exact name `nightly`.
 - The migrate job runs the account-state grant on every run, as `supabase_auth_admin`. It logs `not_ready` until GoTrue has created `auth.users`. The next run restores the policy `invitee_account_state_read` after a GoTrue upgrade drops it.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
-- Connect as `invoice_gateway` only from the gateway's hand-off store, registrant and account-event outboxes, session revocations and throttle counts. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs` and `account_event_handoffs`, and `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, nothing else.
+- Connect as `invoice_gateway` only from the gateway's hand-off store, registrant and account-event outboxes, session revocations, throttle counts and the sign-up unsubscribe token. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs` and `account_event_handoffs`, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, and `EXECUTE` on `mail_unsubscribe_token(text)` (no privilege on `mail_unsubscribes`), nothing else.
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
 - Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.
@@ -142,3 +142,4 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.
 
 Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.
+Give `invoice_app` SELECT, DELETE and UPDATE (`unsubscribed_at`) on `mail_unsubscribes`, and EXECUTE on `mail_unsubscribe_token`. Give `invoice_gateway` EXECUTE only. It is global: no RLS. Only the erase routine deletes a row.

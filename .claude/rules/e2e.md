@@ -26,7 +26,7 @@ paths:
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build.
+- Serve `/auth/mock/member`, `/auth/mock/invitation-token`, `/auth/mock/deletion-link-token` and `/auth/mock/readiness-confirm-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
@@ -46,7 +46,7 @@ paths:
 - Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
 - Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag, the GA4 events on the routed production host and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
-- Skip the `send` test of `e2e/smoke/check.spec.ts` on `www.ascomply.com`. It writes a contact and a mail; the other tests run everywhere.
+- Skip the `send` test of `e2e/smoke/check.spec.ts` on `www.ascomply.com`. It writes a held check and a mail; the other tests run everywhere.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
 - Cover the app cookie notice, its layout, the PR-host chat gate, the sign-out cookie wipe, the routed production-host tag, `invoice_validated` and the app funnel events `email_verified`, `workspace_created` and `client_added` in `e2e/topology/app-consent.spec.ts`.
 - Cover `sign_up` and `email_verified` on the routed landing in `e2e/smoke/landing-analytics.spec.ts`.

@@ -1056,6 +1056,21 @@ func TestConfirm_PassesTheGatewaySentenceAndRefusesABadOne(t *testing.T) {
 	}
 }
 
+// A token is 43 characters of A-Z a-z 0-9 - _ : each class must pass the shape check.
+func TestConfirm_TakesEveryBase64urlCharacter(t *testing.T) {
+	for _, c := range []string{"A", "z", "0", "-", "_"} {
+		t.Run(c, func(t *testing.T) {
+			r := newRig(t)
+			r.store.confirmFn = sendsAt(0, true)
+			token := strings.Repeat(c, tokenLength)
+			wantStatus(t, r.confirm(confirmJSON(token, consentS)), http.StatusOK, "")
+			if got := r.store.confirmed(); len(got) != 1 || got[0].token != token {
+				t.Errorf("Confirm calls = %+v, want one with the token %q", got, token)
+			}
+		})
+	}
+}
+
 func TestConfirm_ThreeRecordedChecksGetTheUsedMail(t *testing.T) {
 	r := newRig(t)
 	r.store.confirmFn = sendsAt(3, false)
@@ -1173,6 +1188,10 @@ func TestConfirm_AClientCancelDoesNotReachTheStore(t *testing.T) {
 	}
 	if !hasDeadline || left <= ConfirmTimeout-3*time.Second || left > ConfirmTimeout {
 		t.Errorf("Confirm deadline: set %v, %v away; want ConfirmTimeout (%v) away", hasDeadline, left, ConfirmTimeout)
+	}
+	// The press sends its mail inside the transaction, so its budget must outlast the mail's.
+	if left <= MailTimeout {
+		t.Errorf("Confirm deadline %v away is not past the %v mail budget: a slow send would roll the press back", left, MailTimeout)
 	}
 	wantStatus(t, rec, http.StatusOK, "")
 }

@@ -685,6 +685,23 @@ func TestStore_HoldStoresOnlyTheTokenHash(t *testing.T) {
 	}
 }
 
+// The link lives 24 hours, as the mail says.
+func TestStore_HoldExpiresInTwentyFourHours(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	a := addr(t, pool)
+	if _, err := (&Store{Pool: pool}).Hold(ctx, heldFor(a, "csv", 1, nil)); err != nil {
+		t.Fatal(err)
+	}
+	var life time.Duration
+	if err := pool.QueryRow(ctx, `SELECT expires_at - now() FROM readiness_check_requests WHERE email = $1`, a).Scan(&life); err != nil {
+		t.Fatal(err)
+	}
+	if life > 24*time.Hour || life < 24*time.Hour-time.Minute {
+		t.Errorf("a new hold expires in %v, want 24h", life)
+	}
+}
+
 // The merge a registrant gets at the press is the one the intake gives; both write one marketing consent and queue the same jobs.
 func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
 	pool := testPool(t)

@@ -1,0 +1,13 @@
+{{- define "title"}}Confirm your email to get your readiness check results{{end}}
+{{- define "preheader"}}Confirm your email and we will send your readiness check results.{{end}}
+{{- define "eyebrow"}}Readiness check{{end}}
+{{- define "heading"}}Confirm your email.{{end}}
+{{- define "heading_accent"}}Then we send your results.{{end}}
+{{- define "intro"}}Someone ran the ASComply readiness check and asked for the results at {{.Email}}. Confirm that this is your address and we will email them. Nothing more is sent until you do.{{end}}
+{{- define "action_url"}}{{.ConfirmURL}}{{end}}
+{{- define "action_label"}}Get my results{{end}}
+{{- define "expiry"}}This link works once and expires in {{.ValidHours}} hours.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Email</td><td style="{{template "row_value_style"}}">{{.Email}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">File type</td><td style="{{template "row_value_style_last"}}">{{.FileType}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you did not ask for this, ignore this email. We will not send the results or keep your address as a contact.{{end}}
+{{- define "reason"}}You received this email because this address was entered on the ASComply readiness check page.{{end}}
+{{- template "layout" .}}

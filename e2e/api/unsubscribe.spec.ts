@@ -8,6 +8,7 @@ import { getReceived, listSent, waitForMail } from '../mail/resendClient'
 import { nightlyTarget } from '../targets'
 import { apiBase, contactsMe, fleetHeaders, rawFetch, registerFormAccount, unsubscribeTokenOf, type ContactMe, type RealAccount } from './client'
 import { googleIdToken, serviceUrl } from './preview'
+import { pressReadinessCheck } from './readinessPress'
 
 // internal/accountmail/accountmail.go: NewDeviceSubject.
 const NEW_DEVICE_SUBJECT = 'New sign-in to your ASComply account'
@@ -21,11 +22,9 @@ const HEADING = 'Unsubscribe from ASComply marketing email'
 const DONE_COPY =
   'You are unsubscribed. We will send you no more marketing email. You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.'
 const BAD_COPY = 'This unsubscribe link does not work. Email sam@ascomply.com and we will unsubscribe you.'
-// cmd/notifications/main.go: the two unsubscribe routes and the readiness intake.
+// cmd/notifications/main.go: the two unsubscribe routes.
 const LOOKUP_ROUTE = '/internal/contacts/unsubscribe/lookup'
 const PRESS_ROUTE = '/internal/contacts/unsubscribe'
-const INTAKE = '/internal/contacts/readiness-checks'
-const CONSENT = 'Yes, send me product news and offers.'
 
 // Three real browser agents parse to three distinct device pairs, none the empty pair Node signs in with.
 const AGENTS = [
@@ -151,11 +150,11 @@ test.describe('unsubscribe link (API E2E)', () => {
     })
 
     test('a later tick is skipped', async () => {
-      test.setTimeout(nightlyTarget() ? 240_000 : 60_000)
+      test.skip(nightlyTarget(), 'the press needs the mock confirm token, and a run would pass the nightly IP budget')
+      test.setTimeout(60_000)
       // Compare with the earlier delivery, not a clock: the test host and the server disagree on time.
       const before = (await contactsMe(access))?.resend.delivered_at ?? null
-      const res = await notificationsPost(INTAKE, { email: account.email, marketing_consent_text: CONSENT })
-      expect(res.status, JSON.stringify(res.body)).toBe(202)
+      await pressReadinessCheck(account.email)
 
       let row: ContactMe | null = null
       await expect

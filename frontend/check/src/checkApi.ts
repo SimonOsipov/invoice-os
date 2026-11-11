@@ -11,8 +11,7 @@ export interface RunInput {
 }
 
 export interface RunAnswer {
-  status: string
-  checks_left: number
+  status: 'confirm'
 }
 
 // Part order matters: the gateway refuses a file part before email and consent_text.

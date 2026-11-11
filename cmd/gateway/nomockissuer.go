@@ -28,3 +28,8 @@ func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
 func mockDeletionLinkTokenRoute(dsn string, logger *slog.Logger) http.Handler {
 	return http.NotFoundHandler()
 }
+
+// mockReadinessConfirmTokenRoute never serves: this build carries no readiness confirm token code.
+func mockReadinessConfirmTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return http.NotFoundHandler()
+}

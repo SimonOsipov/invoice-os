@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -71,6 +71,12 @@ import {
   purgeDeletesFilesThenRows,
   purgeErasesEveryNonRemovedMember,
   readSource,
+  readinessConfirmMailHours,
+  readinessContactOnlyAtThePress,
+  readinessHeldColumns,
+  readinessHeldHours,
+  readinessHeldPurgedHourly,
+  readinessLinkWorksOnce,
   resolveMarksRemovedMembers,
   workspaceExportIsMerged,
   aiProviderHosts,
@@ -1337,5 +1343,55 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     expect(sentence('P4')).toContain('a pair that is not on the list, we email you through Resend')
     expect(sentence('P4')).toContain('the browser, the operating system, the IP address and the time')
     expect(sentence('P4')).toContain('The erasure of your account deletes the list')
+  })
+})
+
+describe('SECAUD-20-07: the readiness hold sentences state what the code does', () => {
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const STORE = 'internal/readinesscheck/store.go'
+  const GW = 'internal/gateway/readiness_check.go'
+
+  it('readinessContactOnlyAtThePress reads the code', () => {
+    expect(readinessContactOnlyAtThePress()).toBe(true)
+    const inHold = swap(STORE, /(func \(s \*Store\) Hold\b[^\n]*\n)/, '$1\t_ = s.Contacts.ReadinessCheckTx(ctx, nil, "", "")\n')
+    expect(readinessContactOnlyAtThePress(inHold), 'merge called in Hold').toBe(false)
+    expect(readinessContactOnlyAtThePress(undefined, [readSource('internal/readinesscheck/handlers.go') + '\nfunc x() { s.Store.Contacts.ReadinessCheckTx() }\n']), 'merge in another file').toBe(false)
+    expect(readinessContactOnlyAtThePress(undefined, undefined, [readSource(GW) + '\ntype ReadinessCheckSink interface{}\n']), 'gateway sink').toBe(false)
+    expect(readinessContactOnlyAtThePress(undefined, undefined, [readSource(GW) + '\nvar u = "readiness-checks"\n']), 'gateway intake route').toBe(false)
+  })
+
+  it('readinessLinkWorksOnce reads the press', () => {
+    expect(readinessLinkWorksOnce()).toBe(true)
+    expect(readinessLinkWorksOnce(swap(STORE, 'AND expires_at > now()', ''))).toBe(false)
+    expect(readinessLinkWorksOnce(swap(STORE, 'DELETE FROM readiness_check_requests WHERE token_hash = $1 AND', 'SELECT 1 FROM readiness_check_requests WHERE token_hash = $1 AND'))).toBe(false)
+    const handlers = readSource('internal/readinesscheck/handlers.go')
+    expect(readinessLinkWorksOnce(undefined, handlers + '\nfunc (s *Service) answerHeld2() { accountmail.RenderReadinessCheck(x) }\n')).toBe(false)
+  })
+
+  it('readinessHeldHours equals the mail hours and the page constant', () => {
+    expect(readinessHeldHours()).toBe(24)
+    expect(readinessHeldHours()).toBe(readinessConfirmMailHours())
+    expect(READINESS_CONFIRM_HOURS).toBe(readinessHeldHours())
+    expect(readinessHeldHours(swap(STORE, 'heldLife       = "24 hours"', 'heldLife       = "48 hours"'))).not.toBe(readinessConfirmMailHours())
+    expect(() => readinessHeldHours(swap(STORE, "interval '`+heldLife+`'", "interval '24 hours'"))).toThrow()
+  })
+
+  it('readinessHeldColumns holds no file and no IP', () => {
+    const cols = readinessHeldColumns()
+    expect(cols).toContain('mail')
+    expect(cols).toContain('email')
+    expect(cols.filter((c) => /file_bytes|content|(^|_)ip(_|$)/i.test(c))).toEqual([])
+    const planted = [...cols, 'ip']
+    expect(planted.filter((c) => /file_bytes|content|(^|_)ip(_|$)/i.test(c))).toEqual(['ip'])
+  })
+
+  it('readinessHeldPurgedHourly reads the worker', () => {
+    expect(readinessHeldPurgedHourly()).toBe(true)
+    expect(readinessHeldPurgedHourly(swap('cmd/worker/main.go', /NewWorker\(time\.Hour, leader\.Lead\("readiness-request-purge"/, 'NewWorker(24*time.Hour, leader.Lead("readiness-request-purge"'))).toBe(false)
   })
 })

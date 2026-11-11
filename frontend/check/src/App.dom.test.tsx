@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CONSENT_TEXT } from './analytics'
 import { CHECK_FIELD_KEYS, fieldLabel } from './fields'
-import { READING_TEXT, SENT_TEXT, SENDING_TEXT, TYPE_SENTENCE } from './copy'
-import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { READING_TEXT, SENT_NOTE, SENDING_TEXT, TYPE_SENTENCE } from './copy'
+import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -35,7 +35,7 @@ const suggestion = (columns: string[], mapping: Record<string, string>, headerRo
   mapping,
   source: 'heuristic',
 })
-const SENT = () => json(200, { status: 'sent', checks_left: 2 })
+const SENT = () => json(200, { status: 'confirm' })
 
 let container: HTMLDivElement
 let root: Root
@@ -377,13 +377,17 @@ describe('details and sent', () => {
     expect(button('Send').disabled).toBe(false)
   })
 
-  it('send_200ShowsTheSentTextAndNoResults', async () => {
+  it('send_200ShowsTheConfirmTextWithTheTrimmedAddress', async () => {
     stubFetch({ [RUN]: SENT })
     await mount()
     await pick(file('a.pdf'))
-    await fillAndSend()
-    expect(text()).toContain(SENT_TEXT('a@example.com'))
-    expect(container.querySelector('.check-tool [role="status"]')!.textContent).not.toMatch(/checks_left|rule|\d/i)
+    await fillAndSend('  a@x.io ')
+    const status = container.querySelector('.check-tool [role="status"]')!.textContent!
+    expect(status).toContain('Check your inbox at a@x.io.')
+    expect(status).toContain(SENT_NOTE)
+    expect(status).not.toMatch(/24 hours|button|send your results/i)
+    expect(status).toContain('no-reply@ascomply.com')
+    expect(status).not.toMatch(/on their\s+way|checks_left|rule/i)
     expect(container.querySelector('form')).toBeNull()
   })
 
@@ -396,13 +400,14 @@ describe('details and sent', () => {
     expect(button('Send').disabled).toBe(true)
   })
 
-  it('send_409ShowsTheSignUpSentenceAndLink', async () => {
-    stubFetch({ [RUN]: () => json(409, { error: SIGN_UP_SENTENCE }) })
+  it('send_409IsTheUnavailableSentenceWithoutSignUp', async () => {
+    stubFetch({ [RUN]: () => json(409, { error: 'x' }) })
     await mount()
     await pick(file('a.pdf'))
     await fillAndSend()
-    expect(text()).toContain(SIGN_UP_SENTENCE)
-    expect(container.querySelector<HTMLAnchorElement>('[role="alert"] a[href$="/?register"]')?.textContent).toBe('Sign up')
+    const alert = container.querySelector('[role="alert"]')!
+    expect(alert.textContent).toBe(UNAVAILABLE_SENTENCE)
+    expect(alert.querySelector('a')).toBeNull()
   })
 
   it('send_429FromTheGatewayShowsItsSentence', async () => {

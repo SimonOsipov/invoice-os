@@ -47,8 +47,8 @@ describe('overBudgetFor', () => {
   })
 
   it('a readiness run at the threshold leaves the email run inside its budget', () => {
-    expect(overBudget(nightly(17 + 3), DOMAIN, NOW)).toBe(false)
-    expect(overBudget(nightly(18 + 3), DOMAIN, NOW)).toBe(true)
+    expect(overBudget(nightly(13 + 7), DOMAIN, NOW)).toBe(false)
+    expect(overBudget(nightly(14 + 7), DOMAIN, NOW)).toBe(true)
   })
 })
 
@@ -83,17 +83,17 @@ describe('readinessMailEnv', () => {
 
 describe('readinessBudgetProblem', () => {
   it('is null under the threshold', () => {
-    expect(readinessBudgetProblem(nightly(17), DOMAIN, NOW)).toBeNull()
+    expect(readinessBudgetProblem(nightly(13), DOMAIN, NOW)).toBeNull()
   })
 
   it('names the count and the cap when spent', () => {
-    expect(readinessBudgetProblem(nightly(18), DOMAIN, NOW)).toBe(
-      'environment: 18 nightly mails went out today; a readiness run and the email run need 8 and the day stops at 25',
+    expect(readinessBudgetProblem(nightly(14), DOMAIN, NOW)).toBe(
+      'environment: 14 nightly mails went out today; a readiness run and the email run need 12 and the day stops at 25',
     )
   })
 
   it("counts only today's nightly run sends", () => {
-    const sends = [...nightly(17), send('a@example.com'), send(`customer@${DOMAIN}`), send(`customer2@${DOMAIN}`), ...nightly(1, YESTERDAY)]
+    const sends = [...nightly(13), send('a@example.com'), send(`customer@${DOMAIN}`), send(`customer2@${DOMAIN}`), ...nightly(1, YESTERDAY)]
     expect(readinessBudgetProblem(sends, DOMAIN, NOW)).toBeNull()
   })
 })

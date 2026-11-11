@@ -433,10 +433,10 @@ func TestTwoInstances_TheReadinessCheckIPLimitCountsAcrossInstances(t *testing.T
 	clean()
 	t.Cleanup(clean)
 
-	wu, nu := readinessStubs(t)
+	wu, _ := readinessStubs(t)
 	log := slog.New(slog.DiscardHandler)
-	a := readinessCheckHandlers(wu, nu, "gw-token", log, poolA).Run
-	b := readinessCheckHandlers(wu, nu, "gw-token", log, poolB).Run
+	a := readinessCheckHandlers(wu, "gw-token", log, poolA).Run
+	b := readinessCheckHandlers(wu, "gw-token", log, poolB).Run
 	run := func(h http.Handler) int {
 		req := readinessRunRequest(t, "")
 		req.RemoteAddr = ip + ":4000"

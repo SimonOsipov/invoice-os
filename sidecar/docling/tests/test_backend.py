@@ -49,7 +49,7 @@ def _page_images_by_number(monkeypatch=None, order=None):
         orig = ThreadedDoclingParseDocumentBackend.iter_pages
 
         def shuffled(self):
-            pages = list(orig(self))
+            pages = sorted(orig(self), key=lambda p: p.page_no)
             for i in order:
                 yield pages[i]
 

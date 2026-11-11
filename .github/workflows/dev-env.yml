@@ -719,7 +719,7 @@ jobs:
           # BUG-128 forced fault: unresolvable apt mirrors. Removed before merge.
           sudo sed -i -E 's#https?://[a-z0-9.-]*ubuntu\.com#http://apt-mirror.invalid#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/apt-mirrors.txt 2>/dev/null || true
           sudo grep -rl apt-mirror.invalid /etc/apt || echo "::warning::forced fault not planted"
-          pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+          pnpm --filter @invoice-os/e2e exec playwright install chromium
       - name: Smoke (landing, library, blog and both consoles render)
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ needs.changes.outputs.nightly == 'true' && format('{0}/nightly-results/playwright-smoke.json', github.workspace) || '' }}
@@ -897,7 +897,7 @@ jobs:
           # BUG-128 forced fault: unresolvable apt mirrors. Removed before merge.
           sudo sed -i -E 's#https?://[a-z0-9.-]*ubuntu\.com#http://apt-mirror.invalid#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/apt-mirrors.txt 2>/dev/null || true
           sudo grep -rl apt-mirror.invalid /etc/apt || echo "::warning::forced fault not planted"
-          pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+          pnpm --filter @invoice-os/e2e exec playwright install chromium
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -1174,7 +1174,7 @@ jobs:
           # BUG-128 forced fault: unresolvable apt mirrors. Removed before merge.
           sudo sed -i -E 's#https?://[a-z0-9.-]*ubuntu\.com#http://apt-mirror.invalid#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/apt-mirrors.txt 2>/dev/null || true
           sudo grep -rl apt-mirror.invalid /etc/apt || echo "::warning::forced fault not planted"
-          pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+          pnpm --filter @invoice-os/e2e exec playwright install chromium
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}

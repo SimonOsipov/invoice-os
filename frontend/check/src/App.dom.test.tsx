@@ -148,12 +148,12 @@ describe('upload step', () => {
     expect(byLabel('Email address')).toBeTruthy()
   })
 
-  it('upload_thePickerIsDisabledWhileReadingColumns', async () => {
+  it('upload_theZoneGivesWayWhileReadingColumns', async () => {
     let release!: (r: Response) => void
     stubFetch({ [MAPPING]: () => new Promise<Response>((r) => (release = r)) })
     await mount()
     await pick(file('a.csv'))
-    expect(fileInput().disabled).toBe(true)
+    expect(container.querySelector('input[type="file"]')).toBeNull()
     expect(text()).toContain(READING_TEXT)
     await act(async () => release(json(422, { error: UNREADABLE_SENTENCE })))
     await settle()

@@ -356,7 +356,7 @@ describe('details and sent', () => {
     const status = container.querySelector('.check-tool [role="status"]')!.textContent!
     expect(status).toContain('Check your inbox at a@x.io.')
     expect(status).toContain(SENT_NOTE)
-    expect(status).toContain('24 hours')
+    expect(status).not.toMatch(/24 hours|button|send your results/i)
     expect(status).toContain('no-reply@ascomply.com')
     expect(status).not.toMatch(/on their\s+way|checks_left|rule/i)
     expect(container.querySelector('form')).toBeNull()

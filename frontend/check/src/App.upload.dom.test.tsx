@@ -324,6 +324,17 @@ describe('upload step', () => {
     expect(document.activeElement).toBe(input())
   })
 
+  it('upload_aDropClearsTheRefocusFlagAnInputRefusalLeft', async () => {
+    const answer = held()
+    await mount()
+    await pick(file('notes.txt'))
+    await drop([file('a.csv')])
+    expect(q('input[type="file"]')).toBeNull()
+    await answer(json(422, { error: UNREADABLE_SENTENCE }))
+    await settle()
+    expect(document.activeElement).not.toBe(input())
+  })
+
   it('upload_theStatusRegionStaysMountedAcrossTheRead', async () => {
     const answer = held()
     await mount()

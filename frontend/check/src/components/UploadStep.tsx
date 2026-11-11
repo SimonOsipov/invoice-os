@@ -80,6 +80,7 @@ export function UploadStep({ file, reading, verdict, refusal, onPick }: Props) {
               }}
               onDrop={(e) => {
                 if (hasFiles(e)) e.preventDefault()
+                refocus.current = false
                 depth.current = 0
                 setOver(false)
                 const dropped = e.dataTransfer?.files?.[0]

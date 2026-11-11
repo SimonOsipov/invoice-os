@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
-import { AI_PROVIDER_HOST, ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS, READINESS_MAIL_FROM } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { READINESS_CONSENT_TEXT } from '../readinessConsent'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
@@ -31,7 +31,13 @@ import {
   accountmailFrom,
   aiModelVendors,
   eraseDeletesMailUnsubscribes,
+  eraseDeletesHeldChecks,
+  readSource,
   eraseDeletesReadinessChecks,
+  readinessConfirmMailHours,
+  readinessContactOnlyAtThePress,
+  readinessHeldHours,
+  readinessLinkWorksOnce,
   everyMailCarriesTheUnsubscribeFooter,
   optInSkipsAnUnsubscribedAddress,
   signupKeepsAnUnsubscribeCode,
@@ -544,7 +550,7 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
 // A key table is the page's words for each code key; its keys must equal the code's, so a new
 // property forces both the table and the page to follow.
 // U1 names invitations and email; DEL-13-03 exempts exactly this paragraph, and the FREECHK-09-08 test pins its words.
-const UNSUBSCRIBE_U1 = `Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes nothing. If a link cannot carry its code, the page it opens asks you to email ${PRIVACY_CONTACT}, and we unsubscribe you.`
+const UNSUBSCRIBE_U1 = `Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness check confirmations and results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes nothing. If a link cannot carry its code, the page it opens asks you to email ${PRIVACY_CONTACT}, and we unsubscribe you.`
 
 describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   const html = renderToStaticMarkup(createElement(Privacy))
@@ -1181,9 +1187,11 @@ describe('FREECHK-03-08: the readiness check section', () => {
     return part!.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
   }
   const goStore = (returning: string, intake: string) =>
-    `const mergeSQL = \`\nINSERT INTO contacts\nRETURNING email, ${returning},\n  version\`\n\nfunc (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {\n\treturn s.merge(ctx, intake{email: in.Email, readiness: true, ${intake}})\n}\n`
+    `const mergeSQL = \`\nINSERT INTO contacts\nRETURNING email, ${returning},\n  version\`\n\nfunc (s *Store) ReadinessCheckTx(ctx context.Context, tx pgx.Tx, email, consentText string) error {\n\treturn s.mergeTx(ctx, tx, intake{email: email, readiness: true, ${intake}})\n}\n`
+  const goPress = (arg: string) =>
+    `func (s *Store) Confirm(ctx context.Context, token, consentText string) error {\n\tif fresh {\n\t\tif err := s.Contacts.ReadinessCheckTx(ctx, tx, h.Email, ${arg}); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn nil\n}\n`
   const TERM = 'resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL)'
-  const TICK = 'consentText: in.ConsentText'
+  const TICK = 'consentText: consentText'
 
   it('FREECHK-03: the check section names the AI host and vendors from code', () => {
     const t = text()
@@ -1202,7 +1210,7 @@ describe('FREECHK-03-08: the readiness check section', () => {
       created_at: 'time',
     }
     expect(cols.filter((c) => c !== 'id').sort()).toEqual(Object.keys(words).sort())
-    const kept = /What we keep about a check is a summary:([^.]*)\./.exec(text())?.[1]
+    const kept = /What we keep about a confirmed check is a summary:([^.]*)\./.exec(text())?.[1]
     expect(kept, 'the summary sentence').toBeDefined()
     for (const c of cols.filter((c) => c !== 'id')) expect(kept).toContain(words[c])
   })
@@ -1231,21 +1239,23 @@ describe('FREECHK-03-08: the readiness check section', () => {
       `We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email.`,
     )
     expect(t).not.toContain('It adds you to no marketing list')
-    expect(readinessConsentIsMarketing(goStore(TERM, TICK)), 'control: a passing source').toBe(true)
-    expect(readinessConsentIsMarketing(goStore('resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))', TICK)), 'RETURNING term reverted').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, 'readinessConsentText: in.ConsentText')), 'readinessConsentText set').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, `${TICK}, readinessConsentText: in.ConsentText`)), 'both set').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, 'consentText: ""')), 'consentText not passed').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('consentText')), 'control: a passing source').toBe(true)
+    expect(readinessConsentIsMarketing(goStore('resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))', TICK), goPress('consentText')), 'RETURNING term reverted').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'readinessConsentText: consentText'), goPress('consentText')), 'readinessConsentText set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, `${TICK}, readinessConsentText: consentText`), goPress('consentText')), 'both set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'consentText: ""'), goPress('consentText')), 'consentText not passed').toBe(false)
     const elsewhere = goStore('resend_delivered_at IS NULL', TICK) + `// ${TERM}\nvar other = "${TERM}"\n`
-    expect(readinessConsentIsMarketing(elsewhere), 'the term outside mergeSQL does not count').toBe(false)
+    expect(readinessConsentIsMarketing(elsewhere, goPress('consentText')), 'the term outside mergeSQL does not count').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('""')), 'the press drops the ticked text').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('""').replace('fresh {', 'fresh {\n// s.Contacts.ReadinessCheckTx(ctx, tx, h.Email, consentText)')), 'a commented call does not count').toBe(false)
   })
 
   it('FREECHK-06: the demo and registration sections name the check as a route to Resend', () => {
     expect(readinessConsentIsMarketing()).toBe(true)
     const t = html.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
-    expect(t).toContain('A ticked marketing box, or a readiness check run with the same email address, sends your email address and your first and last name to Resend.')
+    expect(t).toContain('A ticked marketing box, or a confirmed readiness check with the same email address, sends your email address and your first and last name to Resend.')
     expect(t).toContain(
-      'Only a ticked marketing box, or the ticked box of a readiness check run with the same email address, makes you eligible for marketing email; with neither box ticked, Resend holds you for product and service email only.',
+      'Only a ticked marketing box, or the ticked box of a confirmed readiness check with the same email address, makes you eligible for marketing email; with neither box ticked, Resend holds you for product and service email only.',
     )
     expect(t).not.toContain('Leave it unticked and Resend never receives them.')
     expect(t).not.toContain('with the box unticked, Resend holds you')
@@ -1258,8 +1268,39 @@ describe('FREECHK-03-08: the readiness check section', () => {
 
   it('FREECHK-03: the erasure sentence follows erase.go', () => {
     expect(eraseDeletesReadinessChecks()).toBe(true)
-    expect(text()).toContain('The summary rows are deleted when an ASComply account with that address is deleted')
+    expect(text()).toContain('are deleted when an ASComply account with that address is deleted')
     expect(eraseDeletesReadinessChecks('func (w *EraseWorker) sweep(ctx context.Context) {\n\tDELETE FROM blog_subscribers WHERE email = $1\n}\n')).toBe(false)
+  })
+
+  it('SECAUD-20-07: the section states the confirm step and the hold', () => {
+    const t = text()
+    const hours = `${readinessHeldHours()} hours`
+    expect(readinessLinkWorksOnce()).toBe(true)
+    expect(readinessContactOnlyAtThePress()).toBe(true)
+    expect(READINESS_CONFIRM_HOURS).toBe(readinessHeldHours())
+    expect(t).toContain(`We first email the address a link that works once and expires in ${hours}. The results email goes only after the link is pressed, from ${READINESS_MAIL_FROM} through Resend.`)
+    expect(t).toContain('Until you confirm your address, we keep your email address and the results on our own server, not the file; we delete them when you confirm, or within an hour after the link expires.')
+    expect(t).toContain('Only after you confirm does your email address become a HubSpot contact tagged')
+    expect(t).not.toContain('We do not check the address first')
+    expect(readinessConfirmMailHours()).toBe(readinessHeldHours())
+  })
+
+  it('SECAUD-20-07: the summary is kept only after confirmation and the erase names the waiting results', () => {
+    const t = text()
+    expect(t).toContain('What we keep about a confirmed check is a summary')
+    expect(t).not.toContain('What we keep about a check is a summary')
+    expect(eraseDeletesHeldChecks()).toBe(true)
+    expect(t).toContain('The summary rows, and any results still waiting for confirmation, are deleted when an ASComply account with that address is deleted')
+    const moved = readSource('internal/notifications/erase.go').replace(/\n\s*del\{sql: `DELETE FROM readiness_check_requests WHERE email = \$1`[^\n]*/, '')
+    expect(eraseDeletesHeldChecks(moved), 'row deleted').toBe(false)
+    const outside = moved.replace('deletes := []del{', 'deletes := []del{\n\t\t{sql: `DELETE FROM readiness_check_requests WHERE email = $1`},')
+    expect(eraseDeletesHeldChecks(outside), 'row moved out of the superseded block').toBe(false)
+  })
+
+  it('SECAUD-20-07: the demo and registrant paragraphs name a confirmed check', () => {
+    const all = html.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
+    expect(all.match(/a confirmed readiness check/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(all).toContain('readiness check confirmations')
   })
 
   it('FREECHK-03: the hash sentence follows the throttle', () => {

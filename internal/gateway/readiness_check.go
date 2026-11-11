@@ -43,7 +43,6 @@ const (
 	checkUnavailableSentence = "The check is unavailable. Try again in a few minutes."
 	checkCeilingSentence     = "The free check has reached its limit for today. Try again tomorrow."
 	checkTooLongSentence     = "This document has too much text for the free check. Try a shorter invoice."
-	checkSignUpSentence      = "This address has used its 3 free checks. Sign up to check every invoice."
 	checkUnreadableSentence  = "We could not read this file."
 	checkTooLargeSentence    = "file is over 15 MiB"
 	checkConsentSentence     = "consent_text must be 1 to 500 characters"
@@ -73,37 +72,20 @@ func checkIPKey(ip string) string {
 	return netip.PrefixFrom(a, 64).Masked().String()
 }
 
-// ReadinessCheckSink hands a checked address and its consent text to the notifications /internal/contacts/readiness-checks intake.
-type ReadinessCheckSink interface {
-	ReadinessCheck(ctx context.Context, email, consentText string) error
-}
-
-// NewHTTPReadinessCheckSink posts to notifications at base with the gateway token; it never follows a redirect.
-func NewHTTPReadinessCheckSink(base *url.URL, client *http.Client, gatewayToken string) ReadinessCheckSink {
-	return readinessSink{NewHTTPContactSink(base, client, gatewayToken).(*httpContactSink)}
-}
-
-type readinessSink struct{ s *httpContactSink }
-
-func (k readinessSink) ReadinessCheck(ctx context.Context, email, consentText string) error {
-	return k.s.post(ctx, "readiness-checks", map[string]string{"email": email, "marketing_consent_text": consentText})
-}
-
-// ReadinessCheckRoutes holds the two public check handlers.
-type ReadinessCheckRoutes struct{ Mapping, Run http.Handler }
+// ReadinessCheckRoutes holds the public check handlers; Confirm is the page behind the mailed link.
+type ReadinessCheckRoutes struct{ Mapping, Run, Confirm http.Handler }
 
 // ReadinessCheckHandlers serves POST /readiness-check/run and /mapping by streaming the visitor's file to the worker.
 // A run is counted per client IP (IPv6 per /64) in perIP before the file is read. No log line carries the address, the IP or the file name.
-func ReadinessCheckHandlers(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) ReadinessCheckRoutes {
-	c := newReadinessCheck(worker, client, gatewayToken, sink, perIP, enforce, posture, log)
-	return ReadinessCheckRoutes{Mapping: http.HandlerFunc(c.mapping), Run: http.HandlerFunc(c.run)}
+func ReadinessCheckHandlers(worker *url.URL, client *http.Client, gatewayToken string, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) ReadinessCheckRoutes {
+	c := newReadinessCheck(worker, client, gatewayToken, perIP, enforce, posture, log)
+	return ReadinessCheckRoutes{Mapping: http.HandlerFunc(c.mapping), Run: http.HandlerFunc(c.run), Confirm: ReadinessConfirmPageHandler(worker, client, gatewayToken, log)}
 }
 
 type readinessCheck struct {
 	worker                     *url.URL
 	client                     *http.Client
 	token                      string
-	sink                       ReadinessCheckSink
 	perIP                      *SignInThrottle
 	enforce                    bool
 	posture                    platform.PostureKind
@@ -113,8 +95,8 @@ type readinessCheck struct {
 	uploadTimeout              time.Duration
 }
 
-func newReadinessCheck(worker *url.URL, client *http.Client, gatewayToken string, sink ReadinessCheckSink, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) *readinessCheck {
-	return &readinessCheck{worker: worker, client: client, token: gatewayToken, sink: sink, perIP: perIP, enforce: enforce,
+func newReadinessCheck(worker *url.URL, client *http.Client, gatewayToken string, perIP *SignInThrottle, enforce bool, posture platform.PostureKind, log *slog.Logger) *readinessCheck {
+	return &readinessCheck{worker: worker, client: client, token: gatewayToken, perIP: perIP, enforce: enforce,
 		posture: posture, log: log, slots: make(chan struct{}, maxCheckUploads),
 		runTimeout: readinessRunTimeout, mappingTimeout: readinessMappingTimeout,
 		uploadTimeout: readinessUploadTimeout}
@@ -305,19 +287,8 @@ func (c *readinessCheck) run(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status == http.StatusOK {
-		// The mail went: hand off even when the answer is unusable.
-		if err := c.sink.ReadinessCheck(context.WithoutCancel(r.Context()), email, fields["consent_text"]); err != nil {
-			c.log.WarnContext(r.Context(), "readiness-check: hand-off failed", slog.Int("status", failureStatus(err)))
-		}
-		var in struct {
-			ChecksLeft *int `json:"checks_left"`
-		}
-		if json.Unmarshal(answer, &in) != nil || in.ChecksLeft == nil || *in.ChecksLeft < 0 || *in.ChecksLeft > 2 {
-			c.log.ErrorContext(r.Context(), "readiness-check: worker answer has no checks_left", slog.Int("upstream_status", status))
-			writeError(w, http.StatusBadGateway, checkUnavailableSentence)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "sent", "checks_left": *in.ChecksLeft})
+		// The answer is the same for every address and every worker 200 body.
+		writeJSON(w, http.StatusOK, map[string]string{"status": "confirm"})
 		return
 	}
 
@@ -427,8 +398,6 @@ func workerRefusal(status int, body []byte) (out int, word, text string) {
 	_ = json.Unmarshal(body, &in)
 	word = in.Error
 	switch status {
-	case http.StatusConflict:
-		return http.StatusConflict, word, checkSignUpSentence
 	case http.StatusBadRequest:
 		if word == "" || len(word) > maxCheckErrorBytes {
 			return http.StatusBadRequest, word, "invalid request body"
@@ -453,7 +422,7 @@ func engineNotStarted(status int, word string) bool {
 	switch status {
 	case http.StatusBadRequest:
 		return word != checkTooLongSentence
-	case http.StatusConflict, http.StatusRequestEntityTooLarge:
+	case http.StatusRequestEntityTooLarge:
 		return true
 	case http.StatusServiceUnavailable:
 		return word == "busy" || word == "unavailable" || word == "ceiling"

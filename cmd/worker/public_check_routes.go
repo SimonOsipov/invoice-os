@@ -10,4 +10,5 @@ import (
 func registerPublicCheckRoutes(Mux *http.ServeMux, svc *readinesscheck.Service) {
 	Mux.Handle("POST /internal/public-checks/run", svc.RunHandler())
 	Mux.Handle("POST /internal/public-checks/mapping", svc.MappingHandler())
+	Mux.Handle("POST /internal/public-checks/confirm", svc.ConfirmHandler())
 }

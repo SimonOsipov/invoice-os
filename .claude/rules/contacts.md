@@ -5,6 +5,11 @@ paths:
   - "internal/gateway/contacts*.go"
   - "internal/gateway/blog_subscribe*.go"
   - "internal/gateway/readiness_check*.go"
+  - "internal/gateway/readiness_confirm*"
+  - "internal/accountmail/readiness_confirm.html"
+  - "internal/accountmail/readiness_used.html"
+  - "internal/readinesscheck/store*.go"
+  - "migrations/*readiness_check_requests*"
   - "migrations/*contacts*"
   - "migrations/*mail_unsubscribes*"
   - "internal/gateway/unsubscribe*.go"
@@ -64,7 +69,7 @@ paths:
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
 - Only the nightly sets `HUBSPOT_DEAL_STAGE`; production leaves it unset and deals open in `demoStage`.
-- Open one HubSpot deal per demo request, one per first registration and one per readiness check.
+- Open one HubSpot deal per demo request, one per first registration and one per confirmed readiness check.
 - Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
@@ -72,7 +77,9 @@ paths:
 - Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Log no client IP on the demo route.
 - Log no client IP, address or file name on the readiness-check routes.
-- Hand a readiness check's contact to the intake once, on a 200 from the worker, on `context.WithoutCancel`. A failed hand-off still answers 200 and logs a WARN with the status only.
+- Merge a readiness check's contact in the worker's confirm transaction (`ReadinessCheckTx`), with the summary row and the consumed link, before the results mail; a failure rolls all of it back (`TestStore_AFailedSendPutsTheRowBack`).
+- Send a readiness check's results, its contact and its Marketing `opt_in` only after the confirm press (`TestStore_ConfirmInsertsTheSummaryAndConsumesTheRow`).
+- Delete unconfirmed readiness-check requests within an hour of expiry (`TestStore_PurgeExpiredDeletesOnlyExpired`).
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.
 - Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
 - Page the deals by reading the first page again after each delete. Never follow `after` across a delete (`TestHubSpotErase_DeletesEveryDealWhenThePagesShrink`).
@@ -83,6 +90,7 @@ paths:
 - Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
 - The sweep deletes the person's accepted invitations and, when no other account holds the address, the pending and revoked invitations to it (`TestErase_SweepDeletesTheInvitations`).
 - The erase sweep deletes the address's `readiness_checks` rows when no other account holds the address.
+- The erase sweep deletes the address's `readiness_check_requests` rows when no other account holds the address (`TestErase_SweepDeletesTheHeldChecks`).
 - Delete the address's `mail_unsubscribes` row in the erase sweep when no other account holds the address.
 - Fill the unsubscribe link of every `accountmail` mail from `mail_unsubscribe_token`. Never send a mail with the placeholder. When the lookup fails, send the mail with the bare link.
 - Never put an email, a name or a user id in an erase log line or error.

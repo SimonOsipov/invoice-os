@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
@@ -22,18 +23,29 @@ const readinessAllowedOrigin = "https://app.example"
 
 var readinessPaths = []string{"/readiness-check/mapping", "/readiness-check/run"}
 
-func readinessStubs(t *testing.T) (worker, notifications *url.URL) {
+// readinessStubs stands in for the worker: the run answers confirm, the press answers sent; every path is counted.
+func readinessStubs(t *testing.T) (worker *url.URL, calls func(path string) int) {
 	t.Helper()
+	var mu sync.Mutex
+	seen := map[string]int{}
 	w := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path]++
+		mu.Unlock()
 		rw.Header().Set("Content-Type", "application/json")
-		_, _ = rw.Write([]byte(`{"checks_left":2}`))
+		if r.URL.Path == "/internal/public-checks/confirm" {
+			_, _ = rw.Write([]byte(`{"outcome":"sent"}`))
+			return
+		}
+		_, _ = rw.Write([]byte(`{"status":"confirm"}`))
 	}))
-	n := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { rw.WriteHeader(http.StatusAccepted) }))
 	t.Cleanup(w.Close)
-	t.Cleanup(n.Close)
 	wu, _ := url.Parse(w.URL)
-	nu, _ := url.Parse(n.URL)
-	return wu, nu
+	return wu, func(path string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen[path]
+	}
 }
 
 // The landing's sentence is read from its source: the gateway takes no other.
@@ -68,8 +80,8 @@ func readinessRunRequest(t *testing.T, xff string) *http.Request {
 
 func TestGatewayRoutes_ReadinessCheckRoutesAreCORSWrapped(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "production")
-	wu, nu := readinessStubs(t)
-	rt := readinessCheckHandlers(wu, nu, "gw-token", slog.New(slog.DiscardHandler), nil)
+	wu, _ := readinessStubs(t)
+	rt := readinessCheckHandlers(wu, "gw-token", slog.New(slog.DiscardHandler), nil)
 	withCORS := gateway.CORS([]string{readinessAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /readiness-check/mapping", withCORS(rt.Mapping))
@@ -114,6 +126,65 @@ func TestGatewayRoutes_ReadinessCheckRoutesAreCORSWrapped(t *testing.T) {
 	}
 }
 
+// The confirm page is a same-origin form on the gateway: both methods are registered, and no CORS wrapper adds a grant.
+func TestReadinessRoutes_ConfirmIsRegisteredWithoutCORS(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	wu, calls := readinessStubs(t)
+	rt := readinessCheckHandlers(wu, "gw-token", slog.New(slog.DiscardHandler), nil)
+	if rt.Confirm == nil {
+		t.Fatal("readinessCheckHandlers returned no Confirm handler")
+	}
+
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sites, stmts := mainRoutes(t, src)
+	recv := ""
+	for _, s := range stmts {
+		if as, ok := s.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok && types.ExprString(call.Fun) == "readinessCheckHandlers" {
+				recv = types.ExprString(as.Lhs[0])
+			}
+		}
+	}
+	if recv == "" {
+		t.Fatal("main has no top-level `x := readinessCheckHandlers(...)`")
+	}
+	for _, m := range []string{"GET", "POST"} {
+		s := sitesFor(sites, m+" /readiness-check/confirm")
+		if want := recv + ".Confirm"; len(s) != 1 || !s[0].topLevel || s[0].handler != want {
+			t.Errorf("%s /readiness-check/confirm = %+v, want one top-level %s with no CORS wrapper", m, s, want)
+		}
+	}
+	if s := sitesFor(sites, "OPTIONS /readiness-check/confirm"); len(s) != 0 {
+		t.Errorf("OPTIONS /readiness-check/confirm = %+v, want no preflight route", s)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("GET /readiness-check/confirm", rt.Confirm)
+	mux.Handle("POST /readiness-check/confirm", rt.Confirm)
+	target := "/readiness-check/confirm?t=" + strings.Repeat("A", 43)
+	for _, tc := range []struct {
+		method, want string
+		sent         int
+	}{{http.MethodGet, "Get my results", 0}, {http.MethodPost, "Done.", 1}} {
+		req := httptest.NewRequest(tc.method, target, nil)
+		req.Header.Set("Origin", readinessAllowedOrigin)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("%s = %d, want 200 with %q\n%s", tc.method, rec.Code, tc.want, rec.Body)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want none", tc.method, got)
+		}
+		if n := calls("/internal/public-checks/confirm"); n != tc.sent {
+			t.Errorf("after %s: worker confirm calls = %d, want %d", tc.method, n, tc.sent)
+		}
+	}
+}
+
 // Production and nightly count the per-IP limit; a preview logs and admits.
 func TestReadinessCheckPosture_EnforcesOffAPreview(t *testing.T) {
 	for _, tc := range []struct {
@@ -130,8 +201,8 @@ func TestReadinessCheckPosture_EnforcesOffAPreview(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", tc.env)
-			wu, nu := readinessStubs(t)
-			rt := readinessCheckHandlers(wu, nu, "gw-token", slog.New(slog.DiscardHandler), nil)
+			wu, _ := readinessStubs(t)
+			rt := readinessCheckHandlers(wu, "gw-token", slog.New(slog.DiscardHandler), nil)
 			var last int
 			for i := 0; i < 11; i++ {
 				rec := httptest.NewRecorder()

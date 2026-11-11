@@ -4,7 +4,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
-import { FIELDS_LEGEND, FIELDS_TITLE, SUPPLIER_HINT } from './copy'
+import { CHECK_FIELD_KEYS } from './fields'
+import { FIELDS_LEGEND, FIELDS_TITLE, MAP_ALL_USED, MAP_SUMMARY, NEED_INVOICE_NO, SUPPLIER_HINT } from './copy'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -28,6 +29,8 @@ const suggestion = (columns: string[], mapping: Record<string, string>) => ({
   mapping,
   source: 'ai',
 })
+
+const withRows = (columns: string[], mapping: Record<string, string>, sample_rows: string[][]) => ({ ...suggestion(columns, mapping), sample_rows })
 
 let container: HTMLDivElement
 let root: Root
@@ -92,7 +95,7 @@ const INVOICE_DATES = { invoice_number: 'Inv', issue_date: 'Date', due_date: 'Du
 describe('map groups', () => {
   it('map_showsTheFiveGroupsUnderTheLegend', async () => {
     await toMap(suggestion(COLS, INVOICE_DATES))
-    expect(container.querySelector('.check-sub')!.textContent).toBe(FIELDS_TITLE)
+    expect(container.querySelector('.check-groups-head .check-sub')!.textContent).toBe(FIELDS_TITLE)
     expect(container.querySelector('.check-legend')!.textContent).toBe(`* ${FIELDS_LEGEND}`)
     expect(container.querySelector('.check-legend .check-req')!.textContent).toBe('*')
     expect([...container.querySelectorAll('.check-acc-title')].map((t) => t.textContent)).toEqual(['Invoice', 'Amounts', 'Line items', 'Buyer', 'Supplier'])
@@ -233,6 +236,187 @@ describe('map lists follow the match', () => {
   })
 })
 
+const rows = () => [...container.querySelectorAll('.check-columns tbody tr')]
+const unusedLine = () => container.querySelector('.check-unused-line')?.textContent
+const statusTags = () => [...container.querySelectorAll('.check-columns .check-unused')].map((t) => t.textContent)
+const fill = () => container.querySelector<HTMLElement>('.check-meter i')!
+const button = (name: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === name)
+const toAll = (...keys: string[]) => Object.fromEntries(keys.map((k) => [k, 'Inv']))
+
+describe('map head and summary', () => {
+  it('map_showsTheStepLabelTitleAndFile', async () => {
+    await toMap(suggestion(['Inv', 'A', 'B', 'C', 'D', 'E'], { invoice_number: 'Inv' }))
+    expect(container.querySelector('.check-map .check-step-no')!.textContent).toBe('02 · Match your columns')
+    expect(container.querySelector('.check-map h2')!.textContent).toBe('Tell us which column is which')
+    expect(container.querySelector('.check-map-name')!.textContent).toBe('a.csv')
+    expect(container.querySelector('.check-map-file')!.textContent).toContain('· 6 columns')
+  })
+
+  it('map_oneColumnIsSingular', async () => {
+    await toMap(suggestion(['Inv'], { invoice_number: 'Inv' }))
+    expect(container.querySelector('.check-map-file')!.textContent).toContain('· 1 column')
+    expect(container.querySelector('.check-map-file')!.textContent).not.toContain('columns')
+  })
+
+  it('map_summaryCountsTheMatchedFields', async () => {
+    await toMap(suggestion(COLS, INVOICE_DATES))
+    const n = CHECK_FIELD_KEYS.length
+    expect(n).toBe(38)
+    const text = () => container.querySelector('.check-sum-text')!.textContent
+    expect(container.querySelector('.check-sum-n')!.textContent).toBe('3 of 38')
+    expect(text()).toBe('We matched 3 of 38 fields to your columns. Review the gaps below.')
+    expect(text()).toBe(MAP_SUMMARY(3, n))
+    expect(fill().style.width).toBe('8%')
+    expect(container.querySelector('.check-meter')!.getAttribute('aria-hidden')).toBe('true')
+    await choose('invoice_kind', 'Note')
+    expect(container.querySelector('.check-sum-n')!.textContent).toBe('4 of 38')
+    expect(fill().style.width).toBe('11%')
+    await choose('invoice_number', '')
+    expect(container.querySelector('.check-sum-n')!.textContent).toBe('3 of 38')
+  })
+
+  it('map_nothingMatched', async () => {
+    await toMap(suggestion(['Inv', 'Date', 'Net'], {}))
+    expect(container.querySelector('.check-sum-n')!.textContent).toBe('0 of 38')
+    expect(container.querySelector('.check-sum-text')!.textContent).toBe(MAP_SUMMARY(0, 38))
+    expect(fill().style.width).toBe('0%')
+    for (const g of ['amounts', 'line', 'buyer']) await click(header(g))
+    for (const g of ['invoice', 'amounts', 'line', 'buyer', 'supplier']) {
+      expect(subtitle(g)).toBe('No columns matched yet')
+      expect(count(g)).toMatch(/^0 of \d+ matched$/)
+      expect(subhead(g)).toBeNull()
+    }
+    expect(unusedLine()).toBe('3 of your 3 columns are not used yet: A Inv, B Date, C Net. Fields with no column stay on “Not in this file”.')
+    expect(button('Continue')!.disabled).toBe(true)
+    expect(container.querySelector('#check-map-need')!.textContent).toBe(NEED_INVOICE_NO)
+  })
+
+  it('map_everyFieldMatched', async () => {
+    await toMap(suggestion(['Inv'], toAll(...CHECK_FIELD_KEYS)))
+    expect(container.querySelector('.check-sum-n')!.textContent).toBe('38 of 38')
+    expect(fill().style.width).toBe('100%')
+    expect(unusedLine()).toBe(MAP_ALL_USED)
+    for (const g of ['amounts', 'line', 'buyer']) await click(header(g))
+    expect(listIds('invoice')).toEqual(['invoice_number'])
+    expect(subheadText('invoice')).toBe('6 matched from your file')
+    expect(listIds('supplier')).toEqual([])
+    expect(subheadText('supplier')).toBe('2 matched from your file')
+    for (const g of ['invoice', 'amounts', 'line', 'buyer', 'supplier']) {
+      const [x, y] = count(g).match(/^(\d+) of (\d+) matched$/)!.slice(1)
+      expect(x).toBe(y)
+    }
+  })
+})
+
+describe('map unused line', () => {
+  it('map_unusedLineNamesTheFreeColumns', async () => {
+    await toMap(suggestion(['Inv', 'Date', 'Net', 'Gross', 'Buyer', 'Note'], { invoice_number: 'Inv', issue_date: 'Date', buyer_name: 'Buyer' }))
+    expect(unusedLine()).toBe('3 of your 6 columns are not used yet: C Net, D Gross, F Note. Fields with no column stay on “Not in this file”.')
+  })
+
+  it('map_unusedLineSingularAndAllUsed', async () => {
+    await toMap(suggestion(['Inv', 'Date', 'Note'], { invoice_number: 'Inv', issue_date: 'Date' }))
+    expect(unusedLine()).toBe('1 of your 3 columns is not used yet: C Note. Fields with no column stay on “Not in this file”.')
+    await choose('invoice_kind', 'Note')
+    expect(unusedLine()).toBe(MAP_ALL_USED)
+  })
+
+  it('map_aBlankHeaderIsNeverNamedUnused', async () => {
+    await toMap(suggestion(['Inv', '', 'Date'], { invoice_number: 'Inv', issue_date: 'Date' }))
+    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(rows()[1].querySelector('td:nth-child(4)')!.textContent).toBe('')
+    expect(statusTags()).toEqual([])
+    await click(reviewButton('invoice'))
+    await choose('issue_date', '')
+    expect(unusedLine()).toBe('1 of your 2 columns is not used yet: C Date. Fields with no column stay on “Not in this file”.')
+    expect(rows()[1].querySelector('td:nth-child(4)')!.textContent).toBe('')
+  })
+
+  it('map_noColumnOffered', async () => {
+    await toMap(suggestion(['', ''], {}))
+    expect(container.querySelector('.check-map')).not.toBeNull()
+    expect(container.querySelector('.check-unused-line')).toBeNull()
+    for (const g of ['amounts', 'line', 'buyer']) await click(header(g))
+    for (const s of container.querySelectorAll<HTMLSelectElement>('.check-groups select')) expect([...s.options].map((o) => o.textContent)).toEqual(['Not in this file'])
+    expect(button('Continue')!.disabled).toBe(true)
+    expect(container.querySelector('#check-map-need')!.textContent).toBe(NEED_INVOICE_NO)
+  })
+})
+
+describe('map columns preview', () => {
+  const six = () => suggestion(['Inv', 'Date', 'Due', 'Note', 'Time', 'Net'], { invoice_number: 'Inv' })
+
+  it('map_previewShowsFourColumnsThenAll', async () => {
+    await toMap(six())
+    expect(rows().length).toBe(4)
+    expect(button('Show all 6 columns')!.getAttribute('aria-expanded')).toBe('false')
+    await click(button('Show all 6 columns')!)
+    expect(rows().length).toBe(6)
+    expect(button('Show fewer')!.getAttribute('aria-expanded')).toBe('true')
+    await click(button('Show fewer')!)
+    expect(rows().length).toBe(4)
+  })
+
+  it('map_previewHasNoToggleAtFourColumns', async () => {
+    await toMap(suggestion(['Inv', 'Date', 'Due', 'Note'], { invoice_number: 'Inv' }))
+    expect(rows().length).toBe(4)
+    expect(container.querySelector('.check-preview-head button')).toBeNull()
+  })
+
+  it('map_previewRowCarriesLetterHeaderExamples', async () => {
+    await toMap(withRows(['Inv', 'Date'], { invoice_number: 'Inv' }, [['INV-1', 'x'], ['', 'y'], ['INV-3', 'z'], ['INV-4', 'w']]))
+    expect([...rows()[0].children].slice(0, 3).map((c) => c.textContent)).toEqual(['A', 'Inv', 'INV-1 · INV-3'])
+  })
+
+  it('map_notUsedFollowsTheMapping', async () => {
+    await toMap(suggestion(['Inv', 'Date', 'Note'], { invoice_number: 'Inv', issue_date: 'Date' }))
+    const tag = (i: number) => rows()[i].querySelector('.check-unused')
+    expect(tag(2)!.textContent).toBe('Not used')
+    expect(tag(0)).toBeNull()
+    await choose('invoice_kind', 'Note')
+    expect(tag(2)).toBeNull()
+  })
+
+  it('map_previewIsALabelledScrollRegion', async () => {
+    await toMap(six())
+    const region = container.querySelector('.check-scroll')!
+    expect(region.getAttribute('role')).toBe('region')
+    expect(region.getAttribute('aria-label')).toBe('Preview of your columns')
+    expect(region.getAttribute('tabindex')).toBe('0')
+    const status = region.querySelector('th:nth-child(4) .check-sr')!
+    expect(status.textContent).toBe('Status')
+  })
+})
+
+describe('map action bar', () => {
+  it('map_theBarHoldsTheButtonsLast', async () => {
+    await toMap(suggestion(COLS, INVOICE_DATES))
+    const bar = container.querySelector('.check-map')!.lastElementChild!
+    expect(bar.classList.contains('check-sticky')).toBe(true)
+    expect([...bar.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Choose another file', 'Continue'])
+  })
+
+  it('map_continueExplainsWhyItIsDisabled', async () => {
+    await toMap(suggestion(COLS, { issue_date: 'Date' }))
+    const cont = () => button('Continue')!
+    expect(cont().disabled).toBe(true)
+    expect(container.querySelector('#check-map-need')!.textContent).toBe('Choose the Invoice number column to continue.')
+    expect(cont().getAttribute('aria-describedby')).toBe('check-map-need')
+    await choose('invoice_number', 'Inv')
+    expect(container.querySelector('#check-map-need')).toBeNull()
+    expect(cont().hasAttribute('aria-describedby')).toBe(false)
+    expect(cont().disabled).toBe(false)
+  })
+
+  it('map_continueReadsContinueBesideItsArrow', async () => {
+    await toMap(suggestion(COLS, INVOICE_DATES))
+    const cont = button('Continue')!
+    expect(cont.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1)
+    expect(cont.querySelector('title')).toBeNull()
+    expect(cont.textContent).toBe('Continue')
+  })
+})
+
 describe('map options and hint', () => {
   const optionsOf = () => [...container.querySelectorAll<HTMLSelectElement>('.check-groups select')].map((s) => [...s.options].map((o) => [o.value, o.textContent]))
 
@@ -252,6 +436,14 @@ describe('map options and hint', () => {
     await toMap(suggestion(['Amount', 'Inv', 'Amount'], { invoice_number: 'Inv', total: 'Amount' }))
     await openAll()
     for (const o of optionsOf()) expect(o).toEqual([['', 'Not in this file'], ['Amount', 'A · Amount'], ['Inv', 'B · Inv']])
+    expect(unusedLine()).toBe(MAP_ALL_USED)
+    expect(statusTags()).toEqual([])
+    await click(reviewButton('amounts'))
+    await choose('total', '')
+    expect(unusedLine()).toBe('1 of your 2 columns is not used yet: A Amount. Fields with no column stay on “Not in this file”.')
+    expect(unusedLine()).not.toContain('C Amount')
+    expect(statusTags()).toEqual(['Not used'])
+    expect(rows()[2].querySelector('td:nth-child(4)')!.textContent).toBe('')
   })
 
   it('map_supplierGroupCarriesTheHint', async () => {

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { CHECK_FIELD_KEYS, FIELD_GROUPS, canSubmitMapping, fieldLabel, groupOf, previewColumns, type GroupId, type Mapping, type Suggestion } from '../fields'
-import { FIELDS_LEGEND, FIELDS_TITLE, GROUP_NONE, HIDE, MATCHED_LINE, NOT_IN_FILE, REVIEW, SUGGESTED, SUPPLIER_HINT } from '../copy'
+import {
+  CHOOSE_ANOTHER, CONTINUE, FIELDS_LEGEND, FIELDS_TITLE, GROUP_NONE, HIDE, MAP_ALL_USED, MAP_COLUMNS, MAP_STEP_NO, MAP_SUMMARY, MAP_TITLE, MAP_UNUSED,
+  MATCHED_LINE, NEED_INVOICE_NO, NOT_IN_FILE, NOT_USED, PREVIEW_LABEL, PREVIEW_LESS, PREVIEW_MORE, PREVIEW_TITLE, REVIEW, SUGGESTED, SUPPLIER_HINT,
+} from '../copy'
 import { GLYPHS, Icon } from '../ds'
+import { CHECK_GLYPHS } from '../glyphs'
 
 interface Props {
   fileName: string
@@ -15,6 +19,12 @@ interface Props {
 export function MapStep({ fileName, suggestion, fields, onField, onBack, onContinue }: Props) {
   const columns = previewColumns(suggestion, 3)
   const offered = columns.filter((c, i) => c.mappable && columns.findIndex((d) => d.header === c.header) === i)
+  const used = new Set(Object.values(fields).filter((h) => h !== null))
+  const unused = offered.filter((c) => !used.has(c.header))
+  const matchedCount = CHECK_FIELD_KEYS.filter((k) => fields[k] !== null).length
+  const total = CHECK_FIELD_KEYS.length
+  const canContinue = canSubmitMapping(fields)
+  const [allColumns, setAllColumns] = useState(false)
   const [open, setOpen] = useState<Record<GroupId, boolean>>({ invoice: true, amounts: false, line: false, buyer: false, supplier: true })
   const [review, setReview] = useState<Record<GroupId, boolean>>({ invoice: false, amounts: false, line: false, buyer: false, supplier: false })
   // The last-changed row keeps its list until its select blurs, so a change never unmounts the focused select.
@@ -85,31 +95,63 @@ export function MapStep({ fileName, suggestion, fields, onField, onBack, onConti
 
   return (
     <section className="check-card check-map">
-      <h2>Match your columns</h2>
-      <p className="check-file">{fileName}</p>
-      <div className="check-scroll">
-        <table className="check-columns">
-          <thead>
-            <tr>
-              <th scope="col">Column</th>
-              <th scope="col">Header</th>
-              <th scope="col">Examples</th>
-            </tr>
-          </thead>
-          <tbody>
-            {columns.map((c, i) => (
-              <tr key={i}>
-                <td>{c.letter}</td>
-                <td>{c.header}</td>
-                <td>
-                  {c.samples.map((s, j) => (
-                    <div key={j}>{s}</div>
-                  ))}
-                </td>
+      <div className="check-map-head">
+        <div className="check-step-head">
+          <span className="check-mono check-step-no">{MAP_STEP_NO}</span>
+          <h2 className="check-step-title">{MAP_TITLE}</h2>
+        </div>
+        <p className="check-map-file">
+          <Icon paths={GLYPHS['file-text']} size={16} />
+          <span className="check-map-name">{fileName}</span>
+          <span>{MAP_COLUMNS(columns.length)}</span>
+        </p>
+      </div>
+      <div className="check-sum">
+        <span className="check-sum-n">
+          {matchedCount}
+          <small> of {total}</small>
+        </span>
+        <p className="check-sum-text">{MAP_SUMMARY(matchedCount, total)}</p>
+        <div className="check-sum-foot">
+          <span className="check-meter" aria-hidden="true">
+            <i style={{ width: `${Math.round((matchedCount / total) * 100)}%` }} />
+          </span>
+          {offered.length > 0 && <p className="check-unused-line">{unused.length > 0 ? MAP_UNUSED(unused, offered.length) : MAP_ALL_USED}</p>}
+        </div>
+      </div>
+      <div className="check-preview">
+        <div className="check-preview-head">
+          <span className="check-sub">{PREVIEW_TITLE}</span>
+          {columns.length > 4 && (
+            <button type="button" className="check-link" aria-expanded={allColumns} onClick={() => setAllColumns(!allColumns)}>
+              {allColumns ? PREVIEW_LESS : PREVIEW_MORE(columns.length)}
+            </button>
+          )}
+        </div>
+        <div className="check-scroll" role="region" aria-label={PREVIEW_LABEL} tabIndex={0}>
+          <table className="check-columns">
+            <thead>
+              <tr>
+                <th scope="col">Column</th>
+                <th scope="col">Header</th>
+                <th scope="col">Examples</th>
+                <th scope="col">
+                  <span className="check-sr">Status</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(allColumns ? columns : columns.slice(0, 4)).map((c, i) => (
+                <tr key={i}>
+                  <td className="check-col">{c.letter}</td>
+                  <td className="check-col-head">{c.header}</td>
+                  <td className="check-col-ex">{c.samples.filter((s) => s !== '').join(' · ')}</td>
+                  <td>{unused.includes(c) && <span className="check-unused">{NOT_USED}</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
       <div className="check-groups" onPointerDown={() => (pressing.current = true)}>
         <div className="check-groups-head">
@@ -173,13 +215,23 @@ export function MapStep({ fileName, suggestion, fields, onField, onBack, onConti
           )
         })}
       </div>
-      <div className="check-actions">
-        <button type="button" className="check-btn check-btn--outline" onClick={onBack}>
-          Choose another file
-        </button>
-        <button type="button" className="check-btn" disabled={!canSubmitMapping(fields)} onClick={onContinue}>
-          Continue
-        </button>
+      <div className="check-sticky">
+        <div className="check-actions">
+          <button type="button" className="check-btn check-btn--outline" onClick={onBack}>
+            {CHOOSE_ANOTHER}
+          </button>
+          <div className="check-actions-end">
+            {!canContinue && (
+              <span id="check-map-need" className="check-need">
+                {NEED_INVOICE_NO}
+              </span>
+            )}
+            <button type="button" className="check-btn check-btn--next" disabled={!canContinue} aria-describedby={canContinue ? undefined : 'check-map-need'} onClick={onContinue}>
+              {CONTINUE}
+              <Icon paths={CHECK_GLYPHS['arrow-right']} size={16} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   )

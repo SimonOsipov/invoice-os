@@ -146,7 +146,7 @@ test('check: a visitor uploads a spreadsheet, maps it and is told the results ar
   await page.goto(CHECK_URL)
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByText(DROP_BUTTON, { exact: true }).click()])
   await chooser.setFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
-  await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Tell us which column is which' })).toBeVisible()
   const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"] .check-step-lbl')
   await expect(current).toHaveText('Match columns')
   // Choose every column: a preview's AI is fake, the nightly's is real, so the suggestion proves nothing.

@@ -84,3 +84,18 @@ export const HIDE = 'Hide'
 export const SUGGESTED = 'Suggested'
 export const NOT_IN_FILE = 'Not in this file'
 export const SUPPLIER_HINT = 'A supplier name or TIN that is not in this file fails its rule in your results.'
+export const MAP_STEP_NO = '02 · Match your columns'
+export const MAP_TITLE = 'Tell us which column is which'
+export const MAP_COLUMNS = (n: number): string => `· ${n} ${n === 1 ? 'column' : 'columns'}`
+export const MAP_SUMMARY = (x: number, n: number): string => `We matched ${x} of ${n} fields to your columns. Review the gaps below.`
+export const MAP_UNUSED = (unused: { letter: string; header: string }[], total: number): string =>
+  `${unused.length} of your ${total} columns ${unused.length === 1 ? 'is' : 'are'} not used yet: ${unused.map((c) => `${c.letter} ${c.header}`).join(', ')}. Fields with no column stay on “${NOT_IN_FILE}”.`
+export const MAP_ALL_USED = 'Every column in your file is matched to a field.'
+export const PREVIEW_TITLE = 'Your columns'
+export const PREVIEW_LABEL = 'Preview of your columns'
+export const PREVIEW_MORE = (n: number): string => `Show all ${n} columns`
+export const PREVIEW_LESS = 'Show fewer'
+export const NOT_USED = 'Not used'
+export const CHOOSE_ANOTHER = 'Choose another file'
+export const CONTINUE = 'Continue'
+export const NEED_INVOICE_NO = 'Choose the Invoice number column to continue.'

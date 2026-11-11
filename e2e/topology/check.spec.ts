@@ -48,7 +48,7 @@ async function toMap(page: Page, onUpload?: () => Promise<void>): Promise<void> 
   await expect(page.locator('.check-upload-name')).toBeVisible()
   await onUpload?.()
   release()
-  await expect(page.getByRole('heading', { name: 'Match your columns' }), 'the Map step never showed').toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Tell us which column is which' }), 'the Map step never showed').toBeVisible()
   // The suggestion may leave the invoice number unplaced; Continue needs it.
   await page.getByLabel('Invoice number', { exact: true }).selectOption('invoice_number')
 }
@@ -90,7 +90,7 @@ test.describe('check layout', () => {
       const table = await rectOf(page.locator('.check-columns'), 'columns table')
       const scrolls = await page.locator('.check-scroll').evaluate((el) => el.scrollWidth > el.clientWidth)
       expect(enclosesRect(scroller, table, 1) || scrolls, `${label}: the columns table escapes its scroller`).toBe(true)
-      expect(enclosesRect(cardRect, await rectOf(page.locator('.check-file'), 'file name'), 1), `${label}: the file name is outside the card`).toBe(true)
+      expect(enclosesRect(cardRect, await rectOf(page.locator('.check-map-file'), 'file name'), 1), `${label}: the file name is outside the card`).toBe(true)
     }
   })
 
@@ -339,7 +339,7 @@ test.describe('check layout', () => {
     // Map at 390: the Map rule outranks the 600 px trust-cue rule.
     await page.setViewportSize({ width: 390, height: 1080 })
     await page.locator('#check-file').setInputFiles({ name: 'm.csv', mimeType: 'text/csv', buffer: FIXTURE })
-    await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Tell us which column is which' })).toBeVisible()
     near(await px(page.locator('.check-h1'), 'font-size'), 34, '390 Map h1')
     expect(await css(page.locator('.check-trust'), 'display')).toBe('flex')
   })

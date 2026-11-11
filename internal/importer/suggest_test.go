@@ -4,9 +4,11 @@ package importer
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"go/format"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -40,6 +42,61 @@ func sgFakeAnswer(t *testing.T, text string) (map[string]any, error, string) {
 		SchemaName: mappingSchemaName, Schema: mappingSchema,
 	})
 	return ans, callErr, sgOutcome(t, buf.String())
+}
+
+// sgRecordingSuggester forwards to a real fake-mode client and keeps the request it was given.
+type sgRecordingSuggester struct {
+	c   *ai.Client
+	req ai.Request
+}
+
+func (r *sgRecordingSuggester) Enabled() bool { return r.c.Enabled() }
+
+func (r *sgRecordingSuggester) Call(ctx context.Context, req ai.Request) (map[string]any, error) {
+	r.req = req
+	return r.c.Call(ctx, req)
+}
+
+// A steering marker longer than the prompt cell bound still steers the fake: the fake reads the
+// uncut rows from FakeHint, while the Text sent stays bounded.
+func TestAskMapping_FakeMarkerLongerThanTheCellBoundStillSteers(t *testing.T) {
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	c, err := ai.FromEnv(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	answer := map[string]any{"header_row": 1, "invoice_number": "Inv"}
+	var sch struct {
+		Properties map[string]map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(mappingSchema, &sch); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	for k := range sch.Properties {
+		if _, ok := answer[k]; !ok {
+			answer[k] = nil
+		}
+	}
+	raw, _ := json.Marshal(answer)
+	marker := "AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString(raw)
+	if len(marker) <= maxPromptCellBytes {
+		t.Fatalf("marker is %d bytes, want over %d", len(marker), maxPromptCellBytes)
+	}
+
+	s := &sgRecordingSuggester{c: c}
+	got := askMapping(t.Context(), s, [][]string{{"Inv", "Total"}, {marker, "5"}})
+	if got == nil || got["invoice_number"] != "Inv" {
+		t.Errorf("answer = %v, want the steered answer", got)
+	}
+	for _, line := range strings.Split(s.req.Text, "\n") {
+		if strings.Contains(line, "AIFAKE-ANSWER-") && len(line) > len("Row 2: ")+maxPromptCellBytes+len(",5") {
+			t.Errorf("Text row is %d bytes, want the cell cut at %d", len(line), maxPromptCellBytes)
+		}
+	}
+	if !strings.Contains(s.req.FakeHint, marker) {
+		t.Errorf("FakeHint does not carry the whole marker")
+	}
 }
 
 // sgOutcome reads the one "ai call" log line's outcome field.

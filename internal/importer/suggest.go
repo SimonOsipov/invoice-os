@@ -156,6 +156,19 @@ func mappingPromptText(rows [][]string) string {
 	return mappingIntro + "\n" + strings.Join(lines, "\n")
 }
 
+// mappingRowsText is mappingPromptText without any cut: the fake AI reads its steering marker
+// from it, so a marker longer than a bounded cell still decodes. Never sent or logged.
+func mappingRowsText(rows [][]string) string {
+	if len(rows) == 0 {
+		return mappingIntro
+	}
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = fmt.Sprintf(mappingRowFmt, i+1, csvLine(r))
+	}
+	return mappingIntro + "\n" + strings.Join(lines, "\n")
+}
+
 // cutBytes returns s cut to at most n bytes, never splitting a rune.
 func cutBytes(s string, n int) string {
 	if len(s) <= n {

@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs'
 import { test, expect } from '@playwright/test'
 import { readinessBudgetProblem, readinessMailEnv } from '../mail/mailChecks'
 import { getReceived, listSent, settledMailCount, waitForMailCount } from '../mail/resendClient'
-import { nightlyTarget } from '../targets'
+import { expectedContactsMode, nightlyTarget } from '../targets'
+import { previewSecret } from './preview'
 import { confirmCheck, contactsDirect, contactsMe, postCheck, registerFormAccount, setReadinessConfirmToken, workerPost, type CheckMapping } from './client'
 
 // internal/gateway/readiness_check.go: checkConsentSentence, checkIPSentence.
@@ -29,6 +30,9 @@ const TWO_LEFT = 'You have 2 free checks left.'
 const SUPPLIER_TIN_LABEL = 'Supplier TIN'
 // internal/notifications/store.go: the tag contacts/me returns.
 const TAG = 'readiness check'
+// internal/notifications/deal.go: dealSourceReadinessCheck, and the fallback deal name for that source.
+const HS_OPTION = 'readiness_check'
+const DEAL_NAME = 'Readiness check'
 // Read from the landing source, not retyped: the gateway takes only the sentence the box shows.
 const CONSENT_SRC = new URL('../../frontend/landing/src/readinessConsent.ts', import.meta.url)
 const CONSENT_MATCH = /export const READINESS_CONSENT_TEXT =\s*'((?:[^'\\]|\\.)*)'/.exec(readFileSync(CONSENT_SRC, 'utf8'))
@@ -83,10 +87,12 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
     expect((res.body as CheckMapping).columns).toEqual(HEADER)
   })
 
-  test('a run without consent is refused', async () => {
-    const res = await postCheck('run', { email: freshEmail() }, FILE)
+  test('a run without consent is refused and stores nothing', async () => {
+    const email = freshEmail()
+    const res = await postCheck('run', { email }, FILE)
     expect(res.status).toBe(400)
     expect(res.body).toEqual({ error: CONSENT_SENTENCE })
+    expect(await contactsDirect(email), 'a contact for a refused run').toBeNull()
   })
 
   test('the worker route refuses a call without the gateway token', async () => {
@@ -182,6 +188,46 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
       expect(row!.tags).toContain(TAG)
       expect(row!.marketing_eligible).toBe(true)
       expect(row!.resend.applies).toBe(true)
+      expect(row!.mode).toBe(expectedContactsMode())
+    })
+
+    test('nightly: the contact and its readiness-check deal reach the test HubSpot portal', async () => {
+      test.skip(!nightlyTarget(), 'the test HubSpot portal is reached on the nightly only')
+      test.setTimeout(240_000)
+      const version = process.env.NIGHTLY_HUBSPOT_TOKEN_VERSION ?? ''
+      expect(/^\d+$/.test(version), 'NIGHTLY_HUBSPOT_TOKEN_VERSION must be digits, never latest').toBe(true)
+      // Memory only: never log or write the token.
+      const token = previewSecret('hubspot-token', version).trim()
+      const hs = async (path: string): Promise<{ status: number; body: any }> => {
+        const res = await fetch(`https://api.hubapi.com${path}`, { headers: { Authorization: `Bearer ${token}` } })
+        return { status: res.status, body: await res.json().catch(() => undefined) }
+      }
+      const { email } = inbox()
+
+      let contactId = ''
+      await expect
+        .poll(
+          async () => {
+            const c = await hs(`/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email&properties=ascomply_contact_tags`)
+            if (c.status !== 200) return [`HubSpot answered ${c.status}`]
+            contactId = String(c.body.id)
+            return String(c.body.properties?.ascomply_contact_tags ?? '').split(';')
+          },
+          { ...DELIVERY_POLL, message: `is option ${HS_OPTION} on ascomply_contact_tags in the test portal?` },
+        )
+        .toContain(HS_OPTION)
+
+      await expect
+        .poll(
+          async () => {
+            const assoc = await hs(`/crm/v4/objects/contacts/${contactId}/associations/deals`)
+            if (assoc.status !== 200) return [`HubSpot answered ${assoc.status}`]
+            const ids = (assoc.body.results as { toObjectId: number | string }[]).map((r) => String(r.toObjectId))
+            return Promise.all(ids.map(async (id) => String((await hs(`/crm/v3/objects/deals/${id}?properties=dealname`)).body?.properties?.dealname)))
+          },
+          DELIVERY_POLL,
+        )
+        .toEqual([DEAL_NAME])
     })
 
     test('the fourth run gets the same answer and holds nothing', async () => {

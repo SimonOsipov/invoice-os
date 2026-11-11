@@ -136,6 +136,15 @@ test.describe('check layout', () => {
   const css = (loc: Locator, prop: string) => loc.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop)
   const px = async (loc: Locator, prop: string) => parseFloat(await css(loc, prop))
   const tracks = async (loc: Locator) => (await css(loc, 'grid-template-columns')).trim().split(/\s+/).length
+  const probeBorder = (page: Page) =>
+    page.evaluate(() => {
+      const el = document.createElement('i')
+      el.style.border = '1.5px solid'
+      document.body.appendChild(el)
+      const v = getComputedStyle(el).borderTopWidth
+      el.remove()
+      return v
+    })
   const resolved = (page: Page, token: string, prop: string) =>
     page.evaluate(
       ([t, p]) => {
@@ -559,7 +568,7 @@ test.describe('check layout', () => {
     await dragOver(page)
     await expect.poll(() => css(zone, 'border-top-color')).toBe(await resolved(page, '--teal', 'border-top-color'))
     expect(await css(zone, 'border-top-style')).toBe('solid')
-    expect(await css(zone, 'background-color')).toBe(await resolved(page, '--mint-soft', 'background-color'))
+    await expect.poll(() => css(zone, 'background-color')).toBe(await resolved(page, '--mint-soft', 'background-color'))
     await dragEvent(page, 'dragleave')
     await page.locator('#check-file').setInputFiles(TXT)
     await expect(page.locator('.check-err')).toBeVisible()
@@ -604,7 +613,6 @@ test.describe('check layout', () => {
       ['.check-upload .check-label', 'font-size', '14px'],
       ['.check-upload .check-label', 'font-weight', '700'],
       ['.check-upload .check-label', 'color', '--ink'],
-      ['.check-drop', 'border-top-width', '1.5px'],
       ['.check-drop', 'row-gap', '12px'],
       ['.check-drop-icon', 'width', '52px'],
       ['.check-drop-icon', 'height', '52px'],
@@ -623,9 +631,11 @@ test.describe('check layout', () => {
       ['.check-drop-note', 'font-size', '13px'],
       ['.check-upload-note', 'font-size', '13px'],
     ])
+    // Chrome rounds a 1.5px border to whole px, so compare it with a 1.5px probe.
+    expect(await css(page.locator('.check-drop'), 'border-top-width'), '.check-drop border-top-width').toBe(await probeBorder(page))
     await page.locator('.check-drop').hover()
     await expect.poll(() => css(page.locator('.check-drop'), 'background-color')).toBe(await resolved(page, '--sage-card', 'background-color'))
-    expect(await css(page.locator('.check-drop'), 'border-top-color')).toBe(await resolved(page, '--teal', 'border-top-color'))
+    await expect.poll(() => css(page.locator('.check-drop'), 'border-top-color')).toBe(await resolved(page, '--teal', 'border-top-color'))
     await page.locator('#check-file').setInputFiles(TXT)
     await expect(page.locator('.check-err')).toBeVisible()
     await read([

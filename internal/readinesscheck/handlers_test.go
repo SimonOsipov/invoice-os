@@ -417,7 +417,7 @@ func TestRun_AnEngineRefusalIsTheSameForAFreshAndAUsedAddress(t *testing.T) {
 		word         string
 	}{
 		{"unreadable file", "csv", []byte{}, http.StatusUnprocessableEntity, "unreadable"},
-		{"unsupported format", "png", []byte(oneInvoice), http.StatusBadRequest, "unsupported format"},
+		{"unsupported format", "png", []byte(oneInvoice), http.StatusBadRequest, FormatRefusal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var bodies []string

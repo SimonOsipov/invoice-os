@@ -74,3 +74,13 @@ export const EXAMPLE_MAIL = {
   caption:
     'Illustrative. The real email also lists each invoice’s date, amounts and buyer from your file, and any warnings or rules not checked.',
 } as const
+
+export const FIELDS_TITLE = 'Invoice fields'
+export const FIELDS_LEGEND = 'Required. Leave a field on “Not in this file” if your file has no column for it.'
+export const GROUP_NONE = 'No columns matched yet'
+export const MATCHED_LINE = (n: number): string => `${n} matched from your file`
+export const REVIEW = 'Review'
+export const HIDE = 'Hide'
+export const SUGGESTED = 'Suggested'
+export const NOT_IN_FILE = 'Not in this file'
+export const SUPPLIER_HINT = 'A supplier name or TIN that is not in this file fails its rule in your results.'

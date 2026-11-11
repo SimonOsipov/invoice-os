@@ -51,6 +51,18 @@ func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
 		t.Fatalf("compose up: %v\n%s", err, out)
 	}
 
+	if out, err := run(30*time.Second, "exec", "-T", "postgres", "cat", "/proc/1/cmdline"); err != nil {
+		t.Fatalf("read pid 1 cmdline: %v\n%s", err, out)
+	} else if !strings.Contains(out, "docker-init") {
+		t.Fatalf("PID 1 is not docker-init: %q", out)
+	}
+
+	const startQuery = "select pg_postmaster_start_time()"
+	startBefore, err := run(30*time.Second, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "invoice_os", "-tAc", startQuery)
+	if err != nil || strings.TrimSpace(startBefore) == "" {
+		t.Fatalf("postmaster start time: %v\n%s", err, startBefore)
+	}
+
 	if out, err := run(30*time.Second, "exec", "-T", "postgres", "sh", "-c",
 		"(pg_isready -h /nonexistent >/dev/null &)"); err != nil {
 		t.Fatalf("spawn orphan: %v\n%s", err, out)
@@ -91,5 +103,13 @@ func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
 	}
 	if len(matched) > 0 {
 		t.Fatalf("postgres crash-restarted after an orphaned child exited; log lines:\n%s", strings.Join(matched, "\n"))
+	}
+
+	startAfter, err := run(30*time.Second, "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "invoice_os", "-tAc", startQuery)
+	if err != nil {
+		t.Fatalf("postmaster start time after orphan: %v\n%s", err, startAfter)
+	}
+	if strings.TrimSpace(startAfter) != strings.TrimSpace(startBefore) {
+		t.Fatalf("postmaster restarted: start time %q -> %q", startBefore, startAfter)
 	}
 }

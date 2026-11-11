@@ -26,6 +26,7 @@ const (
 	MappingBudget   = 60 * time.Second
 	MailTimeout     = 15 * time.Second
 	ConfirmTimeout  = 25 * time.Second
+	HoldTimeout     = 5 * time.Second
 	MaxConcurrent   = 2
 
 	maxFieldBytes = 1 << 20 // the largest non-file part: a mapping
@@ -41,7 +42,7 @@ type CheckStore interface {
 	PurgeExpired(ctx context.Context) error
 }
 
-// Service runs one public check. runBudget and mailTimeout override their defaults in tests when non-zero.
+// Service runs one public check. runBudget, mailTimeout and holdTimeout override their defaults in tests when non-zero.
 type Service struct {
 	Checker     *publiccheck.Checker
 	Store       CheckStore
@@ -49,6 +50,7 @@ type Service struct {
 	Logger      *slog.Logger
 	runBudget   time.Duration
 	mailTimeout time.Duration
+	holdTimeout time.Duration
 	slots       chan struct{}
 	inFlight    map[string]struct{}
 	mu          sync.Mutex
@@ -212,6 +214,13 @@ func (s *Service) mailBudget() time.Duration {
 	return MailTimeout
 }
 
+func (s *Service) holdBudget() time.Duration {
+	if s.holdTimeout != 0 {
+		return s.holdTimeout
+	}
+	return HoldTimeout
+}
+
 func (s *Service) budget() time.Duration {
 	if s.runBudget != 0 {
 		return s.runBudget
@@ -297,7 +306,9 @@ func (s *Service) answerUsed(w http.ResponseWriter, r *http.Request, email strin
 
 // answerHeld holds the result and mails the confirm link; a failed send releases the row.
 func (s *Service) answerHeld(w http.ResponseWriter, r *http.Request, h Held) {
-	token, err := s.Store.Hold(context.WithoutCancel(r.Context()), h)
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), s.holdBudget())
+	defer cancel()
+	token, err := s.Store.Hold(hctx, h)
 	if err != nil {
 		s.Logger.ErrorContext(r.Context(), "readiness check: hold error", slog.String("error", err.Error()))
 		writeError(w, http.StatusServiceUnavailable, "unavailable")

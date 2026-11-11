@@ -91,16 +91,25 @@ type fakeStore struct {
 	helds     []Held
 	releases  []relCall
 	confirms  []confirmCall
+	holdFn    func(ctx context.Context) error
 	confirmFn func(ctx context.Context, token, consent string, send func(context.Context, Held, int) error) (Held, bool, error)
 }
 
 func (s *fakeStore) Count(context.Context, string) (int, error) { return s.count, s.countErr }
 
-func (s *fakeStore) Hold(_ context.Context, h Held) (string, error) {
+func (s *fakeStore) Hold(ctx context.Context, h Held) (string, error) {
 	s.ev.add("hold")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.helds = append(s.helds, h)
+	if s.holdFn != nil {
+		fn := s.holdFn
+		s.mu.Unlock()
+		defer s.mu.Lock()
+		if err := fn(ctx); err != nil {
+			return "", err
+		}
+	}
 	if s.holdErr != nil {
 		return "", s.holdErr
 	}
@@ -482,6 +491,31 @@ func TestRun_AFailedHoldIs503AndSendsNothing(t *testing.T) {
 	if logs := r.logs.String(); !strings.Contains(logs, "level=ERROR") || strings.Contains(logs, visitor) {
 		t.Errorf("logs = %q, want an ERROR line without the address", logs)
 	}
+}
+
+func TestRun_AHoldThatBlocksIsCutAndFreesTheSlotAndTheAddress(t *testing.T) {
+	r := newRig(t)
+	r.svc.holdTimeout = 50 * time.Millisecond
+	r.store.holdFn = func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+			return nil
+		}
+	}
+	start := time.Now()
+	for range MaxConcurrent + 1 {
+		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusServiceUnavailable, "unavailable")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("answered after %s, want the hold cut at its timeout", d)
+	}
+	if ev := r.ev.all(); slices.Contains(ev, "send") {
+		t.Errorf("events = %v, want no send after a failed hold", ev)
+	}
+	r.store.holdFn = nil
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
 }
 
 func TestRun_AFailedUsedMailIs503AndHoldsNothing(t *testing.T) {

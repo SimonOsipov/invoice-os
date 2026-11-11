@@ -6,6 +6,7 @@ package extraction_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -17,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 // --- the classifier's two signals disagree ----------------------------------------------------
@@ -565,5 +568,26 @@ func TestTestNames_StateNoFalseTypeCount(t *testing.T) {
 				t.Errorf("%s still names %s; rename it to %s, never delete it", f, old, replacement)
 			}
 		}
+	}
+}
+
+// TestUploadHandler_AHeadReadErrorIs500NotAFormatRefusal: a failed read is ours, not a
+// refusal of the caller's file type.
+func TestUploadHandler_AHeadReadErrorIs500NotAFormatRefusal(t *testing.T) {
+	t.Cleanup(extraction.SwapUploadHeadReaderForTest(func(io.Reader, []byte) (int, error) {
+		return 0, errors.New("disk read failed")
+	}))
+
+	spy := newUpSpy()
+	rec, raw, decoded := upPost(t, spy, "scan.pdf", upPDF, []byte("%PDF-1.7 body"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", rec.Code, raw)
+	}
+	if got := upString(t, decoded, "error"); got != "internal server error" {
+		t.Errorf("error = %q, want %q", got, "internal server error")
+	}
+	if len(spy.order) != 0 {
+		t.Errorf("a head read error ran %v, want neither seam", spy.order)
 	}
 }

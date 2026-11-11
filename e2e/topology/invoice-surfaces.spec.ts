@@ -6051,9 +6051,9 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 )
 
 // A .docx with the zip signature and unreadable content; the uuid carries the uniqueness.
-// EXTR-15-02 made DOCX boxless, so the worker hands these bytes to the reader, which refuses
+// DOCX is boxless, so the worker hands these bytes to the reader, which refuses
 // them: the job dead-letters at text_not_read (import-wizard-2.spec.ts rebuilds it as
-// uniqueEmptyDocxBytes() for EXTR15-E2E-04). The previewer path still reaches `unrenderable`.
+// uniqueCorruptDocxBytes() for EXTR15-E2E-04). The previewer path still reaches `unrenderable`.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)])
 }

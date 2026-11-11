@@ -24,6 +24,9 @@ const (
 // uploadRefusalMessage is the 400 body for a file type this route will not read.
 const uploadRefusalMessage = "this file type cannot be read here"
 
+// readUploadHead is the head-read seam; a test swaps it to inject a read failure.
+var readUploadHead = io.ReadFull
+
 // StoredDocument is what the store seam reports back. internal/extraction never imports
 // internal/document (deps_test.go's fence), so cmd/submission adapts document.Service.Store
 // into this shape, mirroring newDocumentOpener.
@@ -95,7 +98,12 @@ func UploadHandler(
 		}
 
 		head := make([]byte, filesig.HeadLen)
-		n, _ := io.ReadFull(file, head)
+		n, err := readUploadHead(file, head)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			log.ErrorContext(r.Context(), "extraction: read upload head", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
 		if !contentMatches(contentType, head[:n]) {
 			writeError(w, http.StatusBadRequest, uploadRefusalMessage)
 			return

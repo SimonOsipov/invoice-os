@@ -1,4 +1,4 @@
-"""AC for SECAUD-03-04: /v1/read refuses a body that is not a PDF or a DOCX.
+"""/v1/read refuses a body that is not a PDF or a DOCX.
 
 Needs docling importable -- run only via the Docker `test` stage.
 """

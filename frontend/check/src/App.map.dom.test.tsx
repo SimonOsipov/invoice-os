@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS } from './fields'
 import { MAPPING_SENTENCE } from './messages'
+import { GLYPHS } from './ds'
 import { MAP_SUMMARY, NEED_INVOICE_NO } from './copy'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -105,11 +106,9 @@ describe('map groups', () => {
       expect(['true', 'false']).toContain(b.getAttribute('aria-expanded'))
       if (open) expect(container.querySelector(`#${b.getAttribute('aria-controls')}`)).not.toBeNull()
     }
-    const chevrons = [...container.querySelectorAll('.check-chev svg')].map((c) => c.innerHTML)
+    const chevrons = [...container.querySelectorAll('.check-chev path')].map((c) => c.getAttribute('d'))
     expect(chevrons.length).toBe(5)
-    expect(chevrons[0]).not.toBe(chevrons[1])
-    expect(chevrons[0]).toBe(chevrons[4])
-    expect(chevrons[1]).toBe(chevrons[2])
+    expect(chevrons).toEqual([GLYPHS['chevron-up'][0], GLYPHS['chevron-down'][0], GLYPHS['chevron-down'][0], GLYPHS['chevron-down'][0], GLYPHS['chevron-up'][0]])
   })
 
   it('map_invoiceAndSupplierOpenOnArrival', async () => {

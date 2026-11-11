@@ -140,4 +140,5 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.
 
 Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.
+Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `readiness_check_requests`. It is global: no RLS. `invoice_gateway` gets no grant.
 Give `invoice_app` SELECT, DELETE and UPDATE (`unsubscribed_at`) on `mail_unsubscribes`, and EXECUTE on `mail_unsubscribe_token`. Give `invoice_gateway` EXECUTE only. It is global: no RLS. Only the erase routine deletes a row.

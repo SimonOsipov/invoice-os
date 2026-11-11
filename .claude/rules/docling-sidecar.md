@@ -16,6 +16,7 @@ paths:
 - Fetch the RapidOCR checkpoints with `fetch_rapidocr_models.py`, not Docling's own prefetch. It verifies SHA-256.
 - Render PDF page images through pypdfium2 (`PdfiumImageBackend` in `convert.py`). docling-parse paints a `/RunLengthDecode` image blank, and OCR then reads nothing.
 - Keep `pypdfium2` pinned in `requirements.txt`. It renders every image that OCR and the layout model read.
+- Keep `pillow` pinned in `requirements.txt` at 13.0.0 or later.
 - Split a line cell at a word gap wider than `SPLIT_GAP_HEIGHTS` line heights. docling-parse 7.21+ joins a label and its value up to 4 character advances apart.
 - Keep `test_backend.py` green. It locks the backend and asserts a scanned page reaches the wire with text.
 - Add no Surya or olmOCR weights.
@@ -43,3 +44,4 @@ paths:
 - Scrub locals, request bodies, quoted text and third-party log records in `sentryfilter.py`.
 - Make no transaction for `/healthz`, `/readyz` or `/healthz/*`.
 - Send a test event only when `SENTRY_TEST_EVENT` is exactly `true`.
+- Keep `allowed_formats` to PDF and DOCX in `convert.py`. `stub_read` refuses a body that starts with neither `%PDF-` nor `PK\x03\x04`.

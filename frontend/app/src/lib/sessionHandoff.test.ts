@@ -1097,6 +1097,76 @@ describe('join offers', () => {
     }
   })
 
+  const UNAVAILABLE: Reply = { status: 503, body: { error: 'x' } }
+  const OK_ME: Reply = { status: 200, body: ME }
+  const meCalls = (calls: Call[]) => calls.filter((c) => c.url === '/api/tenancy/v1/me').length
+
+  it('joinInvite_andCreateOwnWorkspaceRetryA503OnTheReadAfterRenewal', async () => {
+    vi.useFakeTimers()
+    try {
+      const joinCalls = stub({ me: [UNAVAILABLE, OK_ME] })
+      const joined = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await joined).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(joinCalls)).toBe(2)
+      expect(joinCalls.filter((c) => c.url.endsWith('/accept'))).toHaveLength(1)
+
+      const createCalls = stub({ me: [UNAVAILABLE, OK_ME] })
+      const created = createOwnWorkspace(GATEWAY, offer({ invites: [], firstWorkspace: true }), { workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' }, 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await created).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(createCalls)).toBe(2)
+      expect(createCalls.filter((c) => c.url === '/api/tenancy/v1/workspaces')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_refusalReadRetriesA503BeforeOpeningTheWorkspace', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls = stub({ accept: { status: 404, body: { error: MSG_INVALID } }, me: [UNAVAILABLE, OK_ME] })
+      const pending = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await pending).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(calls)).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_refusalReadThatStays503WaitsTheBackoffThenReportsTheRefusal', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls = stub({ accept: { status: 409, body: { error: MSG_ALREADY_MEMBER } }, me: [UNAVAILABLE, UNAVAILABLE, UNAVAILABLE] })
+      let settled = false
+      const pending = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e).finally(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(1499)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const err = await pending
+      expect(err).toBeInstanceOf(InviteRefusedError)
+      expect((err as InviteRefusedError).outcome).toBe('already-member')
+      expect(meCalls(calls)).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_readAfterRenewalRejectsAtOnceOnA401Or500', async () => {
+    for (const status of [401, 500]) {
+      const calls = stub({ me: [{ status }] })
+      const err = await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      expect(err, String(status)).toMatchObject({ status })
+      expect(meCalls(calls), String(status)).toBe(1)
+
+      const refused = stub({ accept: { status: 404, body: { error: MSG_INVALID } }, me: [{ status }] })
+      const out = await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      expect(out, `refusal ${status}`).toBeInstanceOf(InviteRefusedError)
+      expect(meCalls(refused), `refusal ${status}`).toBe(1)
+    }
+  })
+
   it('createOwnWorkspace_a201SendsWorkspaceCreatedOnce', async () => {
     stub({ me: [{ status: 200, body: IN_HOUSE_ME }] })
     await createOwnWorkspace(GATEWAY, offer({ token: WITH_ANSWERS, answers: ANSWERS, firstWorkspace: true }), ANSWERS, 5000)

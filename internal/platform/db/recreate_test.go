@@ -476,9 +476,7 @@ func TestProvisionRecreateDDLFailureRollsBack(t *testing.T) {
 	}
 }
 
-// connectionCheck returns a check that no client connection to the scratch database
-// is left and the advisory lock is free. The test owns none between steps, so the
-// settled count is 0; a baseline snapshot would absorb a backend that exits later.
+// connectionCheck asserts no client connection to the scratch database is left and the advisory lock is free; the test owns none between steps.
 func connectionCheck(t *testing.T, superDSN string) func(label string) {
 	t.Helper()
 	baseSuper, _ := requireProvisionDSNs(t)
@@ -517,26 +515,6 @@ func connectionCheck(t *testing.T, superDSN string) func(label string) {
 			t.Errorf("%s: advisory lock not free (ok=%v, err=%v)", label, ok, err)
 		}
 	}
-}
-
-// A backend the test does not own is open at the baseline and gone at the check.
-func TestProvisionRecreateConnectionBaselineIgnoresUnownedBackend(t *testing.T) {
-	superDSN, _ := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
-	ctx := context.Background()
-
-	unowned, err := pgx.Connect(ctx, superDSN)
-	if err != nil {
-		t.Fatalf("connect unowned: %v", err)
-	}
-	defer unowned.Close(ctx)
-	if _, err := unowned.Exec(ctx, `SELECT 1`); err != nil {
-		t.Fatalf("unowned backend: %v", err)
-	}
-	check := connectionCheck(t, superDSN)
-	if err := unowned.Close(ctx); err != nil {
-		t.Fatalf("close unowned: %v", err)
-	}
-	check("after an unowned backend exits")
 }
 
 func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {

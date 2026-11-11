@@ -40,7 +40,7 @@ func rcStore(t *testing.T) (*readinesscheck.Store, string) {
 	return &readinesscheck.Store{Pool: h.app, Contacts: noMerge{}}, rcrEmail(t)
 }
 
-func TestSetReadinessConfirmToken_ThePressAcceptsTheNewToken(t *testing.T) {
+func TestRLS_SetReadinessConfirmToken_ThePressAcceptsTheNewToken(t *testing.T) {
 	s, email := rcStore(t)
 	t1 := rcHold(t, s, email)
 	t2 := newToken(t)
@@ -55,7 +55,7 @@ func TestSetReadinessConfirmToken_ThePressAcceptsTheNewToken(t *testing.T) {
 	}
 }
 
-func TestSetReadinessConfirmToken_ChangesOnlyTheNewestRow(t *testing.T) {
+func TestRLS_SetReadinessConfirmToken_ChangesOnlyTheNewestRow(t *testing.T) {
 	s, email := rcStore(t)
 	t1 := rcHold(t, s, email)
 	t2 := rcHold(t, s, email)
@@ -73,7 +73,7 @@ func TestSetReadinessConfirmToken_ChangesOnlyTheNewestRow(t *testing.T) {
 	}
 }
 
-func TestSetReadinessConfirmToken_NoLiveRowIsFalse(t *testing.T) {
+func TestRLS_SetReadinessConfirmToken_NoLiveRowIsFalse(t *testing.T) {
 	s, email := rcStore(t)
 	if ok, err := rcSet(email, newToken(t)); err != nil || ok {
 		t.Fatalf("no row: SetReadinessConfirmToken = (%v, %v), want (false, nil)", ok, err)

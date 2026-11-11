@@ -28,7 +28,7 @@
 //	PRV-10 TestPreviewHandler_OversizedBodyWithIdentity413
 //	PRV-11 TestPreviewHandler_MissingFilePart400
 //	PRV-12 TestPreviewHandler_UnrecognizedFormat400
-//	PRV-13 TestPreviewHandler_UndecodableXLSX400
+//	PRV-13 TestPreview_RefusesAnXlsxThatIsNotAZip, TestPreview_AZipThatIsNotAWorkbookIsUndecodable
 //	PRV-14 TestPreviewHandler_InvalidMultipart400
 //	PRV-15 TestPreviewHandler_DuplicateBlankHeaderPreservedVerbatim
 //	PRV-16 TestPreviewHandler_ColumnsRowsTotalMatchDirectDecode
@@ -47,6 +47,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -413,13 +414,54 @@ func TestPreviewHandler_UnrecognizedFormat400(t *testing.T) {
 
 // --- PRV-13: undecodable xlsx -------------------------------------------------
 
-// TestPreviewHandler_UndecodableXLSX400 (PRV-13): an .xlsx filename whose
-// content is not a valid zip archive must 400 "could not decode uploaded
-// file". RED against the 501 stub: status assertion fails (got 501, want
-// 400).
-func TestPreviewHandler_UndecodableXLSX400(t *testing.T) {
+func TestPreview_RefusesAnXlsxThatIsNotAZip(t *testing.T) {
+	for _, tc := range []struct {
+		name, filename, contentType string
+		content                     []byte
+	}{
+		{"text body", "data.xlsx", xlsxContentType, []byte("not a zip file")},
+		{"pdf declared as a workbook", "upload", xlsxContentType, []byte("%PDF-1.4")},
+		{"legacy xls", "data.xlsx", xlsxContentType, []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}},
+		{"uppercase extension", "DATA.XLSX", "", []byte("not a zip file")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+			body, contentType := buildMultipartBody(t, "", "", tc.filename, tc.contentType, tc.content)
+			rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+			}
+			if resp.Error != "unrecognized file format" {
+				t.Errorf("error = %q, want %q", resp.Error, "unrecognized file format")
+			}
+			var env struct {
+				DocumentID string `json:"document_id"`
+			}
+			if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
+				t.Errorf("document_id missing from %s (err=%v)", raw, err)
+			}
+		})
+	}
+}
+
+func TestPreview_ACsvIsNotSignatureChecked(t *testing.T) {
 	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
-	body, contentType := buildMultipartBody(t, "", "", "data.xlsx", xlsxContentType, []byte("not a zip file"))
+	content := append([]byte("\xEF\xBB\xBF"), []byte("Invoice No,Issue Date\nINV-1,2026-06-03\n")...)
+	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", content)
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if want := []string{"Invoice No", "Issue Date"}; !slices.Equal(resp.Columns, want) {
+		t.Errorf("columns = %v, want %v", resp.Columns, want)
+	}
+}
+
+func TestPreview_AZipThatIsNotAWorkbookIsUndecodable(t *testing.T) {
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+	body, contentType := buildMultipartBody(t, "", "", "data.xlsx", xlsxContentType, []byte("PK\x03\x04 not a workbook"))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
 
 	if rec.Code != http.StatusBadRequest {

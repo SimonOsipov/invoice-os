@@ -1027,7 +1027,7 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		preview, _ := invitationPreviewerStub("tunde@obi.test")
 		regs, registered := invitationRegistrationsStub("tunde@obi.test")
-		_, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
+		_, register := invitationHandlers(authURL, site, 0, preview, regs, nil, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
@@ -1047,9 +1047,9 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 			log := slog.New(slog.DiscardHandler)
 			var invitation, register http.Handler
 			if unset == "AUTH_URL" {
-				invitation, register = invitationHandlers(nil, site, 0, preview, regs, log)
+				invitation, register = invitationHandlers(nil, site, 0, preview, regs, nil, log)
 			} else {
-				invitation, register = invitationHandlers(authURL, nil, 0, preview, regs, log)
+				invitation, register = invitationHandlers(authURL, nil, 0, preview, regs, nil, log)
 			}
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
@@ -1208,7 +1208,7 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			c.strip(&regs)
-			invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
+			invitation, register := invitationHandlers(authURL, site, 0, preview, regs, nil, slog.New(slog.DiscardHandler))
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 

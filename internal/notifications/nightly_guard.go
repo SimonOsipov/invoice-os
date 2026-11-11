@@ -16,7 +16,7 @@ var receivingDomainPattern = regexp.MustCompile(`^[a-z0-9-]+\.resend\.app$`)
 
 // guardNightly limits the real Resend calls and real mail of the nightly to its run addresses; every
 // other address gets the fake client and the capture. Pinned by TestNightlyGuard_*.
-func guardNightly(w *NewsletterWiring, domain string) error {
+func guardNightly(w *NewsletterWiring, domain string, tokens accountmail.TokenFunc) error {
 	domain = foldASCII(strings.TrimSpace(domain))
 	if !receivingDomainPattern.MatchString(domain) {
 		return errors.New("notifications: " + envReceivingDomain + " must be a <name>.resend.app domain for a real nightly newsletter or mail")
@@ -26,7 +26,7 @@ func guardNightly(w *NewsletterWiring, domain string) error {
 		w.Resend = guardResend{real: w.Resend, allow: allow}
 	}
 	if w.MailMode == accountmail.ModeReal {
-		w.Sender = &guardSender{real: w.Sender, capture: &accountmail.Capture{}, allow: allow}
+		w.Sender = &guardSender{real: w.Sender, capture: &accountmail.Capture{Tokens: tokens}, allow: allow}
 	}
 	return nil
 }

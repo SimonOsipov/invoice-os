@@ -1,4 +1,4 @@
-import { CHECK_INTRO, READING_TEXT } from '../copy'
+import { READING_TEXT } from '../copy'
 import { ACCEPT } from '../fields'
 import type { Refusal as RefusalValue } from '../messages'
 import { Refusal } from './Refusal'
@@ -14,7 +14,6 @@ interface Props {
 export function UploadStep({ fileName, reading, verdict, refusal, onPick }: Props) {
   return (
     <section className="check-card">
-      <p>{CHECK_INTRO}</p>
       <label htmlFor="check-file" className="check-label">
         Invoice file
       </label>

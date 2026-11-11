@@ -76,6 +76,13 @@ func checkComposes(t *testing.T, name string) {
 	if len(layout) == 0 || len(mail) == 0 {
 		t.Fatalf("layout.html %d bytes, %s.html %d bytes; want both non-empty", len(layout), name, len(mail))
 	}
+	if name != "confirmation" && name != "recovery" {
+		unsub, err := files.ReadFile("unsubscribe_url.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mail = append(mail, unsub...)
+	}
 	if !bytes.HasPrefix(src, layout) || !bytes.HasSuffix(src, mail) {
 		t.Errorf("Template(%s) is not layout.html followed by %s.html", name, name)
 	}
@@ -154,8 +161,8 @@ func TestRenderDeletionNotice_TokenIsEscapedInBothLinks(t *testing.T) {
 		_, out := renderNotice(t, m)
 		want := AppURL + "#cancel-deletion=" + c.frag
 		as := anchors(out)
-		if len(as) != 3 {
-			t.Fatalf("token %q: anchors = %+v, want 3", c.token, as)
+		if len(as) != 4 {
+			t.Fatalf("token %q: anchors = %+v, want 4 (button, fallback, Privacy, Unsubscribe)", c.token, as)
 		}
 		if as[0].text != "Cancel the deletion" || as[0].href != want {
 			t.Errorf("token %q: button = %+v, want href %s", c.token, as[0], want)
@@ -243,7 +250,7 @@ func TestRenderDeletionNotice_EscapesHostileInput(t *testing.T) {
 	}
 	as := anchors(out)
 	const link = AppURL + "#cancel-deletion=t0k"
-	if len(as) != 3 || as[0].href != link || as[1].href != link || as[2].href != "https://www.ascomply.com/privacy" {
+	if len(as) != 4 || as[0].href != link || as[1].href != link || as[2].href != "https://www.ascomply.com/privacy" || as[3].text != "Unsubscribe" {
 		t.Errorf("hostile input moved an anchor: %+v", as)
 	}
 	pre := preheaderRe.FindStringSubmatch(out)

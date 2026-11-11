@@ -168,10 +168,10 @@ export async function registerFresh(prefix = 'handoff', password?: string): Prom
 // Signs in once before provisioning (the hand-off) and again after (the tenant claim).
 export async function registerFormAccount(
   prefix: string,
-  opts: { marketingConsentText?: string; workspaceName?: string } = {},
+  opts: { marketingConsentText?: string; workspaceName?: string; email?: string } = {},
 ): Promise<{ account: RealAccount; token: string }> {
   const id = crypto.randomUUID()
-  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: opts.workspaceName ?? `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const account: RealAccount = { email: opts.email ?? `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: opts.workspaceName ?? `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
   const res = await rawFetch('/auth/register', {
     method: 'POST',
     body: {
@@ -198,8 +198,9 @@ export interface ContactMe {
   email: string
   tags: string[]
   marketing_eligible: boolean
+  marketing_unsubscribed: boolean
   hubspot: { delivered_at: string | null }
-  resend: { delivered_at: string | null; applies: boolean }
+  resend: { delivered_at: string | null; applies: boolean; opt_in_sent: boolean }
   mode: string
 }
 
@@ -244,6 +245,13 @@ export async function refreshSession(refreshToken: string): Promise<string> {
 // Unverified payload of a JWT the gateway just minted.
 export function claimsOf(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
+// The token the account's mails carry (D2); a preview reads no mail.
+export function unsubscribeTokenOf(accessToken: string): string {
+  const token = (claimsOf(accessToken).user_metadata as { unsubscribe?: unknown } | undefined)?.unsubscribe
+  if (typeof token === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(token)) return token
+  throw new Error('the access token holds no unsubscribe token')
 }
 
 // Unverified header of a JWT.

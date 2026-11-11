@@ -456,14 +456,15 @@ func TestGatewayMainWiresTheInvitationHandlers(t *testing.T) {
 		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
 	}
 	call := invCalls[0]
-	if len(call.Args) != 6 {
-		t.Fatalf("invitationHandlers call has %d arguments, want 6", len(call.Args))
+	if len(call.Args) != 7 {
+		t.Fatalf("invitationHandlers call has %d arguments, want 7", len(call.Args))
 	}
 	for i, want := range map[int]string{
 		0: `probed["auth"]`,
 		1: "siteURL",
 		2: "registerMinResponse",
-		5: "app.Logger",
+		5: "poolTokens(gwPool)",
+		6: "app.Logger",
 	} {
 		if got := types.ExprString(call.Args[i]); got != want {
 			t.Errorf("invitationHandlers argument %d = %s, want %s", i+1, got, want)
@@ -530,7 +531,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
 	}
 	regs, _ := invitationRegistrationsStub("tunde@obi.test")
-	invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
+	invitation, register := invitationHandlers(authURL, site, 0, preview, regs, nil, slog.New(slog.DiscardHandler))
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})

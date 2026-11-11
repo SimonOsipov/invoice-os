@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join, matchesGlob } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ARGOS_SCREENS, changedOf, main, mergeName, run, type Build, type Deps, type Stats } from './argosBuild'
+import { ARGOS_MAX_SHOTS, ARGOS_SCREENS, changedOf, main, mergeName, run, type Build, type Deps, type Stats } from './argosBuild'
 
 let dir: string
 let out: string
@@ -284,7 +284,20 @@ describe('changed', () => {
   })
 })
 
+describe('check shots', () => {
+  it('argosScreens_registersTheCheckShots', () => {
+    expect(ARGOS_SCREENS).toEqual(expect.arrayContaining(['check/upload', 'check/map']))
+    expect(allNames().length).toBeLessThanOrEqual(ARGOS_MAX_SHOTS)
+  })
+})
+
 describe('missing', () => {
+  it('missingOf reports a lost check shot', async () => {
+    await putShots(allNames().filter((n) => n !== 'check/map/375'))
+    const { d } = deps()
+    expect((await run(dl(), out, d)).missing).toEqual(['check/map/375: no shot'])
+  })
+
   it('a lost shard is listed as missing', async () => {
     const lost = allNames().filter((n) => n.startsWith('blog/'))
     await putShots(allNames().filter((n) => !n.startsWith('blog/')))

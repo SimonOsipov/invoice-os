@@ -16,6 +16,8 @@ type FakeResend struct{ State *ResendState }
 
 func (FakeResend) Sync(context.Context, Contact, bool) error { return nil }
 
+func (FakeResend) OptOutMarketing(context.Context, string) error { return nil }
+
 func (FakeResend) EraseContact(context.Context, string) error { return nil }
 
 func (f FakeResend) ContactState(context.Context, string) (ResendState, error) {

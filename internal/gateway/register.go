@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
 const (
@@ -23,12 +25,16 @@ const (
 	maxConsentTextChars = 500
 )
 
+// tokenLookupTimeout bounds the unsubscribe token lookup; the floor still holds after it.
+const tokenLookupTimeout = time.Second
+
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
 const DefaultRegisterMinResponse = 2 * time.Second
 
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup) http.Handler {
+// A nil tokens signs up without the unsubscribe token.
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
@@ -86,7 +92,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		}
 
 		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
-		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil)
+		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil, tokens, in.Email)
 	})
 }
 
@@ -94,8 +100,9 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 // RegisterHandler and InvitationRegisterHandler share it.
 // When invited reports true, it answers as for a new address without calling GoTrue.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
+// After that check it adds the address's unsubscribe token to body's data; a nil tokens, an error or a lookup slower than tokenLookupTimeout leaves it out.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, log *slog.Logger, invited func(context.Context) (bool, error), existing func(), tokens accountmail.TokenFunc, email string) (accountMayExist bool) {
 	if invited != nil {
 		yes, lerr := invited(r.Context())
 		if lerr != nil || yes {
@@ -109,6 +116,10 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 			}
 			return false
 		}
+	}
+
+	if tokens != nil && body != nil {
+		addUnsubscribeToken(r.Context(), log, body, tokens, email)
 	}
 
 	var created any
@@ -169,6 +180,23 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
+}
+
+// addUnsubscribeToken sets data.unsubscribe, creating data when absent. The WARN holds no address.
+func addUnsubscribeToken(ctx context.Context, log *slog.Logger, body map[string]any, tokens accountmail.TokenFunc, email string) {
+	ctx, cancel := context.WithTimeout(ctx, tokenLookupTimeout)
+	defer cancel()
+	token, err := tokens(ctx, email)
+	if err != nil || token == "" {
+		log.WarnContext(ctx, "registration: unsubscribe token unavailable, signing up without it")
+		return
+	}
+	data, _ := body["data"].(map[string]any)
+	if data == nil {
+		data = map[string]any{}
+		body["data"] = data
+	}
+	data[accountmail.UnsubscribeMetadataKey] = token
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and

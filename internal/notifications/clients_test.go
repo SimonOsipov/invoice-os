@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -269,7 +270,7 @@ func clWiring(t *testing.T, env string, vars map[string]string) NewsletterWiring
 	if err != nil {
 		t.Fatalf("deliveryClients: %v", err)
 	}
-	w, err := NewsletterClients(clGetenv(vars), env, contacts, nil)
+	w, err := NewsletterClients(clGetenv(vars), env, contacts, nil, nil)
 	if err != nil {
 		t.Fatalf("newsletterClients: %v", err)
 	}
@@ -322,7 +323,7 @@ func TestNewsletterClients_NightlySendingKeyWithoutBlogIdsGuardsTheSender(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy)
+	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func TestNewsletterClients_NightlySendingKeyWithoutBlogIdsOrDomainFailsToBoot(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil); err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
+	if _, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil, nil); err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
 		t.Fatalf("err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", err)
 	}
 }
@@ -352,7 +353,7 @@ func TestNewsletterClients_NightlyRealWithoutDomainFailsToBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deliveryClients: %v", err)
 	}
-	_, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil)
+	_, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
 		t.Fatalf("err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", err)
 	}
@@ -438,7 +439,7 @@ func TestNewsletterClients_NightlyReceivingDomainIsTrimmedAndChecked(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		return NewsletterClients(clGetenv(vars), "nightly", contacts, nil)
+		return NewsletterClients(clGetenv(vars), "nightly", contacts, nil, nil)
 	}
 	if _, err := boot("x.resend.app\n"); err != nil {
 		t.Errorf("newline-suffixed domain: %v", err)
@@ -446,6 +447,44 @@ func TestNewsletterClients_NightlyReceivingDomainIsTrimmedAndChecked(t *testing.
 	for _, bad := range []string{"gmail.com", "ascomply.com", "evil.example", "x.resend.app.evil.example"} {
 		if _, err := boot(bad); err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
 			t.Errorf("domain %q: err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", bad, err)
+		}
+	}
+}
+
+func TestNewsletterClients_PassesTheTokenFunc(t *testing.T) {
+	html := `<a href="` + accountmail.UnsubscribeURL + `?t=ASCOMPLY_UNSUBSCRIBE_TOKEN">Unsubscribe</a>`
+	tokens := func(context.Context, string) (string, error) { return "tok", nil }
+
+	var posted strings.Builder
+	spy := &clSpyTransport{respond: func(_ int, r *http.Request) *http.Response {
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			posted.Write(b)
+		}
+		return clReply(r, http.StatusOK, nil)
+	}}
+	for _, env := range []string{"pr-1", "production"} {
+		posted.Reset()
+		vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+		contacts, _, _, err := DeliveryClients(clGetenv(vars), env, spy)
+		if err != nil {
+			t.Fatalf("%s: %v", env, err)
+		}
+		w, err := NewsletterClients(clGetenv(vars), env, contacts, spy, tokens)
+		if err != nil {
+			t.Fatalf("%s: %v", env, err)
+		}
+		if err := w.Sender.Send(t.Context(), []accountmail.Message{{To: clAda.Email, HTML: html}}); err != nil {
+			t.Fatalf("%s: send: %v", env, err)
+		}
+		var got string
+		if c, ok := w.Sender.(*accountmail.Capture); ok {
+			got = c.Messages()[0].HTML
+		} else {
+			got = posted.String()
+		}
+		if !strings.Contains(got, "?t=tok") || strings.Contains(got, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+			t.Errorf("%s: mail = %s, want the token filled", env, got)
 		}
 	}
 }

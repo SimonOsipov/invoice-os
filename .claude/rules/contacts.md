@@ -6,6 +6,8 @@ paths:
   - "internal/gateway/blog_subscribe*.go"
   - "internal/gateway/readiness_check*.go"
   - "migrations/*contacts*"
+  - "migrations/*mail_unsubscribes*"
+  - "internal/gateway/unsubscribe*.go"
 ---
 # Contact sync
 
@@ -28,7 +30,7 @@ paths:
 - Put `{{{RESEND_UNSUBSCRIBE_URL}}}` in every Marketing broadcast.
 - Write blog subscribers to Resend only, never HubSpot.
 - Never touch Resend before the confirm click.
-- Never send `unsubscribed` (true or false) or any `opt_out` (Marketing or Blog topic) for a blog subscriber.
+- Never send `unsubscribed` (true or false) or a Blog topic `opt_out` for a blog subscriber. A Marketing `opt_out` goes out only on the person's own unsubscribe press (the exception below).
 - Never add or remove a Resend suppression.
 - Delete unconfirmed blog requests within an hour of expiry.
 - A Resend broadcast cannot filter on a contact property. Send every blog broadcast to all of segment "Blog". Use `blog_categories` and `blog_frequency` to choose content only.
@@ -38,7 +40,9 @@ paths:
 - Send no `opt_in` and write no stamp when the contact is unsubscribed.
 - Treat a Marketing `opt_out` alone as Resend's default, not a refusal.
 - Retry the job when the read fails. Send the `opt_in` when the contact is missing.
+- Send no `opt_in` and read no Resend state when `mail_unsubscribes` records an unsubscribe for the address.
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
+- Exception: the person's own press on the unsubscribe page sends the Marketing topic `opt_out` once (`UnsubscribeStore.Press`). It sends no `unsubscribed` and makes no suppression call.
 - Exception: the erase deleted the Resend contact of an address that another account holds. The rebuild clears `resend_opt_in_sent_at`, so the next delivery sends the `opt_in` once more (`TestErase_ACleanContactGetsItsMarketingOptInBack`).
 - Keep the stamp when the contact was unsubscribed or opted out of Marketing (`TestErase_AnUnsubscribedContactStaysUnsubscribed`, `TestErase_AMarketingOptOutStaysOptedOut`).
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
@@ -79,4 +83,6 @@ paths:
 - Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
 - The sweep deletes the person's accepted invitations and, when no other account holds the address, the pending and revoked invitations to it (`TestErase_SweepDeletesTheInvitations`).
 - The erase sweep deletes the address's `readiness_checks` rows when no other account holds the address.
+- Delete the address's `mail_unsubscribes` row in the erase sweep when no other account holds the address.
+- Fill the unsubscribe link of every `accountmail` mail from `mail_unsubscribe_token`. Never send a mail with the placeholder. When the lookup fails, send the mail with the bare link.
 - Never put an email, a name or a user id in an erase log line or error.

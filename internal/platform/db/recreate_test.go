@@ -476,8 +476,9 @@ func TestProvisionRecreateDDLFailureRollsBack(t *testing.T) {
 	}
 }
 
-func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
-	superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+// connectionCheck asserts no client connection to the scratch database is left and the advisory lock is free; the test owns none between steps.
+func connectionCheck(t *testing.T, superDSN string) func(label string) {
+	t.Helper()
 	baseSuper, _ := requireProvisionDSNs(t)
 	name := strings.TrimPrefix(func() string { u, _ := url.Parse(superDSN); return u.Path }(), "/")
 	ctx := context.Background()
@@ -486,24 +487,23 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer counter.Close(ctx)
+	t.Cleanup(func() { counter.Close(ctx) })
 	count := func() int {
 		var n int
-		if err := counter.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = $1`, name).Scan(&n); err != nil {
+		if err := counter.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND backend_type = 'client backend'`, name).Scan(&n); err != nil {
 			t.Fatalf("count activity: %v", err)
 		}
 		return n
 	}
-	before := count()
 
-	check := func(label string) {
+	return func(label string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
-		for count() != before && time.Now().Before(deadline) {
+		for count() != 0 && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 		}
-		if n := count(); n != before {
-			t.Errorf("%s: %d connections to the scratch database, want %d", label, n, before)
+		if n := count(); n != 0 {
+			t.Errorf("%s: %d connections to the scratch database, want 0", label, n)
 		}
 		probe, err := pgx.Connect(ctx, superDSN)
 		if err != nil {
@@ -515,6 +515,11 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 			t.Errorf("%s: advisory lock not free (ok=%v, err=%v)", label, ok, err)
 		}
 	}
+}
+
+func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
+	superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+	check := connectionCheck(t, superDSN)
 
 	if got, err := recreate(t, superDSN, fstest.MapFS{}, nil); err == nil || got {
 		t.Fatalf("empty migration set: got %v, %v, want false and an error", got, err)

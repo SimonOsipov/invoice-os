@@ -453,6 +453,7 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 		{"503 busy", 503, `{"error":"busy"}`, false},
 		{"503 unavailable", 503, `{"error":"unavailable"}`, false},
 		{"503 ceiling", 503, `{"error":"ceiling"}`, false},
+		{"400 other word", 400, `{"error":"too long"}`, false},
 		{"connection refused", 0, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -469,7 +470,7 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 	}
 }
 
-// wantCeilingSentence is D17's sentence copied from the decision; checkCeilingSentence must equal it.
+// wantCeilingSentence is the agreed sentence; checkCeilingSentence must equal it.
 const wantCeilingSentence = "The free check has reached its limit for today. Try again tomorrow."
 
 func TestRun_WorkerCeilingIsTheCeilingSentence(t *testing.T) {
@@ -494,6 +495,16 @@ func TestRun_WorkerUnavailableStaysTheUnavailableSentence(t *testing.T) {
 			e.w.answer(503, reply)
 			wantRefused(t, e.runOK(t, checkIP), 503, checkUnavailableSentence)
 		})
+	}
+}
+
+func TestRun_KeepsTheSlotForTheTooLongRefusal(t *testing.T) {
+	const word = "This document has too much text for the free check. Try a shorter invoice."
+	e := newCheckEnv(t, true)
+	e.w.answer(400, `{"error":"`+word+`"}`)
+	wantRefused(t, e.runOK(t, checkIP), 400, word)
+	if n := ipCount(e.th, checkIP); n != 1 {
+		t.Errorf("ip count = %d, want 1: Docling already read the file", n)
 	}
 }
 

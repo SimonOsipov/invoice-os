@@ -222,7 +222,7 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
 	rvdSeedField(t, ctx, tenantB, jobB, "supplier_tin", rvdStr("B-TIN"), nil, 0, nil, now)
 
-	// B's job carries the SECAUD-05 flag: A's refused read must not return it.
+	// B's job carries the flag: A's refused read must not return it.
 	if ct, err := stRequire(t).super.Exec(ctx, `UPDATE extraction_jobs SET ai_text_truncated = true WHERE id = $1`, jobB); err != nil || ct.RowsAffected() != 1 {
 		t.Fatalf("plant ai_text_truncated on job %s: rows %d, err %v", jobB, ct.RowsAffected(), err)
 	}
@@ -1948,7 +1948,7 @@ func TestRLS_ExtractionDetailServesTheDocumentType(t *testing.T) {
 	}
 }
 
-// SECAUD-05-04: the flag rides the detail wire as a boolean, never null; the default row is false.
+// The flag rides the detail wire as a boolean, never null; the default row is false.
 func TestReaderDetail_ReturnsAITextTruncated(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)

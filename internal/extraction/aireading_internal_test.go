@@ -827,6 +827,20 @@ func TestDoclingPromptText_KeepsHeadAndTailWithinTheBound(t *testing.T) {
 	}
 }
 
+// Head and tail each fill their half; the marker line must come out of the bound, not on top of it.
+func TestDoclingPromptText_MarkerStaysInsideTheBound(t *testing.T) {
+	for size := 0; size < 40; size++ {
+		text := DoclingPromptText(dpPages(800, 50, size))
+		rows := dpRows(text)
+		if !strings.Contains(rows, aiPromptOmitted) {
+			t.Fatalf("size %d: no marker; the document is not over the bound", size)
+		}
+		if len(rows) > maxDoclingPromptBytes {
+			t.Fatalf("size %d: text after the intro = %d bytes, want <= %d", size, len(rows), maxDoclingPromptBytes)
+		}
+	}
+}
+
 func TestDoclingPromptText_KeepsWholeLinesInReaderOrder(t *testing.T) {
 	pages := dpPages(40, 200, 20)
 	var whole = map[string]bool{aiPromptOmitted: true}

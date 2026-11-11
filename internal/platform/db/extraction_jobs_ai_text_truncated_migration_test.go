@@ -1,4 +1,4 @@
-// Suite for the extraction_jobs.ai_text_truncated migration (SECAUD-05-04): the flag a tenant job
+// Suite for the extraction_jobs.ai_text_truncated migration: the flag a tenant job
 // records when the AI read cut text. One migrator transaction, rolled back, the shape of
 // extraction_jobs_document_type_migration_test.go.
 package db_test

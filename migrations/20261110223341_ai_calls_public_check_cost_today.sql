@@ -2,6 +2,8 @@
 -- +goose Up
 GRANT SELECT (tenant_id, cost, created_at) ON public.ai_calls TO auth_hook_reader;
 CREATE POLICY public_check_spend ON public.ai_calls FOR SELECT TO auth_hook_reader USING (tenant_id IS NULL);
+-- tenant_isolation has no TO clause: without this, a session as auth_hook_reader with app.current_tenant set reads that tenant's rows.
+CREATE POLICY public_check_spend_only ON public.ai_calls AS RESTRICTIVE FOR SELECT TO auth_hook_reader USING (tenant_id IS NULL);
 CREATE INDEX ai_calls_public_check_day ON public.ai_calls (created_at) WHERE tenant_id IS NULL;
 
 SET LOCAL ROLE auth_hook_reader;
@@ -21,5 +23,6 @@ SET LOCAL ROLE auth_hook_reader;
 DROP FUNCTION public.public_check_ai_cost_today();
 RESET ROLE;
 DROP INDEX public.ai_calls_public_check_day;
+DROP POLICY public_check_spend_only ON public.ai_calls;
 DROP POLICY public_check_spend ON public.ai_calls;
 REVOKE SELECT (tenant_id, cost, created_at) ON public.ai_calls FROM auth_hook_reader;

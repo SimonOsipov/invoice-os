@@ -1,4 +1,4 @@
-// SECAUD-05-04: extraction_jobs.ai_text_truncated, the flag a tenant text read records when both
+// extraction_jobs.ai_text_truncated, the flag a tenant text read records when both
 // AI calls answered from cut text. Rides worker_db_test.go's harness (wkAI, wpWorker, wkImageWorker).
 package extraction_test
 

@@ -1,4 +1,4 @@
-// Tests for public.public_check_ai_cost_today(), the check's AI spend for the UTC day (SECAUD-05-05).
+// Tests for public.public_check_ai_cost_today(), the check's AI spend for the UTC day.
 // Reads run as invoice_app inside a rolled-back transaction; superuser seeds are deleted by id.
 package db_test
 
@@ -272,6 +272,40 @@ func TestRLS_AuthHookReaderSeesNoTenantAICallsRow(t *testing.T) {
 	}
 	if n := mustCount(t, tx, `SELECT count(*) FROM ai_calls WHERE tenant_id IS NULL`); n < 1 {
 		t.Errorf("auth_hook_reader sees %d NULL-tenant rows, want at least the seeded one", n)
+	}
+}
+
+// tenant_isolation has no TO clause, so a tenant GUC must not widen what auth_hook_reader reads.
+func TestRLS_AuthHookReaderSeesNoTenantAICallsRowWithATenantSet(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	t1 := aiTenants(t, 1)[0]
+	publicSpendSeed(t, t1, "1")
+	publicSpendSeed(t, "", "0.4")
+
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, t1); err != nil {
+		t.Fatalf("set app.current_tenant: %v", err)
+	}
+	before := publicSpend(t, tx)
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE auth_hook_reader`); err != nil {
+		t.Fatalf("SET LOCAL ROLE auth_hook_reader: %v", err)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM ai_calls WHERE tenant_id IS NOT NULL`); n != 0 {
+		t.Errorf("auth_hook_reader sees %d tenant rows of ai_calls with app.current_tenant set, want 0", n)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM ai_calls WHERE tenant_id IS NULL`); n < 1 {
+		t.Errorf("auth_hook_reader sees %d NULL-tenant rows, want at least the seeded one", n)
+	}
+	if after := publicSpend(t, tx); after.Cmp(before) != 0 {
+		t.Errorf("%s = %s as auth_hook_reader, want %s (the NULL-tenant sum)", publicSpendFn, after.FloatString(6), before.FloatString(6))
+	}
+	if before.Cmp(ratOf(t, "0.4")) < 0 {
+		t.Errorf("%s = %s, want at least the seeded 0.4", publicSpendFn, before.FloatString(6))
 	}
 }
 

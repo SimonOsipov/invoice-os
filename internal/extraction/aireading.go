@@ -116,7 +116,8 @@ func doclingPrompt(pages []TokenPage) (text string, cut bool) {
 		total += len(l) + 1
 	}
 	if total > maxDoclingPromptBytes {
-		const half = maxDoclingPromptBytes / 2
+		// The marker line comes out of the budget, so the joined text stays within the bound.
+		const half = (maxDoclingPromptBytes - len(aiPromptOmitted)) / 2
 		head, used := 0, 0
 		for head < len(lines) && used+len(lines[head])+1 <= half {
 			used += len(lines[head]) + 1

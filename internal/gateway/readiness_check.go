@@ -42,6 +42,7 @@ const (
 	checkSlowUploadSentence  = "The upload took too long. Try again on a faster connection."
 	checkUnavailableSentence = "The check is unavailable. Try again in a few minutes."
 	checkCeilingSentence     = "The free check has reached its limit for today. Try again tomorrow."
+	checkTooLongSentence     = "This document has too much text for the free check. Try a shorter invoice."
 	checkSignUpSentence      = "This address has used its 3 free checks. Sign up to check every invoice."
 	checkUnreadableSentence  = "We could not read this file."
 	checkTooLargeSentence    = "file is over 15 MiB"
@@ -447,9 +448,12 @@ func workerRefusal(status int, body []byte) (out int, word, text string) {
 }
 
 // engineNotStarted reports whether the worker answered before it ran the engine; the IP slot then comes back.
+// The too-long refusal keeps the slot: Docling had already read the file.
 func engineNotStarted(status int, word string) bool {
 	switch status {
-	case http.StatusConflict, http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+	case http.StatusBadRequest:
+		return word != checkTooLongSentence
+	case http.StatusConflict, http.StatusRequestEntityTooLarge:
 		return true
 	case http.StatusServiceUnavailable:
 		return word == "busy" || word == "unavailable" || word == "ceiling"

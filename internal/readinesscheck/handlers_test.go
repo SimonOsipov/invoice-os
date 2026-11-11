@@ -907,11 +907,11 @@ func TestRunHandler_ATooLongDocumentWritesNoSummary(t *testing.T) {
 	r.noWrites(t)
 }
 
-// dailyCeiling is D14's $2.00 copied from the decision; AISpendCeilingUSD must equal it.
+// dailyCeiling is the agreed $2.00; AISpendCeilingUSD must equal it.
 const dailyCeiling = "2.00"
 
 func TestRunHandler_PastTheCeilingAnswersCeilingAndRunsNothing(t *testing.T) {
-	// D16: the ceiling comes before Count, so it wins over a full address and a failed Count.
+	// The ceiling comes before Count, so it wins over a full address and a failed Count.
 	for _, tc := range []struct {
 		name     string
 		count    int

@@ -43,7 +43,7 @@ func TestCeiling_ATenantAICallProceedsPastTheCheckCeiling(t *testing.T) {
 	t1 := e.tenants(t, 1)[0]
 	ctx := context.Background()
 
-	// D14's $2.00 copied from the decision; readinesscheck.AISpendCeilingUSD must equal it.
+	// The agreed $2.00; readinesscheck.AISpendCeilingUSD must equal it.
 	const ceiling = "2.00"
 	if readinesscheck.AISpendCeilingUSD != ceiling {
 		t.Fatalf("AISpendCeilingUSD = %q, want %q", readinesscheck.AISpendCeilingUSD, ceiling)

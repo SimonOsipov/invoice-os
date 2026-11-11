@@ -496,6 +496,19 @@ describe('map hold release', () => {
   })
 })
 
+describe('map hold release without a pointerup', () => {
+  it('map_aHoldReleasesOnTabWhenAPopupTookThePointerup', async () => {
+    await toMap(suggestion(COLS, INVOICE_DATES))
+    await act(async () => void must('invoice_kind').dispatchEvent(new Event('pointerdown', { bubbles: true })))
+    await choose('invoice_kind', 'Note')
+    expect(listIds('invoice')).toContain('invoice_kind')
+    await act(async () => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })))
+    await leave('invoice_kind')
+    expect(sel('invoice_kind')).toBeNull()
+    expect(subheadText('invoice')).toBe('3 matched from your file')
+  })
+})
+
 describe('rejected mapping', () => {
   const RUN = '/readiness-check/run'
   const SHEET = suggestion(['Inv', 'Seller', 'STIN', 'Net'], { invoice_number: 'Inv', supplier_name: 'Seller' })
@@ -550,6 +563,12 @@ describe('rejected mapping', () => {
     await click(button('Continue')!)
     expect(container.querySelector<HTMLInputElement>('#check-email')!.value).toBe('a@example.com')
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true)
+  })
+
+  it('map_aRejectedMappingMovesFocusToTheAlert', async () => {
+    await toRejected()
+    expect(alertIn()).not.toBeNull()
+    expect(document.activeElement).toBe(alertIn())
   })
 
   it('map_aFieldChangeClearsTheMappingAlert', async () => {

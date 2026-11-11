@@ -45,11 +45,20 @@ export function MapStep({ fileName, suggestion, fields, error, onField, onBack, 
     }
     document.addEventListener('pointerup', end)
     document.addEventListener('pointercancel', end)
+    // A native popup can take the pointerup; any key press also ends the hold.
+    document.addEventListener('keydown', end)
     return () => {
       document.removeEventListener('pointerup', end)
       document.removeEventListener('pointercancel', end)
+      document.removeEventListener('keydown', end)
     }
   }, [])
+
+  // A rejected mapping unmounts the focused Send button; focus moves to the alert.
+  const alertRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (error) alertRef.current?.focus()
+  }, [error])
 
   const renderRow = (key: string) => {
     const tagged = fields[key] !== null && fields[key] === suggestion.mapping[key]
@@ -218,7 +227,7 @@ export function MapStep({ fileName, suggestion, fields, error, onField, onBack, 
       </div>
       <div className="check-sticky">
         {error && (
-          <div className="check-alert" role="alert">
+          <div ref={alertRef} tabIndex={-1} className="check-alert" role="alert">
             <Icon paths={GLYPHS['triangle-alert']} size={18} strokeWidth={2} />
             <span>{error}</span>
           </div>

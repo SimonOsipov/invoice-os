@@ -55,7 +55,7 @@ type fakeWorker struct {
 
 func newFakeWorker(t *testing.T) *fakeWorker {
 	t.Helper()
-	w := &fakeWorker{status: http.StatusOK, reply: `{"checks_left":2}`}
+	w := &fakeWorker{status: http.StatusOK, reply: `{"status":"confirm"}`}
 	w.srv = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Lock()
 		w.n++
@@ -106,40 +106,20 @@ func (w *fakeWorker) answer(status int, reply string) {
 	w.mu.Unlock()
 }
 
-type fakeCheckSink struct {
-	mu    sync.Mutex
-	calls [][2]string
-	err   error
-}
-
-func (s *fakeCheckSink) ReadinessCheck(_ context.Context, email, consent string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls = append(s.calls, [2]string{email, consent})
-	return s.err
-}
-
-func (s *fakeCheckSink) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.calls)
-}
-
 type checkEnv struct {
 	rc   *readinessCheck
 	th   *SignInThrottle
-	sink *fakeCheckSink
 	w    *fakeWorker
 	logs *safeBuf
 }
 
 func newCheckEnv(t *testing.T, enforce bool) *checkEnv {
 	t.Helper()
-	e := &checkEnv{sink: &fakeCheckSink{}, w: newFakeWorker(t), logs: &safeBuf{}}
+	e := &checkEnv{w: newFakeWorker(t), logs: &safeBuf{}}
 	e.th = NewSignInThrottle("readiness-check-ip", ReadinessCheckPerIP, ReadinessCheckMaxKeys, ReadinessCheckIPWindow, time.Now)
 	u, _ := url.Parse(e.w.srv.URL)
 	log := slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	e.rc = newReadinessCheck(u, http.DefaultClient, "gw-token", e.sink, e.th, enforce, platform.PostureLocal, log)
+	e.rc = newReadinessCheck(u, http.DefaultClient, "gw-token", e.th, enforce, platform.PostureLocal, log)
 	return e
 }
 
@@ -265,8 +245,8 @@ func TestRun_OnlyTheCurrentConsentSentenceIsTaken(t *testing.T) {
 			}
 			if tc.want == 400 {
 				wantRefused(t, rec, 400, checkConsentSentence)
-				if consumed.Load() || ipCount(e.th, checkIP) != 0 || e.w.calls() != 0 || e.sink.count() != 0 {
-					t.Errorf("file read %v, ip count %d, worker calls %d, sink calls %d; want none", consumed.Load(), ipCount(e.th, checkIP), e.w.calls(), e.sink.count())
+				if consumed.Load() || ipCount(e.th, checkIP) != 0 || e.w.calls() != 0 {
+					t.Errorf("file read %v, ip count %d, worker calls %d; want none", consumed.Load(), ipCount(e.th, checkIP), e.w.calls())
 				}
 			}
 		})
@@ -379,7 +359,7 @@ func TestRun_AZonedIPv6AddressCountsPerSlash64WithoutItsZone(t *testing.T) {
 
 func TestRun_RefundReturnsTheSlash64Count(t *testing.T) {
 	e := newCheckEnv(t, true)
-	e.w.answer(409, `{"error":"sign_up"}`)
+	e.w.answer(400, `{"error":"m"}`)
 	e.runOK(t, "2001:db8:1:2::1")
 	if n := ipCount(e.th, "2001:db8:1:2::/64"); n != 0 {
 		t.Errorf("/64 count = %d, want 0: the engine did not start", n)
@@ -448,7 +428,6 @@ func TestRun_RefundsTheSlotWhenTheEngineDidNotStart(t *testing.T) {
 		reply  string
 		down   bool
 	}{
-		{"409", 409, `{"error":"sign_up"}`, false},
 		{"400", 400, `{"error":"m"}`, false},
 		{"413", 413, `{"error":"too large"}`, false},
 		{"503 busy", 503, `{"error":"busy"}`, false},
@@ -517,7 +496,7 @@ func TestRun_KeepsTheSlotWhenTheEngineStarted(t *testing.T) {
 		reply    string
 		deadline bool
 	}{
-		{"200", 200, `{"checks_left":1}`, false},
+		{"200", 200, `{"status":"confirm"}`, false},
 		{"422", 422, `{"error":"unreadable"}`, false},
 		{"503 failed", 503, `{"error":"failed"}`, false},
 		{"500", 500, `{"error":"internal error"}`, false},
@@ -538,110 +517,51 @@ func TestRun_KeepsTheSlotWhenTheEngineStarted(t *testing.T) {
 	}
 }
 
-func TestRun_SentHandsTheContactOffOnce(t *testing.T) {
+func TestRun_AnswersConfirm(t *testing.T) {
 	e := newCheckEnv(t, true)
 	req, _ := newCheckRequest(t, "/readiness-check/run", mpPart{"email", "", []byte("  A@x.co ")}, mpPart{"consent_text", "", []byte(checkConsent)}, mpPart{"file", "inv.csv", []byte("a\n1\n")})
 	rec := e.run(t, req)
-	var got map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if rec.Code != 200 || got["status"] != "sent" || got["checks_left"] != float64(2) {
-		t.Fatalf("answer = %d %s, want 200 sent with checks_left 2", rec.Code, rec.Body)
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"status":"confirm"}` {
+		t.Fatalf("answer = %d %s, want 200 {\"status\":\"confirm\"}", rec.Code, rec.Body)
 	}
-	if len(e.sink.calls) != 1 || e.sink.calls[0] != [2]string{"A@x.co", checkConsent} {
-		t.Errorf("sink calls = %v, want one with the trimmed email and the consent text", e.sink.calls)
+	if n := ipCount(e.th, checkIP); n != 1 {
+		t.Errorf("ip count = %d, want 1", n)
 	}
-}
-
-type holdSink struct {
-	entered chan struct{}
-	release chan struct{}
-	ctxErr  chan error
-	calls   atomic.Int32
-}
-
-func (s *holdSink) ReadinessCheck(ctx context.Context, _, _ string) error {
-	s.calls.Add(1)
-	s.entered <- struct{}{}
-	select {
-	case <-s.release:
-	case <-ctx.Done():
-	}
-	s.ctxErr <- ctx.Err()
-	return nil
-}
-
-func TestRun_HandOffSurvivesAClientCancel(t *testing.T) {
-	e := newCheckEnv(t, true)
-	hs := &holdSink{entered: make(chan struct{}, 2), release: make(chan struct{}), ctxErr: make(chan error, 2)}
-	e.rc.sink = hs
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("inv.csv", []byte("a\n1\n"))...)
-	done := make(chan struct{})
-	go func() { e.run(t, req.WithContext(ctx)); close(done) }()
-	select {
-	case <-hs.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the sink was never called")
-	}
-	cancel()
-	close(hs.release)
-	if err := <-hs.ctxErr; err != nil {
-		t.Errorf("the hand-off context ended with the request: %v", err)
-	}
-	<-done
-	if hs.calls.Load() != 1 {
-		t.Errorf("sink calls = %d, want 1", hs.calls.Load())
+	if len(e.w.got) != 1 || e.w.got[0].fields["email"] != "A@x.co" {
+		t.Errorf("worker got %+v, want one call with the trimmed email", e.w.got)
 	}
 }
 
-func TestRun_FailedHandOffStillAnswers200(t *testing.T) {
-	e := newCheckEnv(t, true)
-	e.sink.err = sinkStatusError(500)
-	if rec := e.runOK(t, checkIP); rec.Code != 200 {
-		t.Fatalf("answer = %d, want 200", rec.Code)
-	}
-	logs := e.logs.String()
-	if strings.Count(logs, "level=WARN") != 1 || !strings.Contains(logs, "status=500") || strings.Contains(logs, "a@x.co") {
-		t.Errorf("want one WARN with status=500 and no address:\n%s", logs)
+// The visitor must not learn from the answer whether the address had used its checks.
+func TestRun_EveryWorker200GetsTheSameAnswer(t *testing.T) {
+	var first *httptest.ResponseRecorder
+	for _, reply := range []string{`{"status":"confirm"}`, `{"checks_left":2}`, `not json`} {
+		e := newCheckEnv(t, true)
+		e.w.answer(200, reply)
+		rec := e.runOK(t, checkIP)
+		if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"status":"confirm"}` {
+			t.Fatalf("worker %s: answer = %d %s, want 200 confirm", reply, rec.Code, rec.Body)
+		}
+		if first == nil {
+			first = rec
+			continue
+		}
+		if rec.Body.String() != first.Body.String() || rec.Header().Get("Content-Type") != first.Header().Get("Content-Type") {
+			t.Errorf("worker %s: answer %q (%s) differs from %q (%s)", reply, rec.Body, rec.Header().Get("Content-Type"), first.Body, first.Header().Get("Content-Type"))
+		}
 	}
 }
 
-func TestRun_RefusedRunHandsNothingOff(t *testing.T) {
+func TestRun_AWorker409IsUnavailable(t *testing.T) {
 	e := newCheckEnv(t, true)
 	e.w.answer(409, `{"error":"sign_up"}`)
-	e.runOK(t, checkIP)
-	if e.sink.count() != 0 {
-		t.Errorf("sink calls = %d, want 0", e.sink.count())
+	rec := e.runOK(t, checkIP)
+	wantRefused(t, rec, 502, checkUnavailableSentence)
+	if strings.Contains(strings.ToLower(rec.Body.String()), "free checks") || strings.Contains(strings.ToLower(rec.Body.String()), "sign up") {
+		t.Errorf("answer %s names the used-up state", rec.Body)
 	}
-}
-
-func TestReadinessCheckSink_PostsToTheIntake(t *testing.T) {
-	var mu sync.Mutex
-	var gotPath, gotToken string
-	var gotBody map[string]string
-	status := http.StatusAccepted
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		gotPath, gotToken = r.URL.Path, r.Header.Get("X-Gateway-Token")
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(status)
-	}))
-	t.Cleanup(srv.Close)
-	u, _ := url.Parse(srv.URL)
-	sink := NewHTTPReadinessCheckSink(u, http.DefaultClient, "tok")
-	if err := sink.ReadinessCheck(context.Background(), "a@x.co", "text"); err != nil {
-		t.Fatalf("202 = %v, want nil", err)
-	}
-	mu.Lock()
-	if gotPath != "/internal/contacts/readiness-checks" || gotToken != "tok" || gotBody["email"] != "a@x.co" || gotBody["marketing_consent_text"] != "text" || len(gotBody) != 2 {
-		t.Errorf("posted %q token %q body %v", gotPath, gotToken, gotBody)
-	}
-	status = http.StatusBadRequest
-	mu.Unlock()
-	if err := sink.ReadinessCheck(context.Background(), "a@x.co", "text"); err == nil {
-		t.Error("400 = nil, want an error")
+	if n := ipCount(e.th, checkIP); n != 1 {
+		t.Errorf("ip count = %d, want 1: a stray 409 is not a not-started refusal", n)
 	}
 }
 
@@ -654,10 +574,10 @@ func TestRun_WorkerAnswersMapToVisitorStatuses(t *testing.T) {
 		want     int
 		msg      string
 	}{
-		{"409", 409, `{"error":"sign_up"}`, false, 409, checkSignUpSentence},
 		{"422", 422, `{"error":"unreadable"}`, false, 422, checkUnreadableSentence},
 		{"400", 400, `{"error":"m"}`, false, 400, "m"},
 		{"503", 503, `{"error":"failed"}`, false, 503, checkUnavailableSentence},
+		{"409", 409, `{"error":"sign_up"}`, false, 502, checkUnavailableSentence},
 		{"418", 418, ``, false, 502, checkUnavailableSentence},
 		{"timeout", 0, ``, true, 502, checkUnavailableSentence},
 	} {
@@ -670,15 +590,6 @@ func TestRun_WorkerAnswersMapToVisitorStatuses(t *testing.T) {
 			}
 			wantRefused(t, e.runOK(t, checkIP), tc.want, tc.msg)
 		})
-	}
-}
-
-func TestRun_WorkerOKWithoutChecksLeftIs502(t *testing.T) {
-	e := newCheckEnv(t, true)
-	e.w.answer(200, `{}`)
-	wantRefused(t, e.runOK(t, checkIP), 502, checkUnavailableSentence)
-	if n := ipCount(e.th, checkIP); n != 1 || e.sink.count() != 1 {
-		t.Errorf("ip count %d, sink calls %d, want 1 and 1", n, e.sink.count())
 	}
 }
 
@@ -779,8 +690,6 @@ func TestReadinessCheck_LogsNoPersonalData(t *testing.T) {
 		e.run(t, req)
 	}
 	full := []mpPart{{"email", "", []byte(addr)}, {"consent_text", "", []byte(checkConsent)}, {"file", file, []byte("a\n1\n")}}
-	post(full...)
-	e.sink.err = sinkStatusError(500)
 	post(full...)
 	e.w.answer(200, `{}`)
 	post(full...)
@@ -1058,17 +967,6 @@ func TestRun_ConsentWithNULAndAnEmailWithASpaceAreRefused(t *testing.T) {
 	}
 }
 
-func TestRun_WorkerOKWithAnInvalidChecksLeftIs502(t *testing.T) {
-	for _, reply := range []string{`{"checks_left":3}`, `{"checks_left":-1}`, `{"checks_left":"2"}`, `not json`} {
-		e := newCheckEnv(t, true)
-		e.w.answer(200, reply)
-		wantRefused(t, e.runOK(t, checkIP), 502, checkUnavailableSentence)
-		if e.sink.count() != 1 {
-			t.Errorf("reply %s: sink calls = %d, want 1: the mail went", reply, e.sink.count())
-		}
-	}
-}
-
 func TestRun_FormatComesFromTheLowercasedExtension(t *testing.T) {
 	for file, want := range map[string]string{"INV.CSV": "csv", "a.b.Xlsx": "xlsx", "scan.PDF": "pdf", "note.docx": "docx"} {
 		e := newCheckEnv(t, true)
@@ -1117,7 +1015,7 @@ func TestRun_ForwardHoldsOneCopyOfTheFileUntilTheSend(t *testing.T) {
 		if n < size {
 			t.Errorf("the forward carried %d bytes, want the %d of the file and more", n, size)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"checks_left":2}`)), Header: http.Header{}, Request: r}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"confirm"}`)), Header: http.Header{}, Request: r}, nil
 	})}
 	req, _ := newCheckRequest(t, "/readiness-check/run", okParts("big.csv", data)...)
 	rec := e.run(t, req)
@@ -1300,9 +1198,6 @@ func TestRun_ASlowWorkerAfterAFastUploadStillAnswers200(t *testing.T) {
 	u := dialUpload(t, srv, "/readiness-check/run", okParts("inv.csv", slowFile)...)
 	u.send(t, u.body)
 	u.wantAnswer(t, 200, "")
-	if e.sink.count() != 1 {
-		t.Errorf("hand-offs = %d, want 1", e.sink.count())
-	}
 	if got, _ := ctxErr.Load().(struct{ err error }); got.err != nil {
 		t.Errorf("request context after run = %v, want nil", got.err)
 	}

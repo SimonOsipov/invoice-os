@@ -17,7 +17,6 @@ import (
 type IntakeStore interface {
 	Registrant(ctx context.Context, in RegistrantIntake) error
 	DemoRequest(ctx context.Context, in DemoIntake) error
-	ReadinessCheck(ctx context.Context, in ReadinessIntake) error
 	Me(ctx context.Context, email string) (Contact, error)
 }
 
@@ -40,11 +39,6 @@ type demoBody struct {
 	Email                string `json:"email"`
 	Name                 string `json:"name"`
 	Company              string `json:"company"`
-	MarketingConsentText string `json:"marketing_consent_text"`
-}
-
-type readinessBody struct {
-	Email                string `json:"email"`
 	MarketingConsentText string `json:"marketing_consent_text"`
 }
 
@@ -129,24 +123,6 @@ func DemoRequestsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
 		intakeResult(w, r, log, store.DemoRequest(r.Context(), DemoIntake{
 			Email: b.Email, Name: b.Name, Company: b.Company, ConsentText: b.MarketingConsentText,
 		}))
-	}
-}
-
-func ReadinessChecksHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var b readinessBody
-		if !decodeIntake(w, r, &b) {
-			return
-		}
-		if strings.TrimSpace(b.Email) == "" {
-			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
-			return
-		}
-		if strings.TrimSpace(b.MarketingConsentText) == "" {
-			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "marketing_consent_text is required"})
-			return
-		}
-		intakeResult(w, r, log, store.ReadinessCheck(r.Context(), ReadinessIntake{Email: b.Email, ConsentText: b.MarketingConsentText}))
 	}
 }
 

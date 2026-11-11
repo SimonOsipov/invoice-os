@@ -7,6 +7,7 @@ import { resolveTarget } from '../targets'
 import { enclosesRect, gaps, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 const CHECK_URL = resolveTarget('CHECK_URL')
+const GATEWAY_URL = resolveTarget('GATEWAY_URL')
 
 // Long unbroken text (D15): a 120-character file name, a 60-character header, an 80-character sample.
 const FILE_NAME = `${'f'.repeat(116)}.csv`
@@ -14,6 +15,9 @@ const LONG_HEADER = 'h'.repeat(60)
 const LONG_SAMPLE = 's'.repeat(80)
 const FIXTURE = Buffer.from(`invoice_number,${LONG_HEADER},total\nINV-1,${LONG_SAMPLE},100\n`)
 const EMAIL_200 = `${'e'.repeat(187)}@example.com`
+
+// A well-shaped token nothing issued: the ask page renders without looking it up.
+const unknownConfirmLink = () => `${GATEWAY_URL}/readiness-check/confirm?t=${'A'.repeat(43)}`
 
 const card = (page: Page) => page.locator('.check-card')
 const rectOf = async (loc: Locator, label: string): Promise<Rect> => {
@@ -1026,5 +1030,68 @@ test.describe('check layout', () => {
     await toMapWith(page)
     await sendRejected(page)
     await shoot(page, 'check', 'map-error')
+  })
+})
+
+test.describe('check confirm page', () => {
+  test('check confirm page layout: the card and button fit at every width', async ({ page }) => {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+      const height = 1080
+      await page.setViewportSize({ width, height })
+      await page.goto(unknownConfirmLink())
+      const button = page.getByRole('button')
+      await expect(button, `one button at ${width}px`).toHaveCount(1)
+      const main = page.locator('main')
+      const cardBox = await rectOf(main, `the card at ${width}px`)
+      const buttonBox = await rectOf(button, `the button at ${width}px`)
+      expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px`).toBe(true)
+      expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px`).toBe(true)
+      const paragraphs = main.locator('p')
+      const count = await paragraphs.count()
+      expect(count, `paragraphs at ${width}px`).toBeGreaterThan(0)
+      for (let i = 0; i < count; i++) {
+        expect(enclosesRect(cardBox, await rectOf(paragraphs.nth(i), `paragraph ${i} at ${width}px`), 1), `paragraph ${i} leaves the card at ${width}px`).toBe(true)
+      }
+      expect(Math.abs(cardBox.x - (width - cardBox.x - cardBox.width)), `the card is off-centre at ${width}px`).toBeLessThanOrEqual(1)
+      await noSidewaysScroll(page, `the confirm page at ${width}px`)
+    }
+  })
+
+  test('check confirm page: one press sends one POST', async ({ page }) => {
+    const posts: string[] = []
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && new URL(req.url()).pathname === '/readiness-check/confirm') posts.push(req.url())
+    })
+    // The page reports its button on submit: a test call into a page with a held navigation never returns.
+    const reports: unknown[] = []
+    await page.exposeBinding('__confirmReport', (_source, value) => reports.push(value))
+    // A window listener runs after the form's own submit handler, so it sees the pressed state.
+    await page.addInitScript(() => {
+      window.addEventListener('submit', () => {
+        const b = document.querySelector('button')
+        ;(window as unknown as { __confirmReport: (v: unknown) => void }).__confirmReport([b?.textContent?.trim(), b?.disabled])
+      })
+    })
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    await page.route((u) => u.pathname === '/readiness-check/confirm', async (route) => {
+      if (route.request().method() === 'POST') await held
+      await route.continue()
+    })
+    try {
+      await page.goto(unknownConfirmLink())
+      const button = page.getByRole('button')
+      await expect(button).toHaveText('Get my results')
+      // The mouse API does not wait for the held navigation the way a locator click would.
+      const box = await rectOf(button, 'the button')
+      await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
+      await expect.poll(() => reports[0], { message: 'the button as the first submit left it' }).toEqual(['Sending…', true])
+      await expect.poll(() => posts.length, { message: 'POST /readiness-check/confirm requests sent by the double-click' }).toBe(1)
+    } finally {
+      release()
+    }
+    // The token was never issued, so the press lands on the expired page.
+    await expect(page.getByText('This link has expired or was already used.')).toBeVisible()
+    expect(posts.length, 'POST requests after the page answered').toBe(1)
   })
 })

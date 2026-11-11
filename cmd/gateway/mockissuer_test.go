@@ -366,6 +366,36 @@ func taggedJWK(t *testing.T, kid string) string {
 	return string(raw)
 }
 
+// Same shape as TestTaggedMockDeletionLinkTokenRouteWiresTheSetter.
+func TestTaggedMockReadinessConfirmTokenRouteWiresTheSetter(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "readiness-confirm-dsn-marker.invalid"
+	h := mockReadinessConfirmTokenRoute("postgres://u@"+dsnHost+":5432/db", logger)
+	post := func(body string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/mock/readiness-confirm-token", strings.NewReader(body)))
+		return rec
+	}
+	rec := post(`{`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: POST = %d (body %s), want 400", rec.Code, rec.Body.String())
+	}
+	rec = post(`{"email":"a@b.io","token":"abcdefghijklmnopqrstuvwxyz-_ABCDEFGHIJKLMNO"}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("valid body, unreachable database: POST = %d (body %s), want 502", rec.Code, rec.Body.String())
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
+	}
+	if strings.Contains(logs.String()+rec.Body.String(), "abcdefghijklmnopqrstuvwxyz-_") {
+		t.Errorf("the log or the answer carries the token: %s %s", logs.String(), rec.Body.String())
+	}
+}
+
 // With GATEWAY_MOCK_ISSUER_KEY set, JWKS and /auth/login both use that key's kid.
 func TestTaggedMockIssuerUsesConfiguredKey(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)

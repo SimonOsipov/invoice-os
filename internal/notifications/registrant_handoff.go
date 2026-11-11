@@ -29,7 +29,7 @@ func (RegistrantArgs) Kind() string { return "registrant_intake" }
 // RegistrantWorker records a handed-off registrant. A failure retries on River's default policy.
 type RegistrantWorker struct {
 	river.WorkerDefaults[RegistrantArgs]
-	Store  IntakeStore
+	Store  *Store
 	Logger *slog.Logger
 }
 

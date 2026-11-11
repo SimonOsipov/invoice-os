@@ -829,19 +829,96 @@ export function eraseDeletesReadinessChecks(src: string = readSource('internal/n
   return sweepDeletes(src).includes('DELETE FROM readiness_checks WHERE email = $1')
 }
 
+// The non-test Go sources of a directory, comments stripped.
+function goSources(rel: string, name: RegExp = /\.go$/): string[] {
+  return readdirSync(join(REPO, rel))
+    .filter((f) => name.test(f) && !f.endsWith('_test.go'))
+    .sort()
+    .map((f) => readSource(`${rel}/${f}`))
+}
+
+// The worker merges the contact in Confirm alone; no gateway readiness file hands a contact off or posts to the intake.
+export function readinessContactOnlyAtThePress(
+  store: string = readSource('internal/readinesscheck/store.go'),
+  others: string[] = goSources('internal/readinesscheck').filter((src) => src !== readSource('internal/readinesscheck/store.go')),
+  gateway: string[] = goSources('internal/gateway', /^readiness_.*\.go$/),
+): boolean {
+  const call = /\.ReadinessCheckTx\(/g
+  const confirm = goFunc(store, /func \(s \*Store\) Confirm\b/, 'Store.Confirm')
+  const rest = store.replace(confirm, '')
+  return (
+    (confirm.match(call) ?? []).length === 1 &&
+    !call.test(rest) &&
+    others.every((src) => !/\.ReadinessCheckTx\(/.test(src)) &&
+    gateway.length > 0 &&
+    gateway.every((src) => !/\bReadinessCheckSink\b|readiness-checks/i.test(src))
+  )
+}
+
+// The link is consumed by a DELETE of an unexpired row, and only the confirm handler renders the results mail.
+export function readinessLinkWorksOnce(
+  store: string = readSource('internal/readinesscheck/store.go'),
+  handlers: string = readSource('internal/readinesscheck/handlers.go'),
+): boolean {
+  const confirm = goFunc(store, /func \(s \*Store\) Confirm\b/, 'Store.Confirm')
+  const press = goFunc(handlers, /func \(s \*Service\) ConfirmHandler\b/, 'Service.ConfirmHandler')
+  const render = /\baccountmail\.RenderReadinessCheck\(/g
+  return (
+    /DELETE FROM readiness_check_requests WHERE token_hash = \$1 AND expires_at > now\(\)\s*RETURNING/i.test(confirm) &&
+    (press.match(render) ?? []).length === 1 &&
+    (handlers.match(render) ?? []).length === 1
+  )
+}
+
+// The sweep deletes the address's held readiness results in the block that the superseded case skips.
+export function eraseDeletesHeldChecks(src: string = readSource('internal/notifications/erase.go')): boolean {
+  const block = found(/\n\s*if !res\.superseded \{([\s\S]*?)\n\s*\}\n/.exec(sweepDeletes(src))?.[1], 'the !res.superseded block of the sweep')
+  return /DELETE FROM readiness_check_requests WHERE email = \$1/i.test(block)
+}
+
+// The hours of the interval that Hold gives a new row.
+export function readinessHeldHours(src: string = readSource('internal/readinesscheck/store.go')): number {
+  const hold = goFunc(src, /func \(s \*Store\) Hold\b/, 'Store.Hold')
+  if (!/interval '`\+heldLife\+`'/i.test(hold)) throw new Error('privacyCodeFacts: Hold does not use heldLife for the interval')
+  return Number(found(/\bheldLife\s*=\s*"(\d+) hours"/i.exec(src)?.[1], 'heldLife hours'))
+}
+
+// ReadinessConfirmValidHours, the hours the confirmation mail tells the owner.
+export function readinessConfirmMailHours(src: string = readSource('internal/accountmail/accountmail.go')): number {
+  return Number(found(/\bReadinessConfirmValidHours\s*=\s*(\d+)/.exec(src)?.[1], 'ReadinessConfirmValidHours'))
+}
+
+// Column names of the CREATE TABLE in migrations/*_readiness_check_requests.sql, in order.
+export function readinessHeldColumns(): string[] {
+  const dir = join(REPO, 'migrations')
+  const file = found(readdirSync(dir).find((f) => f.endsWith('_readiness_check_requests.sql')), 'the readiness_check_requests migration')
+  const body = found(/CREATE TABLE public\.readiness_check_requests \(([\s\S]*?)\n\);/.exec(readFileSync(join(dir, file), 'utf8'))?.[1], 'the readiness_check_requests CREATE TABLE')
+  return Array.from(body.matchAll(/^\s{4}([a-z_]+)\s+\S/gm), (m) => m[1])
+}
+
+// The worker purges the held rows every hour, under a leader.
+export function readinessHeldPurgedHourly(src: string = readSource('cmd/worker/main.go')): boolean {
+  return /codelist\.NewWorker\(time\.Hour,\s*leader\.Lead\("readiness-request-purge",[^\n]*\.PurgeExpired\)\)/i.test(src)
+}
+
 // The address part of accountmail.From ("Name <addr>").
 export function accountmailFrom(src: string = readSource('internal/accountmail/sender.go')): string {
   return found(/\bFrom\s*=\s*"[^"<]*<([^>"]+)>"/.exec(src)?.[1], 'accountmail.From')
 }
 
-// ReadinessCheck passes the text as the marketing consentText, and the RETURNING term of mergeSQL queues Resend for a marketing tick.
-export function readinessConsentIsMarketing(source: string = readSource('internal/notifications/store.go')): boolean {
+// The press hands the ticked text to ReadinessCheckTx, which merges it as the marketing consentText; the RETURNING term of mergeSQL queues Resend for a marketing tick.
+export function readinessConsentIsMarketing(
+  source: string = readSource('internal/notifications/store.go'),
+  press: string = readSource('internal/readinesscheck/store.go'),
+): boolean {
   const src = stripComments(source)
-  const body = goFunc(src, /func \(s \*Store\) ReadinessCheck\b/, 'Store.ReadinessCheck')
-  const returning = found(/const mergeSQL = `[\s\S]*?\bRETURNING\b([^`]*)`/.exec(src)?.[1], 'the RETURNING clause of mergeSQL')
+  const body = goFunc(src, /func \(s \*Store\) ReadinessCheckTx\b/, 'Store.ReadinessCheckTx')
+  const confirm = goFunc(stripComments(press), /func \(s \*Store\) Confirm\b/, 'readinesscheck Store.Confirm')
+  const returning = found(/const mergeSQL = `[\s\S]*?\bRETURNING\b([^`]*)`/i.exec(src)?.[1], 'the RETURNING clause of mergeSQL')
   return (
-    /\bconsentText:\s*in\.ConsentText/.test(body) &&
-    !/\breadinessConsentText\b/.test(body) &&
+    /\bconsentText:\s*consentText\b/i.test(body) &&
+    !/\breadinessConsentText\b/i.test(body) &&
+    /\.Contacts\.ReadinessCheckTx\(ctx, tx, h\.Email, consentText\)/i.test(confirm) &&
     returning.includes('registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL')
   )
 }

@@ -35,7 +35,7 @@ const MAP_TITLE = 'Tell us which column is which'
 const REVIEW = 'Review'
 const MAP_ALL_USED = 'Every column in your file is matched to a field.'
 // frontend/check/src/copy.ts: SENT_TEXT.
-const sentText = (email: string) => `Your results are on their way to ${email}.`
+const sentText = (email: string) => `Check your inbox at ${email}.`
 // internal/gateway/readiness_check.go: checkIPSentence.
 const IP_SENTENCE = 'This network has run 10 checks today. Try again tomorrow.'
 
@@ -134,7 +134,7 @@ test('check: the drop zone shows its text and refuses a wrong file in place', as
   expect(errors, `console errors on the check:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
+test('check: a visitor uploads a spreadsheet, maps it and is told to check the inbox to confirm', async ({ page }) => {
   test.skip(LIVE, 'www.ascomply.com is production: the send writes a contact and a mail')
   test.setTimeout(180_000)
   const errors: string[] = []

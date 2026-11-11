@@ -646,8 +646,7 @@ func TestNotificationsMain_ServesTheContactRoutes(t *testing.T) {
 
 	demo := fmt.Sprintf(`{"email":%q,"name":"Grace Hopper","company":"Navy"}`, strings.ToUpper(email))
 	registrant := fmt.Sprintf(`{"user_id":%q,"email":%q,"display_name":"Grace Hopper"}`, uuid.NewString(), email)
-	readiness := fmt.Sprintf(`{"email":%q,"marketing_consent_text":"Yes."}`, email)
-	routes := map[string]string{"/internal/contacts/demo-requests": demo, "/internal/contacts/registrants": registrant, "/internal/contacts/readiness-checks": readiness}
+	routes := map[string]string{"/internal/contacts/demo-requests": demo, "/internal/contacts/registrants": registrant}
 	for path, body := range routes {
 		if code, out := p.call(t, http.MethodPost, path, body, nil); code != http.StatusUnauthorized {
 			t.Errorf("POST %s without the gateway token: status %d (%s), want 401", path, code, out)
@@ -685,8 +684,8 @@ func TestNotificationsMain_ServesTheContactRoutes(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &me); err != nil {
 		t.Fatalf("GET me body %q: %v", out, err)
 	}
-	if me.Email != email || !slices.Equal(me.Tags, []string{"registered", "demo request", "readiness check"}) || me.Mode != nil {
-		t.Errorf("GET me = %+v, want %s with registered + demo request + readiness check tags and a null mode in off mode", me, email)
+	if me.Email != email || !slices.Equal(me.Tags, []string{"registered", "demo request"}) || me.Mode != nil {
+		t.Errorf("GET me = %+v, want %s with registered + demo request tags and a null mode in off mode", me, email)
 	}
 }
 

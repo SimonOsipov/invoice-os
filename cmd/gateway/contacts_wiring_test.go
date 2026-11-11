@@ -126,10 +126,6 @@ func (s *intakeStore) DemoRequest(_ context.Context, in notifications.DemoIntake
 	return nil
 }
 
-func (s *intakeStore) ReadinessCheck(context.Context, notifications.ReadinessIntake) error {
-	return nil
-}
-
 func (s *intakeStore) Me(context.Context, string) (notifications.Contact, error) {
 	return notifications.Contact{}, notifications.ErrNotFound
 }

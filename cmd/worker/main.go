@@ -204,6 +204,7 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(accountevents.HandoffInterval, leader.Lead("account-event-handoff", accountevents.MoveHandoffs(pool, q.River(), app.Logger))))
 
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
+	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("readiness-request-purge", (&readinesscheck.Store{Pool: pool}).PurgeExpired)))
 
 	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
@@ -250,7 +251,7 @@ func main() {
 		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumReader(),
 			AI: aiClient, Jev: jevClient},
 	}
-	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool}, nl.Sender, app.Logger))
+	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {

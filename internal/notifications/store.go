@@ -42,11 +42,6 @@ type DemoIntake struct {
 	ConsentText          string
 }
 
-// ReadinessIntake: the store stamps the check time and the consent time.
-type ReadinessIntake struct {
-	Email, ConsentText string
-}
-
 type Contact struct {
 	Email                 string
 	FirstName             string
@@ -120,8 +115,9 @@ func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 	})
 }
 
-func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {
-	return s.merge(ctx, intake{email: in.Email, readiness: true, consentText: in.ConsentText})
+// ReadinessCheckTx merges the readiness-check contact inside the caller's transaction; the caller commits.
+func (s *Store) ReadinessCheckTx(ctx context.Context, tx pgx.Tx, email, consentText string) error {
+	return s.mergeTx(ctx, tx, intake{email: email, readiness: true, consentText: consentText})
 }
 
 func (s *Store) merge(ctx context.Context, in intake) error {
@@ -130,7 +126,16 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		return fmt.Errorf("notifications: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := s.mergeTx(ctx, tx, in); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("notifications: commit: %w", err)
+	}
+	return nil
+}
 
+func (s *Store) mergeTx(ctx context.Context, tx pgx.Tx, in intake) error {
 	var userID, consentText *string
 	if in.userID != "" {
 		userID = &in.userID
@@ -146,7 +151,7 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 	var email string
 	var version int64
 	var hubspotPending, resendPending, newlyRegistered bool
-	err = tx.QueryRow(ctx, mergeSQL, in.email, userID, in.first, in.last, in.company,
+	err := tx.QueryRow(ctx, mergeSQL, in.email, userID, in.first, in.last, in.company,
 		in.registered, in.demo, consentText, consentAt, in.readiness).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
 	if err != nil {
 		return fmt.Errorf("notifications: merge contact: %w", err)
@@ -177,9 +182,6 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		if _, err := s.river.InsertTx(ctx, tx, args, nil); err != nil {
 			return fmt.Errorf("notifications: queue demo deal: %w", err)
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("notifications: commit: %w", err)
 	}
 	return nil
 }

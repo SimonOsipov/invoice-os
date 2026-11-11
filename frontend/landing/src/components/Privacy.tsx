@@ -14,6 +14,7 @@ export const AI_PROVIDER_HOST = 'openrouter.ai'
 export const HOSTING_REGION = 'africa-south1'
 // Pinned to accountmail.From (accountmailFrom in privacyCodeFacts.test.util.ts).
 export const READINESS_MAIL_FROM = 'no-reply@ascomply.com'
+export const READINESS_CONFIRM_HOURS = 24
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
@@ -303,9 +304,9 @@ export function Privacy() {
             for word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
           <p style={P}>
-            Resend is the service we use to send email. A ticked marketing box, or a readiness check run with the same
+            Resend is the service we use to send email. A ticked marketing box, or a confirmed readiness check with the same
             email address, sends your email address and your first and last name to Resend. If the marketing box is not
-            ticked and no readiness check ran with that address, Resend never receives them from a demo request.
+            ticked and no readiness check was confirmed with that address, Resend never receives them from a demo request.
           </p>
           <p style={P}>HubSpot holds what it receives from you on their EU servers.</p>
           <p style={P}>
@@ -353,7 +354,7 @@ export function Privacy() {
           <p style={P}>
             Every verified registrant becomes a contact in Resend, so that we can send you product and service email. Resend
             receives your email address and your first and last name. Only a ticked marketing box, or the ticked box of a
-            readiness check run with the same email address, makes you eligible for marketing email; with neither box
+            confirmed readiness check with the same email address, makes you eligible for marketing email; with neither box
             ticked, Resend holds you for product and service email only.
           </p>
           <p style={P}>The registration form tells you about that email: “{PRODUCT_EMAIL_NOTICE}”</p>
@@ -451,27 +452,32 @@ export function Privacy() {
             terms.
           </p>
           <p style={P}>
-            Our server reads the file in memory and keeps no copy. What we keep about a check is a summary: your email
-            address, the file type, the number of rows, the ids of the failed rules and the time. It is not the file and
-            not your IP address. To count checks per network, we keep a hash of your network's IP address, not the
-            address itself.
+            Our server reads the file in memory and keeps no copy. What we keep about a confirmed check is a summary:
+            your email address, the file type, the number of rows, the ids of the failed rules and the time. It is not
+            the file and not your IP address. To count checks per network, we keep a hash of your network's IP address,
+            not the address itself.
           </p>
           <p style={P}>
-            The results email goes from {READINESS_MAIL_FROM} through Resend. It carries the invoice amounts and the
-            buyer details read from the file. We do not check the address first, so a mistyped address receives them.
+            Until you confirm your address, we keep your email address and the results on our own server, not the file;
+            we delete them when you confirm, or within an hour after the link expires.
           </p>
           <p style={P}>
-            Your email address becomes a HubSpot contact tagged “readiness check”, with a deal. We record the sentence
-            you ticked, word for word: “{READINESS_CONSENT_TEXT}” Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email. The summary
-            rows are deleted when an ASComply account with that address is deleted, unless another account still holds
-            the address.
+            We first email the address a link that works once and expires in {READINESS_CONFIRM_HOURS} hours. The
+            results email goes only after the link is pressed, from {READINESS_MAIL_FROM} through Resend. It carries the
+            invoice amounts and the buyer details read from the file.
+          </p>
+          <p style={P}>
+            Only after you confirm does your email address become a HubSpot contact tagged “readiness check”, with a
+            deal. We record the sentence you ticked, word for word: “{READINESS_CONSENT_TEXT}” Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email. The summary
+            rows, and any results still waiting for confirmation, are deleted when an ASComply account with that address
+            is deleted, unless another account still holds the address.
           </p>
 
           <h2 style={H2}>Unsubscribing from marketing email</h2>
           <p style={P}>
             Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers
             account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness
-            check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes
+            check confirmations and results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes
             nothing. If a link cannot carry its code, the page it opens asks you to email {PRIVACY_CONTACT}, and we
             unsubscribe you.
           </p>

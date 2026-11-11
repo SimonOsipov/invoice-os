@@ -57,7 +57,7 @@ export function App() {
       return
     }
     setFile(null)
-    setRefusal(res.ok ? { text: COLUMNS_SENTENCE, signUp: false } : refuse('mapping', res.status, res.error))
+    setRefusal(res.ok ? { text: COLUMNS_SENTENCE } : refuse('mapping', res.status, res.error))
   }
 
   const backToUpload = () => {

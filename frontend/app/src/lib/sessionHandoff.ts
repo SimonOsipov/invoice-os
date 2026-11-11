@@ -103,7 +103,7 @@ export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
   return 'kind' in x && x.kind === 'join'
 }
 
-// A transient /me failure (503, network) retries within the 15 s budget; any other failure, the timeout included, rejects.
+// A /me 503 retries within the 15 s budget; any other failure, the timeout included, rejects at once.
 const ME_RETRY_DELAYS_MS = [500, 1000]
 
 // The gateway answers 503 when GoTrue is slow; the single-use code is spent, so only /me can retry.
@@ -112,7 +112,7 @@ async function readMeRetrying(base: string, token: string, signal: AbortSignal):
     try {
       return await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
     } catch (err) {
-      const transient = err instanceof ApiError && (err.status === 503 || err.kind === 'network')
+      const transient = err instanceof ApiError && err.status === 503
       if (!transient || signal.aborted) {
         throw err
       }

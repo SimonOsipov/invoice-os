@@ -78,10 +78,11 @@ async function pick(f: File) {
 // jsdom has no DragEvent; a plain Event carries the dataTransfer React reads.
 function fire(target: Element, type: string, files: File[] = [], types: string[] = ['Files']) {
   const e = new Event(type, { bubbles: true, cancelable: true })
-  Object.defineProperty(e, 'dataTransfer', { value: { types, files } })
+  Object.defineProperty(e, 'dataTransfer', { value: { types, files, dropEffect: 'copy' } })
   act(() => void target.dispatchEvent(e))
   return e
 }
+const effect = (e: Event) => (e as unknown as { dataTransfer: { dropEffect: string } }).dataTransfer.dropEffect
 async function drop(files: File[]) {
   fire(zone(), 'drop', files)
   await settle()
@@ -302,6 +303,39 @@ describe('upload step', () => {
     expect(fire(document.body, 'drop', [], ['text/plain']).defaultPrevented).toBe(false)
     expect(fire(document.body, 'dragover', [file('a.pdf')]).defaultPrevented).toBe(true)
     expect(fire(document.body, 'dragover', [], ['text/plain']).defaultPrevented).toBe(false)
+  })
+
+  it('upload_aFileDraggedBesideTheZoneShowsTheNoDropCursor', async () => {
+    stubFetch({})
+    await mount()
+    expect(effect(fire(document.body, 'dragover', [file('a.pdf')]))).toBe('none')
+    expect(effect(fire(zone(), 'dragover', [file('a.pdf')]))).toBe('copy')
+    expect(effect(fire(document.body, 'dragover', [], ['text/plain']))).toBe('copy')
+  })
+
+  it('upload_focusReturnsToTheInputAfterARefusedRead', async () => {
+    const answer = held()
+    await mount()
+    input().focus()
+    await pick(file('a.csv'))
+    expect(q('input[type="file"]')).toBeNull()
+    await answer(json(422, { error: UNREADABLE_SENTENCE }))
+    await settle()
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('upload_theStatusRegionStaysMountedAcrossTheRead', async () => {
+    const answer = held()
+    await mount()
+    const status = q('[role="status"]')!
+    expect(status.textContent).toBe('')
+    await pick(file('a.csv'))
+    expect(q('[role="status"]')).toBe(status)
+    expect(status.textContent).toBe(READING_TEXT)
+    await answer(json(422, { error: UNREADABLE_SENTENCE }))
+    await settle()
+    expect(q('[role="status"]')).toBe(status)
+    expect(status.textContent).toBe('')
   })
 
   it('upload_aStrayFileDropDuringTheReadIsPrevented', async () => {

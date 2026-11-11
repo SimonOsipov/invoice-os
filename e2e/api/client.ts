@@ -2265,6 +2265,12 @@ export async function postCheck(
   return { status: res.status, body: await res.json().catch(() => undefined) }
 }
 
+// POST /readiness-check/confirm?t=: the press. The gateway answers a small HTML page, so the body is text.
+export async function confirmCheck(token: string): Promise<{ status: number; body: string }> {
+  const res = await fetch(`${apiBase()}/readiness-check/confirm?t=${encodeURIComponent(token)}`, { method: 'POST' })
+  return { status: res.status, body: await res.text() }
+}
+
 // internal/readinesscheck/handlers.go mappingResponse.
 export interface CheckMapping {
   columns: string[]

@@ -1,4 +1,4 @@
-package db_test
+package devdb_test
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	compose := filepath.Join(wd, "..", "..", "..", "docker-compose.yml")
+	compose := filepath.Join(wd, "..", "..", "docker-compose.yml")
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

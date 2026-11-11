@@ -6,6 +6,7 @@
 services:
   postgres:
     image: postgres:18            # MAJOR must match Cloud SQL's (POSTGRES_18).
+    init: true                    # docker-init reaps orphans so the postmaster never sees an untracked child exit.
     environment:
       # Superuser + default DB, identical to ci.yml's migrations job so local == CI.
       POSTGRES_USER: postgres

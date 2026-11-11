@@ -68,16 +68,22 @@ test.describe('check layout', () => {
       const g = gaps(cardRect, { x: 0, width: vw })
       expect(Math.abs(g.left - g.right), `${label}: card gutters ${g.left} / ${g.right}`).toBeLessThanOrEqual(1)
 
-      const rows = page.locator('.check-field')
-      const lefts: number[] = []
-      for (let i = 0; i < (await rows.count()); i++) {
-        const label_ = await rectOf(rows.nth(i).locator('label'), `field ${i} label`)
-        const select = await rectOf(rows.nth(i).locator('select'), `field ${i} select`)
-        expect(rectsOverlap(label_, select), `${label}: field row ${i} label overlaps its select`).toBe(false)
-        lefts.push(select.x)
+      const rows = page.locator('.check-row')
+      expect(await rows.count(), 'no field rows').toBeGreaterThan(0)
+      const groups = page.locator('.check-grp')
+      for (let g = 0; g < (await groups.count()); g++) {
+        const groupRows = groups.nth(g).locator('.check-row')
+        const lefts: number[] = []
+        for (let i = 0; i < (await groupRows.count()); i++) {
+          const lbl = await rectOf(groupRows.nth(i).locator('.check-row-lbl'), `group ${g} row ${i} label`)
+          const select = await rectOf(groupRows.nth(i).locator('select'), `group ${g} row ${i} select`)
+          expect(rectsOverlap(lbl, select), `${label}: group ${g} row ${i} label overlaps its select`).toBe(false)
+          lefts.push(select.x)
+        }
+        if (lefts.length > 0) {
+          expect(Math.max(...lefts) - Math.min(...lefts), `${label}: group ${g} selects share no left edge`).toBeLessThanOrEqual(1)
+        }
       }
-      expect(lefts.length, 'no field rows').toBeGreaterThan(0)
-      expect(Math.max(...lefts) - Math.min(...lefts), `${label}: selects share no left edge`).toBeLessThanOrEqual(1)
 
       const scroller = await rectOf(page.locator('.check-scroll'), 'columns scroller')
       expect(enclosesRect(cardRect, scroller, 1), `${label}: the columns scroller is outside the card`).toBe(true)

@@ -88,6 +88,20 @@ def test_each_page_image_is_its_own_pdfium_page_when_pages_arrive_out_of_order(m
     assert len(set(images.values())) == 3, "the three page images must differ pairwise"
 
 
+def test_page_order_override_holds_when_the_parser_completes_pages_out_of_order(monkeypatch):
+    real = ThreadedDoclingParseDocumentBackend.iter_pages
+
+    def completed_2_1_3(self):
+        by_no = {p.page_no: p for p in real(self)}
+        for no in (2, 1, 3):
+            yield by_no[no]
+
+    monkeypatch.setattr(ThreadedDoclingParseDocumentBackend, "iter_pages", completed_2_1_3)
+    seen, images = _page_images_by_number(monkeypatch, order=[2, 0, 1])
+    assert seen == [3, 1, 2]
+    assert len(set(images.values())) == 3, "the three page images must differ pairwise"
+
+
 def test_the_parser_runs_on_the_pinned_thread_count():
     opt = convert._construct_converter().format_to_options[InputFormat.PDF]
     assert opt.backend_options.parser_threads == convert.DOCLING_NUM_THREADS

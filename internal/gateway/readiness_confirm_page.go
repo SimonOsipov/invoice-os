@@ -92,8 +92,8 @@ func (p *readinessConfirmPage) serve(w http.ResponseWriter, r *http.Request) {
 		p.press(w, r, token)
 		return
 	}
-	body := "<p>" + confirmAskCopy + "</p>\n<p class=\"note\">Pressing it also confirms the box on the check page: “" +
-		html.EscapeString(checkConsentText) + "”</p>\n" + confirmForm(token)
+	body := "<p>" + confirmAskCopy + "</p>\n<p class=\"note\">Pressing it also confirms the box on the check page: \u201c" +
+		html.EscapeString(checkConsentText) + "\u201d</p>\n" + confirmForm(token)
 	p.write(w, r, http.StatusOK, body)
 }
 

@@ -115,6 +115,32 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
     expect(result).toEqual({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
   })
 
+  it('redeemHandoff retries /me once after a transient 503 session check', async () => {
+    let meCalls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.endsWith('/auth/exchange')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ access_token: LIVE }) })
+        }
+        meCalls += 1
+        return meCalls === 1
+          ? Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable', json: () => Promise.resolve({ error: 'session check unavailable' }) })
+          : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ME) })
+      }),
+    )
+    // Fake timers let the fix back off by any delay without a real wait.
+    vi.useFakeTimers()
+    try {
+      const pending = redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await pending).toEqual({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
+      expect(meCalls).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   function stubExchange(answer: unknown) {
     vi.stubGlobal(
       'fetch',

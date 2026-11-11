@@ -1386,6 +1386,57 @@ func TestStore_ReadinessCheckStoresMarketingConsentAndQueuesResend(t *testing.T)
 	}
 }
 
+func TestStore_ReadinessCheckTxRollsBackWithTheCaller(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	rolledBack, committed, twin := uniqueEmail(t, e, "readytxrb"), uniqueEmail(t, e, "readytxc"), uniqueEmail(t, e, "readytxtwin")
+
+	tx, err := e.app.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ReadinessCheckTx(ctx, tx, rolledBack, consentText); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ReadinessCheckTx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := rowCount(t, e, rolledBack); n != 0 {
+		t.Errorf("contacts after the caller rolled back = %d, want 0", n)
+	}
+	requireJobs(t, e, rolledBack)
+	if got := dealJobsFor(t, e, rolledBack); len(got) != 0 {
+		t.Errorf("demo_deal jobs after the caller rolled back = %+v, want none", got)
+	}
+
+	tx, err = e.app.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ReadinessCheckTx(ctx, tx, committed, consentText); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ReadinessCheckTx: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: twin, ConsentText: consentText}); err != nil {
+		t.Fatal(err)
+	}
+	c, w := readRow(t, e, committed), readRow(t, e, twin)
+	if deref(c.ConsentText) != consentText || c.ReadinessAt == nil || c.ConsentedAt == nil || c.Version != w.Version ||
+		deref(c.ConsentText) != deref(w.ConsentText) || (c.ReadinessAt == nil) != (w.ReadinessAt == nil) {
+		t.Errorf("row after ReadinessCheckTx = %+v, after ReadinessCheck = %+v; want the same facts", c, w)
+	}
+	requireJobs(t, e, committed, "hubspot@1", "resend@1")
+	requireJobs(t, e, twin, "hubspot@1", "resend@1")
+	want := []DemoDealArgs{{Email: committed, Source: dealSourceReadinessCheck}}
+	if got := dealJobsFor(t, e, committed); !slices.Equal(got, want) {
+		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
+	}
+}
+
 func TestStore_ReadinessDealInsertFailureRollsBackTheIntake(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

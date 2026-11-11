@@ -25,6 +25,7 @@ import (
 const (
 	runRoute      = "/internal/public-checks/run"
 	mappingRoute  = "/internal/public-checks/mapping"
+	confirmRoute  = "/internal/public-checks/confirm"
 	capturedRoute = "/internal/public-checks/captured-mail"
 )
 
@@ -39,6 +40,23 @@ func callIndexes(body []ast.Stmt, want string) (idx []int, calls []*ast.CallExpr
 		})
 	}
 	return idx, calls
+}
+
+// storeMergesContacts reports whether e is a readinesscheck.Store literal whose Contacts field is rw.Store.
+func storeMergesContacts(e ast.Expr) bool {
+	if u, ok := e.(*ast.UnaryExpr); ok {
+		e = u.X
+	}
+	lit, ok := e.(*ast.CompositeLit)
+	if !ok || wtExprString(lit.Type) != "readinesscheck.Store" {
+		return false
+	}
+	for _, el := range lit.Elts {
+		if kv, ok := el.(*ast.KeyValueExpr); ok && wtExprString(kv.Key) == "Contacts" && wtExprString(kv.Value) == "rw.Store" {
+			return true
+		}
+	}
+	return false
 }
 
 // publicCheckWiringProblems reports how main() in f departs from the public-check wiring: routes before the
@@ -60,6 +78,11 @@ func publicCheckWiringProblems(t *testing.T, f *ast.File) []string {
 		problems = append(problems, "registerPublicCheckRoutes must take the mux and the service only")
 	} else if c, ok := args[1].(*ast.CallExpr); !ok || wtCallName(c.Fun) != "readinesscheck.NewService" || len(c.Args) != 4 || wtExprString(c.Args[2]) != "nl.Sender" {
 		problems = append(problems, "the service must be readinesscheck.NewService(..., nl.Sender, ...): the guarded sender")
+	}
+	if args := regCalls[0].Args; len(args) == 2 {
+		if c, ok := args[1].(*ast.CallExpr); ok && len(c.Args) == 4 && !storeMergesContacts(c.Args[1]) {
+			problems = append(problems, "the service's store must be &readinesscheck.Store{..., Contacts: rw.Store}: the press merges the contact in its transaction")
+		}
 	}
 	if args := gateCalls[0].Args; len(args) != 1 {
 		problems = append(problems, "app.RequireGateway must take only the token")
@@ -139,7 +162,7 @@ func post(t *testing.T, url, token string, body io.Reader) int {
 // The ID token is checked by Cloud Run before the request reaches the worker, so only the gateway token is observable here.
 func TestWorker_PublicCheckRouteRefusesAMissingGatewayToken(t *testing.T) {
 	base := bootWorker(t, "pr-1")
-	for _, route := range []string{runRoute, mappingRoute} {
+	for _, route := range []string{runRoute, mappingRoute, confirmRoute} {
 		for name, tok := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
 			if got := post(t, base+route, tok, strings.NewReader(`{}`)); got != http.StatusUnauthorized {
 				t.Errorf("POST %s with %s = %d, want 401", route, name, got)
@@ -178,7 +201,7 @@ func TestWorkerMain_CapturedMailRouteIsGone(t *testing.T) {
 	if got := post(capturedRoute, `{"to":"a@x.io"}`); got != http.StatusNotFound {
 		t.Errorf("POST %s = %d, want 404", capturedRoute, got)
 	}
-	for _, route := range []string{runRoute, mappingRoute} {
+	for _, route := range []string{runRoute, mappingRoute, confirmRoute} {
 		if got := post(route, ""); got == http.StatusNotFound {
 			t.Errorf("POST %s = 404, want the route registered", route)
 		}

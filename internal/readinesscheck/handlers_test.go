@@ -37,6 +37,8 @@ const (
 	threeInvoice = "Inv,Total,BTIN,Date\nA,1,12345678-0001,2026-10-01\nB,2,,2027-01-05\nC,3,12345678-0002,2027-01-06\n"
 	csvMapping   = `{"invoice_number":"Inv","total":"Total","buyer_tin":"BTIN","issue_date":"Date"}`
 	checkSubject = "Your ASComply readiness check results"
+	holdToken    = "Tk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 43 base64url characters
+	consentS     = "Allow marketing communications: ASComply Africa may email me product news and offers."
 )
 
 type lockedBuf struct {
@@ -73,13 +75,24 @@ func (e *events) all() []string {
 	return slices.Clone(e.list)
 }
 
+type relCall struct {
+	token  string
+	ctxErr error
+}
+
+type confirmCall struct{ token, consent string }
+
 type fakeStore struct {
 	ev        *events
 	count     int
 	countErr  error
-	insertErr error
+	holdErr   error
 	mu        sync.Mutex
 	inserts   []Summary
+	helds     []Held
+	releases  []relCall
+	confirms  []confirmCall
+	confirmFn func(ctx context.Context, token, consent string, send func(context.Context, Held, int) error) (Held, bool, error)
 }
 
 func (s *fakeStore) Count(context.Context, string) (int, error) { return s.count, s.countErr }
@@ -89,13 +102,64 @@ func (s *fakeStore) Insert(_ context.Context, m Summary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inserts = append(s.inserts, m)
-	return s.insertErr
+	return nil
 }
+
+func (s *fakeStore) Hold(_ context.Context, h Held) (string, error) {
+	s.ev.add("hold")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.helds = append(s.helds, h)
+	if s.holdErr != nil {
+		return "", s.holdErr
+	}
+	return holdToken, nil
+}
+
+func (s *fakeStore) Release(ctx context.Context, token string) error {
+	s.ev.add("release")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releases = append(s.releases, relCall{token, ctx.Err()})
+	return nil
+}
+
+func (s *fakeStore) Confirm(ctx context.Context, token, consent string, send func(context.Context, Held, int) error) (Held, bool, error) {
+	s.ev.add("confirm")
+	s.mu.Lock()
+	s.confirms = append(s.confirms, confirmCall{token, consent})
+	fn := s.confirmFn
+	s.mu.Unlock()
+	if fn == nil {
+		return Held{}, false, ErrLinkInvalid
+	}
+	return fn(ctx, token, consent, send)
+}
+
+func (s *fakeStore) PurgeExpired(context.Context) error { return nil }
 
 func (s *fakeStore) rows() []Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.inserts)
+}
+
+func (s *fakeStore) holds() []Held {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.helds)
+}
+
+func (s *fakeStore) released() []relCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.releases)
+}
+
+func (s *fakeStore) confirmed() []confirmCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.confirms)
 }
 
 // recSender records the order of its sends against the store and delegates to a Capture.
@@ -285,13 +349,90 @@ func wantStatus(t *testing.T, rec *httptest.ResponseRecorder, status int, errWor
 	}
 }
 
-func TestRun_FourthRunIsRefusedBeforeTheEngine(t *testing.T) {
+// runBody is the answer of the submit; it must be the same bytes for every address.
+func runBody(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	wantStatus(t, rec, http.StatusOK, "")
+	if out := decode(t, rec); len(out) != 1 || out["status"] != "confirm" {
+		t.Fatalf("body = %v, want exactly {\"status\":\"confirm\"}", out)
+	}
+	return rec.Body.String()
+}
+
+func TestRun_AFreshAddressHoldsTheResultAndMailsTheLink(t *testing.T) {
+	r := newRig(t)
+	runBody(t, r.run(t, "  Visitor@X.io ", "csv", []byte(threeInvoice), "mapping", csvMapping))
+	helds := r.store.holds()
+	if len(helds) != 1 {
+		t.Fatalf("holds = %d, want 1", len(helds))
+	}
+	h := helds[0]
+	if h.Email != "visitor@x.io" || h.Summary.FileType != "csv" || h.Summary.RowCount != 3 ||
+		!slices.Equal(h.Summary.FailedRuleIDs, []string{"buyer-tin-required"}) {
+		t.Errorf("held = %+v, want visitor@x.io csv 3 rows [buyer-tin-required]", h)
+	}
+	if h.Mail.ChecksLeft != 0 || h.Mail.Checked == 0 || h.Mail.Checked != len(h.Mail.Invoices) {
+		t.Errorf("held mail = checked %d, %d invoices, checks left %d; want the checked invoices and 0 (the press sets the checks left)",
+			h.Mail.Checked, len(h.Mail.Invoices), h.Mail.ChecksLeft)
+	}
+	msgs := r.send.capture.Messages()
+	if len(msgs) != 1 || msgs[0].To != "visitor@x.io" || msgs[0].Subject != accountmail.ReadinessConfirmSubject ||
+		!strings.Contains(msgs[0].HTML, "?t="+holdToken) {
+		t.Fatalf("captured = %+v, want one mail to visitor@x.io with subject %q and the held token in its link", msgs, accountmail.ReadinessConfirmSubject)
+	}
+	if ev := r.ev.all(); !slices.Equal(ev, []string{"hold", "send"}) {
+		t.Errorf("events = %v, want hold then send and no insert", ev)
+	}
+}
+
+func TestRun_AUsedAddressGetsTheUsedMailAndTheSameAnswer(t *testing.T) {
+	want := runBody(t, newRig(t).run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping))
 	for _, count := range []int{3, 4} {
-		r := newRig(t)
-		r.store.count = count
-		rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
-		wantStatus(t, rec, http.StatusConflict, "sign_up")
-		r.untouched(t)
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			r := newRig(t)
+			r.store.count = count
+			if got := runBody(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)); got != want {
+				t.Errorf("body = %q, want the count-0 body %q", got, want)
+			}
+			if n := r.loads.Load(); n != 1 {
+				t.Errorf("rule loads = %d, want 1: the engine runs for a used address too", n)
+			}
+			msgs := r.send.capture.Messages()
+			if len(msgs) != 1 || msgs[0].To != visitor || msgs[0].Subject != accountmail.ReadinessUsedSubject ||
+				strings.Contains(msgs[0].HTML, accountmail.ReadinessConfirmURL) {
+				t.Fatalf("captured = %+v, want one used-checks mail to %s with no confirm link", msgs, visitor)
+			}
+			if ev := r.ev.all(); !slices.Equal(ev, []string{"send"}) {
+				t.Errorf("events = %v, want one send and nothing held", ev)
+			}
+		})
+	}
+}
+
+func TestRun_AnEngineRefusalIsTheSameForAFreshAndAUsedAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name, format string
+		file         []byte
+		status       int
+		word         string
+	}{
+		{"unreadable file", "csv", []byte{}, http.StatusUnprocessableEntity, "unreadable"},
+		{"unsupported format", "png", []byte(oneInvoice), http.StatusBadRequest, "unsupported format"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var bodies []string
+			for _, count := range []int{0, 3} {
+				r := newRig(t)
+				r.store.count = count
+				rec := r.run(t, visitor, tc.format, tc.file, "mapping", csvMapping)
+				wantStatus(t, rec, tc.status, tc.word)
+				bodies = append(bodies, rec.Body.String())
+				r.noWrites(t)
+			}
+			if bodies[0] != bodies[1] {
+				t.Errorf("bodies differ: %q for a fresh address, %q for a used one", bodies[0], bodies[1])
+			}
+		})
 	}
 }
 
@@ -299,37 +440,12 @@ func TestRun_ThirdRunIsAllowed(t *testing.T) {
 	r := newRig(t)
 	r.store.count = 2
 	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
-	wantStatus(t, rec, http.StatusOK, "")
-	if got := decode(t, rec)["checks_left"]; got != float64(0) {
-		t.Errorf("checks_left = %v, want 0", got)
+	runBody(t, rec)
+	if _, has := decode(t, rec)["checks_left"]; has {
+		t.Error("the answer carries checks_left, which names the address's count")
 	}
-	if ev := r.ev.all(); !slices.Equal(ev, []string{"send", "insert"}) {
-		t.Errorf("events = %v, want send then insert", ev)
-	}
-}
-
-func TestRun_SendsOneMailThenWritesOneRow(t *testing.T) {
-	r := newRig(t)
-	rec := r.run(t, "  Visitor@X.io ", "csv", []byte(threeInvoice), "mapping", csvMapping)
-	wantStatus(t, rec, http.StatusOK, "")
-	if got := decode(t, rec)["checks_left"]; got != float64(2) {
-		t.Errorf("checks_left = %v, want 2", got)
-	}
-	msgs := r.send.capture.Messages()
-	if len(msgs) != 1 || msgs[0].To != "visitor@x.io" || msgs[0].Subject != checkSubject || msgs[0].HTML == "" {
-		t.Fatalf("captured = %+v, want one mail to visitor@x.io with subject %q and a body", msgs, checkSubject)
-	}
-	rows := r.store.rows()
-	if len(rows) != 1 {
-		t.Fatalf("inserts = %d, want 1", len(rows))
-	}
-	got := rows[0]
-	if strings.TrimSpace(strings.ToLower(got.Email)) != "visitor@x.io" || got.FileType != "csv" || got.RowCount != 3 ||
-		!slices.Equal(got.FailedRuleIDs, []string{"buyer-tin-required"}) {
-		t.Errorf("summary = %+v, want visitor@x.io csv 3 rows [buyer-tin-required]", got)
-	}
-	if ev := r.ev.all(); !slices.Equal(ev, []string{"send", "insert"}) {
-		t.Errorf("events = %v, want send then insert", ev)
+	if ev := r.ev.all(); !slices.Equal(ev, []string{"hold", "send"}) {
+		t.Errorf("events = %v, want hold then send", ev)
 	}
 }
 
@@ -359,13 +475,87 @@ func TestRun_SpentBudgetIs503(t *testing.T) {
 	r.noWrites(t)
 }
 
-func TestRun_FailedSendIs503AndWritesNoRow(t *testing.T) {
+func TestRun_AFailedConfirmMailIs503AndReleasesTheHold(t *testing.T) {
 	r := newRig(t)
 	r.send.err = &accountmail.SendError{Status: 500}
-	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
-	wantStatus(t, rec, http.StatusServiceUnavailable, "failed")
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusServiceUnavailable, "failed")
+	if ev := r.ev.all(); !slices.Equal(ev, []string{"hold", "send", "release"}) {
+		t.Errorf("events = %v, want hold, send, release", ev)
+	}
+	if rel := r.store.released(); len(rel) != 1 || rel[0].token != holdToken {
+		t.Errorf("releases = %+v, want one with the Hold token", rel)
+	}
+}
+
+func TestRun_AFailedHoldIs503AndSendsNothing(t *testing.T) {
+	r := newRig(t)
+	r.store.holdErr = errors.New("db down")
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusServiceUnavailable, "unavailable")
+	if ev := r.ev.all(); !slices.Equal(ev, []string{"hold"}) {
+		t.Errorf("events = %v, want the failed hold and no send", ev)
+	}
+	if logs := r.logs.String(); !strings.Contains(logs, "level=ERROR") || strings.Contains(logs, visitor) {
+		t.Errorf("logs = %q, want an ERROR line without the address", logs)
+	}
+}
+
+func TestRun_AFailedUsedMailIs503AndHoldsNothing(t *testing.T) {
+	r := newRig(t)
+	r.store.count = 3
+	r.send.err = &accountmail.SendError{Status: 500}
+	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusServiceUnavailable, "failed")
 	if ev := r.ev.all(); !slices.Equal(ev, []string{"send"}) {
-		t.Errorf("events = %v, want one send and no insert", ev)
+		t.Errorf("events = %v, want one send and no hold or release", ev)
+	}
+}
+
+// cancelSender holds the send open until its context ends, as a slow vendor does.
+type cancelSender struct {
+	ev      *events
+	started chan struct{}
+}
+
+func (s *cancelSender) Send(ctx context.Context, _ []accountmail.Message) error {
+	s.ev.add("send")
+	close(s.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRun_ACancelledSendStillReleasesTheHold(t *testing.T) {
+	r := newRig(t)
+	cs := &cancelSender{ev: r.ev, started: make(chan struct{})}
+	r.svc.Sender = cs
+	r.svc.mailTimeout = 2 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body, ct := runForm(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
+	req := httptest.NewRequest(http.MethodPost, "/", body).WithContext(ctx)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		r.svc.RunHandler().ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-cs.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run never reached the send")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not end after the client left")
+	}
+	wantStatus(t, rec, http.StatusServiceUnavailable, "failed")
+	rel := r.store.released()
+	if len(rel) != 1 || rel[0].token != holdToken {
+		t.Fatalf("releases = %+v, want one with the Hold token", rel)
+	}
+	if rel[0].ctxErr != nil {
+		t.Errorf("Release ran on a context that was already done (%v): a client that leaves would strand the held row", rel[0].ctxErr)
 	}
 }
 
@@ -486,45 +676,6 @@ func TestRun_TheAddressIsFreedAfterARun(t *testing.T) {
 	}
 }
 
-// ctxStore records the deadline left on the context Insert receives.
-type ctxStore struct {
-	*fakeStore
-	left time.Duration
-}
-
-func (s *ctxStore) Insert(ctx context.Context, m Summary) error {
-	if d, ok := ctx.Deadline(); ok {
-		s.left = time.Until(d)
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return s.fakeStore.Insert(ctx, m)
-}
-
-// slowSender uses up the mail context before it returns.
-type slowSender struct{ recSender }
-
-func (s *slowSender) Send(ctx context.Context, msgs []accountmail.Message) error {
-	<-ctx.Done()
-	return nil
-}
-
-func TestRun_TheSummaryInsertHasItsOwnTimeout(t *testing.T) {
-	r := newRig(t)
-	cs := &ctxStore{fakeStore: r.store}
-	r.svc.Store = cs
-	r.svc.Sender = &slowSender{}
-	r.svc.mailTimeout = 20 * time.Millisecond
-	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
-	if len(r.store.rows()) != 1 {
-		t.Fatalf("rows = %d, want 1: the insert must not share the spent mail context", len(r.store.rows()))
-	}
-	if cs.left <= 0 || cs.left > InsertTimeout {
-		t.Errorf("insert deadline left = %v, want within (0, %v]", cs.left, InsertTimeout)
-	}
-}
-
 type failReader struct{ t *testing.T }
 
 func (f failReader) Read([]byte) (int, error) {
@@ -552,20 +703,6 @@ func TestRun_CountErrorIs503BeforeTheEngine(t *testing.T) {
 	}
 }
 
-func TestRun_FailedInsertStillAnswers200(t *testing.T) {
-	r := newRig(t)
-	r.store.insertErr = errors.New("db down")
-	rec := r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping)
-	wantStatus(t, rec, http.StatusOK, "")
-	if n := len(r.send.capture.Messages()); n != 1 {
-		t.Errorf("mails = %d, want 1: the visitor has the result", n)
-	}
-	logs := r.logs.String()
-	if n := strings.Count(logs, "level=ERROR"); n != 1 || strings.Contains(logs, visitor) {
-		t.Errorf("logs = %q, want exactly one ERROR line without the address", logs)
-	}
-}
-
 func TestRun_ASlotIsFreedAfterEveryOutcome(t *testing.T) {
 	r := newRig(t)
 	r.store.countErr = errors.New("db down")
@@ -574,7 +711,7 @@ func TestRun_ASlotIsFreedAfterEveryOutcome(t *testing.T) {
 	}
 	r.store.countErr, r.store.count = nil, 3
 	for range MaxConcurrent + 1 {
-		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice)), http.StatusConflict, "sign_up")
+		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
 	}
 	r.store.count = 0
 	wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
@@ -684,8 +821,8 @@ func TestHandlers_LogNoPersonalData(t *testing.T) {
 		fmt   string
 	}{
 		{"count error", func(r *rig) { r.store.countErr = errors.New("db down") }, []string{"mapping", csvMapping}, csv, "csv"},
-		{"sign up", func(r *rig) { r.store.count = 3 }, []string{"mapping", csvMapping}, csv, "csv"},
-		{"insert error", func(r *rig) { r.store.insertErr = errors.New("db down") }, []string{"mapping", csvMapping}, csv, "csv"},
+		{"used address", func(r *rig) { r.store.count = 3 }, []string{"mapping", csvMapping}, csv, "csv"},
+		{"hold error", func(r *rig) { r.store.holdErr = errors.New("db down") }, []string{"mapping", csvMapping}, csv, "csv"},
 		{"send error", func(r *rig) { r.send.err = &accountmail.SendError{Status: 500} }, []string{"mapping", csvMapping}, csv, "csv"},
 		{"read unavailable", nil, nil, []byte("%PDF-1.4"), "pdf"},
 		{"mapping names a column the file lacks", nil, []string{"mapping", `{"invoice_number":"Inv","buyer_name":"` + buyer + `X"}`}, csv, "csv"},
@@ -726,7 +863,7 @@ func TestHandlers_LogNoPersonalData(t *testing.T) {
 		}
 	})
 	if errorLines == 0 {
-		t.Error("no branch logged an ERROR line; the count and insert errors must log one")
+		t.Error("no branch logged an ERROR line; the count and hold errors must log one")
 	}
 }
 
@@ -777,9 +914,9 @@ func TestRun_AnXlsxRunIsRecordedAsXlsx(t *testing.T) {
 	r := newRig(t)
 	rec := r.run(t, visitor, "xlsx", xlsxOf(t, threeInvoice), "mapping", csvMapping)
 	wantStatus(t, rec, http.StatusOK, "")
-	rows := r.store.rows()
-	if len(rows) != 1 || rows[0].FileType != "xlsx" || rows[0].RowCount != 3 {
-		t.Errorf("summary = %+v, want one xlsx row of 3 rows", rows)
+	helds := r.store.holds()
+	if len(helds) != 1 || helds[0].Summary.FileType != "xlsx" || helds[0].Summary.RowCount != 3 {
+		t.Errorf("held = %+v, want one xlsx hold of 3 rows", helds)
 	}
 }
 
@@ -793,18 +930,6 @@ func TestRun_UnexpectedEngineErrorIs500WithoutPayload(t *testing.T) {
 	r.noWrites(t)
 	if logs := r.logs.String(); !strings.Contains(logs, "level=ERROR") || strings.Contains(logs, visitor) {
 		t.Errorf("logs = %q, want an ERROR line without the error text", logs)
-	}
-}
-
-func TestRun_TheMailStatesTheChecksLeftTheAnswerReports(t *testing.T) {
-	for count, want := range map[int]string{0: "2 free checks left", 1: "1 free check left", 2: "no free checks left"} {
-		r := newRig(t)
-		r.store.count = count
-		wantStatus(t, r.run(t, visitor, "csv", []byte(oneInvoice), "mapping", csvMapping), http.StatusOK, "")
-		msgs := r.send.capture.Messages()
-		if len(msgs) != 1 || !strings.Contains(msgs[0].HTML, want) {
-			t.Errorf("count %d: mail lacks %q", count, want)
-		}
 	}
 }
 
@@ -837,4 +962,259 @@ func TestMapping_ShareTheTwoSlotsWithRuns(t *testing.T) {
 		t.Errorf("mapper calls = %d, want 0: a busy mapping call must not reach the AI", r.mapper.calls.Load())
 	}
 	finish()
+}
+
+// confirmJSON is the body the gateway posts at the press.
+func confirmJSON(token, consent string) string {
+	b, _ := json.Marshal(map[string]string{"token": token, "consent_text": consent})
+	return string(b)
+}
+
+func (r *rig) confirmCtx(ctx context.Context, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.svc.ConfirmHandler().ServeHTTP(rec, req)
+	return rec
+}
+
+func (r *rig) confirm(body string) *httptest.ResponseRecorder {
+	return r.confirmCtx(context.Background(), body)
+}
+
+// heldMail is a held result as the store returns it; its mail carries the zero checks left that Hold stores.
+func heldMail() Held {
+	return Held{Email: visitor, Summary: Summary{Email: visitor, FileType: "csv", RowCount: 1},
+		Mail: accountmail.ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []accountmail.ReadinessCheckInvoice{
+			{Number: "INV-1", Passes: true, Buyer: []accountmail.MailField{{Label: "Name", Value: "ZZBUYER"}}}}}}
+}
+
+// sendsAt is a Confirm that consumes a link and calls send with the recorded count.
+func sendsAt(count int, fresh bool) func(context.Context, string, string, func(context.Context, Held, int) error) (Held, bool, error) {
+	return func(ctx context.Context, _, _ string, send func(context.Context, Held, int) error) (Held, bool, error) {
+		h := heldMail()
+		return h, fresh, send(ctx, h, count)
+	}
+}
+
+func TestConfirm_SendsTheResultsWithTheChecksLeftAtThePress(t *testing.T) {
+	for count, want := range map[int]string{0: "You have 2 free checks left.", 1: "You have 1 free check left.", 2: "You have no free checks left."} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			r := newRig(t)
+			r.store.confirmFn = sendsAt(count, true)
+			rec := r.confirm(confirmJSON(holdToken, consentS))
+			wantStatus(t, rec, http.StatusOK, "")
+			if out := decode(t, rec); len(out) != 1 || out["outcome"] != "sent" {
+				t.Errorf("body = %v, want exactly {\"outcome\":\"sent\"}", out)
+			}
+			msgs := r.send.capture.Messages()
+			if len(msgs) != 1 || msgs[0].To != visitor || msgs[0].Subject != checkSubject || !strings.Contains(msgs[0].HTML, want) {
+				t.Fatalf("captured = %+v, want one results mail to %s that says %q", msgs, visitor, want)
+			}
+			if got := r.store.confirmed(); len(got) != 1 || got[0].token != holdToken {
+				t.Errorf("Confirm calls = %+v, want one with the posted token", got)
+			}
+		})
+	}
+}
+
+func TestConfirm_PassesTheGatewaySentenceAndRefusesABadOne(t *testing.T) {
+	for _, tc := range []struct{ name, consent string }{{"a sentence", consentS}, {"500 characters", strings.Repeat("a", 500)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.store.confirmFn = sendsAt(0, true)
+			wantStatus(t, r.confirm(confirmJSON(holdToken, tc.consent)), http.StatusOK, "")
+			if got := r.store.confirmed(); len(got) != 1 || got[0].consent != tc.consent {
+				t.Errorf("Confirm calls = %+v, want one with the posted sentence", got)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"missing", `{"token":"` + holdToken + `"}`},
+		{"blank", confirmJSON(holdToken, "  \t ")},
+		{"501 characters", confirmJSON(holdToken, strings.Repeat("a", 501))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.store.confirmFn = sendsAt(0, true)
+			wantStatus(t, r.confirm(tc.body), http.StatusBadRequest, "bad request")
+			if got := r.store.confirmed(); len(got) != 0 {
+				t.Errorf("Confirm calls = %+v, want none for a bad sentence", got)
+			}
+			r.noWrites(t)
+		})
+	}
+}
+
+func TestConfirm_ThreeRecordedChecksGetTheUsedMail(t *testing.T) {
+	r := newRig(t)
+	r.store.confirmFn = sendsAt(3, false)
+	rec := r.confirm(confirmJSON(holdToken, consentS))
+	wantStatus(t, rec, http.StatusOK, "")
+	if out := decode(t, rec); len(out) != 1 || out["outcome"] != "used" {
+		t.Errorf("body = %v, want exactly {\"outcome\":\"used\"}", out)
+	}
+	msgs := r.send.capture.Messages()
+	if len(msgs) != 1 || msgs[0].To != visitor || msgs[0].Subject != accountmail.ReadinessUsedSubject {
+		t.Fatalf("captured = %+v, want one used-checks mail to %s", msgs, visitor)
+	}
+}
+
+func TestConfirm_AnUnknownTokenIs410(t *testing.T) {
+	r := newRig(t)
+	r.store.confirmFn = func(context.Context, string, string, func(context.Context, Held, int) error) (Held, bool, error) {
+		return Held{}, false, fmt.Errorf("confirm: %w", ErrLinkInvalid)
+	}
+	wantStatus(t, r.confirm(confirmJSON(holdToken, consentS)), http.StatusGone, "gone")
+	if n := len(r.send.capture.Messages()); n != 0 {
+		t.Errorf("mails = %d, want none", n)
+	}
+	if got := r.store.confirmed(); len(got) != 1 {
+		t.Errorf("Confirm calls = %d, want the one that found no link", len(got))
+	}
+}
+
+func TestConfirm_ABadBodyIs410WithoutAStoreCall(t *testing.T) {
+	tooBig := `{"token":"` + holdToken + `","consent_text":"` + consentS + `","pad":"` + strings.Repeat("a", 2048) + `"}`
+	for _, tc := range []struct{ name, body string }{
+		{"over 2 KiB", tooBig},
+		{"not JSON", "not json"},
+		{"empty", ""},
+		{"a JSON array", "[]"},
+		{"no token", `{"consent_text":"` + consentS + `"}`},
+		{"42 characters", confirmJSON(holdToken[:42], consentS)},
+		{"44 characters", confirmJSON(holdToken+"x", consentS)},
+		{"a character outside base64url", confirmJSON(holdToken[:42]+"+", consentS)},
+		{"padding", confirmJSON(holdToken[:42]+"=", consentS)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.store.confirmFn = sendsAt(0, true)
+			wantStatus(t, r.confirm(tc.body), http.StatusGone, "gone")
+			if got := r.store.confirmed(); len(got) != 0 {
+				t.Errorf("Confirm calls = %+v, want none", got)
+			}
+			r.noWrites(t)
+		})
+	}
+}
+
+func TestConfirm_AFailedMailIs503(t *testing.T) {
+	r := newRig(t)
+	r.send.err = &accountmail.SendError{Status: 500}
+	r.store.confirmFn = sendsAt(0, true)
+	wantStatus(t, r.confirm(confirmJSON(holdToken, consentS)), http.StatusServiceUnavailable, "failed")
+}
+
+func TestConfirm_ACommitFailureIs503AndLogsAnError(t *testing.T) {
+	r := newRig(t)
+	r.store.confirmFn = func(ctx context.Context, _, _ string, send func(context.Context, Held, int) error) (Held, bool, error) {
+		if err := send(ctx, heldMail(), 0); err != nil {
+			return Held{}, false, err
+		}
+		return Held{}, false, errors.New("commit failed")
+	}
+	wantStatus(t, r.confirm(confirmJSON(holdToken, consentS)), http.StatusServiceUnavailable, "failed")
+	if n := len(r.send.capture.Messages()); n != 1 {
+		t.Errorf("mails = %d, want the one that went before the commit failed", n)
+	}
+	logs := r.logs.String()
+	if n := strings.Count(logs, "level=ERROR"); n != 1 || strings.Contains(logs, visitor) || strings.Contains(logs, holdToken) {
+		t.Errorf("logs = %q, want exactly one ERROR line without the address or the token", logs)
+	}
+}
+
+func TestConfirm_AClientCancelDoesNotReachTheStore(t *testing.T) {
+	r := newRig(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var left time.Duration
+	var hasDeadline bool
+	var ctxErr error
+	r.store.confirmFn = func(ctx context.Context, _, _ string, _ func(context.Context, Held, int) error) (Held, bool, error) {
+		d, ok := ctx.Deadline()
+		left, hasDeadline = time.Until(d), ok
+		close(entered)
+		<-release
+		ctxErr = ctx.Err()
+		return heldMail(), true, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var rec *httptest.ResponseRecorder
+	done := make(chan struct{})
+	go func() {
+		rec = r.confirmCtx(ctx, confirmJSON(holdToken, consentS))
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Confirm was never called")
+	}
+	cancel()
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not return")
+	}
+	if ctxErr != nil {
+		t.Errorf("Confirm's context ended with %v after the client left: the press would roll back", ctxErr)
+	}
+	if !hasDeadline || left <= ConfirmTimeout-3*time.Second || left > ConfirmTimeout {
+		t.Errorf("Confirm deadline: set %v, %v away; want ConfirmTimeout (%v) away", hasDeadline, left, ConfirmTimeout)
+	}
+	wantStatus(t, rec, http.StatusOK, "")
+}
+
+func TestConfirmAndRun_LogNoAddressOrToken(t *testing.T) {
+	const buyer = "ZZBUYER"
+	csv := []byte("Inv,Total,BTIN,Date," + buyer + "\nA,1,,2026-10-01,Beta\n")
+	needles := []string{visitor, holdToken, buyer, "secret.csv"}
+	run := func(r *rig) *httptest.ResponseRecorder { return r.run(t, visitor, "csv", csv, "mapping", csvMapping) }
+	confirm := func(body string) func(*rig) *httptest.ResponseRecorder {
+		return func(r *rig) *httptest.ResponseRecorder { return r.confirm(body) }
+	}
+	good := confirmJSON(holdToken, consentS)
+	failSend := func(r *rig) { r.send.err = &accountmail.SendError{Status: 500} }
+	for _, tc := range []struct {
+		name   string
+		setup  func(*rig)
+		call   func(*rig) *httptest.ResponseRecorder
+		status int
+	}{
+		{"fresh", nil, run, 200},
+		{"used", func(r *rig) { r.store.count = 3 }, run, 200},
+		{"hold error", func(r *rig) { r.store.holdErr = errors.New("db down") }, run, 503},
+		{"confirmation mail error", failSend, run, 503},
+		{"used mail error", func(r *rig) { r.store.count = 3; failSend(r) }, run, 503},
+		{"press sent", func(r *rig) { r.store.confirmFn = sendsAt(1, true) }, confirm(good), 200},
+		{"press used", func(r *rig) { r.store.confirmFn = sendsAt(3, false) }, confirm(good), 200},
+		{"press unknown token", nil, confirm(good), 410},
+		{"press bad body", nil, confirm("not json"), 410},
+		{"press bad sentence", nil, confirm(confirmJSON(holdToken, "")), 400},
+		{"press mail error", func(r *rig) { failSend(r); r.store.confirmFn = sendsAt(0, true) }, confirm(good), 503},
+		{"press commit error", func(r *rig) {
+			r.store.confirmFn = func(ctx context.Context, _, _ string, send func(context.Context, Held, int) error) (Held, bool, error) {
+				_ = send(ctx, heldMail(), 0)
+				return Held{}, false, errors.New("commit failed")
+			}
+		}, confirm(good), 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			if tc.setup != nil {
+				tc.setup(r)
+			}
+			if rec := tc.call(r); rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: the branch did not run, so a clean log proves nothing", rec.Code, tc.status)
+			}
+			logs := r.logs.String()
+			for _, n := range needles {
+				if strings.Contains(logs, n) {
+					t.Errorf("log carries %q: %s", n, logs)
+				}
+			}
+		})
+	}
 }

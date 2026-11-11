@@ -1218,6 +1218,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/validate":                        {verdict: scCovered},
 	"POST /internal/public-checks/run":                       {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /internal/public-checks/mapping":                   {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
+	"POST /internal/public-checks/confirm":                   {verdict: scExempt, reason: "gateway-token call with no caller; held readiness checks carry no tenant"},
 	"POST /v1/validate/batch":                                {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/custom-rules/check":                            {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/workflow-roles":                                {verdict: scCovered},

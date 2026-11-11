@@ -41,6 +41,19 @@ vi.mock('./lib/authedFetch', async (importOriginal) => {
   }
 })
 
+const hold = vi.hoisted(() => ({ saves: false }))
+// Defers the real save so the passive-effect write lands after the sidebar mounts.
+vi.mock('./lib/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/session')>()
+  return {
+    ...actual,
+    saveSession: (s: Session) => {
+      if (hold.saves) setTimeout(() => actual.saveSession(s), 150)
+      else actual.saveSession(s)
+    },
+  }
+})
+
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
@@ -80,6 +93,7 @@ const stored = () => JSON.parse(localStorage.getItem(SESSION_KEY) as string)
 beforeEach(() => {
   capturedCtx = undefined
   calls = []
+  hold.saves = false
   handler = async (url) => {
     if (isMe(url)) return me(DUE)
     throw new Error(`unexpected ${url}`)
@@ -156,12 +170,14 @@ describe('deletion notice', () => {
       throw new Error(`unexpected ${url}`)
     }
     await renderApp(sessionWith(DUE))
-    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+    const cancel = await screen.findByTestId('deletion-notice-cancel')
+    hold.saves = true
+    fireEvent.click(cancel)
 
     await screen.findByTestId('sidebar')
     expect(calls.some((c) => isCancel(c.url) && c.method === 'POST')).toBe(true)
     expect(notice()).toBeNull()
-    await waitFor(() => expect(stored().me.tenant.deletion_due_at).toBeNull())
+    expect(stored().me.tenant.deletion_due_at).toBeNull()
   })
 
   it('deletion notice: a failed cancel keeps the notice and shows why', async () => {

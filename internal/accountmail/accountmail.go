@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html readiness_check.html recovery.html stranded_alert.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html readiness_check.html recovery.html stranded_alert.html unsubscribe_url.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -32,7 +32,15 @@ func Template(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(layout, mail...), nil
+	src := append(layout, mail...)
+	if name != "confirmation" && name != "recovery" {
+		unsub, err := files.ReadFile("unsubscribe_url.html")
+		if err != nil {
+			return nil, err
+		}
+		src = append(src, unsub...)
+	}
+	return src, nil
 }
 
 const (

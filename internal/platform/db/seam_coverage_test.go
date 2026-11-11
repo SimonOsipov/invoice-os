@@ -221,6 +221,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/accountevents/new_device.go"},                                    // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
 	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
 	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
+	{file: "internal/notifications/unsubscribe.go"},                                   // mail_unsubscribes carries no tenant, so no tenant seam can scope it; the store reads and locks it on the pool
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
 	{file: "internal/gateway/handoff_pg.go"},                                          // sign-in hand-off codes: no tenant and no identity yet
@@ -1006,6 +1007,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"DELETE /v1/workflow-roles/{key}":                        {verdict: scCovered},
 	"GET /.well-known/jwks.json":                             {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
 	"GET /auth/reset-password":                               {verdict: scExempt, reason: "no database; renders the reset page"},
+	"GET /unsubscribe":                                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /auth/verify":                                       {verdict: scExempt, reason: "no database; renders the confirm page, or redirects a stateless open to landing"},
 	"GET /blog/categories":                                   {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/covers/{id}/{version}":                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
@@ -1163,6 +1165,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/reset-password":                              {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/sign-in":                                     {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/sign-out":                                    {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /unsubscribe":                                      {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /auth/verify":                                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /contacts/demo-request":                            {verdict: scExempt, reason: "no database; hands the form to notifications"},
 	"POST /readiness-check/mapping":                          {verdict: scExempt, reason: "no database; forwards the file to the worker"},
@@ -1172,6 +1175,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /internal/contacts/demo-requests":                  {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/readiness-checks":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                    {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
+	"POST /internal/contacts/unsubscribe":                    {verdict: scExempt, reason: "gateway-token call with no caller; an address carries no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/contacts/unsubscribe/lookup":             {verdict: scExempt, reason: "gateway-token call with no caller; an address carries no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/invitations/preview":                     {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /internal/invitations/pending":                     {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
 	"POST /internal/invitations/register":                    {verdict: scExempt, reason: "no caller; the token names the invite"},

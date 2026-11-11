@@ -121,7 +121,9 @@ es256_keys
 start idp-rebuild 9993 -e GOTRUE_JWT_KEYS "${no_mail[@]}" \
   -e GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI=pg-functions://postgres/public/test_rebuild_claims_hook
 start_mailpit
-es256_keys
+# idp-mail shares idp-es256's key, so a test can sign an admin token for it.
+GOTRUE_JWT_KEYS="$(cat "$keys_file")"
+export GOTRUE_JWT_KEYS
 # The absolute confirmation path points the mailed link at the test's gateway verify routes, which also serve the branded template.
 GOTRUE_MAILER_SUBJECTS_CONFIRMATION="Confirm your ASComply account"
 export GOTRUE_MAILER_SUBJECTS_CONFIRMATION

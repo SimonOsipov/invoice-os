@@ -48,16 +48,18 @@ type ReadinessIntake struct {
 }
 
 type Contact struct {
-	Email              string
-	FirstName          string
-	LastName           string
-	Company            string
-	Tags               []string
-	MarketingEligible  bool
-	ResendApplies      bool
-	HubSpotDeliveredAt *time.Time
-	ResendDeliveredAt  *time.Time
-	Mode               *string
+	Email                 string
+	FirstName             string
+	LastName              string
+	Company               string
+	Tags                  []string
+	MarketingEligible     bool
+	ResendApplies         bool
+	MarketingUnsubscribed bool
+	ResendOptInSent       bool
+	HubSpotDeliveredAt    *time.Time
+	ResendDeliveredAt     *time.Time
+	Mode                  *string
 }
 
 // A delivery fact that was NULL and is now set bumps version and clears delivery; names merge freely.
@@ -197,9 +199,12 @@ func (s *Store) Me(ctx context.Context, email string) (Contact, error) {
 	var registered, demo, readiness, consented bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT email, registered_at IS NOT NULL, demo_requested_at IS NOT NULL, readiness_checked_at IS NOT NULL,
-		       marketing_consented_at IS NOT NULL, hubspot_delivered_at, resend_delivered_at, delivery_mode
+		       marketing_consented_at IS NOT NULL, hubspot_delivered_at, resend_delivered_at, delivery_mode,
+		       resend_opt_in_sent_at IS NOT NULL,
+		       EXISTS (SELECT 1 FROM mail_unsubscribes u WHERE u.email = contacts.email AND u.unsubscribed_at IS NOT NULL)
 		FROM contacts WHERE email = lower(btrim($1))`, email).Scan(
-		&c.Email, &registered, &demo, &readiness, &consented, &c.HubSpotDeliveredAt, &c.ResendDeliveredAt, &c.Mode)
+		&c.Email, &registered, &demo, &readiness, &consented, &c.HubSpotDeliveredAt, &c.ResendDeliveredAt, &c.Mode,
+		&c.ResendOptInSent, &c.MarketingUnsubscribed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Contact{}, ErrNotFound
 	}
@@ -215,7 +220,7 @@ func (s *Store) Me(ctx context.Context, email string) (Contact, error) {
 	if readiness {
 		c.Tags = append(c.Tags, "readiness check")
 	}
-	c.MarketingEligible = consented
+	c.MarketingEligible = consented && !c.MarketingUnsubscribed
 	c.ResendApplies = registered || consented
 	return c, nil
 }

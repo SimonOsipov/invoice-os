@@ -467,6 +467,29 @@ export function Privacy() {
             the address.
           </p>
 
+          <h2 style={H2}>Unsubscribing from marketing email</h2>
+          <p style={P}>
+            Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers
+            account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness
+            check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes
+            nothing. If a link cannot carry its code, the page it opens asks you to email {PRIVACY_CONTACT}, and we
+            unsubscribe you.
+          </p>
+          <p style={P}>
+            Pressing the button stops all marketing email to that address. We record the unsubscribe on our own server.
+            When Resend holds the address as a contact, we also opt it out of our marketing email there. While we hold
+            that record, no later form, demo request or readiness check opts the address back in.
+          </p>
+          <p style={P}>
+            You will still get email about your account and your own requests, such as password resets, sign-in alerts
+            and readiness check results. The blog newsletter has its own unsubscribe link.
+          </p>
+          <p style={P}>
+            To make each link work, we keep a random code on our own server for each address we email and for each
+            address entered in the create-an-account form. We delete that record when an ASComply account with that
+            address is deleted, unless another account still holds the address.
+          </p>
+
           <h2 style={H2}>If you ask for an explanation</h2>
           <p style={P}>
             This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks,

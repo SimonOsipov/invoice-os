@@ -850,3 +850,66 @@ export function readinessConsentIsMarketing(source: string = readSource('interna
 export function ipCountIsHashed(src: string = readSource('internal/gateway/signin_throttle_pg.go')): boolean {
   return goFunc(src, /func \(t \*SignInThrottle\) hashKey\b/, 'SignInThrottle.hashKey').includes('sha256.Sum256')
 }
+
+// HTML and Go-template comments hold no fact.
+const readTemplate = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').replace(/<!--[\s\S]*?-->/g, '').replace(/\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g, '')
+
+// The layout ends with the footer sentence and the unsubscribe_url link; every mail gets a definition of it.
+export function everyMailCarriesTheUnsubscribeFooter(
+  layout: string = readTemplate('internal/accountmail/layout.html'),
+  accountmail: string = readSource('internal/accountmail/accountmail.go'),
+  confirmation: string = readTemplate('internal/accountmail/confirmation.html'),
+  recovery: string = readTemplate('internal/accountmail/recovery.html'),
+): boolean {
+  const template = goFunc(accountmail, /func Template\b/, 'accountmail.Template')
+  const defines = /\{\{-?\s*define "unsubscribe_url"\s*-?\}\}/i
+  return (
+    /Don't want marketing email from ASComply\? <a href="\{\{template "unsubscribe_url" \.\}\}"[^>]*>Unsubscribe<\/a>\./i.test(layout) &&
+    /name != "confirmation" && name != "recovery"/i.test(template) &&
+    /files\.ReadFile\("unsubscribe_url\.html"\)/i.test(template) &&
+    /src = append\(src, unsub\.\.\.\)/i.test(template) &&
+    defines.test(readTemplate('internal/accountmail/unsubscribe_url.html')) &&
+    defines.test(confirmation) &&
+    defines.test(recovery)
+  )
+}
+
+// The press sends the Marketing topic opt_out and nothing else to Resend: no global unsubscribed, no suppression.
+export function unsubscribeOptsOutOfMarketingOnly(src: string = readSource('internal/notifications/unsubscribe.go')): boolean {
+  const optOut = goFunc(src, /func \(r \*Resend\) OptOutMarketing\b/, 'Resend.OptOutMarketing')
+  const press = goFunc(src, /func \(s \*UnsubscribeStore\) Press\b/, 'UnsubscribeStore.Press')
+  return (
+    /"id":\s*r\.topicID,\s*"subscription":\s*"opt_out"/i.test(optOut) &&
+    !/"unsubscribed"/i.test(optOut) &&
+    !/suppression/i.test(optOut) &&
+    /rs\.OptOutMarketing\(/i.test(press)
+  )
+}
+
+// The delivery worker reads mail_unsubscribes and sends no opt_in for a recorded unsubscribe.
+export function optInSkipsAnUnsubscribedAddress(src: string = readSource('internal/notifications/worker.go')): boolean {
+  const work = goFunc(src, /func \(w \*DeliverWorker\) Work\b/, 'DeliverWorker.Work')
+  return (
+    /^\s*EXISTS \(SELECT 1 FROM mail_unsubscribes u WHERE u\.email = contacts\.email AND u\.unsubscribed_at IS NOT NULL\)/im.test(work) &&
+    /sendOptIn := consent && !optInSent && !unsubscribed\b/i.test(work)
+  )
+}
+
+// The sweep deletes the address's mail_unsubscribes row in the block that the superseded case skips.
+export function eraseDeletesMailUnsubscribes(src: string = readSource('internal/notifications/erase.go')): boolean {
+  const block = found(/\n\s*if !res\.superseded \{([\s\S]*?)\n\s*\}\n/.exec(sweepDeletes(src))?.[1], 'the !res.superseded block of the sweep')
+  return /DELETE FROM mail_unsubscribes WHERE email = \$1/i.test(block)
+}
+
+// The address the unsubscribe page's bad-link copy names.
+export function unsubscribePageContact(src: string = readSource('internal/gateway/unsubscribe_page.go')): string {
+  found(/\bunsubscribeBadCopy\s*=\s*"[^"]*"\s*\+\s*unsubscribeContact\b/.exec(src), 'unsubscribeBadCopy built from unsubscribeContact')
+  return found(/\bunsubscribeContact\s*=\s*"([^"]+)"/.exec(src)?.[1], 'unsubscribeContact')
+}
+
+// signUp calls addUnsubscribeToken, which sets data[UnsubscribeMetadataKey] to the looked-up token.
+export function signupKeepsAnUnsubscribeCode(src: string = readSource('internal/gateway/register.go')): boolean {
+  const signUp = goFunc(src, /func signUp\b/, 'signUp')
+  const add = goFunc(src, /func addUnsubscribeToken\b/, 'addUnsubscribeToken')
+  return /\baddUnsubscribeToken\(/i.test(signUp) && /data\[accountmail\.UnsubscribeMetadataKey\]\s*=\s*token\b/i.test(add)
+}

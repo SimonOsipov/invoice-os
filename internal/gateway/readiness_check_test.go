@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/readinesscheck"
 )
 
 const (
@@ -498,8 +499,9 @@ func TestRun_WorkerUnavailableStaysTheUnavailableSentence(t *testing.T) {
 	}
 }
 
+// The word is the worker's own constant, so a change to the worker's sentence that the gateway does not follow fails here.
 func TestRun_KeepsTheSlotForTheTooLongRefusal(t *testing.T) {
-	const word = "This document has too much text for the free check. Try a shorter invoice."
+	const word = readinesscheck.DocumentTooLongSentence
 	e := newCheckEnv(t, true)
 	e.w.answer(400, `{"error":"`+word+`"}`)
 	wantRefused(t, e.runOK(t, checkIP), 400, word)

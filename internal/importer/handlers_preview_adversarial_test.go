@@ -498,8 +498,7 @@ func TestPreviewHandler_ConcurrentRequestsIsolated(t *testing.T) {
 	}
 }
 
-// A CFB container with a crafted EncryptionInfo stream size is a 400, not a
-// panic (GHSA-2j4c) or a 4 GiB allocation (GHSA-x2q3).
+// Crafted CFB: GHSA-2j4c (panic) and GHSA-x2q3 (4 GiB allocation); the decoder must still error.
 func TestPreviewHandler_CraftedCFBIsRefusedWithoutAPanic(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -536,14 +535,18 @@ func TestPreviewHandler_CraftedCFBIsRefusedWithoutAPanic(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
 			}
-			if resp.Error != "could not decode uploaded file" {
-				t.Errorf("error = %q, want %q", resp.Error, "could not decode uploaded file")
+			if resp.Error != "unrecognized file format" {
+				t.Errorf("error = %q, want %q", resp.Error, "unrecognized file format")
 			}
 			var env struct {
 				DocumentID string `json:"document_id"`
 			}
 			if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
 				t.Errorf("document_id missing from %s (err=%v)", raw, err)
+			}
+
+			if _, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(enc), "xlsx", 1); err == nil {
+				t.Error("DecodeFrom on the crafted CFB returned nil error")
 			}
 		})
 	}

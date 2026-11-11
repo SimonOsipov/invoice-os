@@ -6,6 +6,7 @@ package extraction_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -17,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 // --- the classifier's two signals disagree ----------------------------------------------------
@@ -26,38 +29,43 @@ import (
 // still uploads a PDF. This is detectFormat's shape (internal/importer/handlers.go:142-162)
 // and the order EXTR-09-04's picker classifies in, so the two agree by construction.
 //
-// The last case is the CONSEQUENCE of that order and is pinned as a known hole, not as
-// desired behaviour: an extension the table does not know falls THROUGH to the declared type,
-// so a caller can hand this route a .csv by declaring it application/pdf. Nothing downstream
-// re-checks. The picker never produces that request; a hostile or broken client can.
+// The last two cases fall THROUGH to the declared type, and the head check refuses them.
 func TestUploadHandler_ExtensionWinsOverAContradictingContentType(t *testing.T) {
 	cases := []struct {
 		name     string
 		filename string
 		partType string
+		body     []byte
 		wantCode int
 		wantType string
 	}{
-		{"a pdf declared text/csv is a pdf", "scan.pdf", "text/csv", http.StatusCreated, upPDF},
+		{"a pdf declared text/csv is a pdf", "scan.pdf", "text/csv", []byte(upPDFBody), http.StatusCreated, upPDF},
 		// Both signals name an accepted type and disagree, in both directions. The first row
 		// was a .png declared application/pdf until EXTR-15-03 narrowed .png out of the table.
-		{"a pdf declared as a docx is a pdf", "scan.pdf", upDOCX, http.StatusCreated, upPDF},
-		{"a docx declared image/jpeg is a docx", "scan.docx", upJPEG, http.StatusCreated, upDOCX},
+		{"a pdf declared as a docx is a pdf", "scan.pdf", upDOCX, []byte(upPDFBody), http.StatusCreated, upPDF},
+		{"a docx declared image/jpeg is a docx", "scan.docx", upJPEG, []byte(upZipBody), http.StatusCreated, upDOCX},
 
-		// KNOWN HOLES, pinned so a change to either is deliberate. The .png row is EXTR-15-03's
-		// own consequence: narrowing removed the EXTENSION, so a .png now falls through to the
-		// declared type like any other unknown one, and image bytes still enter under a lie.
-		{"a csv declared application/pdf is accepted as a pdf", "ledger.csv", upPDF, http.StatusCreated, upPDF},
-		{"a png declared application/pdf is accepted as a pdf", "scan.png", upPDF, http.StatusCreated, upPDF},
+		// The content check refuses a body that does not match the declared type.
+		{"a csv declared application/pdf is refused", "ledger.csv", upPDF, []byte("invoice_number,total\n"), http.StatusBadRequest, ""},
+		{"a png declared application/pdf is refused", "scan.png", upPDF, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), http.StatusBadRequest, ""},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			spy := newUpSpy()
-			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte("bytes"))
+			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, c.body)
 
 			if rec.Code != c.wantCode {
 				t.Fatalf("status = %d, want %d for %s declared %q (body=%s)", rec.Code, c.wantCode, c.filename, c.partType, raw)
+			}
+			if c.wantCode == http.StatusBadRequest {
+				if got := upString(t, decoded, "error"); got != upMsgRefusal {
+					t.Errorf("error = %q, want %q", got, upMsgRefusal)
+				}
+				if spy.calls("store") != 0 {
+					t.Errorf("the store seam ran %d time(s) on a refused body, want 0", spy.calls("store"))
+				}
+				return
 			}
 			if got := upString(t, decoded, "content_type"); got != c.wantType {
 				t.Errorf("content_type = %q, want %q", got, c.wantType)
@@ -134,28 +142,53 @@ func TestUploadHandler_MissingFilePartIs400(t *testing.T) {
 	}
 }
 
-// TestUploadHandler_EmptyFilePartIs201: an accepted extension carrying zero bytes is stored
-// and enqueued today -- documents.size_bytes CHECKs >= 0, so the row is legal, and nothing
-// between here and the worker looks at the length.
-//
-// Pinned as the SHIPPED behaviour, not as a preference: no acceptance criterion rules on it,
-// and the cost is one dead extraction job per empty upload. A future minimum-size refusal
-// should change this spec deliberately.
-func TestUploadHandler_EmptyFilePartIs201(t *testing.T) {
+// TestUploadHandler_EmptyFilePartIsRefused: an empty part carries no signature.
+func TestUploadHandler_EmptyFilePartIsRefused(t *testing.T) {
 	spy := newUpSpy()
 	rec, raw, decoded := upPost(t, spy, "scan.pdf", upPDF, []byte{})
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 for a zero-byte pdf part (body=%s)", rec.Code, raw)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a zero-byte pdf part (body=%s)", rec.Code, raw)
 	}
-	if spy.gotSize != 0 {
-		t.Errorf("the store seam was handed size %d, want 0", spy.gotSize)
+	if got := upString(t, decoded, "error"); got != upMsgRefusal {
+		t.Errorf("error = %q, want %q", got, upMsgRefusal)
 	}
-	if spy.calls("enqueue") != 1 {
-		t.Errorf("enqueue ran %d time(s) for a zero-byte upload, want 1 (the shipped behaviour)", spy.calls("enqueue"))
+	if len(spy.order) != 0 {
+		t.Errorf("a refused empty upload ran %v, want neither seam", spy.order)
 	}
-	if got := upBool(t, decoded, "reused"); got {
-		t.Errorf("reused = true from a store seam that reported false")
+}
+
+// TestUploadHandler_RefusesBytesThatAreNotTheirType: the declared or extension type decides
+// the signature the body must carry.
+func TestUploadHandler_RefusesBytesThatAreNotTheirType(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n"
+	cfb := "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+	cases := []struct {
+		name, filename, partType, body string
+	}{
+		{"pdf extension, png bytes", "scan.pdf", "", png},
+		{"pdf extension, html", "scan.pdf", "", "<html>"},
+		{"pdf content type, png bytes", "scan", upPDF, png},
+		{"docx extension, pdf bytes", "scan.docx", "", "%PDF-1.7"},
+		{"docx extension, plain bytes", "scan.docx", "", "bytes"},
+		{"docx extension, legacy doc header", "scan.docx", "", cfb},
+		{"upper case pdf extension, png bytes", "SCAN.PDF", "", png},
+		{"docx content type, pdf bytes", "scan", upDOCX, "%PDF-1.7"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spy := newUpSpy()
+			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte(c.body))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+			}
+			if got := upString(t, decoded, "error"); got != upMsgRefusal {
+				t.Errorf("error = %q, want %q", got, upMsgRefusal)
+			}
+			if spy.calls("store") != 0 || spy.calls("enqueue") != 0 {
+				t.Errorf("a refused body ran %v, want neither seam", spy.order)
+			}
+		})
 	}
 }
 
@@ -164,7 +197,7 @@ func TestUploadHandler_EmptyFilePartIs201(t *testing.T) {
 // and enqueue two, and the 201 would name only one of them.
 func TestUploadHandler_FirstFilePartWins(t *testing.T) {
 	spy := newUpSpy()
-	body, ct := upTwoFileParts(t, "first.pdf", upPDF, []byte("%PDF first"), "second.png", upPNG, []byte("PNG second"))
+	body, ct := upTwoFileParts(t, "first.pdf", upPDF, []byte("%PDF-1.7 first"), "second.png", upPNG, []byte("PNG second"))
 	rec, raw, decoded := upServe(t, spy, &upIdentity, ct, body)
 
 	if rec.Code != http.StatusCreated {
@@ -206,7 +239,7 @@ func TestUploadHandler_ContentTypeCasingAndParametersAreNormalized(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			// scan.bin so the extension cannot decide; the declared type is the only signal.
 			spy := newUpSpy()
-			rec, raw, decoded := upPost(t, spy, "scan.bin", c.partType, []byte("bytes"))
+			rec, raw, decoded := upPost(t, spy, "scan.bin", c.partType, []byte(upPDFBody))
 
 			if rec.Code != c.wantCode {
 				t.Fatalf("status = %d, want %d for Content-Type %q (body=%s)", rec.Code, c.wantCode, c.partType, raw)
@@ -535,5 +568,26 @@ func TestTestNames_StateNoFalseTypeCount(t *testing.T) {
 				t.Errorf("%s still names %s; rename it to %s, never delete it", f, old, replacement)
 			}
 		}
+	}
+}
+
+// TestUploadHandler_AHeadReadErrorIs500NotAFormatRefusal: a failed read is ours, not a
+// refusal of the caller's file type.
+func TestUploadHandler_AHeadReadErrorIs500NotAFormatRefusal(t *testing.T) {
+	t.Cleanup(extraction.SwapUploadHeadReaderForTest(func(io.Reader, []byte) (int, error) {
+		return 0, errors.New("disk read failed")
+	}))
+
+	spy := newUpSpy()
+	rec, raw, decoded := upPost(t, spy, "scan.pdf", upPDF, []byte("%PDF-1.7 body"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", rec.Code, raw)
+	}
+	if got := upString(t, decoded, "error"); got != "internal server error" {
+		t.Errorf("error = %q, want %q", got, "internal server error")
+	}
+	if len(spy.order) != 0 {
+		t.Errorf("a head read error ran %v, want neither seam", spy.order)
 	}
 }

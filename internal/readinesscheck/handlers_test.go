@@ -740,6 +740,8 @@ func TestRun_EngineErrorsMapToStatuses(t *testing.T) {
 	}{
 		{"empty file", "csv", []byte{}, []string{"mapping", csvMapping}, http.StatusUnprocessableEntity, "unreadable"},
 		{"png format", "png", []byte(oneInvoice), nil, http.StatusBadRequest, ""},
+		{"pdf with PNG bytes", "pdf", []byte("\x89PNG\r\n\x1a\n0000"), nil, http.StatusBadRequest, FormatRefusal},
+		{"xlsx that is not a zip", "xlsx", []byte("not a zip"), nil, http.StatusBadRequest, FormatRefusal},
 		{"15 MiB and a byte", "csv", big, []string{"mapping", csvMapping}, http.StatusRequestEntityTooLarge, ""},
 		{"no invoice_number in the mapping", "csv", []byte(oneInvoice), []string{"mapping", noNumber}, http.StatusBadRequest, ""},
 	} {
@@ -805,6 +807,13 @@ func TestMapping_RefusesADocument(t *testing.T) {
 	r := newRig(t)
 	body, ct := mapForm(t, "pdf", []byte("%PDF-1.4"))
 	wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusBadRequest, "")
+	r.untouched(t)
+}
+
+func TestMapping_RefusesAnXlsxThatIsNotAZip(t *testing.T) {
+	r := newRig(t)
+	body, ct := mapForm(t, "xlsx", []byte("not a zip"))
+	wantStatus(t, serve(r.svc.MappingHandler(), body, ct), http.StatusBadRequest, FormatRefusal)
 	r.untouched(t)
 }
 

@@ -1187,9 +1187,11 @@ describe('FREECHK-03-08: the readiness check section', () => {
     return part!.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
   }
   const goStore = (returning: string, intake: string) =>
-    `const mergeSQL = \`\nINSERT INTO contacts\nRETURNING email, ${returning},\n  version\`\n\nfunc (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {\n\treturn s.merge(ctx, intake{email: in.Email, readiness: true, ${intake}})\n}\n`
+    `const mergeSQL = \`\nINSERT INTO contacts\nRETURNING email, ${returning},\n  version\`\n\nfunc (s *Store) ReadinessCheckTx(ctx context.Context, tx pgx.Tx, email, consentText string) error {\n\treturn s.mergeTx(ctx, tx, intake{email: email, readiness: true, ${intake}})\n}\n`
+  const goPress = (arg: string) =>
+    `func (s *Store) Confirm(ctx context.Context, token, consentText string) error {\n\tif fresh {\n\t\tif err := s.Contacts.ReadinessCheckTx(ctx, tx, h.Email, ${arg}); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn nil\n}\n`
   const TERM = 'resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL)'
-  const TICK = 'consentText: in.ConsentText'
+  const TICK = 'consentText: consentText'
 
   it('FREECHK-03: the check section names the AI host and vendors from code', () => {
     const t = text()
@@ -1237,13 +1239,15 @@ describe('FREECHK-03-08: the readiness check section', () => {
       `We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email.`,
     )
     expect(t).not.toContain('It adds you to no marketing list')
-    expect(readinessConsentIsMarketing(goStore(TERM, TICK)), 'control: a passing source').toBe(true)
-    expect(readinessConsentIsMarketing(goStore('resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))', TICK)), 'RETURNING term reverted').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, 'readinessConsentText: in.ConsentText')), 'readinessConsentText set').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, `${TICK}, readinessConsentText: in.ConsentText`)), 'both set').toBe(false)
-    expect(readinessConsentIsMarketing(goStore(TERM, 'consentText: ""')), 'consentText not passed').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('consentText')), 'control: a passing source').toBe(true)
+    expect(readinessConsentIsMarketing(goStore('resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR (demo_requested_at IS NOT NULL AND marketing_consented_at IS NOT NULL))', TICK), goPress('consentText')), 'RETURNING term reverted').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'readinessConsentText: consentText'), goPress('consentText')), 'readinessConsentText set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, `${TICK}, readinessConsentText: consentText`), goPress('consentText')), 'both set').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, 'consentText: ""'), goPress('consentText')), 'consentText not passed').toBe(false)
     const elsewhere = goStore('resend_delivered_at IS NULL', TICK) + `// ${TERM}\nvar other = "${TERM}"\n`
-    expect(readinessConsentIsMarketing(elsewhere), 'the term outside mergeSQL does not count').toBe(false)
+    expect(readinessConsentIsMarketing(elsewhere, goPress('consentText')), 'the term outside mergeSQL does not count').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('""')), 'the press drops the ticked text').toBe(false)
+    expect(readinessConsentIsMarketing(goStore(TERM, TICK), goPress('""').replace('fresh {', 'fresh {\n// s.Contacts.ReadinessCheckTx(ctx, tx, h.Email, consentText)')), 'a commented call does not count').toBe(false)
   })
 
   it('FREECHK-06: the demo and registration sections name the check as a route to Resend', () => {

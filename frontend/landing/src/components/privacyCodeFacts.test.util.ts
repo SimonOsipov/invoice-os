@@ -906,14 +906,19 @@ export function accountmailFrom(src: string = readSource('internal/accountmail/s
   return found(/\bFrom\s*=\s*"[^"<]*<([^>"]+)>"/.exec(src)?.[1], 'accountmail.From')
 }
 
-// ReadinessCheck passes the text as the marketing consentText, and the RETURNING term of mergeSQL queues Resend for a marketing tick.
-export function readinessConsentIsMarketing(source: string = readSource('internal/notifications/store.go')): boolean {
+// The press hands the ticked text to ReadinessCheckTx, which merges it as the marketing consentText; the RETURNING term of mergeSQL queues Resend for a marketing tick.
+export function readinessConsentIsMarketing(
+  source: string = readSource('internal/notifications/store.go'),
+  press: string = readSource('internal/readinesscheck/store.go'),
+): boolean {
   const src = stripComments(source)
-  const body = goFunc(src, /func \(s \*Store\) ReadinessCheck\b/, 'Store.ReadinessCheck')
-  const returning = found(/const mergeSQL = `[\s\S]*?\bRETURNING\b([^`]*)`/.exec(src)?.[1], 'the RETURNING clause of mergeSQL')
+  const body = goFunc(src, /func \(s \*Store\) ReadinessCheckTx\b/, 'Store.ReadinessCheckTx')
+  const confirm = goFunc(stripComments(press), /func \(s \*Store\) Confirm\b/, 'readinesscheck Store.Confirm')
+  const returning = found(/const mergeSQL = `[\s\S]*?\bRETURNING\b([^`]*)`/i.exec(src)?.[1], 'the RETURNING clause of mergeSQL')
   return (
-    /\bconsentText:\s*in\.ConsentText/.test(body) &&
-    !/\breadinessConsentText\b/.test(body) &&
+    /\bconsentText:\s*consentText\b/i.test(body) &&
+    !/\breadinessConsentText\b/i.test(body) &&
+    /\.Contacts\.ReadinessCheckTx\(ctx, tx, h\.Email, consentText\)/i.test(confirm) &&
     returning.includes('registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL')
   )
 }

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html readiness_check.html recovery.html stranded_alert.html unsubscribe_url.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html readiness_check.html readiness_confirm.html readiness_used.html recovery.html stranded_alert.html unsubscribe_url.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -20,7 +20,7 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
 	switch name {
-	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "readiness_check", "recovery", "stranded_alert":
+	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "readiness_check", "readiness_confirm", "readiness_used", "recovery", "stranded_alert":
 	default:
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
@@ -395,4 +395,69 @@ func RenderReadinessCheck(m ReadinessCheckMail) (subject, html string, err error
 		return "", "", err
 	}
 	return ReadinessCheckSubject, buf.String(), nil
+}
+
+const (
+	// ReadinessConfirmURL is the confirm page; the page POSTs the token, so a mail scanner's GET confirms nothing.
+	ReadinessConfirmURL        = "https://www.ascomply.com/readiness-check/confirm"
+	ReadinessConfirmSubject    = "Confirm your email to get your readiness check results"
+	ReadinessConfirmValidHours = 24
+	ReadinessUsedSubject       = "This address has used its free readiness checks"
+)
+
+// ReadinessConfirmMail is the data of one readiness confirmation mail; FileType is csv, xlsx, pdf or docx.
+type ReadinessConfirmMail struct{ Email, Token, FileType string }
+
+// ReadinessUsedMail is the data of one used-checks mail.
+type ReadinessUsedMail struct{ Email string }
+
+type readinessConfirmView struct {
+	Email, FileType, ConfirmURL string
+	ValidHours                  int
+}
+
+var readinessFileTypes = map[string]string{"csv": "CSV", "xlsx": "XLSX", "pdf": "PDF", "docx": "DOCX"}
+
+func renderReadinessMail(name string, view any) (string, error) {
+	src, err := Template(name)
+	if err != nil {
+		return "", err
+	}
+	tpl, err := template.New(name).Parse(string(src))
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, view); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// RenderReadinessConfirm renders the confirmation mail; the subject is fixed so it never carries user text.
+func RenderReadinessConfirm(m ReadinessConfirmMail) (subject, html string, err error) {
+	label, ok := readinessFileTypes[m.FileType]
+	if !ok {
+		return "", "", fmt.Errorf("accountmail: unknown readiness file type %q", m.FileType)
+	}
+	if m.Token == "" {
+		return "", "", fmt.Errorf("accountmail: readiness confirm mail needs a token")
+	}
+	html, err = renderReadinessMail("readiness_confirm", readinessConfirmView{
+		Email: m.Email, FileType: label,
+		ConfirmURL: ReadinessConfirmURL + "?t=" + url.QueryEscape(m.Token), ValidHours: ReadinessConfirmValidHours,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return ReadinessConfirmSubject, html, nil
+}
+
+// RenderReadinessUsed renders the used-checks mail; it holds no invoice data and no confirm link.
+func RenderReadinessUsed(m ReadinessUsedMail) (subject, html string, err error) {
+	html, err = renderReadinessMail("readiness_used", struct{ Email, SignUpURL string }{m.Email, ReadinessCheckSignUpURL})
+	if err != nil {
+		return "", "", err
+	}
+	return ReadinessUsedSubject, html, nil
 }

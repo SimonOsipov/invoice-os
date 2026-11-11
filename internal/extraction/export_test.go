@@ -6,6 +6,7 @@ package extraction
 import (
 	"context"
 	"fmt"
+	"io"
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
@@ -317,4 +318,11 @@ func PDFiumWordsForTest(rects []*responses.GetPageTextStructuredRect, chars []*r
 		})
 	}
 	return tokens, textChars, groups
+}
+
+// SwapUploadHeadReaderForTest replaces the upload head-read seam and returns the restore.
+func SwapUploadHeadReaderForTest(f func(io.Reader, []byte) (int, error)) func() {
+	orig := readUploadHead
+	readUploadHead = f
+	return func() { readUploadHead = orig }
 }

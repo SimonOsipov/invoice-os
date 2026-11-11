@@ -658,6 +658,31 @@ func TestStore_HoldExpiresInTwentyFourHours(t *testing.T) {
 	}
 }
 
+func TestStore_HoldKeepsAFileValueWithANulByte(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	a := addr(t, pool)
+	h := heldFor(a, "csv", 1, nil)
+	h.Mail.Invoices[0].Number = "INV\x00-1"
+	h.Mail.Invoices[0].Buyer = []accountmail.MailField{{Label: "Name", Value: "Ada\x00 Ltd"}}
+	h.Mail.Invoices[0].NotChecked = []string{"a\x00b"}
+	if _, err := (&Store{Pool: pool}).Hold(ctx, h); err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	var got accountmail.ReadinessCheckMail
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT mail FROM readiness_check_requests WHERE email = $1`, a).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	inv := got.Invoices[0]
+	if inv.Number != "INV\uFFFD-1" || inv.Buyer[0].Value != "Ada\uFFFD Ltd" || inv.NotChecked[0] != "a\uFFFDb" {
+		t.Errorf("held mail = %+v, want each NUL shown as U+FFFD, as the mail template shows it", inv)
+	}
+}
+
 // A submit holds the result and nothing more: the summary row waits for the press.
 func TestStore_HoldWritesNoSummaryRow(t *testing.T) {
 	pool := testPool(t)

@@ -1,6 +1,7 @@
 package readinesscheck
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -58,13 +60,42 @@ func tokenHash(token string) []byte {
 	return h[:]
 }
 
+// marshalMail encodes the mail for jsonb, which rejects \u0000. A NUL becomes U+FFFD, as the mail template renders it.
+func marshalMail(m accountmail.ReadinessCheckMail) ([]byte, error) {
+	b, err := json.Marshal(m)
+	if err != nil || !bytes.Contains(b, []byte(`\u0000`)) {
+		return b, err
+	}
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(replaceNul(v))
+}
+
+func replaceNul(v any) any {
+	switch x := v.(type) {
+	case string:
+		return strings.ReplaceAll(x, "\x00", "\uFFFD")
+	case []any:
+		for i := range x {
+			x[i] = replaceNul(x[i])
+		}
+	case map[string]any:
+		for k := range x {
+			x[k] = replaceNul(x[k])
+		}
+	}
+	return v
+}
+
 // Hold stores the result under a new token, after deleting expired rows. A second hold never replaces the first.
 func (s *Store) Hold(ctx context.Context, h Held) (string, error) {
 	tok, hash, err := mintToken()
 	if err != nil {
 		return "", fmt.Errorf("readinesscheck: mint token: %w", err)
 	}
-	mail, err := json.Marshal(h.Mail)
+	mail, err := marshalMail(h.Mail)
 	if err != nil {
 		return "", fmt.Errorf("readinesscheck: marshal mail: %w", err)
 	}

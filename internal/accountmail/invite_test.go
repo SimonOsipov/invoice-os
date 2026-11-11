@@ -69,7 +69,11 @@ func TestInviteTemplate_ComposesTheLayout(t *testing.T) {
 	if !bytes.HasPrefix(src, layout) {
 		t.Error("Template(invite) does not begin with layout.html")
 	}
-	if !bytes.HasSuffix(src, inv) {
+	unsub, err := files.ReadFile("unsubscribe_url.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(src, append(inv, unsub...)) {
 		t.Error("Template(invite) does not end with invite.html")
 	}
 	if _, err := template.New("invite").Parse(string(src)); err != nil {
@@ -161,8 +165,8 @@ func TestRenderInvite_TokenIsEscapedInBothLinks(t *testing.T) {
 		_, out := renderInvite(t, m)
 		want := "https://www.ascomply.com/invite#token=" + c.frag
 		as := anchors(out)
-		if len(as) != 3 {
-			t.Fatalf("token %q: anchors = %+v, want 3", c.token, as)
+		if len(as) != 4 {
+			t.Fatalf("token %q: anchors = %+v, want 4 (button, fallback, Privacy, Unsubscribe)", c.token, as)
 		}
 		if as[0].text != "Accept invite" || as[0].href != want {
 			t.Errorf("token %q: button = %+v, want href %s", c.token, as[0], want)
@@ -253,8 +257,8 @@ func TestRenderInvite_EscapesWorkspaceAndInviter(t *testing.T) {
 		t.Errorf("intro = %q, want the hostile values as plain text", got)
 	}
 	as := anchors(out)
-	if len(as) != 3 {
-		t.Fatalf("anchors = %+v, want button, fallback and Privacy only", as)
+	if len(as) != 4 {
+		t.Fatalf("anchors = %+v, want button, fallback, Privacy and Unsubscribe only", as)
 	}
 	const accept = "https://www.ascomply.com/invite#token=t0k"
 	if as[0].href != accept || as[1].href != accept || as[1].text != accept || as[2].href != "https://www.ascomply.com/privacy" {

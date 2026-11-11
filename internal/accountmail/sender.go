@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -41,6 +42,7 @@ var ErrNotConfigured = errors.New("accountmail: sending is not configured")
 type Resend struct {
 	baseURL, key string
 	client       *http.Client
+	Tokens       TokenFunc
 }
 
 func NewResend(baseURL, key string, rt http.RoundTripper) *Resend {
@@ -55,10 +57,11 @@ func NewResend(baseURL, key string, rt http.RoundTripper) *Resend {
 }
 
 type batchItem struct {
-	From    string   `json:"from"`
-	To      []string `json:"to"`
-	Subject string   `json:"subject"`
-	HTML    string   `json:"html"`
+	From    string            `json:"from"`
+	To      []string          `json:"to"`
+	Subject string            `json:"subject"`
+	HTML    string            `json:"html"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 func (r *Resend) Send(ctx context.Context, msgs []Message) error {
@@ -70,7 +73,14 @@ func (r *Resend) Send(ctx context.Context, msgs []Message) error {
 	}
 	items := make([]batchItem, len(msgs))
 	for i, m := range msgs {
-		items[i] = batchItem{From: From, To: []string{m.To}, Subject: m.Subject, HTML: m.HTML}
+		html, token := fillUnsubscribe(ctx, r.Tokens, m)
+		items[i] = batchItem{From: From, To: []string{m.To}, Subject: m.Subject, HTML: html}
+		if token != "" {
+			items[i].Headers = map[string]string{
+				"List-Unsubscribe":      "<" + UnsubscribeURL + "?t=" + url.QueryEscape(token) + ">",
+				"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+			}
+		}
 	}
 	body, err := json.Marshal(items)
 	if err != nil {
@@ -97,14 +107,20 @@ func (r *Resend) Send(ctx context.Context, msgs []Message) error {
 
 // Capture keeps the last 100 messages in memory.
 type Capture struct {
-	mu   sync.Mutex
-	msgs []Message
+	Tokens TokenFunc
+	mu     sync.Mutex
+	msgs   []Message
 }
 
-func (c *Capture) Send(_ context.Context, msgs []Message) error {
+func (c *Capture) Send(ctx context.Context, msgs []Message) error {
+	filled := make([]Message, len(msgs))
+	for i, m := range msgs {
+		m.HTML, _ = fillUnsubscribe(ctx, c.Tokens, m)
+		filled[i] = m
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.msgs = append(c.msgs, msgs...)
+	c.msgs = append(c.msgs, filled...)
 	if n := len(c.msgs) - captureKeep; n > 0 {
 		c.msgs = append([]Message(nil), c.msgs[n:]...)
 	}
@@ -141,12 +157,14 @@ func ModeFromEnv(getenv func(string) string, preview bool) (Mode, string) {
 	return ModeOff, ""
 }
 
-func NewSender(mode Mode, key string, rt http.RoundTripper) Sender {
+func NewSender(mode Mode, key string, rt http.RoundTripper, tokens TokenFunc) Sender {
 	switch mode {
 	case ModeReal:
-		return NewResend(ResendBaseURL, key, rt)
+		r := NewResend(ResendBaseURL, key, rt)
+		r.Tokens = tokens
+		return r
 	case ModeCapture:
-		return &Capture{}
+		return &Capture{Tokens: tokens}
 	}
 	return Off{}
 }

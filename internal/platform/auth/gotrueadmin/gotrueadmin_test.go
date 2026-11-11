@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -716,5 +717,74 @@ func TestUserEmail_DoesNotFollowARedirectAndReadsAtMost16KiB(t *testing.T) {
 				t.Errorf("read %d bytes of the answer, want at most %d", read, 16<<10)
 			}
 		})
+	}
+}
+
+func TestListUsers_DecodesTheUnsubscribeKey(t *testing.T) {
+	k := signing(t)
+	var method, path, query, auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query, auth = r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"users":[{"id":"a","email":"a@x.test","user_metadata":{"unsubscribe":"tok","registration":{}}},{"id":"b","email":"b@x.test"},{"id":"c","email":"c@x.test","user_metadata":{"unsubscribe":{"own":"edit"}}},{"id":"d","email":"d@x.test","user_metadata":{"unsubscribe":5}}],"aud":"authenticated"}`)
+	}))
+	t.Cleanup(srv.Close)
+	got, err := newClient(t, srv.URL, k).ListUsers(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []gotrueadmin.AdminUser{{ID: "a", Email: "a@x.test", Unsubscribe: "tok"}, {ID: "b", Email: "b@x.test"},
+		// GoTrue lets an account write any JSON into its own user_metadata; one odd value must not fail the page.
+		{ID: "c", Email: "c@x.test"}, {ID: "d", Email: "d@x.test"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("users = %v, want %v", got, want)
+	}
+	if method != http.MethodGet || path != "/admin/users" || query != "page=1&per_page=100" {
+		t.Errorf("request = %s %s?%s", method, path, query)
+	}
+	if _, claims := parseAdminToken(t, auth, k); claims["role"] != "service_role" {
+		t.Errorf("role = %v, want service_role", claims["role"])
+	}
+}
+
+func TestListUsers_AFailureCarriesTheStatusOnly(t *testing.T) {
+	srv, _ := recordingServer(t, http.StatusInternalServerError, `{"msg":"boom for secret@leak.test"}`)
+	_, err := newClient(t, srv.URL, signing(t)).ListUsers(context.Background(), 1, 100)
+	var se *gotrueadmin.StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusInternalServerError {
+		t.Fatalf("err = %v, want *StatusError{500}", err)
+	}
+	if strings.Contains(err.Error(), "leak.test") {
+		t.Errorf("error text %q carries the response body", err)
+	}
+}
+
+func TestSetUserMetadata_SendsOnlyUserMetadata(t *testing.T) {
+	var method, path, ctype, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		method, path, ctype, body = r.Method, r.URL.Path, r.Header.Get("Content-Type"), string(b)
+		_, _ = io.WriteString(w, "{}")
+	}))
+	t.Cleanup(srv.Close)
+	id := uuid.NewString()
+	if err := newClient(t, srv.URL, signing(t)).SetUserMetadata(context.Background(), id, map[string]any{"unsubscribe": "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPut || path != "/admin/users/"+id || ctype != "application/json" {
+		t.Errorf("request = %s %s (%s)", method, path, ctype)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(body), &got); err != nil || !reflect.DeepEqual(got, map[string]any{"user_metadata": map[string]any{"unsubscribe": "t"}}) {
+		t.Errorf("body = %s, want only user_metadata.unsubscribe", body)
+	}
+}
+
+func TestSetUserMetadata_RefusesANonUUIDBeforeAnyRequest(t *testing.T) {
+	srv, got := recordingServer(t, http.StatusOK, "{}")
+	if err := newClient(t, srv.URL, signing(t)).SetUserMetadata(context.Background(), "abc", map[string]any{"unsubscribe": "t"}); err == nil {
+		t.Fatal("err = nil, want a refusal")
+	}
+	if len(*got) != 0 {
+		t.Errorf("server saw %d request(s), want none", len(*got))
 	}
 }

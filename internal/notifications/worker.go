@@ -61,7 +61,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	var (
 		version                              int64
 		registered, demo, readiness, consent bool
-		delivered, optInSent                 bool
+		delivered, optInSent, unsubscribed   bool
 		first, last, company                 string
 	)
 	// ceiling: the lock and its connection are held across the vendor calls (MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
@@ -79,9 +79,10 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		       registered_at IS NOT NULL, demo_requested_at IS NOT NULL, readiness_checked_at IS NOT NULL,
 		       marketing_consented_at IS NOT NULL,
 		       CASE WHEN $2::text = 'hubspot' THEN hubspot_delivered_at ELSE resend_delivered_at END IS NOT NULL,
-		       resend_opt_in_sent_at IS NOT NULL
+		       resend_opt_in_sent_at IS NOT NULL,
+		       EXISTS (SELECT 1 FROM mail_unsubscribes u WHERE u.email = contacts.email AND u.unsubscribed_at IS NOT NULL)
 		FROM contacts WHERE email = $1`, job.Args.Email, dest).Scan(
-		&version, &first, &last, &company, &registered, &demo, &readiness, &consent, &delivered, &optInSent)
+		&version, &first, &last, &company, &registered, &demo, &readiness, &consent, &delivered, &optInSent, &unsubscribed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -109,7 +110,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		if !registered && !consent {
 			return nil
 		}
-		sendOptIn := consent && !optInSent
+		sendOptIn := consent && !optInSent && !unsubscribed
 		if sendOptIn {
 			var st ResendState
 			st, err = w.Resend.ContactState(ctx, c.Email)

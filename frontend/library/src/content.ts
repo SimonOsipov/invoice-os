@@ -181,7 +181,12 @@ const RAW_GROUPS: RawGroup[] = [
           { kind: 'toggles', win: 'Cookie choices', rows: [['Essential', 'Sign-in and your cookie answer', true], ['Analytics', 'Google Analytics and the live chat', false]], steps: [
             { cap: 'The notice asks before anything is measured', focus: 1 },
             { cap: 'Accept turns analytics on', focus: 1, flip: { 1: true } },
-            { cap: 'Reject, or Cookie choices later, turns it off', focus: 1, flip: { 1: false } }] })] }
+            { cap: 'Reject, or Cookie choices later, turns it off', focus: 1, flip: { 1: false } }] }),
+        F('unsubscribe-link', 'Unsubscribe from marketing email', 'One link in every email stops marketing email.', 'Every email ASComply sends from its own templates ends with “Don\'t want marketing email from ASComply? Unsubscribe.” The link opens a page with one button. Opening it changes nothing. Pressing Unsubscribe stops all marketing email to that address. Account and security email keeps arriving: password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.', ['One press stops all marketing email', 'Opening the link alone changes nothing', 'Account and security email keeps arriving'], ['Everyone'], 'dashboard', ['app-analytics', 'delete-account'],
+          { kind: 'form', win: 'Unsubscribe', fields: [{ l: 'Email', v: 'a***@saharafoods.example' }, { l: 'Stops', v: 'Marketing email' }, { l: 'Keeps', v: 'Account and security email' }], steps: [
+            { cap: 'The link in the email footer opens one page', reveal: 1, focus: 0 },
+            { cap: 'Nothing changes until you press Unsubscribe', reveal: 3, focus: 1 },
+            { cap: 'Marketing email stops; account and security email keeps arriving', focus: -1, mark: { 0: 'ok', 1: 'ok', 2: 'ok' }, msg: 'Marketing email to this address has stopped.', tone: 'ok' }] })] }
 ]
 
 export const GROUPS: Group[] = RAW_GROUPS.map((g) => ({ ...g, feats: g.feats.map((f): Feature => ({ ...f, gid: g.id })) }))

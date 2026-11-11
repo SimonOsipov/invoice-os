@@ -43,7 +43,7 @@ func TestRenderDeletionCancelled_ButtonOpensTheApp(t *testing.T) {
 		case AppURL:
 			fallback = append(fallback, a)
 		}
-		if strings.ContainsAny(a.href, "#?") {
+		if a.text != "Unsubscribe" && strings.ContainsAny(a.href, "#?") {
 			t.Errorf("anchor %+v holds a fragment or query", a)
 		}
 	}

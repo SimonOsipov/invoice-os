@@ -46,7 +46,7 @@ type NewsletterWiring struct {
 	Enabled  bool
 }
 
-func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mode, transport http.RoundTripper) (NewsletterWiring, error) {
+func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mode, transport http.RoundTripper, tokens accountmail.TokenFunc) (NewsletterWiring, error) {
 	posture := platform.Posture(deployEnv)
 	mode, keys, err := NewsletterModeFromEnv(getenv, posture, contacts)
 	if err != nil {
@@ -54,7 +54,7 @@ func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mo
 	}
 	capture := posture == platform.PosturePreview || (posture == platform.PostureNightly && getenv("RESEND_SENDING_KEY") == "")
 	mailMode, mailKey := accountmail.ModeFromEnv(getenv, capture)
-	w := NewsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport)}
+	w := NewsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport, tokens)}
 	switch mode {
 	case ModeFake:
 		w.Resend = FakeBlogResend{}
@@ -62,7 +62,7 @@ func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mo
 		w.Resend = NewBlogResend(ResendBaseURL, getenv("RESEND_API_KEY"), keys, NewHTTPClient(transport))
 	}
 	if posture == platform.PostureNightly && (mode == ModeReal || mailMode == accountmail.ModeReal) {
-		if err := guardNightly(&w, getenv(envReceivingDomain)); err != nil {
+		if err := guardNightly(&w, getenv(envReceivingDomain), tokens); err != nil {
 			return NewsletterWiring{}, err
 		}
 	}

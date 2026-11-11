@@ -86,7 +86,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
 	// Mail routes: the sender is chosen once at boot from the environment.
-	sender := inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger)
+	sender := inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger, accountmail.PoolTokens(pool))
 	inviter := &tenancy.Inviter{Store: store, Sender: sender, Logger: app.Logger}
 	notifier := &tenancy.DeletionNotifier{Store: store, Sender: sender, Logger: app.Logger}
 	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(notifier.Schedule, app.Logger))
@@ -118,12 +118,12 @@ func main() {
 
 // inviteSender picks the mail sender: capture on a preview, and on the nightly until its key is mounted;
 // Resend with a key, else off.
-func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
+func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger, tokens accountmail.TokenFunc) accountmail.Sender {
 	p := platform.Posture(platform.DeployEnvFrom(getenv))
 	capture := p == platform.PosturePreview || (p == platform.PostureNightly && getenv("RESEND_SENDING_KEY") == "")
 	mode, key := accountmail.ModeFromEnv(getenv, capture)
 	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))
-	return accountmail.NewSender(mode, key, rt)
+	return accountmail.NewSender(mode, key, rt, tokens)
 }
 
 func mustEnv(key string) string {

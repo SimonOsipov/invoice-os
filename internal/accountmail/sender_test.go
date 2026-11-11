@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -324,7 +325,7 @@ func TestCapture_RecordsWithoutNetwork(t *testing.T) {
 		t.Errorf("capture made a network call: %s %s", r.Method, r.URL)
 		return nil, errors.New("must not be called")
 	})
-	s := NewSender("capture", "", rt)
+	s := NewSender("capture", "", rt, nil)
 	c, ok := s.(*Capture)
 	if !ok {
 		t.Fatalf("NewSender(capture) = %T, want *Capture", s)
@@ -438,7 +439,7 @@ func TestNewSender_PicksTheImplementation(t *testing.T) {
 		{"off", Off{}},
 	}
 	for _, tc := range cases {
-		got := NewSender(tc.mode, "k", nil)
+		got := NewSender(tc.mode, "k", nil, nil)
 		if reflect.TypeOf(got) != reflect.TypeOf(tc.want) {
 			t.Errorf("NewSender(%q) = %T, want %T", tc.mode, got, tc.want)
 		}
@@ -451,7 +452,7 @@ func TestNewSender_RealUsesTheKeyBaseAndTransport(t *testing.T) {
 		got = append(got, r)
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
 	})
-	if err := NewSender("real", testKey, spy).Send(t.Context(), msgs(1)); err != nil {
+	if err := NewSender("real", testKey, spy, nil).Send(t.Context(), msgs(1)); err != nil {
 		t.Fatalf("Send = %v, want nil", err)
 	}
 	if len(got) != 1 {
@@ -480,5 +481,120 @@ func TestAccountmail_DoesNotImportPlatform(t *testing.T) {
 		if strings.HasSuffix(p, "/internal/platform") || strings.Contains(p, "/internal/platform/") {
 			t.Errorf("accountmail depends on %s", p)
 		}
+	}
+}
+
+const unsubPlaceholderHTML = `<a href="` + UnsubscribeURL + `?t=ASCOMPLY_UNSUBSCRIBE_TOKEN">Unsubscribe</a>`
+
+func tokensByAddress(m map[string]string) TokenFunc {
+	return func(_ context.Context, email string) (string, error) {
+		if tok, ok := m[email]; ok {
+			return tok, nil
+		}
+		return "", errors.New("no token")
+	}
+}
+
+type batchOut []struct {
+	To      []string          `json:"to"`
+	HTML    string            `json:"html"`
+	Headers map[string]string `json:"headers"`
+}
+
+func sentBatch(t *testing.T, seen func() []recordedReq) batchOut {
+	t.Helper()
+	reqs := seen()
+	if len(reqs) != 1 {
+		t.Fatalf("server saw %d requests, want 1", len(reqs))
+	}
+	var out batchOut
+	if err := json.Unmarshal(reqs[0].Body, &out); err != nil {
+		t.Fatalf("decode batch: %v", err)
+	}
+	return out
+}
+
+func TestResendSend_FillsEachRecipientsTokenAndHeaders(t *testing.T) {
+	srv, seen := recordingServer(t, http.StatusOK, `{}`)
+	r := NewResend(srv.URL, testKey, nil)
+	r.Tokens = tokensByAddress(map[string]string{"a@x.test": "t1", "b@x.test": "t2"})
+	in := []Message{{To: "a@x.test", HTML: unsubPlaceholderHTML}, {To: "b@x.test", HTML: unsubPlaceholderHTML}}
+	if err := r.Send(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	for i, tok := range []string{"t1", "t2"} {
+		item := sentBatch(t, seen)[i]
+		if !strings.Contains(item.HTML, UnsubscribeURL+"?t="+tok+`"`) || strings.Contains(item.HTML, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+			t.Errorf("item %d html = %s", i, item.HTML)
+		}
+		want := map[string]string{"List-Unsubscribe": "<" + UnsubscribeURL + "?t=" + tok + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+		if !reflect.DeepEqual(item.Headers, want) {
+			t.Errorf("item %d headers = %v, want %v", i, item.Headers, want)
+		}
+	}
+}
+
+func TestResendSend_AMailWithoutThePlaceholderGetsNoHeadersAndNoLookup(t *testing.T) {
+	srv, seen := recordingServer(t, http.StatusOK, `{}`)
+	r := NewResend(srv.URL, testKey, nil)
+	r.Tokens = func(context.Context, string) (string, error) {
+		t.Error("TokenFunc called for a mail with no placeholder")
+		return "x", nil
+	}
+	if err := r.Send(t.Context(), []Message{{To: "a@x.test", HTML: "<p>plain</p>"}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(seen()[0].Body), `"headers"`) {
+		t.Errorf("body holds a headers key: %s", seen()[0].Body)
+	}
+}
+
+func TestResendSend_ATokenFailureSendsTheBareLink(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv, seen := recordingServer(t, http.StatusOK, `{}`)
+	r := NewResend(srv.URL, testKey, nil)
+	r.Tokens = tokensByAddress(map[string]string{"a@x.test": "t1"})
+	in := []Message{{To: "a@x.test", HTML: unsubPlaceholderHTML}, {To: "b@x.test", HTML: unsubPlaceholderHTML}}
+	if err := r.Send(t.Context(), in); err != nil {
+		t.Fatalf("Send = %v, want nil", err)
+	}
+	items := sentBatch(t, seen)
+	if !strings.Contains(items[0].HTML, "?t=t1") || len(items[0].Headers) != 2 {
+		t.Errorf("a's item = %+v, want its token and headers", items[0])
+	}
+	if !strings.Contains(items[1].HTML, `href="`+UnsubscribeURL+`"`) || items[1].Headers != nil {
+		t.Errorf("b's item = %+v, want the bare link and no headers", items[1])
+	}
+	if strings.Contains(logs.String(), "a@x.test") || strings.Contains(logs.String(), "b@x.test") {
+		t.Errorf("log holds an address: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("no WARN logged: %q", logs.String())
+	}
+}
+
+func TestCaptureSend_StoresTheFilledLink(t *testing.T) {
+	c := &Capture{Tokens: tokensByAddress(map[string]string{"a@x.test": "tok"})}
+	if err := c.Send(t.Context(), []Message{{To: "a@x.test", HTML: unsubPlaceholderHTML}}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Messages()[0].HTML
+	if !strings.Contains(got, UnsubscribeURL+"?t=tok") || strings.Contains(got, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+		t.Errorf("captured html = %s", got)
+	}
+}
+
+func TestCaptureSend_ANilTokenFuncSendsTheBareLink(t *testing.T) {
+	c := &Capture{}
+	if err := c.Send(t.Context(), []Message{{To: "a@x.test", HTML: unsubPlaceholderHTML}}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Messages()[0].HTML
+	if !strings.Contains(got, `href="`+UnsubscribeURL+`"`) || strings.Contains(got, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+		t.Errorf("captured html = %s", got)
 	}
 }

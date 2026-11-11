@@ -262,6 +262,10 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger, ` + hand + `.AccountEvents)`,
 		"POST /auth/invitation/password":       hand + ".InvitationPassword",
 
+		// A mailed link's page and its same-origin form POST (or RFC 8058 one-click) take no CORS wrap.
+		"GET /unsubscribe":  "unsubscribePage",
+		"POST /unsubscribe": "unsubscribePage",
+
 		// Browser-called from the landing accept page, like register: CORS-wrapped with a preflight.
 		"POST /auth/invitation":             "withCORS(" + invPreview + ")",
 		"OPTIONS /auth/invitation":          "withCORS(" + invPreview + ")",

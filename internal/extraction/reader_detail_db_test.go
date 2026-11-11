@@ -46,7 +46,7 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.
-	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "document", "pages", "fields"}},
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "ai_text_truncated", "document", "pages", "fields"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
 }
 
@@ -222,9 +222,17 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
 	rvdSeedField(t, ctx, tenantB, jobB, "supplier_tin", rvdStr("B-TIN"), nil, 0, nil, now)
 
+	// B's job carries the flag: A's refused read must not return it.
+	if ct, err := stRequire(t).super.Exec(ctx, `UPDATE extraction_jobs SET ai_text_truncated = true WHERE id = $1`, jobB); err != nil || ct.RowsAffected() != 1 {
+		t.Fatalf("plant ai_text_truncated on job %s: rows %d, err %v", jobB, ct.RowsAffected(), err)
+	}
+
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
 		t.Fatalf("A reading its own job %s: %v", jobA, err)
+	}
+	if got.AITextTruncated {
+		t.Errorf("A's own job reads ai_text_truncated true, want false: only B's job is flagged")
 	}
 	if got.ID != jobA || got.DocumentID != docA {
 		t.Fatalf("A reading its own job got id %q / document %q, want %q / %q", got.ID, got.DocumentID, jobA, docA)
@@ -244,6 +252,9 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	got, err = r.Detail(ctxA, jobB)
 	if !errors.Is(err, extraction.ErrNotFound) {
 		t.Errorf("A reading B's job %s returned %v, want %v", jobB, err, extraction.ErrNotFound)
+	}
+	if got.AITextTruncated {
+		t.Errorf("the refused read of B's flagged job returned ai_text_truncated true, want the zero value")
 	}
 	if got.ID != "" || got.DocumentID != "" || got.State != "" {
 		t.Errorf("the refused read carried id %q / document %q / state %q, want the zero values", got.ID, got.DocumentID, got.State)
@@ -1876,7 +1887,7 @@ func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
 		gotKeys = append(gotKeys, k)
 	}
 	slices.Sort(gotKeys)
-	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1896,7 +1907,7 @@ func TestExtractionDetail_DocumentTypeMarshalsAsExplicitNull(t *testing.T) {
 		t.Fatalf("unmarshal the detail: %v", err)
 	}
 	gotKeys := slices.Sorted(maps.Keys(decoded))
-	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1932,6 +1943,45 @@ func TestRLS_ExtractionDetailServesTheDocumentType(t *testing.T) {
 			}
 			if got := rvdJSONKey(t, w.Body.Bytes(), "document_type"); got != tc.want {
 				t.Errorf("GET /v1/extractions/%s serves document_type %s, want %s", tc.jobID, got, tc.want)
+			}
+		})
+	}
+}
+
+// The flag rides the detail wire as a boolean, never null; the default row is false.
+func TestReaderDetail_ReturnsAITextTruncated(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	reqCtx, tenantID, docA := rdTenant(t, ctx, "active")
+	docB := rdSeedDocument(t, ctx, tenantID)
+	flagged := rdSeedJob(t, ctx, tenantID, docA, "succeeded", time.Now().UTC(), nil)
+	plain := rdSeedJob(t, ctx, tenantID, docB, "succeeded", time.Now().UTC(), nil)
+	ct, err := stRequire(t).super.Exec(ctx, `UPDATE extraction_jobs SET ai_text_truncated = true WHERE id = $1`, flagged)
+	if err != nil || ct.RowsAffected() != 1 {
+		t.Fatalf("plant ai_text_truncated on job %s: rows %d, err %v", flagged, ct.RowsAffected(), err)
+	}
+
+	for _, tc := range []struct {
+		name, jobID, want string
+		wantField         bool
+	}{
+		{"a cut read", flagged, "true", true},
+		{"a default row", plain, "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.Detail(reqCtx, tc.jobID)
+			if err != nil {
+				t.Fatalf("Detail(%s): %v", tc.jobID, err)
+			}
+			if got.AITextTruncated != tc.wantField {
+				t.Errorf("Detail(%s).AITextTruncated = %v, want %v", tc.jobID, got.AITextTruncated, tc.wantField)
+			}
+			b, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal the detail: %v", err)
+			}
+			if k := rvdJSONKey(t, b, "ai_text_truncated"); k != tc.want {
+				t.Errorf("the detail wire carries ai_text_truncated %s, want %s", k, tc.want)
 			}
 		})
 	}

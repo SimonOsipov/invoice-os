@@ -35,3 +35,10 @@ func (s *Store) Insert(ctx context.Context, m Summary) error {
 		m.Email, m.FileType, m.RowCount, ids)
 	return err
 }
+
+// AISpendReached reports whether the check's AI spend for the UTC day has reached the ceiling.
+func (s *Store) AISpendReached(ctx context.Context, ceiling string) (bool, error) {
+	var reached bool
+	err := s.Pool.QueryRow(ctx, `SELECT public.public_check_ai_cost_today() >= $1::numeric`, ceiling).Scan(&reached)
+	return reached, err
+}

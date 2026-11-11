@@ -1,5 +1,5 @@
 # Wrapper stage. The golang tag equals go.mod; TestGoPins_RepoAgree fails when they differ.
-FROM mirror.gcr.io/library/golang:1.26.10-alpine AS wrap
+FROM mirror.gcr.io/library/golang:1.26.11-alpine AS wrap
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/authsentry cmd/authsentry

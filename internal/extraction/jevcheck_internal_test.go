@@ -804,3 +804,28 @@ func TestDocumentType_OffNilOrErrorRecordsNothing(t *testing.T) {
 		t.Errorf("no error: %d flagged, verdict %q; want %d and %q", flaggedCount(out), verdict, len(names), "receipt")
 	}
 }
+
+func TestJevCheck_AnOverBoundDocumentSendsTheBoundedState(t *testing.T) {
+	pages := dpPages(800, 50, 30)
+	want := DoclingPromptText(pages)
+	if strings.Count(want, aiPromptOmitted) != 1 {
+		t.Fatal("fixture is not over the bound")
+	}
+	results := vcRows("invoice_number")
+	val := "INV-1"
+	results[0].Value = &val
+
+	req, _ := valueCheckRequest(pages, results)
+	if req.State != want {
+		t.Error("value-check State is not DoclingPromptText(tokens)")
+	}
+	req, _ = documentRequest(pages, nil)
+	if req.State != want || strings.Count(req.State, aiPromptOmitted) != 1 {
+		t.Error("document-type State is not DoclingPromptText(tokens) with one marker")
+	}
+	a := &vcAsker{enabled: true}
+	checkDocument(context.Background(), a, pages, results)
+	if len(a.calls) != 1 || a.calls[0].State != want {
+		t.Errorf("Ask requests = %d, want 1 carrying the bounded State", len(a.calls))
+	}
+}

@@ -192,6 +192,22 @@ func writeDocumentTypeTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, docTyp
 	return nil
 }
 
+// writeAITextTruncatedTx flags a job whose AI calls answered from cut text. Zero rows affected
+// is an error for writeLayoutTx's reason: the row is the caller's own.
+func writeAITextTruncatedTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) error {
+	ct, err := tx.Exec(ctx,
+		`UPDATE extraction_jobs SET ai_text_truncated = true
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID)
+	if err != nil {
+		return fmt.Errorf("extraction: write ai text truncated for job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("extraction: write ai text truncated for job %s: no row affected", jobID)
+	}
+	return nil
+}
+
 // writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
 // alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
 // the reason_code CHECK admits four words or NULL, and the all-NULL arm is what

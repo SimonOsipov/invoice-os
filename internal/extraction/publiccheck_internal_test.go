@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -372,6 +374,64 @@ func TestReadForCheck_NoTextPDFImagePathFailuresAreNotAReading(t *testing.T) {
 			}
 			if len(c.ai.reqs) != c.aiCalls {
 				t.Errorf("AI calls = %d, want %d", len(c.ai.reqs), c.aiCalls)
+			}
+		})
+	}
+}
+
+// pcBigPage is one page whose prompt is over the bound: 6,000 tokens of about 50 bytes.
+func pcBigPage() Page {
+	p := Page{Number: 1}
+	for i := 0; i < 6_000; i++ {
+		p.Tokens = append(p.Tokens, tok(fmt.Sprintf("row%05d %s", i, strings.Repeat("a", 40)), 1, 0.1, float64(i)/7000, 0.3, 0.9))
+	}
+	return p
+}
+
+func TestReadForCheck_AnOverBoundDocumentIsRefusedBeforeAnyAICall(t *testing.T) {
+	var order []string
+	a := &pcAI{enabled: true, order: &order}
+	j := &pcJev{order: &order}
+	r := CheckReaders{Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: a, Jev: j}
+
+	_, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
+	if !errors.Is(err, ErrCheckDocumentTooLong) {
+		t.Fatalf("err = %v, want ErrCheckDocumentTooLong", err)
+	}
+	if len(a.reqs) != 0 || j.calls != 0 {
+		t.Errorf("AI calls = %d, Jev calls = %d, want 0 and 0", len(a.reqs), j.calls)
+	}
+}
+
+func TestReadForCheck_AParagraphTokenIsReadNotRefused(t *testing.T) {
+	var order []string
+	a := &pcAI{enabled: true, order: &order, header: map[string]any{}, lines: map[string]any{}}
+	page := Page{Number: 1, Tokens: []Token{tok(strings.Repeat("w", 4_000), 1, 0.1, 0.1, 0.9, 0.2)}}
+	r := CheckReaders{Text: &pcReader{pages: []Page{page}, chars: 4_000}, AI: a}
+
+	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.reqs) != 2 {
+		t.Errorf("AI calls = %d, want 2", len(a.reqs))
+	}
+}
+
+func TestReadForCheck_AnOverBoundDocumentWithTheAIOffIsNotRefused(t *testing.T) {
+	var order []string
+	off := &pcAI{enabled: false, order: &order}
+	for name, ai := range map[string]AIReader{"nil reader": nil, "disabled reader": off} {
+		t.Run(name, func(t *testing.T) {
+			r := CheckReaders{Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: ai}
+			fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fields) == 0 {
+				t.Error("no engine fields returned")
+			}
+			if len(off.reqs) != 0 {
+				t.Errorf("AI calls = %d, want 0", len(off.reqs))
 			}
 		})
 	}

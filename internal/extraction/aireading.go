@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
@@ -78,18 +80,72 @@ func aiSchemaFor(fields []string) json.RawMessage {
 	return b
 }
 
-// DoclingPromptText is aiTextIntro plus one line per Docling token in reader order, the AIR-01
-// measured shape (run.py doc_text).
-func DoclingPromptText(pages []TokenPage) string {
+const (
+	maxPromptRunBytes     = 16_000  // one token's text
+	maxDoclingPromptBytes = 256_000 // rendered lines after the intro
+	aiPromptOmitted       = "--- rows omitted ---"
+)
+
+// cutRunes cuts s to at most n bytes on a rune boundary.
+func cutRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// doclingPrompt is aiTextIntro plus one line per Docling token in reader order, the AIR-01
+// measured shape (run.py doc_text). cut reports that a token text or the line total was cut; over
+// the bound it keeps the first and last whole lines, half the bound each.
+func doclingPrompt(pages []TokenPage) (text string, cut bool) {
 	var lines []string
+	total := -1 // joined length
 	for _, p := range pages {
 		lines = append(lines, fmt.Sprintf(aiPromptPageFmt, p.Number))
 		for _, tok := range p.Tokens {
-			run := fmt.Sprintf(aiPromptRunFmt, tok.Region.X0, tok.Text)
+			t := cutRunes(tok.Text, maxPromptRunBytes)
+			cut = cut || len(t) < len(tok.Text)
+			run := fmt.Sprintf(aiPromptRunFmt, tok.Region.X0, t)
 			lines = append(lines, fmt.Sprintf(aiPromptRowFmt, tok.Region.Y0, run))
 		}
 	}
-	return aiTextIntro + "\n\n" + strings.Join(lines, "\n")
+	for _, l := range lines {
+		total += len(l) + 1
+	}
+	if total > maxDoclingPromptBytes {
+		// The marker line comes out of the budget, so the joined text stays within the bound.
+		const half = (maxDoclingPromptBytes - len(aiPromptOmitted)) / 2
+		head, used := 0, 0
+		for head < len(lines) && used+len(lines[head])+1 <= half {
+			used += len(lines[head]) + 1
+			head++
+		}
+		tail := len(lines)
+		used = 0
+		for tail > head && used+len(lines[tail-1])+1 <= half {
+			used += len(lines[tail-1]) + 1
+			tail--
+		}
+		kept := append(slices.Clone(lines[:head]), aiPromptOmitted)
+		lines = append(kept, lines[tail:]...)
+		cut = true
+	}
+	return aiTextIntro + "\n\n" + strings.Join(lines, "\n"), cut
+}
+
+// DoclingPromptText is the bounded document prompt askAI, askAILines and the Jev states send.
+func DoclingPromptText(pages []TokenPage) string {
+	text, _ := doclingPrompt(pages)
+	return text
+}
+
+// DoclingPromptCut reports that DoclingPromptText dropped or cut text.
+func DoclingPromptCut(pages []TokenPage) bool {
+	_, cut := doclingPrompt(pages)
+	return cut
 }
 
 // aiFailed: any Call error sends the document to manual entry (BQ1), except an ended caller

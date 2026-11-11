@@ -53,6 +53,8 @@ paths:
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
 - Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
+- Grant `EXECUTE` on `public.public_check_ai_cost_today` to `invoice_app` only. It returns the NULL-tenant `ai_calls` cost of the current UTC day.
+- Treat `invoice_migrator` as able to read `tenant_id`, `cost` and `created_at` of NULL-tenant `ai_calls` rows through `SET ROLE auth_hook_reader`.
 - Return no rows from `pending_invites_for_email` for a user id that holds a membership that is not `removed`.
 - Return no invite of a workspace scheduled for deletion from `invitation_by_token`, `pending_invites_for_email` and `invitation_pending_for_email`.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.

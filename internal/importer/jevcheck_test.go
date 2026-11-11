@@ -474,3 +474,23 @@ func TestMappingCheck_TheCallersContextReachesAsk(t *testing.T) {
 		t.Errorf("cancelled context: got %#v, want non-nil empty", got)
 	}
 }
+
+func TestMappingCheck_AWideWindowSendsABoundedState(t *testing.T) {
+	cell := strings.Repeat("w", 10_000)
+	row := make([]string, 200)
+	for i := range row {
+		row[i] = cell
+	}
+	window := make([][]string, 10)
+	for i := range window {
+		window[i] = row
+	}
+	s := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"vat": 1})}
+	checkPlacements(context.Background(), s, window, map[string]string{"vat": cell})
+	if len(s.calls) != 1 {
+		t.Fatalf("Ask called %d times, want 1", len(s.calls))
+	}
+	if n := len(s.calls[0].State) - len(mappingIntro) - 1; n <= 0 || n > maxMappingPromptBytes {
+		t.Errorf("State rows text = %d bytes, want 1 to %d", n, maxMappingPromptBytes)
+	}
+}

@@ -49,7 +49,7 @@ async function toMap(page: Page, onUpload?: () => Promise<void>): Promise<void> 
   const response = await page.goto(`${CHECK_URL}/`)
   expect(response?.ok(), '/check did not answer 2xx').toBeTruthy()
   await page.locator('#check-file').setInputFiles({ name: FILE_NAME, mimeType: 'text/csv', buffer: FIXTURE })
-  await expect(page.locator('.check-file')).toBeVisible()
+  await expect(page.locator('.check-upload-name')).toBeVisible()
   await onUpload?.()
   release()
   await expect(page.getByRole('heading', { name: 'Match your columns' }), 'the Map step never showed').toBeVisible()
@@ -61,7 +61,7 @@ test.describe('check layout', () => {
   test('check layout: the page and the Map step fit at wide widths', async ({ page }) => {
     await resize(page, WIDE_WIDTHS[0])
     await toMap(page, async () => {
-      expect(enclosesRect(await rectOf(card(page), 'card'), await rectOf(page.locator('.check-file'), 'file name'), 1), 'Upload: the file name is outside the card').toBe(true)
+      expect(enclosesRect(await rectOf(card(page), 'card'), await rectOf(page.locator('.check-upload-name'), 'file name'), 1), 'Upload: the file name is outside the card').toBe(true)
     })
     for (const width of WIDE_WIDTHS) {
       await resize(page, width)
@@ -140,7 +140,16 @@ test.describe('check layout', () => {
   const css = (loc: Locator, prop: string) => loc.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop)
   const px = async (loc: Locator, prop: string) => parseFloat(await css(loc, prop))
   const tracks = async (loc: Locator) => (await css(loc, 'grid-template-columns')).trim().split(/\s+/).length
-  const resolved = (page: Page, token: string, prop: 'color' | 'outline-color') =>
+  const probeBorder = (page: Page) =>
+    page.evaluate(() => {
+      const el = document.createElement('i')
+      el.style.border = '1.5px solid'
+      document.body.appendChild(el)
+      const v = getComputedStyle(el).borderTopWidth
+      el.remove()
+      return v
+    })
+  const resolved = (page: Page, token: string, prop: string) =>
     page.evaluate(
       ([t, p]) => {
         const el = document.createElement('i')
@@ -443,11 +452,250 @@ test.describe('check layout', () => {
     }
   })
 
+  // Upload step. `dragEvent` carries a file, so dataTransfer.types includes 'Files'.
+  const dragEvent = (page: Page, type: 'dragenter' | 'dragleave') =>
+    page.evaluateHandle((t) => {
+      const dt = new DataTransfer()
+      dt.items.add(new File(['x'], 'notes.txt'))
+      document.querySelector('.check-drop')!.dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }))
+    }, type)
+  const dragOver = (page: Page) => dragEvent(page, 'dragenter')
+  const TXT = { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }
+  const BIG = { name: 'big.csv', mimeType: 'text/csv', buffer: Buffer.alloc(15 * 1024 * 1024 + 1) }
+  const near1 = (a: number, b: number, what: string) => expect(Math.abs(a - b), `${what}: ${a} vs ${b}`).toBeLessThanOrEqual(1)
+  const bottom = (r: Rect) => r.y + r.height
+  const pads = async (loc: Locator) => [await px(loc, 'padding-top'), await px(loc, 'padding-right'), await px(loc, 'padding-bottom')]
+
+  test('check layout: the drop zone and its contents fit the card', async ({ page }) => {
+    await openCheck(page, ALL_WIDTHS[0])
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const cardRect = await rectOf(card(page), 'card')
+      const zone = await rectOf(page.locator('.check-drop'), 'zone')
+      expect(enclosesRect(cardRect, zone, 1), `${label}: the zone is outside the card`).toBe(true)
+      const chips = page.locator('.check-chip')
+      expect(await chips.count()).toBe(4)
+      const chipRects: Rect[] = []
+      for (let i = 0; i < 4; i++) chipRects.push(await rectOf(chips.nth(i), `chip ${i}`))
+      noOverlap(chipRects, `${label}: chips`)
+      const stack = [
+        await rectOf(page.locator('.check-drop-icon'), 'icon'),
+        await rectOf(page.locator('.check-drop-title'), 'title'),
+        await rectOf(page.locator('.check-drop-or'), 'or'),
+        await rectOf(page.locator('.check-fake-btn'), 'button'),
+        await rectOf(page.locator('.check-chips'), 'chips'),
+        await rectOf(page.locator('.check-drop-note'), 'help'),
+      ]
+      for (const [i, r] of [...stack, ...chipRects].entries()) expect(enclosesRect(zone, r, 1), `${label}: part ${i} is outside the zone`).toBe(true)
+      for (let i = 1; i < stack.length; i++) expect(stack[i].y, `${label}: part ${i} starts above part ${i - 1}'s bottom`).toBeGreaterThanOrEqual(bottom(stack[i - 1]) - 1)
+      const lefts = [await rectOf(page.locator('.check-upload .check-label'), 'label'), zone, await rectOf(page.locator('.check-upload-note'), 'note')].map((r) => r.x)
+      expect(Math.max(...lefts) - Math.min(...lefts), `${label}: label, zone and note share no left edge`).toBeLessThanOrEqual(1)
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  test('check layout: holding a file over the zone moves nothing', async ({ page }) => {
+    await openCheck(page, 1280)
+    for (const width of [1280, 390]) {
+      await resize(page, width)
+      const zone = page.locator('.check-drop')
+      const [z0, n0] = [await rectOf(zone, 'zone'), await rectOf(page.locator('.check-upload-note'), 'note')]
+      await dragOver(page)
+      await expect(page.locator('.check-drop-title')).toHaveText('Drop it here to start')
+      const [z1, n1] = [await rectOf(zone, 'zone'), await rectOf(page.locator('.check-upload-note'), 'note')]
+      for (const k of ['x', 'y', 'width', 'height'] as const) near1(z1[k], z0[k], `${width}px zone ${k}`)
+      near1(n1.y, n0.y, `${width}px note top`)
+      await dragEvent(page, 'dragleave')
+      await expect(page.locator('.check-drop-title')).toHaveText('Drag your invoice file here')
+    }
+  })
+
+  test('check layout: a refusal sits under the zone and fits', async ({ page }) => {
+    await openCheck(page, ALL_WIDTHS[0])
+    for (const file of [TXT, BIG]) {
+      await page.locator('#check-file').setInputFiles(file)
+      await expect(page.locator('.check-err')).toBeVisible()
+      for (const width of ALL_WIDTHS) {
+        await resize(page, width)
+        const label = `${width}px ${file.name}`
+        const cardRect = await rectOf(card(page), 'card')
+        const zone = await rectOf(page.locator('.check-drop'), 'zone')
+        const err = await rectOf(page.locator('.check-err'), 'error')
+        expect(err.y, `${label}: the error starts above the zone's bottom`).toBeGreaterThanOrEqual(bottom(zone) - 1)
+        expect(enclosesRect(cardRect, err, 1) && enclosesRect(cardRect, zone, 1), `${label}: the error or zone is outside the card`).toBe(true)
+        const icon = await rectOf(page.locator('.check-err svg'), 'error icon')
+        const text = await rectOf(page.locator('.check-err span'), 'error text')
+        expect(rectsOverlap(icon, text), `${label}: the error icon overlaps its text`).toBe(false)
+        expect(enclosesRect(cardRect, text, 1), `${label}: the error text is outside the card`).toBe(true)
+        expect((await rectOf(page.locator('.check-upload-note'), 'note')).y, `${label}: the note starts above the error's bottom`).toBeGreaterThanOrEqual(bottom(err) - 1)
+        await noSidewaysScroll(page, label)
+      }
+    }
+  })
+
+  test('check layout: the reading row fits', async ({ page }) => {
+    await resize(page, ALL_WIDTHS[0])
+    await toMap(page, async () => {
+      await expect(page.locator('.check-drop')).toHaveCount(0)
+      for (const width of ALL_WIDTHS) {
+        await resize(page, width)
+        const label = `${width}px`
+        const cardRect = await rectOf(card(page), 'card')
+        const row = await rectOf(page.locator('.check-upload-file'), 'file row')
+        const name = await rectOf(page.locator('.check-upload-name'), 'file name')
+        const bar = await rectOf(page.locator('.check-bar'), 'bar')
+        expect(enclosesRect(cardRect, row, 1), `${label}: the row is outside the card`).toBe(true)
+        expect(enclosesRect(row, name, 1), `${label}: the name is outside the row`).toBe(true)
+        expect(rectsOverlap(await rectOf(page.locator('.check-spinner'), 'spinner'), name), `${label}: the spinner overlaps the name`).toBe(false)
+        expect(enclosesRect(cardRect, bar, 1), `${label}: the bar is outside the card`).toBe(true)
+        expect(bar.y, `${label}: the bar is above the row`).toBeGreaterThanOrEqual(bottom(row) - 1)
+        expect((await rectOf(page.getByRole('status'), 'status')).y, `${label}: the status is above the bar`).toBeGreaterThanOrEqual(bottom(bar) - 1)
+      }
+      await resize(page, ALL_WIDTHS[0])
+    })
+  })
+
+  test('check layout: the upload step takes the design\'s sizes and gaps', async ({ page }) => {
+    await openCheck(page, 1280)
+    const zone = page.locator('.check-drop')
+    const title = page.locator('.check-step-title')
+    expect(await px(title, 'font-size'), '1280 step title').toBe(22)
+    expect(await px(page.locator('.check-upload'), 'row-gap'), '1280 row gap').toBe(22)
+    expect(await pads(zone), '1280 zone padding').toEqual([36, 24, 30])
+    expect(await px(page.locator('.check-drop-title'), 'font-size')).toBe(17)
+    expect(await px(page.locator('.check-fake-btn'), 'height')).toBe(44)
+    expect(await px(page.locator('.check-chip').first(), 'font-size')).toBe(11)
+    expect(await css(zone, 'border-top-style')).toBe('dashed')
+    near1((await rectOf(title, 'h2')).y, bottom(await rectOf(page.locator('.check-step-no'), 'step no')) + 6, 'step-no to h2')
+    near1((await rectOf(zone, 'zone')).y, bottom(await rectOf(page.locator('.check-upload .check-label'), 'label')) + 10, 'label to zone')
+    await dragOver(page)
+    await expect.poll(() => css(zone, 'border-top-color')).toBe(await resolved(page, '--teal', 'border-top-color'))
+    expect(await css(zone, 'border-top-style')).toBe('solid')
+    await expect.poll(() => css(zone, 'background-color')).toBe(await resolved(page, '--mint-soft', 'background-color'))
+    await dragEvent(page, 'dragleave')
+    await page.locator('#check-file').setInputFiles(TXT)
+    await expect(page.locator('.check-err')).toBeVisible()
+    await page.mouse.move(0, 0)
+    await expect.poll(() => css(zone, 'border-top-color')).toBe(await resolved(page, '--destructive', 'border-top-color'))
+    near1((await rectOf(page.locator('.check-err'), 'error')).y, bottom(await rectOf(zone, 'zone')) + 10, 'zone to error')
+    await resize(page, 390)
+    expect(await px(title, 'font-size'), '390 step title').toBe(20)
+    expect(await px(page.locator('.check-upload'), 'row-gap'), '390 row gap').toBe(18)
+    expect(await pads(zone), '390 zone padding').toEqual([26, 16, 22])
+
+    await resize(page, 1280)
+    await toMap(page, async () => {
+      expect(await px(page.locator('.check-spinner'), 'width')).toBe(18)
+      expect(await px(page.locator('.check-bar'), 'height')).toBe(4)
+      const label = await rectOf(page.locator('.check-upload .check-label'), 'label')
+      const row = await rectOf(page.locator('.check-upload-file'), 'file row')
+      const bar = await rectOf(page.locator('.check-bar'), 'bar')
+      const status = await rectOf(page.getByRole('status'), 'status')
+      near1(row.y, bottom(label) + 14, 'label to file row')
+      near1(bar.y, bottom(row) + 14, 'file row to bar')
+      near1(status.y, bottom(bar) + 14, 'bar to status')
+    })
+  })
+
+  test('check layout: the upload step takes the design\'s type and colour', async ({ page }) => {
+    await openCheck(page, 1280)
+    // [selector, property, expected]; a '--token' expectation compares the resolved value.
+    type Row = [string, string, string]
+    const read = async (rows: Row[]) => {
+      for (const [sel, prop, want] of rows) {
+        const loc = page.locator(sel).first()
+        const expected = want.startsWith('--') ? await resolved(page, want, prop) : want
+        expect(await css(loc, prop), `${sel} ${prop}`).toBe(expected)
+      }
+    }
+    await read([
+      ['.check-step-no', 'font-size', '11px'],
+      ['.check-step-no', 'letter-spacing', '0.44px'],
+      ['.check-step-no', 'text-transform', 'uppercase'],
+      ['.check-step-no', 'color', '--step-label'],
+      ['.check-upload .check-label', 'font-size', '14px'],
+      ['.check-upload .check-label', 'font-weight', '700'],
+      ['.check-upload .check-label', 'color', '--ink'],
+      ['.check-drop', 'row-gap', '12px'],
+      ['.check-drop-icon', 'width', '52px'],
+      ['.check-drop-icon', 'height', '52px'],
+      ['.check-drop-title', 'font-weight', '700'],
+      ['.check-drop-or', 'font-size', '14px'],
+      ['.check-drop-or', 'color', '--muted-foreground'],
+      ['.check-fake-btn', 'padding-top', '0px'],
+      ['.check-fake-btn', 'padding-left', '20px'],
+      ['.check-fake-btn', 'background-color', '--primary'],
+      ['.check-fake-btn', 'color', 'rgb(255, 255, 255)'],
+      ['.check-fake-btn', 'font-size', '14px'],
+      ['.check-fake-btn', 'font-weight', '700'],
+      ['.check-chip', 'padding-top', '3px'],
+      ['.check-chip', 'padding-left', '7px'],
+      ['.check-chip', 'border-top-width', '1px'],
+      ['.check-drop-note', 'font-size', '13px'],
+      ['.check-upload-note', 'font-size', '13px'],
+    ])
+    // Chrome rounds a 1.5px border to whole px, so compare it with a 1.5px probe.
+    expect(await css(page.locator('.check-drop'), 'border-top-width'), '.check-drop border-top-width').toBe(await probeBorder(page))
+    await page.locator('.check-drop').hover()
+    await expect.poll(() => css(page.locator('.check-drop'), 'background-color')).toBe(await resolved(page, '--sage-card', 'background-color'))
+    await expect.poll(() => css(page.locator('.check-drop'), 'border-top-color')).toBe(await resolved(page, '--teal', 'border-top-color'))
+    await page.locator('#check-file').setInputFiles(TXT)
+    await expect(page.locator('.check-err')).toBeVisible()
+    await read([
+      ['.check-err', 'font-size', '13.5px'],
+      ['.check-err', 'font-weight', '600'],
+      ['.check-err', 'color', '--destructive'],
+      ['.check-err', 'column-gap', '8px'],
+    ])
+    await toMap(page, async () => {
+      await read([
+        ['.check-upload-file', 'padding-top', '12px'],
+        ['.check-upload-file', 'padding-left', '14px'],
+        ['.check-upload-file', 'border-top-width', '1px'],
+        ['.check-upload-name', 'font-size', '14px'],
+        ['.check-upload-name', 'font-weight', '700'],
+        ['.check-upload-size', 'font-size', '13px'],
+      ])
+    })
+  })
+
+  test('check layout: the drop zone shows the design\'s focus ring', async ({ page }) => {
+    await openCheck(page, 1280)
+    const zone = page.locator('.check-drop')
+    expect(await css(zone, 'outline-style'), 'unfocused').toBe('none')
+    await page.locator('#check-file').focus()
+    expect(await css(zone, 'outline-style')).toBe('solid')
+    expect(await css(zone, 'outline-width')).toBe('2px')
+    expect(await css(zone, 'outline-offset')).toBe('2px')
+    expect(await css(zone, 'outline-color')).toBe(await resolved(page, '--ring', 'outline-color'))
+  })
+
+  test('check layout: reduced motion stops the spinner and the bar', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await resize(page, WIDE_WIDTHS[0])
+    await toMap(page, async () => {
+      await expect(page.locator('.check-spinner')).toHaveCSS('animation-name', 'none')
+      await expect(page.locator('.check-bar i')).toHaveCSS('animation-name', 'none')
+      await page.emulateMedia({ reducedMotion: 'no-preference' })
+      expect(await css(page.locator('.check-spinner'), 'animation-name')).not.toBe('none')
+      expect(await css(page.locator('.check-bar i'), 'animation-name')).not.toBe('none')
+    })
+  })
+
   test('check layout: the Argos shots of the Upload and Map steps', async ({ page }) => {
     test.skip(!argosOn(), 'Argos shots are taken on the nightly only')
     await openCheck(page, 1440)
     await shoot(page, 'check', 'upload')
-    await toMap(page)
+    await dragOver(page)
+    await shoot(page, 'check', 'upload-drag')
+    await dragEvent(page, 'dragleave')
+    await page.locator('#check-file').setInputFiles(TXT)
+    await expect(page.locator('.check-err')).toBeVisible()
+    await shoot(page, 'check', 'upload-error-type')
+    await toMap(page, async () => {
+      await shoot(page, 'check', 'upload-reading')
+    })
     await shoot(page, 'check', 'map')
   })
 })

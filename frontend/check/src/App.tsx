@@ -98,7 +98,7 @@ export function App() {
         <Hero wide={step === 'map'}>
           <ProgressStrip progress={progress(step, file?.name ?? null)} />
           <div className="check-steps">
-            {step === 'upload' && <UploadStep fileName={file?.name ?? null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
+            {step === 'upload' && <UploadStep file={file ? { name: file.name, size: file.size } : null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
             {step === 'map' && file && suggestion && fields && (
               <MapStep
                 fileName={file.name}

@@ -4,7 +4,7 @@ import { ACCEPTED_PICKED_TYPES, MAX_UPLOAD_BYTES } from './fields'
 export const MAX_INVOICES = 2 // publiccheck.MaxInvoices
 export const MAX_RUNS_PER_EMAIL = 3 // readinesscheck.MaxRunsPerEmail
 const MAX_MIB = MAX_UPLOAD_BYTES / 1024 / 1024
-const TYPE_NAMES = ACCEPTED_PICKED_TYPES.map((r) => r.ext.slice(1).toUpperCase())
+export const FILE_TYPE_NAMES = ACCEPTED_PICKED_TYPES.map((r) => r.ext.slice(1).toUpperCase())
 
 export const CHECK_TITLE = 'Free e-invoice readiness check — ASComply Africa'
 export const CHECK_DESCRIPTION =
@@ -18,6 +18,15 @@ export const SENDING_TEXT = 'Checking your file. This can take a minute or two.'
 export const READING_TEXT = 'Reading the columns…'
 export const TYPE_SENTENCE = 'Choose a CSV, XLSX, PDF or DOCX file.'
 export const SIZE_SENTENCE = 'This file is over 15 MiB. Choose a smaller file.'
+export const UPLOAD_STEP_NO = '01 · Upload'
+export const UPLOAD_TITLE = 'Add one invoice file'
+export const FILE_LABEL = 'Invoice file'
+export const DROP_TITLE = 'Drag your invoice file here'
+export const DROP_TITLE_OVER = 'Drop it here to start'
+export const DROP_OR = 'or'
+export const DROP_BUTTON = 'Choose a file'
+export const DROP_HELP = `One file, up to ${MAX_MIB} MiB. We check its first ${MAX_INVOICES} invoices.`
+export const FILE_PRIVACY = 'Your file is used only for this check and deleted when it finishes.'
 export const STEP_LABELS = { upload: 'Upload', map: 'Match columns', email: 'Email', sent: 'Sent' } as const
 export const CHECK_EYEBROW = 'FREE E-INVOICE READINESS CHECK'
 export const COMPANY_LINE = '© 2026 ASComply Africa Limited · Lagos, Nigeria'
@@ -42,7 +51,7 @@ export const WHAT_LIMITS = [
   { n: String(MAX_INVOICES), caption: 'invoices checked per file' },
   { n: String(MAX_RUNS_PER_EMAIL), caption: 'free checks per email address' },
   { n: `${MAX_MIB} MiB`, caption: 'largest file, one at a time' },
-  { n: String(TYPE_NAMES.length), caption: `file types: ${TYPE_NAMES.join(', ')}` },
+  { n: String(FILE_TYPE_NAMES.length), caption: `file types: ${FILE_TYPE_NAMES.join(', ')}` },
 ] as const
 export const WHAT_CTA = 'Check a file'
 // Subject, sender and pass text are the real mail's (accountmail.ReadinessCheckSubject, sender.From, readiness_check.html);

@@ -331,6 +331,11 @@ describe('map unused line', () => {
     expect(unusedLine()).toBe('Every column in your file is matched to a field.')
   })
 
+  it('map_unusedLineSingularColumnWhenOneIsOffered', async () => {
+    await toMap(suggestion(['Note'], {}))
+    expect(unusedLine()).toBe('1 of your 1 column is not used yet: A Note. Fields with no column stay on “Not in this file”.')
+  })
+
   it('map_aBlankHeaderIsNeverNamedUnused', async () => {
     await toMap(suggestion(['Inv', '', 'Date'], { invoice_number: 'Inv', issue_date: 'Date' }))
     expect(unusedLine()).toBe('Every column in your file is matched to a field.')
@@ -583,6 +588,7 @@ describe('rejected mapping', () => {
     ['400 consent', () => json(400, { error: 'consent_text must be 1 to 500 characters' })],
     ['400 format', () => json(400, { error: 'file must be CSV, XLSX, PDF or DOCX' })],
     ['400 spreadsheet format', () => json(400, { error: 'file must be a CSV or XLSX spreadsheet' })],
+    ['400 too much text', () => json(400, { error: 'This document has too much text for the free check. Try a shorter invoice.' })],
     ['503', () => json(503, { error: 'unavailable' })],
     ['network', () => Promise.reject(new TypeError('Failed to fetch'))],
   ])('send_otherSpreadsheetRefusalsStayOnEmail %s', async (_name, answer) => {

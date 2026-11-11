@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/blog"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -24,22 +25,22 @@ func main() {
 	}
 
 	ctx := context.Background()
-	mode, _, _, err := notifications.DeliveryClients(os.Getenv, platform.DeployEnv(), notifications.RealTransport())
-	if err != nil {
-		platform.Fatal(app.Logger, "notifications: %v", err)
-	}
-	platform.Contacts = string(mode)
-	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport())
-	if err != nil {
-		platform.Fatal(app.Logger, "notifications: %v", err)
-	}
-
 	pool, err := db.NewPool(ctx, mustEnv("DATABASE_URL"))
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: db pool: %v", err)
 	}
 	defer pool.Close()
 	app.Ready("database", pool.Ping)
+
+	mode, _, resend, err := notifications.DeliveryClients(os.Getenv, platform.DeployEnv(), notifications.RealTransport())
+	if err != nil {
+		platform.Fatal(app.Logger, "notifications: %v", err)
+	}
+	platform.Contacts = string(mode)
+	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport(), accountmail.PoolTokens(pool))
+	if err != nil {
+		platform.Fatal(app.Logger, "notifications: %v", err)
+	}
 
 	// Insert-only: cmd/worker delivers every contact job and purges expired blog requests.
 	q, err := queue.New(pool, queue.Config{})
@@ -52,6 +53,10 @@ func main() {
 	app.Mux.HandleFunc("POST /internal/contacts/demo-requests", notifications.DemoRequestsHandler(store, app.Logger))
 	app.Mux.HandleFunc("POST /internal/contacts/readiness-checks", notifications.ReadinessChecksHandler(store, app.Logger))
 	app.Mux.HandleFunc("GET /v1/contacts/me", notifications.MeHandler(store, app.Logger))
+
+	unsubscribeStore := notifications.NewUnsubscribeStore(pool)
+	app.Mux.HandleFunc("POST /internal/contacts/unsubscribe/lookup", notifications.UnsubscribeLookupHandler(unsubscribeStore, app.Logger))
+	app.Mux.HandleFunc("POST /internal/contacts/unsubscribe", notifications.UnsubscribeHandler(unsubscribeStore, resend, app.Logger))
 
 	newsletterStore := notifications.NewNewsletterStore(pool, q.River())
 	newsletter := notifications.Newsletter{Store: newsletterStore, Sender: nl.Sender, Resend: nl.Resend, Enabled: nl.Enabled}

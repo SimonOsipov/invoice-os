@@ -7,10 +7,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +61,7 @@ func TestInviteSender_PreviewCapturesAndDiscardsTheKey(t *testing.T) {
 			var logs bytes.Buffer
 			env := getenvOf(map[string]string{"DEPLOY_ENV": env, "RESEND_SENDING_KEY": "k_live"})
 
-			s := inviteSender(env, spy, textLogger(&logs))
+			s := inviteSender(env, spy, textLogger(&logs), nil)
 
 			c, ok := s.(*accountmail.Capture)
 			if !ok {
@@ -87,7 +89,7 @@ func TestInviteSender_ProductionWithKeySendsThroughTheTransport(t *testing.T) {
 	var logs bytes.Buffer
 	env := getenvOf(map[string]string{"DEPLOY_ENV": "production", "RESEND_SENDING_KEY": "k_live"})
 
-	s := inviteSender(env, spy, textLogger(&logs))
+	s := inviteSender(env, spy, textLogger(&logs), nil)
 
 	if _, ok := s.(*accountmail.Resend); !ok {
 		t.Fatalf("sender = %T, want *accountmail.Resend", s)
@@ -113,7 +115,7 @@ func TestInviteSender_NightlySendsWithTheKey(t *testing.T) {
 	var logs bytes.Buffer
 	env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly", "RESEND_SENDING_KEY": "k_live"})
 
-	s := inviteSender(env, spy, textLogger(&logs))
+	s := inviteSender(env, spy, textLogger(&logs), nil)
 
 	if _, ok := s.(*accountmail.Resend); !ok {
 		t.Fatalf("sender = %T, want *accountmail.Resend", s)
@@ -136,7 +138,7 @@ func TestInviteSender_NightlyCapturesWithoutTheKey(t *testing.T) {
 	var logs bytes.Buffer
 	env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly"})
 
-	s := inviteSender(env, spy, textLogger(&logs))
+	s := inviteSender(env, spy, textLogger(&logs), nil)
 
 	c, ok := s.(*accountmail.Capture)
 	if !ok {
@@ -159,7 +161,7 @@ func TestInviteSender_ProductionWithoutKeyIsOff(t *testing.T) {
 	var logs bytes.Buffer
 	env := getenvOf(map[string]string{"DEPLOY_ENV": "production"})
 
-	s := inviteSender(env, spy, textLogger(&logs))
+	s := inviteSender(env, spy, textLogger(&logs), nil)
 
 	if _, ok := s.(accountmail.Off); !ok {
 		t.Fatalf("sender = %T, want accountmail.Off", s)
@@ -196,7 +198,7 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 			var logs bytes.Buffer
 			env := getenvOf(map[string]string{"DEPLOY_ENV": c.env, "RESEND_SENDING_KEY": c.key})
 
-			s := inviteSender(env, spy, textLogger(&logs))
+			s := inviteSender(env, spy, textLogger(&logs), nil)
 
 			if _, ok := s.(*accountmail.Resend); ok != c.wantReal {
 				t.Errorf("sender = %T, want real %v", s, c.wantReal)
@@ -283,5 +285,56 @@ func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
 		if got := loaders[want.pattern]; len(got) != 1 || got[0] != want.loader {
 			t.Errorf("%q loader = %v, want exactly [%s]", want.pattern, got, want.loader)
 		}
+	}
+}
+
+// bodySpy records the body of every request and answers 200.
+type bodySpy struct{ body strings.Builder }
+
+func (s *bodySpy) RoundTrip(r *http.Request) (*http.Response, error) {
+	b, _ := io.ReadAll(r.Body)
+	s.body.Write(b)
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
+}
+
+func TestInviteSender_PassesTheTokenFunc(t *testing.T) {
+	mail := []accountmail.Message{{To: "b@x.test", HTML: `<a href="` + accountmail.UnsubscribeURL + `?t=ASCOMPLY_UNSUBSCRIBE_TOKEN">Unsubscribe</a>`}}
+	tokens := func(context.Context, string) (string, error) { return "tok", nil }
+
+	s := inviteSender(getenvOf(map[string]string{"DEPLOY_ENV": "pr-1"}), &spyTransport{}, textLogger(&bytes.Buffer{}), tokens)
+	if err := s.Send(context.Background(), mail); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*accountmail.Capture).Messages()[0].HTML; !strings.Contains(got, "?t=tok") {
+		t.Errorf("captured html = %s, want ?t=tok", got)
+	}
+
+	spy := &bodySpy{}
+	s = inviteSender(getenvOf(map[string]string{"DEPLOY_ENV": "production", "RESEND_SENDING_KEY": "k"}), spy, textLogger(&bytes.Buffer{}), tokens)
+	if err := s.Send(context.Background(), mail); err != nil {
+		t.Fatal(err)
+	}
+	if got := spy.body.String(); !strings.Contains(got, "?t=tok") || strings.Contains(got, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+		t.Errorf("posted body = %s, want ?t=tok", got)
+	}
+}
+
+// A nil TokenFunc sends every invite and deletion mail with the bare unsubscribe link and fails nothing else.
+func TestTenancyMain_HandsThePoolTokensToTheMailSender(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "inviteSender" && len(c.Args) == 4 {
+				got = append(got, types.ExprString(c.Args[3]))
+			}
+		}
+		return true
+	})
+	if !slices.Equal(got, []string{"accountmail.PoolTokens(pool)"}) {
+		t.Errorf("inviteSender calls in main.go pass %v as the TokenFunc, want one call with accountmail.PoolTokens(pool)", got)
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
 // InvitationPreview is what a token holder sees before signing in.
@@ -241,7 +243,7 @@ func NewHTTPInvitationRegistrations(base *url.URL, client *http.Client, gatewayT
 // under a password nobody keeps; the invitee chooses theirs from the confirmation mail.
 // The address comes from the claim, never from the body. A token backs one sign-up: a repeat answers 202 with no GoTrue call.
 // A confirmed or unconfirmed preview is refused before the claim and the sign-up. A first claim whose sign-up left no account is released after the answer.
-func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, preview InvitationPreviewer, registrations InvitationRegistrations) http.Handler {
+func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, preview InvitationPreviewer, registrations InvitationRegistrations, tokens accountmail.TokenFunc) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -296,7 +298,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		if !first {
 			// A repeat waits the same floor and mails nobody.
-			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil)
+			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "")
 			return
 		}
 		pw := make([]byte, 32)
@@ -307,7 +309,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			"data":     map[string]any{"invited": true},
 		}
 		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
-		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists); !mayExist {
+		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists, tokens, email); !mayExist {
 			if err := registrations.Release(context.WithoutCancel(r.Context()), in.Token); err != nil {
 				log.WarnContext(r.Context(), "invitation: release failed", slog.String("error", err.Error()))
 			}

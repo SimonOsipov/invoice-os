@@ -70,6 +70,9 @@ paths:
   - "internal/gateway/signin_throttle_pg.go"
   - "internal/accountmail/sender.go"
   - "internal/accountmail/readiness_check.html"
+  - "migrations/*mail_unsubscribes*"
+  - "internal/accountmail/layout.html"
+  - "internal/gateway/unsubscribe*.go"
 ---
 # Privacy page
 
@@ -174,5 +177,15 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - Sentence 4 (a hash of the network's IP address): Backed by `hashKey` (sha256, no secret). Do not call it one-way: an IPv4 hash can be reversed by trying every address. `ipCountIsHashed()` pins it.
 - Sentence 5 (results mail from `no-reply@ascomply.com` through Resend, carries amounts and buyer details; the address is not checked first): `accountmailFrom()` reads `accountmail.From`; `readiness_check.html` renders the amounts and `.Buyer`.
 - Sentence 6 (HubSpot contact tagged "readiness check", with a deal): `crmTags()[2]` and `dealSourceReadinessCheck` in `deal.go`.
-- Sentence 7 (the ticked sentence is recorded; the tick adds the address to Marketing in Resend; "You can unsubscribe from any email."): `readinessConsentIsMarketing()` reads `ReadinessCheck` and the Resend term of `mergeSQL` in `store.go`; `ruleMarketingBroadcastCarriesUnsubscribe()` reads `contacts.md` for Marketing email. No code backs "You can unsubscribe from any email." The user's decision backs it (`[unsubscribe-scope]` in the FREECHK-06 story).
+- Sentence 7 (the ticked sentence is recorded; the tick adds the address to Marketing in Resend; "You can unsubscribe from any email."): `readinessConsentIsMarketing()` reads `ReadinessCheck` and the Resend term of `mergeSQL` in `store.go`; `ruleMarketingBroadcastCarriesUnsubscribe()` reads `contacts.md` for Marketing email. `everyMailCarriesTheUnsubscribeFooter()` backs "from any email".
 - Sentence 8 (summary rows deleted with the account, unless another account holds the address): `eraseDeletesReadinessChecks()` reads `erase.go`; the `superseded` branch skips the delete.
+
+## Unsubscribing
+
+The section "Unsubscribing from marketing email" follows the readiness check section. Sentence 7 above keeps its wording. A later form does not re-opt an unsubscribed address in, which `U2` says.
+
+- `U1` (every template mail ends with an unsubscribe link; the page changes nothing on open; a link without a code asks for `PRIVACY_CONTACT`): `everyMailCarriesTheUnsubscribeFooter()` reads `layout.html`, `Template` in `accountmail.go`, `confirmation.html` and `recovery.html`. `unsubscribePageContact()` reads `unsubscribeContact` and must equal `PRIVACY_CONTACT`.
+- `U2` (the press stops all marketing email; recorded on our server; opts out in Resend when a contact exists; no later form opts back in): `unsubscribeOptsOutOfMarketingOnly()` reads `OptOutMarketing` and `Press` in `unsubscribe.go`. `optInSkipsAnUnsubscribedAddress()` reads `DeliverWorker.Work` in `worker.go`.
+- `U3` (account mail and your own requests still arrive; the blog newsletter has its own link): `rulePutsUnsubscribeInEveryBroadcast()`.
+- `U4` (a random code per address emailed and per address entered in the create-an-account form; deleted with the account unless another account holds the address): `signupKeepsAnUnsubscribeCode()` reads `signUp` and `addUnsubscribeToken` in `register.go`. `eraseDeletesMailUnsubscribes()` reads the `!res.superseded` block of the erase sweep.
+- Promise no preference centre and no per-topic toggle.

@@ -313,8 +313,8 @@ func TestIntake_MeReadsTheTokenEmail(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body %q is not JSON: %v", rec.Body, err)
 	}
-	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"email", "hubspot", "marketing_eligible", "mode", "resend", "tags"}) {
-		t.Errorf("body keys = %v, want exactly email, hubspot, marketing_eligible, mode, resend, tags", keys)
+	if keys := slices.Sorted(maps.Keys(body)); !slices.Equal(keys, []string{"email", "hubspot", "marketing_eligible", "marketing_unsubscribed", "mode", "resend", "tags"}) {
+		t.Errorf("body keys = %v, want exactly email, hubspot, marketing_eligible, marketing_unsubscribed, mode, resend, tags", keys)
 	}
 	if body["email"] != "ada@corp.example" || body["marketing_eligible"] != true || body["mode"] != "fake" {
 		t.Errorf("body = %v, want the contact's email, marketing_eligible true, mode fake", body)
@@ -573,5 +573,26 @@ func TestIntake_StrayClosingBracketIsNotOneBody(t *testing.T) {
 	}
 	if n := store.calls(); n != 0 {
 		t.Errorf("the store was called %d times, want 0", n)
+	}
+}
+
+func TestMeHandler_ServesTheUnsubscribeFields(t *testing.T) {
+	store := &qaIntakeStore{me: Contact{Email: "ada@corp.example", ResendApplies: true, MarketingUnsubscribed: true, ResendOptInSent: true}}
+	rec := qaServe(MeHandler(store, (&qaLogSink{}).logger()), "GET", "/v1/contacts/me", "", map[string]string{"X-User-Email": "ada@corp.example"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %q)", rec.Code, rec.Body)
+	}
+	var body struct {
+		Unsubscribed bool `json:"marketing_unsubscribed"`
+		Eligible     bool `json:"marketing_eligible"`
+		Resend       struct {
+			OptInSent *bool `json:"opt_in_sent"`
+		} `json:"resend"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	if !body.Unsubscribed || body.Eligible || body.Resend.OptInSent == nil || !*body.Resend.OptInSent {
+		t.Errorf("body = %q, want marketing_unsubscribed true, marketing_eligible false, resend.opt_in_sent true", rec.Body)
 	}
 }

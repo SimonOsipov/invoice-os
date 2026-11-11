@@ -30,7 +30,13 @@ import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
   accountmailFrom,
   aiModelVendors,
+  eraseDeletesMailUnsubscribes,
   eraseDeletesReadinessChecks,
+  everyMailCarriesTheUnsubscribeFooter,
+  optInSkipsAnUnsubscribedAddress,
+  signupKeepsAnUnsubscribeCode,
+  unsubscribeOptsOutOfMarketingOnly,
+  unsubscribePageContact,
   ipCountIsHashed,
   readinessCheckColumns,
   readinessConsentIsMarketing,
@@ -537,6 +543,9 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
 // Every fact below is read from the Go and TS that sends it (privacyCodeFacts.test.util.ts).
 // A key table is the page's words for each code key; its keys must equal the code's, so a new
 // property forces both the table and the page to follow.
+// U1 names invitations and email; DEL-13-03 exempts exactly this paragraph, and the FREECHK-09-08 test pins its words.
+const UNSUBSCRIBE_U1 = `Every email we send from our own templates ends with a link to unsubscribe from marketing email. That covers account emails, sign-in alerts, invitations, workspace deletion notices, blog confirmations and readiness check results. The link opens a page on our server with one button, Unsubscribe. Opening the page changes nothing. If a link cannot carry its code, the page it opens asks you to email ${PRIVACY_CONTACT}, and we unsubscribe you.`
+
 describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   const html = renderToStaticMarkup(createElement(Privacy))
   const plain = (s: string): string =>
@@ -817,7 +826,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
     expect(paras.length).toBeGreaterThan(10)
     const p5 = ACCOUNT_RECORD_SENTENCES.find((x) => x.id === 'P5')!.text
-    expect(paras.filter((t) => t !== p5 && /invitation/i.test(t) && /email/i.test(t))).toEqual([])
+    expect(paras.filter((t) => t !== p5 && t !== UNSUBSCRIBE_U1 && /invitation/i.test(t) && /email/i.test(t))).toEqual([])
   })
 
   it('DEL-10-03 R1 promises no completeness', () => {
@@ -1257,5 +1266,48 @@ describe('FREECHK-03-08: the readiness check section', () => {
     expect(ipCountIsHashed()).toBe(true)
     expect(text()).toContain('we keep a hash of your network')
     expect(ipCountIsHashed('func (t *SignInThrottle) hashKey(email string) []byte {\n\treturn []byte(email)\n}\n')).toBe(false)
+  })
+})
+
+describe('FREECHK-09-08: the unsubscribe section', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const clean = (part: string): string => part.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim()
+  const section = (): string => {
+    const part = html.split(/(?=<h2[ >])/).find((p) => p.startsWith('<h2') && p.includes('>Unsubscribing from marketing email</h2>'))
+    expect(part, 'the unsubscribe h2').toBeDefined()
+    return Array.from(part!.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => clean(m[1])).join(' ')
+  }
+
+  it('the page says every template mail has an unsubscribe link and what it stops', () => {
+    expect(section()).toBe(
+      [
+        UNSUBSCRIBE_U1,
+        'Pressing the button stops all marketing email to that address. We record the unsubscribe on our own server. When Resend holds the address as a contact, we also opt it out of our marketing email there. While we hold that record, no later form, demo request or readiness check opts the address back in.',
+        'You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.',
+        'To make each link work, we keep a random code on our own server for each address we email and for each address entered in the create-an-account form. We delete that record when an ASComply account with that address is deleted, unless another account still holds the address.',
+      ].join(' '),
+    )
+    const readiness = clean(html.split(/(?=<h2[ >])/).find((p) => p.includes('If you run the readiness check</h2>'))!)
+    expect(readiness).toContain(
+      `We record the sentence you ticked, word for word: \u201c${READINESS_CONSENT_TEXT}\u201d Ticking the box also adds you to our marketing email in Resend. You can unsubscribe from any email.`,
+    )
+    const h2s = Array.from(html.matchAll(/<h2[^>]*>([^<]*)<\/h2>/g), (m) => m[1])
+    expect(h2s.indexOf('Unsubscribing from marketing email')).toBe(h2s.indexOf('If you run the readiness check') + 1)
+  })
+
+  it('the unsubscribe sentences are backed by code', () => {
+    expect(everyMailCarriesTheUnsubscribeFooter()).toBe(true)
+    expect(unsubscribeOptsOutOfMarketingOnly()).toBe(true)
+    expect(optInSkipsAnUnsubscribedAddress()).toBe(true)
+    expect(eraseDeletesMailUnsubscribes()).toBe(true)
+    expect(signupKeepsAnUnsubscribeCode()).toBe(true)
+  })
+
+  it('the unsubscribe page names the privacy contact', () => {
+    expect(unsubscribePageContact()).toBe(PRIVACY_CONTACT)
+  })
+
+  it('the unsubscribe section promises no preference centre', () => {
+    expect(section()).not.toMatch(/preference|toggle|choose which/i)
   })
 })

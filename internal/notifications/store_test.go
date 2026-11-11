@@ -1817,3 +1817,44 @@ func TestStore_OldWordingContactGainsMarketingFromANewCheck(t *testing.T) {
 		t.Errorf("marketing_consent_text=%q version=%d, want %q and 2", deref(r.ConsentText), r.Version, consentText)
 	}
 }
+
+func TestStore_MeReportsAnUnsubscribe(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "meunsub")
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	recordUnsubscribe(t, e, email)
+
+	c, err := e.store.Me(ctx, email)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if !c.MarketingUnsubscribed || c.MarketingEligible || c.ResendOptInSent {
+		t.Errorf("unsubscribed=%v eligible=%v opt_in_sent=%v, want true, false, false", c.MarketingUnsubscribed, c.MarketingEligible, c.ResendOptInSent)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1`, email); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = e.store.Me(ctx, email); err != nil || !c.ResendOptInSent {
+		t.Errorf("after a stamp: opt_in_sent=%v err=%v, want true", c.ResendOptInSent, err)
+	}
+}
+
+func TestStore_MeOfAnUnsubscribedAddressWithNoContactIsNotFound(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "menocontact")
+	recordUnsubscribe(t, e, email)
+
+	if _, err := e.store.Me(ctx, email); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Me with no contact = %v, want ErrNotFound", err)
+	}
+	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		t.Fatalf("ReadinessCheck: %v", err)
+	}
+	if c, err := e.store.Me(ctx, email); err != nil || !c.MarketingUnsubscribed {
+		t.Errorf("after the intake: unsubscribed=%v err=%v, want true", c.MarketingUnsubscribed, err)
+	}
+}

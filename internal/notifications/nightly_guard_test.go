@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -44,7 +45,7 @@ func ngWiring(t *testing.T) (NewsletterWiring, *clSpyTransport, *ngBodies) {
 	if err != nil {
 		t.Fatalf("deliveryClients: %v", err)
 	}
-	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy)
+	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy, nil)
 	if err != nil {
 		t.Fatalf("newsletterClients: %v", err)
 	}
@@ -123,5 +124,27 @@ func TestNightlyGuard_LookalikeAddressesAreForeign(t *testing.T) {
 				t.Errorf("%q on %q foreign, want allowed", e, d)
 			}
 		}
+	}
+}
+
+func TestNightlyGuard_CapturedMailHoldsTheToken(t *testing.T) {
+	spy := &clSpyTransport{respond: func(_ int, r *http.Request) *http.Response { return clReply(r, http.StatusOK, nil) }}
+	vars := clNightlyVars("RESEND_SENDING_KEY", "sk")
+	contacts, _, _, err := DeliveryClients(clGetenv(vars), "nightly", spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := func(context.Context, string) (string, error) { return "tok", nil }
+	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy, tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := `<a href="` + accountmail.UnsubscribeURL + `?t=ASCOMPLY_UNSUBSCRIBE_TOKEN">Unsubscribe</a>`
+	if err := w.Sender.Send(t.Context(), []accountmail.Message{{To: ngForeign, HTML: html}}); err != nil {
+		t.Fatal(err)
+	}
+	got := w.Sender.(*guardSender).capture.Messages()
+	if len(got) != 1 || !strings.Contains(got[0].HTML, "?t=tok") || strings.Contains(got[0].HTML, "ASCOMPLY_UNSUBSCRIBE_TOKEN") {
+		t.Errorf("captured = %+v, want one mail holding ?t=tok", got)
 	}
 }

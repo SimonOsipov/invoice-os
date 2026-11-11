@@ -159,6 +159,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 .check-columns .check-col-ex { color: var(--muted-foreground); }
 .check-unused { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 6px; border-radius: var(--radius-sm); background: var(--status-progress-bg); color: var(--status-progress-fg); }
 .check-sticky { position: sticky; bottom: 0; z-index: 2; display: grid; gap: 12px; margin: 0 -28px -28px; padding: 16px 28px; background: color-mix(in srgb, var(--cream-card) 94%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-top: 1px solid var(--cream-card-border); }
+.check-alert { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: var(--radius-md); border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--card)); background: color-mix(in srgb, var(--destructive) 7%, var(--card)); color: var(--destructive); font-size: 14px; line-height: 1.55; font-weight: 600; }
 .check-map .check-actions { flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .check-actions-end { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 14px; }
 .check-need { font-size: 13px; color: var(--muted-foreground); }

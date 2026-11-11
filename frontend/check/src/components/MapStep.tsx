@@ -11,12 +11,13 @@ interface Props {
   fileName: string
   suggestion: Suggestion
   fields: Mapping
+  error: string | null
   onField: (key: string, header: string | null) => void
   onBack: () => void
   onContinue: () => void
 }
 
-export function MapStep({ fileName, suggestion, fields, onField, onBack, onContinue }: Props) {
+export function MapStep({ fileName, suggestion, fields, error, onField, onBack, onContinue }: Props) {
   const columns = previewColumns(suggestion, 3)
   const offered = columns.filter((c, i) => c.mappable && columns.findIndex((d) => d.header === c.header) === i)
   const used = new Set(Object.values(fields).filter((h) => h !== null))
@@ -216,6 +217,12 @@ export function MapStep({ fileName, suggestion, fields, onField, onBack, onConti
         })}
       </div>
       <div className="check-sticky">
+        {error && (
+          <div className="check-alert" role="alert">
+            <Icon paths={GLYPHS['triangle-alert']} size={18} strokeWidth={2} />
+            <span>{error}</span>
+          </div>
+        )}
         <div className="check-actions">
           <button type="button" className="check-btn check-btn--outline" onClick={onBack}>
             {CHOOSE_ANOTHER}

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS } from './fields'
+import { MAPPING_SENTENCE } from './messages'
 import { FIELDS_LEGEND, FIELDS_TITLE, MAP_ALL_USED, MAP_SUMMARY, NEED_INVOICE_NO, SUPPLIER_HINT } from './copy'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -474,5 +475,132 @@ describe('map hold release', () => {
     expect(document.activeElement).toBe(second)
     expect(sel('invoice_kind')).toBeNull()
     expect(subheadText('invoice')).toBe('3 matched from your file')
+  })
+})
+
+describe('rejected mapping', () => {
+  const RUN = '/readiness-check/run'
+  const SHEET = suggestion(['Inv', 'Seller', 'STIN', 'Net'], { invoice_number: 'Inv', supplier_name: 'Seller' })
+  let run: ReturnType<typeof vi.fn<() => Response | Promise<Response>>>
+  const mapRejected = () => json(400, { error: 'mapping: column "Inv" not found' })
+
+  async function mountSheet(answer: () => Response | Promise<Response>) {
+    run = vi.fn(answer)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (input) => (String(input).endsWith(RUN) ? run() : json(200, SHEET))),
+    )
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => root.render(<App />))
+    await pickFile()
+  }
+  async function typeEmail(value: string) {
+    const el = container.querySelector<HTMLInputElement>('#check-email')!
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      set.call(el, value)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  async function send() {
+    await typeEmail('a@example.com')
+    const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    if (!box.checked) await click(box)
+    await click(button('Send')!)
+    await settle()
+  }
+  const alertIn = () => container.querySelector('.check-sticky [role="alert"]')
+  async function toRejected() {
+    await mountSheet(mapRejected)
+    await click(button('Continue')!)
+    await send()
+  }
+
+  it('map_aRejectedMappingKeepsTheChoicesAndTheForm', async () => {
+    await mountSheet(mapRejected)
+    await choose('supplier_tin', 'STIN')
+    await click(button('Continue')!)
+    await send()
+    expect(alertIn()).not.toBeNull()
+    expect(header('invoice').getAttribute('aria-expanded')).toBe('true')
+    expect(header('supplier').getAttribute('aria-expanded')).toBe('true')
+    expect(sel('invoice_number')).not.toBeNull()
+    await click(reviewButton('supplier'))
+    expect(must('supplier_tin').value).toBe('STIN')
+    await click(button('Continue')!)
+    expect(container.querySelector<HTMLInputElement>('#check-email')!.value).toBe('a@example.com')
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true)
+  })
+
+  it('map_aFieldChangeClearsTheMappingAlert', async () => {
+    await toRejected()
+    await click(header('amounts'))
+    await click(header('amounts'))
+    expect(alertIn()!.textContent).toBe(MAPPING_SENTENCE)
+    await choose('invoice_kind', 'Net')
+    expect(container.querySelector('.check-sticky [role="alert"]')).toBeNull()
+  })
+
+  it('map_continueClearsTheMappingAlert', async () => {
+    await toRejected()
+    await click(button('Continue')!)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(container.textContent).not.toContain(MAPPING_SENTENCE)
+    await click(button('Back')!)
+    expect(alertIn()).toBeNull()
+  })
+
+  it('map_chooseAnotherFileClearsTheMappingAlert', async () => {
+    await toRejected()
+    await click(button('Choose another file')!)
+    expect(container.querySelector('input[type="file"]')).not.toBeNull()
+    expect(container.querySelector('#check-file-err')).toBeNull()
+    expect(container.textContent).not.toContain(MAPPING_SENTENCE)
+  })
+
+  it.each([
+    ['409', () => json(409, { error: 'This address has used its 3 free checks. Sign up to check every invoice.' })],
+    ['429', () => json(429, { error: 'This network has run 10 checks today. Try again tomorrow.' })],
+    ['422', () => json(422, { error: 'We could not read this file.' })],
+    ['408', () => json(408, { error: 'The upload took too long. Try again on a faster connection.' })],
+    ['413', () => json(413, { error: 'too large' })],
+    ['400 email', () => json(400, { error: 'email is invalid' })],
+    ['400 consent', () => json(400, { error: 'consent_text must be 1 to 500 characters' })],
+    ['400 format', () => json(400, { error: 'file must be CSV, XLSX, PDF or DOCX' })],
+    ['400 spreadsheet format', () => json(400, { error: 'file must be a CSV or XLSX spreadsheet' })],
+    ['503', () => json(503, { error: 'unavailable' })],
+    ['network', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ])('send_otherSpreadsheetRefusalsStayOnEmail %s', async (_name, answer) => {
+    await mountSheet(answer as () => Response | Promise<Response>)
+    await click(button('Continue')!)
+    await send()
+    expect(container.querySelector('#check-email')).not.toBeNull()
+    expect(container.textContent).not.toContain('Tell us which column is which')
+    expect(container.querySelector('.check-refusal')).not.toBeNull()
+    expect(container.textContent).not.toContain(MAPPING_SENTENCE)
+  })
+
+  it('send_backAndSendAreLockedWhileTheRunIsInFlight', async () => {
+    let release!: () => void
+    await mountSheet(() => new Promise<Response>((r) => (release = () => r(mapRejected()))))
+    await click(button('Continue')!)
+    await send()
+    expect(button('Back')!.disabled).toBe(true)
+    await act(async () => void container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(run).toHaveBeenCalledTimes(1)
+    await act(async () => release())
+    await settle()
+    expect(alertIn()!.textContent).toBe(MAPPING_SENTENCE)
+  })
+
+  it('send_aSecondRejectionReturnsToMapAgain', async () => {
+    await toRejected()
+    await click(button('Continue')!)
+    await click(button('Send')!)
+    await settle()
+    expect(alertIn()!.textContent).toBe(MAPPING_SENTENCE)
+    expect(run).toHaveBeenCalledTimes(2)
   })
 })

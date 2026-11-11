@@ -335,13 +335,18 @@ describe('details and sent', () => {
     expect(text()).not.toContain(MAPPING_SENTENCE)
   })
 
-  it('send_aSpreadsheet400IsTheMappingSentence', async () => {
-    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'invalid request body' }) })
+  it('send_aRejectedMappingReturnsToTheMapStep', async () => {
+    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'mapping: column "Inv" not found' }) })
     await mount()
     await pick(file('a.csv'))
     await click(button('Continue'))
     await fillAndSend()
-    expect(text()).toContain(MAPPING_SENTENCE)
+    expect(container.querySelector('h2')!.textContent).toBe('Tell us which column is which')
+    expect(container.querySelector('.check-progress [aria-current="step"]')!.textContent).toContain('Match columns')
+    const alert = container.querySelector('.check-sticky [role="alert"]')!
+    expect(alert.textContent).toBe(MAPPING_SENTENCE)
+    expect(alert.nextElementSibling!.classList.contains('check-actions')).toBe(true)
+    expect(button('Send')).toBeUndefined()
   })
 
   it('send_isDisabledUntilEmailAndTick', async () => {

@@ -42,11 +42,6 @@ type DemoIntake struct {
 	ConsentText          string
 }
 
-// ReadinessIntake: the store stamps the check time and the consent time.
-type ReadinessIntake struct {
-	Email, ConsentText string
-}
-
 type Contact struct {
 	Email                 string
 	FirstName             string
@@ -120,11 +115,7 @@ func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 	})
 }
 
-func (s *Store) ReadinessCheck(ctx context.Context, in ReadinessIntake) error {
-	return s.merge(ctx, intake{email: in.Email, readiness: true, consentText: in.ConsentText})
-}
-
-// ReadinessCheckTx is ReadinessCheck inside the caller's transaction; the caller commits.
+// ReadinessCheckTx merges the readiness-check contact inside the caller's transaction; the caller commits.
 func (s *Store) ReadinessCheckTx(ctx context.Context, tx pgx.Tx, email, consentText string) error {
 	return s.mergeTx(ctx, tx, intake{email: email, readiness: true, consentText: consentText})
 }

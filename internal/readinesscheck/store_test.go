@@ -699,16 +699,14 @@ func TestStore_HoldWritesNoSummaryRow(t *testing.T) {
 	}
 }
 
-// The merge a registrant gets at the press is the one the intake gives; both write one marketing consent and queue the same jobs.
-func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
+// The press merges a registrant: one marketing consent with the ticked sentence, a readiness check and queued jobs.
+func TestStore_ConfirmMergesARegistrant(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	viaPress, viaIntake := contactAddr(t, pool), contactAddr(t, pool)
+	viaPress := contactAddr(t, pool)
 	ns := realContacts(t, pool)
-	for _, a := range []string{viaPress, viaIntake} {
-		if err := ns.Registrant(ctx, notifications.RegistrantIntake{UserID: uuid.NewString(), Email: a, DisplayName: "Ada Lovelace"}); err != nil {
-			t.Fatal(err)
-		}
+	if err := ns.Registrant(ctx, notifications.RegistrantIntake{UserID: uuid.NewString(), Email: viaPress, DisplayName: "Ada Lovelace"}); err != nil {
+		t.Fatal(err)
 	}
 	s := &Store{Pool: pool, Contacts: ns}
 	token, err := s.Hold(ctx, heldFor(viaPress, "csv", 1, nil))
@@ -717,9 +715,6 @@ func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
 	}
 	if _, fresh, err := s.Confirm(ctx, token, consentS, (&sender{}).send); err != nil || !fresh {
 		t.Fatalf("Confirm = fresh %v, %v", fresh, err)
-	}
-	if err := ns.ReadinessCheck(ctx, notifications.ReadinessIntake{Email: viaIntake, ConsentText: consentS}); err != nil {
-		t.Fatal(err)
 	}
 	type facts struct {
 		Consent                          string
@@ -756,16 +751,12 @@ func TestStore_ConfirmMergesARegistrantLikeTheIntake(t *testing.T) {
 		}
 		return out
 	}
-	p, i := read(viaPress), read(viaIntake)
-	if p != i {
-		t.Errorf("contact after the press = %+v, after the intake = %+v; want the same", p, i)
-	}
+	p := read(viaPress)
 	if p.Consent != consentS || !p.Consented || !p.Registered || !p.Readiness {
 		t.Errorf("contact after the press = %+v, want the gateway sentence, a consent, registered and a readiness check", p)
 	}
-	pj, ij := jobs(viaPress), jobs(viaIntake)
-	if !slices.Equal(pj, ij) || len(pj) == 0 {
-		t.Errorf("jobs after the press = %v, after the intake = %v; want the same, not empty", pj, ij)
+	if pj := jobs(viaPress); len(pj) == 0 {
+		t.Errorf("jobs after the press = %v, want some", pj)
 	}
 }
 

@@ -51,7 +51,6 @@ func main() {
 	store := notifications.NewStore(pool, q.River())
 	app.Mux.HandleFunc("POST /internal/contacts/registrants", notifications.RegistrantsHandler(store, app.Logger))
 	app.Mux.HandleFunc("POST /internal/contacts/demo-requests", notifications.DemoRequestsHandler(store, app.Logger))
-	app.Mux.HandleFunc("POST /internal/contacts/readiness-checks", notifications.ReadinessChecksHandler(store, app.Logger))
 	app.Mux.HandleFunc("GET /v1/contacts/me", notifications.MeHandler(store, app.Logger))
 
 	unsubscribeStore := notifications.NewUnsubscribeStore(pool)

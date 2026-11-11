@@ -1363,7 +1363,7 @@ func TestStore_ReadinessCheckStoresMarketingConsentAndQueuesResend(t *testing.T)
 	e := newEnv(t)
 	email := uniqueEmail(t, e, "ready")
 	lo := dbNow(t, e)
-	if err := e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	hi := dbNow(t, e)
@@ -1421,7 +1421,7 @@ func TestStore_ReadinessCheckTxRollsBackWithTheCaller(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: twin, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, twin, consentText); err != nil {
 		t.Fatal(err)
 	}
 	c, w := readRow(t, e, committed), readRow(t, e, twin)
@@ -1458,7 +1458,7 @@ func TestStore_ReadinessDealInsertFailureRollsBackTheIntake(t *testing.T) {
 		t.Fatalf("create trigger: %v", err)
 	}
 
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err == nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err == nil {
 		t.Fatal("ReadinessCheck with a failing deal insert returned nil")
 	}
 	if n := rowCount(t, e, email); n != 0 {
@@ -1471,13 +1471,12 @@ func TestStore_RepeatReadinessCheckKeepsTheFactAndQueuesAnotherDeal(t *testing.T
 	e := newEnv(t)
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "readyrepeat")
-	in := ReadinessIntake{Email: email, ConsentText: consentText}
-	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("first check: %v", err)
 	}
 	first := readRow(t, e, email)
 	markDelivered(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("repeat check: %v", err)
 	}
 	r := readRow(t, e, email)
@@ -1501,7 +1500,7 @@ func TestStore_ReadinessCheckOfARegisteredContactBumpsTheVersion(t *testing.T) {
 	}
 	before := readRow(t, e, email)
 	markDelivered(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textB}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, textB); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	r := readRow(t, e, email)
@@ -1519,7 +1518,7 @@ func TestStore_RegistrantAfterReadinessCheckQueuesASignUpDealJob(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "readythenreg")
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
@@ -1538,13 +1537,12 @@ func TestStore_ReadinessOnlyContactQueuesOneResendJob(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "readyonly")
-	in := ReadinessIntake{Email: email, ConsentText: consentText}
-	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	requireJobs(t, e, email, "hubspot@1", "resend@1")
 	markDelivered(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, in); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("repeat ReadinessCheck: %v", err)
 	}
 	requireJobs(t, e, email, "hubspot@1", "resend@1")
@@ -1578,7 +1576,7 @@ func TestStore_MeReportsTheReadinessCheckTag(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	only := uniqueEmail(t, e, "meready")
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: only, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, only, consentText); err != nil {
 		t.Fatal(err)
 	}
 	c, err := e.store.Me(ctx, only)
@@ -1593,7 +1591,7 @@ func TestStore_MeReportsTheReadinessCheckTag(t *testing.T) {
 	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: reg}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: reg, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, reg, consentText); err != nil {
 		t.Fatal(err)
 	}
 	c, err = e.store.Me(ctx, reg)
@@ -1610,11 +1608,11 @@ func TestStore_SecondCheckKeepsTheFirstConsentText(t *testing.T) {
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "readytwice")
 	const textA, textB = "Text A.", "Text B."
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textA}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, textA); err != nil {
 		t.Fatalf("first check: %v", err)
 	}
 	first := readRow(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textB}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, textB); err != nil {
 		t.Fatalf("second check: %v", err)
 	}
 	r := readRow(t, e, email)
@@ -1636,7 +1634,7 @@ func TestStore_RegistrantWithoutMarketingGainsItFromACheck(t *testing.T) {
 	}
 	markDelivered(t, e, email)
 	before := readRow(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	r := readRow(t, e, email)
@@ -1664,7 +1662,7 @@ func TestStore_UntickedDemoBookerGainsMarketingFromACheck(t *testing.T) {
 		t.Fatalf("DemoRequest: %v", err)
 	}
 	requireJobs(t, e, email, "hubspot@1")
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if r := readRow(t, e, email); deref(r.ConsentText) != consentText || r.ConsentedAt == nil {
@@ -1689,7 +1687,7 @@ func TestStore_TickedDemoBookerKeepsConsentAfterACheck(t *testing.T) {
 		t.Fatalf("DemoRequest: %v", err)
 	}
 	first := readRow(t, e, email)
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textC}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, textC); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	r := readRow(t, e, email)
@@ -1713,7 +1711,7 @@ func TestStore_CheckOnlyContactWhoRegistersUntickedStaysEligible(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "checkthenreg")
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email}); err != nil {
@@ -1736,7 +1734,7 @@ func TestStore_CheckThenTickedRegistrationKeepsTheCheckConsent(t *testing.T) {
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "checkthenregtick")
 	const textC, textR = "Text C.", "Text R."
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: textC}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, textC); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, ConsentText: textR}); err != nil {
@@ -1760,7 +1758,7 @@ func TestStore_CheckThenTickedDemoAndMixedCaseCheckKeepOneConsent(t *testing.T) 
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "checkthendemo")
 	const textC, textD = "Text C.", "Text D."
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: " " + strings.ToUpper(email) + " ", ConsentText: textC}); err != nil {
+	if err := readinessCheck(ctx, e.store, " "+strings.ToUpper(email)+" ", textC); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", ConsentText: textD}); err != nil {
@@ -1832,7 +1830,7 @@ func TestStore_OldWordingContactGainsMarketingFromANewCheck(t *testing.T) {
 	seeded := readRow(t, e, email)
 
 	lo := dbNow(t, e)
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	hi := dbNow(t, e)
@@ -1860,7 +1858,7 @@ func TestStore_OldWordingContactGainsMarketingFromANewCheck(t *testing.T) {
 		t.Error("MarketingEligible = false, want true")
 	}
 
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: "Text B."}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, "Text B."); err != nil {
 		t.Fatalf("second check: %v", err)
 	}
 	r = readRow(t, e, email)
@@ -1873,7 +1871,7 @@ func TestStore_MeReportsAnUnsubscribe(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	email := uniqueEmail(t, e, "meunsub")
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	recordUnsubscribe(t, e, email)
@@ -1902,10 +1900,23 @@ func TestStore_MeOfAnUnsubscribedAddressWithNoContactIsNotFound(t *testing.T) {
 	if _, err := e.store.Me(ctx, email); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Me with no contact = %v, want ErrNotFound", err)
 	}
-	if err := e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	if c, err := e.store.Me(ctx, email); err != nil || !c.MarketingUnsubscribed {
 		t.Errorf("after the intake: unsubscribed=%v err=%v, want true", c.MarketingUnsubscribed, err)
 	}
+}
+
+// readinessCheck merges a readiness-check contact the way the press does: in a transaction the caller commits.
+func readinessCheck(ctx context.Context, s *Store, email, consentText string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := s.ReadinessCheckTx(ctx, tx, email, consentText); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

@@ -1660,7 +1660,7 @@ test('unsubscribe page: the button says Unsubscribing… and one press sends one
     const box = await boxOf('the button', button, 0)
     await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
     await expect.poll(() => reports[0], { message: 'the button as the first submit left it' }).toEqual(['Unsubscribing…', true])
-    expect(posts.length, 'POST /unsubscribe requests sent by the double-click').toBe(1)
+    await expect.poll(() => posts.length, { message: 'POST /unsubscribe requests sent by the double-click' }).toBe(1)
   } finally {
     release()
   }

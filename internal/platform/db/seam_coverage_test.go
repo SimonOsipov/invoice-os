@@ -191,42 +191,43 @@ func (e scPoolExemption) covers(s scPoolSite) bool {
 
 // scPoolAllowlist is every caller allowed to reach the database without the seam.
 var scPoolAllowlist = []scPoolExemption{
-	{file: "internal/platform/db/db.go"},                                              // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	{file: "internal/platform/db/tenant.go"},                                          // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	{file: "internal/platform/db/migrate.go"},                                         // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	{file: "internal/platform/db/bootstrap.go"},                                       // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	{file: "internal/platform/db/provision.go"},                                       // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadForBatch"},                        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
-	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/workspacepurge/purge.go", fn: "dueTenants"},                      // the workspace-purge ticker reads due tenants as invoice_tenant_reader with no GUC set
-	{file: "internal/workspacepurge/purge.go", fn: "lockTenant"},                      // holds a session advisory lock for one tenant's purge; reads no tenant row
-	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"}, // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
-	{file: "internal/platform/db/leader.go", fn: "claim"},                             // worker-only advisory locks; reads no table and serves no request
-	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                 // global outbox, no tenant data; invoice_gateway may only INSERT into it
-	{file: "internal/gateway/account_events.go", fn: "Record"},                        // global outbox, no tenant data; invoice_gateway may only INSERT into it
-	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
-	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
-	{file: "internal/readinesscheck/store.go"},                                        // readiness checks carry no tenant and no caller identity; the store reads and writes them on the pool
-	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
-	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
-	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
-	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
-	{file: "internal/aicalls/recorder.go", fn: "writePublicCheck"},                    // a public check has no tenant to bind: the NULL-tenant INSERT is the one write invoice_app may make with no GUC
-	{file: "internal/notifications/erase.go"},                                         // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
-	{file: "internal/accountevents/new_device.go"},                                    // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
-	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
-	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
-	{file: "internal/notifications/unsubscribe.go"},                                   // mail_unsubscribes carries no tenant, so no tenant seam can scope it; the store reads and locks it on the pool
-	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
-	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
-	{file: "internal/gateway/handoff_pg.go"},                                          // sign-in hand-off codes: no tenant and no identity yet
-	{file: "internal/gateway/session_check_pg.go"},                                    // sign-out revocations: global gateway state keyed on the subject, no tenant
-	{file: "internal/gateway/signin_throttle_pg.go"},                                  // per-address limit counts: global gateway state keyed on a hash, no tenant
+	{file: "internal/platform/db/db.go"},                                                      // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                                                  // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                                                 // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                                               // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                                               // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadForBatch"},                                // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                                                   // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                                                  // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                                                // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/workspacepurge/purge.go", fn: "dueTenants"},                              // the workspace-purge ticker reads due tenants as invoice_tenant_reader with no GUC set
+	{file: "internal/workspacepurge/purge.go", fn: "lockTenant"},                              // holds a session advisory lock for one tenant's purge; reads no tenant row
+	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},                 // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},              // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"},         // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/readiness_confirm_token.go", fn: "SetReadinessConfirmToken"}, // mock builds only: the E2E fork replaces a held readiness check's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"},         // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
+	{file: "internal/platform/db/leader.go", fn: "claim"},                                     // worker-only advisory locks; reads no table and serves no request
+	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                         // global outbox, no tenant data; invoice_gateway may only INSERT into it
+	{file: "internal/gateway/account_events.go", fn: "Record"},                                // global outbox, no tenant data; invoice_gateway may only INSERT into it
+	{file: "internal/notifications/store.go"},                                                 // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
+	{file: "internal/notifications/worker.go"},                                                // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/readinesscheck/store.go"},                                                // readiness checks carry no tenant and no caller identity; the store reads and writes them on the pool
+	{file: "internal/validation/codelist/store.go"},                                           // global NRS reference data written by a schedule; the package serves no HTTP
+	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                            // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
+	{file: "internal/notifications/deal.go"},                                                  // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
+	{file: "internal/notifications/newsletter_worker.go"},                                     // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
+	{file: "internal/aicalls/recorder.go", fn: "writePublicCheck"},                            // a public check has no tenant to bind: the NULL-tenant INSERT is the one write invoice_app may make with no GUC
+	{file: "internal/notifications/erase.go"},                                                 // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
+	{file: "internal/accountevents/new_device.go"},                                            // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
+	{file: "internal/notifications/erase_by_id.go"},                                           // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
+	{file: "internal/notifications/newsletter.go"},                                            // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
+	{file: "internal/notifications/unsubscribe.go"},                                           // mail_unsubscribes carries no tenant, so no tenant seam can scope it; the store reads and locks it on the pool
+	{file: "internal/systemhealth/store.go", fn: "Record"},                                    // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
+	{file: "internal/blog/public.go", fn: "readPublic"},                                       // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
+	{file: "internal/gateway/handoff_pg.go"},                                                  // sign-in hand-off codes: no tenant and no identity yet
+	{file: "internal/gateway/session_check_pg.go"},                                            // sign-out revocations: global gateway state keyed on the subject, no tenant
+	{file: "internal/gateway/signin_throttle_pg.go"},                                          // per-address limit counts: global gateway state keyed on a hash, no tenant
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -1158,6 +1159,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/login":                                       {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                       {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/deletion-link-token":                    {verdict: scExempt, reason: "mock builds only; replaces an admin's cancel link token hash on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/mock/readiness-confirm-token":                {verdict: scExempt, reason: "mock builds only; replaces a held readiness check's token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                                 {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/refresh":                                     {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/register":                                    {verdict: scExempt, reason: "no database; calls GoTrue"},

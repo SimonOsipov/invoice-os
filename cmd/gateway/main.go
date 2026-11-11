@@ -194,6 +194,7 @@ func main() {
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		app.Mux.Handle("POST /auth/mock/deletion-link-token", mockDeletionLinkTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
+		app.Mux.Handle("POST /auth/mock/readiness-confirm-token", mockReadinessConfirmTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		platform.MockIssuer = "on"
 	}
 

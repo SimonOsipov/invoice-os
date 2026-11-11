@@ -308,6 +308,13 @@ export async function setDeletionLinkToken(tenantId: string, userId: string, tok
   if (res.status !== 204) throw new Error(`deletion link token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
+// POST /auth/mock/readiness-confirm-token (internal/gateway/mockreadinessconfirm.go answers 204); mock build only.
+// Replaces the token of the address's newest live held readiness check; 404 where it has none.
+export async function setReadinessConfirmToken(email: string, token: string): Promise<void> {
+  const res = await rawFetch('/auth/mock/readiness-confirm-token', { method: 'POST', body: { email, token } })
+  if (res.status !== 204) throw new Error(`readiness confirm token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
 // Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
 // `tenantId` is the admin's workspace.
 export async function inviteWithToken(

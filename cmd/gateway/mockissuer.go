@@ -66,3 +66,10 @@ func mockDeletionLinkTokenRoute(dsn string, logger *slog.Logger) http.Handler {
 		return db.SetDeletionLinkToken(ctx, dsn, tenantID, userID, token)
 	}, logger)
 }
+
+// mockReadinessConfirmTokenRoute binds the held readiness check token setter to the owner DSN.
+func mockReadinessConfirmTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return gateway.MockReadinessConfirmTokenHandler(func(ctx context.Context, email, token string) (bool, error) {
+		return db.SetReadinessConfirmToken(ctx, dsn, email, token)
+	}, logger)
+}

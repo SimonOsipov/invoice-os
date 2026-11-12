@@ -212,7 +212,12 @@ func TestStaffCodeLists_SummaryIsTheNewestRowPerList(t *testing.T) {
 		t.Errorf("summary carries %d of the 3 seeded lists: %s", len(seen), raw)
 	}
 
-	// Ordered by list, in the database's own order, one entry per list.
+	assertSummaryOrder(t, super, names)
+}
+
+// assertSummaryOrder asserts names is one entry per list, ordered by list in the database's order.
+func assertSummaryOrder(t *testing.T, super *pgxpool.Pool, names []string) {
+	t.Helper()
 	rows, err := super.Query(context.Background(), `SELECT DISTINCT list FROM nrs_code_list_syncs ORDER BY list`)
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +234,29 @@ func TestStaffCodeLists_SummaryIsTheNewestRowPerList(t *testing.T) {
 	if !reflect.DeepEqual(names, wantNames) {
 		t.Errorf("summary lists = %v, want one per list ordered by list: %v", names, wantNames)
 	}
+}
+
+// A list another test adds between the summary read and the order check must not fail the check.
+func TestStaffCodeLists_SummaryOrderIgnoresListAddedAfterTheRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	at := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	for i := 0; i < 3; i++ {
+		seedSyncs(t, super, newSyncList(), syncRow{syncedAt: at, entryCount: i + 1})
+	}
+
+	body, raw := readSyncs(t, store, nil)
+	var names []string
+	for _, l := range objects(t, body["lists"], "lists") {
+		n, _ := l["list"].(string)
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		t.Fatalf("summary is empty: %s", raw)
+	}
+
+	seedSyncs(t, super, newSyncList(), syncRow{syncedAt: at.Add(time.Hour), entryCount: 1})
+	assertSummaryOrder(t, super, names)
 }
 
 func TestStaffCodeLists_ListDetailNewestFirstCappedAt30(t *testing.T) {

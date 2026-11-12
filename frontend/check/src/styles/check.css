@@ -175,7 +175,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 .check-consent { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 12px; font-size: 14px; line-height: 1.6; color: var(--foreground); cursor: pointer; }
 .check-consent input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--primary); }
 .check-consent span { min-width: 0; overflow-wrap: anywhere; }
-.check-consent-err { padding-left: 34px; }
+.check-card .check-err.check-consent-err { margin-left: 34px; }
 /* sending */
 .check-card.check-sending { display: grid; gap: 22px; }
 .check-sending h2:focus { outline: none; }

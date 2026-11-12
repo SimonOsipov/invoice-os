@@ -248,7 +248,7 @@ func main() {
 		LoadRules: validation.NewStore(pool).LoadForBatch,
 		Engine:    validation.NewDefaultEngine(),
 		Mapper:    aiClient,
-		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumReader(),
+		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumEndsReader(),
 			Cap: extraction.NewPDFiumReader(),
 			AI:  aiClient, Jev: jevClient},
 	}

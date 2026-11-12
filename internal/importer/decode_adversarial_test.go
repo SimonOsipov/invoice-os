@@ -12,10 +12,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"reflect"
 	"runtime"
 	"strings"
@@ -856,5 +858,278 @@ func TestXLSXRows_DecodesWithinTheDeadline(t *testing.T) {
 	rows, err := xlsxRows(context.Background(), bytes.NewReader(tenRowBook(t)), 1)
 	if err != nil || len(rows) != 10 {
 		t.Fatalf("rows=%d err=%v, want 10, nil", len(rows), err)
+	}
+}
+
+// SECAUD-04-01: the CSV decoder reads record by record and stops at the
+// XLSX row and cell limits.
+
+// csvRows builds a one-column CSV: header "h" then n rows of "a".
+func csvRows(n int) string {
+	return "h\n" + strings.Repeat("a\n", n)
+}
+
+// allocDelta runs fn and returns the bytes it allocated in total.
+func allocDelta(fn func()) uint64 {
+	runtime.GC()
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	fn()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}
+
+func TestDecode_CSVAcceptsExactlyTheRowCap(t *testing.T) {
+	_, rows, _, err := Decode(context.Background(), strings.NewReader(csvRows(maxXLSXDataRows)), "csv")
+	if err != nil || len(rows) != maxXLSXDataRows {
+		t.Fatalf("err = %v, rows = %d, want nil, %d", err, len(rows), maxXLSXDataRows)
+	}
+}
+
+func TestDecode_CSVRefusesOneRowPastTheRowCap(t *testing.T) {
+	_, _, _, err := Decode(context.Background(), strings.NewReader(csvRows(maxXLSXDataRows+1)), "csv")
+	if !errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestDecodeFrom_CSVRowCapCountsRowsBelowTheHeader(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want error
+	}{{maxXLSXDataRows, nil}, {maxXLSXDataRows + 1, ErrTooManyRows}} {
+		in := "Title\nSubtitle\n" + csvRows(tc.n)
+		_, rows, _, err := DecodeFrom(context.Background(), strings.NewReader(in), "csv", 3)
+		if !errors.Is(err, tc.want) || (tc.want == nil && len(rows) != tc.n) {
+			t.Errorf("%d rows: err = %v, rows = %d, want %v", tc.n, err, len(rows), tc.want)
+		}
+	}
+}
+
+func TestDecodeFrom_CSVBlankHeaderRowCountsEveryRecord(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want error
+	}{{maxXLSXDataRows, nil}, {maxXLSXDataRows + 1, ErrTooManyRows}} {
+		in := "Title\n\n" + strings.Repeat("a\n", tc.n)
+		header, rows, _, err := DecodeFrom(context.Background(), strings.NewReader(in), "csv", 2)
+		if !errors.Is(err, tc.want) || (tc.want == nil && (len(rows) != tc.n || header != nil)) {
+			t.Errorf("%d records: err = %v, header = %v, rows = %d, want %v", tc.n, err, header, len(rows), tc.want)
+		}
+	}
+}
+
+// csvCells builds records of cols fields each: header plus n-1 rows.
+func csvCells(cols, records int) string {
+	line := strings.Repeat("a,", cols-1) + "a\n"
+	return strings.Repeat(line, records)
+}
+
+func TestDecode_CSVAcceptsExactlyTheCellBudget(t *testing.T) {
+	_, rows, _, err := Decode(context.Background(), strings.NewReader(csvCells(50, 100_000)), "csv")
+	if err != nil || len(rows) != 99_999 {
+		t.Fatalf("err = %v, rows = %d, want nil, 99999", err, len(rows))
+	}
+}
+
+func TestDecode_CSVRefusesOneRecordPastTheCellBudget(t *testing.T) {
+	_, _, _, err := Decode(context.Background(), strings.NewReader(csvCells(50, 100_001)), "csv")
+	if !errors.Is(err, ErrTooManyCells) || errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyCells only", err)
+	}
+}
+
+func TestDecode_CSVRaggedRowsCountTheirOwnCells(t *testing.T) {
+	// 50,000 pairs of (1 field, 99 fields) = 5,000,000 cells in 100,000 records, plus one more.
+	in := strings.Repeat("a\n"+strings.Repeat("a,", 98)+"a\n", 50_000) + "a\n"
+	_, _, _, err := Decode(context.Background(), strings.NewReader(in), "csv")
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestDecode_CSVStopsReadingAtTheRowCap(t *testing.T) {
+	_, _, _, err := Decode(context.Background(), strings.NewReader(csvRows(maxXLSXDataRows+1)+"a\"b\n"), "csv")
+	var pe *csv.ParseError
+	if !errors.Is(err, ErrTooManyRows) || errors.As(err, &pe) {
+		t.Fatalf("err = %v, want ErrTooManyRows and no ParseError", err)
+	}
+}
+
+func TestDecode_CSVParseErrorBeforeTheCapIsStillReturned(t *testing.T) {
+	_, _, _, err := Decode(context.Background(), strings.NewReader("h\na\na\"b\na\na\n"), "csv")
+	var pe *csv.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want *csv.ParseError", err)
+	}
+}
+
+func TestDecode_A15MiBCSVOfOneCharacterRowsIsRefusedWithBoundedAllocation(t *testing.T) {
+	in := bytes.Repeat([]byte("a\n"), 15<<20/2)
+	var err error
+	got := allocDelta(func() { _, _, _, err = Decode(context.Background(), bytes.NewReader(in), "csv") })
+	if !errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyRows", err)
+	}
+	if got > 4*uint64(len(in)) {
+		t.Errorf("allocated %d MiB, want <= %d MiB", got>>20, 4*len(in)>>20)
+	}
+}
+
+func TestDecode_AWideRecordIsRefusedBeforeItIsParsed(t *testing.T) {
+	in := append(bytes.Repeat([]byte(","), 15<<20), '\n')
+	var err error
+	got := allocDelta(func() { _, _, _, err = Decode(context.Background(), bytes.NewReader(in), "csv") })
+	if !errors.Is(err, ErrTooManyCells) || errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+	if got > 4*uint64(len(in)) {
+		t.Errorf("allocated %d MiB, want <= %d MiB", got>>20, 4*len(in)>>20)
+	}
+}
+
+func TestDecodeFrom_AWideHeaderBelowTitleLinesIsRefusedBeforeItIsParsed(t *testing.T) {
+	in := append([]byte("Title\n"), append(bytes.Repeat([]byte(","), 15<<20), '\n')...)
+	var err error
+	got := allocDelta(func() { _, _, _, err = DecodeFrom(context.Background(), bytes.NewReader(in), "csv", 2) })
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+	if got > 4*uint64(len(in)) {
+		t.Errorf("allocated %d MiB, want <= %d MiB", got>>20, 4*len(in)>>20)
+	}
+}
+
+func TestDecode_AQuotedMultilineRecordCountsAsOneWideRecord(t *testing.T) {
+	in := append(bytes.Repeat([]byte("\"x\n\","), 15<<20/4), []byte("x\n")...)
+	var err error
+	got := allocDelta(func() { _, _, _, err = Decode(context.Background(), bytes.NewReader(in), "csv") })
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+	if got > 4*uint64(len(in)) {
+		t.Errorf("allocated %d MiB, want <= %d MiB", got>>20, 4*len(in)>>20)
+	}
+}
+
+func TestDecode_CSVRecordAtTheXLSXWidthDecodes(t *testing.T) {
+	for _, tc := range []struct {
+		w    int
+		want error
+	}{{excelize.MaxColumns, nil}, {excelize.MaxColumns + 1, ErrTooManyCells}} {
+		line := strings.Repeat("a,", tc.w-1) + "a\n"
+		header, rows, _, err := Decode(context.Background(), strings.NewReader(line+line), "csv")
+		if !errors.Is(err, tc.want) || (tc.want == nil && (len(header) != tc.w || len(rows) != 1)) {
+			t.Errorf("width %d: err = %v, header = %d, rows = %d, want %v", tc.w, err, len(header), len(rows), tc.want)
+		}
+	}
+}
+
+func TestDecode_SeparatorsInsideQuotesDoNotCountTowardTheWidth(t *testing.T) {
+	cell := "\"" + strings.Repeat(",\n", 10_000) + "\""
+	header, rows, _, err := Decode(context.Background(), strings.NewReader("a,b\n"+cell+",x\n"), "csv")
+	if err != nil || len(header) != 2 || len(rows) != 1 || len(rows[0]) != 2 {
+		t.Fatalf("err = %v, header = %v, rows = %d", err, header, len(rows))
+	}
+}
+
+func TestDecodeFrom_TheWidthScanReadsBelowTheHeaderRow(t *testing.T) {
+	in := strings.Repeat(",", 20_000) + "\na,b\n1,2\n"
+	header, _, _, err := DecodeFrom(context.Background(), strings.NewReader(in), "csv", 2)
+	if err != nil || len(header) != 2 {
+		t.Fatalf("err = %v, header = %v, want 2 fields", err, header)
+	}
+}
+
+func TestDecode_CSVCellsTripWellBeforeRows(t *testing.T) {
+	_, _, _, err := Decode(context.Background(), strings.NewReader(csvCells(5_001, 1_000)), "csv")
+	if !errors.Is(err, ErrTooManyCells) || errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestDecode_EmptyCSVDecodesAsBefore(t *testing.T) {
+	header, rows, _, err := Decode(context.Background(), strings.NewReader(""), "csv")
+	if err != nil || header != nil || rows != nil {
+		t.Fatalf("header = %v, rows = %v, err = %v, want nil all", header, rows, err)
+	}
+}
+
+func TestDecode_HeaderOnlyCSVDecodesAsBefore(t *testing.T) {
+	header, rows, _, err := Decode(context.Background(), strings.NewReader("Inv,Total\n"), "csv")
+	if err != nil || !reflect.DeepEqual(header, []string{"Inv", "Total"}) || len(rows) != 0 {
+		t.Fatalf("header = %v, rows = %v, err = %v", header, rows, err)
+	}
+}
+
+func TestSniffDelimiter_AllocatesNothingOnAWideHeader(t *testing.T) {
+	line := bytes.Repeat([]byte(","), 15<<20)
+	var got rune
+	if n := testing.AllocsPerRun(3, func() { got = sniffDelimiter(line) }); n != 0 {
+		t.Errorf("allocs = %v, want 0", n)
+	}
+	if got != ',' {
+		t.Errorf("delimiter = %q, want ','", got)
+	}
+}
+
+// oracleFields is encoding/csv's verdict on one line.
+func oracleFields(line string, comma rune) (int, bool) {
+	cr := csv.NewReader(strings.NewReader(line))
+	cr.Comma = comma
+	cr.FieldsPerRecord = -1
+	rec, err := cr.Read()
+	return len(rec), err == nil
+}
+
+func TestCSVLineFields_AgreesWithEncodingCSV(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	const alphabet = "a,;\t|\" "
+	delims := []byte{',', ';', '\t', '|'}
+	for i := 0; i < 200_000; i++ {
+		b := make([]byte, rng.Intn(14))
+		for j := range b {
+			b[j] = alphabet[rng.Intn(len(alphabet))]
+		}
+		for _, d := range delims {
+			n, ok := csvLineFields(b, d)
+			wn, wok := oracleFields(string(b), rune(d))
+			if ok != wok || (ok && n != wn) {
+				t.Fatalf("line %q comma %q: got (%d, %v), csv.Reader (%d, %v)", b, d, n, ok, wn, wok)
+			}
+		}
+		// the pick, against the head rule run through the oracle
+		best, bestN := ',', -1
+		for _, c := range []rune{',', ';', '\t', '|'} {
+			if n, ok := oracleFields(string(b), c); ok && n > bestN {
+				best, bestN = c, n
+			}
+		}
+		if got := sniffDelimiter(b); got != best {
+			t.Fatalf("line %q: sniffDelimiter = %q, head pick %q", b, got, best)
+		}
+	}
+}
+
+func TestCSVLineFields_NamedQuoteCases(t *testing.T) {
+	for _, tc := range []struct {
+		line  string
+		comma byte
+		n     int
+		ok    bool
+	}{
+		{`"Buyer, Ltd";"Address, Line";total`, ';', 3, true},
+		{`"Buyer, Ltd";"Address, Line";total`, ',', 0, false},
+		{`a"b`, ',', 0, false},
+		{`"a""b",c`, ',', 2, true},
+		{`"abc`, ',', 0, false},
+		{`""`, ',', 1, true},
+		{``, ',', 0, false},
+		{`a,`, ',', 2, true},
+	} {
+		n, ok := csvLineFields([]byte(tc.line), tc.comma)
+		if ok != tc.ok || (ok && n != tc.n) {
+			t.Errorf("%q comma %q: got (%d, %v), want (%d, %v)", tc.line, tc.comma, n, ok, tc.n, tc.ok)
+		}
 	}
 }

@@ -806,6 +806,39 @@ func TestRun_EngineErrorsMapToStatuses(t *testing.T) {
 	}
 }
 
+func TestMappingAndRun_AnOverCapCSVAnswersLikeAnOverCapXLSX(t *testing.T) {
+	book := excelize.NewFile()
+	for _, c := range []string{"A1", "A100002"} {
+		if err := book.SetCellValue("Sheet1", c, "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buf, err := book.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvOver := []byte("Inv\n" + strings.Repeat("a\n", 100_001))
+	for _, route := range []string{"mapping", "run"} {
+		bodies := map[string]string{}
+		for format, file := range map[string][]byte{"csv": csvOver, "xlsx": buf.Bytes()} {
+			r := newRig(t)
+			var rec *httptest.ResponseRecorder
+			if route == "mapping" {
+				body, ct := mapForm(t, format, file)
+				rec = serve(r.svc.MappingHandler(), body, ct)
+			} else {
+				rec = r.run(t, visitor, format, file, "mapping", `{"invoice_number":"Inv"}`)
+			}
+			wantStatus(t, rec, http.StatusUnprocessableEntity, "unreadable")
+			bodies[format] = rec.Body.String()
+			r.noWrites(t)
+		}
+		if bodies["csv"] != bodies["xlsx"] {
+			t.Errorf("%s: csv body %q != xlsx body %q", route, bodies["csv"], bodies["xlsx"])
+		}
+	}
+}
+
 func TestRun_MalformedMappingIs400(t *testing.T) {
 	for _, tc := range []struct{ name, key, val string }{
 		{"mapping not json", "mapping", "not json"},

@@ -65,6 +65,7 @@ var (
 )
 
 // decodeCSVText strips a BOM, picks the charset and refuses control bytes.
+// ceiling: the whole upload (<= 15 MiB) is read and decoded in memory.
 func decodeCSVText(r io.Reader) (decoded []byte, encodingName string, err error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -118,12 +119,15 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 	}
 
 	delimiter := sniffDelimiter(headerLine(decoded))
+	if csvTooWide(decoded, delimiter) {
+		return nil, nil, DecodeFacts{}, ErrTooManyCells
+	}
 
 	cr := csv.NewReader(bytes.NewReader(decoded))
 	cr.Comma = delimiter
 	cr.FieldsPerRecord = -1 // tolerate ragged rows; the service quarantines them later
 
-	records, err := cr.ReadAll()
+	records, err := csvRecords(cr, false)
 	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}
@@ -155,12 +159,15 @@ func decodeCSVFrom(r io.Reader, headerRow int) ([]string, [][]string, DecodeFact
 	tail := decoded[offset:]
 	line := headerLine(tail)
 	delimiter := sniffDelimiter(line)
+	if csvTooWide(tail, delimiter) {
+		return nil, nil, DecodeFacts{}, ErrTooManyCells
+	}
 
 	cr := csv.NewReader(bytes.NewReader(tail))
 	cr.Comma = delimiter
 	cr.FieldsPerRecord = -1 // tolerate ragged rows; the service quarantines them later
 
-	records, err := cr.ReadAll()
+	records, err := csvRecords(cr, len(line) == 0)
 	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}
@@ -228,8 +235,8 @@ func lineOffset(decoded []byte, n int) (int, bool) {
 // treats a delimiter character occurring INSIDE a quoted header field
 // (e.g. `"Buyer, Ltd";"Address, Line";total`, 2 embedded commas vs. 2 real
 // semicolons) as an ordinary separator and can pick the wrong delimiter
-// entirely. Parsing each candidate through the real csv.Reader instead means
-// its own quote handling does the work: a WRONG candidate whose delimiter
+// entirely. Counting each candidate with csvLineFields, which mirrors csv.Reader's
+// quote rules, does the work: a WRONG candidate whose delimiter
 // character appears only inside a quoted field fails to parse cleanly
 // (a quoted field must be immediately followed by its own delimiter or the
 // line end) and is skipped, while the correct candidate parses without error
@@ -239,19 +246,131 @@ func sniffDelimiter(header []byte) rune {
 	best := ','
 	bestFields := -1
 	for _, c := range candidates {
-		cr := csv.NewReader(bytes.NewReader(header))
-		cr.Comma = c
-		cr.FieldsPerRecord = -1
-		record, err := cr.Read()
-		if err != nil {
+		n, ok := csvLineFields(header, byte(c))
+		if !ok {
 			continue
 		}
-		if len(record) > bestFields {
-			bestFields = len(record)
+		if n > bestFields {
+			bestFields = n
 			best = c
 		}
 	}
 	return best
+}
+
+// csvLineFields counts line's fields as csv.Reader.Read would (no LazyQuotes);
+// ok=false where Read fails. line holds no '\r' or '\n'. Allocates nothing, so
+// a 15 MiB header line of separators costs no parse (a Read allocated 2.6 GiB).
+func csvLineFields(line []byte, comma byte) (n int, ok bool) {
+	if len(line) == 0 {
+		return 0, false // Read skips it: io.EOF
+	}
+field:
+	for {
+		n++
+		if len(line) == 0 || line[0] != '"' {
+			i := bytes.IndexByte(line, comma)
+			f := line
+			if i >= 0 {
+				f = line[:i]
+			}
+			if bytes.IndexByte(f, '"') >= 0 {
+				return n, false // bare quote
+			}
+			if i < 0 {
+				return n, true
+			}
+			line = line[i+1:]
+			continue
+		}
+		line = line[1:]
+		for {
+			i := bytes.IndexByte(line, '"')
+			if i < 0 {
+				return n, false // unterminated
+			}
+			line = line[i+1:]
+			switch {
+			case len(line) == 0:
+				return n, true
+			case line[0] == '"':
+				line = line[1:] // escaped quote
+			case line[0] == comma:
+				line = line[1:]
+				continue field
+			default:
+				return n, false // extraneous quote
+			}
+		}
+	}
+}
+
+// csvTooWide reports a record of more than excelize.MaxColumns fields: one
+// quote-aware pass, no allocation, so a 15 MiB record of separators is refused
+// before csv.Reader holds it. Quoted separators and newlines do not count.
+func csvTooWide(decoded []byte, comma rune) bool {
+	if comma > utf8.RuneSelf {
+		return false // sniffDelimiter only returns ASCII candidates
+	}
+	sep := byte(comma)
+	n, inQ, start := 0, false, true
+	for i := 0; i < len(decoded); i++ {
+		c := decoded[i]
+		if inQ {
+			if c == '"' {
+				if i+1 < len(decoded) && decoded[i+1] == '"' {
+					i++
+					continue
+				}
+				inQ = false
+			}
+			continue
+		}
+		switch {
+		case c == '"' && start:
+			inQ, start = true, false
+		case c == sep:
+			n++
+			start = true
+			if n+1 > excelize.MaxColumns {
+				return true
+			}
+		case c == '\n':
+			n, start = 0, true
+		case c == '\r':
+		default:
+			start = false
+		}
+	}
+	return false
+}
+
+// csvRecords reads cr record by record, stopping at the XLSX row and cell
+// limits. Records after the first are data; headerless makes every record data.
+// ceiling: one record under the width cap (15 MiB of fields) allocates ~206 MiB.
+func csvRecords(cr *csv.Reader, headerless bool) ([][]string, error) {
+	var records [][]string
+	cells := 0
+	for {
+		record, err := cr.Read()
+		if errors.Is(err, io.EOF) {
+			return records, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+		if cells += len(record); cells > maxXLSXCells {
+			return nil, ErrTooManyCells
+		}
+		data := len(records)
+		if !headerless {
+			data--
+		}
+		if data > maxXLSXDataRows {
+			return nil, ErrTooManyRows
+		}
+	}
 }
 
 // maxXLSXUnzipBytes bounds excelize's Options.UnzipSizeLimit: the total
@@ -270,13 +389,13 @@ func sniffDelimiter(header []byte) rune {
 // OpenReader without needing a real oversized fixture.
 var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 150 MiB
 
-// maxXLSXDataRows caps the rows after the header row; gap rows count.
+// maxXLSXDataRows caps the rows after the header row; gap rows count. CSV obeys it too.
 const maxXLSXDataRows = 100_000
 
 // ErrTooManyRows: the sheet has more than maxXLSXDataRows data rows.
 var ErrTooManyRows = errors.New("importer: spreadsheet has more than 100,000 data rows")
 
-// maxXLSXCells caps the cells (padded blanks included) one decode holds.
+// maxXLSXCells caps the cells (padded blanks included) one decode holds. CSV obeys it too.
 // ceiling: 3x the 1.5M-cell legitimate 100,000 x 15 sheet; raise it if a real sheet is refused.
 const maxXLSXCells = 5_000_000
 

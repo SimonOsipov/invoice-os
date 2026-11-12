@@ -575,6 +575,19 @@ func TestPreviewHandler_TooManyRowsNamesTheLimit(t *testing.T) {
 	}
 }
 
+func TestPreviewHandler_CSVOverTheRowCapNamesTheLimit(t *testing.T) {
+	body, contentType := buildMultipartBody(t, "", "", "big.csv", "", []byte(csvRows(maxXLSXDataRows+1)))
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	if want := "the spreadsheet has more than 100,000 data rows; split it into smaller files"; resp.Error != want {
+		t.Errorf("error = %q, want %q", resp.Error, want)
+	}
+}
+
 func TestPreviewHandler_DecodeDeadlineAnswersAnError(t *testing.T) {
 	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
 	xlsxDecodeTimeout = time.Nanosecond

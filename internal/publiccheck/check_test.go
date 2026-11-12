@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xuri/excelize/v2"
+
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -363,6 +365,38 @@ func TestCheck_ACorruptSpreadsheetIsBadFile(t *testing.T) {
 		t.Fatalf("err = %v, want ErrBadFile", err)
 	}
 	r.untouched(t)
+}
+
+func TestCheck_AnOverCapCSVIsBadFileLikeAnOverCapXLSX(t *testing.T) {
+	book := excelize.NewFile()
+	if err := book.SetCellValue("Sheet1", "A1", "Inv"); err != nil {
+		t.Fatal(err)
+	}
+	if err := book.SetCellValue("Sheet1", "A100002", "x"); err != nil {
+		t.Fatal(err)
+	}
+	buf, err := book.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	over := map[string][]byte{
+		"csv":  []byte("Inv\n" + strings.Repeat("a\n", 100_001)),
+		"xlsx": buf.Bytes(),
+	}
+	for format, file := range over {
+		r := newRig()
+		_, err := r.c.Check(context.Background(), publiccheck.Request{File: file, Format: format, Mapping: map[string]string{"invoice_number": "Inv"}})
+		if !errors.Is(err, publiccheck.ErrBadFile) || !errors.Is(err, importer.ErrTooManyRows) {
+			t.Errorf("%s Check: err = %v, want ErrBadFile and ErrTooManyRows", format, err)
+		}
+		r.untouched(t)
+		r = newRig()
+		_, err = r.c.SuggestMapping(context.Background(), file, format)
+		if !errors.Is(err, publiccheck.ErrBadFile) || !errors.Is(err, importer.ErrTooManyRows) {
+			t.Errorf("%s SuggestMapping: err = %v, want ErrBadFile and ErrTooManyRows", format, err)
+		}
+		r.untouched(t)
+	}
 }
 
 func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {

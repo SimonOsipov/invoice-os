@@ -37,3 +37,21 @@ export function fieldLabel(key: string): string {
   const f = INVOICE_FIELDS.find((x) => x.importKey === key) ?? INVOICE_FIELDS.find((x) => x.key === key)
   return f ? f.label : key
 }
+
+export const FIELD_GROUPS = [
+  ['invoice', 'Invoice'],
+  ['amounts', 'Amounts'],
+  ['line', 'Line items'],
+  ['buyer', 'Buyer'],
+  ['supplier', 'Supplier'],
+] as const
+export type GroupId = (typeof FIELD_GROUPS)[number][0]
+
+const AMOUNTS = ['currency', 'tax_currency_code', 'subtotal', 'vat', 'total']
+
+export function groupOf(key: string): GroupId {
+  if (key.startsWith('supplier_')) return 'supplier'
+  if (key.startsWith('buyer_')) return 'buyer'
+  if (key.startsWith('line_')) return 'line'
+  return AMOUNTS.includes(key) ? 'amounts' : 'invoice'
+}

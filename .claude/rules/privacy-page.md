@@ -70,6 +70,10 @@ paths:
   - "internal/gateway/signin_throttle_pg.go"
   - "internal/accountmail/sender.go"
   - "internal/accountmail/readiness_check.html"
+  - "migrations/*readiness_check_requests*"
+  - "internal/gateway/readiness_confirm*"
+  - "internal/accountmail/readiness_confirm.html"
+  - "internal/accountmail/readiness_used.html"
   - "migrations/*mail_unsubscribes*"
   - "internal/accountmail/layout.html"
   - "internal/gateway/unsubscribe*.go"
@@ -172,13 +176,15 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 ## Readiness check
 
 - Sentence 1 (file content goes to OpenRouter, then Google or TypeSafe): `AI_PROVIDER_HOST` and `aiModelVendors()`, as the upload section. No retention or training claim.
-- Sentence 2 (our server reads the file in memory, keeps no copy): `TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow` (`internal/publiccheck/check_db_test.go`), FREECHK-01 D18, and the two `NeverParse...MultipartForm` tests of FREECHK-03-06 and FREECHK-03-07.
-- Sentence 3 (the summary keeps email, file type, row count, failed rule ids, time; not the file, not the IP): `readinessCheckColumns()` reads the CREATE TABLE of `*_readiness_checks.sql`.
+- Sentence 2 (our server reads the file in memory, keeps no copy; what it keeps about a confirmed check is a summary): `TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow` (`internal/publiccheck/check_db_test.go`), FREECHK-01 D18, and the two `NeverParse...MultipartForm` tests of FREECHK-03-06 and FREECHK-03-07.
+- Hold sentence (until the press, the address and the results wait on our server, not the file; deleted at the press, or within an hour after the link expires): `readinessHeldColumns()` reads the CREATE TABLE of `*_readiness_check_requests.sql`; `readinessHeldPurgedHourly()` reads the `readiness-request-purge` line of `cmd/worker/main.go`. Amends FREECHK Q11.
+- Sentence 3 (the confirmed summary keeps email, file type, row count, failed rule ids, time; not the file, not the IP): `readinessCheckColumns()` reads the CREATE TABLE of `*_readiness_checks.sql`.
 - Sentence 4 (a hash of the network's IP address): Backed by `hashKey` (sha256, no secret). Do not call it one-way: an IPv4 hash can be reversed by trying every address. `ipCountIsHashed()` pins it.
-- Sentence 5 (results mail from `no-reply@ascomply.com` through Resend, carries amounts and buyer details; the address is not checked first): `accountmailFrom()` reads `accountmail.From`; `readiness_check.html` renders the amounts and `.Buyer`.
-- Sentence 6 (HubSpot contact tagged "readiness check", with a deal): `crmTags()[2]` and `dealSourceReadinessCheck` in `deal.go`.
-- Sentence 7 (the ticked sentence is recorded; the tick adds the address to Marketing in Resend; "You can unsubscribe from any email."): `readinessConsentIsMarketing()` reads `ReadinessCheck` and the Resend term of `mergeSQL` in `store.go`; `ruleMarketingBroadcastCarriesUnsubscribe()` reads `contacts.md` for Marketing email. `everyMailCarriesTheUnsubscribeFooter()` backs "from any email".
-- Sentence 8 (summary rows deleted with the account, unless another account holds the address): `eraseDeletesReadinessChecks()` reads `erase.go`; the `superseded` branch skips the delete.
+- Sentence 5 (a link that works once and expires in 24 hours is emailed first; the results mail goes only after the press, from `no-reply@ascomply.com` through Resend, with amounts and buyer details): `READINESS_CONFIRM_HOURS` equals `readinessHeldHours()` and `readinessConfirmMailHours()` (`ReadinessConfirmValidHours`); `readinessLinkWorksOnce()` reads `Confirm` and `ConfirmHandler`; `accountmailFrom()` reads `accountmail.From`; `readiness_check.html` renders the amounts and `.Buyer`.
+- Sentence 6 (only after the press, a HubSpot contact tagged "readiness check", with a deal): `crmTags()[2]` and `dealSourceReadinessCheck` in `deal.go`.
+- Sentence 7 (`readinessContactOnlyAtThePress()` backs "only after you confirm"; the ticked sentence is recorded; the tick adds the address to Marketing in Resend; "You can unsubscribe from any email."): `readinessConsentIsMarketing()` reads `ReadinessCheck` and the Resend term of `mergeSQL` in `store.go`; `ruleMarketingBroadcastCarriesUnsubscribe()` reads `contacts.md` for Marketing email. `everyMailCarriesTheUnsubscribeFooter()` backs "from any email".
+- Sentence 8 (summary rows, and results still waiting for confirmation, deleted with the account, unless another account holds the address): `eraseDeletesReadinessChecks()` and `eraseDeletesHeldChecks()` read `erase.go`; the `superseded` branch skips both deletes.
+- The demo and registration paragraphs say "a confirmed readiness check"; the unsubscribing paragraph lists readiness check confirmations.
 
 ## Unsubscribing
 

@@ -1,0 +1,13 @@
+{{- define "title"}}This address has used its free readiness checks{{end}}
+{{- define "preheader"}}This address has used its 3 free checks, so we sent no results.{{end}}
+{{- define "eyebrow"}}Readiness check{{end}}
+{{- define "heading"}}This address has used its 3 free checks.{{end}}
+{{- define "heading_accent"}}Sign up to check every invoice.{{end}}
+{{- define "intro"}}Someone ran the ASComply readiness check for {{.Email}}. This address has used its 3 free checks, so we sent no results.{{end}}
+{{- define "action_url"}}{{.SignUpURL}}{{end}}
+{{- define "action_label"}}Create your account{{end}}
+{{- define "expiry"}}Free checks are 3 per email address.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style_last"}}">Email</td><td style="{{template "row_value_style_last"}}">{{.Email}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you did not run this check, ignore this email. Nothing else happens.{{end}}
+{{- define "reason"}}You received this email because this address was entered on the ASComply readiness check page.{{end}}
+{{- template "layout" .}}

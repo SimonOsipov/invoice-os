@@ -646,6 +646,10 @@ func goMails(t *testing.T) map[string]string {
 	add("readiness_check", func() (string, string, error) {
 		return RenderReadinessCheck(ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{Number: "A1", Passes: true}}})
 	})
+	add("readiness_confirm", func() (string, string, error) {
+		return RenderReadinessConfirm(ReadinessConfirmMail{Email: adaEmail, Token: "t0k", FileType: "pdf"})
+	})
+	add("readiness_used", func() (string, string, error) { return RenderReadinessUsed(ReadinessUsedMail{Email: adaEmail}) })
 	add("stranded_alert", func() (string, string, error) { return RenderStrandedAlert(okaforStranded) })
 	return out
 }
@@ -673,8 +677,8 @@ func TestTemplates_EveryMailHasTheUnsubscribeLine(t *testing.T) {
 	for k, v := range goTrueMails(t, jsonMap{}) {
 		all[k] = v
 	}
-	if len(all) != 10 {
-		t.Fatalf("rendered %d mails, want 9 template names plus the invited confirmation", len(all))
+	if len(all) != 12 {
+		t.Fatalf("rendered %d mails, want 11 template names plus the invited confirmation", len(all))
 	}
 	for name, out := range all {
 		t.Run(name, func(t *testing.T) {

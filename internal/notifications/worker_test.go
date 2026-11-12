@@ -1727,14 +1727,14 @@ func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
 	ctx := context.Background()
 	only := uniqueEmail(t, r.e, "tagready")
 	all := uniqueEmail(t, r.e, "tagall")
-	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: only, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, r.e.store, only, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	qaRegistrant(t, r.e, all, "Ada Lovelace", "", "")
 	if err := r.e.store.DemoRequest(ctx, DemoIntake{Email: all, Name: "Ada Lovelace"}); err != nil {
 		t.Fatalf("DemoRequest: %v", err)
 	}
-	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: all, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, r.e.store, all, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 
@@ -1757,7 +1757,7 @@ func TestDeliver_ReadinessCheckTagReachesHubSpot(t *testing.T) {
 func TestDeliver_ReadinessOnlyContactGetsTheMarketingOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "chkonly")
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 
@@ -1783,7 +1783,7 @@ func TestDeliver_RegistrantWhoRanACheckGetsTheMarketingOptInOnce(t *testing.T) {
 
 	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
 	qaRequireCompleted(t, res, err, "resend job before the check")
-	if err := r.e.store.ReadinessCheck(ctx, ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(ctx, r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
@@ -1818,7 +1818,7 @@ func TestDeliver_OptedInContactGetsNoSecondOptInAfterACheck(t *testing.T) {
 		t.Fatalf("resend_opt_in_sent_at = %v, reads = %d, want set and 1", in, r.rs.readCount())
 	}
 
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
@@ -1859,7 +1859,7 @@ func countCalls(v *fakeVendor, method, suffix string) (n int) {
 func TestDeliver_UnsubscribedContactGetsNoOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "unsub")
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	v := stateVendor(t, true, `[]`)
@@ -1893,7 +1893,7 @@ func TestDeliver_UnsubscribedContactGetsNoOptIn(t *testing.T) {
 func TestDeliver_DefaultMarketingOptOutStillGetsTheOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "dfltout")
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	v := stateVendor(t, false, `[{"id":"top-1","subscription":"opt_out"}]`)
@@ -1918,7 +1918,7 @@ func TestDeliver_DefaultMarketingOptOutStillGetsTheOptIn(t *testing.T) {
 func TestDeliver_MissingResendContactGetsTheOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "missing")
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	v := newVendor(t, resendAbsent.respond)
@@ -1946,7 +1946,7 @@ func TestDeliver_MissingResendContactGetsTheOptIn(t *testing.T) {
 func TestDeliver_FailedStateReadRetriesWithoutAnOptIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "readfail")
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 	r.rs.state = func(n int) (ResendState, error) {
@@ -1996,7 +1996,7 @@ func TestDeliver_UnreadableContactStateRetriesWithoutAnOptIn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := qaNewRig(t, ModeReal)
 			email := uniqueEmail(t, r.e, "unread")
-			if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+			if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 				t.Fatalf("ReadinessCheck: %v", err)
 			}
 			v := newVendor(t, func(s seenReq) (int, string) {
@@ -2073,7 +2073,7 @@ var consentedIntakes = []struct {
 		}
 	}},
 	{"readiness check", func(t *testing.T, e env, email string) {
-		if err := e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+		if err := readinessCheck(context.Background(), e.store, email, consentText); err != nil {
 			t.Fatalf("ReadinessCheck: %v", err)
 		}
 	}},
@@ -2107,7 +2107,7 @@ func TestDeliver_ASecondTickAfterAnUnsubscribeSendsNoOptIn(t *testing.T) {
 	email := uniqueEmail(t, r.e, "unsub2")
 	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
 	recordUnsubscribe(t, r.e, email)
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 
@@ -2144,7 +2144,7 @@ func TestDeliver_AnUnsubscribeRecordedBeforeTheContactExistsStillSkips(t *testin
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "unsubfirst")
 	recordUnsubscribe(t, r.e, email)
-	if err := r.e.store.ReadinessCheck(context.Background(), ReadinessIntake{Email: email, ConsentText: consentText}); err != nil {
+	if err := readinessCheck(context.Background(), r.e.store, email, consentText); err != nil {
 		t.Fatalf("ReadinessCheck: %v", err)
 	}
 

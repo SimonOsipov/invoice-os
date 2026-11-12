@@ -1430,7 +1430,7 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 	if got := emailProblems(nlJobs(mutateOnce(t, yml, auth+pf, pf+auth))); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
 		t.Errorf("swap auth and preflight: problems %q", got)
 	}
-	chrome := "      - name: Install Chromium\n        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium\n"
+	chrome := "      - name: Install Chromium\n        run: pnpm --filter @invoice-os/e2e exec playwright install chromium\n"
 	specStep := "      - name: Real invite and reset mail\n        timeout-minutes: 16\n" + cmd["spec"]
 	off := "      - name: Turn real mail off\n        if: always() && steps.mailon.outcome != 'skipped'\n        run: bash scripts/ci/preview.sh mail-off \"$PR\"\n"
 	requireEmailMutations(t, []struct{ old, repl, want string }{

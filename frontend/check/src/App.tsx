@@ -157,7 +157,7 @@ export function App() {
               />
             )}
             {step === 'details' && file && sending && <SendingStep stepNo={emailStepNo} email={email.trim()} />}
-            {step === 'sent' && <SentPanel email={email.trim()} />}
+            {step === 'sent' && <SentPanel email={email.trim()} onAnother={backToUpload} />}
           </div>
         </Hero>
         <WhatYouGet />

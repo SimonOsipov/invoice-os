@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS, fieldLabel, formatBytes } from './fields'
-import { SENDING_NOTE, SENDING_TEXT, SENDING_TO, STAGE_MS, STAGES } from './copy'
+import { MAX_INVOICES, NEXT_STEP, SENDING_NOTE, SENDING_TEXT, SENDING_TO, SENT_NOTE, SENT_TEXT, STAGE_MS, STAGES, UPSELL_TEXT } from './copy'
 import {
   ARMOR_SENTENCE,
   CEILING_SENTENCE,
@@ -210,8 +210,7 @@ describe('email step', () => {
   })
 })
 
-// ceiling: SentPanel has no .check-sent class until FREECHK-13-04
-const SENT = '.check-tool [role="status"]'
+const SENT = '.check-sent [role="status"]'
 
 describe('sending view', () => {
   let answer: (() => Response) | null
@@ -423,5 +422,68 @@ describe('email alert', () => {
   it('email_theAlertTakesFocus', async () => {
     await toRefusal(() => json(422, { error: UNREADABLE_SENTENCE }))
     expect(document.activeElement).toBe(alerts()[0])
+  })
+})
+
+describe('sent view', () => {
+  const toSent = async (name = 'a.pdf') => {
+    await mount()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => (String(input).endsWith('/readiness-check/run') ? json(200, { status: 'confirm' }) : json(200, SHEET))))
+    await pick(new File(['aaaa'], name))
+    await type(emailInput(), '  a@x.io ')
+    await click(tickBox())
+    await click(q('button[type="submit"]')!)
+    await settle()
+  }
+  const links = () => [...container.querySelectorAll<HTMLAnchorElement>('.check-upsell a')]
+
+  it('sent_theConfirmationCarriesTheMarkLabelAndBoldSender', async () => {
+    await toSent()
+    expect(q(`${SENT} .check-sent-mark[aria-hidden="true"] svg`)).toBeTruthy()
+    expect(q(`${SENT} .check-sent-label`)!.textContent).toBe('Sent')
+    expect(q(`${SENT} h2`)!.textContent).toBe(SENT_TEXT('a@x.io'))
+    expect(q(`${SENT} .check-sent-note`)!.textContent).toBe(SENT_NOTE)
+    expect(q(`${SENT} .check-sent-note strong`)!.textContent).toBe('no-reply@ascomply.com')
+  })
+
+  it('sent_theOfferSitsOutsideTheStatus', async () => {
+    await toSent()
+    const up = q('.check-upsell')!
+    expect(up.closest('[role="status"]')).toBeNull()
+    expect(up.textContent).toContain(NEXT_STEP)
+    expect(up.textContent).toContain('This check covered up to 2 invoices.')
+    expect(MAX_INVOICES).toBe(2)
+    expect(up.textContent).toContain('Check every invoice before it goes to MBS.')
+    expect(up.textContent).toContain(UPSELL_TEXT)
+  })
+
+  it('sent_signUpAndDemoLinkTheLanding', async () => {
+    await toSent()
+    expect(links().map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['Sign up', 'https://www.ascomply.com/?register'],
+      ['Book a demo', 'https://www.ascomply.com/?demo'],
+    ])
+    await act(async () => root.unmount())
+    container.remove()
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.example/')
+    await toSent()
+    expect(links().map((a) => a.getAttribute('href'))).toEqual(['https://landing-pr-1.example/?register', 'https://landing-pr-1.example/?demo'])
+  })
+
+  it('sent_checkAnotherFileStartsOver', async () => {
+    await toSent()
+    await click(button('Check another file'))
+    expect(q('input[type="file"]')).toBeTruthy()
+    expect(container.textContent).not.toContain('a.pdf')
+    expect(q('.check-progress [aria-current="step"]')!.textContent).toContain('Upload')
+    await pick(new File(['bbbb'], 'b.pdf'))
+    expect(emailInput().value).toBe('a@x.io')
+    expect(tickBox().checked).toBe(false)
+    expect(q<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true)
+  })
+
+  it('sent_theHeadingTakesFocus', async () => {
+    await toSent()
+    expect(document.activeElement).toBe(q('.check-sent h2'))
   })
 })

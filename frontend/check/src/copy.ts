@@ -13,7 +13,16 @@ export const CHECK_H1 = 'Check your invoices against the MBS rules'
 export const CHECK_INTRO =
   'Upload one CSV, XLSX, PDF or DOCX file of up to 15 MiB. We check the first 2 invoices in it and email you the results. No account needed.'
 export const SENT_TEXT = (email: string): string => `Check your inbox at ${email}.`
-export const SENT_NOTE = 'We sent you an email from no-reply@ascomply.com. Check your spam folder if you cannot find it.'
+export const SENT_FROM = 'no-reply@ascomply.com' // = EXAMPLE_MAIL.from
+export const SENT_NOTE = `We sent you an email from ${SENT_FROM}. Check your spam folder if you cannot find it.`
+export const SENT_LABEL = 'Sent'
+export const NEXT_STEP = 'Next step'
+export const UPSELL_TITLE = [`This check covered up to ${MAX_INVOICES} invoices.`, 'Check every invoice before it goes to MBS.'] as const
+export const UPSELL_TEXT =
+  'With an ASComply account, every invoice is validated against the MBS rules, reviewed and approved by your team, and kept as an audit-ready record.'
+export const SIGN_UP = 'Sign up'
+export const BOOK_DEMO = 'Book a demo'
+export const CHECK_ANOTHER = 'Check another file'
 export const SENDING_TEXT = 'Checking your file. This can take a minute or two.'
 export const STAGES = [
   'Uploading your file',

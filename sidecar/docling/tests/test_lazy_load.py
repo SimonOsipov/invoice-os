@@ -19,7 +19,7 @@ from app import app
 PDF_CONTENT_TYPE = "application/pdf"
 
 
-def _fake_convert(stream):
+def _fake_convert(stream, **kwargs):
     """Minimal stand-in for a real ConversionResult -- just enough shape for
     convert._to_wire_contract to build a response without needing the real (multi-second)
     DocumentConverter build. Used by T-03-9's mock so the test can assert its actual
@@ -30,7 +30,9 @@ def _fake_convert(stream):
         version="fake-1.0.0",
         pages={1: SimpleNamespace(size=SimpleNamespace(width=100.0, height=100.0))},
     )
-    return SimpleNamespace(document=document, pages=[page])
+    return SimpleNamespace(
+        document=document, pages=[page], has_timeout_errors=lambda: False
+    )
 
 
 @pytest.fixture

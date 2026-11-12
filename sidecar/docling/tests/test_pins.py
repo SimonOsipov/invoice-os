@@ -118,3 +118,12 @@ def test_pillow_pin_is_present_at_13_or_later():
     match = re.fullmatch(r"pillow==(\d+)\.\S+", pillow_lines[0], re.IGNORECASE)
     assert match, f"{pillow_lines[0]!r} is not an exact == pin"
     assert int(match.group(1)) >= 13, f"{pillow_lines[0]!r} is below Pillow 13"
+
+
+def test_max_pages_matches_the_go_page_cap():
+    import convert
+
+    src = (REPO_ROOT / "internal" / "extraction" / "pdfium.go").read_text()
+    m = re.search(r"const MaxPages = (\d+)", src)
+    assert m, "const MaxPages not found in internal/extraction/pdfium.go"
+    assert convert.MAX_PAGES == int(m.group(1))

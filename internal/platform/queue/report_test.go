@@ -205,6 +205,14 @@ func TestErrorReporter_FinalAttemptOpensOneIssue(t *testing.T) {
 	assertJobEvent(t, e, "discarded", 8, 8)
 }
 
+func TestReportCancelled_OpensOneIssueBeforeTheFinalAttempt(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "submission")
+
+	ReportCancelled(jobRow(2, 3), errors.New("docling: time limit"))
+
+	assertJobEvent(t, rec.One(t, want), "discarded", 2, 3)
+}
+
 func TestErrorReporter_RetryingAttemptOpensNothing(t *testing.T) {
 	t.Run("retrying attempts", func(t *testing.T) {
 		_, rec, want := sentrytest.Boot(t, "submission")

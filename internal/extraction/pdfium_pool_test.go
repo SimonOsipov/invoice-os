@@ -58,6 +58,7 @@ var pxAllowedImports = map[string]bool{
 	"context":       true,
 	"crypto/sha256": true,
 	"encoding/hex":  true,
+	"errors":        true,
 	"fmt":           true,
 	"image/png":     true,
 	"strings":       true,

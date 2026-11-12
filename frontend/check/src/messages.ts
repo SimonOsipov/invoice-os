@@ -5,6 +5,7 @@ export const IP_SENTENCE = 'This network has run 10 checks today. Try again tomo
 export const UNREADABLE_SENTENCE = 'We could not read this file.' // checkUnreadableSentence
 export const UNAVAILABLE_SENTENCE = 'The check is unavailable. Try again in a few minutes.' // checkUnavailableSentence
 export const TOO_MUCH_TEXT_SENTENCE = 'This document has too much text for the free check. Try a shorter invoice.' // readinesscheck.DocumentTooLongSentence
+export const PAGE_LIMIT_SENTENCE = 'This document is over the 800-page limit. Try a shorter invoice.' // readinesscheck.PageLimitSentence
 export const CEILING_SENTENCE = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
 export const SLOW_UPLOAD_SENTENCE = 'The upload took too long. Try again on a faster connection.' // checkSlowUploadSentence
 export const ARMOR_SENTENCE = 'Too many checks from this network. Try again in an hour.'
@@ -39,6 +40,7 @@ function text(route: Route, status: number | null, error: string | null): string
       if (error === 'consent_text must be 1 to 500 characters') return CONSENT_SENTENCE
       if (error !== null && FORMAT_ERRORS.includes(error)) return TYPE_SENTENCE
       if (error === TOO_MUCH_TEXT_SENTENCE) return TOO_MUCH_TEXT_SENTENCE
+      if (error === PAGE_LIMIT_SENTENCE) return PAGE_LIMIT_SENTENCE
       if (route === 'document') return UNREADABLE_SENTENCE
       return route === 'run' ? MAPPING_SENTENCE : COLUMNS_SENTENCE
     case 503:

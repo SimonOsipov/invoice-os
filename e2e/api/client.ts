@@ -2257,11 +2257,11 @@ export function postLineItems(
 export async function postCheck(
   route: 'mapping' | 'run',
   fields: Record<string, string>,
-  file: { name: string; content: string },
+  file: { name: string; content: string; type?: string },
 ): Promise<{ status: number; body: any }> {
   const form = new FormData()
   for (const [k, v] of Object.entries(fields)) form.append(k, v)
-  form.append('file', new Blob([file.content], { type: 'text/csv' }), file.name)
+  form.append('file', new Blob([file.content], { type: file.type ?? 'text/csv' }), file.name)
   const res = await fetch(`${apiBase()}/readiness-check/${route}`, { method: 'POST', body: form })
   return { status: res.status, body: await res.json().catch(() => undefined) }
 }

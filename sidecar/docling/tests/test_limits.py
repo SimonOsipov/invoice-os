@@ -343,26 +343,88 @@ def test_a_declared_xml_size_counts_every_xml_part(client, monkeypatch):
     assert calls == []
 
 
-def _docx_with(parts):
+_XML = "application/xml"
+_WML = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+
+
+def _docx_with(parts, overrides=None, defaults=None):
+    """A package of blank parts; `overrides` maps part name to type, `defaults` extension to type."""
+    defaults = {"xml": _XML, "rels": "application/vnd.openxmlformats-package.relationships+xml",
+                "png": "image/png", "jpg": "image/jpeg", **(defaults or {})}
+    ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+    ct = f'<Types xmlns="{ns}">'
+    ct += "".join(f'<Default Extension="{e}" ContentType="{t}"/>' for e, t in defaults.items())
+    ct += "".join(f'<Override PartName="{n}" ContentType="{t}"/>' for n, t in (overrides or {}).items())
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", ct + "</Types>")
         for name, size in parts.items():
             zf.writestr(name, b" " * size)
     return buf.getvalue()
 
 
+BIG = 9 * 1024 * 1024
+
+
 @pytest.mark.parametrize("name", ["word/document.XML", "word/document.dat", "word/Document.Rels"])
 def test_a_renamed_xml_part_over_the_bound_is_still_422(client, monkeypatch, name):
     calls = _spy_converter(monkeypatch)
+    overrides = {"/" + name: _XML}
 
-    resp = client.post("/v1/read", content=_docx_with({name: 9 * 1024 * 1024}), headers=DOCX)
+    resp = client.post("/v1/read", content=_docx_with({name: BIG}, overrides), headers=DOCX)
 
     assert resp.status_code == 422
     assert calls == []
 
 
-def test_large_images_under_word_media_are_not_counted():
-    body = _docx_with({"word/document.xml": 1000, "word/media/image1.png": 9 * 1024 * 1024,
-                       "word/MEDIA/image2.JPG": 9 * 1024 * 1024})
+def test_a_main_part_under_word_media_with_an_xml_override_is_refused():
+    body = _docx_with({"word/media/document.bin": BIG}, {"/word/media/document.bin": _WML})
+
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(body)
+
+
+def test_a_part_with_an_image_extension_and_an_xml_override_is_refused():
+    body = _docx_with({"word/media/image1.png": BIG}, {"/WORD/media/Image1.png": _XML})
+
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(body)
+
+
+def test_an_xml_default_for_a_custom_extension_is_refused():
+    body = _docx_with({"word/part.bin": BIG}, defaults={"BIN": _XML})
+
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(body)
+
+
+def test_a_part_with_no_resolvable_content_type_is_refused():
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(_docx_with({"word/part.zzz": BIG}))
+
+
+def test_an_xml_suffix_with_an_image_override_still_counts():
+    # docling decodes every .xml member of a Strict package regardless of its declared type
+    body = _docx_with({"word/image.xml": BIG}, {"/word/image.xml": "image/png"})
+
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(body)
+
+
+@pytest.mark.parametrize("ct", [None, b"<not xml"])
+def test_a_package_without_readable_content_types_is_refused(ct):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"x")
+        if ct:
+            zf.writestr("[Content_Types].xml", ct)
+
+    with pytest.raises(convert.DocumentUnreadable):
+        convert._check_docx_xml_size(buf.getvalue())
+
+
+def test_large_images_with_image_types_are_not_counted():
+    body = _docx_with({"word/document.xml": 1000, "word/media/image1.png": BIG,
+                       "word/MEDIA/image2.JPG": BIG, "docProps/thumb.PNG": BIG})
 
     convert._check_docx_xml_size(body)  # raises DocumentUnreadable when over the bound

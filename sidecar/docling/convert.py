@@ -5,6 +5,7 @@ Tables and the DOCX path go through geometry.py, which owns all coord_origin ari
 """
 
 import logging
+import posixpath
 import threading
 import time
 import zipfile
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from io import BytesIO
 
 import sentry_sdk
+from lxml import etree
 
 import geometry
 
@@ -428,18 +430,61 @@ def _time_limit() -> DocumentUnreadable:
     return DocumentUnreadable("conversion passed the time limit", reason=TIME_LIMIT)
 
 
+_CONTENT_TYPES = "[Content_Types].xml"
+_CT_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+
+
+def _is_xml_type(content_type: str) -> bool:
+    t = content_type.split(";")[0].strip().lower()
+    return t.endswith("/xml") or t.endswith("+xml")
+
+
+def _content_types(zf: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:
+    """Overrides by lower-cased part name and Defaults by lower-cased extension."""
+    try:
+        info = zf.getinfo(_CONTENT_TYPES)
+        if info.file_size > DOCX_XML_MAX_BYTES:
+            raise DocumentUnreadable("document XML exceeds the 8 MiB limit")
+        with zf.open(info) as f:
+            root = etree.fromstring(
+                f.read(DOCX_XML_MAX_BYTES + 1),
+                etree.XMLParser(resolve_entities=False, no_network=True),
+            )
+    except (KeyError, etree.XMLSyntaxError):
+        raise DocumentUnreadable("document content types are unreadable") from None
+    overrides = {
+        e.get("PartName", "").lower(): e.get("ContentType", "") for e in root.iter(_CT_NS + "Override")
+    }
+    defaults = {
+        e.get("Extension", "").lower(): e.get("ContentType", "") for e in root.iter(_CT_NS + "Default")
+    }
+    return overrides, defaults
+
+
 def _check_docx_xml_size(body: bytes) -> None:
     """Refuse a package whose declared parts (a zip bomb inflates in docling's parser) are over bound.
 
-    Every entry counts but binary media: OPC part names are free, so a renamed main part must not escape.
+    An entry is exempt only when its declared content type is not XML: OPC part names are free, so
+    the type (which python-docx honours) decides, never the path. Docling also decodes by `.xml` and
+    `.rels` suffix, so those always count.
     """
     try:
         with zipfile.ZipFile(BytesIO(body)) as zf:
-            declared = sum(
-                i.file_size
-                for i in zf.infolist()
-                if "media" not in i.filename.lower().split("/")[:-1]
-            )
+            overrides, defaults = _content_types(zf)
+            declared = 0
+            for i in zf.infolist():
+                if i.is_dir():
+                    continue
+                name = i.filename.lower()
+                content_type = overrides.get("/" + name)
+                if content_type is None:
+                    content_type = defaults.get(posixpath.splitext(name)[1][1:])
+                if (
+                    content_type is None
+                    or _is_xml_type(content_type)
+                    or name.endswith((".xml", ".rels"))
+                ):
+                    declared += i.file_size
     except zipfile.BadZipFile:
         return  # docling reports it as it does today
     if declared > DOCX_XML_MAX_BYTES:

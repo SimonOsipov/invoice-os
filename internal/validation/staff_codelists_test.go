@@ -212,8 +212,14 @@ func TestStaffCodeLists_SummaryIsTheNewestRowPerList(t *testing.T) {
 		t.Errorf("summary carries %d of the 3 seeded lists: %s", len(seen), raw)
 	}
 
-	// Ordered by list, in the database's own order, one entry per list.
-	rows, err := super.Query(context.Background(), `SELECT DISTINCT list FROM nrs_code_list_syncs ORDER BY list`)
+	assertSummaryOrder(t, super, names)
+}
+
+// assertSummaryOrder asserts names has no duplicates and is in the database's order for text.
+// It sorts only the passed names: the table is global and other packages add lists to it.
+func assertSummaryOrder(t *testing.T, super *pgxpool.Pool, names []string) {
+	t.Helper()
+	rows, err := super.Query(context.Background(), `SELECT DISTINCT n FROM unnest($1::text[]) AS n ORDER BY n`, names)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,9 +232,35 @@ func TestStaffCodeLists_SummaryIsTheNewestRowPerList(t *testing.T) {
 		}
 		wantNames = append(wantNames, n)
 	}
-	if !reflect.DeepEqual(names, wantNames) {
-		t.Errorf("summary lists = %v, want one per list ordered by list: %v", names, wantNames)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(names, wantNames) {
+		t.Errorf("summary lists = %v, want unique and ordered by list: %v", names, wantNames)
+	}
+}
+
+// A list another test adds between the summary read and the order check must not fail the check.
+func TestStaffCodeLists_SummaryOrderIgnoresListAddedAfterTheRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	at := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	for i := 0; i < 3; i++ {
+		seedSyncs(t, super, newSyncList(), syncRow{syncedAt: at, entryCount: i + 1})
+	}
+
+	body, raw := readSyncs(t, store, nil)
+	var names []string
+	for _, l := range objects(t, body["lists"], "lists") {
+		n, _ := l["list"].(string)
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		t.Fatalf("summary is empty: %s", raw)
+	}
+
+	seedSyncs(t, super, newSyncList(), syncRow{syncedAt: at.Add(time.Hour), entryCount: 1})
+	assertSummaryOrder(t, super, names)
 }
 
 func TestStaffCodeLists_ListDetailNewestFirstCappedAt30(t *testing.T) {

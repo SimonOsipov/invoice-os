@@ -137,23 +137,6 @@ test.describe('check layout', () => {
     }
   })
 
-  test('check layout: the email step keeps the box and Send inside the card', async ({ page }) => {
-    await resize(page, WIDE_WIDTHS[0])
-    await toMap(page)
-    await page.getByRole('button', { name: 'Continue' }).click()
-    await page.getByLabel('Email address', { exact: true }).fill(EMAIL_200)
-    for (const width of WIDE_WIDTHS) {
-      await resize(page, width)
-      const label = `${width}px`
-      const cardRect = await rectOf(card(page), 'card')
-      const box = await rectOf(page.locator('.check-consent input'), 'consent box')
-      const text = await rectOf(page.locator('.check-consent span'), 'consent label')
-      expect(rectsOverlap(box, text), `${label}: the consent box overlaps its label`).toBe(false)
-      expect(enclosesRect(cardRect, await rectOf(page.getByLabel('Email address', { exact: true }), 'email'), 1), `${label}: the email input is outside the card`).toBe(true)
-      expect(enclosesRect(cardRect, await rectOf(page.getByRole('button', { name: 'Send' }), 'Send'), 1), `${label}: Send is outside the card`).toBe(true)
-    }
-  })
-
   test('check layout: no sideways scroll on a phone', async ({ page }) => {
     await resize(page, PHONE_WIDTHS[0])
     await toMap(page, async () => {
@@ -210,6 +193,302 @@ test.describe('check layout', () => {
     for (let i = 0; i < rects.length; i++)
       for (let j = i + 1; j < rects.length; j++) expect(rectsOverlap(rects[i], rects[j]), `${label}: items ${i} and ${j} overlap`).toBe(false)
   }
+
+  // Fixture check: the run route answers canned; `hold` keeps it pending until release(), which then answers.
+  function routeRun(page: Page, answer: { status: number; body: unknown; hold?: boolean }) {
+    const run = { calls: 0, release: () => {} }
+    const held = new Promise<void>((r) => (run.release = r))
+    return page
+      .route('**/readiness-check/run', async (route) => {
+        run.calls++
+        if (answer.hold) await held
+        await route.fulfill({ status: answer.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(answer.body) })
+      })
+      .then(() => run)
+  }
+
+  // Fixture check: the pdf pick, or the fixture csv through Continue, ends on the Email step.
+  async function toEmail(page: Page, width: number, kind: 'csv' | 'pdf'): Promise<void> {
+    if (kind === 'pdf') {
+      await openCheck(page, width)
+      await page.locator('#check-file').setInputFiles(PDF)
+    } else {
+      await resize(page, width)
+      await toMapWith(page)
+      await page.getByRole('button', { name: 'Continue' }).click()
+    }
+    await expect(page.locator('#check-email'), 'the Email step never showed').toBeVisible()
+    await settleAnimations(page.locator('.check-card'))
+  }
+
+  const tickAndSend = async (page: Page, email: string) => {
+    await page.locator('#check-email').fill(email)
+    await page.locator('.check-consent input').check()
+    await page.getByRole('button', { name: 'Send' }).click()
+  }
+  const inside = async (outer: Locator | Rect, loc: Locator, what: string, label: string) => {
+    const o = 'boundingBox' in outer ? await rectOf(outer, 'outer') : outer
+    expect(enclosesRect(o, await rectOf(loc, what), 1), `${label}: ${what} is outside its container`).toBe(true)
+  }
+
+  test('check layout: the Email step fits the card', async ({ page }) => {
+    for (const kind of ['csv', 'pdf'] as const) {
+      await toEmail(page, ALL_WIDTHS[0], kind)
+      await page.locator('#check-email').fill(EMAIL_200)
+      for (const width of ALL_WIDTHS) {
+        await resize(page, width)
+        const label = `${kind} ${width}px`
+        const cardRect = await rectOf(card(page), 'card')
+        const tool = page.locator('.check-tool')
+        const row = page.locator('.check-email-file')
+        const stepNo = await rectOf(page.locator('.check-step-no'), 'step label')
+        expect(stepNo.y + stepNo.height, `${label}: the step label is not above the h2`).toBeLessThanOrEqual((await rectOf(page.locator('.check-step-title'), 'h2')).y + 1)
+        await inside(tool, row, 'file row', label)
+        const rowRect = await rectOf(row, 'file row')
+        const name = await rectOf(page.locator('.check-upload-name'), 'file name')
+        expect(enclosesRect(rowRect, name, 1), `${label}: the file name is outside the row`).toBe(true)
+        expect(rectsOverlap(name, await rectOf(page.locator('.check-file-ok'), 'check icon')), `${label}: the file name overlaps the check icon`).toBe(false)
+        await inside(rowRect, page.locator('.check-upload-size'), 'file meta', label)
+        const box = await rectOf(page.locator('.check-consent input'), 'consent box')
+        const text = await rectOf(page.locator('.check-consent span'), 'consent text')
+        const send = await rectOf(page.getByRole('button', { name: 'Send' }), 'Send')
+        const back = await rectOf(page.getByRole('button', { name: 'Back' }), 'Back')
+        for (const [r, what] of [[await rectOf(page.locator('#check-email'), 'address'), 'address'], [box, 'consent box'], [text, 'consent text'], [send, 'Send'], [back, 'Back']] as const)
+          expect(enclosesRect(cardRect, r, 1), `${label}: ${what} is outside the card`).toBe(true)
+        expect(rectsOverlap(box, text), `${label}: the consent box overlaps its text`).toBe(false)
+        expect(rectsOverlap(send, back), `${label}: Back and Send overlap`).toBe(false)
+        if (isPhone(width)) {
+          const actions = await rectOf(page.locator('.check-actions'), 'actions')
+          expect(send.y + send.height, `${label}: Send is not above Back`).toBeLessThanOrEqual(back.y + 1)
+          for (const r of [send, back]) expect(Math.abs(r.width - actions.width), `${label}: a button does not fill the bar`).toBeLessThanOrEqual(1)
+        }
+        await noSidewaysScroll(page, label)
+      }
+    }
+  })
+
+  test('check layout: the field messages sit under their fields', async ({ page }) => {
+    await toEmail(page, ALL_WIDTHS[0], 'pdf')
+    await page.locator('#check-email').fill('ada@adebayofoods')
+    await page.locator('#check-email').blur()
+    await page.locator('.check-consent input').check()
+    await page.locator('.check-consent input').uncheck()
+    await expect(page.locator('#check-email-err')).toBeVisible()
+    await expect(page.locator('#check-consent-err')).toBeVisible()
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const cardRect = await rectOf(card(page), 'card')
+      const input = await rectOf(page.locator('#check-email'), 'address')
+      const emailErr = await rectOf(page.locator('#check-email-err'), 'address message')
+      expect(emailErr.y, `${label}: the address message is above the input`).toBeGreaterThanOrEqual(input.y + input.height - 1)
+      expect(enclosesRect(cardRect, emailErr, 1), `${label}: the address message is outside the card`).toBe(true)
+      const text = await rectOf(page.locator('.check-consent span'), 'consent text')
+      const consentErr = await rectOf(page.locator('#check-consent-err'), 'consent message')
+      expect(consentErr.y, `${label}: the consent message is above the text`).toBeGreaterThanOrEqual(text.y + text.height - 1)
+      expect(consentErr.x, `${label}: the consent message starts left of the text`).toBeGreaterThanOrEqual(text.x - 1)
+      expect(enclosesRect(cardRect, consentErr, 1), `${label}: the consent message is outside the card`).toBe(true)
+    }
+  })
+
+  test('check layout: a refusal sits above Back and Send', async ({ page }) => {
+    const run = await routeRun(page, { status: 422, body: { error: 'We could not read this file.' } })
+    await toEmail(page, ALL_WIDTHS[0], 'pdf')
+    await tickAndSend(page, EMAIL_200)
+    const alertBox = page.locator('.check-email .check-alert')
+    await expect(alertBox).toBeVisible()
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const cardRect = await rectOf(card(page), 'card')
+      const alert = await rectOf(alertBox, 'alert')
+      expect(enclosesRect(cardRect, alert, 1), `${label}: the alert is outside the card`).toBe(true)
+      const consent = await rectOf(page.locator('.check-consent-field'), 'consent block')
+      const actions = await rectOf(page.locator('.check-actions'), 'actions')
+      expect(alert.y, `${label}: the alert is above the consent block's end`).toBeGreaterThanOrEqual(consent.y + consent.height - 1)
+      expect(alert.y + alert.height, `${label}: the alert runs into Back and Send`).toBeLessThanOrEqual(actions.y + 1)
+      await inside(alert, page.locator('.check-alert-body span'), 'sentence', label)
+      await inside(alert, page.getByRole('button', { name: 'Choose another file' }), 'Choose another file', label)
+      const icon = await rectOf(page.locator('.check-alert svg').first(), 'alert icon')
+      expect(Math.abs(icon.width - 18), `${label}: alert icon width`).toBeLessThanOrEqual(0.5)
+    }
+    expect(run.calls, 'run calls').toBe(1)
+  })
+
+  test('check layout: a 300-character server sentence wraps inside the alert', async ({ page }) => {
+    // 300 is the longest sentence() in frontend/check/src/messages.ts shows.
+    await routeRun(page, { status: 429, body: { error: 'w'.repeat(300) } })
+    await toEmail(page, PHONE_WIDTHS[0], 'pdf')
+    await tickAndSend(page, 'a@x.io')
+    const alertBox = page.locator('.check-email .check-alert')
+    await expect(alertBox).toBeVisible()
+    for (const width of PHONE_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const alert = await rectOf(alertBox, 'alert')
+      expect(enclosesRect(await rectOf(card(page), 'card'), alert, 1), `${label}: the alert is outside the card`).toBe(true)
+      const sentence = page.locator('.check-alert-body span').first()
+      expect(enclosesRect(alert, await rectOf(sentence, 'sentence'), 1), `${label}: the sentence is outside the alert`).toBe(true)
+      const fit = await sentence.evaluate((el) => el.scrollWidth - el.clientWidth)
+      expect(fit, `${label}: the sentence overflows`).toBeLessThanOrEqual(1)
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  test('check layout: the sending view fits', async ({ page }) => {
+    const run = await routeRun(page, { status: 200, body: { status: 'confirm' }, hold: true })
+    try {
+      await toEmail(page, ALL_WIDTHS[0], 'pdf')
+      await tickAndSend(page, EMAIL_200)
+      await expect(page.locator('.check-sending')).toBeVisible()
+      for (const width of ALL_WIDTHS) {
+        await resize(page, width)
+        const label = `${width}px`
+        const cardRect = await rectOf(card(page), 'card')
+        for (const [sel, what] of [['.check-step-title', 'h2'], ['.check-bar', 'bar'], ['.check-stages', 'stages'], ['.check-sending-to', 'results box']] as const)
+          await inside(cardRect, page.locator(sel), what, label)
+        const lis = page.locator('.check-stages li')
+        const rects: Rect[] = []
+        const dots: number[] = []
+        for (let i = 0; i < (await lis.count()); i++) {
+          rects.push(await rectOf(lis.nth(i), `stage ${i}`))
+          dots.push((await rectOf(lis.nth(i).locator('.check-sdot'), `dot ${i}`)).x)
+        }
+        expect(rects.length, `${label}: stages`).toBeGreaterThan(1)
+        noOverlap(rects, label)
+        expect(Math.max(...dots) - Math.min(...dots), `${label}: the dots share no left edge`).toBeLessThanOrEqual(1)
+        const addr = page.locator('.check-sending-addr')
+        await inside(page.locator('.check-sending-to'), addr, 'address', label)
+        expect(await addr.evaluate((el) => el.scrollWidth - el.clientWidth), `${label}: the address overflows`).toBeLessThanOrEqual(1)
+        await noSidewaysScroll(page, label)
+      }
+    } finally {
+      run.release()
+    }
+  })
+
+  test('check layout: the Sent view fits', async ({ page }) => {
+    await routeRun(page, { status: 200, body: { status: 'confirm' } })
+    await toEmail(page, ALL_WIDTHS[0], 'pdf')
+    await tickAndSend(page, EMAIL_200)
+    await expect(page.locator('.check-sent')).toBeVisible()
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const cardRect = await rectOf(card(page), 'card')
+      for (const sel of ['.check-sent-mark', '.check-sent-title', '.check-sent-note', '.check-upsell'])
+        await inside(cardRect, page.locator(sel), sel, label)
+      await inside(cardRect, page.getByRole('button', { name: 'Check another file' }), 'Check another file', label)
+      expect(await page.locator('.check-sent-title').evaluate((el) => el.scrollWidth - el.clientWidth), `${label}: the title overflows`).toBeLessThanOrEqual(1)
+      const upsell = page.locator('.check-upsell')
+      const signUp = page.locator('.check-upsell').getByRole('link', { name: 'Sign up' })
+      const demo = page.locator('.check-upsell').getByRole('link', { name: 'Book a demo' })
+      await inside(upsell, signUp, 'Sign up', label)
+      await inside(upsell, demo, 'Book a demo', label)
+      expect(rectsOverlap(await rectOf(signUp, 'Sign up'), await rectOf(demo, 'Book a demo')), `${label}: Sign up and Book a demo overlap`).toBe(false)
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  // Rows are [selector, property, expected]; a '--token' expectation compares the resolved value.
+  async function readRows(page: Page, rows: [string, string, string][]): Promise<void> {
+    for (const [sel, prop, want] of rows) {
+      const expected = want.startsWith('--') ? await resolved(page, want, prop) : want
+      expect(await css(page.locator(sel).first(), prop), `${sel} ${prop}`).toBe(expected)
+    }
+  }
+
+  test('check layout: the Email, Sending and Sent views take the design\'s values', async ({ page }) => {
+    await toEmail(page, 1280, 'pdf')
+    await readRows(page, [
+      ['.check-email form', 'row-gap', '22px'],
+      ['.check-step-title', 'font-size', '22px'],
+      ['#check-email', 'height', '44px'],
+      ['#check-email', 'font-size', '15px'],
+      ['#check-email', 'border-top-color', '--input'],
+      ['.check-consent', 'column-gap', '12px'],
+      ['.check-consent', 'font-size', '14px'],
+      ['.check-consent input', 'width', '20px'],
+      ['.check-consent input', 'height', '20px'],
+      ['.check-actions .check-btn--next', 'height', '46px'],
+      ['.check-actions .check-btn--next', 'min-width', '160px'],
+      ['.check-actions .check-btn--next', 'background-color', '--input'],
+      ['.check-actions .check-btn--next', 'color', '--muted-foreground'],
+    ])
+    expect(await tracks(page.locator('.check-consent')), 'consent tracks').toBe(2)
+    await page.locator('#check-email').fill('ada@adebayofoods')
+    await page.locator('#check-email').blur()
+    await expect.poll(() => css(page.locator('#check-email'), 'border-top-color')).toBe(await resolved(page, '--destructive', 'border-top-color'))
+    await readRows(page, [
+      ['.check-err', 'font-size', '13.5px'],
+      ['.check-err', 'font-weight', '600'],
+      ['.check-err', 'color', '--destructive'],
+    ])
+    await page.locator('#check-email').fill('ada@example.com')
+    await page.locator('.check-consent input').check()
+    await expect(page.locator('.check-actions .check-btn--next')).toBeEnabled()
+    await expect.poll(() => css(page.locator('.check-actions .check-btn--next'), 'background-color')).toBe(await resolved(page, '--primary', 'background-color'))
+
+    await routeRun(page, { status: 422, body: { error: 'We could not read this file.' } })
+    await page.getByRole('button', { name: 'Send' }).click()
+    await expect(page.locator('.check-email .check-alert')).toBeVisible()
+    await readRows(page, [
+      ['.check-alert', 'padding-top', '14px'],
+      ['.check-alert', 'padding-left', '16px'],
+      ['.check-alert', 'font-size', '14px'],
+      ['.check-alert .check-link', 'color', '--destructive'],
+      ['.check-alert .check-link', 'text-decoration-line', 'underline'],
+    ])
+
+    const run = await routeRun(page, { status: 200, body: { status: 'confirm' }, hold: true })
+    try {
+      await page.getByRole('button', { name: 'Send' }).click()
+      await expect(page.locator('.check-sending')).toBeVisible()
+      await readRows(page, [
+        ['.check-stages li', 'font-size', '14px'],
+        ['.check-stages li', 'font-weight', '600'],
+        ['.check-stages li', 'padding-top', '10px'],
+        ['.check-sdot', 'width', '22px'],
+        ['.check-sdot', 'height', '22px'],
+        ['.check-sending-to', 'background-color', '--secondary'],
+        ['.check-sending-to', 'padding-top', '14px'],
+        ['.check-sending-to', 'padding-left', '16px'],
+      ])
+      // The first stage finishes after STAGE_MS (copy.ts).
+      await expect.poll(() => css(page.locator('.check-stages li.is-done .check-sdot').first(), 'background-color'), { timeout: 10_000 }).toBe(
+        await resolved(page, '--status-success-bg', 'background-color'),
+      )
+    } finally {
+      run.release()
+    }
+    await expect(page.locator('.check-sent')).toBeVisible()
+    await readRows(page, [
+      ['.check-sent-mark', 'width', '56px'],
+      ['.check-sent-mark', 'height', '56px'],
+      ['.check-sent-mark', 'background-color', '--status-success-bg'],
+      ['.check-sent-title', 'font-size', '24px'],
+      ['.check-sent-note', 'font-size', '15px'],
+      ['.check-sent-note', 'color', '--text-copy'],
+      ['.check-upsell', 'background-color', '--peach-card'],
+      ['.check-upsell', 'padding-top', '24px'],
+      ['.check-upsell', 'row-gap', '14px'],
+      ['.check-upsell-step', 'color', '--highlight-on-peach'],
+      ['.check-upsell-title', 'font-size', '21px'],
+      ['.check-upsell-title', 'font-weight', '700'],
+      ['.check-upsell-link', 'color', '--accent-foreground'],
+    ])
+
+    await routeRun(page, { status: 200, body: { status: 'confirm' } })
+    await toEmail(page, 390, 'pdf')
+    await readRows(page, [
+      ['.check-email form', 'row-gap', '18px'],
+      ['.check-step-title', 'font-size', '20px'],
+      ['.check-actions', 'flex-direction', 'column-reverse'],
+    ])
+    await tickAndSend(page, 'a@x.io')
+    await expect(page.locator('.check-sent')).toBeVisible()
+    await readRows(page, [['.check-sent-title', 'font-size', '24px']])
+  })
 
   test('check layout: the header stays on top and fits', async ({ page }) => {
     await openCheck(page, ALL_WIDTHS[0])
@@ -1031,6 +1310,34 @@ test.describe('check layout', () => {
     await toMapWith(page)
     await sendRejected(page)
     await shoot(page, 'check', 'map-error')
+  })
+
+  test('check layout: the Argos shots of the Email, Sending and Sent steps', async ({ page }) => {
+    test.skip(!argosOn(), 'Argos shots are taken on the nightly only')
+    await toEmail(page, 1440, 'csv')
+    await shoot(page, 'check', 'email')
+    await toEmail(page, 1440, 'pdf')
+    await shoot(page, 'check', 'email-pdf')
+    await page.locator('#check-email').fill('ada@adebayofoods')
+    await page.locator('#check-email').blur()
+    await page.locator('.check-consent input').check()
+    await page.locator('.check-consent input').uncheck()
+    await expect(page.locator('#check-consent-err')).toBeVisible()
+    await shoot(page, 'check', 'email-errors')
+    await routeRun(page, { status: 422, body: { error: 'We could not read this file.' } })
+    await tickAndSend(page, 'ada@example.com')
+    await expect(page.locator('.check-email .check-alert')).toBeVisible()
+    await shoot(page, 'check', 'error-read')
+    const run = await routeRun(page, { status: 200, body: { status: 'confirm' }, hold: true })
+    try {
+      await page.getByRole('button', { name: 'Send' }).click()
+      await expect(page.locator('.check-sending')).toBeVisible()
+      await shoot(page, 'check', 'sending')
+    } finally {
+      run.release()
+    }
+    await expect(page.locator('.check-sent')).toBeVisible()
+    await shoot(page, 'check', 'sent')
   })
 })
 

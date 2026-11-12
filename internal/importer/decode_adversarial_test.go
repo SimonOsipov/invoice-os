@@ -933,7 +933,7 @@ func TestDecode_CSVAcceptsExactlyTheCellBudget(t *testing.T) {
 }
 
 func TestDecode_CSVRefusesOneRecordPastTheCellBudget(t *testing.T) {
-	_, _, _, err := Decode(context.Background(), strings.NewReader(csvCells(50, 100_001)), "csv")
+	_, _, _, err := Decode(context.Background(), strings.NewReader(csvCells(50, 100_000)+"a\n"), "csv")
 	if !errors.Is(err, ErrTooManyCells) || errors.Is(err, ErrTooManyRows) {
 		t.Fatalf("err = %v, want ErrTooManyCells only", err)
 	}
@@ -1026,9 +1026,17 @@ func TestDecode_CSVRecordAtTheXLSXWidthDecodes(t *testing.T) {
 }
 
 func TestDecode_SeparatorsInsideQuotesDoNotCountTowardTheWidth(t *testing.T) {
-	cell := "\"" + strings.Repeat(",\n", 10_000) + "\""
+	cell := "\"" + strings.Repeat(",", excelize.MaxColumns+1) + "\n\""
 	header, rows, _, err := Decode(context.Background(), strings.NewReader("a,b\n"+cell+",x\n"), "csv")
 	if err != nil || len(header) != 2 || len(rows) != 1 || len(rows[0]) != 2 {
+		t.Fatalf("err = %v, header = %v, rows = %d", err, header, len(rows))
+	}
+}
+
+func TestDecode_NarrowRecordsDoNotAddUpToAWideOne(t *testing.T) {
+	in := strings.Repeat("a,b\n", excelize.MaxColumns+1)
+	header, rows, _, err := Decode(context.Background(), strings.NewReader(in), "csv")
+	if err != nil || len(header) != 2 || len(rows) != excelize.MaxColumns {
 		t.Fatalf("err = %v, header = %v, rows = %d", err, header, len(rows))
 	}
 }

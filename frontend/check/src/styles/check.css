@@ -135,7 +135,8 @@ input[type='file'] { max-width: 100%; font: inherit; }
 .check-subhead .check-link { font-size: 13px; }
 .check-card .check-hint { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--status-progress-bg); color: var(--status-progress-fg); font-size: 13.5px; line-height: 1.5; font-weight: 600; }
 /* map step: head, summary, columns preview, sticky bar */
-.check-card.check-map { display: grid; gap: 22px; }
+.check-card.check-map { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+.check-map :is(.check-groups, .check-rows, .check-preview, .check-sum-foot, .check-sticky) { grid-template-columns: minmax(0, 1fr); }
 .check-map-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; }
 .check-card .check-map-file { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: var(--muted-foreground); }
 .check-map-name { min-width: 0; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }

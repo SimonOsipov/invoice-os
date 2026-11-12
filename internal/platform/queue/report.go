@@ -32,12 +32,25 @@ func (errorReporter) HandlePanic(ctx context.Context, job *rivertype.JobRow, pan
 	return nil
 }
 
+// ReportCancelled reports a job its worker ends early with river.JobCancel, which River never
+// passes to the error handler, the way a final attempt is reported.
+func ReportCancelled(job *rivertype.JobRow, err error) {
+	if hub := reportHub(job, "discarded", ""); hub != nil {
+		hub.CaptureException(err)
+	}
+}
+
 // finalAttemptHub returns a scoped hub when this attempt ends the job and Sentry is on, else nil.
-// Only the tenant id is read from EncodedArgs; the rest and Errors stay out (the filter does not scrub raw JSON).
 func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	if job.Attempt < job.MaxAttempts {
 		return nil
 	}
+	return reportHub(job, class, trace)
+}
+
+// reportHub returns a scoped hub when Sentry is on, else nil.
+// Only the tenant id is read from EncodedArgs; the rest and Errors stay out (the filter does not scrub raw JSON).
+func reportHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	hub := sentry.CurrentHub()
 	if !hub.Client().IsEnabled() {
 		return nil

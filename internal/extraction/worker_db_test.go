@@ -46,6 +46,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
 )
 
 const (
@@ -5856,7 +5857,7 @@ func TestRLS_ExtractWorkerNeverReadsPagesForABoxlessNoTextDocument(t *testing.T)
 	}
 }
 
-// SECAUD-04 tenant arm: the render gate refuses an over-cap PDF before the docling reader runs.
+// The render gate refuses an over-cap PDF before the docling reader runs.
 func TestExtractWorker_APDFOverThePageCapNeverReachesTheTextReader(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)
@@ -5879,19 +5880,24 @@ func TestExtractWorker_APDFOverThePageCapNeverReachesTheTextReader(t *testing.T)
 	}
 }
 
-// wkTimedOutRead runs one job whose text read fails with err on the given attempt of 3.
-func wkTimedOutRead(t *testing.T, ctx context.Context, err error, attempt int, riverJobID int64) (workErr error, tenantID, xid string) {
+// wkTimedOutRead runs one job whose text read fails with err on the given attempt of 3, after
+// earlier attempts that failed with prior.
+func wkTimedOutRead(t *testing.T, ctx context.Context, err error, attempt int, riverJobID int64, prior ...string) (workErr error, tenantID, xid string) {
 	t.Helper()
 	tenantID, documentID := wkFixture(t, ctx)
 	rec := &wkAuditRecorder{}
 	ew := wkWorkerText(t, wkOK(), wkDocxOpener(t), &wkErrReader{err: err}, rec)
-	workErr = ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, attempt, 3, tenantID, documentID, uuid.NewString()))
+	workErr = ew.Work(ctx, extraction.NewExtractJobAfterErrorsForTest(riverJobID, attempt, 3, tenantID, documentID, prior...))
 	return workErr, tenantID, wkExtractionJobID(t, ctx, tenantID, riverJobID)
 }
 
-func TestExtractWorker_AFirstTimedOutReadRetries(t *testing.T) {
-	ctx := t.Context()
-	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrReadTimedOut), 1, 915601)
+var (
+	wkTimeLimitErr = fmt.Errorf("read: %w", extraction.ErrReadTimedOut)
+	wkUnavailable  = "docling: /read returned 503: service unavailable"
+)
+
+func wkRequireRetry(t *testing.T, ctx context.Context, err error, tenantID, xid string) {
+	t.Helper()
 	var cancel *river.JobCancelError
 	if err == nil || errors.As(err, &cancel) {
 		t.Fatalf("Work returned %v, want a plain error so River retries", err)
@@ -5902,9 +5908,28 @@ func TestExtractWorker_AFirstTimedOutReadRetries(t *testing.T) {
 	}
 }
 
+func TestExtractWorker_AFirstTimedOutReadRetries(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, wkTimeLimitErr, 1, 915601)
+	wkRequireRetry(t, ctx, err, tenantID, xid)
+}
+
+func TestExtractWorker_ATimeLimitAfterAnUnavailableAttemptRetries(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, wkTimeLimitErr, 2, 915604, wkUnavailable)
+	wkRequireRetry(t, ctx, err, tenantID, xid)
+}
+
+func TestExtractWorker_AnUnavailableAttemptAfterATimeLimitRetries(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, errors.New("docling: /read returned 503"), 2, 915605, wkTimeLimitErr.Error())
+	wkRequireRetry(t, ctx, err, tenantID, xid)
+}
+
 func TestExtractWorker_ASecondTimedOutReadDeadLetters(t *testing.T) {
 	ctx := t.Context()
-	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrReadTimedOut), 2, 915602)
+	_, rec, want := sentrytest.Boot(t, "worker")
+	err, tenantID, xid := wkTimedOutRead(t, ctx, wkTimeLimitErr, 2, 915602, wkTimeLimitErr.Error())
 	var cancel *river.JobCancelError
 	if !errors.As(err, &cancel) {
 		t.Fatalf("Work returned %v, want a *river.JobCancelError", err)
@@ -5918,6 +5943,7 @@ func TestExtractWorker_ASecondTimedOutReadDeadLetters(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("wrote %d audit row(s), want 1: %v", len(rows), rows)
 	}
+	rec.One(t, want)
 }
 
 func TestExtractWorker_AnotherReadFailureStillRetries(t *testing.T) {

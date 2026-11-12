@@ -39,7 +39,7 @@ export function SentPanel({ email, onAnother }: { email: string; onAnother: () =
         </div>
       </div>
       <div className="check-upsell">
-        <span className="check-mono check-upsell-step">{NEXT_STEP}</span>
+        <span className="t-step check-upsell-step">{NEXT_STEP}</span>
         <p className="check-upsell-title">
           {UPSELL_TITLE[0]}
           <br />

@@ -1904,7 +1904,8 @@ async function recordOversizedAiCall(): Promise<void> {
   expect(res.ok, `the oversized preview is accepted (status ${res.status})`).toBe(true)
   const { document_id } = (await res.json()) as { document_id?: string }
   expect(typeof document_id, `preview carries a document_id (status ${res.status})`).toBe('string')
-  await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
+  const suggested = await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
+  if (nightlyTarget()) expect(suggested.source, 'the real AI answers the cut cell').toBe('ai')
   await expect.poll(async () => [...(await listed())].some((id) => !known.has(id)), { message: "the oversized call's row is listed", timeout: 30_000 }).toBe(true)
 }
 

@@ -34,8 +34,14 @@ const MAP_STEP_NO = '02 · Match your columns'
 const MAP_TITLE = 'Tell us which column is which'
 const REVIEW = 'Review'
 const MAP_ALL_USED = 'Every column in your file is matched to a field.'
-// frontend/check/src/copy.ts: SENT_TEXT.
+// frontend/check/src/copy.ts: EMAIL_STEP_NO (spreadsheet), EMAIL_TITLE, FILE_MATCHED (X is the real AI's), SENT_TEXT, SENT_NOTE, SIGN_UP, BOOK_DEMO.
+const EMAIL_STEP_NO = '03 · Email'
+const EMAIL_TITLE = 'Where should we send the results?'
+const FILE_MATCHED = /\d+ of \d+ fields matched/
 const sentText = (email: string) => `Check your inbox at ${email}.`
+const SENT_NOTE = 'We sent you an email from no-reply@ascomply.com. Check your spam folder if you cannot find it.'
+const SIGN_UP = 'Sign up'
+const BOOK_DEMO = 'Book a demo'
 // internal/gateway/readiness_check.go: checkIPSentence.
 const IP_SENTENCE = 'This network has run 10 checks today. Try again tomorrow.'
 
@@ -174,6 +180,11 @@ test('check: a visitor uploads a spreadsheet, maps it and is told to check the i
   await next.click()
 
   await expect(current).toHaveText('Email')
+  await expect(page.getByText(EMAIL_STEP_NO, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: EMAIL_TITLE })).toBeVisible()
+  const file = page.locator('.check-email-file')
+  await expect(file).toContainText('invoices.csv')
+  await expect(file).toContainText(FILE_MATCHED)
   const email = `check-${crypto.randomUUID()}@example.com`
   await page.getByLabel('Email address', { exact: true }).fill(email)
   await expect(page.locator('.check-consent')).toHaveText(CONSENT)
@@ -186,6 +197,12 @@ test('check: a visitor uploads a spreadsheet, maps it and is told to check the i
     throw e
   }
 
+  const sent = page.locator('.check-sent')
+  await expect(sent.getByRole('heading', { name: sentText(email) })).toBeVisible()
+  await expect(sent.locator('.check-sent-note')).toHaveText(SENT_NOTE)
+  const upsell = page.locator('.check-upsell')
+  await expect(upsell.getByRole('link', { name: SIGN_UP, exact: true })).toHaveAttribute('href', /\/\?register$/)
+  await expect(upsell.getByRole('link', { name: BOOK_DEMO, exact: true })).toHaveAttribute('href', /\/\?demo$/)
   await expect(current).toHaveCount(0)
   expect(errors, `console errors on the check:\n${errors.join('\n')}`).toEqual([])
 })

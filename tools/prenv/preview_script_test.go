@@ -1229,6 +1229,8 @@ func TestPreviewMailOnFailsWhenItCannotRetireTheOldWorkerRevisions(t *testing.T)
 		{"empty latest ready name", "no latest ready revision", func(dir string) { writeIn(t, dir, "latest-worker-nightly", "\n") }},
 		{"describe fails", "cannot read the worker-nightly serving revision", func(dir string) { writeIn(t, dir, "faildescribe", "") }},
 		{"list fails", "cannot list the worker-nightly revisions", func(dir string) { writeIn(t, dir, "fail-run-revisions", "") }},
+		{"serving revision not listed", "is not in the worker-nightly revision list", func(dir string) { writeIn(t, dir, "revisions-worker-nightly", old+"\n") }},
+		{"revision list empty", "is not in the worker-nightly revision list", func(dir string) { writeIn(t, dir, "revisions-worker-nightly", "") }},
 		{"delete fails", "cannot delete the old worker-nightly revision " + old, func(dir string) { writeIn(t, dir, "faildelete", old+"\n") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

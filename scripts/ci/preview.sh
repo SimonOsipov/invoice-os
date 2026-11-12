@@ -495,6 +495,7 @@ cmd_mail_on() {
   [ -n "$latest" ] || die "worker-nightly has no latest ready revision"
   revs=$(gcloud run revisions list --service worker-nightly "${gc[@]}" --format 'value(metadata.name)') \
     || die "cannot list the worker-nightly revisions"
+  case $'\n'"$revs"$'\n' in *$'\n'"$latest"$'\n'*) ;; *) die "the serving revision $latest is not in the worker-nightly revision list" ;; esac
   for rev in $revs; do
     [ "$rev" = "$latest" ] && continue
     gcloud run revisions delete "$rev" "${gc[@]}" || die "cannot delete the old worker-nightly revision $rev"

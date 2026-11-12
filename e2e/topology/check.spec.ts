@@ -20,7 +20,19 @@ const EMAIL_200 = `${'e'.repeat(187)}@example.com`
 const unknownConfirmLink = () => `${GATEWAY_URL}/readiness-check/confirm?t=${'A'.repeat(43)}`
 
 const card = (page: Page) => page.locator('.check-card')
+// A view change remounts the card and replays its entry slide; wait a frame, then for every finite animation.
+const settlePage = (page: Page) =>
+  page.evaluate(async () => {
+    await document.fonts.ready
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      const running = document.getAnimations().filter((a) => a.playState !== 'finished' && a.effect?.getComputedTiming().endTime !== Infinity)
+      if (!running.length) return
+      await Promise.all(running.map((a) => a.finished.catch(() => undefined)))
+    }
+  })
 const rectOf = async (loc: Locator, label: string): Promise<Rect> => {
+  await settlePage(loc.page())
   await settleAnimations(loc)
   const box = await loc.boundingBox()
   if (!box) throw new Error(`${label} has no box`)
@@ -324,6 +336,7 @@ test.describe('check layout', () => {
     await expect(alertBox).toBeVisible()
     for (const width of PHONE_WIDTHS) {
       await resize(page, width)
+      await settlePage(page)
       const label = `${width}px`
       const alert = await rectOf(alertBox, 'alert')
       expect(enclosesRect(await rectOf(card(page), 'card'), alert, 1), `${label}: the alert is outside the card`).toBe(true)

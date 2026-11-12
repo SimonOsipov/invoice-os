@@ -6,6 +6,10 @@ Tables and the DOCX path go through geometry.py, which owns all coord_origin ari
 
 import logging
 import threading
+import time
+import zipfile
+from contextvars import ContextVar
+from dataclasses import dataclass
 from io import BytesIO
 
 import sentry_sdk
@@ -22,8 +26,52 @@ logger = logging.getLogger(__name__)
 DOCLING_NUM_THREADS = 2
 
 
+MAX_PAGES = 800  # internal/extraction MaxPages; test_pins.py keeps them equal
+DOCUMENT_TIMEOUT_S = 240.0  # the PM's per-document limit
+DOCX_XML_MAX_BYTES = 8 * 1024 * 1024  # D13
+TIME_LIMIT = "time_limit"
+
+
 class DocumentUnreadable(Exception):
-    """Docling opened the document but could not convert it -- maps to 422 (T-03-13)."""
+    """Docling opened the document but could not convert it -- maps to 422 (T-03-13).
+
+    reason is a machine-readable cause the 422 body carries when set.
+    """
+
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass
+class ReadStop:
+    """What ends one read early: the caller's deadline (time.monotonic()) and a disconnect."""
+
+    deadline: float | None
+    disconnected: threading.Event
+
+
+# Per request; asyncio.to_thread copies the context into the conversion thread.
+read_stop: ContextVar[ReadStop | None] = ContextVar("read_stop", default=None)
+
+
+class _Stopped(BaseException):
+    """BaseException: docling swallows an Exception raised by a progress callback."""
+
+
+def _stop_check(stop: ReadStop, started: float):
+    """A docling progress callback that raises _Stopped once the read is due to end."""
+
+    def check(_event) -> None:
+        now = time.monotonic()
+        if (
+            stop.disconnected.is_set()
+            or (stop.deadline is not None and now > stop.deadline)
+            or now - started > DOCUMENT_TIMEOUT_S
+        ):
+            raise _Stopped
+
+    return check
 
 
 _construction_count = 0
@@ -66,6 +114,8 @@ def pipeline_options():
     # parsed_page.textline_cells is this subtask's token source (see _page_tokens) --
     # normally discarded after document assembly.
     opts.generate_parsed_pages = True
+    # Backstop; the per-request _stop_check ends a read at the caller's deadline first.
+    opts.document_timeout = DOCUMENT_TIMEOUT_S
     return opts
 
 
@@ -353,10 +403,39 @@ def stub_read(body: bytes, content_type: str) -> dict:
 
     if not body.startswith(_ACCEPTED_SIGNATURES):
         raise DocumentUnreadable("unsupported format")
+    if body.startswith(b"PK\x03\x04"):
+        _check_docx_xml_size(body)
     converter = get_converter()
     stream = DocumentStream(name=_stream_name(content_type), stream=BytesIO(body))
+    stop = read_stop.get() or ReadStop(None, threading.Event())
     try:
-        result = converter.convert(stream)
+        result = converter.convert(
+            stream,
+            max_num_pages=MAX_PAGES,
+            progress_callback=_stop_check(stop, time.monotonic()),
+        )
     except ConversionError as exc:
         raise DocumentUnreadable(str(exc)) from exc
+    except _Stopped:
+        raise _time_limit() from None
+    if result.has_timeout_errors():
+        raise _time_limit()
     return _to_wire_contract(result)
+
+
+def _time_limit() -> DocumentUnreadable:
+    logger.warning("conversion stopped at the time limit (document limit %.0f s)", DOCUMENT_TIMEOUT_S)
+    return DocumentUnreadable("conversion passed the time limit", reason=TIME_LIMIT)
+
+
+def _check_docx_xml_size(body: bytes) -> None:
+    """Refuse a package whose declared XML (a zip bomb inflates in docling's parser) is over bound."""
+    try:
+        with zipfile.ZipFile(BytesIO(body)) as zf:
+            declared = sum(
+                i.file_size for i in zf.infolist() if i.filename.endswith((".xml", ".rels"))
+            )
+    except zipfile.BadZipFile:
+        return  # docling reports it as it does today
+    if declared > DOCX_XML_MAX_BYTES:
+        raise DocumentUnreadable("document XML exceeds the 8 MiB limit")

@@ -249,7 +249,8 @@ func main() {
 		Engine:    validation.NewDefaultEngine(),
 		Mapper:    aiClient,
 		Readers: extraction.CheckReaders{Text: textReader, Render: extraction.NewPDFiumReader(),
-			AI: aiClient, Jev: jevClient},
+			Cap: extraction.NewPDFiumReader(),
+			AI:  aiClient, Jev: jevClient},
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))

@@ -5855,3 +5855,26 @@ func TestRLS_ExtractWorkerNeverReadsPagesForABoxlessNoTextDocument(t *testing.T)
 		t.Errorf("bucket holds %d rendered page(s), want 0: a DOCX renders nothing", n)
 	}
 }
+
+// SECAUD-04 tenant arm: the render gate refuses an over-cap PDF before the docling reader runs.
+func TestExtractWorker_APDFOverThePageCapNeverReachesTheTextReader(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	text := &pcapText{}
+	ew := wkWorkerText(t, wkOK(), &wkOpener{body: fxBuildNPage(prOverCap)}, text, &wkAuditRecorder{})
+	ew.Pages = wkPDFiumPages(&wkPageSink{})
+
+	const riverJobID = int64(954270)
+	err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString()))
+	if !errors.Is(err, extraction.ErrTooManyPages) {
+		t.Fatalf("Work = %v, want ErrTooManyPages", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	if got := stJobFailureKind(t, ctx, xid); got == nil || *got != "pages_not_rendered" {
+		t.Errorf("failure_kind = %s, want pages_not_rendered", wkStr(got))
+	}
+	if n := text.calls.Load(); n != 0 {
+		t.Errorf("text reader calls = %d, want 0", n)
+	}
+}

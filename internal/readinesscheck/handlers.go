@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/publiccheck"
 )
@@ -186,6 +187,9 @@ func (u upload) request() (publiccheck.Request, bool) {
 // DocumentTooLongSentence is the error word of a check document whose text is over the prompt bound.
 const DocumentTooLongSentence = "This document has too much text for the free check. Try a shorter invoice."
 
+// PageLimitSentence is the error word of a check PDF over extraction.MaxPages.
+var PageLimitSentence = fmt.Sprintf("This document is over the %d-page limit. Try a shorter invoice.", extraction.MaxPages)
+
 // FormatRefusal is the gateway's checkFormatSentence; a test keeps them equal.
 const FormatRefusal = "file must be CSV, XLSX, PDF or DOCX"
 
@@ -200,6 +204,8 @@ func engineStatus(err error) (status int, word string) {
 		return http.StatusBadRequest, strings.TrimPrefix(err.Error(), importer.ErrValidation.Error()+": ")
 	case errors.Is(err, publiccheck.ErrDocumentTooLong):
 		return http.StatusBadRequest, DocumentTooLongSentence
+	case errors.Is(err, publiccheck.ErrTooManyPages):
+		return http.StatusBadRequest, PageLimitSentence
 	case errors.Is(err, publiccheck.ErrBadFile):
 		return http.StatusUnprocessableEntity, "unreadable"
 	case errors.Is(err, publiccheck.ErrReadUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):

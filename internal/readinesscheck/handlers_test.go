@@ -230,6 +230,10 @@ func (r *fakeText) Read(context.Context, extraction.Document, func(extraction.Pa
 	return extraction.PageResult{}, r.err
 }
 
+type capStub struct{ err error }
+
+func (c *capStub) CheckPageCap(context.Context, extraction.Document) error { return c.err }
+
 type rig struct {
 	svc     *Service
 	store   *fakeStore
@@ -239,6 +243,7 @@ type rig struct {
 	mapper  *fakeMapper
 	ai      *fakeAI
 	text    *fakeText
+	cp      *capStub
 	loads   atomic.Int32
 	entered chan struct{}
 	gate    chan struct{} // when set, LoadRules blocks until it closes or the run context ends
@@ -246,7 +251,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{ev: &events{}, logs: &lockedBuf{}, ai: &fakeAI{}, text: &fakeText{err: errors.New("docling down")},
+	r := &rig{ev: &events{}, logs: &lockedBuf{}, ai: &fakeAI{}, cp: &capStub{}, text: &fakeText{err: errors.New("docling down")},
 		entered: make(chan struct{}, 8)}
 	r.store = &fakeStore{ev: r.ev}
 	r.send = &recSender{ev: r.ev}
@@ -258,7 +263,7 @@ func newRig(t *testing.T) *rig {
 		LoadRules: r.load,
 		Engine:    validation.NewDefaultEngine(),
 		Mapper:    r.mapper,
-		Readers:   extraction.CheckReaders{Text: r.text, AI: r.ai},
+		Readers:   extraction.CheckReaders{Text: r.text, Cap: r.cp, AI: r.ai},
 		Now:       func() time.Time { return time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC) },
 	}
 	logger := slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -1367,6 +1372,35 @@ func TestRunHandler_ATooLongDocumentHoldsAndMailsNothing(t *testing.T) {
 	}
 	if ai := r.ai.calls.Load(); ai != 0 {
 		t.Errorf("AI calls = %d, want 0", ai)
+	}
+	r.noWrites(t)
+}
+
+func TestEngineStatus_APDFOverThePageCapIs400WithTheSentence(t *testing.T) {
+	err := fmt.Errorf("%w: %w", publiccheck.ErrTooManyPages, extraction.ErrTooManyPages)
+	status, word := engineStatus(err)
+	const want = "This document is over the 800-page limit. Try a shorter invoice."
+	if status != http.StatusBadRequest || word != want || PageLimitSentence != want {
+		t.Errorf("engineStatus = %d %q, PageLimitSentence = %q; want 400 %q", status, word, PageLimitSentence, want)
+	}
+}
+
+func TestRunHandler_APDFOverThePageCapHoldsAndMailsNothing(t *testing.T) {
+	r := newRig(t)
+	r.cp.err = fmt.Errorf("cap: %w %w", extraction.ErrTooManyPages, extraction.ErrDocumentUnreadable)
+	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF-1.4"), "consent_text", "ok")
+	wantStatus(t, rec, http.StatusBadRequest, PageLimitSentence)
+	if n := len(r.store.holds()); n != 0 {
+		t.Errorf("holds = %d, want 0", n)
+	}
+	if n := len(r.send.capture.Messages()); n != 0 {
+		t.Errorf("mails sent = %d, want 0", n)
+	}
+	if n := r.text.calls.Load(); n != 0 {
+		t.Errorf("text calls = %d, want 0", n)
+	}
+	if n := r.ai.calls.Load(); n != 0 {
+		t.Errorf("AI calls = %d, want 0", n)
 	}
 	r.noWrites(t)
 }

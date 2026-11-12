@@ -13,8 +13,14 @@ import (
 type CheckReaders struct {
 	Text   PageReader // docling
 	Render PageReader // NewPDFiumEndsReader, for a PDF with no text layer
+	Cap    PageCapper // NewPDFiumReader: refuses a PDF over MaxPages before docling
 	AI     AIReader
 	Jev    JevAsker
+}
+
+// PageCapper counts a PDF's pages without rendering any.
+type PageCapper interface {
+	CheckPageCap(ctx context.Context, doc Document) error
 }
 
 var (
@@ -29,6 +35,16 @@ func ReadForCheck(ctx context.Context, r CheckReaders, file []byte, format strin
 		return nil, "", errors.New("extraction: check has no text reader")
 	}
 	doc := Document{Bytes: file, ContentType: acceptedDocumentTypes["."+format]}
+	if format == "pdf" {
+		if r.Cap == nil {
+			return nil, "", errors.New("extraction: check has no page cap")
+		}
+		// Any other cap error (pdfium cannot open it) falls through to docling, as before.
+		if err := r.Cap.CheckPageCap(ctx, doc); errors.Is(err, ErrTooManyPages) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", err
+		}
+	}
 	textPages, tokens, res, err := readText(ctx, r.Text, doc)
 	if err != nil {
 		return nil, "", err

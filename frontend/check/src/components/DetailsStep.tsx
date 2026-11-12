@@ -18,10 +18,11 @@ interface Props {
   onEmail: (v: string) => void
   onTick: (v: boolean) => void
   onBack: () => void
+  onChooseAnother: () => void
   onSend: () => void
 }
 
-export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, canSend, refusal, onEmail, onTick, onBack, onSend }: Props) {
+export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, canSend, refusal, onEmail, onTick, onBack, onChooseAnother, onSend }: Props) {
   // Touched state resets on remount (Back, a new file).
   const [emailTouched, setEmailTouched] = useState(false)
   const [tickTouched, setTickTouched] = useState(false)
@@ -98,6 +99,7 @@ export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, canSend
             </p>
           )}
         </div>
+        {refusal && <Refusal refusal={refusal} onChooseAnother={onChooseAnother} />}
         <div className="check-actions">
           <button type="button" className="check-btn check-btn--outline" onClick={onBack}>
             {BACK}
@@ -107,7 +109,6 @@ export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, canSend
             <Icon paths={CHECK_GLYPHS['arrow-right']} size={16} strokeWidth={2} />
           </button>
         </div>
-        {refusal && <Refusal refusal={refusal} />}
       </form>
     </section>
   )

@@ -139,13 +139,20 @@ export function App() {
                 ticked={ticked}
                 canSend={canSend({ file, email, ticked, fields })}
                 refusal={refusal}
-                onEmail={setEmail}
-                onTick={setTicked}
+                onEmail={(v) => {
+                  setRefusal(null)
+                  setEmail(v)
+                }}
+                onTick={(v) => {
+                  setRefusal(null)
+                  setTicked(v)
+                }}
                 onBack={() => {
                   setRefusal(null)
                   if (suggestion) setStep('map')
                   else backToUpload()
                 }}
+                onChooseAnother={backToUpload}
                 onSend={send}
               />
             )}

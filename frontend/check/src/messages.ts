@@ -51,3 +51,5 @@ function text(route: Route, status: number | null, error: string | null): string
 export const refusal = (route: Route, status: number | null, error: string | null): Refusal => ({
   text: text(route, status, error),
 })
+
+export const offersAnotherFile = (r: Refusal): boolean => r.text === UNREADABLE_SENTENCE || r.text === SLOW_UPLOAD_SENTENCE

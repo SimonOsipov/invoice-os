@@ -616,7 +616,7 @@ describe('rejected mapping', () => {
     await send()
     expect(container.querySelector('#check-email')).not.toBeNull()
     expect(container.textContent).not.toContain('Tell us which column is which')
-    expect(container.querySelector('.check-refusal')).not.toBeNull()
+    expect(container.querySelector('.check-email [role="alert"]')).not.toBeNull()
     expect(container.textContent).not.toContain(MAPPING_SENTENCE)
   })
 

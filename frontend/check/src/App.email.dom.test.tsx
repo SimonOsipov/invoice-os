@@ -6,7 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS, fieldLabel, formatBytes } from './fields'
 import { SENDING_NOTE, SENDING_TEXT, SENDING_TO, STAGE_MS, STAGES } from './copy'
-import { CONSENT_SENTENCE, EMAIL_SENTENCE } from './messages'
+import {
+  ARMOR_SENTENCE,
+  CEILING_SENTENCE,
+  CONSENT_SENTENCE,
+  EMAIL_SENTENCE,
+  IP_SENTENCE,
+  SLOW_UPLOAD_SENTENCE,
+  TOO_MUCH_TEXT_SENTENCE,
+  UNAVAILABLE_SENTENCE,
+  UNREADABLE_SENTENCE,
+} from './messages'
+import { SIZE_SENTENCE } from './copy'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -306,5 +317,111 @@ describe('sending view', () => {
     expect(document.activeElement).toBe(h2)
     expect(h2.tabIndex).toBe(-1)
     await act(async () => release())
+  })
+})
+
+describe('email alert', () => {
+  let answer: () => Response | Promise<Response>
+  const html429 = () => new Response('<html>429</html>', { status: 429, headers: { 'Content-Type': 'text/html' } })
+  const reject = () => Promise.reject(new TypeError('Failed to fetch'))
+  const ALERT = '.check-email [role="alert"]'
+  const alerts = () => container.querySelectorAll('.check-email .check-alert')
+  const fill = async () => {
+    await type(emailInput(), 'a@x.io')
+    await click(tickBox())
+  }
+  const submit = () => click(q('button[type="submit"]')!)
+  const toRefusal = async (a: () => Response | Promise<Response>, name = 'a.pdf') => {
+    answer = a
+    await mount()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => (String(input).endsWith('/readiness-check/run') ? answer() : json(200, SHEET))))
+    await pick(new File(['aaaa'], name))
+    await fill()
+    await submit()
+    await settle()
+  }
+
+  it.each<[string, () => Response | Promise<Response>, string]>([
+    ['429 gateway', () => json(429, { error: IP_SENTENCE }), IP_SENTENCE],
+    ['429 armor', html429, ARMOR_SENTENCE],
+    ['422', () => json(422, { error: UNREADABLE_SENTENCE }), UNREADABLE_SENTENCE],
+    ['408', () => json(408, { error: SLOW_UPLOAD_SENTENCE }), SLOW_UPLOAD_SENTENCE],
+    ['503 ceiling', () => json(503, { error: CEILING_SENTENCE }), CEILING_SENTENCE],
+    ['503 other', () => json(503, { error: 'busy' }), UNAVAILABLE_SENTENCE],
+    ['413', () => json(413, { error: 'file is over 15 MiB' }), SIZE_SENTENCE],
+    ['400 too much text', () => json(400, { error: TOO_MUCH_TEXT_SENTENCE }), TOO_MUCH_TEXT_SENTENCE],
+    ['400 email', () => json(400, { error: 'email is invalid' }), EMAIL_SENTENCE],
+    ['409', () => json(409, { error: 'x' }), UNAVAILABLE_SENTENCE],
+    ['network', reject, UNAVAILABLE_SENTENCE],
+  ])('email_eachServerRefusalShowsInTheOneAlert %s', async (_n, a, sentence) => {
+    await toRefusal(a)
+    expect(container.querySelectorAll(ALERT).length).toBe(1)
+    const alert = alerts()[0]!
+    expect(alert.textContent!.startsWith(sentence)).toBe(true)
+    expect(alert.nextElementSibling!.className).toBe('check-actions')
+    expect(alert.previousElementSibling!.className).toBe('check-consent-field')
+    if (_n === '409') expect(alert.querySelector('a')).toBeNull()
+  })
+
+  it.each<[string, () => Response]>([
+    ['422', () => json(422, { error: UNREADABLE_SENTENCE })],
+    ['408', () => json(408, { error: SLOW_UPLOAD_SENTENCE })],
+  ])('email_aFileRefusalOffersAnotherFile %s', async (_n, a) => {
+    await toRefusal(a)
+    const choose = [...alerts()[0]!.querySelectorAll('button')].find((b) => b.textContent === 'Choose another file')!
+    expect(choose).toBeTruthy()
+    await click(choose)
+    expect(q('input[type="file"]')).not.toBeNull()
+    expect(alerts().length).toBe(0)
+    expect(container.textContent).not.toContain('a.pdf')
+    expect(q('.check-progress [aria-current="step"]')!.textContent).toContain('Upload')
+    await pick(new File(['bbbb'], 'b.pdf'))
+    expect(emailInput().value).toBe('a@x.io')
+    expect(tickBox().checked).toBe(false)
+  })
+
+  it.each<[string, () => Response | Promise<Response>]>([
+    ['429', () => json(429, { error: IP_SENTENCE })],
+    ['503', () => json(503, { error: 'busy' })],
+    ['413', () => json(413, { error: 'x' })],
+    ['400 too much text', () => json(400, { error: TOO_MUCH_TEXT_SENTENCE })],
+    ['network', reject],
+  ])('email_otherRefusalsOfferNoOtherFile %s', async (_n, a) => {
+    await toRefusal(a)
+    expect(alerts().length).toBe(1)
+    expect(alerts()[0]!.querySelector('button, a')).toBeNull()
+  })
+
+  it('email_aRefusalKeepsTheFormFilled', async () => {
+    await toRefusal(() => json(503, { error: 'busy' }))
+    expect(emailInput().value).toBe('a@x.io')
+    expect(tickBox().checked).toBe(true)
+    expect(button('Send').disabled).toBe(false)
+  })
+
+  it('email_editingTheFormClearsTheAlert', async () => {
+    const a = () => json(503, { error: 'busy' })
+    await toRefusal(a)
+    await blur(emailInput())
+    expect(alerts().length).toBe(1)
+    await type(emailInput(), 'a@x.ioo')
+    expect(alerts().length).toBe(0)
+    await submit()
+    await settle()
+    expect(alerts().length).toBe(1)
+    await click(tickBox())
+    expect(alerts().length).toBe(0)
+    await click(tickBox())
+    await submit()
+    await settle()
+    expect(alerts().length).toBe(1)
+    await click(button('Back'))
+    await pick(new File(['aaaa'], 'a.pdf'))
+    expect(alerts().length).toBe(0)
+  })
+
+  it('email_theAlertTakesFocus', async () => {
+    await toRefusal(() => json(422, { error: UNREADABLE_SENTENCE }))
+    expect(document.activeElement).toBe(alerts()[0])
   })
 })

@@ -39,7 +39,8 @@ const EMAIL_STEP_NO = '03 · Email'
 const EMAIL_TITLE = 'Where should we send the results?'
 const FILE_MATCHED = /\d+ of \d+ fields matched/
 const sentText = (email: string) => `Check your inbox at ${email}.`
-const SENT_NOTE = 'We sent you an email from no-reply@ascomply.com. Check your spam folder if you cannot find it.'
+const SENT_FROM = 'no-reply@ascomply.com'
+const SENT_NOTE = `We sent you an email from ${SENT_FROM}. Check your spam folder if you cannot find it.`
 const SIGN_UP = 'Sign up'
 const BOOK_DEMO = 'Book a demo'
 // internal/gateway/readiness_check.go: checkIPSentence.

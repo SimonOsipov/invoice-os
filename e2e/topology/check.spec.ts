@@ -536,7 +536,7 @@ test.describe('check layout', () => {
       ['.check-acc-text', 'min-width', '0px'],
       ['.check-acc-sub', 'text-overflow', 'ellipsis'],
       ['.check-acc-sub', 'white-space', 'nowrap'],
-      ['.check-chev', 'display', 'inline-flex'],
+      ['.check-chev', 'display', 'flex'], // inline-flex, blockified as a grid item
       ['.check-chev', 'color', '--muted-foreground'],
       ['.check-acc-title', 'font-size', '15px'],
       ['.check-acc-title', 'font-weight', '700'],

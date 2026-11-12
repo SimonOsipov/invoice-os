@@ -53,7 +53,7 @@ export const PR_LANE_MAPPING: Record<string, string> = Object.fromEntries(
   Object.entries(PERF_MAPPING).filter(([field]) => field !== 'buyer_name' && field !== 'line_description'),
 )
 
-// The Item cell exceeds the model's context, so a real call is refused; no marker, so the fake answers blank.
+// The fake answers blank to this file; the real AI gets the Item cell cut to 200 bytes (maxPromptCellBytes) and answers.
 export function buildOversizedCellCsv(): string {
   return `${PERF_HEADER}\nINV-OVR-1,2026-03-31,12345678-0001,Buyer,NGN,100,7.5,107.5,${'7'.repeat(6_000_000)},1,100\n`
 }

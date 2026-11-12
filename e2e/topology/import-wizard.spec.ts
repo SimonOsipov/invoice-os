@@ -636,22 +636,26 @@ test("AIR07-E2E-04: an oversized cell opens exactly today's Map step", async ({ 
   )
   await readColumnsBtn.click()
   const suggestBody = (await (await suggestResp).json()) as { source: string; mapping: Record<string, string> }
-  // Control: the fake answers blank, the real AI refuses the oversized cell; both give 'none'.
-  expect(suggestBody.source, 'control: an oversized-cell file must fall to the no-answer path').toBe('none')
-  expect(Object.keys(suggestBody.mapping), 'control: a blank answer places nothing').toHaveLength(0)
+  // The fake answers blank; the real AI gets the cell cut to 200 bytes (maxPromptCellBytes) and answers.
+  const real = nightlyTarget()
+  expect(suggestBody.source, 'control: the fake falls to the no-answer path, the real AI answers').toBe(real ? 'ai' : 'none')
+  if (!real) expect(Object.keys(suggestBody.mapping), 'control: a blank answer places nothing').toHaveLength(0)
 
   // Control: the screen is live with all 11 columns rendered, not merely empty.
   await expect(page.getByTestId('map-column'), 'control: the Map step must have rendered all 11 columns').toHaveCount(11)
-  await expect(page.getByTestId('map-suggested-badge'), 'no badge before placement').toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Map invoice number to continue' })).toBeVisible()
 
-  // The shipped click-to-place pair: arm invoice_number, then place it on its column.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  if (!real) {
+    await expect(page.getByTestId('map-suggested-badge'), 'no badge before placement').toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Map invoice number to continue' })).toBeVisible()
 
-  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
-  await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
-  await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
+    // The shipped click-to-place pair: arm invoice_number, then place it on its column.
+    await page.getByRole('button', { name: 'invoice_number' }).click()
+    await page.getByText('Invoice No', { exact: true }).click()
+
+    const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+    await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
+    await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

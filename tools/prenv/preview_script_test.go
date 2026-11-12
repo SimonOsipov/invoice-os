@@ -45,7 +45,19 @@ case "$1 $2 $3" in
   labels.preview-pr=*) cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
   *) cat "$D/have" 2>/dev/null || : ;;
   esac ;;
-"run services describe" | "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run services describe") case "$*" in *latestReadyRevisionName*)
+  [ ! -e "$D/faildescribe" ] || { echo "ERROR: describe $4 failed" >&2; exit 1; }
+  cat "$D/latest-$4"; exit 0 ;; esac
+  [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run revisions list")
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --service ] && cat "$D/revisions-$a" 2>/dev/null
+    prev=$a
+  done ;;
+"run revisions delete") if grep -qxF -- "$4" "$D/faildelete" 2>/dev/null; then echo "ERROR: delete $4 failed" >&2; exit 1; fi
+  echo "$4" >> "$D/deleted" ;;
+"run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
@@ -1122,13 +1134,24 @@ var blogIDEnv = []string{"RESEND_BLOG_TOPIC_ID=" + blogTopicID, "RESEND_BLOG_SEG
 
 func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	t.Parallel()
-	r := runPreviewEnv(t, blogIDEnv, nil, "mail-on", "nightly")
+	r := runPreviewEnv(t, blogIDEnv, func(dir string) {
+		writeIn(t, dir, "revisions-worker-nightly", "worker-nightly-00001-aaa\n")
+		writeIn(t, dir, "latest-worker-nightly", "worker-nightly-00001-aaa\n")
+	}, "mail-on", "nightly")
 	if r.code != 0 {
 		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
-	lines := nonBlankLines(r.file(t, "calls"))
+	var lines []string
+	for _, c := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(c, "run services update ") {
+			lines = append(lines, c)
+		}
+	}
 	if len(lines) != 4 {
 		t.Fatalf("calls = %v, want four service updates", lines)
+	}
+	if !strings.Contains(r.file(t, "calls"), "run revisions list --service worker-nightly ") || r.exists("deleted") {
+		t.Errorf("a lone serving revision must be listed and not deleted; calls = %q", r.file(t, "calls"))
 	}
 	gw := "https://gateway-nightly-944095690109.africa-south1.run.app"
 	for _, w := range []string{"run services update auth-nightly ", "--update-secrets GOTRUE_SMTP_PASS=nightly-gotrue-smtp-pass:latest",
@@ -1156,6 +1179,82 @@ func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	}
 	if strings.Contains(r.file(t, "calls"), "versions access") {
 		t.Error("mail-on read a secret value")
+	}
+}
+
+func TestPreviewMailOnDeletesEveryWorkerRevisionButTheServingOne(t *testing.T) {
+	t.Parallel()
+	old := []string{"worker-nightly-00001-aaa", "worker-nightly-00002-bbb"}
+	latest := "worker-nightly-00003-ccc"
+	r := runPreviewEnv(t, blogIDEnv, func(dir string) {
+		writeIn(t, dir, "revisions-worker-nightly", strings.Join(append(old, latest), "\n")+"\n")
+		writeIn(t, dir, "latest-worker-nightly", latest+"\n")
+	}, "mail-on", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	calls := nonBlankLines(r.file(t, "calls"))
+	update := -1
+	for i, c := range calls {
+		if strings.HasPrefix(c, "run services update worker-nightly ") {
+			update = i
+		}
+	}
+	if update < 0 {
+		t.Fatalf("no worker-nightly update in %v", calls)
+	}
+	for _, rev := range append(old, latest) {
+		at := -1
+		for i, c := range calls {
+			if strings.HasPrefix(c, "run revisions delete "+rev+" ") {
+				at = i
+			}
+		}
+		switch {
+		case rev == latest && at >= 0:
+			t.Errorf("deleted the serving revision %s", rev)
+		case rev != latest && at < update:
+			t.Errorf("earlier revision %s not deleted after the worker update (delete at %d, update at %d)", rev, at, update)
+		}
+	}
+}
+
+func TestPreviewMailOnFailsWhenItCannotRetireTheOldWorkerRevisions(t *testing.T) {
+	t.Parallel()
+	old, latest := "worker-nightly-00001-aaa", "worker-nightly-00002-bbb"
+	for _, tc := range []struct {
+		name, want string
+		setup      func(dir string)
+	}{
+		{"empty latest ready name", "no latest ready revision", func(dir string) { writeIn(t, dir, "latest-worker-nightly", "\n") }},
+		{"describe fails", "cannot read the worker-nightly serving revision", func(dir string) { writeIn(t, dir, "faildescribe", "") }},
+		{"list fails", "cannot list the worker-nightly revisions", func(dir string) { writeIn(t, dir, "fail-run-revisions", "") }},
+		{"serving revision not listed", "is not in the worker-nightly revision list", func(dir string) { writeIn(t, dir, "revisions-worker-nightly", old+"\n") }},
+		{"revision list empty", "is not in the worker-nightly revision list", func(dir string) { writeIn(t, dir, "revisions-worker-nightly", "") }},
+		{"delete fails", "cannot delete the old worker-nightly revision " + old, func(dir string) { writeIn(t, dir, "faildelete", old+"\n") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreviewEnv(t, blogIDEnv, func(dir string) {
+				writeIn(t, dir, "revisions-worker-nightly", old+"\n"+latest+"\n")
+				writeIn(t, dir, "latest-worker-nightly", latest+"\n")
+				tc.setup(dir)
+			}, "mail-on", "nightly")
+			if r.code == 0 || !strings.Contains(r.stderr, tc.want) {
+				t.Fatalf("exit %d, stderr %q, want a failure containing %q", r.code, r.stderr, tc.want)
+			}
+			if r.exists("deleted") {
+				t.Errorf("deleted %q, want nothing", r.file(t, "deleted"))
+			}
+			for _, c := range nonBlankLines(r.file(t, "calls")) {
+				if strings.HasPrefix(c, "run revisions delete ") && strings.Contains(c, latest) {
+					t.Errorf("tried to delete the serving revision: %s", c)
+				}
+				if strings.HasPrefix(c, "run revisions ") && strings.Contains(c, "=") {
+					t.Errorf("revision call carries a key=value argument: %s", c)
+				}
+			}
+		})
 	}
 }
 

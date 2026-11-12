@@ -473,7 +473,7 @@ cmd_mail_blog_ids() {
 
 # mail-on: after E2E, mount the mail secrets. Only secret names and the public Blog ids go in argv.
 cmd_mail_on() {
-  local gw ids v
+  local gw ids v latest revs rev
   for v in RESEND_BLOG_TOPIC_ID RESEND_BLOG_SEGMENT_ID; do
     [[ "${!v:-}" =~ $UUID_RE ]] || die "$v must be a UUID"
   done
@@ -489,6 +489,17 @@ cmd_mail_on() {
     --update-env-vars "$ids"
   gcloud run services update worker-nightly "${gc[@]}" \
     --update-secrets RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest --update-env-vars "$ids"
+  # An old revision's instance keeps polling River without the Blog ids; delete it so it cannot claim the blog sync job.
+  latest=$(gcloud run services describe worker-nightly "${gc[@]}" --format 'value(status.latestReadyRevisionName)') \
+    || die "cannot read the worker-nightly serving revision"
+  [ -n "$latest" ] || die "worker-nightly has no latest ready revision"
+  revs=$(gcloud run revisions list --service worker-nightly "${gc[@]}" --format 'value(metadata.name)') \
+    || die "cannot list the worker-nightly revisions"
+  case $'\n'"$revs"$'\n' in *$'\n'"$latest"$'\n'*) ;; *) die "the serving revision $latest is not in the worker-nightly revision list" ;; esac
+  for rev in $revs; do
+    [ "$rev" = "$latest" ] && continue
+    gcloud run revisions delete "$rev" "${gc[@]}" || die "cannot delete the old worker-nightly revision $rev"
+  done
 }
 
 # mail-off: unmount the mail secrets and turn auto-confirm back on. Runs after a failed run too.

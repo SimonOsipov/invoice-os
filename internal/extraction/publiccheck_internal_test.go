@@ -44,6 +44,19 @@ func (r *pcReader) Read(_ context.Context, _ Document, onPage func(Page) error) 
 	return PageResult{Pages: len(r.pages), TextChars: r.chars}, nil
 }
 
+// pcCap is a page cap that never refuses.
+type pcCap struct{}
+
+func (pcCap) CheckPageCap(context.Context, Document) error { return nil }
+
+// pcCapRec records its calls and returns err.
+type pcCapRec struct {
+	calls int
+	err   error
+}
+
+func (c *pcCapRec) CheckPageCap(context.Context, Document) error { c.calls++; return c.err }
+
 // pcAI answers by purpose and records the call order into *order.
 type pcAI struct {
 	enabled bool
@@ -118,7 +131,7 @@ func TestReadForCheck_TextDocumentAsksHeaderThenLinesThenJev(t *testing.T) {
 	j := &pcJev{order: &order, resp: jev.Response{Answers: map[string]jev.Answer{
 		documentTypeQuestionID: {Type: jev.TypeChoice, Choice: "credit note", Confidence: 0.95},
 	}}}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
 
 	fields, docType, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if err != nil {
@@ -140,7 +153,7 @@ func TestReadForCheck_FailedHeaderCallIsUnavailable(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, failOn: ai.PurposeDocument}
 	j := &pcJev{order: &order}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
 
 	_, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if !errors.Is(err, ErrCheckAIUnavailable) {
@@ -155,7 +168,7 @@ func TestReadForCheck_FailedLineCallIsUnavailable(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, failOn: ai.PurposeLineItems, header: map[string]any{}}
 	j := &pcJev{order: &order}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
 
 	_, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if !errors.Is(err, ErrCheckAIUnavailable) {
@@ -170,7 +183,7 @@ func TestReadForCheck_NoTextPDFSendsFirstAndLastPageFromMemory(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, header: map[string]any{"invoice_number": "INV-9"}}
 	render := pcRender("p1", "p2", "p3")
-	r := CheckReaders{Text: &pcReader{}, Render: render, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: render, AI: a}
 
 	fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if err != nil {
@@ -188,7 +201,7 @@ func TestReadForCheck_NoTextPDFSendsFirstAndLastPageFromMemory(t *testing.T) {
 func TestReadForCheck_NoTextOnePagePDFSendsThatPage(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, header: map[string]any{"invoice_number": "INV-9"}}
-	r := CheckReaders{Text: &pcReader{}, Render: pcRender("p1"), AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: pcRender("p1"), AI: a}
 
 	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); err != nil {
 		t.Fatal(err)
@@ -206,7 +219,7 @@ func TestReadForCheck_NoTextDOCXIsAPoorScan(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order}
 	render := pcRender("p1")
-	r := CheckReaders{Text: &pcReader{}, Render: render, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: render, AI: a}
 
 	fields, _, err := ReadForCheck(context.Background(), r, []byte("PK"), "docx")
 	if err != nil {
@@ -221,7 +234,7 @@ func TestReadForCheck_NoTextPDFWithAIOffIsAPoorScan(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: false, order: &order}
 	render := pcRender("p1")
-	r := CheckReaders{Text: &pcReader{}, Render: render, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: render, AI: a}
 
 	fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if err != nil {
@@ -236,7 +249,7 @@ func TestReadForCheck_ReaderErrorIsReturned(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order}
 	boom := errors.New("docling down")
-	r := CheckReaders{Text: &pcReader{err: boom}, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{err: boom}, AI: a}
 
 	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
@@ -249,7 +262,7 @@ func TestReadForCheck_ReaderErrorIsReturned(t *testing.T) {
 func TestReadForCheck_NilTextReaderIsAnError(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order}
-	if _, _, err := ReadForCheck(context.Background(), CheckReaders{AI: a}, []byte("%PDF"), "pdf"); err == nil {
+	if _, _, err := ReadForCheck(context.Background(), CheckReaders{Cap: pcCap{}, AI: a}, []byte("%PDF"), "pdf"); err == nil {
 		t.Fatal("err = nil, want an error")
 	}
 	if len(a.reqs) != 0 {
@@ -261,7 +274,7 @@ func TestReadForCheck_ContextEndedDuringTheReadReturnsItsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var order []string
 	a := &pcAI{enabled: true, order: &order, header: map[string]any{"invoice_number": "INV-9"}}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20, onRun: cancel}, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20, onRun: cancel}, AI: a}
 
 	fields, _, err := ReadForCheck(ctx, r, []byte("%PDF"), "pdf")
 	if !errors.Is(err, context.Canceled) || fields != nil {
@@ -280,7 +293,7 @@ func TestReadForCheck_NilOrFailingJevLeavesNoVerdict(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var order []string
 			a := &pcAI{enabled: true, order: &order, header: map[string]any{"invoice_number": "INV-9"}}
-			r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: jv}
+			r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: jv}
 
 			fields, docType, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 			if err != nil || docType != "" || pcValue(fields, "invoice_number") != "INV-9" {
@@ -297,7 +310,7 @@ func TestReadForCheck_LineAnswerBecomesLineItemFields(t *testing.T) {
 			map[string]any{"description": "Widget"},
 			map[string]any{"description": "Gadget"},
 		}}}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a}
 
 	fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if err != nil {
@@ -322,7 +335,7 @@ func TestReadForCheck_EveryAICallCarriesThePublicCheckMark(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, header: map[string]any{}}
 	j := &pcJev{order: &order}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: a, Jev: j}
 	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +350,7 @@ func TestReadForCheck_EveryAICallCarriesThePublicCheckMark(t *testing.T) {
 	}
 
 	a2 := &pcAI{enabled: true, order: &order, header: map[string]any{}}
-	r2 := CheckReaders{Text: &pcReader{}, Render: pcRender("p1"), AI: a2}
+	r2 := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: pcRender("p1"), AI: a2}
 	if _, _, err := ReadForCheck(context.Background(), r2, []byte("%PDF"), "pdf"); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +377,7 @@ func TestReadForCheck_NoTextPDFImagePathFailuresAreNotAReading(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := CheckReaders{Text: &pcReader{}, Render: c.render, AI: c.ai}
+			r := CheckReaders{Cap: pcCap{}, Text: &pcReader{}, Render: c.render, AI: c.ai}
 			fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 			if !errors.Is(err, c.wantErr) || (c.wantErr == nil) != (err == nil) {
 				t.Fatalf("err = %v, want %v", err, c.wantErr)
@@ -392,7 +405,7 @@ func TestReadForCheck_AnOverBoundDocumentIsRefusedBeforeAnyAICall(t *testing.T) 
 	var order []string
 	a := &pcAI{enabled: true, order: &order}
 	j := &pcJev{order: &order}
-	r := CheckReaders{Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: a, Jev: j}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: a, Jev: j}
 
 	_, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 	if !errors.Is(err, ErrCheckDocumentTooLong) {
@@ -407,7 +420,7 @@ func TestReadForCheck_AParagraphTokenIsReadNotRefused(t *testing.T) {
 	var order []string
 	a := &pcAI{enabled: true, order: &order, header: map[string]any{}, lines: map[string]any{}}
 	page := Page{Number: 1, Tokens: []Token{tok(strings.Repeat("w", 4_000), 1, 0.1, 0.1, 0.9, 0.2)}}
-	r := CheckReaders{Text: &pcReader{pages: []Page{page}, chars: 4_000}, AI: a}
+	r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{page}, chars: 4_000}, AI: a}
 
 	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); err != nil {
 		t.Fatal(err)
@@ -422,7 +435,7 @@ func TestReadForCheck_AnOverBoundDocumentWithTheAIOffIsNotRefused(t *testing.T) 
 	off := &pcAI{enabled: false, order: &order}
 	for name, ai := range map[string]AIReader{"nil reader": nil, "disabled reader": off} {
 		t.Run(name, func(t *testing.T) {
-			r := CheckReaders{Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: ai}
+			r := CheckReaders{Cap: pcCap{}, Text: &pcReader{pages: []Page{pcBigPage()}, chars: 20}, AI: ai}
 			fields, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf")
 			if err != nil {
 				t.Fatal(err)
@@ -434,5 +447,37 @@ func TestReadForCheck_AnOverBoundDocumentWithTheAIOffIsNotRefused(t *testing.T) 
 				t.Errorf("AI calls = %d, want 0", len(off.reqs))
 			}
 		})
+	}
+}
+
+func TestReadForCheck_ADOCXNeverCallsTheCap(t *testing.T) {
+	c := &pcCapRec{err: ErrTooManyPages}
+	r := CheckReaders{Cap: c, Text: &pcReader{pages: []Page{pcTextPage()}, chars: 20}, AI: &pcAI{}}
+	if _, _, err := ReadForCheck(context.Background(), r, []byte("PK"), "docx"); err != nil {
+		t.Fatal(err)
+	}
+	if c.calls != 0 {
+		t.Errorf("cap calls = %d, want 0", c.calls)
+	}
+}
+
+func TestReadForCheck_APDFWithNoCapIsAnError(t *testing.T) {
+	text := &pcReader{pages: []Page{pcTextPage()}, chars: 20}
+	if _, _, err := ReadForCheck(context.Background(), CheckReaders{Text: text, AI: &pcAI{}}, []byte("%PDF"), "pdf"); err == nil {
+		t.Fatal("err = nil, want an error")
+	}
+	if text.calls != 0 {
+		t.Errorf("text calls = %d, want 0", text.calls)
+	}
+}
+
+func TestReadForCheck_ACapErrorThatIsNotTheCapCarriesOn(t *testing.T) {
+	text := &pcReader{pages: []Page{pcTextPage()}, chars: 20}
+	r := CheckReaders{Cap: &pcCapRec{err: errors.New("pdfium: cannot open")}, Text: text, AI: &pcAI{}}
+	if _, _, err := ReadForCheck(context.Background(), r, []byte("%PDF"), "pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if text.calls != 1 {
+		t.Errorf("text calls = %d, want 1", text.calls)
 	}
 }

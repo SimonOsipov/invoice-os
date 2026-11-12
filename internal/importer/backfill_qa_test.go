@@ -530,6 +530,14 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 	}
 }
 
+func TestDecodeStoredDocument_AnOverCapCSVIsAnErrorTheCallerSkips(t *testing.T) {
+	open := newFakeDocOpen("d.csv", "text/csv", []byte(csvRows(maxXLSXDataRows+1)))
+	rows, err := decodeStoredDocument(context.Background(), open.fn(), open.doc.ID)
+	if !errors.Is(err, ErrTooManyRows) || rows != nil {
+		t.Fatalf("rows = %d, err = %v, want nil rows, ErrTooManyRows", len(rows), err)
+	}
+}
+
 func TestDecodeStoredDocument_PassesItsContextToTheDecode(t *testing.T) {
 	book := cellsAt(t, "A1", "A2")
 	open := newFakeDocOpen("d.xlsx", xlsxContentType, book)

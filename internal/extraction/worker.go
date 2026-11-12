@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
+
 	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -289,8 +291,10 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		}
 	}
 	if err != nil {
+		// A second time-limit stop dead-letters early: a retry would only repeat the same stop.
+		early := errors.Is(err, ErrReadTimedOut) && priorTimeLimitStop(job) && job.Attempt < job.MaxAttempts
 		state := "failed"
-		if job.Attempt >= job.MaxAttempts {
+		if job.Attempt >= job.MaxAttempts || early {
 			state = "dead_lettered"
 		}
 		if txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
@@ -314,6 +318,11 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			})
 		}); txErr != nil {
 			return txErr
+		}
+		if early {
+			// River skips its error handler for a cancel, so report it as a final attempt would be.
+			queue.ReportCancelled(job.JobRow, err)
+			return river.JobCancel(err)
 		}
 		return err
 	}
@@ -365,4 +374,15 @@ func flaggedCount(results []FieldResult) int {
 		}
 	}
 	return n
+}
+
+// priorTimeLimitStop reports whether an earlier attempt of this job ended on the sidecar's time
+// limit, read from the error text River recorded for it.
+func priorTimeLimitStop(job *river.Job[extractArgs]) bool {
+	for _, e := range job.Errors {
+		if strings.Contains(e.Error, ErrReadTimedOut.Error()) {
+			return true
+		}
+	}
+	return false
 }

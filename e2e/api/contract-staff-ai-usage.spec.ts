@@ -192,7 +192,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test('staff ai calls: failed=true keeps only failed calls', async () => {
-    test.setTimeout(240_000) // 30s list reads + 6MB preview + 120s real-AI suggest (as AIR07-E2E-04) + 30s poll = 180s, plus margin
+    test.setTimeout(240_000) // 30s list reads + 6MB preview + 120s suggest (as AIR07-E2E-04) + 30s poll = 180s, plus margin
     const list = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
     const failed = (await calls({ ...forA(), failed: 'true', limit: String(MAX_LIMIT) })).calls
     for (const c of failed) expect(c.outcome, `row ${c.id} under failed=true`).not.toBe('ok')
@@ -201,10 +201,13 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
       expect(failed.map((c) => c.id).includes(id), `row ${id} is listed iff its outcome ${row.outcome} is not ok`).toBe(row.outcome !== 'ok')
     }
 
-    // An oversized prompt is refused by the real AI and blank under the fake: a failed row on both. A fresh entity per call.
+    // The fake answers blank to the oversized cell: a failed row. The real AI gets a 200-byte cell
+    // (maxPromptCellBytes) and answers: an ok row, which failed=true must not list. A fresh entity per call.
     const tokenB = await login(PERSONAS.B)
     const forB = { tenant: PERSONAS.B.tenantId, from: start, failed: 'true', limit: String(MAX_LIMIT) }
-    const known = new Set((await calls(forB)).calls.map((c) => c.id))
+    const { failed: _failed, ...allB } = forB
+    const watched = nightlyTarget() ? allB : forB
+    const known = new Set((await calls(watched)).calls.map((c) => c.id))
     const tin = freshTin()
     const entity = await createEntity(tokenB, { name: `Zz SUPP-10 failed ${tin}`, tin })
     const documentId = await previewDocument(tokenB, buildOversizedCellCsv())
@@ -213,13 +216,17 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
     await expect
       .poll(
         async () => {
-          oversized = (await calls(forB)).calls.find((c) => !known.has(c.id) && c.client === 'ai' && c.purpose === AI_PURPOSE)
+          oversized = (await calls(watched)).calls.find((c) => !known.has(c.id) && c.client === 'ai' && c.purpose === AI_PURPOSE)
           return oversized !== undefined
         },
-        { message: "the oversized call's row is listed under failed=true", timeout: 30_000 },
+        { message: nightlyTarget() ? "the oversized call's row is listed" : "the oversized call's row is listed under failed=true", timeout: 30_000 },
       )
       .toBe(true)
-    if (nightlyTarget()) expect(AI_OUTCOMES, `oversized ai row ${oversized!.id} outcome ${oversized!.outcome}`).toContain(oversized!.outcome)
+    if (nightlyTarget()) {
+      expect(oversized!.outcome, `oversized ai row ${oversized!.id} outcome`).toBe('ok')
+      const failedB = (await calls(forB)).calls.map((c) => c.id)
+      expect(failedB, `ok row ${oversized!.id} must not be listed under failed=true`).not.toContain(oversized!.id)
+    }
   })
 
   test('staff ai totals equal the call list they summarise', async () => {

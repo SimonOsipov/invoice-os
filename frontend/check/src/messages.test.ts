@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { CEILING_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, TOO_MUCH_TEXT_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { CEILING_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, PAGE_LIMIT_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, TOO_MUCH_TEXT_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409MapsLikeAnyUnknownStatus', () => {
@@ -54,6 +54,14 @@ describe('refusal', () => {
 
   it('refusal_400TooMuchTextKeepsItsSentence', () => {
     expect(refusal('document', 400, TOO_MUCH_TEXT_SENTENCE)).toEqual({ text: TOO_MUCH_TEXT_SENTENCE })
+  })
+
+  it('refusal_400PageLimitKeepsItsSentence', () => {
+    expect(refusal('document', 400, PAGE_LIMIT_SENTENCE)).toEqual({ text: PAGE_LIMIT_SENTENCE })
+  })
+
+  it('refusal_400PageLimitSentenceIsTheWorkerLiteral', () => {
+    expect(PAGE_LIMIT_SENTENCE).toBe('This document is over the 800-page limit. Try a shorter invoice.') // readinesscheck.PageLimitSentence
   })
 
   it('refusal_400OtherWordOnADocumentIsUnreadable', () => {

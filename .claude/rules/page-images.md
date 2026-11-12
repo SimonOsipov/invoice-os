@@ -27,11 +27,11 @@ paths:
 - Pad the page number to four digits so keys sort in page order.
 - Treat `v1` as the render profile. A change of DPI, colour model or format mints `v2` keys.
 - Never overwrite `v1` objects. Decide what happens to the rows that name them.
-- Fail a document over `maxPages` with a stated reason. Never truncate it.
-- Derive `maxPages` from the 10-minute job timeout, a 120-second reserve, 300 ms per page and a safety factor of 2.
-- Re-derive `maxPages` when a measured per-page cost exceeds 300 ms. Never raise it from the arithmetic alone.
-- Assume one render per job. Re-derive `maxPages` before you wire `PDFiumExtractor` beside `PageStore`.
-- Re-derive `maxPages` before you fill `ExtractWorker.Text` with a local reader. `selectTextReader` fills it only under docling.
+- Fail a document over `MaxPages` with a stated reason. Never truncate it.
+- Derive `MaxPages` from the 10-minute job timeout, a 120-second reserve, 300 ms per page and a safety factor of 2.
+- Re-derive `MaxPages` when a measured per-page cost exceeds 300 ms. Never raise it from the arithmetic alone.
+- Assume one render per job. Re-derive `MaxPages` before you wire `PDFiumExtractor` beside `PageStore`.
+- Re-derive `MaxPages` before you fill `ExtractWorker.Text` with a local reader. `selectTextReader` fills it only under docling.
 - Keep the page images as long as the source document. Set no TTL and no bucket lifecycle rule.
 - Delete a bucket object only in `document.DeleteTenantObjects`, during a tenant purge.
 - Expect orphan PNGs after a demo purge. It deletes the rows and leaves the objects.

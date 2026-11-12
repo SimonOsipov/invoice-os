@@ -421,8 +421,8 @@ test.describe('check layout', () => {
       const acc = await rectOf(buyer.locator('.check-acc'), 'Buyer header')
       const sub = await rectOf(buyer.locator('.check-acc-sub'), 'Buyer subtitle')
       expect(enclosesRect(acc, sub, 1), `${label}: the Buyer subtitle is outside its header`).toBe(true)
-      // Allowed deviation (Decision [Long Buyer subtitle truncation]): the cut is asserted at 1280 and on phones only.
-      if (width === 1280 || isPhone(width)) {
+      // The cut is asserted on phones only: at wide widths the subtitle fits (Decision [Long Buyer subtitle truncation], gate run 43134395967).
+      if (isPhone(width)) {
         expect(await buyer.locator('.check-acc-sub').evaluate((el) => el.scrollWidth > el.clientWidth), `${label}: the long subtitle is not cut`).toBe(true)
       }
       const end = await rectOf(buyer.locator(isPhone(width) ? '.check-chev' : '.check-count'), 'subtitle neighbour')

@@ -45,7 +45,16 @@ case "$1 $2 $3" in
   labels.preview-pr=*) cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
   *) cat "$D/have" 2>/dev/null || : ;;
   esac ;;
-"run services describe" | "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run services describe") case "$*" in *latestReadyRevisionName*) cat "$D/latest-$4"; exit 0 ;; esac
+  [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run revisions list")
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --service ] && cat "$D/revisions-$a" 2>/dev/null
+    prev=$a
+  done ;;
+"run revisions delete") echo "$4" >> "$D/deleted" ;;
+"run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
@@ -1156,6 +1165,43 @@ func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	}
 	if strings.Contains(r.file(t, "calls"), "versions access") {
 		t.Error("mail-on read a secret value")
+	}
+}
+
+func TestPreviewMailOnDeletesEveryWorkerRevisionButTheServingOne(t *testing.T) {
+	t.Parallel()
+	old := []string{"worker-nightly-00001-aaa", "worker-nightly-00002-bbb"}
+	latest := "worker-nightly-00003-ccc"
+	r := runPreviewEnv(t, blogIDEnv, func(dir string) {
+		writeIn(t, dir, "revisions-worker-nightly", strings.Join(append(old, latest), "\n")+"\n")
+		writeIn(t, dir, "latest-worker-nightly", latest+"\n")
+	}, "mail-on", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	calls := nonBlankLines(r.file(t, "calls"))
+	update := -1
+	for i, c := range calls {
+		if strings.HasPrefix(c, "run services update worker-nightly ") {
+			update = i
+		}
+	}
+	if update < 0 {
+		t.Fatalf("no worker-nightly update in %v", calls)
+	}
+	for _, rev := range append(old, latest) {
+		at := -1
+		for i, c := range calls {
+			if strings.HasPrefix(c, "run revisions delete "+rev+" ") {
+				at = i
+			}
+		}
+		switch {
+		case rev == latest && at >= 0:
+			t.Errorf("deleted the serving revision %s", rev)
+		case rev != latest && at < update:
+			t.Errorf("earlier revision %s not deleted after the worker update (delete at %d, update at %d)", rev, at, update)
+		}
 	}
 }
 

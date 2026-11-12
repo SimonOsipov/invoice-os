@@ -108,15 +108,19 @@ def test_a_conversion_past_the_time_limit_is_422(client, sentry_capture, monkeyp
     assert sentry_capture.events() == []
 
 
-def test_stub_read_raises_on_a_timed_out_result(monkeypatch):
+def test_stub_read_raises_on_a_timed_out_result(monkeypatch, caplog):
     monkeypatch.setattr(
         convert, "get_converter", lambda: _fake_converter(lambda s, **kw: _fake_result(True))
     )
 
-    with pytest.raises(convert.DocumentUnreadable) as err:
+    with caplog.at_level("WARNING", logger="convert"), pytest.raises(
+        convert.DocumentUnreadable
+    ) as err:
         convert.stub_read(b"%PDF-1.4\nx", "application/pdf")
 
     assert err.value.reason == "time_limit"
+    # the 240 s PM limit is the one the stop reports
+    assert any("document limit 240 s" in r.getMessage() for r in caplog.records)
 
 
 def test_a_stop_logs_no_sentry_event(client, sentry_capture, monkeypatch):

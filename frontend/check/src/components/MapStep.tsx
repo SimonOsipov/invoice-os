@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CHECK_FIELD_KEYS, FIELD_GROUPS, canSubmitMapping, fieldLabel, groupOf, previewColumns, type GroupId, type Mapping, type Suggestion } from '../fields'
+import { CHECK_FIELD_KEYS, FIELD_GROUPS, canSubmitMapping, fieldLabel, groupOf, matchedCount, previewColumns, type GroupId, type Mapping, type Suggestion } from '../fields'
 import {
   CHOOSE_ANOTHER, CONTINUE, FIELDS_LEGEND, FIELDS_TITLE, GROUP_NONE, HIDE, MAP_ALL_USED, MAP_COLUMNS, MAP_STEP_NO, MAP_SUMMARY, MAP_TITLE, MAP_UNUSED,
   MATCHED_LINE, NEED_INVOICE_NO, NOT_IN_FILE, NOT_USED, PREVIEW_LABEL, PREVIEW_LESS, PREVIEW_MORE, PREVIEW_TITLE, REVIEW, SUGGESTED, SUPPLIER_HINT,
@@ -22,7 +22,7 @@ export function MapStep({ fileName, suggestion, fields, error, onField, onBack, 
   const offered = columns.filter((c, i) => c.mappable && columns.findIndex((d) => d.header === c.header) === i)
   const used = new Set(Object.values(fields).filter((h) => h !== null))
   const unused = offered.filter((c) => !used.has(c.header))
-  const matchedCount = CHECK_FIELD_KEYS.filter((k) => fields[k] !== null).length
+  const matched = matchedCount(fields)
   const total = CHECK_FIELD_KEYS.length
   const canContinue = canSubmitMapping(fields)
   const [allColumns, setAllColumns] = useState(false)
@@ -118,13 +118,13 @@ export function MapStep({ fileName, suggestion, fields, error, onField, onBack, 
       </div>
       <div className="check-sum">
         <span className="check-sum-n">
-          {matchedCount}
+          {matched}
           <small> of {total}</small>
         </span>
-        <p className="check-sum-text">{MAP_SUMMARY(matchedCount, total)}</p>
+        <p className="check-sum-text">{MAP_SUMMARY(matched, total)}</p>
         <div className="check-sum-foot">
           <span className="check-meter" aria-hidden="true">
-            <i style={{ width: `${Math.round((matchedCount / total) * 100)}%` }} />
+            <i style={{ width: `${Math.round((matched / total) * 100)}%` }} />
           </span>
           {offered.length > 0 && <p className="check-unused-line">{unused.length > 0 ? MAP_UNUSED(unused, offered.length) : MAP_ALL_USED}</p>}
         </div>

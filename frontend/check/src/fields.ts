@@ -13,6 +13,10 @@ export const ACCEPT = ACCEPTED_PICKED_TYPES.map((r) => r.ext).join(',')
 // Order of Go importer.CheckMappingKeys.
 export const CHECK_FIELD_KEYS: readonly string[] = [...IMPORT_KEYS, 'supplier_name', 'supplier_tin']
 
+export function matchedCount(fields: Mapping): number {
+  return CHECK_FIELD_KEYS.filter((k) => fields[k] !== null).length
+}
+
 // Wire shape of readinesscheck mappingResponse (internal/readinesscheck/handlers.go).
 export interface Suggestion {
   columns: string[]

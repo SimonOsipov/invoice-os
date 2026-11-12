@@ -103,7 +103,35 @@ export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
   return 'kind' in x && x.kind === 'join'
 }
 
-// No degraded fallback: any failure, a 15 s timeout included, rejects.
+// A /me 503 retries within the 15 s budget; any other failure, the timeout included, rejects at once.
+const ME_RETRY_DELAYS_MS = [500, 1000]
+
+// The gateway answers 503 when GoTrue is slow; the single-use code is spent, so only /me can retry.
+async function readMeRetrying(base: string, token: string, signal: AbortSignal): Promise<Me> {
+  for (const delay of ME_RETRY_DELAYS_MS) {
+    try {
+      return await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
+    } catch (err) {
+      const transient = err instanceof ApiError && err.status === 503
+      if (!transient || signal.aborted) {
+        throw err
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(signal.reason)
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, delay)
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+  return apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
+}
+
 export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: { token: string; name: string | null } | null = null): Promise<Session | JoinOffer> {
   const signal = AbortSignal.timeout(15000)
   const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {
@@ -116,7 +144,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
   }
   let me: Me
   try {
-    me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
+    me = await readMeRetrying(base, token, signal)
   } catch (err) {
     if (!(err instanceof ApiError && err.status === 403)) {
       throw err
@@ -241,7 +269,7 @@ async function renewAndRead(base: string, auth: { token: string; refreshToken: u
   const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
   auth.token = access
   auth.refreshToken = refresh
-  const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token: access, signal })
+  const me = await readMeRetrying(base, access, signal)
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
   }

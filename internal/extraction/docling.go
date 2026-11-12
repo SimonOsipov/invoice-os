@@ -29,9 +29,12 @@ const (
 	doclingErrBodyMax = 4 << 10
 
 	// Time kept back from the caller's deadline so the sidecar's own stop answers before the
-	// caller gives up (D20).
+	// caller gives up.
 	doclingAnswerMargin = 60 * time.Second
 )
+
+// errDoclingNoTime is a transient failure, like a sidecar 503: neither a time-limit stop nor unreadable.
+var errDoclingNoTime = errors.New("docling: too little time left to read")
 
 // ErrReadTimedOut marks a sidecar 422 whose reason is time_limit: the read passed its deadline.
 var ErrReadTimedOut = errors.New("docling: read passed the time limit")
@@ -90,7 +93,11 @@ func (r *DoclingReader) Read(ctx context.Context, doc Document, onPage func(Page
 		req.Header.Set("Content-Type", doc.ContentType)
 	}
 	if d, ok := ctx.Deadline(); ok {
-		left := max(time.Until(d)-doclingAnswerMargin, time.Millisecond)
+		left := time.Until(d) - doclingAnswerMargin
+		if left <= 0 {
+			// Too little time for a real read: a 1 ms stop would be reported as a false time limit.
+			return PageResult{}, errDoclingNoTime
+		}
 		req.Header.Set("X-Read-Deadline-Ms", strconv.FormatInt(left.Milliseconds(), 10))
 	}
 

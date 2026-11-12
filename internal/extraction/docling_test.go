@@ -594,12 +594,12 @@ func TestDoclingReader_WaitsOutASlowColdStart(t *testing.T) {
 	})
 	r := dcNewReader(t, srv.URL)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	res, err := r.Read(ctx, dcDoc("x"), func(extraction.Page) error { return nil })
 	if err != nil {
-		t.Fatalf("Read with a 60s deadline over a 20s-sleeping server: %v", err)
+		t.Fatalf("Read with a 120s deadline over a 20s-sleeping server: %v", err)
 	}
 	if res.Pages != 1 {
 		t.Errorf("Read succeeded but reported %d page(s), want 1", res.Pages)
@@ -699,11 +699,32 @@ func TestDoclingReader_SendsTheCallersDeadlineLessTheMargin(t *testing.T) {
 	}
 }
 
-func TestDoclingReader_ADeadlineInsideTheMarginSendsOneMillisecond(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+func TestDoclingReader_ADeadlineInsideTheMarginFailsWithoutCallingTheSidecar(t *testing.T) {
+	var calls atomic.Int32
+	srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`{"pages":[]}`))
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 59*time.Second)
 	defer cancel()
-	if got, _ := dcHeaderRead(t, ctx); got != "1" {
-		t.Errorf("X-Read-Deadline-Ms = %q, want 1", got)
+	_, err := dcNewReader(t, srv.URL).Read(ctx, dcDoc("x"), func(extraction.Page) error { return nil })
+	if err == nil {
+		t.Fatal("Read returned no error")
+	}
+	if errors.Is(err, extraction.ErrReadTimedOut) || errors.Is(err, extraction.ErrDocumentUnreadable) {
+		t.Errorf("err = %v, want a transient error that is neither a time-limit stop nor unreadable", err)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("sidecar calls = %d, want 0", n)
+	}
+}
+
+func TestDoclingReader_ADeadlineJustOutsideTheMarginCallsTheSidecar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 65*time.Second)
+	defer cancel()
+	got, _ := dcHeaderRead(t, ctx)
+	if ms, err := strconv.Atoi(got); err != nil || ms < 4000 || ms > 5000 {
+		t.Errorf("X-Read-Deadline-Ms = %q, want an integer in [4000, 5000]", got)
 	}
 }
 

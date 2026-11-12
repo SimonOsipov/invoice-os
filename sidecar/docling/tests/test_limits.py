@@ -64,12 +64,23 @@ def _fake_converter(convert_fn):
     return SimpleNamespace(convert=convert_fn)
 
 
+_warmed: set[int] = set()
+
+
 @pytest.fixture
 def warm_converter():
-    """The real shared converter, built once (a test that reset it rebuilds here)."""
+    """The real shared converter with its pipeline loaded: building it does not load the
+    models, the first conversion does (minutes cold), so convert once here, not in a test."""
     if convert._warmup_thread is not None:
         convert._warmup_thread.join()
-    return convert.get_converter()
+    converter = convert.get_converter()
+    if id(converter) not in _warmed:
+        try:
+            convert.stub_read((TESTDATA / "native_3page.pdf").read_bytes(), "application/pdf")
+        except convert.DocumentUnreadable:
+            pass  # a time-limit under load still leaves the pipeline loaded
+        _warmed.add(id(converter))
+    return converter
 
 
 @pytest.fixture
@@ -141,6 +152,24 @@ def test_a_passed_caller_deadline_stops_the_real_conversion(client, warm_convert
     assert stopped.json()["reason"] == "time_limit"
     assert after.status_code == 200
     assert len(after.json()["pages"]) == 3
+
+
+def test_a_stop_on_a_cold_pipeline_leaves_the_converter_usable(client, monkeypatch):
+    if convert._warmup_thread is not None:
+        convert._warmup_thread.join()
+    # A fresh converter has loaded no models; monkeypatch restores the shared one at teardown.
+    monkeypatch.setattr(convert, "_converter", None)
+    monkeypatch.setattr(convert, "_construction_count", 0)
+    body = (TESTDATA / "native_3page.pdf").read_bytes()
+
+    stopped = client.post("/v1/read", content=body, headers={**PDF, "X-Read-Deadline-Ms": "1"})
+    after = client.post("/v1/read", content=body, headers=PDF)
+
+    assert stopped.status_code == 422
+    assert stopped.json()["reason"] == "time_limit"
+    assert after.status_code == 200
+    assert len(after.json()["pages"]) == 3
+    assert convert.construction_count() == 1, "the stop rebuilt the converter"
 
 
 def test_a_deadline_stop_answers_inside_the_margin(client, warm_converter):

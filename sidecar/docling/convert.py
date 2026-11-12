@@ -436,7 +436,7 @@ _CT_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 
 def _is_xml_type(content_type: str) -> bool:
     t = content_type.split(";")[0].strip().lower()
-    return t.endswith("/xml") or t.endswith("+xml")
+    return t.endswith(("/xml", "+xml"))
 
 
 def _content_types(zf: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:

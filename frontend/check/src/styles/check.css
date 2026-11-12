@@ -257,7 +257,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
   .check-progress-m { display: grid; }
 }
 @media (max-width: 767px) {
-  /* Map step phone layout: PHONE_WIDTHS in e2e/topology/layout.ts tops out at 767 */
+  /* Phone layout: PHONE_WIDTHS in e2e/topology/layout.ts tops out at 767 */
   .check-acc { grid-template-columns: minmax(0, 1fr) auto; padding: 14px; }
   .check-acc .check-count { grid-column: 1; grid-row: 2; }
   .check-acc .check-chev { grid-column: 2; grid-row: 1 / span 2; }

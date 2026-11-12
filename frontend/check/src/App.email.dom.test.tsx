@@ -4,12 +4,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import { CHECK_GLYPHS } from './glyphs'
 import { CHECK_FIELD_KEYS, fieldLabel, formatBytes } from './fields'
-import { MAX_INVOICES, NEXT_STEP, SENDING_NOTE, SENDING_TEXT, SENDING_TO, SENT_NOTE, SENT_TEXT, STAGE_MS, STAGES, UPSELL_TEXT } from './copy'
+import { MAX_INVOICES, UPSELL_TEXT } from './copy'
 import {
   ARMOR_SENTENCE,
   CEILING_SENTENCE,
-  CONSENT_SENTENCE,
   EMAIL_SENTENCE,
   IP_SENTENCE,
   SLOW_UPLOAD_SENTENCE,
@@ -149,7 +149,8 @@ describe('email step', () => {
     await blur(emailInput())
     const err = q('#check-email-err')!
     expect(err.getAttribute('role')).toBe('alert')
-    expect(err.textContent).toBe(EMAIL_SENTENCE)
+    expect(err.textContent).toBe('Enter a valid email address.')
+    expect(EMAIL_SENTENCE).toBe('Enter a valid email address.')
     expect(emailInput().getAttribute('aria-invalid')).toBe('true')
     expect(emailInput().classList.contains('is-err')).toBe(true)
     expect(emailInput().getAttribute('aria-describedby')).toBe('check-email-err')
@@ -182,7 +183,7 @@ describe('email step', () => {
     await click(tickBox())
     const err = q('#check-consent-err')!
     expect(err.getAttribute('role')).toBe('alert')
-    expect(err.textContent).toBe(CONSENT_SENTENCE)
+    expect(err.textContent).toBe('Tick the box to get your results by email.')
     expect(tickBox().getAttribute('aria-describedby')).toBe('check-consent-err')
     await click(tickBox())
     expect(q('#check-consent-err')).toBeNull()
@@ -206,6 +207,7 @@ describe('email step', () => {
     const send = q<HTMLButtonElement>('button[type="submit"]')!
     expect(send.textContent).toBe('Send')
     expect(send.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1)
+    expect([...send.querySelectorAll('svg path')].map((x) => x.getAttribute('d'))).toEqual(CHECK_GLYPHS['arrow-right'])
     expect(button('Back').getAttribute('type')).toBe('button')
   })
 })
@@ -242,13 +244,17 @@ describe('sending view', () => {
     await toPdfEmail()
     await fill('  a@x.io ')
     await submit()
-    expect(q('.check-sending h2')!.textContent).toBe(SENDING_TEXT)
+    expect(q('.check-sending h2')!.textContent).toBe('Checking your file. This can take a minute or two.')
     expect(q('.check-step-no')!.textContent).toBe('02 · Email')
     expect(q('.check-bar')).toBeTruthy()
-    expect([...container.querySelectorAll('.check-stages li')].map((li) => li.textContent)).toEqual([...STAGES])
-    expect(q('.check-sending-addr')!.textContent).toBe(SENDING_TO('a@x.io'))
+    expect([...container.querySelectorAll('.check-stages li')].map((li) => li.textContent)).toEqual([
+      'Uploading your file',
+      'Reading the first 2 invoices',
+      'Checking them against the MBS rules',
+      'Writing your email',
+    ])
     expect(q('.check-sending-addr')!.textContent).toBe('We email you at a@x.io')
-    expect(q('.check-sending-note')!.textContent).toBe(SENDING_NOTE)
+    expect(q('.check-sending-note')!.textContent).toBe('Keep this page open until we confirm. The results are not shown here.')
     expect(q('form')).toBeNull()
     expect(button('Back')).toBeUndefined()
     expect(button('Send')).toBeUndefined()
@@ -262,12 +268,13 @@ describe('sending view', () => {
     vi.useFakeTimers()
     await submit()
     expect(classes()).toEqual(['is-now', 'is-todo', 'is-todo', 'is-todo'])
-    await advance(STAGE_MS - 1)
+    await advance(1499)
     expect(classes()).toEqual(['is-now', 'is-todo', 'is-todo', 'is-todo'])
     await advance(1)
     expect(classes()).toEqual(['is-done', 'is-now', 'is-todo', 'is-todo'])
-    expect(q('.check-stages li .check-sdot svg')).toBeTruthy()
-    await advance(2 * STAGE_MS)
+    expect(q('.check-stages li.is-done .check-sdot svg')).toBeTruthy()
+    expect(container.querySelectorAll('.check-stages li:not(.is-done) .check-sdot svg').length).toBe(0)
+    await advance(3000)
     expect(classes()).toEqual(['is-done', 'is-done', 'is-done', 'is-now'])
     await advance(60000)
     expect(classes()).toEqual(['is-done', 'is-done', 'is-done', 'is-now'])
@@ -279,7 +286,7 @@ describe('sending view', () => {
     vi.useFakeTimers()
     answer = () => json(503, { error: 'unavailable' })
     await submit()
-    await advance(2 * STAGE_MS)
+    await advance(3000)
     await act(async () => release())
     await advance(0)
     expect(q('#check-email')).toBeTruthy()
@@ -306,6 +313,19 @@ describe('sending view', () => {
     await act(async () => release())
     await settle()
     expect(q(SENT)).toBeTruthy()
+  })
+
+  it('sending_leavingMidRequestStopsTheStages', async () => {
+    await toPdfEmail()
+    await fill()
+    vi.useFakeTimers()
+    await submit()
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    await act(async () => root.unmount())
+    await advance(0)
+    expect(vi.getTimerCount()).toBe(0)
+    root = createRoot(container)
+    await act(async () => release())
   })
 
   it('sending_theHeadingTakesFocus', async () => {
@@ -419,6 +439,21 @@ describe('email alert', () => {
     expect(alerts().length).toBe(0)
   })
 
+  it('email_backFromASpreadsheetClearsTheAlert', async () => {
+    answer = () => json(503, { error: 'busy' })
+    await mount()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => (String(input).endsWith('/readiness-check/run') ? answer() : json(200, SHEET))))
+    await pick(new File(['aaaa'], 'a.csv'))
+    await click(button('Continue'))
+    await fill()
+    await submit()
+    await settle()
+    expect(alerts().length).toBe(1)
+    await click(button('Back'))
+    expect(q('.check-map')).toBeTruthy()
+    expect(container.querySelectorAll('[role="alert"]').length).toBe(0)
+  })
+
   it('email_theAlertTakesFocus', async () => {
     await toRefusal(() => json(422, { error: UNREADABLE_SENTENCE }))
     expect(document.activeElement).toBe(alerts()[0])
@@ -441,8 +476,8 @@ describe('sent view', () => {
     await toSent()
     expect(q(`${SENT} .check-sent-mark[aria-hidden="true"] svg`)).toBeTruthy()
     expect(q(`${SENT} .check-sent-label`)!.textContent).toBe('Sent')
-    expect(q(`${SENT} h2`)!.textContent).toBe(SENT_TEXT('a@x.io'))
-    expect(q(`${SENT} .check-sent-note`)!.textContent).toBe(SENT_NOTE)
+    expect(q(`${SENT} h2`)!.textContent).toBe('Check your inbox at a@x.io.')
+    expect(q(`${SENT} .check-sent-note`)!.textContent).toBe('We sent you an email from no-reply@ascomply.com. Check your spam folder if you cannot find it.')
     expect(q(`${SENT} .check-sent-note strong`)!.textContent).toBe('no-reply@ascomply.com')
   })
 
@@ -450,7 +485,7 @@ describe('sent view', () => {
     await toSent()
     const up = q('.check-upsell')!
     expect(up.closest('[role="status"]')).toBeNull()
-    expect(up.textContent).toContain(NEXT_STEP)
+    expect(up.textContent).toContain('Next step')
     expect(up.textContent).toContain('This check covered up to 2 invoices.')
     expect(MAX_INVOICES).toBe(2)
     expect(up.textContent).toContain('Check every invoice before it goes to MBS.')
@@ -485,5 +520,6 @@ describe('sent view', () => {
   it('sent_theHeadingTakesFocus', async () => {
     await toSent()
     expect(document.activeElement).toBe(q('.check-sent h2'))
+    expect(q<HTMLElement>('.check-sent h2')!.tabIndex).toBe(-1)
   })
 })

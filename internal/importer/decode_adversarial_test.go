@@ -861,7 +861,7 @@ func TestXLSXRows_DecodesWithinTheDeadline(t *testing.T) {
 	}
 }
 
-// SECAUD-04-01: the CSV decoder reads record by record and stops at the
+// The CSV decoder reads record by record and stops at the
 // XLSX row and cell limits.
 
 // csvRows builds a one-column CSV: header "h" then n rows of "a".

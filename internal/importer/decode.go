@@ -65,7 +65,7 @@ var (
 )
 
 // decodeCSVText strips a BOM, picks the charset and refuses control bytes.
-// ceiling: the whole upload (<= 15 MiB) is read and decoded in memory.
+// ceiling: the whole upload (<= 15 MiB) is read and decoded in memory; revisit if the upload limit rises past 15 MiB.
 func decodeCSVText(r io.Reader) (decoded []byte, encodingName string, err error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -347,7 +347,7 @@ func csvTooWide(decoded []byte, comma rune) bool {
 
 // csvRecords reads cr record by record, stopping at the XLSX row and cell
 // limits. Records after the first are data; headerless makes every record data.
-// ceiling: one record under the width cap (15 MiB of fields) allocates ~206 MiB.
+// ceiling: one record under the width cap (15 MiB of fields) allocates ~206 MiB; revisit if the width cap or the upload limit rises.
 func csvRecords(cr *csv.Reader, headerless bool) ([][]string, error) {
 	var records [][]string
 	cells := 0

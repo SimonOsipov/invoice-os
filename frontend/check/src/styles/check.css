@@ -151,6 +151,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 .check-preview-head { display: flex; justify-content: space-between; gap: 12px; }
 /* relative: contains the absolute .check-sr in th, else it escapes the clip */
 .check-map .check-scroll { position: relative; max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.check-map svg { flex: none; }
 .check-map .check-columns { width: 100%; border-collapse: collapse; font-size: 13px; }
 .check-columns th { padding: 9px 12px; background: var(--background); border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; text-align: left; white-space: nowrap; color: var(--muted-foreground); }
 .check-columns td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--foreground); white-space: nowrap; }

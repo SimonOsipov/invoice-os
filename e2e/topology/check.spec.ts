@@ -482,6 +482,7 @@ test.describe('check layout', () => {
       expect(alert.y + alert.height, `${label}: the alert is not above the buttons`).toBeLessThanOrEqual(actions.y + 1)
       expect(Math.abs(bar.y + bar.height - 600), `${label}: the bar's bottom is not the viewport's bottom`).toBeLessThanOrEqual(1)
       expect(enclosesRect(bar, await rectOf(page.locator('.check-alert span'), 'alert text'), 1), `${label}: the alert text is outside the bar`).toBe(true)
+      expect((await rectOf(page.locator('.check-alert svg'), 'alert icon')).width, `${label}: the alert icon is squeezed`).toBeCloseTo(18, 0)
       await noSidewaysScroll(page, label)
     }
     expect(runs.n, 'the run request did not reach the route once').toBe(1)

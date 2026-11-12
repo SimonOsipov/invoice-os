@@ -215,10 +215,11 @@ func TestStaffCodeLists_SummaryIsTheNewestRowPerList(t *testing.T) {
 	assertSummaryOrder(t, super, names)
 }
 
-// assertSummaryOrder asserts names is one entry per list, ordered by list in the database's order.
+// assertSummaryOrder asserts names has no duplicates and is in the database's order for text.
+// It sorts only the passed names: the table is global and other packages add lists to it.
 func assertSummaryOrder(t *testing.T, super *pgxpool.Pool, names []string) {
 	t.Helper()
-	rows, err := super.Query(context.Background(), `SELECT DISTINCT list FROM nrs_code_list_syncs ORDER BY list`)
+	rows, err := super.Query(context.Background(), `SELECT DISTINCT n FROM unnest($1::text[]) AS n ORDER BY n`, names)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,8 +232,11 @@ func assertSummaryOrder(t *testing.T, super *pgxpool.Pool, names []string) {
 		}
 		wantNames = append(wantNames, n)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(names, wantNames) {
-		t.Errorf("summary lists = %v, want one per list ordered by list: %v", names, wantNames)
+		t.Errorf("summary lists = %v, want unique and ordered by list: %v", names, wantNames)
 	}
 }
 

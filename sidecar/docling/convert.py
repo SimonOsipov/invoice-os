@@ -28,7 +28,7 @@ DOCLING_NUM_THREADS = 2
 
 MAX_PAGES = 800  # internal/extraction MaxPages; test_pins.py keeps them equal
 DOCUMENT_TIMEOUT_S = 240.0  # the PM's per-document limit
-DOCX_XML_MAX_BYTES = 8 * 1024 * 1024  # D13
+DOCX_XML_MAX_BYTES = 8 * 1024 * 1024
 TIME_LIMIT = "time_limit"
 
 
@@ -429,11 +429,16 @@ def _time_limit() -> DocumentUnreadable:
 
 
 def _check_docx_xml_size(body: bytes) -> None:
-    """Refuse a package whose declared XML (a zip bomb inflates in docling's parser) is over bound."""
+    """Refuse a package whose declared parts (a zip bomb inflates in docling's parser) are over bound.
+
+    Every entry counts but binary media: OPC part names are free, so a renamed main part must not escape.
+    """
     try:
         with zipfile.ZipFile(BytesIO(body)) as zf:
             declared = sum(
-                i.file_size for i in zf.infolist() if i.filename.endswith((".xml", ".rels"))
+                i.file_size
+                for i in zf.infolist()
+                if "media" not in i.filename.lower().split("/")[:-1]
             )
     except zipfile.BadZipFile:
         return  # docling reports it as it does today

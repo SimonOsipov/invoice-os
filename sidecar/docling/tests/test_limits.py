@@ -1,4 +1,4 @@
-"""SECAUD-04-04: page cap, DOCX XML bound, and the three ways a conversion is stopped
+"""Page cap, DOCX XML bound, and the three ways a conversion is stopped
 (caller deadline, disconnect, 240 s backstop). Needs docling: Docker `test` stage only.
 """
 
@@ -341,3 +341,28 @@ def test_a_declared_xml_size_counts_every_xml_part(client, monkeypatch):
 
     assert resp.status_code == 422
     assert calls == []
+
+
+def _docx_with(parts):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, size in parts.items():
+            zf.writestr(name, b" " * size)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("name", ["word/document.XML", "word/document.dat", "word/Document.Rels"])
+def test_a_renamed_xml_part_over_the_bound_is_still_422(client, monkeypatch, name):
+    calls = _spy_converter(monkeypatch)
+
+    resp = client.post("/v1/read", content=_docx_with({name: 9 * 1024 * 1024}), headers=DOCX)
+
+    assert resp.status_code == 422
+    assert calls == []
+
+
+def test_large_images_under_word_media_are_not_counted():
+    body = _docx_with({"word/document.xml": 1000, "word/media/image1.png": 9 * 1024 * 1024,
+                       "word/MEDIA/image2.JPG": 9 * 1024 * 1024})
+
+    convert._check_docx_xml_size(body)  # raises DocumentUnreadable when over the bound

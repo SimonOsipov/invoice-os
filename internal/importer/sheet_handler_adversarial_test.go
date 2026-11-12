@@ -59,6 +59,17 @@ func TestSheetHandler_TrailingBlankLineDropsNoRealRow(t *testing.T) {
 	}
 }
 
+func TestSheetHandler_StoredCSVOverTheRowCapIs400(t *testing.T) {
+	id := testIdentity()
+	open := newFakeDocOpen("big.csv", "text/csv", []byte(csvRows(maxXLSXDataRows+1)))
+
+	rec, raw := doSheetRequest(t, open.fn(), &id, open.doc.ID)
+
+	if want := "the spreadsheet has more than 100,000 data rows; split it into smaller files"; rec.Code != http.StatusBadRequest || !strings.Contains(string(raw), want) {
+		t.Fatalf("status = %d body %s, want 400 with %q", rec.Code, raw, want)
+	}
+}
+
 func TestSheetHandler_HeaderOnlyCSVHasZeroDataRows(t *testing.T) {
 	id := testIdentity()
 	content := []byte("h1,h2,h3\n")

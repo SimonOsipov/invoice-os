@@ -1,7 +1,7 @@
 // A readiness check through the deployed gateway. A run holds the check and mails a confirmation link; the
 // press sends the results. On the nightly the spec reads both mails from the real inbox; a preview captures
 // them and sets the confirm token instead. The nightly enforces the per-IP limit of 10 a day: the e2e job makes
-// 5 checks per attempt (4 here, 1 in smoke).
+// 5 checks per attempt (4 here, 1 in smoke). A run refused for its page count spends no per-IP check.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { test, expect } from '@playwright/test'
@@ -38,6 +38,29 @@ const CONSENT_SRC = new URL('../../frontend/landing/src/readinessConsent.ts', im
 const CONSENT_MATCH = /export const READINESS_CONSENT_TEXT =\s*'((?:[^'\\]|\\.)*)'/.exec(readFileSync(CONSENT_SRC, 'utf8'))
 if (CONSENT_MATCH == null) throw new Error(`${CONSENT_SRC.pathname}: no READINESS_CONSENT_TEXT literal`)
 const CONSENT = CONSENT_MATCH[1] as string
+
+// internal/readinesscheck/handlers.go PageLimitSentence (extraction.MaxPages = 800).
+const PAGE_LIMIT_SENTENCE = 'This document is over the 800-page limit. Try a shorter invoice.'
+
+// A blank n-page PDF, the shape of fxBuildNPage (internal/extraction/fixtures_test.go): about 60 KiB for 801.
+function buildNPagePdf(n: number): string {
+  const kids = Array.from({ length: n }, (_, i) => `${i + 3} 0 R`).join(' ')
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${kids}] /Count ${n} /MediaBox [0 0 595 842] >>`,
+    ...Array.from({ length: n }, () => '<< /Type /Page /Parent 2 0 R >>'),
+  ]
+  let out = '%PDF-1.4\n'
+  const offsets: number[] = []
+  objs.forEach((o, i) => {
+    offsets.push(out.length)
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`
+  })
+  const xref = out.length
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`
+  for (const off of offsets) out += `${String(off).padStart(10, '0')} 00000 n \n`
+  return `${out}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+}
 
 const HEADER = ['Inv', 'Date', 'Cur', 'Net', 'Tax', 'Gross', 'Buyer', 'BTIN', 'Seller', 'STIN']
 // The second invoice has no supplier TIN (rule supplier-tin-required).
@@ -93,6 +116,16 @@ test.describe('readiness check (API E2E, gateway to worker)', () => {
     expect(res.status).toBe(400)
     expect(res.body).toEqual({ error: CONSENT_SENTENCE })
     expect(await contactsDirect(email), 'a contact for a refused run').toBeNull()
+  })
+
+  test('a PDF over the page limit is refused with the page-limit sentence', async () => {
+    const res = await postCheck(
+      'run',
+      { email: freshEmail(), consent_text: CONSENT },
+      { name: 'long.pdf', content: buildNPagePdf(801), type: 'application/pdf' },
+    )
+    expect(res.status, JSON.stringify(res.body)).toBe(400)
+    expect(res.body).toEqual({ error: PAGE_LIMIT_SENTENCE })
   })
 
   test('the worker route refuses a call without the gateway token', async () => {

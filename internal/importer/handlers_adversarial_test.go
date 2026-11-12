@@ -409,6 +409,7 @@ func TestDecodeRoutes_CapAndDeadlineAnswerThroughDecodeErrorMessage(t *testing.T
 		mustSetCellValue(t, f, sheet, "A1", "x")
 		mustSetCellValue(t, f, sheet, "A100002", "x")
 	})
+	overCSV := []byte(csvRows(maxXLSXDataRows + 1))
 	ten := buildXLSX(t, func(f *excelize.File, sheet string) {
 		for i := 1; i <= 10; i++ {
 			mustSetCellValue(t, f, sheet, fmt.Sprintf("A%d", i), "x")
@@ -454,6 +455,12 @@ func TestDecodeRoutes_CapAndDeadlineAnswerThroughDecodeErrorMessage(t *testing.T
 	for _, rt := range routes {
 		t.Run(rt.name+"/row_cap", func(t *testing.T) {
 			code, raw := rt.call(newFakeDocOpen("big.xlsx", xlsxContentType, over))
+			if code != http.StatusBadRequest || errText(raw) != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+				t.Errorf("status %d body %s, want 400 %q", code, raw, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
+			}
+		})
+		t.Run(rt.name+"/csv_row_cap", func(t *testing.T) {
+			code, raw := rt.call(newFakeDocOpen("big.csv", "text/csv", overCSV))
 			if code != http.StatusBadRequest || errText(raw) != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
 				t.Errorf("status %d body %s, want 400 %q", code, raw, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
 			}

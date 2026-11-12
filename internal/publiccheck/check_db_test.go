@@ -199,7 +199,7 @@ func TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow(t *testing.T) {
 	rec := aicalls.NewRecorder(app, slog.New(slog.DiscardHandler))
 	fake.SetRecorder(rec.Record)
 	counter := &countingAI{Client: fake}
-	c.Readers = extraction.CheckReaders{Text: &pdfText{chars: 20}, AI: counter}
+	c.Readers = extraction.CheckReaders{Text: &pdfText{chars: 20}, Cap: &capStub{}, AI: counter}
 
 	before, callsBefore := counts(), count(nullCalls)
 

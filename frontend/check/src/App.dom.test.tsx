@@ -345,6 +345,16 @@ describe('details and sent', () => {
     expect(text()).not.toContain(UNREADABLE_SENTENCE)
   })
 
+  it('send_aPageLimitRefusalShowsThePageLimitSentence', async () => {
+    const sentence = 'This document is over the 800-page limit. Try a shorter invoice.' // readinesscheck.PageLimitSentence
+    stubFetch({ [RUN]: () => json(400, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
   it('send_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
     const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
     stubFetch({ [RUN]: () => json(503, { error: sentence }) })

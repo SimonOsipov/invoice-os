@@ -4,6 +4,7 @@ package extraction
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"strings"
@@ -26,9 +27,16 @@ const (
 // 113 KiB of grayscale PNG per invoice page. RGBA is 10x that and JPEG q85 8x, on line art.
 const pdfiumRenderDPI = 150
 
-// maxPages refuses a document rather than letting River dead-letter it as a timeout: 800 x the
+// MaxPages refuses a document rather than letting River dead-letter it as a timeout: 800 x the
 // 300 ms per-page cost is 240 s, half the 480 s of render budget inside worker.go's 600 s.
-const maxPages = 800
+const MaxPages = 800
+
+// ErrTooManyPages marks a document over MaxPages; it travels with ErrDocumentUnreadable.
+var ErrTooManyPages = errors.New("extraction: document is over the page limit")
+
+func pageCapError(n int) error {
+	return unreadableError{fmt.Errorf("pdfium: document has %d pages, over the %d page limit: %w", n, MaxPages, ErrTooManyPages)}
+}
 
 // Render-bitmap releases, read by TestPDFiumReader_HoldsOnePageAtATime.
 var pdfiumCleanups atomic.Int64
@@ -49,7 +57,7 @@ var _ PageReader = (*PDFiumReader)(nil)
 func NewPDFiumReader() *PDFiumReader { return &PDFiumReader{} }
 
 // NewPDFiumEndsReader skips every page but the first and last: a public check needs two PNGs
-// and the upload can run to maxPages. PageResult.Pages stays the document's count; TextChars and
+// and the upload can run to MaxPages. PageResult.Pages stays the document's count; TextChars and
 // PagesWithText cover only those pages.
 func NewPDFiumEndsReader() *PDFiumReader { return &PDFiumReader{endsOnly: true} }
 
@@ -62,6 +70,30 @@ func (r *PDFiumReader) renderDPI() int {
 		return pdfiumRenderDPI
 	}
 	return r.dpi
+}
+
+// CheckPageCap counts the pages and refuses a document over MaxPages. It renders nothing, so
+// the public check can refuse before the docling upload. An open failure is Read's.
+func (r *PDFiumReader) CheckPageCap(ctx context.Context, doc Document) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return withPDFiumInstance(ctx, func(inst pdfium.Pdfium) error {
+		opened, err := inst.OpenDocument(&requests.OpenDocument{File: &doc.Bytes})
+		if err != nil {
+			return unreadableError{fmt.Errorf("pdfium: open document: %w", err)}
+		}
+		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
+
+		count, err := inst.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: opened.Document})
+		if err != nil {
+			return fmt.Errorf("pdfium: page count: %w", err)
+		}
+		if count.PageCount > MaxPages {
+			return pageCapError(count.PageCount)
+		}
+		return nil
+	})
 }
 
 // Read hands doc.Bytes to pdfium by reference and calls onPage once per page in ascending
@@ -87,8 +119,8 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 		if err != nil {
 			return fmt.Errorf("pdfium: page count: %w", err)
 		}
-		if count.PageCount > maxPages {
-			return unreadableError{fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)}
+		if count.PageCount > MaxPages {
+			return pageCapError(count.PageCount)
 		}
 
 		totals := PageResult{Pages: count.PageCount}

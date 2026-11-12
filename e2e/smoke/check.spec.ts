@@ -17,8 +17,25 @@ const EYEBROW = 'FREE E-INVOICE READINESS CHECK'
 const TRUST_TITLES = ['Free', 'No account', 'File not kept', 'Results by email']
 const STEPS = ['Upload', 'Match columns', 'Email', 'Sent']
 const WHAT_HEADING = 'Two invoices, checked rule by rule.'
+// frontend/check/src/copy.ts: UPLOAD_STEP_NO, UPLOAD_TITLE, FILE_LABEL, DROP_TITLE, DROP_TITLE_OVER, DROP_BUTTON, FILE_PRIVACY, TYPE_SENTENCE.
+const UPLOAD_STEP_NO = '01 · Upload'
+const UPLOAD_TITLE = 'Add one invoice file'
+const FILE_LABEL = 'Invoice file'
+const DROP_TITLE = 'Drag your invoice file here'
+const DROP_TITLE_OVER = 'Drop it here to start'
+const DROP_BUTTON = 'Choose a file'
+const FILE_PRIVACY = 'Your file is used only for this check and deleted when it finishes.'
+const TYPE_SENTENCE = 'Choose a CSV, XLSX, PDF or DOCX file.'
+const FILE_CHIPS = ['CSV', 'XLSX', 'PDF', 'DOCX']
+// frontend/app/src/lib/importFlow.ts: MAX_UPLOAD_BYTES (15 MiB); frontend/check/src/copy.ts: MAX_INVOICES (publiccheck.MaxInvoices).
+const DROP_HELP = 'One file, up to 15 MiB. We check its first 2 invoices.'
+// frontend/check/src/copy.ts: MAP_STEP_NO, MAP_TITLE, REVIEW, MAP_ALL_USED.
+const MAP_STEP_NO = '02 · Match your columns'
+const MAP_TITLE = 'Tell us which column is which'
+const REVIEW = 'Review'
+const MAP_ALL_USED = 'Every column in your file is matched to a field.'
 // frontend/check/src/copy.ts: SENT_TEXT.
-const sentText = (email: string) => `Your results are on their way to ${email}.`
+const sentText = (email: string) => `Check your inbox at ${email}.`
 // internal/gateway/readiness_check.go: checkIPSentence.
 const IP_SENTENCE = 'This network has run 10 checks today. Try again tomorrow.'
 
@@ -79,7 +96,45 @@ test('check: the page shows the hero, the trust cues and the progress strip', as
   expect(errors).toEqual([])
 })
 
-test('check: a visitor uploads a spreadsheet, maps it and is told the results are on their way', async ({ page }) => {
+// Writes nothing, so it runs on production too.
+test('check: the drop zone shows its text and refuses a wrong file in place', async ({ page }) => {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+  const requests: string[] = []
+  page.on('request', (req) => {
+    if (req.url().includes('/readiness-check/')) requests.push(req.url())
+  })
+  await seedConsent(page, false)
+  await page.goto(CHECK_URL)
+  const card = page.locator('.check-upload')
+  for (const text of [UPLOAD_STEP_NO, UPLOAD_TITLE, FILE_LABEL, DROP_TITLE, DROP_BUTTON, DROP_HELP, FILE_PRIVACY]) {
+    await expect(card.getByText(text, { exact: true })).toBeVisible()
+  }
+  await expect(card.locator('.check-chip')).toHaveText(FILE_CHIPS)
+
+  const zone = card.locator('.check-drop')
+  const dataTransfer = await page.evaluateHandle(() => {
+    const dt = new DataTransfer()
+    dt.items.add(new File(['not an invoice'], 'notes.txt', { type: 'text/plain' }))
+    return dt
+  })
+  await zone.dispatchEvent('dragenter', { dataTransfer })
+  await expect(card.getByText(DROP_TITLE_OVER, { exact: true })).toBeVisible()
+  await zone.dispatchEvent('drop', { dataTransfer })
+
+  const alert = card.getByRole('alert')
+  await expect(alert).toHaveText(TYPE_SENTENCE)
+  const color = await alert.evaluate((el) => getComputedStyle(el).color)
+  await expect(zone).toHaveCSS('border-top-color', color)
+  await expect(card.getByText(DROP_TITLE, { exact: true })).toBeVisible()
+  expect(requests).toEqual([])
+  expect(errors, `console errors on the check:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('check: a visitor uploads a spreadsheet, maps it and is told to check the inbox to confirm', async ({ page }) => {
   test.skip(LIVE, 'www.ascomply.com is production: the send writes a contact and a mail')
   test.setTimeout(180_000)
   const errors: string[] = []
@@ -94,15 +149,29 @@ test('check: a visitor uploads a spreadsheet, maps it and is told the results ar
 
   await seedConsent(page, false)
   await page.goto(CHECK_URL)
-  await page.locator('#check-file').setInputFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
-  await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByText(DROP_BUTTON, { exact: true }).click()])
+  await chooser.setFiles({ name: 'invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
+  await expect(page.getByText(MAP_STEP_NO, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: MAP_TITLE })).toBeVisible()
   const current = page.getByRole('list', { name: 'Check progress' }).locator('[aria-current="step"] .check-step-lbl')
   await expect(current).toHaveText('Match columns')
+  // Amounts and Buyer start closed; a header's name holds its subtitle and count, so reach it by aria-controls.
+  for (const gid of ['amounts', 'buyer']) {
+    const head = page.locator(`button[aria-controls="check-g-${gid}"]`)
+    if ((await head.getAttribute('aria-expanded')) === 'false') await head.click()
+    await expect(head).toHaveAttribute('aria-expanded', 'true')
+  }
+  // A pressed Review reads "Hide", so the loop ends.
+  const review = page.getByRole('button', { name: REVIEW, exact: true })
+  while ((await review.count()) > 0) await review.first().click()
   // Choose every column: a preview's AI is fake, the nightly's is real, so the suggestion proves nothing.
   for (const [label, header] of COLUMNS) {
     await page.getByLabel(label, { exact: true }).selectOption(header)
   }
-  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByText(MAP_ALL_USED, { exact: true })).toBeVisible()
+  const next = page.getByRole('button', { name: 'Continue' })
+  await expect(next).toBeEnabled()
+  await next.click()
 
   await expect(current).toHaveText('Email')
   const email = `check-${crypto.randomUUID()}@example.com`

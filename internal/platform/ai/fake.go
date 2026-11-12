@@ -44,7 +44,8 @@ func markerAnswerPrefixFor(scope string) string {
 	return "AIFAKE-" + scope + "-ANSWER-"
 }
 
-// fakeMarker returns the first marker in Text, else the first in FakeHint. A non-empty
+// fakeMarker returns the first marker in FakeHint, else the first in Text: FakeHint can carry
+// the uncut form of a Text that was bounded. A non-empty
 // FakeScope searches only that scope's own spelling and never falls back to the unscoped one --
 // falling back is what let one marker steer two calls sharing the same Text.
 func fakeMarker(req Request) string {
@@ -52,10 +53,10 @@ func fakeMarker(req Request) string {
 	if req.FakeScope != "" {
 		re = scopedMarkerRe(req.FakeScope)
 	}
-	if m := re.FindString(req.Text); m != "" {
+	if m := re.FindString(req.FakeHint); m != "" {
 		return m
 	}
-	return re.FindString(req.FakeHint)
+	return re.FindString(req.Text)
 }
 
 // blankAnswer is every top-level property set to null (D3).

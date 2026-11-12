@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
@@ -23,20 +25,43 @@ const (
 	RunBudget       = 240 * time.Second
 	MappingBudget   = 60 * time.Second
 	MailTimeout     = 15 * time.Second
-	InsertTimeout   = 5 * time.Second
+	ConfirmTimeout  = 25 * time.Second
+	HoldTimeout     = 5 * time.Second
 	MaxConcurrent   = 2
 
 	maxFieldBytes = 1 << 20 // the largest non-file part: a mapping
 	bodySlack     = 1 << 20 // multipart framing and fields around a 15 MiB file
 )
 
-// CheckStore is what the handlers need of the summary store; *Store satisfies it.
-type CheckStore interface {
-	Count(ctx context.Context, email string) (int, error)
-	Insert(ctx context.Context, m Summary) error
+// AISpendCeilingUSD is the check's AI spend per UTC day; past it both routes answer 503 ceiling.
+// ceiling: the spend is read before a request, so runs in flight finish past it (at most MaxConcurrent per worker instance).
+const AISpendCeilingUSD = "2.00"
+
+// spendReached answers 503 ceiling past the daily ceiling and 503 unavailable when the read fails.
+func (s *Service) spendReached(ctx context.Context, w http.ResponseWriter) bool {
+	reached, err := s.Store.AISpendReached(ctx, AISpendCeilingUSD)
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "readiness check: spend read failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return true
+	}
+	if reached {
+		writeError(w, http.StatusServiceUnavailable, "ceiling")
+	}
+	return reached
 }
 
-// Service runs one public check. runBudget and mailTimeout override their defaults in tests when non-zero.
+// CheckStore is what the handlers need of the summary store; *Store satisfies it.
+type CheckStore interface {
+	AISpendReached(ctx context.Context, ceiling string) (bool, error)
+	Count(ctx context.Context, email string) (int, error)
+	Hold(ctx context.Context, h Held) (token string, err error)
+	Release(ctx context.Context, token string) error
+	Confirm(ctx context.Context, token, consentText string, send func(ctx context.Context, h Held, count int) error) (h Held, fresh bool, err error)
+	PurgeExpired(ctx context.Context) error
+}
+
+// Service runs one public check. runBudget, mailTimeout and holdTimeout override their defaults in tests when non-zero.
 type Service struct {
 	Checker     *publiccheck.Checker
 	Store       CheckStore
@@ -44,6 +69,7 @@ type Service struct {
 	Logger      *slog.Logger
 	runBudget   time.Duration
 	mailTimeout time.Duration
+	holdTimeout time.Duration
 	slots       chan struct{}
 	inFlight    map[string]struct{}
 	mu          sync.Mutex
@@ -157,15 +183,23 @@ func (u upload) request() (publiccheck.Request, bool) {
 	return req, true
 }
 
+// DocumentTooLongSentence is the error word of a check document whose text is over the prompt bound.
+const DocumentTooLongSentence = "This document has too much text for the free check. Try a shorter invoice."
+
+// FormatRefusal is the gateway's checkFormatSentence; a test keeps them equal.
+const FormatRefusal = "file must be CSV, XLSX, PDF or DOCX"
+
 // engineStatus maps an engine error to its status and error word.
 func engineStatus(err error) (status int, word string) {
 	switch {
 	case errors.Is(err, publiccheck.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, "too large"
 	case errors.Is(err, publiccheck.ErrFormat):
-		return http.StatusBadRequest, "unsupported format"
+		return http.StatusBadRequest, FormatRefusal
 	case errors.Is(err, importer.ErrValidation):
 		return http.StatusBadRequest, strings.TrimPrefix(err.Error(), importer.ErrValidation.Error()+": ")
+	case errors.Is(err, publiccheck.ErrDocumentTooLong):
+		return http.StatusBadRequest, DocumentTooLongSentence
 	case errors.Is(err, publiccheck.ErrBadFile):
 		return http.StatusUnprocessableEntity, "unreadable"
 	case errors.Is(err, publiccheck.ErrReadUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
@@ -202,6 +236,13 @@ func (s *Service) mailBudget() time.Duration {
 		return s.mailTimeout
 	}
 	return MailTimeout
+}
+
+func (s *Service) holdBudget() time.Duration {
+	if s.holdTimeout != 0 {
+		return s.holdTimeout
+	}
+	return HoldTimeout
 }
 
 func (s *Service) budget() time.Duration {
@@ -241,14 +282,13 @@ func (s *Service) RunHandler() http.Handler {
 
 		ctx, cancel := context.WithTimeout(r.Context(), s.budget())
 		defer cancel()
+		if s.spendReached(ctx, w) {
+			return
+		}
 		count, err := s.Store.Count(ctx, email)
 		if err != nil {
 			s.Logger.ErrorContext(r.Context(), "readiness check: count failed", slog.String("error", err.Error()))
 			writeError(w, http.StatusServiceUnavailable, "unavailable")
-			return
-		}
-		if count >= MaxRunsPerEmail {
-			writeError(w, http.StatusConflict, "sign_up")
 			return
 		}
 
@@ -257,27 +297,135 @@ func (s *Service) RunHandler() http.Handler {
 			s.answerEngineError(r.Context(), w, err)
 			return
 		}
-		left := MaxRunsPerEmail - count - 1
-		subject, html, err := accountmail.RenderReadinessCheck(MailFor(res, left))
-		if err != nil {
-			s.Logger.ErrorContext(r.Context(), "readiness check: render failed")
-			writeError(w, http.StatusInternalServerError, "internal error")
+		if count >= MaxRunsPerEmail {
+			s.answerUsed(w, r, email)
 			return
 		}
-		mctx, mcancel := context.WithTimeout(r.Context(), s.mailBudget())
-		defer mcancel()
-		if err := s.Sender.Send(mctx, []accountmail.Message{{To: email, Subject: subject, HTML: html}}); err != nil {
-			s.Logger.ErrorContext(r.Context(), "readiness check: send failed", slog.String("error", err.Error()))
+		s.answerHeld(w, r, Held{Email: email, Mail: MailFor(res, 0),
+			Summary: Summary{Email: email, FileType: req.Format, RowCount: res.RowsTotal, FailedRuleIDs: FailedRuleIDs(res)}})
+	})
+}
+
+// sendOne sends one mail within the mail budget.
+func (s *Service) sendOne(ctx context.Context, to, subject, html string) error {
+	mctx, cancel := context.WithTimeout(ctx, s.mailBudget())
+	defer cancel()
+	return s.Sender.Send(mctx, []accountmail.Message{{To: to, Subject: subject, HTML: html}})
+}
+
+var confirmed = map[string]string{"status": "confirm"}
+
+// answerUsed mails the used-checks notice; the answer equals a held check's.
+func (s *Service) answerUsed(w http.ResponseWriter, r *http.Request, email string) {
+	subject, html, err := accountmail.RenderReadinessUsed(accountmail.ReadinessUsedMail{Email: email})
+	if err != nil {
+		s.Logger.ErrorContext(r.Context(), "readiness check: render failed")
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := s.sendOne(r.Context(), email, subject, html); err != nil {
+		s.Logger.ErrorContext(r.Context(), "readiness check: send failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, confirmed)
+}
+
+// answerHeld holds the result and mails the confirm link; a failed send releases the row.
+func (s *Service) answerHeld(w http.ResponseWriter, r *http.Request, h Held) {
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), s.holdBudget())
+	defer cancel()
+	token, err := s.Store.Hold(hctx, h)
+	if err != nil {
+		s.Logger.ErrorContext(r.Context(), "readiness check: hold error", slog.String("error", err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	release := func() {
+		if err := s.Store.Release(context.WithoutCancel(r.Context()), token); err != nil {
+			s.Logger.ErrorContext(r.Context(), "readiness check: release failed", slog.String("error", err.Error()))
+		}
+	}
+	subject, html, err := accountmail.RenderReadinessConfirm(accountmail.ReadinessConfirmMail{Email: h.Email, Token: token, FileType: h.Summary.FileType})
+	if err != nil {
+		release()
+		s.Logger.ErrorContext(r.Context(), "readiness check: render failed")
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := s.sendOne(r.Context(), h.Email, subject, html); err != nil {
+		release()
+		s.Logger.ErrorContext(r.Context(), "readiness check: send failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, confirmed)
+}
+
+const (
+	maxConfirmBody   = 2 << 10
+	maxConsentLength = 500
+	tokenLength      = 43
+)
+
+type confirmRequest struct {
+	Token       string `json:"token"`
+	ConsentText string `json:"consent_text"`
+}
+
+func wellShapedToken(t string) bool {
+	if len(t) != tokenLength {
+		return false
+	}
+	for _, c := range t {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// ConfirmHandler is the press: it sends the held results (or the used-checks mail) and records the check in one transaction.
+func (s *Service) ConfirmHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in confirmRequest
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfirmBody))
+		if err != nil || json.Unmarshal(body, &in) != nil || !wellShapedToken(in.Token) {
+			writeError(w, http.StatusGone, "gone")
+			return
+		}
+		if n := utf8.RuneCountInString(in.ConsentText); strings.TrimSpace(in.ConsentText) == "" || n > maxConsentLength {
+			writeError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		// The gateway may drop the connection; the press must still commit or roll back whole.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), ConfirmTimeout)
+		defer cancel()
+		_, fresh, err := s.Store.Confirm(ctx, in.Token, in.ConsentText, func(ctx context.Context, h Held, count int) error {
+			var subject, html string
+			var err error
+			if count >= MaxRunsPerEmail {
+				subject, html, err = accountmail.RenderReadinessUsed(accountmail.ReadinessUsedMail{Email: h.Email})
+			} else {
+				h.Mail.ChecksLeft = MaxRunsPerEmail - count - 1
+				subject, html, err = accountmail.RenderReadinessCheck(h.Mail)
+			}
+			if err != nil {
+				return fmt.Errorf("render: %w", err)
+			}
+			return s.sendOne(ctx, h.Email, subject, html)
+		})
+		switch {
+		case errors.Is(err, ErrLinkInvalid):
+			writeError(w, http.StatusGone, "gone")
+		case err != nil:
+			s.Logger.ErrorContext(r.Context(), "readiness check: confirm failed", slog.String("error", err.Error()))
 			writeError(w, http.StatusServiceUnavailable, "failed")
-			return
+		case fresh:
+			writeJSON(w, http.StatusOK, map[string]string{"outcome": "sent"})
+		default:
+			writeJSON(w, http.StatusOK, map[string]string{"outcome": "used"})
 		}
-		sum := Summary{Email: email, FileType: req.Format, RowCount: res.RowsTotal, FailedRuleIDs: FailedRuleIDs(res)}
-		ictx, icancel := context.WithTimeout(context.WithoutCancel(r.Context()), InsertTimeout)
-		defer icancel()
-		if err := s.Store.Insert(ictx, sum); err != nil {
-			s.Logger.ErrorContext(r.Context(), "readiness check: summary not recorded", slog.String("error", err.Error()))
-		}
-		writeJSON(w, http.StatusOK, map[string]int{"checks_left": left})
 	})
 }
 
@@ -306,6 +454,9 @@ func (s *Service) MappingHandler() http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), MappingBudget)
 		defer cancel()
+		if s.spendReached(ctx, w) {
+			return
+		}
 		sug, err := s.Checker.SuggestMapping(ctx, u.file, u.format)
 		if err != nil {
 			s.answerEngineError(r.Context(), w, err)

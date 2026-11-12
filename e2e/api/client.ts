@@ -308,6 +308,13 @@ export async function setDeletionLinkToken(tenantId: string, userId: string, tok
   if (res.status !== 204) throw new Error(`deletion link token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
+// POST /auth/mock/readiness-confirm-token (internal/gateway/mockreadinessconfirm.go answers 204); mock build only.
+// Replaces the token of the address's newest live held readiness check; 404 where it has none.
+export async function setReadinessConfirmToken(email: string, token: string): Promise<void> {
+  const res = await rawFetch('/auth/mock/readiness-confirm-token', { method: 'POST', body: { email, token } })
+  if (res.status !== 204) throw new Error(`readiness confirm token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
 // Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
 // `tenantId` is the admin's workspace.
 export async function inviteWithToken(
@@ -2156,6 +2163,7 @@ export interface ExtractionDetail {
   state: string
   failure_kind: string | null
   document_type: string | null
+  ai_text_truncated: boolean
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
@@ -2256,6 +2264,12 @@ export async function postCheck(
   form.append('file', new Blob([file.content], { type: 'text/csv' }), file.name)
   const res = await fetch(`${apiBase()}/readiness-check/${route}`, { method: 'POST', body: form })
   return { status: res.status, body: await res.json().catch(() => undefined) }
+}
+
+// POST /readiness-check/confirm?t=: the press. The gateway answers a small HTML page, so the body is text.
+export async function confirmCheck(token: string): Promise<{ status: number; body: string }> {
+  const res = await fetch(`${apiBase()}/readiness-check/confirm?t=${encodeURIComponent(token)}`, { method: 'POST' })
+  return { status: res.status, body: await res.text() }
 }
 
 // internal/readinesscheck/handlers.go mappingResponse.

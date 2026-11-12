@@ -57,6 +57,7 @@ func askMappingWith(ctx context.Context, s MappingSuggester, window [][]string, 
 		Purpose:    ai.PurposeSpreadsheet,
 		System:     system,
 		Text:       mappingPromptText(window),
+		FakeHint:   mappingRowsText(window),
 		SchemaName: mappingSchemaName,
 		Schema:     schema,
 	})

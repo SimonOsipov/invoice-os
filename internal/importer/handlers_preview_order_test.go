@@ -98,7 +98,8 @@ func TestPreviewHandler_RefusalStillNamesTheStoredDocument(t *testing.T) {
 		wantError       string
 	}{
 		{"an unrecognized format", "data.txt", "application/octet-stream", []byte("whatever"), "unrecognized file format"},
-		{"an undecodable xlsx", "data.xlsx", xlsxContentType, []byte("not a zip file"), "could not decode uploaded file"},
+		{"an xlsx that is not a zip", "data.xlsx", xlsxContentType, []byte("not a zip file"), "unrecognized file format"},
+		{"an undecodable xlsx", "data.xlsx", xlsxContentType, []byte("PK\x03\x04 not a workbook"), "could not decode uploaded file"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newPvoStore()

@@ -5,10 +5,10 @@ import { parseCreatedAt } from './resendClient'
 
 export type Sent = { to: string[]; created_at: string }
 
-// The day stops at 25; the email run sends 5, the readiness run 3 and the unsubscribe run 3 (6 with the CI retry), all on one nightly.
+// The day stops at 25; the email run sends 5, the readiness run 7 (3 confirmations, 3 results, 1 used-checks notice) and the unsubscribe run 3 (6 with the CI retry), all on one nightly.
 export const DAY_CAP = 25
 export const EMAIL_RUN_SENDS = 5
-export const READINESS_RUN_SENDS = 3
+export const READINESS_RUN_SENDS = 7
 export const UNSUBSCRIBE_RUN_SENDS = 3
 const SPEC_FILE = 'e2e/mail/real-mail.spec.ts'
 

@@ -122,6 +122,7 @@ func (r *eraseRig) track(email, uid string) {
 			{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},
 			{`DELETE FROM blog_subscription_requests WHERE email = $1`, []any{email}},
 			{`DELETE FROM readiness_checks WHERE email = $1`, []any{email}},
+			{`DELETE FROM readiness_check_requests WHERE email = $1`, []any{email}},
 		} {
 			if _, err := r.e.admin.Exec(ctx, c.q, c.args...); err != nil {
 				r.t.Errorf("cleanup: %v", err)
@@ -491,6 +492,47 @@ func TestErase_SupersededAddressKeepsItsReadinessChecks(t *testing.T) {
 	}
 	if n := r.count(`SELECT count(*) FROM readiness_checks WHERE email = $1`, r.mail); n != 2 {
 		t.Fatalf("%d readiness rows left, want 2", n)
+	}
+}
+
+// heldCheck inserts one confirm link's held result for the address.
+func (r *eraseRig) heldCheck(email string, n int) {
+	r.t.Helper()
+	for range n {
+		r.exec(`INSERT INTO readiness_check_requests (email, token_hash, file_type, row_count, mail, expires_at)
+			VALUES ($1, sha256(gen_random_uuid()::text::bytea), 'csv', 1, '{}', now() + interval '1 hour')`, email)
+	}
+}
+
+func TestErase_SweepDeletesTheHeldChecks(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	_, omail := r.person()
+	r.heldCheck(r.mail, 2)
+	r.heldCheck(omail, 1)
+	r.failAll()
+	_ = r.work(gen)
+	q := `SELECT count(*) FROM readiness_check_requests WHERE email = $1`
+	if n := r.count(q, r.mail); n != 0 {
+		t.Errorf("%d held rows left", n)
+	}
+	if n := r.count(q, omail); n != 1 {
+		t.Errorf("another address has %d held rows, want 1", n)
+	}
+}
+
+func TestErase_SupersededAddressKeepsItsHeldChecks(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.exec(`UPDATE person_erasures SET account_erased_at = now() WHERE user_id = $1`, r.uid)
+	buid := uuid.NewString()
+	r.contact(r.mail, &buid, 1)
+	r.heldCheck(r.mail, 2)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.count(`SELECT count(*) FROM readiness_check_requests WHERE email = $1`, r.mail); n != 2 {
+		t.Fatalf("%d held rows left, want 2", n)
 	}
 }
 

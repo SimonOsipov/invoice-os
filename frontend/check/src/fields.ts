@@ -1,10 +1,11 @@
-// The one seam to app source (only these three modules); the check never imports app components.
+// The one seam to app source (only these four modules); the check never imports app components.
 import { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns } from '../../app/src/lib/importFlow'
 import { canSubmitMapping, toImportMapping } from '../../app/src/lib/mapping'
 import { IMPORT_KEYS, INVOICE_FIELDS, labelOf } from '../../app/src/lib/invoiceFields'
+import { formatBytes } from '../../app/src/lib/sourceDocument'
 import type { Mapping } from '../../app/src/types'
 
-export { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns, canSubmitMapping, toImportMapping, IMPORT_KEYS, labelOf }
+export { ACCEPTED_PICKED_TYPES, classifyPickedFile, MAX_UPLOAD_BYTES, previewColumns, canSubmitMapping, toImportMapping, IMPORT_KEYS, labelOf, formatBytes }
 export type { Mapping }
 
 export const ACCEPT = ACCEPTED_PICKED_TYPES.map((r) => r.ext).join(',')
@@ -35,4 +36,22 @@ export function initialMapping(s: Suggestion): Mapping {
 export function fieldLabel(key: string): string {
   const f = INVOICE_FIELDS.find((x) => x.importKey === key) ?? INVOICE_FIELDS.find((x) => x.key === key)
   return f ? f.label : key
+}
+
+export const FIELD_GROUPS = [
+  ['invoice', 'Invoice'],
+  ['amounts', 'Amounts'],
+  ['line', 'Line items'],
+  ['buyer', 'Buyer'],
+  ['supplier', 'Supplier'],
+] as const
+export type GroupId = (typeof FIELD_GROUPS)[number][0]
+
+const AMOUNTS = ['currency', 'tax_currency_code', 'subtotal', 'vat', 'total']
+
+export function groupOf(key: string): GroupId {
+  if (key.startsWith('supplier_')) return 'supplier'
+  if (key.startsWith('buyer_')) return 'buyer'
+  if (key.startsWith('line_')) return 'line'
+  return AMOUNTS.includes(key) ? 'amounts' : 'invoice'
 }

@@ -170,6 +170,7 @@ function mkDetail(o: Partial<ExtractionDetail> = {}): ExtractionDetail {
     state: 'succeeded',
     failure_kind: null,
     document_type: null,
+    ai_text_truncated: false,
     document: mkDocument(),
     pages: THREE_PAGES,
     fields: THREE_FIELDS,

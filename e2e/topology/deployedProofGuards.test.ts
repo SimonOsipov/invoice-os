@@ -79,7 +79,7 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
     'uniqueWildNoNumberPdfBytes()',
     'uniqueGarbageBytes()',
     'uniqueGoldenDocxBytes()',
-    'uniqueEmptyDocxBytes()',
+    'uniqueCorruptDocxBytes()',
     'uniquePdfBytes()',
   ]
   const FORWARDERS = new Set(['Buffer', 'file.buffer'])

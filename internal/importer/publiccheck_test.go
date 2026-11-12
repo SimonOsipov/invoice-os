@@ -110,6 +110,28 @@ func TestSuggestCheckMapping_SendsTheCheckPrompt(t *testing.T) {
 	}
 }
 
+func TestSuggestCheckMapping_SendsABoundedPrompt(t *testing.T) {
+	f := &fakeSuggester{enabled: true, answer: supplierAnswer()}
+	cells := make([]string, 20)
+	for i := range cells {
+		cells[i] = strings.Repeat("h", 10_000)
+	}
+	csv := strings.Join(cells, ",") + "\n" + strings.Join(cells, ",") + "\n"
+	if _, err := SuggestCheckMapping(t.Context(), f, []byte(csv), "csv"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(f.calls))
+	}
+	req := f.calls[0]
+	if n := len(req.Text) - len(mappingIntro) - 1; n <= 0 || n > maxMappingPromptBytes {
+		t.Errorf("Text rows = %d bytes, want 1 to %d", n, maxMappingPromptBytes)
+	}
+	if req.Purpose != ai.PurposeSpreadsheet {
+		t.Errorf("Purpose = %q", req.Purpose)
+	}
+}
+
 type markCapture struct {
 	fakeSuggester
 	marked bool

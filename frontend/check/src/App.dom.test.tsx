@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CONSENT_TEXT } from './analytics'
 import { CHECK_FIELD_KEYS, fieldLabel } from './fields'
-import { READING_TEXT, SENT_TEXT, SENDING_TEXT, TYPE_SENTENCE } from './copy'
-import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, SIGN_UP_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { READING_TEXT, SENT_NOTE, SENDING_TEXT, TYPE_SENTENCE } from './copy'
+import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -35,7 +35,7 @@ const suggestion = (columns: string[], mapping: Record<string, string>, headerRo
   mapping,
   source: 'heuristic',
 })
-const SENT = () => json(200, { status: 'sent', checks_left: 2 })
+const SENT = () => json(200, { status: 'confirm' })
 
 let container: HTMLDivElement
 let root: Root
@@ -105,6 +105,10 @@ async function choose(label: string, value: string) {
   })
 }
 const click = (el: Element) => act(async () => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+async function openAll() {
+  for (const b of [...container.querySelectorAll<HTMLButtonElement>('.check-acc')]) if (b.getAttribute('aria-expanded') === 'false') await click(b)
+  for (const b of [...container.querySelectorAll<HTMLButtonElement>('.check-subhead button')]) if (b.textContent === 'Review') await click(b)
+}
 async function fillAndSend(email = 'a@example.com') {
   await type(byLabel<HTMLInputElement>('Email address'), email)
   await click(container.querySelector('input[type="checkbox"]')!)
@@ -148,12 +152,12 @@ describe('upload step', () => {
     expect(byLabel('Email address')).toBeTruthy()
   })
 
-  it('upload_thePickerIsDisabledWhileReadingColumns', async () => {
+  it('upload_theZoneGivesWayWhileReadingColumns', async () => {
     let release!: (r: Response) => void
     stubFetch({ [MAPPING]: () => new Promise<Response>((r) => (release = r)) })
     await mount()
     await pick(file('a.csv'))
-    expect(fileInput().disabled).toBe(true)
+    expect(container.querySelector('input[type="file"]')).toBeNull()
     expect(text()).toContain(READING_TEXT)
     await act(async () => release(json(422, { error: UNREADABLE_SENTENCE })))
     await settle()
@@ -177,6 +181,7 @@ describe('map step', () => {
     const headers = [...container.querySelectorAll('.check-columns tbody td:nth-child(2)')].map((c) => c.textContent)
     expect(headers).toEqual(['Inv', 'Seller', 'STIN', 'Net'])
     expect(byLabel<HTMLSelectElement>('Invoice number').value).toBe('Inv')
+    await click(container.querySelector('#check-g-supplier .check-subhead button')!)
     expect(byLabel<HTMLSelectElement>('Supplier name').value).toBe('Seller')
     const tin = byLabel<HTMLSelectElement>('Supplier TIN')
     expect(tin.value).toBe('')
@@ -241,11 +246,12 @@ describe('map and details extras', () => {
     sheetStub()
     await mount()
     await pick(file('a.csv'))
-    const rows = [...container.querySelectorAll('.check-fields .check-field')]
+    await openAll()
+    const selects = [...container.querySelectorAll('.check-groups select')]
     expect(CHECK_FIELD_KEYS.length).toBeGreaterThan(0)
-    expect(rows.map((r) => r.querySelector('select')!.id)).toEqual(CHECK_FIELD_KEYS.map((k) => `check-field-${k}`))
-    const labels = rows.map((r) => r.querySelector('label')!.textContent)
-    expect(labels).toEqual(CHECK_FIELD_KEYS.map(fieldLabel))
+    expect(selects.map((x) => x.id).sort()).toEqual(CHECK_FIELD_KEYS.map((k) => `check-field-${k}`).sort())
+    const labels = selects.map((x) => container.querySelector(`label[for=${x.id}]`)!.textContent)
+    expect(labels.slice().sort()).toEqual(CHECK_FIELD_KEYS.map(fieldLabel).sort())
     expect(new Set(labels).size).toBe(labels.length)
     for (const k of CHECK_FIELD_KEYS) expect(labels, 'a raw key shown as a label').not.toContain(k)
   })
@@ -258,6 +264,7 @@ describe('map and details extras', () => {
     await click(button('Continue'))
     await click(button('Back'))
     expect(container.querySelector('.check-columns')).not.toBeNull()
+    await click(container.querySelector('#check-g-supplier .check-subhead button')!)
     expect(byLabel<HTMLSelectElement>('Supplier TIN').value).toBe('STIN')
   })
 
@@ -328,13 +335,47 @@ describe('details and sent', () => {
     expect(text()).not.toContain(MAPPING_SENTENCE)
   })
 
-  it('send_aSpreadsheet400IsTheMappingSentence', async () => {
-    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'invalid request body' }) })
+  it('send_aTooLongDocumentShowsTheTooMuchTextSentence', async () => {
+    const sentence = 'This document has too much text for the free check. Try a shorter invoice.' // readinesscheck.DocumentTooLongSentence
+    stubFetch({ [RUN]: () => json(400, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNREADABLE_SENTENCE)
+  })
+
+  it('send_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [RUN]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.pdf'))
+    await fillAndSend()
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
+  })
+
+  it('suggest_aCeilingRefusalShowsTheDailyLimitSentence', async () => {
+    const sentence = 'The free check has reached its limit for today. Try again tomorrow.' // gateway checkCeilingSentence
+    stubFetch({ [MAPPING]: () => json(503, { error: sentence }) })
+    await mount()
+    await pick(file('a.csv'))
+    expect(text()).toContain(sentence)
+    expect(text()).not.toContain(UNAVAILABLE_SENTENCE)
+  })
+
+  it('send_aRejectedMappingReturnsToTheMapStep', async () => {
+    stubFetch({ [MAPPING]: () => json(200, SHEET), [RUN]: () => json(400, { error: 'mapping: column "Inv" not found' }) })
     await mount()
     await pick(file('a.csv'))
     await click(button('Continue'))
     await fillAndSend()
-    expect(text()).toContain(MAPPING_SENTENCE)
+    expect(container.querySelector('h2')!.textContent).toBe('Tell us which column is which')
+    expect(container.querySelector('.check-progress [aria-current="step"]')!.textContent).toContain('Match columns')
+    const alert = container.querySelector('.check-sticky [role="alert"]')!
+    expect(alert.textContent).toBe(MAPPING_SENTENCE)
+    expect(alert.nextElementSibling!.classList.contains('check-actions')).toBe(true)
+    expect(button('Send')).toBeUndefined()
   })
 
   it('send_isDisabledUntilEmailAndTick', async () => {
@@ -348,13 +389,17 @@ describe('details and sent', () => {
     expect(button('Send').disabled).toBe(false)
   })
 
-  it('send_200ShowsTheSentTextAndNoResults', async () => {
+  it('send_200ShowsTheConfirmTextWithTheTrimmedAddress', async () => {
     stubFetch({ [RUN]: SENT })
     await mount()
     await pick(file('a.pdf'))
-    await fillAndSend()
-    expect(text()).toContain(SENT_TEXT('a@example.com'))
-    expect(container.querySelector('.check-tool [role="status"]')!.textContent).not.toMatch(/checks_left|rule|\d/i)
+    await fillAndSend('  a@x.io ')
+    const status = container.querySelector('.check-tool [role="status"]')!.textContent!
+    expect(status).toContain('Check your inbox at a@x.io.')
+    expect(status).toContain(SENT_NOTE)
+    expect(status).not.toMatch(/24 hours|button|send your results/i)
+    expect(status).toContain('no-reply@ascomply.com')
+    expect(status).not.toMatch(/on their\s+way|checks_left|rule/i)
     expect(container.querySelector('form')).toBeNull()
   })
 
@@ -367,13 +412,14 @@ describe('details and sent', () => {
     expect(button('Send').disabled).toBe(true)
   })
 
-  it('send_409ShowsTheSignUpSentenceAndLink', async () => {
-    stubFetch({ [RUN]: () => json(409, { error: SIGN_UP_SENTENCE }) })
+  it('send_409IsTheUnavailableSentenceWithoutSignUp', async () => {
+    stubFetch({ [RUN]: () => json(409, { error: 'x' }) })
     await mount()
     await pick(file('a.pdf'))
     await fillAndSend()
-    expect(text()).toContain(SIGN_UP_SENTENCE)
-    expect(container.querySelector<HTMLAnchorElement>('[role="alert"] a[href$="/?register"]')?.textContent).toBe('Sign up')
+    const alert = container.querySelector('[role="alert"]')!
+    expect(alert.textContent).toBe(UNAVAILABLE_SENTENCE)
+    expect(alert.querySelector('a')).toBeNull()
   })
 
   it('send_429FromTheGatewayShowsItsSentence', async () => {

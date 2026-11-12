@@ -209,7 +209,7 @@ func TestCheckDB_StoresNoDocumentExtractionInvoiceOrJobRow(t *testing.T) {
 	if counter.calls != 0 {
 		t.Fatalf("spreadsheet check made %d AI calls, want 0", counter.calls)
 	}
-	if _, err := c.Check(ctx, publiccheck.Request{File: []byte("%PDF"), Format: "pdf"}); err != nil {
+	if _, err := c.Check(ctx, publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"}); err != nil {
 		t.Fatalf("pdf check: %v", err)
 	}
 	rec.Wait()

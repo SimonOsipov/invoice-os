@@ -53,6 +53,8 @@ paths:
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
 - Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
+- Grant `EXECUTE` on `public.public_check_ai_cost_today` to `invoice_app` only. It returns the NULL-tenant `ai_calls` cost of the current UTC day.
+- Treat `invoice_migrator` as able to read `tenant_id`, `cost` and `created_at` of NULL-tenant `ai_calls` rows through `SET ROLE auth_hook_reader`.
 - Return no rows from `pending_invites_for_email` for a user id that holds a membership that is not `removed`.
 - Return no invite of a workspace scheduled for deletion from `invitation_by_token`, `pending_invites_for_email` and `invitation_pending_for_email`.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
@@ -140,4 +142,5 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.
 
 Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.
+Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `readiness_check_requests`. It is global: no RLS. `invoice_gateway` gets no grant.
 Give `invoice_app` SELECT, DELETE and UPDATE (`unsubscribed_at`) on `mail_unsubscribes`, and EXECUTE on `mail_unsubscribe_token`. Give `invoice_gateway` EXECUTE only. It is global: no RLS. Only the erase routine deletes a row.

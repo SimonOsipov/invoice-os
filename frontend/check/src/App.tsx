@@ -13,7 +13,7 @@ import { WhatYouGet } from './components/WhatYouGet'
 import { canSend, fileVerdict, kindOf } from './flow'
 import { initialMapping, type Mapping, type Suggestion } from './fields'
 import { landingHref } from './links'
-import { COLUMNS_SENTENCE, refusal as refuse, type Refusal } from './messages'
+import { COLUMNS_SENTENCE, MAPPING_SENTENCE, refusal as refuse, type Refusal } from './messages'
 import { progress, type Step } from './progress'
 
 export function App() {
@@ -57,7 +57,7 @@ export function App() {
       return
     }
     setFile(null)
-    setRefusal(res.ok ? { text: COLUMNS_SENTENCE, signUp: false } : refuse('mapping', res.status, res.error))
+    setRefusal(res.ok ? { text: COLUMNS_SENTENCE } : refuse('mapping', res.status, res.error))
   }
 
   const backToUpload = () => {
@@ -76,8 +76,14 @@ export function App() {
     setRefusal(null)
     const res = await runCheck({ email, file, mapping: suggestion && fields ? { headerRow: suggestion.header_row, fields } : undefined })
     setSending(false)
-    if (res.ok) setStep('sent')
-    else setRefusal(refuse(suggestion ? 'run' : 'document', res.status, res.error))
+    if (res.ok) {
+      setStep('sent')
+      return
+    }
+    const r = refuse(suggestion ? 'run' : 'document', res.status, res.error)
+    setRefusal(r)
+    // Only a rejected mapping goes back to step 2; every other refusal stays on the email step.
+    if (suggestion && r.text === MAPPING_SENTENCE) setStep('map')
   }
 
   // A choice made in another tab applies here when this tab is shown again.
@@ -98,15 +104,22 @@ export function App() {
         <Hero wide={step === 'map'}>
           <ProgressStrip progress={progress(step, file?.name ?? null)} />
           <div className="check-steps">
-            {step === 'upload' && <UploadStep fileName={file?.name ?? null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
+            {step === 'upload' && <UploadStep file={file ? { name: file.name, size: file.size } : null} reading={reading} verdict={verdict} refusal={refusal} onPick={pick} />}
             {step === 'map' && file && suggestion && fields && (
               <MapStep
                 fileName={file.name}
                 suggestion={suggestion}
                 fields={fields}
-                onField={(key, header) => setFields({ ...fields, [key]: header })}
+                error={refusal?.text ?? null}
+                onField={(key, header) => {
+                  setRefusal(null)
+                  setFields({ ...fields, [key]: header })
+                }}
                 onBack={backToUpload}
-                onContinue={() => setStep('details')}
+                onContinue={() => {
+                  setRefusal(null)
+                  setStep('details')
+                }}
               />
             )}
             {step === 'details' && file && (

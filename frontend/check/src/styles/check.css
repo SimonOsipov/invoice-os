@@ -219,6 +219,16 @@ input[type='file'] { max-width: 100%; font: inherit; }
   .check-progress { display: none; }
   .check-progress-m { display: grid; }
 }
+@media (max-width: 767px) {
+  /* Map step phone layout: PHONE_WIDTHS in e2e/topology/layout.ts tops out at 767 */
+  .check-acc { grid-template-columns: minmax(0, 1fr) auto; padding: 14px; }
+  .check-acc .check-count { grid-column: 1; grid-row: 2; }
+  .check-acc .check-chev { grid-column: 2; grid-row: 1 / span 2; }
+  .check-row { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px 14px; }
+  .check-map .check-actions { flex-direction: column-reverse; align-items: stretch; }
+  .check-actions-end { flex-direction: column; align-items: stretch; }
+  .check-map .check-btn { width: 100%; }
+}
 @media (max-width: 600px) {
   :root { --check-header-h: 64px; }
   .check-page { --gutter: 16px; --section-y: 56px; } /* the design's 600 px values */
@@ -234,17 +244,10 @@ input[type='file'] { max-width: 100%; font: inherit; }
   .check-mail-head, .check-mail-no, .check-mail-row, .check-mail-line { padding-inline: 14px; }
   .check-foot-row { flex-direction: column; align-items: flex-start; }
   .check-card { padding: 16px; }
-  .check-acc { grid-template-columns: minmax(0, 1fr) auto; padding: 14px; }
-  .check-acc .check-count { grid-column: 1; grid-row: 2; }
-  .check-acc .check-chev { grid-column: 2; grid-row: 1 / span 2; }
-  .check-row { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px 14px; }
   .check-card.check-upload, .check-card.check-map { gap: 18px; }
   .check-sum { padding: 16px; gap: 6px 14px; }
   .check-sum-n { font-size: 28px; }
   .check-sticky { margin: 0 -16px -20px; padding: 12px 16px; }
-  .check-map .check-actions { flex-direction: column-reverse; align-items: stretch; }
-  .check-actions-end { flex-direction: column; align-items: stretch; }
-  .check-map .check-btn { width: 100%; }
   .check-card .check-step-title { font-size: 20px; }
   .check-drop { padding: 26px 16px 22px; }
 }

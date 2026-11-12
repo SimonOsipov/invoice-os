@@ -99,3 +99,11 @@ export const NOT_USED = 'Not used'
 export const CHOOSE_ANOTHER = 'Choose another file'
 export const CONTINUE = 'Continue'
 export const NEED_INVOICE_NO = 'Choose the Invoice number column to continue.'
+export const EMAIL_STEP_NO = (sheet: boolean): string => `${sheet ? '03' : '02'} · Email`
+export const EMAIL_TITLE = 'Where should we send the results?'
+export const EMAIL_LABEL = 'Email address'
+export const EMAIL_PLACEHOLDER = 'name@company.ng'
+export const FILE_MATCHED = (x: number, n: number): string => `${x} of ${n} fields matched`
+export const FILE_NO_MATCHING = 'No column matching needed'
+export const BACK = 'Back'
+export const SEND = 'Send'

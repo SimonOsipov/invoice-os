@@ -44,6 +44,18 @@ describe('canSend', () => {
     expect(canSend({ ...ready, email: '  ' })).toBe(false)
   })
 
+  it.each([
+    ['ada@adebayofoods', false],
+    ['a@b', false],
+    ['a@b.c', false],
+    ['a b@x.io', false],
+    ['a@@x.io', false],
+    ['a@x.io', true],
+    ['  a@x.io ', true],
+  ])('canSend_needsAWellShapedAddress %j', (email, want) => {
+    expect(canSend({ file: file('a.pdf'), email, ticked: true, fields: null })).toBe(want)
+  })
+
   it('canSend_aSpreadsheetNeedsTheInvoiceNumber', () => {
     const unplaced = { ...ready, fields: { invoice_number: null } }
     expect(canSend(unplaced)).toBe(false)

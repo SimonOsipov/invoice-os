@@ -1,0 +1,199 @@
+// @vitest-environment jsdom
+// @vitest-environment-options { "url": "https://www.ascomply.com/check/" }
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { App } from './App'
+import { CHECK_FIELD_KEYS, fieldLabel, formatBytes } from './fields'
+import { CONSENT_SENTENCE, EMAIL_SENTENCE } from './messages'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const store = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
+    clear: () => store.clear(),
+  },
+})
+
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+const SHEET = {
+  columns: ['Inv', 'Seller', 'Tot', 'Net'],
+  sample_rows: [['v0', 'v1', 'v2', 'v3']],
+  header_row: 1,
+  rows_total: 1,
+  mapping: { invoice_number: 'Inv', supplier_name: 'Seller', total: 'Tot' },
+  source: 'heuristic',
+}
+
+let container: HTMLDivElement
+let root: Root
+
+async function mount() {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => json(200, SHEET)))
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => root.render(<App />))
+}
+
+beforeEach(() => {
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://api.example.test')
+  store.set('asc_consent', JSON.stringify({ analytics: false, ts: '2026-01-01T00:00:00Z', v: 1 }))
+})
+afterEach(async () => {
+  await act(async () => root.unmount())
+  container.remove()
+  store.clear()
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+})
+
+const settle = async () => {
+  for (let i = 0; i < 4; i++) await act(async () => void (await new Promise((r) => setTimeout(r, 0))))
+}
+const q = <T extends Element>(sel: string) => container.querySelector<T>(sel)
+const button = (name: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === name)!
+const emailInput = () => q<HTMLInputElement>('#check-email')!
+const tickBox = () => q<HTMLInputElement>('.check-consent input')!
+const click = (el: Element) => act(async () => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+const blur = (el: Element) => act(async () => void el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+
+async function pick(f: File) {
+  const input = q<HTMLInputElement>('input[type="file"]')!
+  Object.defineProperty(input, 'files', { value: [f], configurable: true })
+  await act(async () => void input.dispatchEvent(new Event('change', { bubbles: true })))
+  await settle()
+}
+async function type(el: HTMLInputElement, value: string) {
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  await act(async () => {
+    set.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+async function choose(label: string, value: string) {
+  const l = [...container.querySelectorAll('label')].find((x) => x.textContent === label)!
+  const el = q<HTMLSelectElement>(`#${l.htmlFor}`)!
+  const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+  await act(async () => {
+    set.call(el, value)
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+async function openAll() {
+  for (const b of [...container.querySelectorAll<HTMLButtonElement>('.check-acc')]) if (b.getAttribute('aria-expanded') === 'false') await click(b)
+  for (const b of [...container.querySelectorAll<HTMLButtonElement>('.check-subhead button')]) if (b.textContent === 'Review') await click(b)
+}
+const toEmail = async (name: string, size = 4) => {
+  await mount()
+  await pick(new File(['a'.repeat(size)], name))
+  if (name.endsWith('.csv')) await click(button('Continue'))
+}
+
+describe('email step', () => {
+  it('email_stepLabelFollowsTheFileKind', async () => {
+    for (const [name, label] of [['a.csv', '03 · Email'], ['a.pdf', '02 · Email'], ['a.docx', '02 · Email']]) {
+      await toEmail(name)
+      expect(q('.check-step-no')!.textContent).toBe(label)
+      expect(q('h2')!.textContent).toBe('Where should we send the results?')
+      await act(async () => root.unmount())
+      container.remove()
+    }
+    await mount()
+  })
+
+  it('email_fileRowCountsTheMatchedFields', async () => {
+    await toEmail('a.csv')
+    const n = CHECK_FIELD_KEYS.length
+    expect(q('.check-upload-name')!.textContent).toBe('a.csv')
+    expect(q('.check-upload-size')!.textContent).toBe(`${formatBytes(4)} · 3 of ${n} fields matched`)
+    await click(button('Back'))
+    await openAll()
+    await choose(fieldLabel('subtotal'), 'Net')
+    await click(button('Continue'))
+    expect(q('.check-upload-size')!.textContent).toBe(`${formatBytes(4)} · 4 of ${n} fields matched`)
+    await click(button('Back'))
+    await openAll()
+    await choose(fieldLabel('subtotal'), '')
+    await click(button('Continue'))
+    expect(q('.check-upload-size')!.textContent).toBe(`${formatBytes(4)} · 3 of ${n} fields matched`)
+  })
+
+  it('email_aDocumentNeedsNoColumnMatching', async () => {
+    await toEmail('a.pdf', 2048)
+    expect(q('.check-upload-size')!.textContent).toBe('2 KB · No column matching needed')
+    expect(q('.check-file-ok svg')).toBeTruthy()
+  })
+
+  it('email_aMalformedAddressShowsItsMessageOnBlur', async () => {
+    await toEmail('a.pdf')
+    await type(emailInput(), 'ada@adebayofoods')
+    expect(q('#check-email-err')).toBeNull()
+    await blur(emailInput())
+    const err = q('#check-email-err')!
+    expect(err.getAttribute('role')).toBe('alert')
+    expect(err.textContent).toBe(EMAIL_SENTENCE)
+    expect(emailInput().getAttribute('aria-invalid')).toBe('true')
+    expect(emailInput().classList.contains('is-err')).toBe(true)
+    expect(emailInput().getAttribute('aria-describedby')).toBe('check-email-err')
+  })
+
+  it('email_anEmptyFieldBlursSilently', async () => {
+    await toEmail('a.pdf')
+    await blur(emailInput())
+    expect(q('#check-email-err')).toBeNull()
+    expect(emailInput().getAttribute('aria-invalid')).not.toBe('true')
+  })
+
+  it('email_aFixedAddressClearsTheMessageAsTyped', async () => {
+    await toEmail('a.pdf')
+    await type(emailInput(), 'ada@adebayofoods')
+    await blur(emailInput())
+    expect(q('#check-email-err')).toBeTruthy()
+    await type(emailInput(), 'ada@adebayofoods.ng')
+    expect(q('#check-email-err')).toBeNull()
+    expect(q('.is-err')).toBeNull()
+    await type(emailInput(), 'ada@adebayofoods')
+    expect(q('#check-email-err')).toBeTruthy()
+  })
+
+  it('email_consentMessageShowsOnceTheBoxIsLeftEmpty', async () => {
+    await toEmail('a.pdf')
+    expect(q('#check-consent-err')).toBeNull()
+    await click(tickBox())
+    expect(q('#check-consent-err')).toBeNull()
+    await click(tickBox())
+    const err = q('#check-consent-err')!
+    expect(err.getAttribute('role')).toBe('alert')
+    expect(err.textContent).toBe(CONSENT_SENTENCE)
+    expect(tickBox().getAttribute('aria-describedby')).toBe('check-consent-err')
+    await click(tickBox())
+    expect(q('#check-consent-err')).toBeNull()
+  })
+
+  it('email_sendWaitsForAValidAddressAndTheTick', async () => {
+    await toEmail('a.pdf')
+    const send = () => button('Send') as HTMLButtonElement
+    await type(emailInput(), 'ada@adebayofoods')
+    await click(tickBox())
+    expect(send().disabled).toBe(true)
+    await type(emailInput(), 'ada@adebayofoods.ng')
+    await click(tickBox())
+    expect(send().disabled).toBe(true)
+    await click(tickBox())
+    expect(send().disabled).toBe(false)
+  })
+
+  it('email_sendCarriesTheArrowAndKeepsItsName', async () => {
+    await toEmail('a.pdf')
+    const send = q<HTMLButtonElement>('button[type="submit"]')!
+    expect(send.textContent).toBe('Send')
+    expect(send.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1)
+    expect(button('Back').getAttribute('type')).toBe('button')
+  })
+})

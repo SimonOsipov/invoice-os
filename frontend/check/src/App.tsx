@@ -11,7 +11,8 @@ import { SentPanel } from './components/SentPanel'
 import { UploadStep } from './components/UploadStep'
 import { WhatYouGet } from './components/WhatYouGet'
 import { canSend, fileVerdict, kindOf } from './flow'
-import { initialMapping, type Mapping, type Suggestion } from './fields'
+import { CHECK_FIELD_KEYS, formatBytes, initialMapping, type Mapping, type Suggestion } from './fields'
+import { EMAIL_STEP_NO, FILE_MATCHED, FILE_NO_MATCHING } from './copy'
 import { landingHref } from './links'
 import { COLUMNS_SENTENCE, MAPPING_SENTENCE, refusal as refuse, type Refusal } from './messages'
 import { progress, type Step } from './progress'
@@ -124,7 +125,9 @@ export function App() {
             )}
             {step === 'details' && file && (
               <DetailsStep
+                stepNo={EMAIL_STEP_NO(kindOf(file) === 'spreadsheet')}
                 fileName={file.name}
+                fileMeta={`${formatBytes(file.size)} · ${fields ? FILE_MATCHED(CHECK_FIELD_KEYS.filter((k) => fields[k] != null).length, CHECK_FIELD_KEYS.length) : FILE_NO_MATCHING}`}
                 email={email}
                 ticked={ticked}
                 sending={sending}

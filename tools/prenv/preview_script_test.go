@@ -1131,11 +1131,19 @@ var blogIDEnv = []string{"RESEND_BLOG_TOPIC_ID=" + blogTopicID, "RESEND_BLOG_SEG
 
 func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	t.Parallel()
-	r := runPreviewEnv(t, blogIDEnv, nil, "mail-on", "nightly")
+	r := runPreviewEnv(t, blogIDEnv, func(dir string) {
+		writeIn(t, dir, "revisions-worker-nightly", "worker-nightly-00001-aaa\n")
+		writeIn(t, dir, "latest-worker-nightly", "worker-nightly-00001-aaa\n")
+	}, "mail-on", "nightly")
 	if r.code != 0 {
 		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
-	lines := nonBlankLines(r.file(t, "calls"))
+	var lines []string
+	for _, c := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(c, "run services update ") {
+			lines = append(lines, c)
+		}
+	}
 	if len(lines) != 4 {
 		t.Fatalf("calls = %v, want four service updates", lines)
 	}

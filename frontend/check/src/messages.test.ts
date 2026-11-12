@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TYPE_SENTENCE } from './copy'
-import { CEILING_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, PAGE_LIMIT_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, TOO_MUCH_TEXT_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
+import { CEILING_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, offersAnotherFile, PAGE_LIMIT_SENTENCE, refusal, SLOW_UPLOAD_SENTENCE, TOO_MUCH_TEXT_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 describe('refusal', () => {
   it('refusal_409MapsLikeAnyUnknownStatus', () => {
@@ -102,5 +102,20 @@ describe('refusal', () => {
     expect(refusal('run', 422, null).text).toBe(UNREADABLE_SENTENCE)
     expect(refusal('run', 422, '')).toEqual({ text: UNREADABLE_SENTENCE })
     expect(refusal('run', 422, 'x'.repeat(300)).text).toBe('x'.repeat(300))
+  })
+})
+
+describe('offersAnotherFile', () => {
+  it.each([
+    ['run 422', 'run', 422, null, true],
+    ['run 408', 'run', 408, null, true],
+    ['document 400 invalid request body', 'document', 400, 'invalid request body', true],
+    ['run 400 too much text', 'run', 400, TOO_MUCH_TEXT_SENTENCE, false],
+    ['run 413', 'run', 413, null, false],
+    ['run 503', 'run', 503, null, false],
+    ['run 429', 'run', 429, null, false],
+    ['run network', 'run', null, null, false],
+  ] as const)('refusal_offersAnotherFileOnlyForAnUnreadableOrSlowFile %s', (_n, route, status, error, want) => {
+    expect(offersAnotherFile(refusal(route, status, error))).toBe(want)
   })
 })

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CONSENT_TEXT } from './analytics'
 import { CHECK_FIELD_KEYS, fieldLabel } from './fields'
-import { READING_TEXT, SENT_NOTE, SENDING_TEXT, TYPE_SENTENCE } from './copy'
+import { READING_TEXT, SENT_NOTE, TYPE_SENTENCE } from './copy'
 import { ARMOR_SENTENCE, COLUMNS_SENTENCE, IP_SENTENCE, MAPPING_SENTENCE, UNAVAILABLE_SENTENCE, UNREADABLE_SENTENCE } from './messages'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -418,8 +418,8 @@ describe('details and sent', () => {
     await mount()
     await pick(file('a.pdf'))
     await fillAndSend()
-    expect(text()).toContain(SENDING_TEXT)
-    expect(button('Send').disabled).toBe(true)
+    expect(container.querySelector('h2')!.textContent).toBe('Checking your file. This can take a minute or two.')
+    expect(button('Send')).toBeUndefined()
   })
 
   it('send_409IsTheUnavailableSentenceWithoutSignUp', async () => {

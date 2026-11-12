@@ -18,7 +18,10 @@ export interface SendState {
   fields: Mapping | null
 }
 
+// The design's shape; the gateway's invalidEmail stays the judge.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+
 export function canSend(s: SendState): boolean {
-  if (s.email.trim() === '' || !s.ticked) return false
+  if (!EMAIL_RE.test(s.email.trim()) || !s.ticked) return false
   return kindOf(s.file) === 'spreadsheet' ? canSubmitMapping(s.fields) : true
 }

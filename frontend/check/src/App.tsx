@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Footer } from './components/Footer'
 import { Header } from './components/Header'
 import { Hero } from './components/Hero'
@@ -7,11 +7,13 @@ import { chooseConsent, CookieNotice, readConsent, syncCheckConsent } from './an
 import { runCheck, suggestMapping } from './checkApi'
 import { DetailsStep } from './components/DetailsStep'
 import { MapStep } from './components/MapStep'
+import { SendingStep } from './components/SendingStep'
 import { SentPanel } from './components/SentPanel'
 import { UploadStep } from './components/UploadStep'
 import { WhatYouGet } from './components/WhatYouGet'
 import { canSend, fileVerdict, kindOf } from './flow'
-import { initialMapping, type Mapping, type Suggestion } from './fields'
+import { CHECK_FIELD_KEYS, formatBytes, initialMapping, matchedCount, type Mapping, type Suggestion } from './fields'
+import { EMAIL_STEP_NO, FILE_MATCHED, FILE_NO_MATCHING } from './copy'
 import { landingHref } from './links'
 import { COLUMNS_SENTENCE, MAPPING_SENTENCE, refusal as refuse, type Refusal } from './messages'
 import { progress, type Step } from './progress'
@@ -29,6 +31,8 @@ export function App() {
   const [email, setEmail] = useState('')
   const [ticked, setTicked] = useState(false)
   const [sending, setSending] = useState(false)
+  // A second submit can land before React re-renders the sending view.
+  const inFlight = useRef(false)
 
   // A new pick drops everything the previous file left behind.
   const pick = async (picked: File) => {
@@ -71,10 +75,12 @@ export function App() {
   }
 
   const send = async () => {
-    if (!file) return
+    if (!file || inFlight.current) return
+    inFlight.current = true
     setSending(true)
     setRefusal(null)
     const res = await runCheck({ email, file, mapping: suggestion && fields ? { headerRow: suggestion.header_row, fields } : undefined })
+    inFlight.current = false
     setSending(false)
     if (res.ok) {
       setStep('sent')
@@ -85,6 +91,8 @@ export function App() {
     // Only a rejected mapping goes back to step 2; every other refusal stays on the email step.
     if (suggestion && r.text === MAPPING_SENTENCE) setStep('map')
   }
+
+  const emailStepNo = EMAIL_STEP_NO(file !== null && kindOf(file) === 'spreadsheet')
 
   // A choice made in another tab applies here when this tab is shown again.
   useEffect(() => {
@@ -122,25 +130,34 @@ export function App() {
                 }}
               />
             )}
-            {step === 'details' && file && (
+            {step === 'details' && file && !sending && (
               <DetailsStep
+                stepNo={emailStepNo}
                 fileName={file.name}
+                fileMeta={`${formatBytes(file.size)} · ${fields ? FILE_MATCHED(matchedCount(fields), CHECK_FIELD_KEYS.length) : FILE_NO_MATCHING}`}
                 email={email}
                 ticked={ticked}
-                sending={sending}
                 canSend={canSend({ file, email, ticked, fields })}
                 refusal={refusal}
-                onEmail={setEmail}
-                onTick={setTicked}
+                onEmail={(v) => {
+                  setRefusal(null)
+                  setEmail(v)
+                }}
+                onTick={(v) => {
+                  setRefusal(null)
+                  setTicked(v)
+                }}
                 onBack={() => {
                   setRefusal(null)
                   if (suggestion) setStep('map')
                   else backToUpload()
                 }}
+                onChooseAnother={backToUpload}
                 onSend={send}
               />
             )}
-            {step === 'sent' && <SentPanel email={email.trim()} />}
+            {step === 'details' && file && sending && <SendingStep stepNo={emailStepNo} email={email.trim()} />}
+            {step === 'sent' && <SentPanel email={email.trim()} onAnother={backToUpload} />}
           </div>
         </Hero>
         <WhatYouGet />

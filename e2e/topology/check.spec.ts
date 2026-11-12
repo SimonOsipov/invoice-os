@@ -1,5 +1,5 @@
 // The /check page layout on the PR preview: relationships, plus the design's computed values per breakpoint.
-// It never presses Send: no run, no IP count, no mail.
+// It never sends a run to the server: no run, no IP count, no mail.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { argosOn, shoot } from '../argos'
 import { seedConsent } from '../smoke/landingConsent'
@@ -27,14 +27,53 @@ const rectOf = async (loc: Locator, label: string): Promise<Rect> => {
   return box
 }
 
-async function resize(page: Page, width: number): Promise<void> {
-  await page.setViewportSize({ width, height: 1080 })
-  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+async function resize(page: Page, width: number, height = 1080): Promise<void> {
+  await page.setViewportSize({ width, height })
+  await expect.poll(() => page.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([width, height])
 }
 
 async function noSidewaysScroll(page: Page, label: string): Promise<void> {
   const r = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
   expect(r.scrollWidth - r.clientWidth, `${label}: the page scrolls sideways (${r.scrollWidth} vs ${r.clientWidth})`).toBeLessThanOrEqual(1)
+}
+
+// Fixture check: the gateway's mapping answer is canned, so the columns, samples and matches are known.
+const SUGGESTION = {
+  columns: ['Inv', LONG_HEADER, 'Total', 'Buyer', 'Date', 'Currency'],
+  sample_rows: [['INV-1', LONG_SAMPLE, '100', 'Acme', '2026-01-01', 'NGN']],
+  header_row: 1,
+  rows_total: 1,
+  mapping: { invoice_number: 'Inv', total: 'Total', buyer_name: 'Buyer', issue_date: 'Date' } as Record<string, string>,
+  source: 'heuristic',
+}
+const BUYER_KEYS = ['buyer_tin', 'buyer_name', 'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga']
+// Every Buyer field on one column: the Buyer subtitle lists all ten labels.
+const ALL_BUYER = { ...SUGGESTION, mapping: { ...SUGGESTION.mapping, ...Object.fromEntries(BUYER_KEYS.map((k) => [k, 'Buyer'])) } }
+
+// Fixture check: opens /check, uploads the fixture, answers the mapping call with `suggestion`.
+async function toMapWith(page: Page, suggestion: typeof SUGGESTION = SUGGESTION): Promise<void> {
+  await seedConsent(page, false)
+  await page.route('**/readiness-check/mapping', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(suggestion) }),
+  )
+  const response = await page.goto(`${CHECK_URL}/`)
+  expect(response?.ok(), '/check did not answer 2xx').toBeTruthy()
+  await page.locator('#check-file').setInputFiles({ name: FILE_NAME, mimeType: 'text/csv', buffer: FIXTURE })
+  await expect(page.getByRole('heading', { name: 'Tell us which column is which' }), 'the Map step never showed').toBeVisible()
+}
+
+// Fixture check: from the Map step, Continue and Send; the run route answers 400, so the page returns to step 2 with the sentence.
+async function sendRejected(page: Page, runs = { n: 0 }): Promise<void> {
+  await page.route('**/readiness-check/run', (route) => {
+    runs.n++
+    return route.fulfill({ status: 400, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ error: 'mapping rejected' }) })
+  })
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await page.getByLabel('Email address', { exact: true }).fill('check-fixture@example.com')
+  await page.locator('.check-consent input').check()
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByRole('heading', { name: 'Tell us which column is which' })).toBeVisible()
+  await expect(page.locator('.check-alert')).toBeVisible()
 }
 
 // Opens /check, uploads the fixture and returns once the Map step shows. `onUpload` runs while the mapping call is held.
@@ -52,7 +91,7 @@ async function toMap(page: Page, onUpload?: () => Promise<void>): Promise<void> 
   await expect(page.locator('.check-upload-name')).toBeVisible()
   await onUpload?.()
   release()
-  await expect(page.getByRole('heading', { name: 'Match your columns' }), 'the Map step never showed').toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Tell us which column is which' }), 'the Map step never showed').toBeVisible()
   // The suggestion may leave the invoice number unplaced; Continue needs it.
   await page.getByLabel('Invoice number', { exact: true }).selectOption('invoice_number')
 }
@@ -72,23 +111,29 @@ test.describe('check layout', () => {
       const g = gaps(cardRect, { x: 0, width: vw })
       expect(Math.abs(g.left - g.right), `${label}: card gutters ${g.left} / ${g.right}`).toBeLessThanOrEqual(1)
 
-      const rows = page.locator('.check-field')
-      const lefts: number[] = []
-      for (let i = 0; i < (await rows.count()); i++) {
-        const label_ = await rectOf(rows.nth(i).locator('label'), `field ${i} label`)
-        const select = await rectOf(rows.nth(i).locator('select'), `field ${i} select`)
-        expect(rectsOverlap(label_, select), `${label}: field row ${i} label overlaps its select`).toBe(false)
-        lefts.push(select.x)
+      const rows = page.locator('.check-row')
+      expect(await rows.count(), 'no field rows').toBeGreaterThan(0)
+      const groups = page.locator('.check-grp')
+      for (let g = 0; g < (await groups.count()); g++) {
+        const groupRows = groups.nth(g).locator('.check-row')
+        const lefts: number[] = []
+        for (let i = 0; i < (await groupRows.count()); i++) {
+          const lbl = await rectOf(groupRows.nth(i).locator('.check-row-lbl'), `group ${g} row ${i} label`)
+          const select = await rectOf(groupRows.nth(i).locator('select'), `group ${g} row ${i} select`)
+          expect(rectsOverlap(lbl, select), `${label}: group ${g} row ${i} label overlaps its select`).toBe(false)
+          lefts.push(select.x)
+        }
+        if (lefts.length > 0) {
+          expect(Math.max(...lefts) - Math.min(...lefts), `${label}: group ${g} selects share no left edge`).toBeLessThanOrEqual(1)
+        }
       }
-      expect(lefts.length, 'no field rows').toBeGreaterThan(0)
-      expect(Math.max(...lefts) - Math.min(...lefts), `${label}: selects share no left edge`).toBeLessThanOrEqual(1)
 
       const scroller = await rectOf(page.locator('.check-scroll'), 'columns scroller')
       expect(enclosesRect(cardRect, scroller, 1), `${label}: the columns scroller is outside the card`).toBe(true)
       const table = await rectOf(page.locator('.check-columns'), 'columns table')
       const scrolls = await page.locator('.check-scroll').evaluate((el) => el.scrollWidth > el.clientWidth)
       expect(enclosesRect(scroller, table, 1) || scrolls, `${label}: the columns table escapes its scroller`).toBe(true)
-      expect(enclosesRect(cardRect, await rectOf(page.locator('.check-file'), 'file name'), 1), `${label}: the file name is outside the card`).toBe(true)
+      expect(enclosesRect(cardRect, await rectOf(page.locator('.check-map-file'), 'file name'), 1), `${label}: the file name is outside the card`).toBe(true)
     }
   })
 
@@ -269,6 +314,292 @@ test.describe('check layout', () => {
     }
   })
 
+  // Map step rows (fixture checks): a canned mapping answer, so the geometry is the page's alone.
+  const headToTop = (page: Page) => page.locator('.check-map .check-step-head').evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'instant' }))
+  const isPhone = (w: number) => (PHONE_WIDTHS as readonly number[]).includes(w)
+  const pageEnd = (page: Page) => page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }))
+
+  test('check layout: the Map step head, summary and preview fit the card', async ({ page }) => {
+    await resize(page, ALL_WIDTHS[0])
+    await toMapWith(page)
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const tool = await rectOf(page.locator('.check-tool'), 'tool')
+      const stepNo = await rectOf(page.locator('.check-step-no'), 'step label')
+      const title = await rectOf(page.locator('.check-step-title'), 'title')
+      expect(stepNo.y + stepNo.height, `${label}: the step label is not above the title`).toBeLessThanOrEqual(title.y + 1)
+      expect(enclosesRect(tool, await rectOf(page.locator('.check-map-file'), 'file meta'), 1), `${label}: the file meta is outside the card`).toBe(true)
+      const sum = await rectOf(page.locator('.check-sum'), 'summary')
+      expect(enclosesRect(await rectOf(card(page), 'card'), sum, 1), `${label}: the summary is outside the card`).toBe(true)
+      noOverlap([await rectOf(page.locator('.check-sum-n'), 'summary number'), await rectOf(page.locator('.check-sum-text'), 'summary sentence')], `${label}: summary`)
+      expect(enclosesRect(sum, await rectOf(page.locator('.check-meter'), 'meter'), 1), `${label}: the meter is outside the summary`).toBe(true)
+      expect(enclosesRect(sum, await rectOf(page.locator('.check-unused-line'), 'unused line'), 1), `${label}: the unused line is outside the summary`).toBe(true)
+      noOverlap([await rectOf(page.locator('.check-preview-head .check-sub'), 'preview title'), await rectOf(page.getByRole('button', { name: 'Show all 6 columns' }), 'toggle')], `${label}: preview head`)
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  test('check layout: the columns table scrolls sideways on a phone', async ({ page }) => {
+    await resize(page, ALL_WIDTHS[0])
+    await toMapWith(page)
+    await page.getByRole('button', { name: 'Show all 6 columns' }).click()
+    const scroll = page.locator('.check-scroll')
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const scroller = await rectOf(scroll, 'columns scroller')
+      expect(enclosesRect(await rectOf(card(page), 'card'), scroller, 1), `${label}: the scroll region is outside the card`).toBe(true)
+      const scrolls = await scroll.evaluate((el) => el.scrollWidth > el.clientWidth)
+      if (isPhone(width)) {
+        expect(scrolls, `${label}: the table does not overflow its region`).toBe(true)
+        await scroll.evaluate((el) => {
+          el.scrollLeft = 10000
+        })
+        await expect.poll(() => scroll.evaluate((el) => el.scrollLeft), `${label}: scrollLeft did not move`).toBeGreaterThan(0)
+        await scroll.evaluate((el) => {
+          el.scrollLeft = 0
+        })
+      } else {
+        const table = await rectOf(page.locator('.check-columns'), 'columns table')
+        expect(enclosesRect(scroller, table, 1) || scrolls, `${label}: the table escapes its region`).toBe(true)
+      }
+      await noSidewaysScroll(page, label)
+    }
+  })
+
+  test('check layout: the field groups and rows fit', async ({ page }) => {
+    await resize(page, ALL_WIDTHS[0])
+    await toMapWith(page)
+    for (const title of ['Amounts', 'Buyer']) await page.locator('.check-acc', { hasText: title }).first().click()
+    await page.locator('#check-g-invoice .check-subhead .check-link').click()
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const cardRect = await rectOf(card(page), 'card')
+      const groups = page.locator('.check-grp')
+      for (let g = 0; g < (await groups.count()); g++) {
+        const grp = groups.nth(g)
+        expect(enclosesRect(cardRect, await rectOf(grp, `group ${g}`), 1), `${label}: group ${g} is outside the card`).toBe(true)
+        const acc = await rectOf(grp.locator('.check-acc'), `group ${g} header`)
+        const parts = [await rectOf(grp.locator('.check-acc-title'), 'title'), await rectOf(grp.locator('.check-count'), 'count'), await rectOf(grp.locator('.check-chev'), 'chevron')]
+        for (const p of parts) expect(enclosesRect(acc, p, 1), `${label}: group ${g} header part is outside the header`).toBe(true)
+        noOverlap(parts, `${label}: group ${g} header`)
+        expect(enclosesRect(acc, await rectOf(grp.locator('.check-acc-sub'), 'subtitle'), 1), `${label}: group ${g} subtitle is outside the header`).toBe(true)
+        const rows = grp.locator('.check-row')
+        const lefts: number[] = []
+        for (let i = 0; i < (await rows.count()); i++) {
+          const lbl = await rectOf(rows.nth(i).locator('.check-row-lbl'), `group ${g} row ${i} label`)
+          const select = await rectOf(rows.nth(i).locator('select'), `group ${g} row ${i} select`)
+          if (isPhone(width)) {
+            expect(select.y, `${label}: group ${g} row ${i} select starts above its label's bottom`).toBeGreaterThanOrEqual(lbl.y + lbl.height - 1)
+            expect(Math.abs(select.x - lbl.x), `${label}: group ${g} row ${i} select and label share no left edge`).toBeLessThanOrEqual(1)
+          } else {
+            expect(rectsOverlap(lbl, select), `${label}: group ${g} row ${i} label overlaps its select`).toBe(false)
+            lefts.push(select.x)
+          }
+        }
+        if (lefts.length > 0) expect(Math.max(...lefts) - Math.min(...lefts), `${label}: group ${g} selects share no left edge`).toBeLessThanOrEqual(1)
+      }
+      const row = page.locator('.check-row').filter({ has: page.locator('#check-field-issue_date') })
+      const rowRect = await rectOf(row, 'Issue date row')
+      const tag = await rectOf(row.locator('.check-tag'), 'Suggested tag')
+      expect(enclosesRect(rowRect, tag, 1), `${label}: the tag is outside its row`).toBe(true)
+      expect(rectsOverlap(tag, await rectOf(row.locator('label'), 'Issue date label')), `${label}: the tag overlaps the label`).toBe(false)
+      const supplier = page.locator('.check-grp').filter({ has: page.locator('#check-g-supplier') })
+      expect(enclosesRect(await rectOf(supplier, 'Supplier group'), await rectOf(page.locator('.check-hint'), 'hint'), 1), `${label}: the hint is outside the Supplier group`).toBe(true)
+    }
+
+    // Boundary: the long Buyer subtitle.
+    await resize(page, ALL_WIDTHS[0])
+    await toMapWith(page, ALL_BUYER)
+    await page.locator('.check-acc', { hasText: 'Buyer' }).first().click()
+    const buyer = page.locator('.check-grp').filter({ has: page.locator('#check-g-buyer') })
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width)
+      const label = `${width}px`
+      const acc = await rectOf(buyer.locator('.check-acc'), 'Buyer header')
+      const sub = await rectOf(buyer.locator('.check-acc-sub'), 'Buyer subtitle')
+      expect(enclosesRect(acc, sub, 1), `${label}: the Buyer subtitle is outside its header`).toBe(true)
+      // The cut is asserted on phones only: at wide widths the subtitle fits (Decision [Long Buyer subtitle truncation], gate run 43134395967).
+      if (isPhone(width)) {
+        expect(await buyer.locator('.check-acc-sub').evaluate((el) => el.scrollWidth > el.clientWidth), `${label}: the long subtitle is not cut`).toBe(true)
+      }
+      const end = await rectOf(buyer.locator(isPhone(width) ? '.check-chev' : '.check-count'), 'subtitle neighbour')
+      expect(sub.x + sub.width, `${label}: the subtitle runs into its neighbour`).toBeLessThanOrEqual(end.x + 1)
+    }
+  })
+
+  test('check layout: the action bar sticks to the bottom of the viewport', async ({ page }) => {
+    await resize(page, ALL_WIDTHS[0], 600)
+    await toMapWith(page)
+    await page.getByLabel('Invoice number', { exact: true }).selectOption('')
+    const bar = page.locator('.check-sticky')
+    const buttons = () => [page.getByRole('button', { name: 'Choose another file' }), page.locator('.check-need'), page.getByRole('button', { name: 'Continue' })]
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width, 600)
+      const label = `${width}px`
+      await headToTop(page)
+      const tool = await rectOf(page.locator('.check-tool'), 'tool')
+      let b = await rectOf(bar, 'bar')
+      expect(Math.abs(b.y + b.height - 600), `${label}: the bar's bottom is not the viewport's bottom`).toBeLessThanOrEqual(1)
+      expect(Math.abs(b.x - tool.x), `${label}: the bar's left edge is not the card's`).toBeLessThanOrEqual(2)
+      expect(Math.abs(b.x + b.width - (tool.x + tool.width)), `${label}: the bar's right edge is not the card's`).toBeLessThanOrEqual(2)
+      const rects: Rect[] = []
+      for (const [i, loc] of buttons().entries()) {
+        const r = await rectOf(loc, `bar item ${i}`)
+        expect(enclosesRect(b, r, 1), `${label}: bar item ${i} is outside the bar`).toBe(true)
+        rects.push(r)
+      }
+      noOverlap(rects, `${label}: bar`)
+      if (isPhone(width)) {
+        const inner = b.width - (await px(bar, 'padding-left')) - (await px(bar, 'padding-right'))
+        expect(rects[2].y + rects[2].height, `${label}: Continue is not above Choose another file`).toBeLessThanOrEqual(rects[0].y + 1)
+        for (const i of [0, 2]) expect(Math.abs(rects[i].width - inner), `${label}: bar item ${i} does not fill the bar`).toBeLessThanOrEqual(1)
+      }
+      await pageEnd(page)
+      b = await rectOf(bar, 'resting bar')
+      const lastGroup = await rectOf(page.locator('.check-grp').last(), 'last group')
+      const cardNow = await rectOf(page.locator('.check-tool'), 'tool')
+      expect(b.y, `${label}: the resting bar is over the last group`).toBeGreaterThanOrEqual(lastGroup.y + lastGroup.height - 1)
+      expect(Math.abs(b.y + b.height - (cardNow.y + cardNow.height)), `${label}: the resting bar's bottom is not the card's`).toBeLessThanOrEqual(2)
+    }
+  })
+
+  test('check layout: a rejected mapping shows in the pinned bar', async ({ page }) => {
+    const runs = { n: 0 }
+    await resize(page, ALL_WIDTHS[0], 600)
+    await toMapWith(page)
+    await sendRejected(page, runs)
+    for (const width of ALL_WIDTHS) {
+      await resize(page, width, 600)
+      const label = `${width}px`
+      await headToTop(page)
+      const bar = await rectOf(page.locator('.check-sticky'), 'bar')
+      const alert = await rectOf(page.locator('.check-alert'), 'alert')
+      const actions = await rectOf(page.locator('.check-actions'), 'actions')
+      expect(enclosesRect(bar, alert, 1), `${label}: the alert is outside the bar`).toBe(true)
+      expect(alert.y + alert.height, `${label}: the alert is not above the buttons`).toBeLessThanOrEqual(actions.y + 1)
+      expect(Math.abs(bar.y + bar.height - 600), `${label}: the bar's bottom is not the viewport's bottom`).toBeLessThanOrEqual(1)
+      expect(enclosesRect(bar, await rectOf(page.locator('.check-alert span'), 'alert text'), 1), `${label}: the alert text is outside the bar`).toBe(true)
+      expect((await rectOf(page.locator('.check-alert svg'), 'alert icon')).width, `${label}: the alert icon is squeezed`).toBeCloseTo(18, 0)
+      await noSidewaysScroll(page, label)
+    }
+    expect(runs.n, 'the run request did not reach the route once').toBe(1)
+  })
+
+  test('check layout: the Map step takes the design\'s sizes and colours', async ({ page }) => {
+    type Row = [string, string, string]
+    const read = async (rows: Row[]) => {
+      for (const [sel, prop, want] of rows) {
+        const loc = page.locator(sel).first()
+        const expected = want.startsWith('--') ? await resolved(page, want, prop) : want
+        expect(await css(loc, prop), `${sel} ${prop}`).toBe(expected)
+      }
+    }
+    const next = page.getByRole('button', { name: 'Continue' })
+    await resize(page, 1280)
+    await toMapWith(page)
+    // First, before any pointer use: a script focus shows :focus-visible only then.
+    const acc = page.locator('.check-acc').first()
+    await acc.focus()
+    await read([
+      ['.check-acc', 'outline-style', 'solid'],
+      ['.check-acc', 'outline-width', '2px'],
+      ['.check-acc', 'outline-offset', '2px'],
+      ['.check-acc', 'outline-color', '--ring'],
+    ])
+    await page.getByRole('button', { name: 'Show all 6 columns' }).click()
+    await page.locator('#check-g-invoice .check-subhead .check-link').click()
+    await read([
+      ['.check-map', 'row-gap', '22px'],
+      ['.check-sum', 'padding-top', '18px'],
+      ['.check-sum', 'padding-left', '20px'],
+      ['.check-sum', 'column-gap', '20px'],
+      ['.check-sum', 'background-color', '--secondary'],
+      ['.check-sum-n', 'font-size', '34px'],
+      ['.check-sum-n', 'font-weight', '800'],
+      ['.check-sum-text', 'font-size', '15px'],
+      ['.check-sum-text', 'font-weight', '700'],
+      ['.check-meter', 'height', '6px'],
+      ['.check-meter i', 'background-color', '--teal'],
+      ['.check-unused-line', 'font-size', '13px'],
+      ['.check-columns th', 'font-size', '10.5px'],
+      ['.check-columns th', 'text-transform', 'uppercase'],
+      ['.check-columns td', 'padding-top', '9px'],
+      ['.check-columns td', 'padding-left', '12px'],
+      ['.check-columns td', 'white-space', 'nowrap'],
+      ['.check-col', 'color', '--teal'],
+      ['.check-unused', 'font-size', '10px'],
+      ['.check-unused', 'background-color', '--status-progress-bg'],
+      ['.check-acc', 'padding-top', '14px'],
+      ['.check-acc', 'padding-left', '16px'],
+      ['.check-acc-text', 'min-width', '0px'],
+      ['.check-acc-sub', 'text-overflow', 'ellipsis'],
+      ['.check-acc-sub', 'white-space', 'nowrap'],
+      ['.check-chev', 'display', 'flex'], // inline-flex, blockified as a grid item
+      ['.check-chev', 'color', '--muted-foreground'],
+      ['.check-acc-title', 'font-size', '15px'],
+      ['.check-acc-title', 'font-weight', '700'],
+      ['.check-count', 'font-size', '12px'],
+      ['.check-row', 'padding-top', '10px'],
+      ['.check-row', 'padding-left', '16px'],
+      ['.check-row-lbl', 'font-size', '14px'],
+      ['.check-row-lbl', 'font-weight', '600'],
+      ['.check-row select', 'height', '40px'],
+      ['.check-row select', 'font-size', '14px'],
+      ['.check-fld.is-empty', 'color', '--muted-foreground'],
+      ['.check-fld.is-empty', 'background-color', '--background'],
+      ['.check-tag', 'font-size', '10px'],
+      ['.check-tag', 'background-color', '--mint-soft'],
+      ['.check-tag', 'color', '--status-success-fg'],
+      ['.check-subhead', 'padding-top', '10px'],
+      ['.check-subhead', 'padding-left', '16px'],
+      ['.check-subhead', 'background-color', '--background'],
+      ['.check-hint', 'font-size', '13.5px'],
+      ['.check-hint', 'font-weight', '600'],
+      ['.check-hint', 'background-color', '--status-progress-bg'],
+      ['.check-sticky', 'padding-top', '16px'],
+      ['.check-sticky', 'padding-left', '28px'],
+      ['.check-sticky', 'border-top-color', '--cream-card-border'],
+      ['.check-sticky', 'position', 'sticky'],
+      ['.check-req', 'color', '--destructive'],
+    ])
+    expect(await tracks(page.locator('.check-row').first()), '1280 row tracks').toBe(2)
+    // The fill is rounded to a whole percent in the page, so compare with the rounded share.
+    const of = Number((await page.locator('.check-sum-n small').innerText()).replace(/\D/g, ''))
+    const meter = await rectOf(page.locator('.check-meter'), 'meter')
+    const fill = await rectOf(page.locator('.check-meter i'), 'meter fill')
+    expect(Math.abs(fill.width - (meter.width * Math.round((4 / of) * 100)) / 100), `meter fill ${fill.width} of ${meter.width}`).toBeLessThanOrEqual(1)
+    expect(await px(next, 'height')).toBe(46)
+    expect(await px(next, 'min-width')).toBe(160)
+    expect(await css(next, 'font-weight')).toBe('700')
+    await page.getByLabel('Invoice number', { exact: true }).selectOption('')
+    expect(await css(next, 'background-color'), 'disabled Continue background').toBe(await resolved(page, '--input', 'background-color'))
+    expect(await css(next, 'color'), 'disabled Continue colour').toBe(await resolved(page, '--muted-foreground', 'color'))
+    await page.getByLabel('Invoice number', { exact: true }).selectOption('Inv')
+    await sendRejected(page)
+    await read([
+      ['.check-alert', 'padding-top', '14px'],
+      ['.check-alert', 'padding-left', '16px'],
+      ['.check-alert', 'color', '--destructive'],
+    ])
+    await resize(page, 390)
+    await read([
+      ['.check-map', 'row-gap', '18px'],
+      ['.check-sum', 'padding-top', '16px'],
+      ['.check-sum', 'padding-left', '16px'],
+      ['.check-sum-n', 'font-size', '28px'],
+      ['.check-row', 'padding-top', '12px'],
+      ['.check-row', 'padding-left', '14px'],
+      ['.check-sticky', 'padding-top', '12px'],
+      ['.check-sticky', 'padding-left', '16px'],
+      ['.check-actions', 'flex-direction', 'column-reverse'],
+    ])
+    expect(await tracks(page.locator('.check-row').first()), '390 row tracks').toBe(1)
+    expect(await tracks(page.locator('.check-acc').first()), '390 header tracks').toBe(2)
+  })
+
   test('check layout: the footer items do not overlap', async ({ page }) => {
     await openCheck(page, ALL_WIDTHS[0])
     for (const width of ALL_WIDTHS) {
@@ -337,7 +668,7 @@ test.describe('check layout', () => {
     // Map at 390: the Map rule outranks the 600 px trust-cue rule.
     await page.setViewportSize({ width: 390, height: 1080 })
     await page.locator('#check-file').setInputFiles({ name: 'm.csv', mimeType: 'text/csv', buffer: FIXTURE })
-    await expect(page.getByRole('heading', { name: 'Match your columns' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Tell us which column is which' })).toBeVisible()
     near(await px(page.locator('.check-h1'), 'font-size'), 34, '390 Map h1')
     expect(await css(page.locator('.check-trust'), 'display')).toBe('flex')
   })
@@ -697,6 +1028,9 @@ test.describe('check layout', () => {
       await shoot(page, 'check', 'upload-reading')
     })
     await shoot(page, 'check', 'map')
+    await toMapWith(page)
+    await sendRejected(page)
+    await shoot(page, 'check', 'map-error')
   })
 })
 

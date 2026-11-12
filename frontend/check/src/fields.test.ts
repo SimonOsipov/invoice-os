@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { INVOICE_FIELDS } from '../../app/src/lib/invoiceFields'
-import { ACCEPT, CHECK_FIELD_KEYS, fieldLabel, IMPORT_KEYS, initialMapping, labelOf, type Suggestion } from './fields'
+import { ACCEPT, CHECK_FIELD_KEYS, fieldLabel, FIELD_GROUPS, groupOf, IMPORT_KEYS, initialMapping, labelOf, type Suggestion } from './fields'
 
 const suggestion = (mapping: Record<string, string>): Suggestion => ({
   columns: ['Inv', 'STIN', 'Net'],
@@ -74,5 +74,21 @@ describe('fields', () => {
       expect(fieldLabel(k), k).toBe(want[k])
       expect(fieldLabel(k), k).not.toMatch(/\b(\w+)\s+\1\b/i)
     }
+  })
+
+  it('groupOf_placesEveryCheckFieldInOneGroup', () => {
+    const ids = FIELD_GROUPS.map(([id]) => id)
+    const counts: Record<string, number> = {}
+    for (const k of CHECK_FIELD_KEYS) {
+      const g = groupOf(k)
+      expect(ids, k).toContain(g)
+      counts[g] = (counts[g] ?? 0) + 1
+    }
+    expect(counts).toEqual({ invoice: 7, amounts: 5, line: 14, buyer: 10, supplier: 2 })
+  })
+
+  it('groupOf_sortsByPrefixAndTheAmountsList', () => {
+    const keys = ['buyer_lga', 'line_total', 'supplier_tin', 'tax_currency_code', 'total', 'due_date']
+    expect(keys.map(groupOf)).toEqual(['buyer', 'line', 'supplier', 'amounts', 'amounts', 'invoice'])
   })
 })

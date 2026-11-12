@@ -115,6 +115,211 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
     expect(result).toEqual({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
   })
 
+  it('redeemHandoff retries /me once after a transient 503 session check', async () => {
+    let meCalls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.endsWith('/auth/exchange')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ access_token: LIVE }) })
+        }
+        meCalls += 1
+        return meCalls === 1
+          ? Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable', json: () => Promise.resolve({ error: 'session check unavailable' }) })
+          : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ME) })
+      }),
+    )
+    // Fake timers let the fix back off by any delay without a real wait.
+    vi.useFakeTimers()
+    try {
+      const pending = redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await pending).toEqual({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
+      expect(meCalls).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  describe('the /me retry (BUG-125)', () => {
+    const INVITE = { id: 'i1', workspace: 'Acme', role: 'member', inviter: null, expires_at: '2030-01-01T00:00:00Z' }
+    const reply = (status: number, body: unknown) =>
+      Promise.resolve({ ok: status < 400, status, statusText: String(status), json: () => Promise.resolve(body) })
+    // Each /me call takes the next status; the last repeats. A hook can run inside the call.
+    function stubMe(statuses: number[], onMe?: (n: number) => void) {
+      const counts = { exchange: 0, me: 0, mine: 0 }
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.endsWith('/auth/exchange')) {
+            counts.exchange += 1
+            return reply(200, { access_token: LIVE })
+          }
+          if (url.endsWith('/invitations/mine')) {
+            counts.mine += 1
+            return reply(200, { invitations: [INVITE] })
+          }
+          counts.me += 1
+          onMe?.(counts.me)
+          const status = statuses[Math.min(counts.me, statuses.length) - 1]
+          return status === 200 ? reply(200, ME) : reply(status, { error: 'x' })
+        }),
+      )
+      return counts
+    }
+    // Resolves to the outcome, or the thrown value; `settled` tells whether it has finished yet.
+    function run() {
+      const state = { settled: false }
+      const pending = redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e).finally(() => { state.settled = true })
+      return { pending, state }
+    }
+    const isApiError = (e: unknown, status: number) => e instanceof ApiError && e.status === status
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('redeemHandoff rejects with the 503 after /me answers 503 on every try', async () => {
+      vi.useFakeTimers()
+      const counts = stubMe([503])
+      const { pending } = run()
+      await vi.runAllTimersAsync()
+      expect(isApiError(await pending, 503)).toBe(true)
+      expect(counts.me).toBe(3)
+      expect(counts.exchange).toBe(1)
+    })
+
+    it('redeemHandoff backs off 500 ms then 1000 ms between /me tries', async () => {
+      vi.useFakeTimers()
+      const counts = stubMe([503, 503, 200])
+      const { pending } = run()
+      await vi.advanceTimersByTimeAsync(499)
+      expect(counts.me).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(counts.me).toBe(2)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(counts.me).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await pending).toMatchObject({ verified: true, handoff: true, token: LIVE })
+      expect(counts.me).toBe(3)
+    })
+
+    it('redeemHandoff rejects promptly when the 15 s signal aborts during the backoff', async () => {
+      vi.useFakeTimers()
+      const controller = new AbortController()
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
+      const counts = stubMe([503])
+      const { pending, state } = run()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(counts.me).toBe(1)
+      const reason = new DOMException('timed out', 'TimeoutError')
+      controller.abort(reason)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(state.settled).toBe(true)
+      expect(await pending).toBe(reason)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(counts.me).toBe(1)
+    })
+
+    it('redeemHandoff rejects with the 503 at once when the signal aborted while /me answered', async () => {
+      vi.useFakeTimers()
+      const controller = new AbortController()
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
+      const counts = stubMe([503], () => controller.abort())
+      const { pending, state } = run()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(state.settled).toBe(true)
+      expect(isApiError(await pending, 503)).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(counts.me).toBe(1)
+    })
+
+    it('redeemHandoff rejects at once, with one /me call, on a non-503 /me failure', async () => {
+      const statuses = [400, 401, 404, 429, 500, 502, 504]
+      expect(statuses.length).toBeGreaterThan(0)
+      for (const status of statuses) {
+        vi.useFakeTimers()
+        const counts = stubMe([status])
+        const { pending, state } = run()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(state.settled, `${status} settled before any backoff`).toBe(true)
+        expect(isApiError(await pending, status), String(status)).toBe(true)
+        expect(counts.me, String(status)).toBe(1)
+        expect(vi.getTimerCount(), String(status)).toBe(0)
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('redeemHandoff rejects at once on a 401 that follows a 503', async () => {
+      vi.useFakeTimers()
+      const counts = stubMe([503, 401])
+      const { pending } = run()
+      await vi.runAllTimersAsync()
+      expect(isApiError(await pending, 401)).toBe(true)
+      expect(counts.me).toBe(2)
+    })
+
+    it('redeemHandoff still takes the invitations path on a 403, with or without a 503 before it', async () => {
+      for (const statuses of [[403], [503, 403]]) {
+        vi.useFakeTimers()
+        const counts = stubMe(statuses)
+        const { pending } = run()
+        await vi.runAllTimersAsync()
+        const offer = (await pending) as JoinOffer
+        expect(offer.kind, String(statuses)).toBe('join')
+        expect(offer.invites, String(statuses)).toEqual([INVITE])
+        expect(counts.me, String(statuses)).toBe(statuses.length)
+        expect(counts.mine, String(statuses)).toBe(1)
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+      }
+    })
+
+    // Hand-off chain with a refresh; /me takes the next status, the last repeats.
+    function stubRenewal(first: string, meStatuses: number[]) {
+      let me = 0
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.endsWith('/auth/exchange')) {
+            return reply(200, { access_token: first, refresh_token: 'R0' })
+          }
+          if (url.endsWith('/auth/refresh')) {
+            return reply(200, { access_token: LIVE, refresh_token: 'R1' })
+          }
+          if (url.endsWith('/invitations/mine')) {
+            return reply(200, { invitations: [] })
+          }
+          if (url.endsWith('/workspaces') || url.endsWith('/invitations/accept')) {
+            return reply(200, { tenant: ME.tenant })
+          }
+          me += 1
+          const status = meStatuses[Math.min(me, meStatuses.length) - 1]
+          return status === 200 ? reply(200, ME) : reply(status, { error: 'x' })
+        }),
+      )
+    }
+    const verified = (s: unknown) => expect(s).toMatchObject({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
+
+    it('redeemHandoff_withInviteRetriesA503OnTheReadAfterRenewal', async () => {
+      stubRenewal(LIVE, [503, 200])
+      vi.useFakeTimers()
+      const pending = redeemHandoff(GATEWAY, CODE, STATE, NOW, { token: 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE', name: null }).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      verified(await pending)
+    })
+
+    it('redeemHandoff_registrationRetriesA503OnTheReadAfterRenewal', async () => {
+      const registered = tokenWith({ user_metadata: { registration: { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' } } })
+      stubRenewal(registered, [403, 503, 200])
+      vi.useFakeTimers()
+      const pending = redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      verified(await pending)
+    })
+  })
+
   function stubExchange(answer: unknown) {
     vi.stubGlobal(
       'fetch',
@@ -889,6 +1094,76 @@ describe('join offers', () => {
       const err = await joinInvite(GATEWAY, offer({ refreshToken }), 'a', 'Ada', 5000).catch((e: unknown) => e)
       expect(err).toMatchObject({ status: 401 })
       expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
+    }
+  })
+
+  const UNAVAILABLE: Reply = { status: 503, body: { error: 'x' } }
+  const OK_ME: Reply = { status: 200, body: ME }
+  const meCalls = (calls: Call[]) => calls.filter((c) => c.url === '/api/tenancy/v1/me').length
+
+  it('joinInvite_andCreateOwnWorkspaceRetryA503OnTheReadAfterRenewal', async () => {
+    vi.useFakeTimers()
+    try {
+      const joinCalls = stub({ me: [UNAVAILABLE, OK_ME] })
+      const joined = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await joined).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(joinCalls)).toBe(2)
+      expect(joinCalls.filter((c) => c.url.endsWith('/accept'))).toHaveLength(1)
+
+      const createCalls = stub({ me: [UNAVAILABLE, OK_ME] })
+      const created = createOwnWorkspace(GATEWAY, offer({ invites: [], firstWorkspace: true }), { workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' }, 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await created).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(createCalls)).toBe(2)
+      expect(createCalls.filter((c) => c.url === '/api/tenancy/v1/workspaces')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_refusalReadRetriesA503BeforeOpeningTheWorkspace', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls = stub({ accept: { status: 404, body: { error: MSG_INVALID } }, me: [UNAVAILABLE, OK_ME] })
+      const pending = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await pending).toMatchObject({ token: RENEWED, me: ME, handoff: true })
+      expect(meCalls(calls)).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_refusalReadThatStays503WaitsTheBackoffThenReportsTheRefusal', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls = stub({ accept: { status: 409, body: { error: MSG_ALREADY_MEMBER } }, me: [UNAVAILABLE, UNAVAILABLE, UNAVAILABLE] })
+      let settled = false
+      const pending = joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e).finally(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(1499)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const err = await pending
+      expect(err).toBeInstanceOf(InviteRefusedError)
+      expect((err as InviteRefusedError).outcome).toBe('already-member')
+      expect(meCalls(calls)).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('joinInvite_readAfterRenewalRejectsAtOnceOnA401Or500', async () => {
+    for (const status of [401, 500]) {
+      const calls = stub({ me: [{ status }] })
+      const err = await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      expect(err, String(status)).toMatchObject({ status })
+      expect(meCalls(calls), String(status)).toBe(1)
+
+      const refused = stub({ accept: { status: 404, body: { error: MSG_INVALID } }, me: [{ status }] })
+      const out = await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      expect(out, `refusal ${status}`).toBeInstanceOf(InviteRefusedError)
+      expect(meCalls(refused), `refusal ${status}`).toBe(1)
     }
   })
 

@@ -5948,7 +5948,7 @@ func TestExtractWorker_ASecondTimedOutReadDeadLetters(t *testing.T) {
 
 func TestExtractWorker_AnotherReadFailureStillRetries(t *testing.T) {
 	ctx := t.Context()
-	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrDocumentUnreadable), 2, 915603)
+	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrDocumentUnreadable), 2, 915603, wkTimeLimitErr.Error())
 	var cancel *river.JobCancelError
 	if err == nil || errors.As(err, &cancel) {
 		t.Fatalf("Work returned %v, want a plain error so River retries", err)
@@ -5956,5 +5956,19 @@ func TestExtractWorker_AnotherReadFailureStillRetries(t *testing.T) {
 	stAssertJobState(t, ctx, xid, "failed")
 	if rows := wkAuditRowsForJob(t, ctx, tenantID, xid); len(rows) != 0 {
 		t.Errorf("wrote %d audit row(s) on a retried attempt, want 0", len(rows))
+	}
+}
+
+// River itself ends the final attempt, so the worker hands back a plain error, not a cancel.
+func TestExtractWorker_AThirdTimedOutReadIsLeftToRiver(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, wkTimeLimitErr, 3, 915606, wkTimeLimitErr.Error(), wkTimeLimitErr.Error())
+	var cancel *river.JobCancelError
+	if err == nil || errors.As(err, &cancel) {
+		t.Fatalf("Work returned %v, want a plain error", err)
+	}
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+	if rows := wkAuditRowsForJob(t, ctx, tenantID, xid); len(rows) != 1 {
+		t.Errorf("wrote %d audit row(s), want 1", len(rows))
 	}
 }

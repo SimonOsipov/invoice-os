@@ -5878,3 +5878,57 @@ func TestExtractWorker_APDFOverThePageCapNeverReachesTheTextReader(t *testing.T)
 		t.Errorf("text reader calls = %d, want 0", n)
 	}
 }
+
+// wkTimedOutRead runs one job whose text read fails with err on the given attempt of 3.
+func wkTimedOutRead(t *testing.T, ctx context.Context, err error, attempt int, riverJobID int64) (workErr error, tenantID, xid string) {
+	t.Helper()
+	tenantID, documentID := wkFixture(t, ctx)
+	rec := &wkAuditRecorder{}
+	ew := wkWorkerText(t, wkOK(), wkDocxOpener(t), &wkErrReader{err: err}, rec)
+	workErr = ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, attempt, 3, tenantID, documentID, uuid.NewString()))
+	return workErr, tenantID, wkExtractionJobID(t, ctx, tenantID, riverJobID)
+}
+
+func TestExtractWorker_AFirstTimedOutReadRetries(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrReadTimedOut), 1, 915601)
+	var cancel *river.JobCancelError
+	if err == nil || errors.As(err, &cancel) {
+		t.Fatalf("Work returned %v, want a plain error so River retries", err)
+	}
+	stAssertJobState(t, ctx, xid, "failed")
+	if rows := wkAuditRowsForJob(t, ctx, tenantID, xid); len(rows) != 0 {
+		t.Errorf("wrote %d audit row(s) on a retried attempt, want 0", len(rows))
+	}
+}
+
+func TestExtractWorker_ASecondTimedOutReadDeadLetters(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrReadTimedOut), 2, 915602)
+	var cancel *river.JobCancelError
+	if !errors.As(err, &cancel) {
+		t.Fatalf("Work returned %v, want a *river.JobCancelError", err)
+	}
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+	stRequireFailureKind(t, ctx)
+	if got := stJobFailureKind(t, ctx, xid); got == nil || *got != string(extraction.FailureTextNotRead) {
+		t.Errorf("failure_kind = %s, want %q", wkStr(got), extraction.FailureTextNotRead)
+	}
+	rows := wkAuditRowsForJob(t, ctx, tenantID, xid)
+	if len(rows) != 1 {
+		t.Fatalf("wrote %d audit row(s), want 1: %v", len(rows), rows)
+	}
+}
+
+func TestExtractWorker_AnotherReadFailureStillRetries(t *testing.T) {
+	ctx := t.Context()
+	err, tenantID, xid := wkTimedOutRead(t, ctx, fmt.Errorf("read: %w", extraction.ErrDocumentUnreadable), 2, 915603)
+	var cancel *river.JobCancelError
+	if err == nil || errors.As(err, &cancel) {
+		t.Fatalf("Work returned %v, want a plain error so River retries", err)
+	}
+	stAssertJobState(t, ctx, xid, "failed")
+	if rows := wkAuditRowsForJob(t, ctx, tenantID, xid); len(rows) != 0 {
+		t.Errorf("wrote %d audit row(s) on a retried attempt, want 0", len(rows))
+	}
+}

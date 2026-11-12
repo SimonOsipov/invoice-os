@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -374,6 +375,17 @@ func TestDoclingReader_Only422IsDocumentUnreadable(t *testing.T) {
 			w.WriteHeader(status)
 			w.Write([]byte(`{"error":"x"}`))
 		})
+		// A 422 without a reason, and a 503 that carries one, are not a timed-out read.
+		srvTL := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":"x","reason":"time_limit"}`))
+		})
+		for _, u := range []string{srv.URL, srvTL.URL} {
+			_, e := dcNewReader(t, u).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+			if got := errors.Is(e, extraction.ErrReadTimedOut); got != (want && u == srvTL.URL) {
+				t.Errorf("status %d, url %s: errors.Is(ErrReadTimedOut) = %v", status, u, got)
+			}
+		}
 		_, err := dcNewReader(t, srv.URL).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
 		if err == nil {
 			t.Errorf("status %d: Read returned no error", status)
@@ -660,4 +672,54 @@ func TestDoclingReader_RetainsNoReferenceToDocBytes(t *testing.T) {
 
 	// The first read's copied pages must not have changed just because a second Read ran.
 	dcAssertPagesMatch(t, firstPages, pages)
+}
+
+func dcHeaderRead(t *testing.T, ctx context.Context) (string, bool) {
+	t.Helper()
+	var got string
+	var seen bool
+	srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Read-Deadline-Ms")
+		_, seen = r.Header["X-Read-Deadline-Ms"]
+		w.Write([]byte(`{"pages":[]}`))
+	})
+	if _, err := dcNewReader(t, srv.URL).Read(ctx, dcDoc("x"), func(extraction.Page) error { return nil }); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return got, seen
+}
+
+func TestDoclingReader_SendsTheCallersDeadlineLessTheMargin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	got, _ := dcHeaderRead(t, ctx)
+	ms, err := strconv.Atoi(got)
+	if err != nil || ms < 29000 || ms > 30000 {
+		t.Errorf("X-Read-Deadline-Ms = %q, want an integer in [29000, 30000]", got)
+	}
+}
+
+func TestDoclingReader_ADeadlineInsideTheMarginSendsOneMillisecond(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if got, _ := dcHeaderRead(t, ctx); got != "1" {
+		t.Errorf("X-Read-Deadline-Ms = %q, want 1", got)
+	}
+}
+
+func TestDoclingReader_NoDeadlineSendsNoHeader(t *testing.T) {
+	if got, seen := dcHeaderRead(t, context.Background()); seen {
+		t.Errorf("X-Read-Deadline-Ms = %q, want the header absent", got)
+	}
+}
+
+func TestDoclingReader_ATimeLimit422IsReadTimedOut(t *testing.T) {
+	srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"error":"conversion passed the time limit","reason":"time_limit"}`))
+	})
+	_, err := dcNewReader(t, srv.URL).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+	if !errors.Is(err, extraction.ErrReadTimedOut) || !errors.Is(err, extraction.ErrDocumentUnreadable) {
+		t.Errorf("err = %v, want both ErrReadTimedOut and ErrDocumentUnreadable", err)
+	}
 }

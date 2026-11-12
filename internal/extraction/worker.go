@@ -289,8 +289,10 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		}
 	}
 	if err != nil {
+		// D19: a second time-limit stop dead-letters early; the first retries.
+		early := errors.Is(err, ErrReadTimedOut) && job.Attempt >= 2 && job.Attempt < job.MaxAttempts
 		state := "failed"
-		if job.Attempt >= job.MaxAttempts {
+		if job.Attempt >= job.MaxAttempts || early {
 			state = "dead_lettered"
 		}
 		if txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
@@ -314,6 +316,9 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			})
 		}); txErr != nil {
 			return txErr
+		}
+		if early {
+			return river.JobCancel(err)
 		}
 		return err
 	}

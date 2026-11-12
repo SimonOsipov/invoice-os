@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -25,7 +27,14 @@ const (
 
 	// Cap on the body read back from a non-2xx response, for the error message only.
 	doclingErrBodyMax = 4 << 10
+
+	// Time kept back from the caller's deadline so the sidecar's own stop answers before the
+	// caller gives up (D20).
+	doclingAnswerMargin = 60 * time.Second
 )
+
+// ErrReadTimedOut marks a sidecar 422 whose reason is time_limit: the read passed its deadline.
+var ErrReadTimedOut = errors.New("docling: read passed the time limit")
 
 // DoclingReader holds no per-read state: a read builds its own request and decodes its own
 // response, so two reads share nothing but the HTTP client.
@@ -80,6 +89,10 @@ func (r *DoclingReader) Read(ctx context.Context, doc Document, onPage func(Page
 	if doc.ContentType != "" {
 		req.Header.Set("Content-Type", doc.ContentType)
 	}
+	if d, ok := ctx.Deadline(); ok {
+		left := max(time.Until(d)-doclingAnswerMargin, time.Millisecond)
+		req.Header.Set("X-Read-Deadline-Ms", strconv.FormatInt(left.Milliseconds(), 10))
+	}
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -127,7 +140,8 @@ func doclingStatusError(resp *http.Response) error {
 
 	reason := strings.TrimSpace(string(body))
 	var payload struct {
-		Error string `json:"error"`
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != "" {
 		reason = payload.Error
@@ -137,6 +151,9 @@ func doclingStatusError(resp *http.Response) error {
 	}
 	err := fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
 	if resp.StatusCode == http.StatusUnprocessableEntity {
+		if payload.Reason == "time_limit" {
+			return unreadableError{fmt.Errorf("%w: %w", ErrReadTimedOut, err)}
+		}
 		return unreadableError{err}
 	}
 	return err

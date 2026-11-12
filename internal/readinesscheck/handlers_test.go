@@ -1551,3 +1551,16 @@ func TestHandlers_PassTheDailyCeiling(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineStatus_ATimedOutReadIs422Unreadable(t *testing.T) {
+	r := newRig(t)
+	r.text.err = fmt.Errorf("%w: %w", extraction.ErrReadTimedOut, extraction.ErrDocumentUnreadable)
+	rec := r.run(t, "a@example.com", "pdf", []byte("%PDF-1.4"), "consent_text", "ok")
+	wantStatus(t, rec, http.StatusUnprocessableEntity, "unreadable")
+	if n := len(r.store.holds()); n != 0 {
+		t.Errorf("holds = %d, want 0", n)
+	}
+	if n := len(r.send.capture.Messages()); n != 0 {
+		t.Errorf("mails sent = %d, want 0", n)
+	}
+}

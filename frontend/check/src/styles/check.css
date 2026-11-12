@@ -194,7 +194,7 @@ input[type='file'] { max-width: 100%; font: inherit; }
 .check-sent-head > div { display: grid; gap: 8px; }
 .check-sent-mark { width: 56px; height: 56px; border-radius: var(--radius-md); display: grid; place-items: center; background: var(--status-success-bg); color: var(--status-success-fg); }
 .check-sent-label { color: var(--status-success-fg); }
-.check-card .check-sent-title { font-size: 24px; overflow-wrap: anywhere; }
+.check-card.check-sent .check-sent-title { font-size: 24px; overflow-wrap: anywhere; }
 .check-sent h2:focus { outline: none; }
 .check-card .check-sent-note { font-size: 15px; line-height: 1.65; color: var(--text-copy); }
 .check-sent-note strong { color: var(--ink); }

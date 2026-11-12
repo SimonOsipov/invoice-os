@@ -15,6 +15,15 @@ export const CHECK_INTRO =
 export const SENT_TEXT = (email: string): string => `Check your inbox at ${email}.`
 export const SENT_NOTE = 'We sent you an email from no-reply@ascomply.com. Check your spam folder if you cannot find it.'
 export const SENDING_TEXT = 'Checking your file. This can take a minute or two.'
+export const STAGES = [
+  'Uploading your file',
+  `Reading the first ${MAX_INVOICES} invoices`,
+  'Checking them against the MBS rules',
+  'Writing your email',
+] as const
+export const STAGE_MS = 1500
+export const SENDING_TO = (email: string): string => `We email you at ${email}`
+export const SENDING_NOTE = 'Keep this page open until we confirm. The results are not shown here.'
 export const READING_TEXT = 'Reading the columns…'
 export const TYPE_SENTENCE = 'Choose a CSV, XLSX, PDF or DOCX file.'
 export const SIZE_SENTENCE = 'This file is over 15 MiB. Choose a smaller file.'

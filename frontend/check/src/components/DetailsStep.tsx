@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { CONSENT_TEXT } from '../analytics'
-import { BACK, EMAIL_LABEL, EMAIL_PLACEHOLDER, EMAIL_TITLE, SEND, SENDING_TEXT } from '../copy'
+import { BACK, EMAIL_LABEL, EMAIL_PLACEHOLDER, EMAIL_TITLE, SEND } from '../copy'
 import { GLYPHS, Icon, IconTile } from '../ds'
 import { EMAIL_RE } from '../flow'
 import { CHECK_GLYPHS } from '../glyphs'
@@ -13,7 +13,6 @@ interface Props {
   fileMeta: string
   email: string
   ticked: boolean
-  sending: boolean
   canSend: boolean
   refusal: RefusalValue | null
   onEmail: (v: string) => void
@@ -22,7 +21,7 @@ interface Props {
   onSend: () => void
 }
 
-export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, sending, canSend, refusal, onEmail, onTick, onBack, onSend }: Props) {
+export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, canSend, refusal, onEmail, onTick, onBack, onSend }: Props) {
   // Touched state resets on remount (Back, a new file).
   const [emailTouched, setEmailTouched] = useState(false)
   const [tickTouched, setTickTouched] = useState(false)
@@ -34,7 +33,7 @@ export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, sending
         data-hs-do-not-collect="true"
         onSubmit={(e) => {
           e.preventDefault()
-          if (canSend && !sending) onSend()
+          if (canSend) onSend()
         }}
       >
         <div className="check-step-head">
@@ -100,15 +99,14 @@ export function DetailsStep({ stepNo, fileName, fileMeta, email, ticked, sending
           )}
         </div>
         <div className="check-actions">
-          <button type="button" className="check-btn check-btn--outline" disabled={sending} onClick={onBack}>
+          <button type="button" className="check-btn check-btn--outline" onClick={onBack}>
             {BACK}
           </button>
-          <button type="submit" className="check-btn check-btn--next" disabled={!canSend || sending}>
+          <button type="submit" className="check-btn check-btn--next" disabled={!canSend}>
             {SEND}
             <Icon paths={CHECK_GLYPHS['arrow-right']} size={16} strokeWidth={2} />
           </button>
         </div>
-        {sending && <p role="status">{SENDING_TEXT}</p>}
         {refusal && <Refusal refusal={refusal} />}
       </form>
     </section>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Footer } from './components/Footer'
 import { Header } from './components/Header'
 import { Hero } from './components/Hero'
@@ -7,6 +7,7 @@ import { chooseConsent, CookieNotice, readConsent, syncCheckConsent } from './an
 import { runCheck, suggestMapping } from './checkApi'
 import { DetailsStep } from './components/DetailsStep'
 import { MapStep } from './components/MapStep'
+import { SendingStep } from './components/SendingStep'
 import { SentPanel } from './components/SentPanel'
 import { UploadStep } from './components/UploadStep'
 import { WhatYouGet } from './components/WhatYouGet'
@@ -30,6 +31,8 @@ export function App() {
   const [email, setEmail] = useState('')
   const [ticked, setTicked] = useState(false)
   const [sending, setSending] = useState(false)
+  // A second submit can land before React re-renders the sending view.
+  const inFlight = useRef(false)
 
   // A new pick drops everything the previous file left behind.
   const pick = async (picked: File) => {
@@ -72,10 +75,12 @@ export function App() {
   }
 
   const send = async () => {
-    if (!file) return
+    if (!file || inFlight.current) return
+    inFlight.current = true
     setSending(true)
     setRefusal(null)
     const res = await runCheck({ email, file, mapping: suggestion && fields ? { headerRow: suggestion.header_row, fields } : undefined })
+    inFlight.current = false
     setSending(false)
     if (res.ok) {
       setStep('sent')
@@ -86,6 +91,8 @@ export function App() {
     // Only a rejected mapping goes back to step 2; every other refusal stays on the email step.
     if (suggestion && r.text === MAPPING_SENTENCE) setStep('map')
   }
+
+  const emailStepNo = EMAIL_STEP_NO(file !== null && kindOf(file) === 'spreadsheet')
 
   // A choice made in another tab applies here when this tab is shown again.
   useEffect(() => {
@@ -123,14 +130,13 @@ export function App() {
                 }}
               />
             )}
-            {step === 'details' && file && (
+            {step === 'details' && file && !sending && (
               <DetailsStep
-                stepNo={EMAIL_STEP_NO(kindOf(file) === 'spreadsheet')}
+                stepNo={emailStepNo}
                 fileName={file.name}
                 fileMeta={`${formatBytes(file.size)} · ${fields ? FILE_MATCHED(CHECK_FIELD_KEYS.filter((k) => fields[k] != null).length, CHECK_FIELD_KEYS.length) : FILE_NO_MATCHING}`}
                 email={email}
                 ticked={ticked}
-                sending={sending}
                 canSend={canSend({ file, email, ticked, fields })}
                 refusal={refusal}
                 onEmail={setEmail}
@@ -143,6 +149,7 @@ export function App() {
                 onSend={send}
               />
             )}
+            {step === 'details' && file && sending && <SendingStep stepNo={emailStepNo} email={email.trim()} />}
             {step === 'sent' && <SentPanel email={email.trim()} />}
           </div>
         </Hero>

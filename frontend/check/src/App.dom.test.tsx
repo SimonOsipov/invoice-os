@@ -408,8 +408,8 @@ describe('details and sent', () => {
     await mount()
     await pick(file('a.pdf'))
     await fillAndSend()
-    expect(text()).toContain(SENDING_TEXT)
-    expect(button('Send').disabled).toBe(true)
+    expect(container.querySelector('h2')!.textContent).toBe(SENDING_TEXT)
+    expect(button('Send')).toBeUndefined()
   })
 
   it('send_409IsTheUnavailableSentenceWithoutSignUp', async () => {

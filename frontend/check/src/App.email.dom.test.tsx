@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { CHECK_FIELD_KEYS, fieldLabel, formatBytes } from './fields'
+import { SENDING_NOTE, SENDING_TEXT, SENDING_TO, STAGE_MS, STAGES } from './copy'
 import { CONSENT_SENTENCE, EMAIL_SENTENCE } from './messages'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -195,5 +196,115 @@ describe('email step', () => {
     expect(send.textContent).toBe('Send')
     expect(send.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1)
     expect(button('Back').getAttribute('type')).toBe('button')
+  })
+})
+
+// ceiling: SentPanel has no .check-sent class until FREECHK-13-04
+const SENT = '.check-tool [role="status"]'
+
+describe('sending view', () => {
+  let answer: (() => Response) | null
+  let release: () => void
+  let run: ReturnType<typeof vi.fn<() => Promise<Response>>>
+  const stubRun = () => {
+    run = vi.fn(() => new Promise<Response>((r) => (release = () => r(answer!()))))
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => (String(input).endsWith('/readiness-check/run') ? run() : json(200, SHEET))))
+  }
+  const fill = async (email = 'a@x.io') => {
+    await type(emailInput(), email)
+    await click(tickBox())
+  }
+  const submit = () => click(q('button[type="submit"]')!)
+  const classes = () => [...container.querySelectorAll('.check-stages li')].map((li) => li.className)
+  const advance = (ms: number) => act(async () => void vi.advanceTimersByTime(ms))
+  const toPdfEmail = async () => {
+    await mount()
+    stubRun()
+    await pick(new File(['aaaa'], 'a.pdf'))
+  }
+
+  beforeEach(() => {
+    answer = () => json(200, { status: 'confirm' })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('sending_showsTheHeadingStagesAndAddress', async () => {
+    await toPdfEmail()
+    await fill('  a@x.io ')
+    await submit()
+    expect(q('.check-sending h2')!.textContent).toBe(SENDING_TEXT)
+    expect(q('.check-step-no')!.textContent).toBe('02 · Email')
+    expect(q('.check-bar')).toBeTruthy()
+    expect([...container.querySelectorAll('.check-stages li')].map((li) => li.textContent)).toEqual([...STAGES])
+    expect(q('.check-sending-addr')!.textContent).toBe(SENDING_TO('a@x.io'))
+    expect(q('.check-sending-addr')!.textContent).toBe('We email you at a@x.io')
+    expect(q('.check-sending-note')!.textContent).toBe(SENDING_NOTE)
+    expect(q('form')).toBeNull()
+    expect(button('Back')).toBeUndefined()
+    expect(button('Send')).toBeUndefined()
+    expect(q('.check-progress [aria-current="step"]')!.textContent).toContain('Email')
+    await act(async () => release())
+  })
+
+  it('sending_stagesAdvanceEveryStageMsAndTheLastHolds', async () => {
+    await toPdfEmail()
+    await fill()
+    vi.useFakeTimers()
+    await submit()
+    expect(classes()).toEqual(['is-now', 'is-todo', 'is-todo', 'is-todo'])
+    await advance(STAGE_MS - 1)
+    expect(classes()).toEqual(['is-now', 'is-todo', 'is-todo', 'is-todo'])
+    await advance(1)
+    expect(classes()).toEqual(['is-done', 'is-now', 'is-todo', 'is-todo'])
+    expect(q('.check-stages li .check-sdot svg')).toBeTruthy()
+    await advance(2 * STAGE_MS)
+    expect(classes()).toEqual(['is-done', 'is-done', 'is-done', 'is-now'])
+    await advance(60000)
+    expect(classes()).toEqual(['is-done', 'is-done', 'is-done', 'is-now'])
+  })
+
+  it('sending_theAnswerEndsTheStagesAndAResendRestarts', async () => {
+    await toPdfEmail()
+    await fill()
+    vi.useFakeTimers()
+    answer = () => json(503, { error: 'unavailable' })
+    await submit()
+    await advance(2 * STAGE_MS)
+    await act(async () => release())
+    await advance(0)
+    expect(q('#check-email')).toBeTruthy()
+    expect(q('.check-sending')).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    answer = () => json(200, { status: 'confirm' })
+    await submit()
+    expect(classes()).toEqual(['is-now', 'is-todo', 'is-todo', 'is-todo'])
+    await act(async () => release())
+    await advance(0)
+    expect(q(SENT)).toBeTruthy()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('sending_aSecondSubmitBeforeTheViewMountsSendsOnce', async () => {
+    await toPdfEmail()
+    await fill()
+    const form = q<HTMLFormElement>('form')!
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    await act(async () => release())
+    await settle()
+    expect(q(SENT)).toBeTruthy()
+  })
+
+  it('sending_theHeadingTakesFocus', async () => {
+    await toPdfEmail()
+    await fill()
+    await submit()
+    const h2 = q<HTMLElement>('.check-sending h2')!
+    expect(document.activeElement).toBe(h2)
+    expect(h2.tabIndex).toBe(-1)
+    await act(async () => release())
   })
 })

@@ -62,6 +62,16 @@ func NewExtractJobForTest(riverJobID int64, attempt, maxAttempts int, tenantID, 
 	}
 }
 
+// NewExtractJobAfterErrorsForTest is NewExtractJobForTest for a job whose earlier attempts
+// failed with priorErrors, oldest first, the way River records them.
+func NewExtractJobAfterErrorsForTest(riverJobID int64, attempt, maxAttempts int, tenantID, documentID string, priorErrors ...string) *river.Job[extractArgs] {
+	job := NewExtractJobForTest(riverJobID, attempt, maxAttempts, tenantID, documentID, "k")
+	for i, e := range priorErrors {
+		job.Errors = append(job.Errors, rivertype.AttemptError{Attempt: i + 1, Error: e})
+	}
+	return job
+}
+
 // NewPDFiumReaderAtDPIForTest builds a reader that renders at a non-default DPI. AC-4's
 // alignment sweep runs 100/150/200 to prove the box space and the pixel space are one space at
 // any resolution.

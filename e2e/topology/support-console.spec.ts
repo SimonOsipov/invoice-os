@@ -14,6 +14,7 @@ import { seedStaffSession } from '../staffSession'
 import { brandMarkProblems, readBrandMark, ringProblems, ringWidth } from './brandMark'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { scopeStrays } from './metricsScope'
+import { nightlyTarget } from '../targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -1884,11 +1885,13 @@ async function liveAiRows<K extends string, R>(path: string, key: K, keyOf: (r: 
   return found
 }
 
-// One oversized suggest-mapping call: refused by the real AI, blank under the fake, a failed row on both. Returns once the row is listed.
-async function recordFailedAiCall(): Promise<void> {
+// One oversized suggest-mapping call. The fake answers blank (a failed row); the real AI gets a 200-byte cell
+// (maxPromptCellBytes) and answers (an ok row). Returns once the row is listed.
+async function recordOversizedAiCall(): Promise<void> {
   const token = await login(PERSONAS.A)
   const listed = async (): Promise<Set<string>> => {
-    const q = new URLSearchParams({ tenant: PERSONAS.A.tenantId, failed: 'true', limit: '100' })
+    const q = new URLSearchParams({ tenant: PERSONAS.A.tenantId, limit: '100' })
+    if (!nightlyTarget()) q.set('failed', 'true')
     const { calls } = await liveStaffGet<{ calls: { id: string; client: string; purpose: string }[] }>(`${STAFF_AI_CALLS}?${q}`)
     return new Set(calls.filter((c) => c.client === 'ai' && c.purpose === 'spreadsheet').map((c) => c.id))
   }
@@ -1901,8 +1904,9 @@ async function recordFailedAiCall(): Promise<void> {
   expect(res.ok, `the oversized preview is accepted (status ${res.status})`).toBe(true)
   const { document_id } = (await res.json()) as { document_id?: string }
   expect(typeof document_id, `preview carries a document_id (status ${res.status})`).toBe('string')
-  await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
-  await expect.poll(async () => [...(await listed())].some((id) => !known.has(id)), { message: "the oversized call's failed row is listed", timeout: 30_000 }).toBe(true)
+  const suggested = await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
+  if (nightlyTarget()) expect(suggested.source, 'the real AI answers the cut cell').toBe('ai')
+  await expect.poll(async () => [...(await listed())].some((id) => !known.has(id)), { message: "the oversized call's row is listed", timeout: 30_000 }).toBe(true)
 }
 
 // The screen is read-only: no switch or input beyond the five filters, and no button outside the allowlist.
@@ -1953,10 +1957,11 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
     const served = ((await res.json()) as { calls: { id: string }[] }).calls.map((c) => c.id)
     await expect.poll(async () => calls.evaluateAll((rows) => rows.map((r) => r.getAttribute('data-call-id'))), { message: 'the rows on screen are the failed=true answer' }).toEqual(served)
     const outcomes = async (): Promise<string[]> => calls.evaluateAll((rows) => rows.map((r) => (r.children[10]?.textContent ?? '').trim()))
-    await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)
+    // The nightly's real AI answers the oversized cell, so it may have no failed row.
+    if (!nightlyTarget()) await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)
     await expect.poll(async () => (await outcomes()).filter((o) => o === 'ok'), { message: 'the failed list holds no ok row' }).toEqual([])
     failedRows = (await calls.all()).slice(0, ROW_CAP)
-    expect(failedRows.length, 'the oversized call left a failed row on the screen').toBeGreaterThanOrEqual(1)
+    if (!nightlyTarget()) expect(failedRows.length, 'the oversized call left a failed row on the screen').toBeGreaterThanOrEqual(1)
   } finally {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
   }
@@ -1988,7 +1993,7 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
     await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${rendered[i].cost}`)
     await expect(kid(row, 7), `total ${i} failed`).toHaveText(rendered[i].failed.toLocaleString('en-US'))
   }
-  await recordFailedAiCall()
+  await recordOversizedAiCall()
   const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', totalKey, compared.map((i) => totalKey(rendered[i])))
   for (const i of compared) {
     const hit = liveTotals.get(totalKey(rendered[i]))
@@ -1998,7 +2003,7 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
     expect(Number(hit!.cost), `total ${i} live cost only grows`).toBeGreaterThanOrEqual(Number(rendered[i].cost))
     if (i === forcedIdx) {
       expect(hit!.calls, 'the forced call landed between the reads').toBeGreaterThan(rendered[i].calls)
-      expect(hit!.failed, 'the forced call failed, so failed grew').toBeGreaterThan(rendered[i].failed)
+      if (!nightlyTarget()) expect(hit!.failed, 'the fake answers blank, so the forced call failed and failed grew').toBeGreaterThan(rendered[i].failed)
     }
   }
   await aiControlsRead(page, 'DAILY TOTALS')
@@ -2192,9 +2197,9 @@ function liveMask(page: Page, nav: string): Locator[] {
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    // AI usage adds two oversized calls (one before the screen, one in DAILY TOTALS): 2 x (30s preview + 120s real-AI suggest + 30s poll) = +360s
+    // AI usage adds two oversized calls (one before the screen, one in DAILY TOTALS): 2 x (30s preview + 120s suggest + 30s poll) = +360s
     test.setTimeout(s.nav === 'System health' ? 300_000 : s.nav === 'AI usage' ? 480_000 : 120_000)
-    if (s.nav === 'AI usage') await recordFailedAiCall()
+    if (s.nav === 'AI usage') await recordOversizedAiCall()
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
     armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection

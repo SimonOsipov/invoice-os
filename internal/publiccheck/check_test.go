@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xuri/excelize/v2"
+
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -64,6 +66,11 @@ func (m *mapper) Call(ctx context.Context, _ ai.Request) (map[string]any, error)
 	}
 	return map[string]any{}, nil
 }
+
+// capStub is the page cap: it returns err, nil by default.
+type capStub struct{ err error }
+
+func (c *capStub) CheckPageCap(context.Context, extraction.Document) error { return c.err }
 
 // pdfText reads one page of text, or fails.
 type pdfText struct {
@@ -134,17 +141,18 @@ type rig struct {
 	tx *pdfText
 	rd *pdfText // render reader, must stay unused
 	ai *fakeAI
+	cp *capStub
 	c  *publiccheck.Checker
 }
 
 func newRig() *rig {
 	r := &rig{l: &loader{rules: []validation.Rule{requiredRule("buyer-tin-required", "buyer.tin")}},
-		m: &mapper{}, tx: &pdfText{chars: 20}, rd: &pdfText{}, ai: &fakeAI{header: map[string]any{"invoice_number": "INV-9"}}}
+		m: &mapper{}, tx: &pdfText{chars: 20}, rd: &pdfText{}, ai: &fakeAI{header: map[string]any{"invoice_number": "INV-9"}}, cp: &capStub{}}
 	r.c = &publiccheck.Checker{
 		LoadRules: r.l.load,
 		Engine:    validation.NewDefaultEngine(),
 		Mapper:    r.m,
-		Readers:   extraction.CheckReaders{Text: r.tx, Render: r.rd, AI: r.ai},
+		Readers:   extraction.CheckReaders{Text: r.tx, Render: r.rd, Cap: r.cp, AI: r.ai},
 		Now:       fixedNow,
 	}
 	return r
@@ -365,6 +373,38 @@ func TestCheck_ACorruptSpreadsheetIsBadFile(t *testing.T) {
 	r.untouched(t)
 }
 
+func TestCheck_AnOverCapCSVIsBadFileLikeAnOverCapXLSX(t *testing.T) {
+	book := excelize.NewFile()
+	if err := book.SetCellValue("Sheet1", "A1", "Inv"); err != nil {
+		t.Fatal(err)
+	}
+	if err := book.SetCellValue("Sheet1", "A100002", "x"); err != nil {
+		t.Fatal(err)
+	}
+	buf, err := book.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	over := map[string][]byte{
+		"csv":  []byte("Inv\n" + strings.Repeat("a\n", 100_001)),
+		"xlsx": buf.Bytes(),
+	}
+	for format, file := range over {
+		r := newRig()
+		_, err := r.c.Check(context.Background(), publiccheck.Request{File: file, Format: format, Mapping: map[string]string{"invoice_number": "Inv"}})
+		if !errors.Is(err, publiccheck.ErrBadFile) || !errors.Is(err, importer.ErrTooManyRows) {
+			t.Errorf("%s Check: err = %v, want ErrBadFile and ErrTooManyRows", format, err)
+		}
+		r.untouched(t)
+		r = newRig()
+		_, err = r.c.SuggestMapping(context.Background(), file, format)
+		if !errors.Is(err, publiccheck.ErrBadFile) || !errors.Is(err, importer.ErrTooManyRows) {
+			t.Errorf("%s SuggestMapping: err = %v, want ErrBadFile and ErrTooManyRows", format, err)
+		}
+		r.untouched(t)
+	}
+}
+
 func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.ai.fail = true
@@ -374,6 +414,18 @@ func TestCheck_AnAIOutageIsReadUnavailable(t *testing.T) {
 	}
 	if len(r.l.calls) != 0 {
 		t.Errorf("loader calls = %d, want 0", len(r.l.calls))
+	}
+}
+
+func TestCheck_APDFOverThePageCapIsTooManyPagesNotBadFile(t *testing.T) {
+	r := newRig()
+	r.cp.err = fmt.Errorf("cap: %w %w", extraction.ErrTooManyPages, extraction.ErrDocumentUnreadable)
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: []byte("%PDF-1.4"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrTooManyPages) || errors.Is(err, publiccheck.ErrBadFile) {
+		t.Fatalf("err = %v, want ErrTooManyPages and not ErrBadFile", err)
+	}
+	if r.tx.calls != 0 {
+		t.Errorf("text calls = %d, want 0", r.tx.calls)
 	}
 }
 
@@ -653,7 +705,7 @@ func TestChecker_HoldsNoObjectStoreSinkOrLogger(t *testing.T) {
 		t.Errorf("Checker fields = %q, want %q", got, wantChecker)
 	}
 	wantReaders := []string{"Text extraction.PageReader", "Render extraction.PageReader",
-		"AI extraction.AIReader", "Jev extraction.JevAsker"}
+		"Cap extraction.PageCapper", "AI extraction.AIReader", "Jev extraction.JevAsker"}
 	if got := fields(extraction.CheckReaders{}); !slices.Equal(got, wantReaders) {
 		t.Errorf("CheckReaders fields = %q, want %q", got, wantReaders)
 	}

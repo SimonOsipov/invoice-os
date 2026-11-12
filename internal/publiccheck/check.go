@@ -29,6 +29,7 @@ var (
 	ErrBadFile         = errors.New("publiccheck: the file is empty or cannot be read")
 	ErrReadUnavailable = errors.New("publiccheck: the document cannot be read now")
 	ErrDocumentTooLong = errors.New("publiccheck: the document has too much text")
+	ErrTooManyPages    = errors.New("publiccheck: the document is over the page limit")
 )
 
 type Request struct {
@@ -107,6 +108,10 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
+			}
+			// Before the unreadable arm: the cap refusal is also an ErrDocumentUnreadable.
+			if errors.Is(err, extraction.ErrTooManyPages) {
+				return Result{}, fmt.Errorf("%w: %w", ErrTooManyPages, err)
 			}
 			if errors.Is(err, extraction.ErrDocumentUnreadable) {
 				return Result{}, fmt.Errorf("%w: %w", ErrBadFile, err)

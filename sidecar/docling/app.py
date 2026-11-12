@@ -1,7 +1,10 @@
 """FastAPI app: GET /healthz, POST /v1/read. Wire contract: EXTR-03 story sec. 3."""
 
 import asyncio
+import contextlib
 import logging
+import threading
+import time
 
 import sentry_sdk
 
@@ -64,6 +67,20 @@ async def _read_capped_body(request: Request) -> bytes | None:
     return b"".join(chunks)
 
 
+def _read_deadline(request: Request) -> float | None:
+    """time.monotonic() deadline from X-Read-Deadline-Ms; a missing or bad value is ignored."""
+    raw = request.headers.get("x-read-deadline-ms", "")
+    if not (raw.isascii() and raw.isdigit()) or int(raw) <= 0:
+        return None
+    return time.monotonic() + int(raw) / 1000
+
+
+async def _watch_disconnect(request: Request, event: threading.Event) -> None:
+    while not await request.is_disconnected():
+        await asyncio.sleep(0.25)
+    event.set()
+
+
 @app.post("/v1/read")
 async def read_document(request: Request) -> JSONResponse:
     """Raw document bytes in, the §3 wire contract out.
@@ -77,12 +94,22 @@ async def read_document(request: Request) -> JSONResponse:
     if not body:
         return JSONResponse({"error": "empty body"}, status_code=400)
     content_type = request.headers.get("content-type", "")
+    disconnected = threading.Event()
+    convert.read_stop.set(convert.ReadStop(_read_deadline(request), disconnected))
+    watcher = asyncio.create_task(_watch_disconnect(request, disconnected))
     try:
         result = await asyncio.to_thread(convert.stub_read, body, content_type)
     except convert.DocumentUnreadable as exc:
-        return JSONResponse({"error": str(exc)}, status_code=422)
+        content = {"error": str(exc)}
+        if exc.reason:
+            content["reason"] = exc.reason
+        return JSONResponse(content, status_code=422)
     except Exception:
         logger.exception("unexpected /v1/read failure")
         sentry_sdk.capture_exception()
         return JSONResponse({"error": "internal error"}, status_code=500)
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
     return JSONResponse(result)

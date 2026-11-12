@@ -5,10 +5,16 @@ Tables and the DOCX path go through geometry.py, which owns all coord_origin ari
 """
 
 import logging
+import posixpath
 import threading
+import time
+import zipfile
+from contextvars import ContextVar
+from dataclasses import dataclass
 from io import BytesIO
 
 import sentry_sdk
+from lxml import etree
 
 import geometry
 
@@ -22,8 +28,52 @@ logger = logging.getLogger(__name__)
 DOCLING_NUM_THREADS = 2
 
 
+MAX_PAGES = 800  # internal/extraction MaxPages; test_pins.py keeps them equal
+DOCUMENT_TIMEOUT_S = 240.0  # the PM's per-document limit
+DOCX_XML_MAX_BYTES = 8 * 1024 * 1024
+TIME_LIMIT = "time_limit"
+
+
 class DocumentUnreadable(Exception):
-    """Docling opened the document but could not convert it -- maps to 422 (T-03-13)."""
+    """Docling opened the document but could not convert it -- maps to 422 (T-03-13).
+
+    reason is a machine-readable cause the 422 body carries when set.
+    """
+
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass
+class ReadStop:
+    """What ends one read early: the caller's deadline (time.monotonic()) and a disconnect."""
+
+    deadline: float | None
+    disconnected: threading.Event
+
+
+# Per request; asyncio.to_thread copies the context into the conversion thread.
+read_stop: ContextVar[ReadStop | None] = ContextVar("read_stop", default=None)
+
+
+class _Stopped(BaseException):
+    """BaseException: docling swallows an Exception raised by a progress callback."""
+
+
+def _stop_check(stop: ReadStop, started: float):
+    """A docling progress callback that raises _Stopped once the read is due to end."""
+
+    def check(_event) -> None:
+        now = time.monotonic()
+        if (
+            stop.disconnected.is_set()
+            or (stop.deadline is not None and now > stop.deadline)
+            or now - started > DOCUMENT_TIMEOUT_S
+        ):
+            raise _Stopped
+
+    return check
 
 
 _construction_count = 0
@@ -66,6 +116,8 @@ def pipeline_options():
     # parsed_page.textline_cells is this subtask's token source (see _page_tokens) --
     # normally discarded after document assembly.
     opts.generate_parsed_pages = True
+    # Backstop; the per-request _stop_check ends a read at the caller's deadline first.
+    opts.document_timeout = DOCUMENT_TIMEOUT_S
     return opts
 
 
@@ -353,10 +405,87 @@ def stub_read(body: bytes, content_type: str) -> dict:
 
     if not body.startswith(_ACCEPTED_SIGNATURES):
         raise DocumentUnreadable("unsupported format")
+    if body.startswith(b"PK\x03\x04"):
+        _check_docx_xml_size(body)
     converter = get_converter()
     stream = DocumentStream(name=_stream_name(content_type), stream=BytesIO(body))
+    stop = read_stop.get() or ReadStop(None, threading.Event())
     try:
-        result = converter.convert(stream)
+        result = converter.convert(
+            stream,
+            max_num_pages=MAX_PAGES,
+            progress_callback=_stop_check(stop, time.monotonic()),
+        )
     except ConversionError as exc:
         raise DocumentUnreadable(str(exc)) from exc
+    except _Stopped:
+        raise _time_limit() from None
+    if result.has_timeout_errors():
+        raise _time_limit()
     return _to_wire_contract(result)
+
+
+def _time_limit() -> DocumentUnreadable:
+    logger.warning("conversion stopped at the time limit (document limit %.0f s)", DOCUMENT_TIMEOUT_S)
+    return DocumentUnreadable("conversion passed the time limit", reason=TIME_LIMIT)
+
+
+_CONTENT_TYPES = "[Content_Types].xml"
+_CT_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+
+
+def _is_xml_type(content_type: str) -> bool:
+    t = content_type.split(";")[0].strip().lower()
+    return t.endswith(("/xml", "+xml"))
+
+
+def _content_types(zf: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:
+    """Overrides by lower-cased part name and Defaults by lower-cased extension."""
+    try:
+        info = zf.getinfo(_CONTENT_TYPES)
+        if info.file_size > DOCX_XML_MAX_BYTES:
+            raise DocumentUnreadable("document XML exceeds the 8 MiB limit")
+        with zf.open(info) as f:
+            root = etree.fromstring(
+                f.read(DOCX_XML_MAX_BYTES + 1),
+                etree.XMLParser(resolve_entities=False, no_network=True),
+            )
+    except (KeyError, etree.XMLSyntaxError):
+        raise DocumentUnreadable("document content types are unreadable") from None
+    overrides = {
+        e.get("PartName", "").lower(): e.get("ContentType", "") for e in root.iter(_CT_NS + "Override")
+    }
+    defaults = {
+        e.get("Extension", "").lower(): e.get("ContentType", "") for e in root.iter(_CT_NS + "Default")
+    }
+    return overrides, defaults
+
+
+def _check_docx_xml_size(body: bytes) -> None:
+    """Refuse a package whose declared parts (a zip bomb inflates in docling's parser) are over bound.
+
+    An entry is exempt only when its declared content type is not XML: OPC part names are free, so
+    the type (which python-docx honours) decides, never the path. Docling also decodes by `.xml` and
+    `.rels` suffix, so those always count.
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(body)) as zf:
+            overrides, defaults = _content_types(zf)
+            declared = 0
+            for i in zf.infolist():
+                if i.is_dir():
+                    continue
+                name = i.filename.lower()
+                content_type = overrides.get("/" + name)
+                if content_type is None:
+                    content_type = defaults.get(posixpath.splitext(name)[1][1:])
+                if (
+                    content_type is None
+                    or _is_xml_type(content_type)
+                    or name.endswith((".xml", ".rels"))
+                ):
+                    declared += i.file_size
+    except zipfile.BadZipFile:
+        return  # docling reports it as it does today
+    if declared > DOCX_XML_MAX_BYTES:
+        raise DocumentUnreadable("document XML exceeds the 8 MiB limit")

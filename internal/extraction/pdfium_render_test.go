@@ -18,6 +18,7 @@ import (
 	"image"
 	"image/png"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -483,6 +484,9 @@ func TestPDFiumReader_RefusesOverThePageCap(t *testing.T) {
 			t.Errorf("the refusal %q does not name %s; an operator needs both the count and the cap to know what to do about it", err.Error(), want)
 		}
 	}
+	if !errors.Is(err, extraction.ErrTooManyPages) || !errors.Is(err, extraction.ErrDocumentUnreadable) {
+		t.Errorf("the refusal %v is not ErrTooManyPages and ErrDocumentUnreadable", err)
+	}
 	if calls != 0 {
 		t.Errorf("Read on a %d-page document called onPage %d time(s); a refused document is never partly rendered", prOverCap, calls)
 	}
@@ -509,12 +513,28 @@ func TestPDFiumReader_AcceptsAtThePageCap(t *testing.T) {
 		return enough
 	})
 
-	// Identity: the cap must let a document at exactly maxPages through to onPage at all.
+	// Identity: the cap must let a document at exactly MaxPages through to onPage at all.
 	if err != enough {
 		t.Fatalf("Read on a %d-page document returned %v, want the onPage refusal: a document at exactly the cap is accepted, and an off-by-one cap refuses it here", prAtCap, err)
 	}
 	if calls != 1 {
 		t.Errorf("Read on a %d-page document called onPage %d time(s), want 1", prAtCap, calls)
+	}
+}
+
+func TestPDFiumReader_CheckPageCapNamesTheCountAndTheCap(t *testing.T) {
+	r := extraction.NewPDFiumReader()
+	err := r.CheckPageCap(t.Context(), extraction.Document{Bytes: fxBuildNPage(prOverCap)})
+	if !errors.Is(err, extraction.ErrTooManyPages) {
+		t.Fatalf("801 pages: err = %v, want ErrTooManyPages", err)
+	}
+	for _, want := range []string{strconv.Itoa(prOverCap), strconv.Itoa(extraction.MaxPages)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %s", err.Error(), want)
+		}
+	}
+	if err := r.CheckPageCap(t.Context(), extraction.Document{Bytes: fxBuildNPage(prAtCap)}); err != nil {
+		t.Errorf("800 pages: err = %v, want nil", err)
 	}
 }
 

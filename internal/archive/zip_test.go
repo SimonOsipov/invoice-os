@@ -18,7 +18,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 )
+
+// bundleCellNote is the manifestNotes sentence that tells a reader to drop the added '.
+const bundleCellNote = "A text cell that starts with ' had that one character added on export, so that a spreadsheet shows a value beginning with =, +, -, @, a tab, a carriage return or ' as text. Remove that first ' to read the stored value. Number columns are written as stored."
 
 // --- fixtures and reader helpers ---------------------------------------------------
 
@@ -309,6 +314,9 @@ func TestManifest_NotesExplainTheEmptyCellRule(t *testing.T) {
 		if !strings.Contains(joined, col) {
 			t.Errorf("manifest.notes %v never mentions %q (cannot be an empty string, per the DB CHECK)", doc.Notes, col)
 		}
+	}
+	if !slices.Contains(doc.Notes, bundleCellNote) {
+		t.Errorf("manifest.notes %v lack the leading-quote note", doc.Notes)
 	}
 }
 
@@ -955,5 +963,239 @@ func TestBundleWriter_StreamCSVThenWriteBodyReadsInOrder(t *testing.T) {
 	}
 	if string(readEntry(t, r, "a.csv")) != "h\n" || string(readEntry(t, r, "b.bin")) != "body" {
 		t.Fatal("entry contents wrong")
+	}
+}
+
+// --- formula-cell neutralising -------------------------------------------------------
+
+func TestCSVRecords_NeutralisesAFormulaCell(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	e := bw.newCSVEntry("invoices.csv")
+	row := fixtureRow(invoicesCSVHeader, "inv")
+	formula := `=HYPERLINK("https://example.test","x")`
+	row[colIndex(t, invoicesCSVHeader, "buyer_name")] = formula
+	row[colIndex(t, invoicesCSVHeader, "buyer_telephone")] = "+2348000000002"
+	if err := e.Write(invoicesCSVHeader); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Write(row); err != nil {
+		t.Fatal(err)
+	}
+	if err := bw.finalizeCSV(e); err != nil {
+		t.Fatal(err)
+	}
+	_ = bw.Close()
+	rows := parseCSV(t, readEntry(t, mustReadZip(t, buf.Bytes()), "invoices.csv"))
+	got := rows[1]
+	for i, col := range invoicesCSVHeader {
+		want := "inv:" + col
+		switch col {
+		case "buyer_name":
+			want = "'" + formula
+		case "buyer_telephone":
+			want = "'+2348000000002"
+		}
+		if got[i] != want {
+			t.Errorf("%s = %q, want %q", col, got[i], want)
+		}
+	}
+}
+
+func TestNeutraliseCell_PrefixesEachFormulaLead(t *testing.T) {
+	for _, in := range []string{"=1", "+1", "-1", "@SUM(A1)", "\t=1", "\r=1", "'=1", "=", "+", "-", "@", "'"} {
+		t.Run(strconv.Quote(in), func(t *testing.T) {
+			if got := neutraliseCell(in); got != "'"+in {
+				t.Errorf("neutraliseCell(%q) = %q, want %q", in, got, "'"+in)
+			}
+		})
+	}
+}
+
+func TestNeutraliseCell_ReaderRuleRestoresTheStoredValue(t *testing.T) {
+	for _, in := range []string{"'=x", "=x", "'abc", "Acme"} {
+		got := strings.TrimPrefix(neutraliseCell(in), "'")
+		if got != in {
+			t.Errorf("reader rule on %q gave %q", in, got)
+		}
+	}
+	if got := neutraliseCell("'=x"); got != "''=x" {
+		t.Errorf("neutraliseCell(%q) = %q, want ''=x", "'=x", got)
+	}
+}
+
+func TestNeutraliseCell_LeavesOtherCellsAlone(t *testing.T) {
+	for _, in := range []string{"", "Acme Ltd", "a=b", " =1", "INV-001", `{"a":1}`, "—"} {
+		if got := neutraliseCell(in); got != in {
+			t.Errorf("neutraliseCell(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}
+
+func TestCSVRecords_HeaderIsWrittenUnchanged(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	err := bw.streamCSV("audit_log.csv", func(w csvWriter) error { return w.Write([]string{"id", "actor_name"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = bw.Close()
+	rows := parseCSV(t, readEntry(t, mustReadZip(t, buf.Bytes()), "audit_log.csv"))
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0], []string{"id", "actor_name"}) {
+		t.Errorf("records = %v, want only the raw header", rows)
+	}
+	if rows := bw.entries[0].Rows; rows == nil || *rows != 0 {
+		t.Errorf("rows = %v, want 0", rows)
+	}
+}
+
+func TestCSVRecords_DoesNotMutateTheCallersRecord(t *testing.T) {
+	var buf bytes.Buffer
+	e := newBundleWriter(&buf).newCSVEntry("invoices.csv")
+	_ = e.Write([]string{"id", "buyer_name"})
+	rec := []string{"1", "=1"}
+	if err := e.Write(rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec[1] != "=1" {
+		t.Errorf("caller's record = %v, want =1 kept", rec)
+	}
+}
+
+func TestCSVRecords_LeavesNumericColumnsRaw(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	write := func(name string, header []string, set map[string]string) {
+		e := bw.newCSVEntry(name)
+		row := fixtureRow(header, name)
+		for c, v := range set {
+			row[colIndex(t, header, c)] = v
+		}
+		if err := e.Write(header); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Write(row); err != nil {
+			t.Fatal(err)
+		}
+		if err := bw.finalizeCSV(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("invoices.csv", invoicesCSVHeader, map[string]string{"subtotal": "-1500.00", "vat": "-225.00", "total": "-1725.00", "buyer_name": "-5"})
+	write("line_items.csv", lineItemsCSVHeader, map[string]string{"quantity": "-2", "line_total": "-100.00", "description": "-5"})
+	_ = bw.Close()
+	zr := mustReadZip(t, buf.Bytes())
+	check := func(name string, header []string, want map[string]string) {
+		rows := parseCSV(t, readEntry(t, zr, name))
+		for c, v := range want {
+			if got := rows[1][colIndex(t, header, c)]; got != v {
+				t.Errorf("%s %s = %q, want %q", name, c, got, v)
+			}
+		}
+	}
+	check("invoices.csv", invoicesCSVHeader, map[string]string{"subtotal": "-1500.00", "vat": "-225.00", "total": "-1725.00", "buyer_name": "'-5"})
+	check("line_items.csv", lineItemsCSVHeader, map[string]string{"quantity": "-2", "line_total": "-100.00", "description": "'-5"})
+}
+
+func TestCSVRecords_StreamCSVKeepsTheAuditIdRaw(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	err := bw.streamCSV("audit_log.csv", func(w csvWriter) error {
+		if err := w.Write(audit.ExportCSVHeader); err != nil {
+			return err
+		}
+		row := fixtureRow(audit.ExportCSVHeader, "a")
+		row[colIndex(t, audit.ExportCSVHeader, "actor_name")] = "@evil"
+		row[colIndex(t, audit.ExportCSVHeader, "id")] = "42"
+		return w.Write(row)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = bw.Close()
+	rows := parseCSV(t, readEntry(t, mustReadZip(t, buf.Bytes()), "audit_log.csv"))
+	if got := rows[1][colIndex(t, audit.ExportCSVHeader, "actor_name")]; got != "'@evil" {
+		t.Errorf("actor_name = %q, want '@evil", got)
+	}
+	if got := rows[1][colIndex(t, audit.ExportCSVHeader, "id")]; got != "42" {
+		t.Errorf("id = %q, want 42", got)
+	}
+}
+
+func TestBundle_ManifestDigestMatchesTheNeutralisedBytes(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	formula := `=HYPERLINK("https://example.test","x")`
+	e := bw.newCSVEntry("invoices.csv")
+	row := fixtureRow(invoicesCSVHeader, "inv")
+	row[colIndex(t, invoicesCSVHeader, "buyer_name")] = formula
+	_ = e.Write(invoicesCSVHeader)
+	_ = e.Write(row)
+	if err := bw.finalizeCSV(e); err != nil {
+		t.Fatal(err)
+	}
+	err := bw.streamCSV("audit_log.csv", func(w csvWriter) error {
+		if err := w.Write(audit.ExportCSVHeader); err != nil {
+			return err
+		}
+		r := fixtureRow(audit.ExportCSVHeader, "a")
+		r[colIndex(t, audit.ExportCSVHeader, "actor_name")] = formula
+		return w.Write(r)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bw.writeManifest(testManifestParams()); err != nil {
+		t.Fatal(err)
+	}
+	_ = bw.Close()
+	zr := mustReadZip(t, buf.Bytes())
+	doc := readManifest(t, zr)
+	for _, name := range []string{"invoices.csv", "audit_log.csv"} {
+		raw := readEntry(t, zr, name)
+		if !bytes.Contains(raw, []byte("'=HYPERLINK")) {
+			t.Errorf("%s lacks the prefixed formula: %s", name, raw)
+		}
+		sum := sha256.Sum256(raw)
+		found := false
+		for _, m := range doc.Entries {
+			if m.Name != name {
+				continue
+			}
+			found = true
+			if m.SHA256 != hex.EncodeToString(sum[:]) || m.Bytes != int64(len(raw)) {
+				t.Errorf("%s manifest sha256/bytes = %s/%d, want %x/%d", name, m.SHA256, m.Bytes, sum, len(raw))
+			}
+		}
+		if !found {
+			t.Errorf("manifest has no entry %s", name)
+		}
+	}
+}
+
+func TestNumericCSVColumns_ExemptExactlyTheNumberColumnsOfEachHeader(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		header []string
+		want   []string
+	}{
+		{"invoices", invoicesCSVHeader, []string{"subtotal", "vat", "total"}},
+		{"line_items", lineItemsCSVHeader, []string{"line_no", "quantity", "unit_price", "line_total", "line_tax", "tax_percent", "base_quantity"}},
+		{"history", historyCSVHeader, []string{"seq"}},
+		{"submissions", submissionsCSVHeader, []string{"attempts"}},
+		{"exchange", exchangeCSVHeader, []string{"attempt", "http_status", "latency_ms"}},
+		{"audit", audit.ExportCSVHeader, []string{"id"}},
+	} {
+		var got []string
+		for _, col := range c.header {
+			if numericCSVColumns[col] {
+				got = append(got, col)
+			}
+		}
+		slices.Sort(got)
+		slices.Sort(c.want)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s exempt columns = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

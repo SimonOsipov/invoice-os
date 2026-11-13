@@ -897,3 +897,80 @@ func TestNightly_PassesTheAISection(t *testing.T) {
 	}
 	requireNightlyMutation(t, " "+nightlyAISection, "", "lacks -section ai")
 }
+
+const nightlyAuthStep = "Read the gateway token and the auth image"
+
+// authStepBox runs prod-check's auth step against a gcloud shim; svc is auth's describe JSON.
+func authStepBox(t *testing.T, svc string) (b *prodBox, envFile string) {
+	t.Helper()
+	b = newProdBox(t)
+	writeShim(t, filepath.Join(b.bin, "gcloud"), `printf '%s\n' "$*" >> "$D/gcloud.log"
+case "$1 $2 $3" in
+"secrets versions access") echo tok ;;
+"run services describe") cat "$D/svc.json" ;;
+esac
+`)
+	b.put("svc.json", svc)
+	envFile = filepath.Join(b.root, "github_env")
+	b.env["GITHUB_ENV"], b.env["PROJECT"], b.env["REGION"] = envFile, "proj-x", "region-x"
+	return b, envFile
+}
+
+// authSvcJSON is auth's service with one 100 % revision; serving is that revision, newest the latest created one.
+func authSvcJSON(serving, newest, labels, image string) string {
+	return `{"metadata":{"name":"auth"},"spec":{"template":{"metadata":{"labels":` + labels + `},"spec":{"containers":[{"image":"` + image + `"}]}}},
+"status":{"latestCreatedRevisionName":"` + newest + `","latestReadyRevisionName":"` + newest + `","traffic":[{"revisionName":"` + serving + `","percent":100}]}}`
+}
+
+func runAuthStep(t *testing.T, svc string) (envText string, calls []string) {
+	t.Helper()
+	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
+	b, envFile := authStepBox(t, svc)
+	if r := b.step(step); r.code != 0 {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw), b.lines("gcloud.log")
+}
+
+func TestNightly_ProdCheckAuthStepSetsTheServingBuild(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	env, calls := runAuthStep(t, authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha+`"}`, "r/images/auth@sha256:D"))
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+sha+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want the token and AUTH_BUILD=%s", env, sha)
+	}
+	if len(calls) != 2 {
+		t.Errorf("gcloud calls %q, want exactly two", calls)
+	}
+}
+
+func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	for _, tc := range []struct{ name, svc string }{
+		{"serving is not the newest", authSvcJSON("auth-1", "auth-2", `{"commit":"`+sha+`"}`, "r/auth@sha256:D")},
+		{"no label", authSvcJSON("auth-2", "auth-2", `{}`, "r/auth@sha256:D")},
+		{"label latest", authSvcJSON("auth-2", "auth-2", `{"commit":"latest"}`, "r/auth@sha256:D")},
+		{"39 hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha[:39]+`"}`, "r/auth@sha256:D")},
+		{"upper-case hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+strings.ToUpper(strings.Repeat("b", 40))+`"}`, "r/auth@sha256:D")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if env, _ := runAuthStep(t, tc.svc); env != "PROD_GATEWAY_TOKEN=tok\n" {
+				t.Errorf("GITHUB_ENV = %q, want only the token", env)
+			}
+		})
+	}
+}
+
+func TestNightly_ProdCheckAuthStepIgnoresTheImageTag(t *testing.T) {
+	t.Parallel()
+	env, _ := runAuthStep(t, authSvcJSON("auth-2", "auth-2", `{}`, "r/images/auth:"+strings.Repeat("c", 40)))
+	if strings.Contains(env, "AUTH_BUILD") {
+		t.Errorf("GITHUB_ENV = %q, want no AUTH_BUILD from an image tag", env)
+	}
+}

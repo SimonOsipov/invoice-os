@@ -681,3 +681,98 @@ func TestDeployProd_BuildPinsBeforeItPushes(t *testing.T) {
 		block+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
 	requireProblemWith(t, "pin moved after the push", pinOrderProblems(moved), "after Build and push")
 }
+
+const labelStep = "Check the commit label the nightly reads"
+
+// labelBox serves auth's describe JSON, shaped like the real gateway service, with template labels labels.
+func labelBox(t *testing.T, labels string) *prodBox {
+	t.Helper()
+	b := newProdBox(t)
+	svc := mutateOnce(t, pinFixture(t, "gateway-service.json"),
+		`"run.googleapis.com/startupProbeType": "Default"`, labels)
+	b.put("run.services.describe.auth.json", svc)
+	b.env["SHA"], b.env["PROJECT"], b.env["REGION"] = strings.Repeat("d", 40), "proj-x", "region-x"
+	return b
+}
+
+const startProbe = `"run.googleapis.com/startupProbeType": "Default"`
+
+func TestDeployProd_LabelCheckPassesOnTheDeployedCommit(t *testing.T) {
+	t.Parallel()
+	b := labelBox(t, startProbe+`, "commit": "`+strings.Repeat("d", 40)+`"`)
+	r := b.step(stepOf(t, "deploy-prod.yml", "deploy", labelStep))
+	if r.code != 0 || !strings.Contains(r.stdout, b.env["SHA"]) || strings.Contains(r.stdout+r.stderr, "::error::") {
+		t.Errorf("exit %d stdout %q stderr %q, want exit 0, the sha named and no ::error::", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestDeployProd_LabelCheckAnnotatesAMissingLabelWithoutFailing(t *testing.T) {
+	t.Parallel()
+	step := stepOf(t, "deploy-prod.yml", "deploy", labelStep)
+	for _, tc := range []struct {
+		name, labels string
+		fails        int
+	}{
+		{"no commit label", startProbe, 0},
+		{"another sha", startProbe + `, "commit": "` + strings.Repeat("e", 40) + `"`, 0},
+		{"the read fails", startProbe, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := labelBox(t, tc.labels)
+			if tc.fails > 0 {
+				b.put("fails.run.services.describe.auth", "3")
+			}
+			r := b.step(step)
+			lines := regexp.MustCompile(`(?m)^::error::auth's template carries commit label .*the nightly will report auth=none\.$`).FindAllString(r.stderr, -1)
+			if r.code != 0 || len(lines) != 1 {
+				t.Errorf("exit %d stderr %q, want exit 0 and one ::error:: line", r.code, r.stderr)
+			}
+			if tc.fails > 0 && !sameLines(b.sleeps(), []string{"20", "20"}) {
+				t.Errorf("sleeps = %v, want [20 20]", b.sleeps())
+			}
+		})
+	}
+}
+
+// labelStepProblems: the label check is in deploy, right after the start step, and may not fail the run silently or loudly.
+func labelStepProblems(yml string) []string {
+	for _, j := range workflowJobsOf(yml) {
+		steps := j.steps()
+		for i, s := range steps {
+			if s.keys["name"] != labelStep {
+				continue
+			}
+			switch {
+			case j.name != "deploy":
+				return []string{"the label check is in job " + j.name + ", not deploy"}
+			case i == 0 || steps[i-1].keys["name"] != startRevsStep:
+				return []string{"the label check does not follow " + startRevsStep}
+			case s.keys["continue-on-error"] != "":
+				return []string{"the label check has continue-on-error"}
+			}
+			return nil
+		}
+	}
+	return []string{"no step " + labelStep}
+}
+
+func TestDeployProd_LabelCheckRunsInDeployAfterTheRevisionsStart(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "deploy-prod.yml")
+	requireNoProblems(t, "deploy-prod.yml", labelStepProblems(yml))
+	needs := regexp.MustCompile(`(?m)^    needs: \[[^\]]*\bdeploy\b`)
+	if !needs.MatchString(yml) {
+		t.Error("no job needs deploy")
+	}
+	start := strings.Index(yml, "      - name: "+labelStep)
+	end := strings.Index(yml, "\n  # The new revisions are reachable")
+	block := yml[start:end]
+	moved := strings.Replace(yml, block, "", 1)
+	before := mutateOnce(t, moved, "      - name: "+startRevsStep, block+"      - name: "+startRevsStep)
+	requireProblemWith(t, "moved before the start step", labelStepProblems(before), "does not follow")
+	toPromote := mutateOnce(t, moved, "      - name: Send 100 % to the new revisions", block+"      - name: Send 100 % to the new revisions")
+	requireProblemWith(t, "moved to promote", labelStepProblems(toPromote), "not deploy")
+	soft := mutateOnce(t, yml, "      - name: "+labelStep+"\n", "      - name: "+labelStep+"\n        continue-on-error: true\n")
+	requireProblemWith(t, "continue-on-error added", labelStepProblems(soft), "continue-on-error")
+}

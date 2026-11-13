@@ -254,6 +254,19 @@ jobs:
             echo "::error::a revision did not deploy; traffic stays on the previous revisions."
             exit 1
           fi
+      - name: Check the commit label the nightly reads
+        # Advisory: a missing label only blanks the nightly's auth build.
+        run: |
+          retry() { for n in 1 2 3; do "$@" && return 0; if [ "$n" -lt 3 ]; then sleep 20; fi; done; return 1; }
+          label=
+          if svc=$(retry gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format json); then
+            label=$(jq -r '.spec.template.metadata.labels.commit // ""' <<<"$svc") || label=
+          fi
+          if [ "$label" != "$SHA" ]; then
+            echo "::error::auth's template carries commit label '$label', not $SHA; the nightly will report auth=none." >&2
+          else
+            echo "auth's template carries commit label $SHA"
+          fi
 
   # The new revisions are reachable only inside the production network, through their tag.
   check:

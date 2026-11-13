@@ -27,6 +27,7 @@ export interface ApiFetchOptions {
   body?: unknown // JSON-serialized + Content-Type: application/json when present
   token?: string | null // when truthy, injects Authorization: Bearer <token>
   signal?: AbortSignal
+  headers?: Record<string, string> // set first: token and body still own Authorization and Content-Type
   // 'text' resolves the raw body (the UBL route serves XML). Errors stay JSON on
   // every path, so this is read only after the !res.ok check below.
   responseType?: 'json' | 'text'
@@ -42,7 +43,7 @@ export function gatewayBase(): string | null {
 // undefined, unreported (apiFetch_aNoBody204ResolvesUndefinedAndIsNotReported). REJECTS with
 // ApiError on network / non-2xx / malformed-body.
 export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
-  const headers = new Headers()
+  const headers = new Headers(opts?.headers)
   if (opts?.token) {
     headers.set('Authorization', 'Bearer ' + opts.token)
   }

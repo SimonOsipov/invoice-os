@@ -471,6 +471,12 @@ func TestPreviewSecretsNeverPrintsTheKey(t *testing.T) {
 			if strings.Contains(r.file(t, "calls"), d) {
 				t.Fatal("the key's d member reached gcloud argv")
 			}
+			if name == "nightly" {
+				tok := r.file(t, "created-nightly-mock-issuer-token")
+				if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
+					t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
+				}
+			}
 		})
 	}
 }
@@ -920,8 +926,15 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 		if svc == "notifications" || svc == "worker" {
 			want += "," + strings.Join(nlContactKeys, ",")
 		}
-		if got := flagValue(ni[svc], "--set-secrets"); got != want {
+		if svc == "gateway" {
+			want += ",GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest"
+		}
+		got := flagValue(ni[svc], "--set-secrets")
+		if got != want {
 			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
+		}
+		if has := strings.Contains(got, "mock-issuer-token"); has != (svc == "gateway") {
+			t.Errorf("%s mounts the mock issuer token = %v", svc, has)
 		}
 		if !strings.Contains(ni[svc], "--labels preview-pr=nightly ") {
 			t.Errorf("%s is not labelled preview-pr=nightly: %s", svc, ni[svc])
@@ -1008,7 +1021,7 @@ func TestPreviewCapAllowsNoMixOverTheBudget(t *testing.T) {
 	}
 }
 
-func TestPreviewSecretsNightlyMakesOnlyThePRSet(t *testing.T) {
+func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "secrets", "nightly")
 	if r.code != 0 {
@@ -1018,6 +1031,7 @@ func TestPreviewSecretsNightlyMakesOnlyThePRSet(t *testing.T) {
 	for _, n := range previewList(t, "PR_SECRETS") {
 		want["created-nightly-"+n] = true
 	}
+	want["created-nightly-mock-issuer-token"] = true
 	entries, _ := os.ReadDir(r.dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "created-") {
@@ -1031,8 +1045,14 @@ func TestPreviewSecretsNightlyMakesOnlyThePRSet(t *testing.T) {
 		t.Errorf("secret %s not created", n)
 	}
 	calls := r.file(t, "calls")
-	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS")) || strings.Count(calls, "--labels preview-pr=nightly") != n {
+	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS"))+1 || strings.Count(calls, "--labels preview-pr=nightly ") != n {
 		t.Errorf("creates or labels wrong:\n%s", calls)
+	}
+	if tok := r.file(t, "created-nightly-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {
+		t.Errorf("mock issuer token = %q, want 64 lowercase hex and no newline", tok)
+	}
+	if !strings.Contains(r.stdout, "created nightly-mock-issuer-token\n") {
+		t.Errorf("stdout lacks the created line:\n%s", r.stdout)
 	}
 	for _, db := range []string{"superuser", "migration", "app", "worker", "reader", "gateway", "auth"} {
 		if dsn := r.file(t, "created-nightly-database-"+db+"-url"); !strings.Contains(dsn, ":5432/pr_0?sslmode=require") {
@@ -1340,7 +1360,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mock-token", "mail-blog-ids"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -1356,7 +1376,7 @@ func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
 	t.Parallel()
 	const shimOutput = "shim-output"
-	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain"} {
+	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain", "mock-token": "nightly-mock-issuer-token"} {
 		t.Run(cmd, func(t *testing.T) {
 			t.Parallel()
 			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+name, shimOutput) }, cmd, "nightly")
@@ -1369,11 +1389,12 @@ func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
 	}
 }
 
-// secretReads are the three preview.sh subcommands that read one secret with gcloud.
+// secretReads are the preview.sh subcommands that read one secret with gcloud.
 var secretReads = []struct{ cmd, secret string }{
 	{"contact-token", "nightly-hubspot-token"},
 	{"mail-read-key", "nightly-resend-read-key"},
 	{"mail-domain", "nightly-resend-receiving-domain"},
+	{"mock-token", "nightly-mock-issuer-token"},
 }
 
 func TestPreviewSecretReadRetriesOneTransientFailure(t *testing.T) {

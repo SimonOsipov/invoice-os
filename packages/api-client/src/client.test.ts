@@ -166,6 +166,22 @@ describe('apiFetch auth header + body injection', () => {
     expect(headers.get('Authorization')).toBe('Bearer jwt')
   })
 
+  it('sends caller headers and keeps its own Authorization and Content-Type', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+
+    await apiFetch('/x', {
+      method: 'POST',
+      token: 't',
+      body: { a: 1 },
+      headers: { 'X-A': '1', Authorization: 'Basic x', 'Content-Type': 'text/plain' },
+    })
+
+    const headers = new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers)
+    expect(headers.get('X-A')).toBe('1')
+    expect(headers.get('Authorization')).toBe('Bearer t')
+    expect(headers.get('Content-Type')).toBe('application/json')
+  })
+
   it('C6: omits the Authorization header when no token is given', async () => {
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
 

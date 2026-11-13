@@ -61,14 +61,8 @@ paths:
 - Downgrade a surface to `nav-only` only through `EXPECTED_NAV_ONLY` in `e2e/personas.test.ts`.
 - Assert the sidebar marker `[title="Tenant verified via /v1/me"]` to prove a backend-resolved identity.
 - Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
-- Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
+- Expect the fleet roll-up to report `sentry` `off` on every preview and `on` or `off` in production. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` on the nightly, through `expectedContactsMode()`.
-- Write the fork's URL variables, `WORKER_URL` and `GATEWAY_TOKEN`, the worker's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
-- Write `VITE_LIBRARY_URL`, `VITE_BLOG_URL` and `VITE_CHECK_URL` on `landing` on each fork.
-- Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `app` on each fork.
-- Write `VITE_APP_URL` and `VITE_LANDING_URL` on `library` on each fork.
-- Write `VITE_GATEWAY_URL` and `VITE_LANDING_URL` on `blog` on each fork.
-- Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
-- Expect `library` to get no `VITE_GATEWAY_URL` on a fork. The blog URL is a CORS origin; the library URL is not.
-- Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.
+- Expect every preview SPA image to carry all eight `VITE_*_URL` build args from `preview.sh urls` (`dev-env.yml` `Build and push`), and each backend's URLs from `preview.sh`'s env file. Change them there, not in a spec.
+- Expect a preview to accept registrations, send no mail and confirm at once. The `auth` case of `preview.sh`'s env file sets `GOTRUE_DISABLE_SIGNUP` false and `GOTRUE_MAILER_AUTOCONFIRM` true.
 - Expect a PR topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.

@@ -218,6 +218,7 @@ func TestBackfill_DuplicateWithAnAlreadyPopulatedSiblingIsAmbiguous(t *testing.T
 	if _, err := svc.Import(cA, entityA, "", doc.ID, 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
+	csUnbindDocument(t, super, doc.ID)
 	if _, err := svc.Import(cB, entityB, "", doc.ID, 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("import into entity B: %v", err)
 	}
@@ -413,6 +414,7 @@ func TestBackfill_SameDocumentAcrossEntitiesRecoversEachIndependently(t *testing
 
 	invA := seedInvoiceForDocument(t, super, tenantID, entityA, doc.ID, "ENT-A-1")
 	addExtraLineItem(t, super, tenantID, invA) // gives it exactly 1 line_items row
+	csUnbindDocument(t, super, doc.ID)
 	invB := seedInvoiceForDocument(t, super, tenantID, entityB, doc.ID, "ENT-B-1")
 	addExtraLineItem(t, super, tenantID, invB)
 

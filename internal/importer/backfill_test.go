@@ -300,6 +300,7 @@ func TestBackfill_DuplicateInvoiceNumberInOneDocumentIsAmbiguous(t *testing.T) {
 	if _, err := svc.Import(cA, entityA, "", doc.ID, 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
+	csUnbindDocument(t, super, doc.ID)
 	if _, err := svc.Import(cB, entityB, "", doc.ID, 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("import into entity B: %v", err)
 	}

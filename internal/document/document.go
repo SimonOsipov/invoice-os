@@ -82,6 +82,7 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		id, _ := auth.IdentityFromContext(ctx)
 
+		// uploaded_by comes from the column default fed by the seam's app.current_user_id.
 		err := scanDocument(tx.QueryRow(ctx,
 			`INSERT INTO documents
 			   (tenant_id, storage_key, content_hash, size_bytes, filename, declared_content_type)
@@ -150,12 +151,9 @@ func (s *Store) Get(ctx context.Context, id string) (Document, error) {
 	return out, nil
 }
 
-// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule: a
-// limited caller reads a document nothing cites, or one cited by a visible invoice or batch.
-const ReadableByScope = `(coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
-	     OR EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id)
-	     OR EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id)
-	     OR NOT (SELECT has_link FROM public.document_link_state(d.id)))`
+// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule;
+// the rule lives in public.document_readable, which the extraction policies also call.
+const ReadableByScope = `public.document_readable(d.id)`
 
 // GetLinked is Get under ReadableByScope; a refused read writes no document.read row.
 func (s *Store) GetLinked(ctx context.Context, id string) (Document, error) {

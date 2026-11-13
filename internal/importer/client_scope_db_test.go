@@ -605,6 +605,12 @@ func csLegacyTx(t *testing.T, super *pgxpool.Pool, sql string, args ...any) {
 	}
 }
 
+// csUnbindDocument clears a document's binding, so the next citation models a pre-migration second client.
+func csUnbindDocument(t *testing.T, super *pgxpool.Pool, doc string) {
+	t.Helper()
+	csLegacyTx(t, super, `UPDATE documents SET entity_id = NULL WHERE id = $1`, doc)
+}
+
 func csLinkInvoiceLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, number string) {
 	t.Helper()
 	csLegacyTx(t, super,

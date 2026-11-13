@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1591,5 +1592,70 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
 		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
+	}
+}
+
+// One link-redeem throttle serves the confirm, reset and invitee POSTs, and only a preview admits over the limit.
+func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
+	rows := []struct {
+		name, env string
+		admits    bool
+	}{
+		{"preview", "pr-1", true},
+		{"nightly", "nightly", false},
+		{"production", "production", false},
+		{"local", "", false},
+	}
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	verifies := func(calls []string) int {
+		return len(slices.DeleteFunc(slices.Clone(calls), func(c string) bool { return c != "POST /verify" }))
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", c.env)
+			authURL, calls := fakeAuth(t)
+			sessions := gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log)
+			h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil)
+			if h.LinkRedeemByIP == nil {
+				t.Fatal("handoffHandlers built no LinkRedeemByIP")
+			}
+			reset := resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, h.AccountEvents, h.LinkRedeemByIP)
+			routes := []struct {
+				h            http.Handler
+				path, typ    string
+				withPassword bool
+			}{
+				{h.Verify, "/auth/verify", "signup", false},
+				{reset, "/auth/reset-password", "recovery", true},
+				{h.InvitationPassword, "/auth/invitation/password", "signup", true},
+			}
+			post := func(i int) {
+				rt := routes[i%len(routes)]
+				body := url.Values{"token": {fmt.Sprintf("%056x", i)}, "type": {rt.typ}}
+				if rt.withPassword {
+					body.Set("password", "new-password-1")
+				}
+				req := httptest.NewRequest(http.MethodPost, rt.path, strings.NewReader(body.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				req.Header.Set("X-Forwarded-For", "198.51.100.1, 203.0.113.7, 130.211.0.1")
+				req.RemoteAddr = "192.0.2.10:5555"
+				rt.h.ServeHTTP(httptest.NewRecorder(), req)
+			}
+			for i := range gateway.LinkRedeemPerIP {
+				post(i)
+			}
+			if got := verifies(calls()); got != gateway.LinkRedeemPerIP {
+				t.Fatalf("GoTrue /verify calls after %d POSTs = %d, want %d", gateway.LinkRedeemPerIP, got, gateway.LinkRedeemPerIP)
+			}
+			post(gateway.LinkRedeemPerIP)
+			want := gateway.LinkRedeemPerIP
+			if c.admits {
+				want++
+			}
+			if got := verifies(calls()); got != want {
+				t.Errorf("GoTrue /verify calls after the 31st POST = %d, want %d (DEPLOY_ENV=%q)", got, want, c.env)
+			}
+		})
 	}
 }

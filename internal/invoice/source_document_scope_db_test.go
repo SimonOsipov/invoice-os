@@ -439,3 +439,105 @@ func TestClientScope_UnreadableDocumentWithATakenNumberAnswersAsAnUnknownOne(t *
 		t.Errorf("taken number citing B's document: %d %s, want 400 %s (not a 409)", code, body, scUnknownBody)
 	}
 }
+
+// scUpload stores a document through document.Store.Upsert under who's identity, so the column default and the seam are exercised.
+func scUpload(t *testing.T, f csFixture, who context.Context, seed string) string {
+	t.Helper()
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	d, _, err := document.NewStore(f.app).Upsert(who, document.Document{
+		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11,
+	})
+	if err != nil {
+		t.Fatalf("Upsert(%s): %v", seed, err)
+	}
+	return d.ID
+}
+
+// scBinding reads documents.entity_id and uploaded_by as the superuser; "" is SQL NULL.
+func scBinding(t *testing.T, f csFixture, doc string) (entity, uploader string) {
+	t.Helper()
+	var e, u *string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, doc).Scan(&e, &u); err != nil {
+		t.Fatalf("read binding of %s: %v", doc, err)
+	}
+	if e != nil {
+		entity = *e
+	}
+	if u != nil {
+		uploader = *u
+	}
+	return entity, uploader
+}
+
+func scSubject(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	id, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("context carries no identity")
+	}
+	return id.Subject
+}
+
+func TestClientScope_ALimitedMemberCannotCiteAnotherMembersUncitedUpload(t *testing.T) {
+	f := newCSFixture(t, "SC uncited cite harm")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entB)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	d := scUpload(t, f, u1, "b-upload")
+	unknown := uuid.NewString()
+
+	if _, got := scBinding(t, f, d); got != scSubject(t, u1) {
+		t.Errorf("uploaded_by = %q after the upload, want %s", got, scSubject(t, u1))
+	}
+	before := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant)
+	if before == 0 {
+		t.Fatal("control: the tenant holds no invoice, the counter below would report 0 for anything")
+	}
+
+	uCode, uBody := scPost(f, u2, f.entA, "SC-UH-U", &unknown)
+	if uCode != http.StatusBadRequest || uBody != scUnknownBody {
+		t.Fatalf("citing an unknown id: %d %s, want 400 %s", uCode, uBody, scUnknownBody)
+	}
+	if code, body := scPost(f, u2, f.entA, "SC-UH-D", &d); code != uCode || body != uBody {
+		t.Errorf("citing another member's uncited upload: %d %s, want %d %s (the unknown id's answer)", code, body, uCode, uBody)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant); n != before {
+		t.Errorf("invoices = %d, want %d", n, before)
+	}
+	if entity, _ := scBinding(t, f, d); entity != "" {
+		t.Errorf("documents.entity_id = %s after the refused citation, want NULL", entity)
+	}
+}
+
+func TestClientScope_UploaderLegacyAndFullAccessCitationsOfAnUncitedDocumentBind(t *testing.T) {
+	f := newCSFixture(t, "SC uncited cite ok")
+	u := f.limited
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entB)
+	allClients := scAllClientsMember(t, f.super, f.tenant)
+
+	doc1 := scUpload(t, f, u, "own-upload")
+	legacy := seedDocument(t, f.super, f.tenant)
+	doc3 := scUpload(t, f, u1, "b-upload")
+
+	for _, c := range []struct {
+		name, number, doc string
+		who               context.Context
+		uploader          string
+	}{
+		{"the uploader citing their own upload", "SC-OK-1", doc1, u, scSubject(t, u)},
+		{"a limited member citing a legacy document", "SC-OK-2", legacy, u2, ""},
+		{"an All clients member citing another member's upload", "SC-OK-3", doc3, allClients, scSubject(t, u1)},
+	} {
+		if code, body := scPost(f, c.who, f.entA, c.number, &c.doc); code != http.StatusCreated {
+			t.Errorf("%s: %d %s, want 201", c.name, code, body)
+		}
+		entity, uploader := scBinding(t, f, c.doc)
+		if entity != f.entA {
+			t.Errorf("%s: documents.entity_id = %q, want %s", c.name, entity, f.entA)
+		}
+		if uploader != c.uploader {
+			t.Errorf("%s: documents.uploaded_by = %q, want %q", c.name, uploader, c.uploader)
+		}
+	}
+}

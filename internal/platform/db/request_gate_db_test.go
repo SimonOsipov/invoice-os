@@ -1543,3 +1543,70 @@ func TestRLS_EntityScopeDoesNotReachTheNextSeamBorrower(t *testing.T) {
 		}
 	}
 }
+
+// rsSeamCurrentUser returns app.current_user_id as the seam's closure sees it: nil when unset.
+func rsSeamCurrentUser(t *testing.T, pool *pgxpool.Pool, ctx context.Context) *string {
+	t.Helper()
+	var got *string
+	if err := db.WithinRequestTenantTx(ctx, pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT current_setting('app.current_user_id', true)`).Scan(&got)
+	}); err != nil {
+		t.Fatalf("seam read of app.current_user_id: %v", err)
+	}
+	return got
+}
+
+func TestRLS_RequestSeamSetsTheCurrentUser(t *testing.T) {
+	h := requireHarness(t)
+	pool, tr := tracedSeamPool(t)
+
+	first, second := uuid.NewString(), uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, first, "admin", "active")
+	seedMembershipWithStatus(t, h.tenantA, second, "preparer", "active")
+
+	for _, user := range []string{first, second} {
+		if got := rsSeamCurrentUser(t, pool, requestCtx(user, h.tenantA)); got == nil || *got != user {
+			t.Errorf("app.current_user_id for %s = %v, want the subject", user, got)
+		}
+	}
+
+	starts := tr.starts()
+	if len(starts) != 2 {
+		t.Fatalf("the seam opened %d batch(es) for two calls, want 2: %q", len(starts), starts)
+	}
+	for _, queued := range starts {
+		if len(queued) != 2 {
+			t.Fatalf("a seam batch queued %d statement(s), want 2: %q", len(queued), queued)
+		}
+		if !strings.Contains(queued[1], "app.current_user_id") {
+			t.Errorf("batch statement 2 = %q, want it to write app.current_user_id", queued[1])
+		}
+	}
+}
+
+func TestRLS_WorkerSeamLeavesTheCurrentUserUnset(t *testing.T) {
+	h := requireHarness(t)
+
+	user := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, user, "admin", "active")
+	ctx := requestCtx(user, h.tenantA)
+
+	// Positive control on the same pool: the request seam names the caller, so an empty read below is not a broken probe.
+	if got := rsSeamCurrentUser(t, h.app, ctx); got == nil || *got != user {
+		t.Fatalf("control: the request seam's app.current_user_id = %v, want %s", got, user)
+	}
+
+	var core *string
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT current_setting('app.current_user_id', true)`).Scan(&core)
+	}); err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+	if core != nil && *core != "" {
+		t.Errorf("the worker core set app.current_user_id = %q, want it unset", *core)
+	}
+
+	if got := rsSeamCurrentUser(t, h.app, requestCtx("backfill-source-rows", h.tenantA)); got != nil && *got != "" {
+		t.Errorf("a non-uuid subject set app.current_user_id = %q, want it unset", *got)
+	}
+}

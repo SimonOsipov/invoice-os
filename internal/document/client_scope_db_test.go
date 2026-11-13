@@ -14,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 type csFixture struct {
@@ -388,5 +390,153 @@ func TestClientScope_DocumentLinkStateIsExecutableByTheAppRoleOnly(t *testing.T)
 	}
 	if len(grantees) != 1 || grantees[0] != "invoice_app" {
 		t.Errorf("EXECUTE grantees besides the owner = %v, want [invoice_app] (a PUBLIC grant reads as \"-\")", grantees)
+	}
+}
+
+// csUpload stores a CSV document through Store.Upsert under who's identity, so the column default and the seam are exercised.
+func csUpload(t *testing.T, f csFixture, who context.Context, seed string) document.Document {
+	t.Helper()
+	h := hashHex(seed)
+	d, _, err := f.store.Upsert(who, document.Document{
+		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11, Filename: ptr("upload.csv"),
+	})
+	if err != nil {
+		t.Fatalf("Upsert(%s): %v", seed, err)
+	}
+	return d
+}
+
+// csCiteAs files an invoice for entity citing doc, inside who's request transaction.
+func csCiteAs(t *testing.T, f csFixture, who context.Context, entity, doc, number string) {
+	t.Helper()
+	if err := db.WithinRequestTenantTx(who, f.app, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(),
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4)`,
+			f.tenant, entity, number, doc)
+		return err
+	}); err != nil {
+		t.Fatalf("cite %s for %s as a member: %v", doc, entity, err)
+	}
+}
+
+// csBinding reads documents.entity_id and uploaded_by as the superuser; nil is SQL NULL.
+func csBinding(t *testing.T, super *pgxpool.Pool, doc string) (entity, uploader *string) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, doc).Scan(&entity, &uploader); err != nil {
+		t.Fatalf("read binding of %s: %v", doc, err)
+	}
+	return entity, uploader
+}
+
+func subjectOf(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	id, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("context carries no identity")
+	}
+	return id.Subject
+}
+
+// csCitedUpload: a member limited to A uploads a document that the admin then cites for B.
+func csCitedUpload(t *testing.T, f csFixture, uploader context.Context) string {
+	t.Helper()
+	d := csUpload(t, f, uploader, "uploaded-then-cited")
+	csCiteAs(t, f, f.admin, f.entB, d.ID, "CS-UP-B")
+	if entity, _ := csBinding(t, f.super, d.ID); entity == nil || *entity != f.entB {
+		t.Fatalf("control: documents.entity_id = %v after the admin cited it for B, want %s", entity, f.entB)
+	}
+	return d.ID
+}
+
+func TestClientScope_UploadRecordsItsUploaderAndADedupeKeepsTheFirst(t *testing.T) {
+	f := newCSFixture(t)
+	u1, u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA), csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+
+	first := csUpload(t, f, u1, "same-bytes")
+	if _, got := csBinding(t, f.super, first.ID); got == nil || *got != subjectOf(t, u1) {
+		t.Errorf("uploaded_by after the first upload = %v, want %s", got, subjectOf(t, u1))
+	}
+	second := csUpload(t, f, u2, "same-bytes")
+	if second.ID != first.ID {
+		t.Fatalf("control: the second upload of the same bytes made a new row %s, want %s", second.ID, first.ID)
+	}
+	if _, got := csBinding(t, f.super, first.ID); got == nil || *got != subjectOf(t, u1) {
+		t.Errorf("uploaded_by after the dedupe by another member = %v, want the first uploader %s", got, subjectOf(t, u1))
+	}
+	if _, got := csBinding(t, f.super, f.docZ); got != nil {
+		t.Errorf("uploaded_by of a superuser-inserted document = %q, want NULL", *got)
+	}
+}
+
+func TestClientScope_TheUploaderReadsTheirDocumentAfterAnotherClientCitesIt(t *testing.T) {
+	f := newCSFixture(t)
+	uploader := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	doc := csCitedUpload(t, f, uploader)
+
+	if got, err := f.store.GetLinked(uploader, doc); err != nil || got.ID != doc {
+		t.Errorf("GetLinked as the uploader = %q, %v, want found", got.ID, err)
+	}
+
+	objects := &fakeObjects{}
+	svc := document.NewService(f.store, objects)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(svc.OpenLinked, nil))
+	mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(svc.OpenLinked, nil))
+	for route, suffix := range map[string]string{"download": "", "sheet": "/sheet"} {
+		objects.getObject = document.Object{Body: io.NopCloser(strings.NewReader("Inv No\nU-1\n")), Size: 12}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/documents/"+doc+suffix, nil).WithContext(uploader))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s as the uploader: %d %s, want 200", route, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestClientScope_ANonUploaderOfTheSameClientIsRefusedABoundDocument(t *testing.T) {
+	f := newCSFixture(t)
+	uploader := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	other := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	doc := csCitedUpload(t, f, uploader)
+
+	// Positive half: the uploader reads the very document the other member is refused.
+	if got, err := f.store.GetLinked(uploader, doc); err != nil || got.ID != doc {
+		t.Fatalf("control: GetLinked as the uploader = %q, %v, want found", got.ID, err)
+	}
+	if _, err := f.store.GetLinked(other, doc); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked as another member limited to A: err = %v, want ErrNotFound", err)
+	}
+
+	objects := &fakeObjects{}
+	svc := document.NewService(f.store, objects)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(svc.OpenLinked, nil))
+	get := func(id string) *httptest.ResponseRecorder {
+		objects.getObject = document.Object{Body: io.NopCloser(strings.NewReader("hello world")), Size: 11}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/documents/"+id, nil).WithContext(other))
+		return rec
+	}
+	bound, unknown := get(doc), get(uuid.NewString())
+	if bound.Code != http.StatusNotFound || bound.Body.String() != unknown.Body.String() || !strings.Contains(bound.Body.String(), "not found") {
+		t.Errorf("download of the bound document: %d %q, want the unknown id's 404 %d %q", bound.Code, bound.Body.String(), unknown.Code, unknown.Body.String())
+	}
+}
+
+func TestClientScope_TheBoundClientAndFullAccessReadABoundDocument(t *testing.T) {
+	f := newCSFixture(t)
+	uploader := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	doc := csCitedUpload(t, f, uploader)
+
+	readers := map[string]context.Context{
+		"the uploader":          uploader,
+		"a member limited to B": csMember(t, f.super, f.tenant, "reviewer", false, f.entB),
+		"admin":                 f.admin,
+		"an All clients member": f.allCli,
+	}
+	for name, who := range readers {
+		if got, err := f.store.GetLinked(who, doc); err != nil || got.ID != doc {
+			t.Errorf("GetLinked as %s = %q, %v, want found", name, got.ID, err)
+		}
 	}
 }

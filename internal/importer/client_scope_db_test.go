@@ -1156,3 +1156,31 @@ func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *test
 		}
 	}
 }
+
+func TestClientScope_TheUploaderReadsTheSettledExtractionOfACitedDocument(t *testing.T) {
+	f := newCSFixture(t, "CS settled extraction uploader")
+	uploader := auth.WithIdentity(context.Background(), csMember(t, f.super, f.tenant, "reviewer", f.entA))
+
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	d, _, err := document.NewStore(f.app).Upsert(uploader, document.Document{
+		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11,
+	})
+	if err != nil {
+		t.Fatalf("Upsert as the uploader: %v", err)
+	}
+	docSeedExtraction(t, f.super, f.tenant, d.ID, docCleanValues("CS-SET-UP"))
+	csLinkInvoice(t, f.super, f.tenant, f.entB, d.ID, "CS-SET-UP-B")
+	var bound *string
+	if err := f.super.QueryRow(context.Background(), `SELECT entity_id::text FROM documents WHERE id = $1`, d.ID).Scan(&bound); err != nil || bound == nil || *bound != f.entB {
+		t.Fatalf("control: documents.entity_id = %v, %v after B's citation, want %s", bound, err, f.entB)
+	}
+
+	if ex, err := f.store.SettledExtraction(uploader, d.ID); err != nil || len(ex.Fields) == 0 {
+		t.Errorf("SettledExtraction as the uploader = %d field(s), %v, want the settled fields", len(ex.Fields), err)
+	}
+	// Negative half: a member limited to A who did not upload it stays refused.
+	other := auth.WithIdentity(context.Background(), csMember(t, f.super, f.tenant, "reviewer", f.entA))
+	if _, err := f.store.SettledExtraction(other, d.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SettledExtraction as another member limited to A: err = %v, want ErrNotFound", err)
+	}
+}

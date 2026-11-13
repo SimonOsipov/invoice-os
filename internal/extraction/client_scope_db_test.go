@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // cseFixture: X is cited by A's invoice, Y by B's import batch and B's invoice, Z by nothing.
@@ -200,5 +202,77 @@ func TestClientScope_ExtractionAdminWritesOnEveryJob(t *testing.T) {
 	w = lixDBServe(t, f.admin, f.jobZ, lixLinesBody(2), lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
 	if w.Code == http.StatusNotFound || w.Code/100 == 2 {
 		t.Errorf("admin line-items on Z's job = %d %s, want a no-invoice refusal, not 404 or 2xx", w.Code, w.Body.String())
+	}
+}
+
+// cseUploadedThenCited: a member limited to A uploads a document through the seam, with a job and a
+// page image, and the admin then cites it for B.
+func cseUploadedThenCited(t *testing.T) (r *extraction.Reader, up context.Context, tenant, job, entA string) {
+	t.Helper()
+	ctx := t.Context()
+	tenant, _ = stTenant(t, ctx)
+	entA, entB := cxEntity(t, ctx, tenant), cxEntity(t, ctx, tenant)
+	admin := cseMember(t, ctx, tenant, "admin")
+	up = cseMember(t, ctx, tenant, "reviewer", entA)
+
+	hash := strings.Repeat("d", 64)
+	var doc string
+	if err := db.WithinRequestTenantTx(up, stRequire(t).app, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, 11) RETURNING id`,
+			tenant, "cse/"+tenant+"/"+hash, hash).Scan(&doc)
+	}); err != nil {
+		t.Fatalf("upload as a member: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	job = rdSeedJob(t, ctx, tenant, doc, "succeeded", now, nil)
+	rvdSeedField(t, ctx, tenant, job, "total", rvdStr("100.00"), nil, 0, nil, now)
+	rvdSeedPage(t, ctx, tenant, doc, 1, 100, 100)
+
+	if err := db.WithinRequestTenantTx(admin, stRequire(t).app, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CSE-UP-B', $3)`,
+			tenant, entB, doc)
+		return err
+	}); err != nil {
+		t.Fatalf("admin cites the upload for B: %v", err)
+	}
+	var bound *string
+	if err := stRequire(t).super.QueryRow(ctx, `SELECT entity_id::text FROM documents WHERE id = $1`, doc).Scan(&bound); err != nil || bound == nil || *bound != entB {
+		t.Fatalf("control: documents.entity_id = %v, %v after the admin cited it for B, want %s", bound, err, entB)
+	}
+	return &extraction.Reader{Pool: stRequire(t).app, Audit: (&rdaRecorder{}).record}, up, tenant, job, entA
+}
+
+func TestClientScope_TheUploaderReadsTheExtractionOfACitedDocument(t *testing.T) {
+	r, uploader, _, job, _ := cseUploadedThenCited(t)
+
+	d, err := r.Detail(uploader, job)
+	if err != nil || len(d.Fields) != 1 || len(d.Pages) != 1 {
+		t.Errorf("Detail as the uploader = %d field(s), %d page(s), err %v, want 1, 1, nil", len(d.Fields), len(d.Pages), err)
+	}
+	if key, err := r.PageImageKey(uploader, job, 1); err != nil || key == "" {
+		t.Errorf("PageImageKey as the uploader = %q, %v, want a key", key, err)
+	}
+}
+
+func TestClientScope_ANonUploaderIsRefusedTheExtractionOfABoundDocument(t *testing.T) {
+	r, uploader, tenant, job, entA := cseUploadedThenCited(t)
+	other := cseMember(t, t.Context(), tenant, "reviewer", entA)
+
+	// Positive half: the uploader reads the job the other member is refused.
+	if _, err := r.Detail(uploader, job); err != nil {
+		t.Fatalf("control: Detail as the uploader: %v", err)
+	}
+	if _, err := r.Detail(other, job); !errors.Is(err, extraction.ErrNotFound) {
+		t.Errorf("Detail as another member limited to A: err = %v, want ErrNotFound", err)
+	}
+	if _, err := r.PageImageKey(other, job, 1); !errors.Is(err, extraction.ErrNotFound) {
+		t.Errorf("PageImageKey as another member limited to A: err = %v, want ErrNotFound", err)
+	}
+	_, unknownDetail := r.Detail(other, uuid.NewString())
+	_, boundDetail := r.Detail(other, job)
+	if unknownDetail == nil || boundDetail == nil || unknownDetail.Error() != boundDetail.Error() {
+		t.Errorf("Detail refusals: bound = %v, unknown = %v, want the same error", boundDetail, unknownDetail)
 	}
 }

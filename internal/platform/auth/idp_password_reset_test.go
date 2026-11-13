@@ -328,11 +328,25 @@ func TestIdP_SpentTamperedAndExpiredResetLinksFail(t *testing.T) {
 		}
 		requireSignIn(t, base, e, e.password, http.StatusOK, "")
 
-		backdateRecovery(t, e.email, 25*time.Hour)
+		// The Dockerfile's GOTRUE_MAILER_OTP_EXP is 1 h, measured from recovery_sent_at.
+		backdateRecovery(t, e.email, 61*time.Minute)
 		if got := submitReset(t, action, values, "pw-new-expired"); got != siteURL+"/?reset=failed" {
 			t.Errorf("expired submit = %q, want %s/?reset=failed", got, siteURL)
 		}
 		requireSignIn(t, base, e, e.password, http.StatusOK, "")
+	})
+
+	t.Run("59_minutes_old_still_works", func(t *testing.T) {
+		f := confirmedRegistrant(t, gw)
+		requestResetAccepted(t, gw, f.email)
+		action, values := confirmForm(t, recoveryLink(t, f.email, 2))
+
+		backdateRecovery(t, f.email, 59*time.Minute)
+		const newPassword = "pw-new-59-minutes"
+		if got := submitReset(t, action, values, newPassword); got != siteURL+"/?reset=1" {
+			t.Fatalf("59-minute-old submit = %q, want %s/?reset=1", got, siteURL)
+		}
+		requireSignIn(t, base, f, newPassword, http.StatusOK, "")
 	})
 
 	t.Run("tampered_leaves_the_real_link_usable", func(t *testing.T) {

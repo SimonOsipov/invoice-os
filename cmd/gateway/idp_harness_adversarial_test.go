@@ -388,6 +388,37 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 					t.Errorf("%s overrides the image's hook URI", c)
 				}
 			}
+			// Only idp-mail raises the per-IP rates: every gateway-backed test shares its loopback key.
+			// The other four keep the image's rates, and idp-hs256 carries the limiter proof.
+			rates := []string{"GOTRUE_RATE_LIMIT_VERIFY", "GOTRUE_RATE_LIMIT_OTP", "GOTRUE_RATE_LIMIT_TOKEN_REFRESH"}
+			mailRun := stubLines(r.log, "RUN", "idp-mail")
+			if len(mailRun) != 1 {
+				t.Fatalf("idp-mail started %d times, want 1", len(mailRun))
+			}
+			for _, v := range append([]string{rateLimitVar}, rates...) {
+				want := "100000"
+				if v == rateLimitVar {
+					want = "100"
+				}
+				if n := strings.Count(mailRun[0], "-e "+v+"="); n != 1 || argvEnv(mailRun[0], v) != want {
+					t.Errorf("idp-mail passes %s %d times as %q, want once as %s: %s", v, n, argvEnv(mailRun[0], v), want, mailRun[0])
+				}
+			}
+			for _, c := range idpContainers {
+				for _, v := range rates {
+					if strings.Contains(stubLines(r.log, "RUN", c)[0], v) {
+						t.Errorf("%s sets %s; only idp-mail raises the per-IP rates", c, v)
+					}
+				}
+			}
+			// The image owns the code length, the lifetime and the limiter header.
+			for _, l := range strings.Split(r.log, "\n") {
+				for _, v := range []string{"GOTRUE_MAILER_OTP_", "GOTRUE_RATE_LIMIT_HEADER"} {
+					if strings.HasPrefix(l, "RUN ") && strings.Contains(l, v) {
+						t.Errorf("a container overrides the image's %s: %s", v, l)
+					}
+				}
+			}
 			// Only idp-short shortens the TTL; the other suites assume the image's 3600 s.
 			for _, c := range append(slices.Clone(idpContainers), "idp-mail") {
 				want := ""

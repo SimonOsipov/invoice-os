@@ -91,9 +91,9 @@ paths:
 - Bind a hand-off code to the `state` that minted it.
 - Share hand-off codes between gateway instances through `gateway_handoff_codes`, as `invoice_gateway` (`DATABASE_GATEWAY_URL`). Store `sha256(code)`, never the code.
 - Expect the gateway to refuse boot on Cloud Run without `DATABASE_GATEWAY_URL`. Elsewhere an unset URL keeps the in-process store, for a single instance only.
-- Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict (FLAKE-00 Q4).
+- Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict.
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
-- Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address (FLAKE-00 Q5).
+- Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address.
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
 - Count `/auth/reset-password` and `/auth/invitation/password` together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call; over the limit, redirect to the route's failed notice. A preview logs and admits.
 - Send `X-User-Address` from `checkIPKey(clientIP)` on every GoTrue call except the session check's `GET /user` and the fleet probe. Never copy it from the client.

@@ -545,7 +545,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
         rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/transitions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${reviewer}` },
-          body: { target: 'queued' },
+          body: { target: 'draft' },
         })
       const approve = () =>
         rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/approvals`, {

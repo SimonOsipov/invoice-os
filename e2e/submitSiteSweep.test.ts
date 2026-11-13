@@ -1,10 +1,9 @@
 // Keeps every topology submit-driving site enumerated: invoice-surfaces.spec.ts's SUBMIT-SITE
 // NOTE names TOPOLOGY_MANIFEST and its exact floor. Built on the TypeScript compiler API: a
-// text needle cannot read transitionInvoice's third argument or expand a helper into its
-// call sites.
+// text needle cannot expand a helper into its call sites.
 //
 // Needles (e2e/topology/*.spec.ts): submit-confirm testid clicks and
-// transitionInvoice(..., 'queued') calls. A testid click inside a named helper is expanded to
+// failedByStaffCancel(...) / submitAndAwait(...) calls. A testid click inside a named helper is expanded to
 // every call site of that helper, so each of submitSelected's callers counts on its own.
 //
 // The manifest is keyed on (file, "test:"+title or "helper:"+name, needle, ordinal-within-
@@ -107,20 +106,9 @@ function describeMatch(m: Match): string {
   return `${m.file}:${m.line} [${m.label} / ${m.needle} #${m.ordinal}]`
 }
 
-// Peels a string literal through wrapper forms that don't change its value -- `as const`,
-// `as T`, `satisfies T`, plain parens. QA's mutation battery (task-575) found `'queued' as
-// const` a real, silent bypass: valid TS, identical at runtime, invisible to a bare
-// ts.isStringLiteralLike(node) check.
-function unwrapLiteral(node: ts.Node): ts.Node {
-  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
-    node = node.expression
-  }
-  return node
-}
-
 // ==================================================================================
 // Topology scan: e2e/topology/*.spec.ts -- submit-confirm testid clicks and
-// transitionInvoice(..., 'queued'). Testid clicks found inside a named helper ARE expanded
+// failedByStaffCancel / submitAndAwait calls. Testid clicks found inside a named helper ARE expanded
 // to every call site of that helper (AC-7).
 // ==================================================================================
 
@@ -138,14 +126,12 @@ function testidClickLiteral(node: ts.Node): string | undefined {
   return arg && ts.isStringLiteralLike(arg) ? arg.text : undefined
 }
 
-// transitionInvoice(token, id, target) -- reads the THIRD argument (AC-6); a raw needle on
-// the call name alone cannot distinguish 'queued' from 'failed'.
-function transitionInvoiceTarget(node: ts.Node): string | undefined {
-  if (!ts.isCallExpression(node)) return undefined
-  if (!ts.isIdentifier(node.expression) || node.expression.text !== 'transitionInvoice') return undefined
-  const arg = node.arguments[2]
-  const value = arg && unwrapLiteral(arg)
-  return value && ts.isStringLiteralLike(value) ? value.text : undefined
+// Helpers that submit an invoice through the real path; matched by identifier callee, any arguments.
+const SUBMIT_CALLS = ['failedByStaffCancel', 'submitAndAwait']
+
+function submitCallName(node: ts.Node): string | undefined {
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return undefined
+  return SUBMIT_CALLS.includes(node.expression.text) ? node.expression.text : undefined
 }
 
 // Every direct call site of `name` in this file, e.g. `submitSelected(page)` -- used to
@@ -178,9 +164,9 @@ function scanTopologyFile(filePath: string): RawMatch[] {
       }
       return
     }
-    const target = transitionInvoiceTarget(node)
-    if (target === 'queued') {
-      direct.push({ file, line: lineOf(sourceFile, node), needle: 'transitionInvoice:queued', enclosing: resolveEnclosing(node) })
+    const call = submitCallName(node)
+    if (call) {
+      direct.push({ file, line: lineOf(sourceFile, node), needle: `call:${call}`, enclosing: resolveEnclosing(node) })
     }
   })
 
@@ -230,37 +216,36 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
     1,
   ],
   [IMPORT_REVIEW_API, 'test:bulk submit: select all, confirm once, one POST, a result per invoice', 'click:review-bulk-confirm', 1],
-  [INVOICE_SURFACES, 'test:submission surface: a failed invoice is an honest dead end', 'transitionInvoice:queued', 1],
+  [INVOICE_SURFACES, 'test:submission surface: a failed invoice is an honest dead end', 'call:failedByStaffCancel', 1],
   [
     INVOICE_SURFACES,
     'test:resolve/unresolve loop: marking a failed invoice resolved drops it from needs-attention without re-driving it, and undo reverses that',
-    'transitionInvoice:queued',
+    'call:failedByStaffCancel',
     1,
   ],
   // The state-strip geometry block's test.beforeAll -- a describe-level fixture, so
   // resolveEnclosing finds neither a test() nor a top-level function declaration. It drives one
-  // invoice to `failed` (via queued) purely so the strip has five attributed nodes to measure;
-  // no browser submit control is involved.
-  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 1],
+  // invoice to `failed` through a staff cancel purely so the strip has five attributed nodes to
+  // measure; no browser submit control is involved.
+  [INVOICE_SURFACES, 'unattributed', 'call:failedByStaffCancel', 1],
   // The activity-card geometry block's test.beforeAll (AUDIT-09-04), same shape as #1
-  // above: it drives one invoice to `failed` (via queued) so the card has real audit rows
+  // above: it fails one invoice through a staff cancel so the card has real audit rows
   // to measure. No browser submit control is involved.
-  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 2],
+  [INVOICE_SURFACES, 'unattributed', 'call:failedByStaffCancel', 2],
   // The action-cluster geometry block's test.beforeAll (BUG-14-04), same shape as the two
-  // above: it drives one invoice to `failed` (via queued) purely to get a can_edit-false
+  // above: it fails one invoice through a staff cancel purely to get a can_edit-false
   // status to measure the cluster at. No browser submit control is involved.
-  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 3],
+  [INVOICE_SURFACES, 'unattributed', 'call:failedByStaffCancel', 3],
   // AUDIT-09-08's deployed journey: the FIRS-rejection leg submits from the register via
   // submitSelected, so the helper's one click expands to this call site (AC-7).
   [INVOICE_SURFACES, 'test:detail surface: a FIRS rejection redens the final node only', 'click:batch-submit-confirm', 1],
   // AUDIT-09-09's rail-order guard: the fiscal-record card only mounts on `accepted` with a
-  // real IRN, and a raw transitionInvoice never creates a submission job -- so pinning the
+  // real IRN, so pinning the
   // rail's three cards needs a real browser submit.
   [INVOICE_SURFACES, 'test:detail surface: the untouched rail order is unchanged', 'click:batch-submit-confirm', 1],
-  // DV-01 and DV-02: raw transitions create no submission job, so nothing
-  // reaches an adapter. DV-02 ends `accepted` in a finally.
-  [INVOICE_SURFACES, 'test:DV-01 failed invoice detail, the none state and the resolve-outside fit', 'transitionInvoice:queued', 1],
-  [INVOICE_SURFACES, 'test:DV-02 submitted invoice detail', 'transitionInvoice:queued', 1],
+  // DV-01 fails its invoice through a staff cancel; DV-02 submits with MOCK_TIN_PENDING and pins the first `submitted` read.
+  [INVOICE_SURFACES, 'test:DV-01 failed invoice detail, the none state and the resolve-outside fit', 'call:failedByStaffCancel', 1],
+  [INVOICE_SURFACES, 'test:DV-02 submitted invoice detail', 'call:submitAndAwait', 1],
   // DV-03 submits from the register with MOCK_TIN_ACCEPT, so the mock APP adapter answers.
   [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
   // The note layout specs need an accepted invoice of 3 lines, reached from the register.
@@ -304,15 +289,9 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
   const topologyMatches = withOrdinals(topologyRaw)
 
   describe('topology', () => {
-    // AC-9 as literally worded said "fails below 7"; the story's own author confirmed that
-    // was a miscount (7 was meant as "5 submitSelected callers + detail-submit-confirm +
-    // review-bulk-confirm", forgetting it should then ADD the 2 transitionInvoice calls to
-    // reach 9, not stop at 7). A floor below the measured population lets someone delete a
-    // real submit site and stay green.
-    //
-    // Floor = the manifest size (21). Adding a site means raising it: the suite enforces the
-    // manifest, not the floor.
-    it('floor: at least 21 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+    // A floor below the measured population lets someone delete a real submit site and stay
+    // green. Floor = the manifest size (21). Adding a site means raising it.
+    it('floor: at least 21 submit-driving sites (the measured population)', () => {
       expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 21`).toBeGreaterThanOrEqual(21)
     })
 
@@ -350,14 +329,11 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    contains the testid click, would not be found or expanded.
 //
 // 3. STRING LITERALS ONLY. A testid built at runtime (`getByTestId(\`${prefix}-confirm\`)`)
-//    or a transitionInvoice target passed through a variable rather than written inline
 //    matches nothing here. Nothing in e2e/ does this today for the needles this file cares
 //    about.
 //
-// 4. THE FLOOR IS EXACT, NOT SOFT -- it equals today's full measured population, 13 (7
-//    submitSelected callers + 1 detail-submit-confirm + 1 review-bulk-confirm + 4
-//    transitionInvoice), so deleting even ONE real site fails the floor directly,
-//    independent of the manifest.
+// 4. THE FLOOR IS EXACT, NOT SOFT -- it equals the manifest size (21), so
+//    deleting even ONE real site fails the floor directly, independent of the manifest.
 //
 //    What remains genuinely unguarded: a single commit that removes one real site and adds
 //    an unrelated one elsewhere (or edits an existing manifest entry's file/label/needle/

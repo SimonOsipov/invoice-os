@@ -17,6 +17,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -180,7 +181,10 @@ func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **Cust
 // a cross-tenant entity_id is rejected even for a caller that bypassed the
 // pre-check (e.g. a race against a concurrent entity delete).
 //
-// The pre-check query and the invoices INSERT are the only pg errors mapped: a
+// A source_document_id the caller cannot read is refused as an unknown one
+// (TestClientScope_CreateCitingAnUnreadableDocumentAnswersAsAnUnknownOne).
+//
+// The pg errors mapped at the pre-check and the INSERT: a
 // unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
 // (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
 // import_batch_id -- the pre-check turns the entity_id case into ErrNotFound
@@ -298,6 +302,23 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			// uuid compare in SQL: a string compare rejects an upper-case entity_id
 			if !sameEntity {
 				return ErrOriginalOtherEntity
+			}
+		}
+
+		// A member cites only a document they can read; refused as an unknown id.
+		if in.SourceDocumentID != nil {
+			var readable bool
+			if err := tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND `+document.ReadableByScope+`)`,
+				*in.SourceDocumentID,
+			).Scan(&readable); err != nil {
+				if pgCode(err) == "22P02" {
+					return ErrValidation
+				}
+				return err
+			}
+			if !readable {
+				return ErrValidation
 			}
 		}
 
@@ -1477,12 +1498,10 @@ func touchesBuyer(changed []string) bool {
 //     rejection_reasons are RETAINED across the demotion, not cleared
 //     ([reason-lifecycle], reversed by M5-09-02/task-255) -- the only
 //     remaining clear lives in transitionTx itself, gated on
-//     target == accepted, because POST /transitions {"target":"accepted"}
-//     bypasses MarkAcceptedTx entirely and must clear too. Either way the
-//     content write and the demotion are one atomic unit -- a failure at
-//     either step (including this audit's own actor CHECK) rolls back the
-//     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit),
-//     the line replace included. A draft `before` has nothing to demote from
+//     target == accepted. Either way the content write and the demotion are
+//     one atomic unit -- a failure at either step (including this audit's own
+//     actor CHECK) rolls back the whole edit, never a partial one
+//     (ContentAuditFailureRollsBackWholeEdit), the line replace included. A draft `before` has nothing to demote from
 //     and stays draft.
 //  9. re-attach afterLines and return `after` -- draft (demoted) after a
 //     validated content change, the demoted row's OWN state after a draft
@@ -2346,28 +2365,14 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 // invoice.transitioned audit row. It does not check legalTransitions; the
 // caller does (transitionCausedTx) or owns an edge outside it (support.go).
 func applyTransitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
-	// [reason-lifecycle] (M5-09-02/task-255, reversing M5-05's wipe-on-
-	// demotion): accepted is the only status whose entry clears
-	// rejection_reasons, and this is the ONLY place that still does so, now
-	// that Store.Edit's rejected->draft demotion retains them. It has to
-	// live HERE rather than in MarkAcceptedTx's outcome closure (actor.go)
-	// because accepted has a second live writer that never calls
-	// MarkAcceptedTx: POST /transitions {"target":"accepted"} on a queued
-	// invoice (legalTransitions[StatusQueued], unguarded by
-	// TransitionHandler, which refuses only validated). Riding the same
-	// UPDATE ... RETURNING keeps the clear atomic with the status write for
-	// BOTH callers -- no second statement, so a rolled-back transition never
-	// leaves an observable partial clear. '[]' is a SQL literal, not a bind
-	// parameter, so it does not renumber $2 (id).
+	// [reason-lifecycle]: entry to accepted clears rejection_reasons, and only
+	// here, since Store.Edit's rejected->draft demotion retains them. The clear
+	// rides the same UPDATE ... RETURNING, so it is atomic with the status write.
+	// '[]' is a SQL literal, so $2 (id) is not renumbered.
 	//
-	// Deliberately NOT symmetric with rejected, even though the same
-	// reasoning applies there too (a residual risk recorded, not coded
-	// around, in M5-09-02's Stage-1 architecture validation, finding F3):
-	// rejected's two writers are MarkRejectedTx's outcome closure and the
-	// identical {"target":"rejected"} handler path, and markTerminalTx runs
-	// the outcome callback BEFORE transitionTx (actor.go) -- so clearing on
-	// rejected here would wipe the reasons MarkRejectedTx had just written
-	// moments earlier in the SAME tx, destroying every APP rejection reason.
+	// Not clearing on rejected is deliberate; the test is
+	// TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx.
+	//
 	// [kept-marks-clear-on-promote] (INVCR-01-15, D6, task-291): draft has exactly
 	// ONE outgoing edge (draft->validated, legalTransitions), so target ==
 	// StatusValidated unambiguously means "promoting a draft" -- no other status

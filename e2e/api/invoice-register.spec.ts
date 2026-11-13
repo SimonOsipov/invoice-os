@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test'
 import { unzipSync } from 'fflate'
 import {
-  apiBase, approveUntilClosed, createEntity, createInvoice, firmApproverTokens, getAuditLog, login, rawFetch, validateInvoice, PERSONAS,
+  apiBase, approveUntilClosed, createEntity, createInvoice, firmApproverTokens, getAuditLog, login, rawFetch, submitAndAwait, validateInvoice, PERSONAS,
 } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
@@ -135,14 +135,12 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     await ensureFirmPolicyActive(token)
     const tin = freshTin()
     const entity = await createEntity(token, { name: `Zz FIRMS-05 resolve ${tin}`, tin })
-    const created = await createInvoice(token, { entity_id: entity.id, ...invoiceFields(`INV-FIRMS-05-RES-${tin}`, '2025-03-15') })
+    // internal/submission/mock_script.go mockTINUnbuildable: the invoice fails as payload_not_built.
+    const created = await createInvoice(token, { entity_id: entity.id, ...invoiceFields(`INV-FIRMS-05-RES-${tin}`, '2025-03-15'), buyer_tin: '99999999-0010' })
     await validateInvoice(token, created.id)
     await approveUntilClosed(created.id, await firmApproverTokens())
     const auth = { Authorization: `Bearer ${token}` }
-    for (const target of ['queued', 'failed']) {
-      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, { method: 'POST', headers: auth, body: { target } })
-      expect(res.status, `setup: transition to ${target} should return 200`).toBe(200)
-    }
+    await submitAndAwait(token, created.id, 'failed')
     const col = (name: string) => HEADER.indexOf(name)
     const netTotal = async () => {
       const res = await registerFetch(token, { entity_id: entity.id, from: FROM, to: TO })

@@ -115,7 +115,7 @@ paths:
 
 ## Connection budget
 
-Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved for superusers.
+Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (invoice-os-infra `terraform/sql.tf`); 3 are reserved for superusers.
 
 - `db.NewPool` caps a pool at `DefaultMaxConns` (4) when the DSN sets no `pool_max_conns`.
 - Set `pool_max_conns` in every hosted DSN, as the table says.

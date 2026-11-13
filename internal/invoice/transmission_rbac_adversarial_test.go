@@ -48,7 +48,7 @@ func TestTransmitGate_RealStore_ResolvesRequestTenantRoleNotUserRole(t *testing.
 	inB := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantB}
 
 	t.Run("refused in the tenant where the role is preparer", func(t *testing.T) {
-		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &inB, invB, transitionToQueuedBody)
+		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &inB, invB, transitionToDraftBody)
 		assertTransmitRefused(t, rec, resp.Error)
 		if got := mustInvoiceStatus(t, super, invB); got != string(StatusValidated) {
 			t.Errorf("tenant B invoice status = %q, want %q", got, StatusValidated)
@@ -62,15 +62,15 @@ func TestTransmitGate_RealStore_ResolvesRequestTenantRoleNotUserRole(t *testing.
 	})
 
 	t.Run("allowed in the tenant where the same subject is admin", func(t *testing.T) {
-		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &inA, invA, transitionToQueuedBody)
+		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &inA, invA, transitionToDraftBody)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 		}
-		if resp.Status != string(StatusQueued) {
-			t.Errorf("response status = %q, want %q", resp.Status, StatusQueued)
+		if resp.Status != string(StatusDraft) {
+			t.Errorf("response status = %q, want %q", resp.Status, StatusDraft)
 		}
-		if got := mustInvoiceStatus(t, super, invA); got != string(StatusQueued) {
-			t.Errorf("tenant A invoice status = %q, want %q", got, StatusQueued)
+		if got := mustInvoiceStatus(t, super, invA); got != string(StatusDraft) {
+			t.Errorf("tenant A invoice status = %q, want %q", got, StatusDraft)
 		}
 	})
 }
@@ -97,11 +97,11 @@ func TestTransmitGate_RealStore_ApproverCannotReachAnotherTenantsInvoice(t *test
 	t.Run("transition", func(t *testing.T) {
 		assertIndistinguishable404(t, []transmitProbe{
 			{"other tenant's invoice", func(t *testing.T) (*httptest.ResponseRecorder, string) {
-				rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, invB, transitionToQueuedBody)
+				rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, invB, transitionToDraftBody)
 				return rec, resp.Error
 			}},
 			{"never-existed id", func(t *testing.T) (*httptest.ResponseRecorder, string) {
-				rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, ghost, transitionToQueuedBody)
+				rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, ghost, transitionToDraftBody)
 				return rec, resp.Error
 			}},
 		})
@@ -169,7 +169,7 @@ func TestTransmitGate_RealStore_InvitedApproverRefused(t *testing.T) {
 	store := NewStore(app)
 	id := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 
-	rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, inv, transitionToQueuedBody)
+	rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, inv, transitionToDraftBody)
 	assertTransmitRefused(t, rec, resp.Error)
 	if got := mustInvoiceStatus(t, super, inv); got != string(StatusValidated) {
 		t.Errorf("invoice status = %q, want %q", got, StatusValidated)
@@ -226,7 +226,7 @@ func TestTransmitGate_RefusalOutranksBodyGuards(t *testing.T) {
 			}
 		}
 		assertIndistinguishable(t, []transmitProbe{
-			{"legal target", probe(transitionToQueuedBody)},
+			{"legal target", probe(transitionToDraftBody)},
 			{"unknown target", probe(`{"target":"not-a-status"}`)},
 			{"absent target", probe(`{}`)},
 			{"empty body", probe("")},
@@ -267,7 +267,7 @@ func TestTransmitGate_ApproverResolvesRoleExactlyOnce(t *testing.T) {
 		transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 			return Invoice{ID: gotID, Status: target}, nil
 		}
-		rec, _ := doInvoiceTransitionAs(t, transition, countingRole, &id, uuid.NewString(), transitionToQueuedBody)
+		rec, _ := doInvoiceTransitionAs(t, transition, countingRole, &id, uuid.NewString(), transitionToDraftBody)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 		}

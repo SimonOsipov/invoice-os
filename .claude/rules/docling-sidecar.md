@@ -39,7 +39,7 @@ paths:
 - Time only a document that yields tokens in `docling-bench.sh`. A zero-token read measures the failure path.
 - Leave `EXTRACTOR` unset or `mock` to select `MockExtractor`. `EXTRACTOR=docling` requires `DOCLING_URL`.
 - Keep a missing or malformed `DOCLING_URL` fatal at boot under `EXTRACTOR=docling`. Never fall back to mock.
-- Set `SENTRY_DSN` on production only. `set-sentry-off` blanks it in every fork, and empty means off.
+- Set `SENTRY_DSN` on production only. A preview gets no DSN, and empty means off.
 - Report `sentry` as `on` or `off` in `/healthz`. `fleet-gate` fails a sidecar that omits it.
 - Scrub locals, request bodies, quoted text and third-party log records in `sentryfilter.py`.
 - Make no transaction for `/healthz`, `/readyz` or `/healthz/*`.

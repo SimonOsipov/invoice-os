@@ -343,7 +343,7 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
           body: { line_items: [{ id: ownLineId, description: 'cross-tenant write', tax_category: 'EXEMPTED' }] },
         }),
       validate: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', headers }),
-      transition: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', headers, body: { target: 'queued' } }),
+      transition: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', headers, body: { target: 'draft' } }),
       submit: (id) =>
         rawFetch('/api/invoice/v1/invoices/submissions', {
           method: 'POST',

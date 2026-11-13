@@ -2,7 +2,6 @@
 // citation, a later citation for another client is refused, and one SQL rule (document_readable)
 // drives the Go read path and the extraction policies.
 //
-// Written before the migration exists: bdSeed fails with a named message until it lands.
 // Rows are seeded as the superuser; the writes under test run as invoice_app.
 package db_test
 
@@ -490,7 +489,7 @@ type bdMatrix struct {
 	docs map[string]string
 }
 
-var bdDocNames = []string{"uncited", "boundA", "boundB", "boundBByUploader", "legacyBoundBCitedByA"}
+var bdDocNames = []string{"uncited", "boundA", "boundB", "boundBByUploader", "legacyBoundBCitedByA", "legacyBoundBCitedByABatch"}
 
 func bdSeedMatrix(t *testing.T) *bdMatrix {
 	t.Helper()
@@ -503,6 +502,9 @@ func bdSeedMatrix(t *testing.T) *bdMatrix {
 	m.docs["legacyBoundBCitedByA"] = bdDoc(t, f, f.b, "")
 	cpLegacyExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, 'bd-legacy-a', $4)`,
 		uuid.NewString(), f.tenant, f.a, m.docs["legacyBoundBCitedByA"])
+	m.docs["legacyBoundBCitedByABatch"] = bdDoc(t, f, f.b, "")
+	cpLegacyExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id) VALUES ($1, $2, $3, $4)`,
+		uuid.NewString(), f.tenant, f.a, m.docs["legacyBoundBCitedByABatch"])
 	for _, name := range bdDocNames {
 		cpExtractionRows(t, f.tenant, m.docs[name])
 	}
@@ -551,7 +553,7 @@ func bdWantReadable(name, scopeKind, caller, uploader string) bool {
 		return true
 	case "A":
 		switch name {
-		case "uncited", "boundA", "legacyBoundBCitedByA":
+		case "uncited", "boundA", "legacyBoundBCitedByA", "legacyBoundBCitedByABatch":
 			return true
 		case "boundBByUploader":
 			return caller == uploader
@@ -849,6 +851,59 @@ func TestRLS_DocumentBindingMigrationBackfillsAndRoundTrips(t *testing.T) {
 	if after := snapshot(); after != before {
 		t.Errorf("the citation rows changed across the migration:\nbefore %s\nafter  %s", before, after)
 	}
+}
+
+// Equal created_at: a batch precedes an invoice, then the lower id wins; an upper-case uuid actor is an uploader.
+func TestRLS_DocumentBindingBackfillBreaksTiesBatchFirst(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	v := migrationVersion(t, bindingMigrationGlob)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+
+	tenant, a, b := caThrowawayTenant(t), uuid.NewString(), uuid.NewString()
+	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $3, 'bt-a'), ($2, $3, 'bt-b')`, a, b, tenant)
+	t.Cleanup(func() {
+		for _, tb := range []string{"invoices", "import_batches", "documents", "business_entities"} {
+			_, _ = h.super.Exec(ctx, `DELETE FROM `+tb+` WHERE tenant_id = $1`, tenant)
+		}
+	})
+	doc := func() string {
+		id := uuid.NewString()
+		bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4, 1024)`,
+			id, tenant, "bt-"+uuid.NewString(), docHash())
+		return id
+	}
+	at := time.Now().Add(-2 * time.Hour)
+	batch := func(id, entity, docID string) {
+		bdExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id, created_at) VALUES ($1, $2, $3, $4, $5)`, id, tenant, entity, docID, at)
+	}
+
+	batchBeatsInvoice, lowerIDWins := doc(), doc()
+	// The invoice for A goes in first, the batch for B second, at the same instant.
+	bdExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, created_at) VALUES ($1, $2, $3, 'bt-1', $4, $5)`,
+		uuid.NewString(), tenant, a, batchBeatsInvoice, at)
+	batch(uuid.NewString(), b, batchBeatsInvoice)
+	// B's batch has the higher id and goes in first; A's has the lower id.
+	batch("ffffffff-0000-4000-8000-000000000001", b, lowerIDWins)
+	batch("00000000-0000-4000-8000-000000000001", a, lowerIDWins)
+
+	upper := strings.ToUpper(uuid.NewString())
+	bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, 'document.created', jsonb_build_object('id', $3::text), $4)`,
+		tenant, upper, batchBeatsInvoice, at)
+
+	reapply()
+
+	var entity, uploader *string
+	if err := h.super.QueryRow(ctx, `SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, batchBeatsInvoice).Scan(&entity, &uploader); err != nil {
+		t.Fatalf("read the backfilled document: %v", err)
+	}
+	if bdShow(entity) != b {
+		t.Errorf("batch and invoice at one instant: entity_id = %s, want the batch's client %s", bdShow(entity), b)
+	}
+	if bdShow(uploader) != strings.ToLower(upper) {
+		t.Errorf("upper-case uuid actor: uploaded_by = %s, want %s", bdShow(uploader), strings.ToLower(upper))
+	}
+	bdWantEntity(t, "two batches at one instant, the lower id", lowerIDWins, &a)
 }
 
 func TestRLS_ALimitedCallerCannotBindAnotherMembersUpload(t *testing.T) {

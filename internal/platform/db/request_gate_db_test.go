@@ -1610,3 +1610,42 @@ func TestRLS_WorkerSeamLeavesTheCurrentUserUnset(t *testing.T) {
 		t.Errorf("a non-uuid subject set app.current_user_id = %q, want it unset", *got)
 	}
 }
+
+// TestRLS_CurrentUserDoesNotReachTheNextBorrower: on one connection, a seam transaction leaves no
+// app.current_user_id for the worker core, an in-process actor or the next member.
+func TestRLS_CurrentUserDoesNotReachTheNextBorrower(t *testing.T) {
+	h := requireHarness(t)
+	cfg, err := pgxpool.ParseConfig(h.appURL)
+	if err != nil {
+		t.Fatalf("parse app url: %v", err)
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("new one-connection pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	first, second := uuid.NewString(), uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, first, "admin", "active")
+	seedMembershipWithStatus(t, h.tenantA, second, "preparer", "active")
+
+	if got := rsSeamCurrentUser(t, pool, requestCtx(first, h.tenantA)); got == nil || *got != first {
+		t.Fatalf("control: the first member's app.current_user_id = %v, want %s", got, first)
+	}
+	if got := rsSeamCurrentUser(t, pool, requestCtx("extraction-worker", h.tenantA)); got != nil && *got != "" {
+		t.Errorf("in-process actor after a member: app.current_user_id = %q, want unset", *got)
+	}
+	var core *string
+	if err := db.WithinTenantTx(requestCtx(first, h.tenantA), pool, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT current_setting('app.current_user_id', true)`).Scan(&core)
+	}); err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+	if core != nil && *core != "" {
+		t.Errorf("worker core after a member: app.current_user_id = %q, want unset", *core)
+	}
+	if got := rsSeamCurrentUser(t, pool, requestCtx(second, h.tenantA)); got == nil || *got != second {
+		t.Errorf("the next member's app.current_user_id = %v, want %s, not the previous member's", got, second)
+	}
+}

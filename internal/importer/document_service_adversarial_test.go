@@ -212,8 +212,8 @@ func TestServiceImportDocument_ABoundDocumentIsRefusedForAnotherEntity(t *testin
 	if resA.QuarantinedInvoices != 0 {
 		t.Fatalf("resA=%+v, want clean", resA)
 	}
-	if _, err := svc.ImportDocument(callCtx, entityB, documentID); err == nil {
-		t.Fatal("ImportDocument(entityB) of a document bound to A: err = nil, want a refusal")
+	if _, err := svc.ImportDocument(callCtx, entityB, documentID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ImportDocument(entityB) of a document bound to A: err = %v, want ErrNotFound", err)
 	}
 
 	if got := countInvoicesForEntity(t, super, entityA); got != 1 {

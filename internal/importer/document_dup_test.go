@@ -27,8 +27,7 @@
 // truly overlaps -- this is the one assertion in the file that actually distinguishes "raced"
 // from "serialized-and-happened-to-match." Also added: TestServiceImportDocument_
 // EightConcurrentRacersYieldExactlyOneWinnerSevenLosers (wider N), TestServiceImportDocument_
-// MixedCollisionRaceIsolatesPerEntityOutcomes (same document/different entities interleaved with
-// a same-entity collision), TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFrom
+// MixedCollisionRaceIsolatesPerEntityOutcomes, TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFrom
 // DuplicateQuarantineUnderRace (two quarantine reasons in one race stay distinguishable).
 package importer
 

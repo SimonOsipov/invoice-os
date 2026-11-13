@@ -12,6 +12,7 @@ paths:
 - A draft PR deploys only when it changes a spec under `e2e/smoke/`, `e2e/api/` or `e2e/topology/`. It runs only those specs, with `--retries=0`, through `scripts/ci/e2e-suite.sh`. `draft-teardown` deletes its preview after the run.
 - `changes` fails a PR whose head does not contain `origin/main`, or `origin/<base>` for another base. No preview job runs.
 - `preview.sh` retries a `preview-db` or `grant` execution up to 3 times only when its log shows SQLSTATE 53300 (`TestPreviewJobRetriesOnlyOnTooManyConnections`).
+- Push preview images only to `africa-south1-docker.pkg.dev/ascomply-preview/previews` (`preview.sh image`). `deploy-preview` holds no write on `images`; `Preview invariants` fails when it does.
 - Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
 - A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
 - A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.

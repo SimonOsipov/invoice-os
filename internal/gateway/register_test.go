@@ -80,10 +80,12 @@ type gotrueCall struct {
 }
 
 // fakeGoTrue answers every request with status and body, recording each call.
+// A non-nil settings answers GET /settings instead.
 type fakeGoTrue struct {
-	URL   *url.URL
-	mu    sync.Mutex
-	calls []gotrueCall
+	URL      *url.URL
+	mu       sync.Mutex
+	calls    []gotrueCall
+	settings http.HandlerFunc
 }
 
 func newFakeGoTrue(t *testing.T, status int, body string) *fakeGoTrue {
@@ -93,7 +95,12 @@ func newFakeGoTrue(t *testing.T, status int, body string) *fakeGoTrue {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b, gaAddress(r)})
+		settings := f.settings
 		f.mu.Unlock()
+		if settings != nil && r.Method == http.MethodGet && r.URL.Path == "/settings" {
+			settings(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -1531,5 +1538,242 @@ func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T)
 	}
 	if newAddr.Body.String() != repeatAddr.Body.String() {
 		t.Errorf("new body %q differs from repeat body %q", newAddr.Body.String(), repeatAddr.Body.String())
+	}
+}
+
+// answerSettings makes GET /settings answer with h.
+func (f *fakeGoTrue) answerSettings(h http.HandlerFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settings = h
+}
+
+// settingsGoTrue is a fake whose /signup answers like a new account and whose GET /settings answers h.
+func settingsGoTrue(t *testing.T, h http.HandlerFunc) *fakeGoTrue {
+	t.Helper()
+	f := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	f.answerSettings(h)
+	return f
+}
+
+const settingsUnreadableMsg = "registration: idp settings unreadable"
+
+var randomPasswordShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// registerHandler builds RegisterHandler with forward; pass forward to RegisterHandler's new parameter, never a constant.
+func registerHandler(authURL *url.URL, client *http.Client, floor time.Duration, log *slog.Logger, forward bool) http.Handler {
+	_ = forward
+	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil)
+}
+
+// signupPasswords is the password of each POST /signup the fake saw.
+func signupPasswords(t *testing.T, f *fakeGoTrue) []string {
+	t.Helper()
+	var out []string
+	for _, c := range f.Calls() {
+		if c.Method != http.MethodPost || c.Path != "/signup" {
+			continue
+		}
+		var sent struct {
+			Password string `json:"password"`
+		}
+		if err := json.Unmarshal(c.Body, &sent); err != nil {
+			t.Fatalf("signup body %q is not JSON: %v", c.Body, err)
+		}
+		out = append(out, sent.Password)
+	}
+	return out
+}
+
+// callNames is "METHOD /path" of each call, in order.
+func callNames(f *fakeGoTrue) []string {
+	var out []string
+	for _, c := range f.Calls() {
+		out = append(out, c.Method+" "+c.Path)
+	}
+	return out
+}
+
+func requireRandomPassword(t *testing.T, got, caller string) {
+	t.Helper()
+	if got == caller {
+		t.Errorf("signup password equals the caller's")
+	}
+	if !randomPasswordShape.MatchString(got) {
+		t.Errorf("signup password has length %d, want 43 base64url characters", len(got))
+	}
+}
+
+func TestRegister_SignsUpWithARandomPasswordWhenTheIdPMails(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":false}`))
+	h := registerHandler(fake.URL, testClient(), 0, nopLog(), true)
+
+	for range 2 {
+		rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword))
+		requirePending202(t, rec)
+	}
+
+	got := signupPasswords(t, fake)
+	if len(got) != 2 {
+		t.Fatalf("GoTrue saw %d signups, want 2: %v", len(got), callNames(fake))
+	}
+	for _, pw := range got {
+		requireRandomPassword(t, pw, regPassword)
+	}
+	if got[0] == got[1] {
+		t.Error("two registers sent the same password")
+	}
+}
+
+func TestRegister_SendsTheCallerPasswordWhenTheIdPAutoconfirms(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+	rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), true), registerBody(regEmail, regPassword))
+
+	requirePending202(t, rec)
+	if got, want := callNames(fake), []string{"GET /settings", "POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	if got := signupPasswords(t, fake); !slices.Equal(got, []string{regPassword}) {
+		t.Errorf("signup passwords = %d sent, want exactly the caller's", len(got))
+	}
+}
+
+func TestRegister_AnUnreadableSettingsAnswerFailsClosed(t *testing.T) {
+	noPassword := `{"email":"` + regEmail + `"}`
+	rows := []struct {
+		name     string
+		settings http.HandlerFunc
+		body     string
+		warns    int
+		upstream float64
+	}{
+		{"status 500 with autoconfirm true", answer(http.StatusInternalServerError, `{"mailer_autoconfirm":true}`), registerBody(regEmail, regPassword), 1, 500},
+		{"transport error", dropped, registerBody(regEmail, regPassword), 1, 0},
+		{"malformed JSON", answer(http.StatusOK, `{`), registerBody(regEmail, regPassword), 1, 200},
+		{"field missing", answer(http.StatusOK, `{}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is the string true", answer(http.StatusOK, `{"mailer_autoconfirm":"true"}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is the number 1", answer(http.StatusOK, `{"mailer_autoconfirm":1}`), registerBody(regEmail, regPassword), 1, 200},
+		{"body over 16 KiB", answer(http.StatusOK, `{"mailer_autoconfirm":true,"pad":"`+strings.Repeat("a", 20<<10)+`"}`), registerBody(regEmail, regPassword), 1, 200},
+		{"autoconfirm true with no caller password", answer(http.StatusOK, `{"mailer_autoconfirm":true}`), noPassword, 0, 0},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := settingsGoTrue(t, c.settings)
+			log, buf := captureLog()
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, log, true), c.body)
+
+			requirePending202(t, rec)
+			got := signupPasswords(t, fake)
+			if len(got) != 1 {
+				t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
+			}
+			requireRandomPassword(t, got[0], regPassword)
+			warns := recordsNamed(t, buf, settingsUnreadableMsg)
+			if len(warns) != c.warns {
+				t.Fatalf("%d %q lines, want %d: %s", len(warns), settingsUnreadableMsg, c.warns, buf.String())
+			}
+			for _, w := range warns {
+				if w["level"] != "WARN" || w["upstream_status"] != c.upstream {
+					t.Errorf("line = level %v upstream_status %v, want WARN %v", w["level"], w["upstream_status"], c.upstream)
+				}
+			}
+		})
+	}
+}
+
+func TestRegister_ABodyWithoutAPasswordAnswers202(t *testing.T) {
+	for _, mode := range []struct {
+		name    string
+		forward bool
+	}{{"forwarding gateway", true}, {"non-forwarding gateway", false}} {
+		for _, body := range []string{`{"email":"` + regEmail + `"}`, registerBody(regEmail, "")} {
+			t.Run(mode.name+" "+body, func(t *testing.T) {
+				fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":false}`))
+
+				rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), mode.forward), body)
+
+				requirePending202(t, rec)
+				got := signupPasswords(t, fake)
+				if len(got) != 1 {
+					t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
+				}
+				requireRandomPassword(t, got[0], "")
+			})
+		}
+	}
+}
+
+func TestRegister_AMissingEmailAnswers400(t *testing.T) {
+	for _, body := range []string{`{}`, `{"password":"x"}`} {
+		t.Run(body, func(t *testing.T) {
+			fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), true), body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != "email is required" {
+				t.Errorf("error = %q, want %q", got, "email is required")
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want none: %v", n, callNames(fake))
+			}
+		})
+	}
+}
+
+func TestRegister_ANonForwardingGatewayNeverReadsSettings(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+	rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), false), registerBody(regEmail, regPassword))
+
+	requirePending202(t, rec)
+	if got, want := callNames(fake), []string{"POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	requireRandomPassword(t, signupPasswords(t, fake)[0], regPassword)
+}
+
+func TestRegister_NoPasswordReachesALogLine(t *testing.T) {
+	const canary = "settings-body-canary-7k2"
+	body := func(v string) http.HandlerFunc {
+		return answer(http.StatusOK, `{"mailer_autoconfirm":`+v+`,"canary":"`+canary+`"}`)
+	}
+	rows := []struct {
+		name       string
+		forward    bool
+		settings   http.HandlerFunc
+		callerSent bool
+		warns      int
+	}{
+		{"autoconfirm true", true, body("true"), true, 0},
+		{"autoconfirm false", true, body("false"), false, 0},
+		{"settings unreadable", true, body(`"true"`), false, 1},
+		{"non-forwarding gateway", false, body("true"), false, 0},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := settingsGoTrue(t, c.settings)
+			log, buf := captureLog()
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, log, c.forward), registerBody(regEmail, regPassword))
+
+			requirePending202(t, rec)
+			sent := signupPasswords(t, fake)
+			if len(sent) != 1 || (sent[0] == regPassword) != c.callerSent {
+				t.Fatalf("mode not in effect: caller's password forwarded = %v, want %v", len(sent) == 1 && sent[0] == regPassword, c.callerSent)
+			}
+			if n := len(recordsNamed(t, buf, settingsUnreadableMsg)); n != c.warns {
+				t.Fatalf("%d %q lines, want %d: %s", n, settingsUnreadableMsg, c.warns, buf.String())
+			}
+			for _, secret := range []string{regPassword, sent[0], regEmail, canary} {
+				if strings.Contains(buf.String(), secret) {
+					t.Errorf("a log line holds a secret of %d characters: %s", len(secret), buf.String())
+				}
+			}
+		})
 	}
 }

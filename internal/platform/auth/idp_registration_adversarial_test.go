@@ -132,13 +132,17 @@ func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 		t.Fatalf("control: mailpit holds %d mails after one registration, want 1", n)
 	}
 
-	status, body, err := register(gw, u.email, u.password)
+	other := "pw-other-" + u.password
+	status, body, err := register(gw, u.email, other)
 	if err != nil || status != http.StatusAccepted || !strings.Contains(body, `"verification_pending"`) {
 		t.Fatalf("repeat registration: status %d, body %s, err %v; want 202 verification_pending", status, body, err)
 	}
 	if n := mailCount(t, u.email); n != 1 {
 		t.Errorf("mailpit holds %d mails after a repeat within the minute, want 1 (GoTrue rate-limits the resend)", n)
 	}
+	// invalid_credentials, not email_not_confirmed: no registration password was stored.
+	requireSignIn(t, base, u, u.password, http.StatusBadRequest, "invalid_credentials")
+	requireSignIn(t, base, u, other, http.StatusBadRequest, "invalid_credentials")
 }
 
 // GoTrue answers a confirmed address 200 with a sanitized user and sends nothing.

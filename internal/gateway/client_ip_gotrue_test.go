@@ -59,6 +59,7 @@ func newGaGoTrue(t *testing.T) *gaGoTrue {
 		"POST /logout":  answer(http.StatusNoContent, ""),
 		"POST /token":   answer(http.StatusOK, session),
 		"POST /signup":  answer(http.StatusOK, gtNewUser),
+		"GET /settings": answer(http.StatusOK, `{"mailer_autoconfirm":false}`),
 		"POST /recover": answer(http.StatusOK, `{}`),
 		"POST /resend":  answer(http.StatusOK, `{}`),
 	}}
@@ -299,5 +300,25 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 				t.Errorf("a log line holds the address: %s", buf.String())
 			}
 		})
+	}
+}
+
+func TestRegister_SettingsCallCarriesTheGatewayAddress(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	const forged = "192.0.2.99"
+	f := newGaGoTrue(t)
+	req := gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, gaXFF)
+	req.Header.Add(platform.HeaderUserIP, forged)
+
+	registerHandler(f.URL, testClient(), 0, nopLog(), true).ServeHTTP(httptest.NewRecorder(), req)
+
+	if got, want := gaNames(f.Calls()), []string{"GET /settings", "POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	gaRequireAddress(t, f.Calls(), gaWant)
+	for _, call := range f.Calls() {
+		if slices.Contains(call.Address, forged) {
+			t.Errorf("%s forwarded the client's %s", call, platform.HeaderUserIP)
+		}
 	}
 }

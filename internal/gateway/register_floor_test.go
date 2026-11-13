@@ -637,3 +637,79 @@ func TestRegister_LookupFailureWaitsTheMinimum(t *testing.T) {
 		t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
 	}
 }
+
+func TestRegister_NewRepeatAndConfirmedAnswerTheSame202InBothModes(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	signups := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"new address", http.StatusOK, gtNewUser},
+		{"repeat address, 422 user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists},
+		{"confirmed address, 200 empty identities", http.StatusOK, gtSanitizedUser},
+	}
+	var first *httptest.ResponseRecorder
+	for _, mode := range []struct {
+		name, settings string
+		callerKept     bool
+	}{
+		{"IdP mails", `{"mailer_autoconfirm":false}`, false},
+		{"IdP autoconfirms", `{"mailer_autoconfirm":true}`, true},
+	} {
+		for _, s := range signups {
+			t.Run(mode.name+" "+s.name, func(t *testing.T) {
+				fake := newFakeGoTrue(t, s.status, s.body)
+				fake.answerSettings(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, mode.settings)
+				})
+
+				start := time.Now()
+				rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), floor, nopLog(), true), registerBody(regEmail, regPassword))
+
+				requirePending202(t, rec)
+				if elapsed := time.Since(start); elapsed < floor {
+					t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+				}
+				if first == nil {
+					first = rec
+				} else if rec.Code != first.Code || !bytes.Equal(rec.Body.Bytes(), first.Body.Bytes()) {
+					t.Errorf("answer = %d %q, want the first row's %d %q", rec.Code, rec.Body.String(), first.Code, first.Body.String())
+				}
+				// The mode is in effect, or the comparison across modes is vacuous.
+				got := signupPasswords(t, fake)
+				if len(got) != 1 || (got[0] == regPassword) != mode.callerKept {
+					t.Errorf("caller's password forwarded = %v, want %v", len(got) == 1 && got[0] == regPassword, mode.callerKept)
+				}
+			})
+		}
+	}
+}
+
+func TestRegister_SettingsFailureKeepsTheFloor(t *testing.T) {
+	const floor = 600 * time.Millisecond
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	fake.answerSettings(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	})
+	// A client timeout shorter than the floor: the settings call fails, then the floor still holds.
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+
+	start := time.Now()
+	rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, client, floor, nopLog(), true), registerBody(regEmail, regPassword))
+	elapsed := time.Since(start)
+
+	requirePending202(t, rec)
+	if elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+	}
+	got := signupPasswords(t, fake)
+	if len(got) != 1 {
+		t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
+	}
+	requireRandomPassword(t, got[0], regPassword)
+}

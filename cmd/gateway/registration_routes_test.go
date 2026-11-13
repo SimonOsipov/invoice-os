@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -945,5 +946,62 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 	}
 	if got := sink.calls(); len(got) != 1 {
 		t.Errorf("sink saw %+v after one POST, want one call", got)
+	}
+}
+
+func TestRegistrationHandlers_ForwardOnlyOnAnEphemeralPosture(t *testing.T) {
+	const caller = "Corr3ct-Horse-Battery"
+	rows := []struct {
+		env     string
+		forward bool
+	}{{"", false}, {"production", false}, {"staging", false}, {"pr-12", true}, {"nightly", true}}
+	for _, c := range rows {
+		t.Run("DEPLOY_ENV="+c.env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", c.env)
+			var mu sync.Mutex
+			var settingsCalls int
+			var signup []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				defer mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method + " " + r.URL.Path {
+				case "GET /settings":
+					settingsCalls++
+					_, _ = w.Write([]byte(`{"mailer_autoconfirm":true}`))
+				case "POST /signup":
+					signup = b
+					_, _ = w.Write([]byte(`{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[{}]}`))
+				}
+			}))
+			t.Cleanup(srv.Close)
+			authURL, _ := url.Parse(srv.URL)
+			site, _ := url.Parse("https://site.example")
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
+
+			rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"`+caller+`"}`)
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			var sent struct {
+				Password string `json:"password"`
+			}
+			if err := json.Unmarshal(signup, &sent); err != nil || sent.Password == "" {
+				t.Fatalf("signup body %q holds no password (err %v)", signup, err)
+			}
+			if got := sent.Password == caller; got != c.forward {
+				t.Errorf("caller's password forwarded = %v, want %v", got, c.forward)
+			}
+			if !c.forward && !regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`).MatchString(sent.Password) {
+				t.Errorf("signup password has length %d, want 43 base64url characters", len(sent.Password))
+			}
+			if want := map[bool]int{true: 1, false: 0}[c.forward]; settingsCalls != want {
+				t.Errorf("GET /settings calls = %d, want %d", settingsCalls, want)
+			}
+		})
 	}
 }

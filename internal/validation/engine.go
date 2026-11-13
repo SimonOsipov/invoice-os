@@ -12,6 +12,7 @@
 package validation
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -50,6 +51,12 @@ func NewEngine(registry map[RuleType]Evaluator, guard GuardFunc) *Engine {
 //     and an Evaluator error are the same class of fault -- both surface as
 //     (Result{}, err), never as a violation.
 func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
+	return e.EvaluateContext(context.Background(), p, rs)
+}
+
+// EvaluateContext is Evaluate that stops with a wrapped ctx error once ctx ends,
+// and runs CEL under the cost limit ctx carries (see withCELCostLimit).
+func (e *Engine) EvaluateContext(ctx context.Context, p Payload, rs RuleSet) (Result, error) {
 	// cache: no-op at this stage -- per-request compilation lives in the
 	// evaluators (M3-04-03/04/05), not the pipeline core.
 
@@ -58,6 +65,9 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 	violations := []Violation{}
 
 	for i := range rs.Rules {
+		if err := ctxErr(ctx); err != nil {
+			return Result{}, err
+		}
 		rule := rs.Rules[i]
 
 		// select stage.
@@ -65,7 +75,7 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 			continue
 		}
 		if rule.When != nil {
-			ok, err := e.guard(*rule.When, p)
+			ok, err := e.guard(ctx, *rule.When, p)
 			if err != nil {
 				return Result{}, err
 			}
@@ -78,6 +88,14 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 		ev, ok := e.registry[rule.Type]
 		if !ok {
 			return Result{}, fmt.Errorf("validation: unknown rule type %q", rule.Type)
+		}
+		if le, ok := ev.(ctxLineEvaluator); ok {
+			vs, err := le.evalLinesContext(ctx, p, rule)
+			if err != nil {
+				return Result{}, err
+			}
+			violations = append(violations, vs...)
+			continue
 		}
 		if le, ok := ev.(lineEvaluator); ok {
 			vs, err := le.evalLines(p, rule)

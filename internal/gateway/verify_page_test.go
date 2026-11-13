@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -659,6 +660,9 @@ func TestVerifyPage_MalformedStateBounces(t *testing.T) {
 	t.Run("repeated state, bad first", func(t *testing.T) {
 		vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&state=short&state="+vpState), bounceLocation)
 	})
+	t.Run("state twice", func(t *testing.T) {
+		vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&state="+vpState+"&state="+vpState), bounceLocation)
+	})
 }
 
 func TestVerifyPage_HeadWithoutStateBounces(t *testing.T) {
@@ -955,5 +959,74 @@ func TestVerifyPage_InviteTokenIsEscaped(t *testing.T) {
 				t.Errorf("the submit-once script appears %d times, want 1", n)
 			}
 		})
+	}
+}
+
+// vpSetPasswordPage is the page the stated link must render; serveInvitationPasswordPage renders it today.
+func vpSetPasswordPage() string { return renderPasswordPage(invitationPageHTML, vpToken, vpState, "") }
+
+func TestVerifyPage_EveryStatedSignupLinkServesTheSetPasswordPage(t *testing.T) {
+	h := vpHandler(t)
+	for name, query := range map[string]string{"plain": vpQuery(vpToken), "invite=1": vpInviteQuery(vpToken)} {
+		t.Run(name, func(t *testing.T) {
+			rec := vpDo(t, h, http.MethodGet, query)
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Fatalf("status %d Content-Type %q, want 200 text/html; charset=utf-8", rec.Code, rec.Header().Get("Content-Type"))
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, "Confirm my email") {
+				t.Error("the page still offers the confirm-only button")
+			}
+			if body != vpSetPasswordPage() {
+				t.Errorf("body is not the set-password page the invitation link renders:\n%s", body)
+			}
+			doc := vpParse(t, body)
+			forms := vpFind(doc, vpTag("form"))
+			if len(forms) != 1 {
+				t.Fatalf("forms = %d, want exactly 1", len(forms))
+			}
+			if got, _ := vpAttr(forms[0], "action"); got != "/auth/invitation/password" {
+				t.Errorf("form action = %q, want /auth/invitation/password", got)
+			}
+			for field, want := range map[string]string{"token": vpToken, "type": "signup", "state": vpState} {
+				if got := vpInputValue(doc, field); got != want {
+					t.Errorf("hidden %s = %q, want %q", field, got, want)
+				}
+			}
+			var pw *html.Node
+			for _, in := range vpFind(forms[0], vpTag("input")) {
+				if n, _ := vpAttr(in, "name"); n == "password" {
+					pw = in
+				}
+			}
+			if pw == nil {
+				t.Fatal("no password input")
+			}
+			for k, want := range map[string]string{"type": "password", "minlength": "6", "maxlength": "72"} {
+				if got, _ := vpAttr(pw, k); got != want {
+					t.Errorf("password input %s = %q, want %q", k, got, want)
+				}
+			}
+			if got := rec.Header().Get("Content-Security-Policy"); got != resetCSP {
+				t.Errorf("Content-Security-Policy = %q, want the set-password page's %q", got, resetCSP)
+			}
+			// [page-note]: one note for a registrant and an invitee.
+			if !strings.Contains(body, "If you did not create an ASComply account or expect an invite, close this page.") {
+				t.Error("the page note does not cover a registrant")
+			}
+		})
+	}
+}
+
+func TestVerifyPage_HeadServesNoBody(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodHead, vpQuery(vpToken))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD body = %q, want empty", rec.Body.String())
+	}
+	if got, want := rec.Header().Get("Content-Length"), strconv.Itoa(len(vpSetPasswordPage())); got != want {
+		t.Errorf("Content-Length = %q, want %q (the set-password page's length)", got, want)
 	}
 }

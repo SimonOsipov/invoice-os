@@ -289,6 +289,54 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 }
 
+// main cannot run in a test, so its route table is read from source; the mux answer is then run over the /auth/verify patterns it holds.
+func TestGatewayRoutes_PostVerifyIsNoRoute(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, _ := mainRoutes(t, src)
+	if got := sitesFor(sites, "GET /auth/verify"); len(got) != 1 {
+		t.Fatalf("GET /auth/verify is registered %d times, want once", len(got))
+	}
+	if got := sitesFor(sites, "POST /auth/verify"); len(got) != 0 {
+		t.Errorf("main registers POST /auth/verify (%s); the route is retired", got[0].handler)
+	}
+
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	page, err := gateway.VerifyPageHandler(site)
+	if err != nil {
+		t.Fatalf("VerifyPageHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	for _, s := range sites {
+		switch {
+		case s.pattern == "GET /auth/verify":
+			mux.Handle(s.pattern, page)
+		case strings.HasSuffix(s.pattern, " /auth/verify"):
+			// Stands in for whatever handler main mounts there: it confirms at GoTrue.
+			mux.HandleFunc(s.pattern, func(w http.ResponseWriter, _ *http.Request) {
+				if resp, err := http.Post(authURL.JoinPath("verify").String(), "application/json", nil); err == nil {
+					resp.Body.Close()
+				}
+				w.WriteHeader(http.StatusSeeOther)
+			})
+		}
+	}
+
+	rec := serveForm(mux, "/auth/verify", "token=T&type=signup&state="+verifyState)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, HEAD" {
+		t.Errorf("POST /auth/verify = %d Allow %q, want 405 GET, HEAD", rec.Code, rec.Header().Get("Allow"))
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("POST /auth/verify reached GoTrue: %v", got)
+	}
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup&state="+verifyState, ""); rec.Code != http.StatusOK {
+		t.Errorf("control: GET /auth/verify = %d, want 200", rec.Code)
+	}
+}
+
 // The resend route is built once from the shared resend budgets and the invite previewer, and both its methods share that handler.
 func TestInvitationResendRoutesAreMountedOnce(t *testing.T) {
 	src, err := os.ReadFile("main.go")

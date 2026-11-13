@@ -187,6 +187,35 @@ func TestVerify_HandOffWithoutConsent(t *testing.T) {
 	}
 }
 
+// coRegistrantGoTrue is a fake GoTrue whose /verify confirms the registrant in meta.
+func coRegistrantGoTrue(t *testing.T, meta string) *resetGoTrue {
+	t.Helper()
+	f := newResetGoTrue(t)
+	f.verify = answer(http.StatusOK, coSession(coUser(meta)))
+	return f
+}
+
+func TestInvitationPassword_HandsARegistrantContactOff(t *testing.T) {
+	noConsent := coWant
+	noConsent.Consent = nil
+	for _, c := range []struct {
+		name, meta string
+		want       RegistrantContact
+	}{
+		{"with consent", coMetaFull, coWant},
+		{"without consent", coMetaNoConsent, noConsent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sink := newRecSink(nil)
+			f := coRegistrantGoTrue(t, c.meta)
+
+			rpRequireRedirect(t, ipPost(t, newInviteHandler(t, f, nil, sink), rpValues(rpToken, "signup", rpPass)), ipOK)
+
+			requireOneHandOff(t, sink, c.want)
+		})
+	}
+}
+
 func TestVerify_NoHandOffWhenRefused(t *testing.T) {
 	good := coSession(coUser(coMetaFull))
 	for _, c := range []struct {

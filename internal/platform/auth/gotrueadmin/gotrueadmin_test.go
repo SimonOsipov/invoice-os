@@ -788,3 +788,64 @@ func TestSetUserMetadata_RefusesANonUUIDBeforeAnyRequest(t *testing.T) {
 		t.Errorf("server saw %d request(s), want none", len(*got))
 	}
 }
+
+// timeField reads a time field of AdminUser by name, so a missing field fails this test instead of the build.
+func timeField(t *testing.T, u gotrueadmin.AdminUser, name string) (time.Time, bool) {
+	t.Helper()
+	f := reflect.ValueOf(u).FieldByName(name)
+	if !f.IsValid() {
+		t.Errorf("AdminUser has no field %s", name)
+		return time.Time{}, false
+	}
+	if f.Kind() == reflect.Ptr {
+		if f.IsNil() {
+			return time.Time{}, false
+		}
+		f = f.Elem()
+	}
+	got, ok := f.Interface().(time.Time)
+	if !ok {
+		t.Errorf("AdminUser.%s is %s, want time.Time or *time.Time", name, f.Type())
+	}
+	return got, ok
+}
+
+func TestListUsers_DecodesTheConfirmationTimes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"users":[`+
+			`{"id":"a","email":"a@x.test","created_at":"2026-11-01T10:00:00.5Z","email_confirmed_at":"2026-11-02T11:00:00Z","confirmation_sent_at":"2026-11-01T10:00:01Z","recovery_sent_at":"2026-11-03T12:00:00Z"},`+
+			`{"id":"b","email":"b@x.test","created_at":"2026-11-04T10:00:00Z","email_confirmed_at":null}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	got, err := newClient(t, srv.URL, signing(t)).ListUsers(context.Background(), 1, 100)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("ListUsers = %d users, err %v; want 2, nil", len(got), err)
+	}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, c := range []struct {
+		user    int
+		field   string
+		want    time.Time
+		wantSet bool
+	}{
+		{0, "CreatedAt", at("2026-11-01T10:00:00.5Z"), true},
+		{0, "EmailConfirmedAt", at("2026-11-02T11:00:00Z"), true},
+		{0, "ConfirmationSentAt", at("2026-11-01T10:00:01Z"), true},
+		{0, "RecoverySentAt", at("2026-11-03T12:00:00Z"), true},
+		{1, "CreatedAt", at("2026-11-04T10:00:00Z"), true},
+		{1, "EmailConfirmedAt", time.Time{}, false},
+		{1, "ConfirmationSentAt", time.Time{}, false},
+		{1, "RecoverySentAt", time.Time{}, false},
+	} {
+		v, set := timeField(t, got[c.user], c.field)
+		if set != c.wantSet || (set && !v.Equal(c.want)) {
+			t.Errorf("user %d %s = (%v, set %v), want (%v, set %v)", c.user, c.field, v, set, c.want, c.wantSet)
+		}
+	}
+}

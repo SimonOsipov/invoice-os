@@ -113,9 +113,7 @@ func TestCreateHandler_PersistsOwnTenantSourceDocument(t *testing.T) {
 
 // TestRLS_CreateRefusesAnotherTenantsSourceDocument (SD-4, AC-4): tenant A
 // naming tenant B's document is refused with a body byte-equal to a
-// never-existed uuid's. No code is added for this -- invoices_tenant_source_
-// document_fk is composite, so the INSERT itself raises 23503 inside Create's
-// tx and store.go maps it to ErrValidation.
+// never-existed uuid's.
 func TestRLS_CreateRefusesAnotherTenantsSourceDocument(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -185,13 +183,13 @@ func TestRLS_RefusedCreateWithASourceDocumentLeavesNoRow(t *testing.T) {
 	}
 }
 
-// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence (SD-6, AC-4
-// falsification): the same id, once while tenant B's documents row EXISTS and
-// once after it is deleted. Identical bodies prove the refusal comes from the
-// composite FK and not from "no such row anywhere" -- which a spec asserting
-// only "cross-tenant is a 400" would pass either way. The two legs use
-// different invoice numbers so a duplicate-number 409 can never stand in for
-// the refusal under test.
+// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence: the same
+// cross-tenant id answers the same while tenant B's row exists and after it is
+// deleted, so the refusal reads neither existence nor tenant. Store.Create's
+// scoped read refuses both legs; the composite FK is the backstop, pinned by
+// TestRLS_InvoicesCrossTenantSourceDocumentRefRejected and
+// TestRLS_DocumentsCrossTenantPointerRefRejectedOnInsert. The legs
+// use different invoice numbers so a duplicate-number 409 cannot stand in.
 func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -224,7 +222,7 @@ func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 		t.Fatalf("row deleted: status = %d, want 400 (body=%s)", absentRec.Code, absentBody)
 	}
 	if presentBody != absentBody {
-		t.Errorf("the same id answers %q while tenant B's row exists and %q after it is deleted -- the refusal is reading existence, not the FK",
+		t.Errorf("the same id answers %q while tenant B's row exists and %q after it is deleted -- the refusal is reading existence",
 			presentBody, absentBody)
 	}
 }

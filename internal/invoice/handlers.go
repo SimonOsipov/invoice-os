@@ -315,11 +315,9 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 			return
 		}
 		// Named 400 rather than the store's 22P02 -> ErrValidation, which names
-		// nothing (TestCreateHandler_MalformedSourceDocumentID400). A document
-		// belonging to another tenant is NOT checked here: the composite FK
-		// invoices_tenant_source_document_fk refuses it inside the tx, so the
-		// answer cannot become an existence oracle
-		// (TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence).
+		// nothing (TestCreateHandler_MalformedSourceDocumentID400). Store.Create's
+		// scoped read refuses an unreadable document as an unknown id; the
+		// composite FK invoices_tenant_source_document_fk is the backstop.
 		if req.SourceDocumentID != nil {
 			if _, err := uuid.Parse(*req.SourceDocumentID); err != nil {
 				writeError(w, http.StatusBadRequest, "source_document_id must be a well-formed uuid")

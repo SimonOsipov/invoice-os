@@ -18,9 +18,9 @@ const KINDS: { value: RegisterKind; label: string }[] = [
   { value: 'in_house', label: 'For our own company — in-house' },
 ]
 export const PRODUCT_EMAIL_NOTICE = 'We will email you about your account and the service. This is part of using ASComply Africa.'
-const EMPTY: RegisterValues = { email: '', password: '', displayName: '', workspaceName: '', kind: '', marketing: false }
-const FIELD_ORDER = ['email', 'password', 'displayName', 'workspaceName'] as const
-const FIELD_IDS = { email: `${ID}-email`, password: `${ID}-password`, displayName: `${ID}-name`, workspaceName: `${ID}-workspace` }
+const EMPTY: RegisterValues = { email: '', displayName: '', workspaceName: '', kind: '', marketing: false }
+const FIELD_ORDER = ['email', 'displayName', 'workspaceName'] as const
+const FIELD_IDS = { email: `${ID}-email`, displayName: `${ID}-name`, workspaceName: `${ID}-workspace` }
 
 export function RegisterModal({ onClose }: { onClose: () => void }) {
   const [values, setValues] = useState<RegisterValues>(EMPTY)
@@ -111,7 +111,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
             <>
               <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Check your email</h3>
               <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
-                If this address can be registered, a confirmation link is on its way to {sentTo}. Open it, confirm your email, then sign in.
+                If this address can be registered, a link to confirm the address and choose your password is on its way to {sentTo}. Open it and choose your password.
               </p>
               <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
                 {resending ? 'Sending…' : 'Send the link again'}
@@ -127,7 +127,6 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
               <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {field('email', 'Work email', 'email', 'email', 'you@company.com')}
-                  {field('password', 'Password', 'password', 'new-password')}
                   {field('displayName', 'Your name', 'text', 'name')}
                   {field('workspaceName', 'Workspace name', 'text', 'organization')}
                   <fieldset

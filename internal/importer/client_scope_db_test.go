@@ -1073,3 +1073,32 @@ func TestClientScope_NoteOriginalsFiledInvoiceOfAHiddenClientReadsAsNull(t *test
 		t.Errorf("member filed_invoice_id = %s, want null: B's invoice id never reaches a member limited to A", *member.FiledInvoiceID)
 	}
 }
+
+// Store.Create now refuses an unreadable document; an uncited one must still file, not quarantine.
+func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *testing.T) {
+	f := newCSFixture(t, "CS import files with document")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-CITE-DOC"))
+	header := []string{"Inv No"}
+	csv := storeDocumentAs(t, f.docSvc, f.tenant, "c.csv", "text/csv", csvBody(t, header, [][]string{{"CS-CITE-CSV"}})).ID
+
+	byDoc, err := f.svc.ImportDocument(f.limited, f.entA, doc)
+	if err != nil {
+		t.Fatalf("ImportDocument as a reviewer limited to A: %v", err)
+	}
+	byCSV, err := f.svc.Import(f.limited, f.entA, "c.csv", csv, 1, map[string]string{"invoice_number": "Inv No"}, header, [][]string{{"CS-CITE-CSV"}}, false, "")
+	if err != nil {
+		t.Fatalf("Import as a reviewer limited to A: %v", err)
+	}
+	for name, c := range map[string]struct {
+		res BatchResult
+		doc string
+	}{"ImportDocument": {byDoc, doc}, "Import": {byCSV, csv}} {
+		if c.res.RowsInvalid != 0 {
+			t.Errorf("%s: RowsInvalid = %d, want 0", name, c.res.RowsInvalid)
+		}
+		if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1 AND source_document_id = $2`, f.entA, c.doc); n != 1 {
+			t.Errorf("%s: invoices filed with the document = %d, want 1", name, n)
+		}
+	}
+}

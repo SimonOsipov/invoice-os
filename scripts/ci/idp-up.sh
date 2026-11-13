@@ -109,7 +109,7 @@ start_mailpit() {
 
 # Only idp-mail mails.
 no_mail=(-e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_SMTP_HOST=)
-# The image limits per X-User-Address; header-less suite traffic shares one key, so these three containers lift the per-IP rates.
+# The gateway-backed tests share one local key, so these three containers lift the per-IP rates.
 per_ip=(-e GOTRUE_RATE_LIMIT_VERIFY=100000 -e GOTRUE_RATE_LIMIT_OTP=100000 -e GOTRUE_RATE_LIMIT_TOKEN_REFRESH=100000)
 
 # Sequential: each GoTrue runs its migrations on boot, so the first finishes them alone.

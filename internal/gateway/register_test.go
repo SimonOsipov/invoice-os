@@ -232,7 +232,7 @@ func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, lo
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	confirmHandler(t, authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -439,13 +439,13 @@ func TestRegister_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	base := fake.URL.JoinPath("auth", "v1")
 
 	doRegister(t, base, nil, registerBody(regEmail, regPassword))
-	doVerify(t, base, siteURL(t), nil, "token="+verifyToken+"&type=signup")
+	doVerify(t, base, siteURL(t), nil, verifyQuery)
 
 	var got []string
 	for _, c := range fake.Calls() {
 		got = append(got, c.Method+" "+c.Path)
 	}
-	if want := []string{"POST /auth/v1/signup", "POST /auth/v1/verify"}; !slices.Equal(got, want) {
+	if want := []string{"POST /auth/v1/signup", "POST /auth/v1/verify", "PUT /auth/v1/user", "POST /auth/v1/logout"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
 	}
 }
@@ -453,7 +453,7 @@ func TestRegister_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 func TestVerify_Success303ToSite(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
 
-	rec := doVerify(t, fake.URL, siteURL(t), nil, "token="+verifyToken+"&type=signup")
+	rec := doVerify(t, fake.URL, siteURL(t), nil, verifyQuery)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303: %s", rec.Code, rec.Body.String())
@@ -462,8 +462,8 @@ func TestVerify_Success303ToSite(t *testing.T) {
 		t.Errorf("Location = %q, want %q", loc, siteURLValue+"/?verified=1")
 	}
 	calls := fake.Calls()
-	if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != "/verify" {
-		t.Fatalf("GoTrue saw %+v, want exactly one POST /verify", calls)
+	if len(calls) == 0 || calls[0].Method != http.MethodPost || calls[0].Path != "/verify" {
+		t.Fatalf("GoTrue saw %+v, want POST /verify first", calls)
 	}
 	var sent map[string]any
 	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
@@ -475,7 +475,7 @@ func TestVerify_Success303ToSite(t *testing.T) {
 }
 
 func TestVerify_Failure303(t *testing.T) {
-	const good = "token=" + verifyToken + "&type=signup"
+	const good = verifyQuery
 	for _, c := range []struct {
 		name      string
 		status    int // GoTrue's; 0 = unreachable
@@ -546,7 +546,7 @@ func TestVerify_IgnoresRedirectTo(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 
 			rec := doVerify(t, fake.URL, siteURL(t), nil,
-				"token="+verifyToken+"&type=signup&redirect_to="+url.QueryEscape(evil))
+				verifyQuery+"&redirect_to="+url.QueryEscape(evil))
 
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d, want 303", rec.Code)
@@ -578,7 +578,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 			log, buf := captureLog()
-			query := "token=" + verifyToken + "&type=signup"
+			query := verifyQuery
 			if c.state != "" {
 				query += "&state=" + c.state
 			}

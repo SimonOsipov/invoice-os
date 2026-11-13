@@ -165,7 +165,7 @@ func TestIdP_LinkRegistrationForAConfirmedAccountChangesNothing(t *testing.T) {
 		if status != http.StatusAccepted {
 			t.Fatalf("/auth/register before the invite: status %d, body %s; want 202", status, body)
 		}
-		if got := follow(t, confirmationLink(t, email)); got != siteURL+"/?verified=1" {
+		if got := follow(t, confirmationLink(t, email), pa); got != siteURL+"/?verified=1" {
 			t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 		}
 	})

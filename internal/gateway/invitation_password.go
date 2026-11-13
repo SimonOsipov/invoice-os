@@ -10,13 +10,14 @@ import (
 	"strings"
 )
 
-// Filled by strings.NewReplacer, not html/template: see verifyPageHTML.
+// Filled by strings.NewReplacer, not html/template: its reflection keeps every exported method
+// in the binary, which TestProductionGatewayBinaryCannotMint rejects.
 //
 //go:embed invitation_password.html
 var invitationPageHTML string
 
-// serveInvitationPasswordPage answers GET /auth/verify?invite=1 with the set-password page, or bounces a stateless open to landing; it makes no GoTrue call.
-func serveInvitationPasswordPage(w http.ResponseWriter, r *http.Request, site, failed string) {
+// serveSetPasswordPage answers GET /auth/verify with the set-password page, or bounces a stateless open to landing as ?confirm=<confirm>; it makes no GoTrue call.
+func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, confirm string) {
 	q := r.URL.Query()
 	token := q.Get("token")
 	if token == "" || len(token) > maxVerifyTokenBytes || q.Get("type") != "signup" {
@@ -25,7 +26,7 @@ func serveInvitationPasswordPage(w http.ResponseWriter, r *http.Request, site, f
 	}
 	state := q.Get("state")
 	if len(q["state"]) != 1 || !stateShape.MatchString(state) {
-		http.Redirect(w, r, site+"/?confirm=invite#token="+url.QueryEscape(token), http.StatusSeeOther)
+		http.Redirect(w, r, site+"/?confirm="+confirm+"#token="+url.QueryEscape(token), http.StatusSeeOther)
 		return
 	}
 	setResetPageHeaders(w.Header())

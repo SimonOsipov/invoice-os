@@ -124,35 +124,6 @@ func vpHash(script string) string {
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
-func TestVerifyPage_GetRendersThePage(t *testing.T) {
-	rec, doc := vpPage(t, vpToken)
-	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
-		t.Errorf("Content-Type = %q, want text/html; charset=utf-8", got)
-	}
-	h1 := vpFind(doc, vpTag("h1"))
-	if len(h1) == 0 {
-		t.Fatal("page has no <h1>")
-	}
-	if got := strings.TrimSpace(vpText(h1[0])); got != "Confirm your email address" {
-		t.Errorf("h1 = %q, want %q", got, "Confirm your email address")
-	}
-	titles := vpFind(doc, vpTag("title"))
-	if len(titles) != 1 || vpText(titles[0]) != "Confirm your email \u00b7 ASComply" {
-		t.Errorf("title elements = %d, want exactly 1 reading %q", len(titles), "Confirm your email \u00b7 ASComply")
-	}
-	var paras []string
-	for _, p := range vpFind(doc, vpTag("p")) {
-		paras = append(paras, strings.TrimSpace(vpText(p)))
-	}
-	want := []string{
-		"Click the button to finish creating your ASComply account.",
-		"If you did not create an ASComply account, close this page.",
-	}
-	if !slices.Equal(paras, want) {
-		t.Errorf("paragraphs = %q, want %q", paras, want)
-	}
-}
-
 func TestVerifyPage_HeadAnswersLikeGet(t *testing.T) {
 	srv := httptest.NewServer(vpHandler(t))
 	defer srv.Close()
@@ -205,57 +176,6 @@ func headersEqual(a, b http.Header) bool {
 		}
 	}
 	return true
-}
-
-func TestVerifyPage_OneFormOneConfirmButton(t *testing.T) {
-	_, doc := vpPage(t, vpToken)
-	forms := vpFind(doc, vpTag("form"))
-	if len(forms) != 1 {
-		t.Fatalf("forms = %d, want exactly 1", len(forms))
-	}
-	form := forms[0]
-	if got, _ := vpAttr(form, "method"); got != "post" {
-		t.Errorf("form method = %q, want post", got)
-	}
-	if got, _ := vpAttr(form, "action"); got != vpPath {
-		t.Errorf("form action = %q, want %s", got, vpPath)
-	}
-	hidden := map[string]string{}
-	for _, in := range vpFind(form, vpTag("input")) {
-		name, _ := vpAttr(in, "name")
-		typ, _ := vpAttr(in, "type")
-		val, _ := vpAttr(in, "value")
-		if typ != "hidden" {
-			t.Errorf("input %q has type %q, want hidden", name, typ)
-		}
-		hidden[name] = val
-	}
-	if len(hidden) != 3 || hidden["token"] != vpToken || hidden["type"] != "signup" || hidden["state"] != vpState {
-		t.Errorf("hidden inputs = %v, want token=%q, type=signup and state=%q only", hidden, vpToken, vpState)
-	}
-	submits := vpFind(doc, func(n *html.Node) bool {
-		typ, has := vpAttr(n, "type")
-		switch n.Data {
-		case "button":
-			return !has || typ == "submit"
-		case "input":
-			return typ == "submit" || typ == "image"
-		}
-		return false
-	})
-	if len(submits) != 1 {
-		t.Fatalf("submit controls in the document = %d, want exactly 1", len(submits))
-	}
-	btn := submits[0]
-	if btn.Data != "button" {
-		t.Errorf("submit control is <%s>, want <button>", btn.Data)
-	}
-	if typ, _ := vpAttr(btn, "type"); typ != "submit" {
-		t.Errorf(`button type = %q, want "submit"`, typ)
-	}
-	if got := strings.TrimSpace(vpText(btn)); got != "Confirm my email" {
-		t.Errorf("button text = %q, want %q", got, "Confirm my email")
-	}
 }
 
 func TestVerifyPage_RevealsNothingButTheTokenAndState(t *testing.T) {
@@ -340,7 +260,7 @@ func TestVerifyPage_TokenAndScriptFillOnlyTheirPlaceholders(t *testing.T) {
 				strings.Contains(body, "{{.Token}}") != strings.Contains(token, "{{.Token}}") {
 				t.Errorf("a placeholder is left unfilled in the page or leaked from the token")
 			}
-			if n := strings.Count(body, verifyScript); n != 1 {
+			if n := strings.Count(body, resetScript); n != 1 {
 				t.Errorf("the submit-once script occurs %d times in the page, want 1", n)
 			}
 			var hits []string
@@ -368,8 +288,6 @@ func TestVerifyPage_TokenAndScriptFillOnlyTheirPlaceholders(t *testing.T) {
 
 func TestVerifyPage_SecurityHeaders(t *testing.T) {
 	h := vpHandler(t)
-	_, doc := vpPage(t, vpToken)
-	wantCSP := strings.Replace(vpWantCSP, "%s", vpHash(vpScript(t, doc)), 1)
 	cases := []struct {
 		name, method, query string
 		status              int
@@ -392,25 +310,13 @@ func TestVerifyPage_SecurityHeaders(t *testing.T) {
 				t.Errorf("Referrer-Policy = %q, want no-referrer", got)
 			}
 			csp := rec.Header().Get("Content-Security-Policy")
-			if csp != wantCSP {
-				t.Errorf("Content-Security-Policy = %q, want %q", csp, wantCSP)
+			if csp != resetCSP {
+				t.Errorf("Content-Security-Policy = %q, want %q", csp, resetCSP)
 			}
 			if strings.Contains(csp, "form-action") {
 				t.Errorf("CSP names form-action: %q", csp)
 			}
 		})
-	}
-}
-
-// The flag set by the first submit is cleared on pageshow, so a bfcache restore or an aborted
-// submit leaves a live button. No JS runtime here; the script text is pinned.
-func TestVerifyPage_ScriptRearmsOnPageshow(t *testing.T) {
-	_, doc := vpPage(t, vpToken)
-	script := vpScript(t, doc)
-	for _, want := range []string{"addEventListener('pageshow'", "delete f.dataset.sent"} {
-		if !strings.Contains(script, want) {
-			t.Errorf("the inline script lacks %q", want)
-		}
 	}
 }
 
@@ -697,7 +603,7 @@ func TestVerifyPage_StateRendersAsHiddenField(t *testing.T) {
 		val, _ := vpAttr(in, "value")
 		got[name] = val
 	}
-	want := map[string]string{"token": vpToken, "type": "signup", "state": vpState}
+	want := map[string]string{"token": vpToken, "type": "signup", "state": vpState, "password": ""}
 	if len(got) != len(want) || got["token"] != want["token"] || got["type"] != want["type"] || got["state"] != want["state"] {
 		t.Errorf("inputs = %v, want %v", got, want)
 	}
@@ -896,7 +802,7 @@ func TestVerifyPage_InviteLinkBadTokenOrTypeIsTheFailedNotice(t *testing.T) {
 	}
 }
 
-func TestVerifyPage_WithoutExactlyOneInviteFlagIsTheConfirmPage(t *testing.T) {
+func TestVerifyPage_WithoutExactlyOneInviteFlagStillServesTheSetPasswordPage(t *testing.T) {
 	h := vpHandler(t)
 	for name, query := range map[string]string{
 		"no invite":        vpQuery(vpToken),
@@ -909,8 +815,8 @@ func TestVerifyPage_WithoutExactlyOneInviteFlagIsTheConfirmPage(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
 			}
-			if got := vpFormAction(t, rec.Body.String()); got != vpPath {
-				t.Errorf("form action = %q, want %s (the confirm page)", got, vpPath)
+			if got := vpFormAction(t, rec.Body.String()); got != "/auth/invitation/password" {
+				t.Errorf("form action = %q, want /auth/invitation/password", got)
 			}
 		})
 	}

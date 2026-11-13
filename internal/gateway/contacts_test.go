@@ -119,11 +119,13 @@ func requireOneHandOff(t *testing.T, s *recSink, want RegistrantContact) {
 	}
 }
 
-const verifyQuery = "token=" + verifyToken + "&type=signup"
+const verifyQuery = "token=" + verifyToken + "&type=signup&password=" + verifyPassword
+
+const verifyPassword = "chosen-pw-1"
 
 // verifyRequest is the click: a form POST whose body is query.
 func verifyRequest(ctx context.Context, query string) *http.Request {
-	req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader(query)).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, ipPath, strings.NewReader(query)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return req
 }
@@ -131,7 +133,7 @@ func verifyRequest(ctx context.Context, query string) *http.Request {
 func doVerifySink(t *testing.T, authURL *url.URL, query string, sink ContactSink) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	confirmHandler(t, authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -427,7 +429,7 @@ func TestHandOff_BlockedSinkNeverDelays(t *testing.T) {
 		sink := newBlockingSink(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		h := VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore(), nil, lrThrottle(time.Now), true)
+		h := confirmHandler(t, fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore(), nil, lrThrottle(time.Now), true)
 
 		rec := answersWithin(t, h, verifyRequest(ctx, verifyQuery), time.Second)
 
@@ -549,7 +551,7 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 			case "verify":
 				fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(coMetaFull)))
 				rec := httptest.NewRecorder()
-				VerifyHandler(fake.URL, siteURL(t), testClient(), log, sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), verifyQuery))
+				confirmHandler(t, fake.URL, siteURL(t), testClient(), log, sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), verifyQuery))
 				requireRedirect(t, rec, verifiedLocation)
 			default:
 				fake := newTokenFake(t, http.StatusOK, coSession(coUser(coMetaFull)))
@@ -858,7 +860,7 @@ func verifyOffline(t *testing.T, client *http.Client, query string, sink Contact
 func verifyOfflineLog(t *testing.T, client *http.Client, query string, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	VerifyHandler(offlineAuth, siteURL(t), client, log, sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	confirmHandler(t, offlineAuth, siteURL(t), client, log, sink, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	synctest.Wait()
 	return rec
 }
@@ -918,22 +920,33 @@ func TestHandOff_UserBodyShapes(t *testing.T) {
 					sink := newRecSink(nil)
 					log, logs := newCaptureLog()
 					client := offlineClient(http.StatusOK, coSession(c.user))
+					var u struct {
+						Email string `json:"email"`
+					}
+					_ = json.Unmarshal([]byte(c.user), &u)
+					// The set-password route refuses a verify answer with no email; its logs carry its own label.
+					label, refused := entry, false
 					want := c.verify
 					if entry == "verify" {
-						requireRedirect(t, verifyOfflineLog(t, client, verifyQuery, sink, log), verifiedLocation)
+						label, refused = "invitation-password", u.Email == ""
+						if refused {
+							requireRedirect(t, verifyOfflineLog(t, client, verifyQuery, sink, log), failedLocation)
+						} else {
+							requireRedirect(t, verifyOfflineLog(t, client, verifyQuery, sink, log), verifiedLocation)
+						}
 					} else {
 						want = c.sign
 						requireCode(t, signInOfflineLog(t, client, NewHandoffStore(HandoffTTL, time.Now), sink, log))
 					}
 
-					var u struct {
-						Email string `json:"email"`
-					}
-					_ = json.Unmarshal([]byte(c.user), &u)
 					warns := logs.all()
 					if blank := strings.TrimSpace(u.Email) == ""; blank {
-						if len(warns) != 1 || warns[0].level != slog.LevelWarn || !strings.HasPrefix(warns[0].text, entry+": gotrue user has no email; no hand-off") {
-							t.Fatalf("logs = %+v, want exactly one %s WARN naming the missing email", warns, entry)
+						wantText := label + ": gotrue user has no email; no hand-off"
+						if refused {
+							wantText = label + ": gotrue verify answer incomplete"
+						}
+						if len(warns) != 1 || warns[0].level != slog.LevelWarn || !strings.HasPrefix(warns[0].text, wantText) {
+							t.Fatalf("logs = %+v, want exactly one %s WARN %q", warns, label, wantText)
 						}
 						for _, pii := range []string{regEmail, coUserID, sessionAT, sessionRT} {
 							if strings.Contains(warns[0].text, pii) {

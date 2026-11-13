@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -297,64 +296,6 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 	case <-ctx.Done():
 		return false
 	}
-}
-
-// VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
-// The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
-	if siteURL == nil {
-		return RegistrationNotConfigured()
-	}
-	verify := authURL.JoinPath("verify").String()
-	site := strings.TrimSuffix(siteURL.String(), "/")
-	verified, failed := site+"/?verified=1", site+"/?verify=failed"
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !postOnly(w, r) {
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
-		if err := r.ParseForm(); err != nil {
-			http.Redirect(w, r, failed, http.StatusSeeOther)
-			return
-		}
-		token := r.PostForm.Get("token")
-		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != "signup" {
-			http.Redirect(w, r, failed, http.StatusSeeOther)
-			return
-		}
-		if !admitLinkRedeem(r, perIP, enforce, "verify", log) {
-			http.Redirect(w, r, failed, http.StatusSeeOther)
-			return
-		}
-		var confirmed struct {
-			AccessToken  string     `json:"access_token"`
-			RefreshToken string     `json:"refresh_token"`
-			User         gotrueUser `json:"user"`
-		}
-		status, gt, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
-		switch {
-		case err != nil:
-			log.WarnContext(r.Context(), "verify: gotrue unreachable", slog.String("error", err.Error()))
-			http.Redirect(w, r, failed, http.StatusSeeOther)
-		case status != http.StatusOK:
-			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
-			http.Redirect(w, r, failed, http.StatusSeeOther)
-		default:
-			handOffRegistrant(r.Context(), log, "verify", sink, confirmed.User.contact())
-			location := verified
-			if state := r.PostForm.Get("state"); stateShape.MatchString(state) && confirmed.AccessToken != "" && confirmed.RefreshToken != "" {
-				answer, _ := json.Marshal(map[string]string{"access_token": confirmed.AccessToken, "refresh_token": confirmed.RefreshToken}) // cannot fail
-				if code, ok := store.Put(string(answer), sha256.Sum256([]byte(state))); ok {
-					location = verified + "&handoff=" + code
-					recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: confirmed.User.ID, Email: confirmed.User.Email, FirstSession: true})
-				} else {
-					log.WarnContext(r.Context(), "verify: hand-off store full")
-				}
-			}
-			http.Redirect(w, r, location, http.StatusSeeOther)
-		}
-	})
 }
 
 // RegistrationNotConfigured answers 503 while AUTH_SITE_URL is unset.

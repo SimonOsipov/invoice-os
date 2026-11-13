@@ -130,7 +130,6 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		target, ctype, in string
 		want              []string
 	}{
-		{"confirm", VerifyHandler(f.URL, site, testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true), "/auth/verify", rpFormType, verifyQuery, []string{"POST /verify"}},
 		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil, lrThrottle(time.Now), true), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout"}},
 		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true), ipPath, rpFormType, withState.Encode(),
@@ -171,19 +170,20 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 	})
 }
 
-// gaVerifyAddress posts the confirm form under env and returns the address GoTrue saw.
+// gaVerifyAddress posts the set-password form under env and returns the address of GoTrue's /verify call.
 func gaVerifyAddress(t *testing.T, env, xff, remote string) []string {
 	t.Helper()
 	t.Setenv("DEPLOY_ENV", env)
-	h, fake := vhVerifier(t, testHandoffStore(), http.StatusOK, gtSession)
-	req := gaRequest("/auth/verify", rpFormType, verifyQuery, xff)
+	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
+	h := confirmHandler(t, fake.URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	req := gaRequest(ipPath, rpFormType, verifyQuery, xff)
 	if remote != "" {
 		req.RemoteAddr = remote
 	}
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	calls := fake.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("GoTrue saw %d calls, want 1", len(calls))
+	if len(calls) == 0 || calls[0].Path != "/verify" {
+		t.Fatalf("GoTrue saw %v, want POST /verify first", calls)
 	}
 	return calls[0].Address
 }
@@ -267,9 +267,9 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 		route         http.HandlerFunc
 		warn          string
 	}{
-		{"confirm: link refused", "verify", answer(http.StatusForbidden, gtOTPExpired), "verify: gotrue refused the link"},
-		{"confirm: 502", "verify", answer(http.StatusBadGateway, gtInternal), "verify: gotrue refused the link"},
-		{"confirm: outage", "verify", dropped, "verify: gotrue unreachable"},
+		{"confirm: link refused", "verify", answer(http.StatusForbidden, gtOTPExpired), "invitation-password: gotrue refused the link"},
+		{"confirm: 502", "verify", answer(http.StatusBadGateway, gtInternal), "invitation-password: gotrue refused the link"},
+		{"confirm: outage", "verify", dropped, "invitation-password: gotrue unreachable"},
 		{"reset: link refused", "reset", answer(http.StatusForbidden, rpOTPExpired), rpMsgRefusedLink},
 		{"reset: 502", "reset", answer(http.StatusBadGateway, gtInternal), rpMsgRefusedLink},
 		{"reset: outage", "reset", dropped, rpMsgUnreachable},
@@ -282,8 +282,8 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 			var h http.Handler
 			var req *http.Request
 			if c.handler == "verify" {
-				h = VerifyHandler(f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
-				req = gaRequest("/auth/verify", rpFormType, verifyQuery, gaXFF)
+				h = confirmHandler(t, f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+				req = gaRequest(ipPath, rpFormType, verifyQuery, gaXFF)
 			} else {
 				th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 				h = ResetPasswordHandler(f.URL, siteURL(t), testClient(), NewSessionChecker(f.URL, testClient(), time.Now, log), th, log, nil, lrThrottle(time.Now), true)

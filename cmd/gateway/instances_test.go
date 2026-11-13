@@ -492,7 +492,7 @@ func TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances(t *testing.T) {
 	t.Cleanup(clean)
 
 	verify := func(h http.Handler) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+uuid.NewString()+"&type=signup"))
+		req := httptest.NewRequest(http.MethodPost, "/auth/invitation/password", strings.NewReader("token="+uuid.NewString()+"&type=signup&password=chosen-pw-1"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.RemoteAddr = ip + ":4000"
 		rec := httptest.NewRecorder()
@@ -504,7 +504,7 @@ func TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances(t *testing.T) {
 		if i%2 == 1 {
 			inst = r.b
 		}
-		if rec := verify(inst.h.Verify); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") == "https://site.example/?verify=failed" {
+		if rec := verify(inst.h.InvitationPassword); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") == "https://site.example/?verify=failed" {
 			t.Fatalf("verify %d = %d Location %q, want 303 to a success notice", i+1, rec.Code, rec.Header().Get("Location"))
 		}
 	}
@@ -512,7 +512,7 @@ func TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances(t *testing.T) {
 		t.Fatalf("GoTrue /verify calls after 30 POSTs = %d, want 30", n)
 	}
 	for name, inst := range map[string]instance{"A": r.a, "B": r.b} {
-		rec := verify(inst.h.Verify)
+		rec := verify(inst.h.InvitationPassword)
 		if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || loc != "https://site.example/?verify=failed" {
 			t.Errorf("31st verify on %s = %d Location %q, want 303 to /?verify=failed: the count is not shared", name, rec.Code, loc)
 		}

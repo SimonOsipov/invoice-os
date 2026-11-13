@@ -73,15 +73,16 @@ func goTrueAnswering(t *testing.T, body string) *url.URL {
 	return u
 }
 
-func TestRegistrationHandlers_VerifyHandsOffToTheSink(t *testing.T) {
+func TestHandoffHandlers_SetPasswordHandsOffToTheSink(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	sink := newChanSink()
-	verify := handoffVerify(goTrueAnswering(t, cwSession), site, sink)
+	log := slog.New(slog.DiscardHandler)
+	h := handoffHandlers(goTrueAnswering(t, cwSession), site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil)
 
-	rec := serveForm(verify, "/auth/verify", "token=tok&type=signup")
+	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=tok&type=signup&password=chosen-pw-1")
 
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
-		t.Fatalf("verify answered %d Location %q, want 303 to /?verified=1", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("set-password answered %d Location %q, want 303 to /?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
 	if got := sink.wait(t); !reflect.DeepEqual(got, cwWant) {
 		t.Errorf("hand-off = %+v, want %+v", got, cwWant)

@@ -181,7 +181,10 @@ func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **Cust
 // a cross-tenant entity_id is rejected even for a caller that bypassed the
 // pre-check (e.g. a race against a concurrent entity delete).
 //
-// The pre-check query and the invoices INSERT are the only pg errors mapped: a
+// A source_document_id the caller cannot read is refused as an unknown one
+// (TestClientScope_CreateCitingAnUnreadableDocumentAnswersAsAnUnknownOne).
+//
+// The pg errors mapped at the pre-check and the INSERT: a
 // unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
 // (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
 // import_batch_id -- the pre-check turns the entity_id case into ErrNotFound

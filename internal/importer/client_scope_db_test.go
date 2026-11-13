@@ -1074,7 +1074,7 @@ func TestClientScope_NoteOriginalsFiledInvoiceOfAHiddenClientReadsAsNull(t *test
 	}
 }
 
-// Store.Create now refuses an unreadable document; an uncited one must still file, not quarantine.
+// Store.Create refuses an unreadable document; an uncited one must still file, not quarantine.
 func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *testing.T) {
 	f := newCSFixture(t, "CS import files with document")
 	doc := docSeedDocument(t, f.super, f.tenant)

@@ -183,11 +183,12 @@ func TestRLS_RefusedCreateWithASourceDocumentLeavesNoRow(t *testing.T) {
 	}
 }
 
-// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence (SD-6, AC-4): the same
+// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence: the same
 // cross-tenant id answers the same while tenant B's row exists and after it is
 // deleted, so the refusal reads neither existence nor tenant. Store.Create's
-// scoped read refuses both legs; the composite FK is the backstop, pinned by the
-// DOC-20 and DOC-25 tests in internal/platform/db/documents_rls_test.go. The legs
+// scoped read refuses both legs; the composite FK is the backstop, pinned by
+// TestRLS_InvoicesCrossTenantSourceDocumentRefRejected and
+// TestRLS_DocumentsCrossTenantPointerRefRejectedOnInsert. The legs
 // use different invoice numbers so a duplicate-number 409 cannot stand in.
 func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 	super, app := dbTestPools(t)

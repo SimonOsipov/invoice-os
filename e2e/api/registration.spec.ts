@@ -1,6 +1,7 @@
 // Registration and workspace provisioning over the deployed gateway.
 // The fork's GoTrue has signup on, SMTP blanked and autoconfirm on, so it mails nothing; the
-// emailed-link path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
+// emailed-link path is proven by the IdP suite (make test-idp) and the nightly e2e/mail spec.
+// The set-password page serves every signup link; POST /auth/verify is retired.
 // /auth/login mints any subject in a mock build, an empty tenant included.
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
@@ -11,8 +12,6 @@ import { resolveTarget } from '../targets'
 
 // internal/gateway/register.go RegisterHandler: the 202 body.
 const VERIFICATION_PENDING = { status: 'verification_pending' }
-// internal/gateway/register.go RegisterHandler: the empty-field refusal.
-const FIELDS_REQUIRED = 'email and password are required'
 // internal/gateway/register.go RegisterHandler: the free-mail refusal.
 const FREE_MAIL_REFUSED = 'a business email address is required; personal email providers are not accepted'
 // internal/tenancy/tenancy.go statusForErr, ErrAlreadyProvisioned.
@@ -23,8 +22,6 @@ const FORBIDDEN = 'forbidden'
 const NAME_REFUSED = 'workspace_name must be 1 to 200 characters'
 // internal/gateway/register.go maxAnswerNameChars.
 const NAME_MAX_CHARS = 200
-// internal/gateway/register.go VerifyHandler: the failure redirect's query.
-const VERIFY_FAILED = '?verify=failed'
 // internal/gateway/resend_verification.go ResendVerificationHandler: the 202 body.
 const RESEND_ACCEPTED = { status: 'accepted' }
 // internal/gateway/resend_verification.go ResendVerificationHandler: the 400 messages.
@@ -101,13 +98,10 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect((res.body as { error: string }).error).toBe(NAME_REFUSED)
   })
 
-  test('an empty password is refused with 400', async () => {
-    const res = await rawFetch('/auth/register', {
-      method: 'POST',
-      body: { email: `reg-${crypto.randomUUID()}@example.com`, password: '' },
-    })
-    assertErrorEnvelope(res, 400, 'empty password')
-    expect((res.body as { error: string }).error).toBe(FIELDS_REQUIRED)
+  test('a body with no password answers 202', async () => {
+    const res = await rawFetch('/auth/register', { method: 'POST', body: { email: `reg-${crypto.randomUUID()}@example.com` } })
+    expect(res.status, JSON.stringify(res.body)).toBe(202)
+    expect(res.body).toEqual(VERIFICATION_PENDING)
   })
 
   test('a free-mail address is refused with the policy message', async () => {
@@ -176,7 +170,7 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/?confirm=1#token=${token}`)
   })
 
-  test('a stated open answers the confirm page', async () => {
+  test('a stated plain link answers the set-password page', async () => {
     // 43 base64url chars: internal/gateway stateShape.
     const state = 'A'.repeat(43)
     const res = await fetch(`${apiBase()}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&state=${state}`, { redirect: 'manual' })
@@ -184,20 +178,21 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(res.headers.get('location'), 'a Location header').toBeNull()
     const body = await res.text()
-    expect(body).toContain('Confirm my email')
-    expect(body).toContain('name="state"')
+    // internal/gateway/invitation_password.html: the form and its password input.
+    expect(body).toContain('action="/auth/invitation/password"')
+    expect(body).toMatch(/<input type="password" name="password"[^>]*minlength="6"[^>]*maxlength="72"/)
+    expect(body).toContain(`name="state" value="${state}"`)
+    expect(body).not.toContain('Confirm my email')
   })
 
-  test('a bogus confirm click redirects 303 to the landing failure page', async () => {
+  test('POST /auth/verify answers 405', async () => {
     const res = await fetch(`${apiBase()}/auth/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ token: `bogus-${crypto.randomUUID()}`, type: 'signup' }),
+      body: new URLSearchParams({ token: `bogus-${crypto.randomUUID()}`, type: 'signup', state: 'A'.repeat(43) }),
       redirect: 'manual',
     })
-    expect(res.status).toBe(303)
-    // Exact, so a lookalike host (landing.example.evil) cannot pass a prefix match.
-    expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`)
+    expect(res.status).toBe(405)
   })
 })
 

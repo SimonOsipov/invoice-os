@@ -707,6 +707,13 @@ jobs:
           token=$(bash scripts/ci/preview.sh token "$PR")
           echo "::add-mask::$token"
           echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
+      - name: Read the mock issuer token
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          mock=$(bash scripts/ci/preview.sh mock-token "$PR")
+          echo "::add-mask::$mock"
+          echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -899,6 +906,13 @@ jobs:
           token=$(bash scripts/ci/preview.sh token "$PR")
           echo "::add-mask::$token"
           echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
+      - name: Read the mock issuer token
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          mock=$(bash scripts/ci/preview.sh mock-token "$PR")
+          echo "::add-mask::$mock"
+          echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
       - name: Topology (${{ matrix.shard }})
         env:
           SHARD: ${{ matrix.shard }}
@@ -1073,6 +1087,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
       APP_URL: ${{ needs.prepare-env.outputs.app_url }}
@@ -1100,6 +1115,16 @@ jobs:
           cache: pnpm
       - name: Install the e2e dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Read the mock issuer token
+        run: |
+          set -euo pipefail
+          mock=$(bash scripts/ci/preview.sh mock-token "$PR")
+          echo "::add-mask::$mock"
+          echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
       - name: Check the AI features and accuracy
         run: pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"
       - name: Upload the nightly results

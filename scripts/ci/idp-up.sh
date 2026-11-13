@@ -109,13 +109,15 @@ start_mailpit() {
 
 # Only idp-mail mails.
 no_mail=(-e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_SMTP_HOST=)
+# The image limits per X-User-Address; header-less suite traffic shares one key, so these three containers lift the per-IP rates.
+per_ip=(-e GOTRUE_RATE_LIMIT_VERIFY=100000 -e GOTRUE_RATE_LIMIT_OTP=100000 -e GOTRUE_RATE_LIMIT_TOKEN_REFRESH=100000)
 
 # Sequential: each GoTrue runs its migrations on boot, so the first finishes them alone.
 es256_keys
 # idp-es256's key, for tests that sign an admin token; idp-down.sh removes it.
 keys_file="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/idp-es256-keys$sfx.json"
 (umask 077 && cp "$tmp/keys" "$keys_file") && chmod 600 "$keys_file"
-start idp-es256 9991 -e GOTRUE_JWT_KEYS "${no_mail[@]}"
+start idp-es256 9991 -e GOTRUE_JWT_KEYS "${no_mail[@]}" "${per_ip[@]}"
 start idp-hs256 9992 "${no_mail[@]}"
 es256_keys
 start idp-rebuild 9993 -e GOTRUE_JWT_KEYS "${no_mail[@]}" \
@@ -130,14 +132,14 @@ export GOTRUE_MAILER_SUBJECTS_CONFIRMATION
 GOTRUE_MAILER_SUBJECTS_RECOVERY="Reset your ASComply password"
 export GOTRUE_MAILER_SUBJECTS_RECOVERY
 # The default email-sent cap (30/h) would throttle the reset specs' mail volume.
-start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e GOTRUE_MAILER_SUBJECTS_RECOVERY -e GOTRUE_RATE_LIMIT_EMAIL_SENT=100 \
+start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e GOTRUE_MAILER_SUBJECTS_RECOVERY -e GOTRUE_RATE_LIMIT_EMAIL_SENT=100 "${per_ip[@]}" \
   -e GOTRUE_MAILER_TEMPLATES_RECOVERY="http://$smtp_host:$verify/emails/recovery.html" -e GOTRUE_MAILER_URLPATHS_RECOVERY="http://localhost:$verify/auth/reset-password" \
   -e GOTRUE_MAILER_TEMPLATES_CONFIRMATION="http://$smtp_host:$verify/emails/confirmation.html" \
   -e GOTRUE_MAILER_AUTOCONFIRM=false \
   -e GOTRUE_SMTP_HOST="$smtp_host" -e GOTRUE_SMTP_PORT="$smtp" -e GOTRUE_SMTP_PASS=unused \
   -e GOTRUE_MAILER_URLPATHS_CONFIRMATION="http://localhost:$verify/auth/verify"
 es256_keys
-start idp-short 9996 -e GOTRUE_JWT_KEYS "${no_mail[@]}" -e GOTRUE_JWT_EXP=5
+start idp-short 9996 -e GOTRUE_JWT_KEYS "${no_mail[@]}" "${per_ip[@]}" -e GOTRUE_JWT_EXP=5
 
 echo "IDP_ES256_URL=http://localhost:$((9991 + off))"
 echo "IDP_HS256_URL=http://localhost:$((9992 + off))"

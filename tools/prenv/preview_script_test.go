@@ -338,7 +338,7 @@ func TestPreviewCheckDeploysAsAPublicSite(t *testing.T) {
 	if got := flagValue(call, "--memory"); got != "256Mi" {
 		t.Errorf("--memory = %q, want 256Mi", got)
 	}
-	if got := flagValue(call, "--image"); got != "africa-south1-docker.pkg.dev/ascomply-preview/images/pr/check:pr-7-abc123" {
+	if got := flagValue(call, "--image"); got != "africa-south1-docker.pkg.dev/ascomply-preview/previews/check:pr-7-abc123" {
 		t.Errorf("--image = %q", got)
 	}
 	if !strings.Contains(call, "--no-invoker-iam-check") {
@@ -677,8 +677,52 @@ func TestPreviewNightlyURLsAndImage(t *testing.T) {
 		t.Errorf("urls:\n%s\nwant\n%s", r.stdout, want)
 	}
 	img := runPreview(t, nil, "image", "nightly", "gateway", "abc123")
-	if img.stdout != "africa-south1-docker.pkg.dev/ascomply-preview/images/pr/gateway:nightly-abc123" {
+	if img.stdout != "africa-south1-docker.pkg.dev/ascomply-preview/previews/gateway:nightly-abc123" {
 		t.Errorf("image = %q", img.stdout)
+	}
+}
+
+func TestPreviewImagesUseOnlyThePreviewRepository(t *testing.T) {
+	t.Parallel()
+	wf, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/deploy-prod.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*REGISTRY:\s*(\S+)`).FindSubmatch(wf)
+	if m == nil {
+		t.Fatal("no REGISTRY in deploy-prod.yml")
+	}
+	prodRegistry := string(m[1])
+	prodRepo := prodRegistry[strings.LastIndex(prodRegistry, "/"):] + "/"
+	const prefix = "africa-south1-docker.pkg.dev/ascomply-preview/previews/"
+	for _, name := range []string{"7", "nightly"} {
+		var runs []previewRun
+		for _, svc := range append(previewList(t, "BACKENDS"), previewList(t, "SITES")...) {
+			runs = append(runs, runPreview(t, nil, "deploy", name, "abc123", svc))
+		}
+		runs = append(runs, runPreview(t, nil, "migrate", name, "abc123"))
+		images := 0
+		for _, r := range runs {
+			if !r.exists("calls") {
+				continue
+			}
+			for _, line := range strings.Split(r.file(t, "calls"), "\n") {
+				img := flagValue(line, "--image")
+				if img == "" {
+					continue
+				}
+				images++
+				if !strings.HasPrefix(img, prefix) {
+					t.Errorf("%s: --image %q is outside %s", name, img, prefix)
+				}
+				if strings.Contains(img, prodRepo) {
+					t.Errorf("%s: --image %q names the production repository %s", name, img, prodRepo)
+				}
+			}
+		}
+		if images < 15 {
+			t.Errorf("%s: saw %d --image flags, want at least 15", name, images)
+		}
 	}
 }
 
@@ -1075,7 +1119,7 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 		t.Errorf("database calls:\n%s", c)
 	}
 	m := runPreview(t, nil, "migrate", "nightly", "abc123")
-	for _, w := range []string{"run jobs deploy migrate-nightly ", "--labels preview-pr=nightly ", "images/pr/migrate:nightly-abc123", "run jobs execute migrate-nightly "} {
+	for _, w := range []string{"run jobs deploy migrate-nightly ", "--labels preview-pr=nightly ", "/previews/migrate:nightly-abc123", "run jobs execute migrate-nightly "} {
 		if !strings.Contains(m.file(t, "calls"), w) {
 			t.Errorf("migrate calls lack %q", w)
 		}

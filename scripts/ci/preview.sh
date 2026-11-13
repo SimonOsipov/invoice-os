@@ -34,7 +34,7 @@ set -euo pipefail
 PROJECT=ascomply-preview
 PROJECT_NUMBER=944095690109
 REGION=africa-south1
-REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/images/pr
+REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/previews
 RUNTIME=run-preview@ascomply-preview.iam.gserviceaccount.com
 LABEL=preview-pr
 gc=(--project "$PROJECT" --region "$REGION" --quiet)

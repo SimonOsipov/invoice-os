@@ -629,7 +629,6 @@ cmd_invariants() {
     "https://artifactregistry.googleapis.com/v1/projects/$PROJECT/locations/$REGION/repositories/$PROD_IMAGES:testIamPermissions")
   case "$code" in
     200) held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/images-held.json") ;;
-    403) held="" ;;
     *) die "testIamPermissions on $PROD_IMAGES answered HTTP $code" ;;
   esac
   if [ -n "$held" ]; then

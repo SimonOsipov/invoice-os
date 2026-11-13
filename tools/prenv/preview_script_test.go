@@ -2154,23 +2154,9 @@ func TestPreviewInvariantsNameEveryHeldImagePermissionAndPassOnAnEmptySet(t *tes
 	}
 }
 
-func TestPreviewInvariantsPassOnA403FromTheImageRepository(t *testing.T) {
-	t.Parallel()
-	r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: "403"})
-	if r.code != 0 {
-		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
-	}
-	if len(imgCalls(t, r, "/"+prodImagesRepo(t)+":testIamPermissions")) != 1 {
-		t.Errorf("the production image repository was never asked:\n%s", r.file(t, "curl-calls"))
-	}
-	if !strings.Contains(r.stdout, "no write on the production image repository") {
-		t.Errorf("success line does not name the production image repository:\n%s", r.stdout)
-	}
-}
-
 func TestPreviewInvariantsFailOnAnUnexpectedImageRepositoryAnswer(t *testing.T) {
 	t.Parallel()
-	for _, code := range []string{"404", "500", "000", "401", "429", "302", "201"} {
+	for _, code := range []string{"403", "404", "500", "000", "401", "429", "302", "201"} {
 		t.Run(code, func(t *testing.T) {
 			t.Parallel()
 			r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: code})

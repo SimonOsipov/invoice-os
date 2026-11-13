@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/ci/caddy-headers.sh: runs the root Caddyfile in the SPA Dockerfiles' Caddy image and
-# asserts every response forbids framing, the host redirects answer as the LB did, and a site with
-# /404.html serves only its built addresses. Needs docker and curl.
+# asserts every response carries the security headers, Cache-Control is right per response class, the
+# host redirects answer as the LB did, and a site with /404.html serves only its built addresses. Needs docker and curl.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 # ceiling: held at Caddy 2.11.7 (2.11.8 try_files matches a bare directory); move when a release passes this script.
@@ -22,18 +22,54 @@ port=$(docker port "$name" 8080/tcp | head -n1 | sed 's/.*://')
 for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$port/health" && break; sleep 0.2; done
 
 fail=0
+# Copied from the Caddyfile's first header block.
+want_hdrs=(
+  "content-security-policy: frame-ancestors 'none'"
+  "x-frame-options: DENY"
+  "x-content-type-options: nosniff"
+  "referrer-policy: strict-origin-when-cross-origin"
+  "permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+)
+# sec <label> <headers-text>: each security header appears exactly once.
+sec() {
+  local l=$1 h=$2 w n
+  for w in "${want_hdrs[@]}"; do
+    n=$(printf '%s\n' "$h" | tr -d '\r' | grep -Fxic -- "$w")
+    [ "$n" = 1 ] || { echo "FAIL $l: '$w' x$n, want 1"; fail=1; }
+  done
+}
+# cc <port> <path> <want> [-sI]: want no-cache, no-store or - (no Cache-Control line).
+cc() {
+  local h n
+  h=$(curl -s${4#-s} -o /dev/null -D - "http://127.0.0.1:$1$2" | tr -d '\r')
+  n=$(printf '%s\n' "$h" | grep -ic '^cache-control:')
+  if [ "$3" = - ]; then
+    [ "$n" = 0 ] || { echo "FAIL $2: Cache-Control present, want none"; fail=1; }
+  else
+    [ "$n" = 1 ] && printf '%s\n' "$h" | grep -qix "cache-control: $3" || { echo "FAIL $2: want one Cache-Control: $3"; fail=1; }
+  fi
+}
+# cond <port> <path> <req-header> <validator-header>: 304 on revalidation, with the security headers.
+cond() {
+  local v h code
+  v=$(curl -s -o /dev/null -D - "http://127.0.0.1:$1$2" | tr -d '\r' | sed -n "s/^$4: //Ip")
+  [ -n "$v" ] || { echo "FAIL $2: no $4 to revalidate with"; fail=1; return; }
+  h=$(curl -s -o /dev/null -D - -H "$3: $v" "http://127.0.0.1:$1$2" | tr -d '\r')
+  code=$(printf '%s\n' "$h" | head -n1 | cut -d' ' -f2)
+  echo "$2 ($3) -> $code"
+  [ "$code" = 304 ] || { echo "FAIL $2 with $3: want 304, got $code"; fail=1; }
+  sec "$2 $3" "$h"
+}
+
 for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health /check/health /assets/index-abc123.js.map; do
   hdrs=$(curl -s -o /dev/null -D - "http://127.0.0.1:$port$path" | tr -d '\r')
   code=$(printf '%s\n' "$hdrs" | head -n1)
   echo "$path -> $code"
   [ -n "$hdrs" ] || { echo "FAIL $path: no response"; fail=1; continue; }
-  printf '%s\n' "$hdrs" | grep -qix "content-security-policy: frame-ancestors 'none'" \
-    || { echo "FAIL $path: Content-Security-Policy: frame-ancestors 'none' missing"; fail=1; }
-  printf '%s\n' "$hdrs" | grep -qix "x-frame-options: DENY" \
-    || { echo "FAIL $path: X-Frame-Options: DENY missing"; fail=1; }
+  sec "$path" "$hdrs"
 done
 
-# row <port> <path> <want-status> <marker>: asserts status, body marker (- = empty body) and both frame headers.
+# row <port> <path> <want-status> <marker>: asserts status, body marker (- = empty body) and the security headers.
 # Optional 5th arg: -sI for a HEAD row (no body to match).
 row() {
   local p=$1 path=$2 want=$3 marker=$4 flag=${5:--s} hdrs body code
@@ -45,10 +81,7 @@ row() {
   if [ "$flag" = "-sI" ]; then :
   elif [ "$marker" = "-" ]; then [ -z "$body" ] || { echo "FAIL $path: body not empty"; fail=1; }
   else printf '%s' "$body" | grep -q -- "$marker" || { echo "FAIL $path: body lacks $marker"; fail=1; }; fi
-  tr -d '\r' <"$hdrs" | grep -qix "content-security-policy: frame-ancestors 'none'" \
-    || { echo "FAIL $path: Content-Security-Policy: frame-ancestors 'none' missing"; fail=1; }
-  tr -d '\r' <"$hdrs" | grep -qix "x-frame-options: DENY" \
-    || { echo "FAIL $path: X-Frame-Options: DENY missing"; fail=1; }
+  sec "$path" "$(cat "$hdrs")"
   rm -f "$hdrs"
 }
 
@@ -58,6 +91,12 @@ row "$port" /.env 200 'SPA-INDEX'
 row "$port" /library/health 200 '^OK$'
 row "$port" /check/health 200 '^OK$'
 row "$port" /assets/index-abc123.js.map 404 -
+cc "$port" / no-cache
+cc "$port" /invoices/42 no-cache
+cc "$port" /invoices/42 no-cache -sI
+cc "$port" /assets/index-abc123.js -
+cond "$port" / If-None-Match etag
+cond "$port" /assets/index-abc123.js If-Modified-Since last-modified
 
 # Strict fixture (landing, library): a site that ships /404.html. docker cp, not a bind mount:
 # a macOS bind mount is case-insensitive and would serve /Privacy.
@@ -113,6 +152,11 @@ row "$sport" /library/invoices 200 LIBRARY-GROUP -sI
 row "$sport" /assets/index-abc123.js.map 404 -
 row "$sport" /library/_landing/assets/index-abc123.js.map 404 -
 row "$sport" /privacy.map 404 -
+for p in / /privacy /privacy/ /library /library/invoices/import-files /check/; do cc "$sport" "$p" no-cache; done
+for p in /assets/index-abc123.js /library/_landing/assets/index-abc123.js /robots.txt; do cc "$sport" "$p" -; done
+for p in /nope-xyz /index.html; do cc "$sport" "$p" no-store; done
+cc "$sport" /nope-xyz no-store -sI
+cond "$sport" /privacy If-None-Match etag
 curl -s -o /dev/null -w '%{content_type}' "http://127.0.0.1:$sport/library/_landing/assets/index-abc123.js" | grep -qi javascript \
   || { echo "FAIL: /library/_landing/assets js is not javascript"; fail=1; }
 
@@ -137,6 +181,7 @@ while read -r h path want; do
   hdrs=$(curl -s -o /dev/null -D - -H "Host: $h" "http://127.0.0.1:$port$path" | tr -d '\r')
   code=$(printf '%s\n' "$hdrs" | head -n1 | cut -d' ' -f2)
   loc=$(printf '%s\n' "$hdrs" | sed -n 's/^[Ll]ocation: //p')
+  sec "$h$path" "$hdrs"
   echo "$h$path -> $code $loc"
   { [ "$code" = 301 ] && [ "$loc" = "$want" ]; } || { echo "FAIL $h$path: want 301 $want"; fail=1; }
 done <<<"$redirects"

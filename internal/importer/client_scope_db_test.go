@@ -476,7 +476,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 
 func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testing.T) {
 	f := newCSFixture(t, "CS import route")
-	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
 	h := CreateHandler(f.svc.Import, f.docSvc.OpenLinked, f.store.SaveMapping, f.store.EntityVisible, nil)
 	post := func(entity, query string) *httptest.ResponseRecorder {
 		body, ct := buildImportForm(t, entity, `{"invoice_number":"Inv No"}`, doc.ID)
@@ -639,7 +639,7 @@ func TestClientScope_ADocumentOfAHiddenClientIsRefusedOnTheImportRoutes(t *testi
 	header := []string{"Inv No"}
 	hidden := storeDocumentAs(t, f.docSvc, f.tenant, "b.csv", "text/csv", csvBody(t, header, [][]string{{"B-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entB, hidden)
-	own := storeDocumentAs(t, f.docSvc, f.tenant, "a.csv", "text/csv", csvBody(t, header, [][]string{{"A-1"}})).ID
+	own := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "a.csv", "text/csv", csvBody(t, header, [][]string{{"A-1"}})).ID
 	if err := f.store.SaveMapping(f.admin, f.entA, header, map[string]string{"invoice_number": "Inv No"}); err != nil {
 		t.Fatalf("SaveMapping(A): %v", err)
 	}
@@ -1134,7 +1134,7 @@ func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *test
 	doc := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-CITE-DOC"))
 	header := []string{"Inv No"}
-	csv := storeDocumentAs(t, f.docSvc, f.tenant, "c.csv", "text/csv", csvBody(t, header, [][]string{{"CS-CITE-CSV"}})).ID
+	csv := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "c.csv", "text/csv", csvBody(t, header, [][]string{{"CS-CITE-CSV"}})).ID
 
 	byDoc, err := f.svc.ImportDocument(f.limited, f.entA, doc)
 	if err != nil {

@@ -541,3 +541,35 @@ func TestClientScope_UploaderLegacyAndFullAccessCitationsOfAnUncitedDocumentBind
 		}
 	}
 }
+
+// The sentinel is pinned by identity, not by name: ErrSourceDocumentBound does not exist yet and
+// naming it would stop the whole package compiling. The green step adds the errors.Is line.
+func TestStoreCreate_BoundElsewhereIsItsOwnErrorAndKeepsTheValidationText(t *testing.T) {
+	f := newCSFixture(t, "SC bound sentinel")
+	d := seedDocument(t, f.super, f.tenant)
+	scCiteByBatch(t, f.super, f.tenant, f.entB, d)
+	if entity, _ := scBinding(t, f, d); entity != f.entB {
+		t.Fatalf("control: documents.entity_id = %q, want %s", entity, f.entB)
+	}
+	badBatch := uuid.NewString()
+
+	bound := scCreate(f, f.admin, f.entA, "SC-SENT-1", &d)
+	boundAgain := scCreate(f, f.admin, f.entA, "SC-SENT-2", &d)
+	_, otherErr := f.store.Create(f.admin, CreateInput{EntityID: f.entA, InvoiceNumber: "SC-SENT-3", ImportBatchID: &badBatch,
+		LineItems: []LineItemInput{{Description: strPtr("SC line")}}})
+
+	for name, err := range map[string]error{"bound elsewhere": bound, "another 23503": otherErr} {
+		if !errors.Is(err, ErrValidation) || err.Error() != "invoice: validation" {
+			t.Errorf("%s: err = %v, want ErrValidation with the text %q", name, err, "invoice: validation")
+		}
+	}
+	if bound == ErrValidation || !errors.Is(boundAgain, bound) {
+		t.Errorf("bound elsewhere: err is the bare ErrValidation or not one stable sentinel (%v, %v), want its own sentinel wrapping ErrValidation", bound, boundAgain)
+	}
+	if otherErr != ErrValidation || errors.Is(otherErr, bound) {
+		t.Errorf("another 23503: err = %v, want the bare ErrValidation, not the bound-elsewhere sentinel", otherErr)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE source_document_id = $1`, d); n != 0 {
+		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+}

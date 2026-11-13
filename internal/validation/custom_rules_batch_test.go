@@ -592,3 +592,49 @@ func TestBatch_GoldenRuleAboveTheLimitIsStillJudged(t *testing.T) {
 		t.Errorf("violations = %v, want the duplicate-line violation", got)
 	}
 }
+
+// serveBatchWithDeadline posts body with a request context that ends after d.
+func serveBatchWithDeadline(t *testing.T, rs RuleSet, body map[string]any, d time.Duration) (*httptest.ResponseRecorder, string) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	var calls []loadCall
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	BatchValidateHandler(recordingLoader(rs, &calls), NewDefaultEngine(), nil, log).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", bytes.NewReader(raw)).WithContext(ctx))
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("handler took %v, want under 5s", el)
+	}
+	return rec, buf.String()
+}
+
+// The last item has no later item to notice the ended context, so the handler
+// must stop on the custom-rule error itself.
+func TestBatch_ContextEndInTheOnlyItemsCustomRuleAnswersNothing(t *testing.T) {
+	rule := cwire("rev1", "custom:slow", TypeCEL, "buyer.email", celParams(nestedAll(100, 100, 10)), "error", "slow")
+	rec, logs := serveBatchWithDeadline(t, goldenFake(), map[string]any{
+		"invoices":         []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{rule}},
+	}, 50*time.Millisecond)
+	if strings.Contains(rec.Body.String(), "results") {
+		t.Errorf("body = %q, want no results", rec.Body.String())
+	}
+	if strings.Contains(logs, "custom rule fault") || strings.Contains(logs, "ERROR") {
+		t.Errorf("log = %q, want no fault and no error line", logs)
+	}
+}
+
+func TestBatch_ContextEndDuringAGoldenRuleIsNotAServerFault(t *testing.T) {
+	rs := RuleSet{ID: "g-slow", Version: 1, Rules: []Rule{celRule("golden-slow", "", nested100(5))}}
+	rec, logs := serveBatchWithDeadline(t, rs, map[string]any{"invoices": []any{item("a")}}, 100*time.Millisecond)
+	if rec.Code == http.StatusInternalServerError || rec.Body.Len() != 0 {
+		t.Errorf("status %d body %q, want no 500 and an empty body", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(logs, "ERROR") {
+		t.Errorf("log = %q, want no error line", logs)
+	}
+}

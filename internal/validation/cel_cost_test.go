@@ -277,3 +277,36 @@ func TestCEL_GoldenRulesCarryNoCostLimit(t *testing.T) {
 		t.Errorf("limited err = %v, want errCELTooExpensive (the input must exceed the limit)", err)
 	}
 }
+
+func TestCEL_EndedContextWinsOverTheCostLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(limited())
+	cancel()
+	_, err := NewDefaultEngine().EvaluateContext(ctx, emptyInvoice(), celOneRule(nested100(3), nil))
+	if !errors.Is(err, context.Canceled) || errors.Is(err, errCELTooExpensive) {
+		t.Fatalf("err = %v, want Canceled and not errCELTooExpensive", err)
+	}
+}
+
+func TestCEL_CostOverrunIsNotAContextError(t *testing.T) {
+	_, err := NewDefaultEngine().EvaluateContext(limited(), emptyInvoice(), celOneRule(nested100(3), nil))
+	if !errors.Is(err, errCELTooExpensive) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want errCELTooExpensive only", err)
+	}
+}
+
+func TestCEL_LimitBoundaryTwoNestedAcceptedThreeRefused(t *testing.T) {
+	if _, err := NewDefaultEngine().EvaluateContext(limited(), emptyInvoice(), celOneRule(nested100(2), nil)); err != nil {
+		t.Errorf("two nested (cost 31,411): err = %v, want none", err)
+	}
+	if _, err := NewDefaultEngine().EvaluateContext(limited(), emptyInvoice(), celOneRule(nested100(3), nil)); !errors.Is(err, errCELTooExpensive) {
+		t.Errorf("three nested (cost 3.1M): err = %v, want errCELTooExpensive", err)
+	}
+}
+
+func TestCEL_LinePassWithinBudgetStillBlamesFailingLines(t *testing.T) {
+	expr := "invoice.line_items.all(x, has(x.ok) && " + nested100(2) + ")"
+	vs, err := celEvaluator{}.evalLinesContext(limited(), linesPayload(map[string]any{}, map[string]any{"ok": true}, map[string]any{}), celRule("k", "line_items", expr))
+	if err != nil || len(vs) != 2 {
+		t.Fatalf("vs=%v err=%v, want 2 line violations and no error", vs, err)
+	}
+}

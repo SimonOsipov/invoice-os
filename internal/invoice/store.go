@@ -17,6 +17,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -298,6 +299,23 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			// uuid compare in SQL: a string compare rejects an upper-case entity_id
 			if !sameEntity {
 				return ErrOriginalOtherEntity
+			}
+		}
+
+		// A member cites only a document they can read; refused as an unknown id.
+		if in.SourceDocumentID != nil {
+			var readable bool
+			if err := tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND `+document.ReadableByScope+`)`,
+				*in.SourceDocumentID,
+			).Scan(&readable); err != nil {
+				if pgCode(err) == "22P02" {
+					return ErrValidation
+				}
+				return err
+			}
+			if !readable {
+				return ErrValidation
 			}
 		}
 

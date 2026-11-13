@@ -2,7 +2,8 @@
 // A sibling of GET /v1/invoices/{id}/history rather than a widening of the
 // invoice payload -- invoiceColumns feeds a positional scanInvoice and the MBS
 // compliance fingerprint, so neither column may enter it. documents/audit_log
-// are read with plain SQL: no import of internal/document, no coupling.
+// are read here with plain SQL. Store.Create imports internal/document only for
+// ReadableByScope, the one document rule.
 package invoice
 
 import (

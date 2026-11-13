@@ -185,13 +185,12 @@ func TestRLS_RefusedCreateWithASourceDocumentLeavesNoRow(t *testing.T) {
 	}
 }
 
-// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence (SD-6, AC-4
-// falsification): the same id, once while tenant B's documents row EXISTS and
-// once after it is deleted. Identical bodies prove the refusal comes from the
-// composite FK and not from "no such row anywhere" -- which a spec asserting
-// only "cross-tenant is a 400" would pass either way. The two legs use
-// different invoice numbers so a duplicate-number 409 can never stand in for
-// the refusal under test.
+// TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence (SD-6, AC-4): the same
+// cross-tenant id answers the same while tenant B's row exists and after it is
+// deleted, so the refusal reads neither existence nor tenant. Store.Create's
+// scoped read refuses both legs; the composite FK is the backstop, pinned by the
+// DOC-20 and DOC-25 tests in internal/platform/db/documents_rls_test.go. The legs
+// use different invoice numbers so a duplicate-number 409 cannot stand in.
 func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 	super, app := dbTestPools(t)
 

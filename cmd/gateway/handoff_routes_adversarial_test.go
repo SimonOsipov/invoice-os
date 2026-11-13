@@ -43,6 +43,15 @@ func signInJSON(email string) string {
 }
 
 // A GoTrue 3xx is an answer, not a hop: following it could turn a refusal into a code or a token.
+// calleeKey names a call; the link-redeem throttle constructor is told apart from the sign-in one by its scope.
+func calleeKey(c *ast.CallExpr) string {
+	name := types.ExprString(c.Fun)
+	if name == "gateway.NewSignInThrottle" && len(c.Args) > 0 && types.ExprString(c.Args[0]) == `"link-redeem-ip"` {
+		return "link-redeem-ip throttle"
+	}
+	return name
+}
+
 func TestHandoffHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	for _, c := range []struct{ path, body, leak string }{
 		{"/auth/sign-in", signInJSON("a@example.com"), `"code"`},
@@ -133,7 +142,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 			case *ast.AssignStmt:
 				if len(n.Lhs) == 1 && len(n.Rhs) == 1 {
 					if c, ok := n.Rhs[0].(*ast.CallExpr); ok {
-						assigned[types.ExprString(c.Fun)] = types.ExprString(n.Lhs[0])
+						assigned[calleeKey(c)] = types.ExprString(n.Lhs[0])
 					}
 				}
 			case *ast.CompositeLit:
@@ -141,7 +150,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 					clients = append(clients, clientFields(n))
 				}
 			case *ast.CallExpr:
-				callee := types.ExprString(n.Fun)
+				callee := calleeKey(n)
 				var args []string
 				for _, a := range n.Args {
 					args = append(args, types.ExprString(a))
@@ -164,15 +173,16 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		t.Errorf("CheckRedirect returns %q, want only http.ErrUseLastResponse", got)
 	}
 
-	store, throttle := assigned["gateway.NewHandoffStore"], assigned["gateway.NewSignInThrottle"]
+	store, throttle, perIP := assigned["gateway.NewHandoffStore"], assigned["gateway.NewSignInThrottle"], assigned["link-redeem-ip throttle"]
 	for callee, want := range map[string]string{
 		"gateway.NewHandoffStore":   "gateway.HandoffTTL, time.Now",
+		"link-redeem-ip throttle":   `"link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now`,
 		"gateway.NewSignInThrottle": `"sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now`,
 		"gateway.SignInHandler":     "authURL, client, " + store + ", " + throttle + ", log, sink, events",
 		"gateway.ExchangeHandler":   store,
 		"gateway.RefreshHandler":    "authURL, client, log",
 		"gateway.SignOutHandler":    "authURL, client, " + sessions + ", log, events",
-		"gateway.VerifyHandler":     "authURL, siteURL, client, log, sink, " + store + ", events",
+		"gateway.VerifyHandler":     "authURL, siteURL, client, log, sink, " + store + ", events, " + perIP + ", enforce",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {

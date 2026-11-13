@@ -203,7 +203,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 		return instance{
 			api:       api,
 			h:         h,
-			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, nil),
+			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)),
 			resend:    reg.ResendVerification,
 			subscribe: blogSubscribeHandlers(notificationsURL, instToken, 0, log, pool).Subscribe,
 		}

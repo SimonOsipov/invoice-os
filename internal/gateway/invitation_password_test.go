@@ -29,7 +29,7 @@ func newInviteRig(t *testing.T, sink ContactSink) *resetRig {
 	t.Helper()
 	r := newResetRig(t)
 	log := slog.New(slog.NewJSONHandler(r.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log, testHandoffStore(), nil)
+	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
 	return r
 }
 
@@ -39,7 +39,7 @@ func newInviteHandler(t *testing.T, f *resetGoTrue, log *slog.Logger, sink Conta
 		log = slog.New(slog.DiscardHandler)
 	}
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, testHandoffStore(), nil)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
 }
 
 func ipPost(t *testing.T, h http.Handler, v url.Values) *httptest.ResponseRecorder {
@@ -269,8 +269,8 @@ func TestInvitationPassword_NonPostIs405AndUnconfiguredIs503(t *testing.T) {
 	th := NewSignInThrottle("sign-in", 10, 10, SignInWindow, newTestClock().Now)
 	log := slog.New(slog.DiscardHandler)
 	for name, h := range map[string]http.Handler{
-		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil),
-		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil),
+		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true),
+		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true),
 	} {
 		rec := ipPost(t, h, rpValues(rpToken, "signup", rpPass))
 		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "registration is not configured") {
@@ -339,7 +339,7 @@ func TestInvitationPassword_NoSecretInLocationOrLogs(t *testing.T) {
 			}
 			log, buf := captureLog()
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-			h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store, nil)
+			h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store, nil, lrThrottle(time.Now), true)
 			v := rpValues(token, "signup", pass)
 			v.Set("state", vhState)
 
@@ -397,7 +397,7 @@ func ipOfflineHandler(t *testing.T, client *http.Client, sink ContactSink, log *
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	sessions := NewSessionChecker(offlineAuth, offlineClient(http.StatusOK, `{}`), time.Now, log)
-	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log, testHandoffStore(), nil)
+	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
 }
 
 func TestInvitationPassword_OnlyAConfirmedPasswordedUserReachesTheContactSink(t *testing.T) {

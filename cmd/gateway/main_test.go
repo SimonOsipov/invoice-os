@@ -1310,9 +1310,9 @@ func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
 			got := map[string]*httptest.ResponseRecorder{}
 			if unset == "AUTH_SITE_URL" {
 				got["page"] = serveRegistration(gateway.ResetPasswordPageHandler(nil), http.MethodGet, "/auth/reset-password?token=t&type=recovery", "")
-				got["form"] = serveForm(resetPasswordHandler(authURL, nil, sessions, signIn, log, nil), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+				got["form"] = serveForm(resetPasswordHandler(authURL, nil, sessions, signIn, log, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
 			} else {
-				got["form"] = serveForm(resetPasswordHandler(nil, site, sessions, signIn, log, nil), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+				got["form"] = serveForm(resetPasswordHandler(nil, site, sessions, signIn, log, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
 			}
 			for name, rec := range got {
 				if rec.Code != http.StatusServiceUnavailable {

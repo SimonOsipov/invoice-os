@@ -129,10 +129,10 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		target, ctype, in string
 		want              []string
 	}{
-		{"confirm", VerifyHandler(f.URL, site, testClient(), log, nil, testHandoffStore(), nil), "/auth/verify", rpFormType, verifyQuery, []string{"POST /verify"}},
-		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
+		{"confirm", VerifyHandler(f.URL, site, testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true), "/auth/verify", rpFormType, verifyQuery, []string{"POST /verify"}},
+		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil, lrThrottle(time.Now), true), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout"}},
-		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, testHandoffStore(), nil), ipPath, rpFormType, withState.Encode(),
+		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true), ipPath, rpFormType, withState.Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout", "POST /token"}},
 		{"sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), throttle(), log, nil, nil), "/auth/sign-in", jsonType, signInBody(regEmail, regPassword, vhState), []string{"POST /token"}},
 		{"refresh", RefreshHandler(f.URL, testClient(), log), "/auth/refresh", jsonType, refreshBody(rpRefresh), []string{"POST /token"}},
@@ -238,7 +238,7 @@ func TestGoTrueAddress_AClientCopyNeverReachesGoTrue(t *testing.T) {
 		h                         http.Handler
 	}{
 		{"sign-in", "application/json", signInBody(regEmail, regPassword, vhState), "/auth/sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), th, nopLog(), nil, nil)},
-		{"reset", rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(), rpPath, ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, nopLog(), nil)},
+		{"reset", rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(), rpPath, ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, nopLog(), nil, lrThrottle(time.Now), true)},
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
@@ -280,11 +280,11 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 			var h http.Handler
 			var req *http.Request
 			if c.handler == "verify" {
-				h = VerifyHandler(f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil)
+				h = VerifyHandler(f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
 				req = gaRequest("/auth/verify", rpFormType, verifyQuery, gaXFF)
 			} else {
 				th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
-				h = ResetPasswordHandler(f.URL, siteURL(t), testClient(), NewSessionChecker(f.URL, testClient(), time.Now, log), th, log, nil)
+				h = ResetPasswordHandler(f.URL, siteURL(t), testClient(), NewSessionChecker(f.URL, testClient(), time.Now, log), th, log, nil, lrThrottle(time.Now), true)
 				req = gaRequest(rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(), gaXFF)
 			}
 			h.ServeHTTP(httptest.NewRecorder(), req)

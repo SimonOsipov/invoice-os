@@ -105,12 +105,12 @@ func writeResetPage(w http.ResponseWriter, method string, status int, page strin
 }
 
 // ResetPasswordHandler answers the page's form POST: verify, set the password, end every session.
-func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, events AccountEvents) http.Handler {
+func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}
 	site := strings.TrimSuffix(siteURL.String(), "/")
-	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
+	return passwordLinkHandler(authURL, client, sessions, signIn, log, perIP, enforce, passwordLinkFlow{
 		verifyType: "recovery", label: "reset-password", page: resetPageHTML,
 		done: site + "/?reset=1", failed: resetFailedURL(siteURL),
 		onConfirmed: func(r *http.Request, user gotrueUser) {
@@ -128,7 +128,7 @@ type passwordLinkFlow struct {
 }
 
 // passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
-func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, flow passwordLinkFlow) http.Handler {
+func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, perIP *SignInThrottle, enforce bool, flow passwordLinkFlow) http.Handler {
 	verify := authURL.JoinPath("verify").String()
 	user := authURL.JoinPath("user").String()
 	logoutURL := authURL.JoinPath("logout")
@@ -153,6 +153,11 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
 			setResetPageHeaders(w.Header())
 			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, formState(r), resetPasswordHint))
+			return
+		}
+
+		if !admitLinkRedeem(r, perIP, enforce, label, log) {
+			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
 

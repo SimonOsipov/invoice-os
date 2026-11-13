@@ -178,7 +178,7 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
-	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger, h.AccountEvents))
+	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger, h.AccountEvents, h.LinkRedeemByIP))
 	app.Mux.Handle("POST /auth/invitation/password", h.InvitationPassword)
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
@@ -328,13 +328,13 @@ func readinessCheckHandlers(worker *url.URL, gatewayToken string, log *slog.Logg
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.
-func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger, events gateway.AccountEvents) http.Handler {
+func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger, events gateway.AccountEvents, perIP *gateway.SignInThrottle) http.Handler {
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
-	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log, events)
+	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log, events, perIP, platform.Posture(platform.DeployEnv()) != platform.PosturePreview)
 }
 
 // poolTokens reads unsubscribe tokens through pool; nil without a pool, so a registration signs up without one.
@@ -382,6 +382,7 @@ func registrantSink(pool *pgxpool.Pool, sink gateway.ContactSink) gateway.Contac
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword, ConsoleHandoff http.Handler
 	SignInThrottle                                                                 *gateway.SignInThrottle
+	LinkRedeemByIP                                                                 *gateway.SignInThrottle
 	AccountEvents                                                                  gateway.AccountEvents
 }
 
@@ -403,17 +404,22 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Transport:     platform.IDTokenTransport(nil),
 	}
 	events := gateway.NewAccountEvents(pool, log)
+	// One count for the confirm, reset and invitee routes; a preview logs and admits.
+	perIP := gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)
+	perIP.Shared(pool, log)
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return handoff{
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink, events),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store, events),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store, events, perIP, enforce),
 
-		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events),
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events, perIP, enforce),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,
+		LinkRedeemByIP: perIP,
 		AccountEvents:  events,
 	}
 }

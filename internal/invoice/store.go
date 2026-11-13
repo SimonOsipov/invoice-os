@@ -2344,15 +2344,13 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 // invoice.transitioned audit row. It does not check legalTransitions; the
 // caller does (transitionCausedTx) or owns an edge outside it (support.go).
 func applyTransitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
-	// [reason-lifecycle] (M5-09-02/task-255): entry to accepted clears
-	// rejection_reasons, and only here, since Store.Edit's rejected->draft
-	// demotion retains them. MarkAcceptedTx is the only writer of accepted;
-	// the clear rides the same UPDATE ... RETURNING, so it is atomic with the
-	// status write. '[]' is a SQL literal, so $2 (id) is not renumbered.
+	// [reason-lifecycle]: entry to accepted clears rejection_reasons, and only
+	// here, since Store.Edit's rejected->draft demotion retains them. The clear
+	// rides the same UPDATE ... RETURNING, so it is atomic with the status write.
+	// '[]' is a SQL literal, so $2 (id) is not renumbered.
 	//
-	// Not symmetric with rejected: markTerminalTx runs MarkRejectedTx's outcome
-	// closure BEFORE transitionTx, so clearing on rejected here would wipe the
-	// reasons it had just written in the same tx.
+	// Not clearing on rejected is deliberate; the test is
+	// TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx.
 	//
 	// [kept-marks-clear-on-promote] (INVCR-01-15, D6, task-291): draft has exactly
 	// ONE outgoing edge (draft->validated, legalTransitions), so target ==

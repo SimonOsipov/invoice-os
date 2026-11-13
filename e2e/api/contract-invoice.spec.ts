@@ -64,8 +64,7 @@ import {
   approveUntilClosed,
   firmApproverTokens,
   failedByStaffCancel,
-  provisionStaffAccount,
-  signInSession,
+  getStaffToken as getStaffTokenFor,
   PERSONAS,
   type Entity,
 } from './client'
@@ -111,10 +110,7 @@ function twoLineInvoiceFields(invoiceNumber: string) {
   }
 }
 
-// The staff token for failedByStaffCancel, provisioned once per file.
-let staffToken: Promise<string> | undefined
-const getStaffToken = (): Promise<string> =>
-  (staffToken ??= provisionStaffAccount('contract-invoice').then(async (a) => (await signInSession(a.email, a.password)).access_token))
+const getStaffToken = () => getStaffTokenFor('contract-invoice')
 
 // A failed invoice with a NULL failure_kind: buyer TIN -0004 retries, then a staff cancel fails it.
 async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
@@ -166,6 +162,9 @@ const MOCK_TIN_RETRYING = '99999999-0004'
 
 // internal/invoice/handlers.go fiscalStatusRefusal, byte for byte.
 const FISCAL_STATUS_REFUSAL = 'this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions'
+
+// internal/invoice/handlers.go statusForErr, the ErrIllegalTransition case, byte for byte.
+const ILLEGAL_TRANSITION_ERROR = 'illegal transition'
 
 // internal/submission/mock_script.go mockTINUnbuildable: the mock adapter fails Transform for this buyer TIN.
 const MOCK_TIN_UNBUILDABLE = '99999999-0010'
@@ -563,6 +562,18 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
 
       expect((await getInvoice(token, created.id)).status, 'a refused transition must not move the invoice').toBe('validated')
+    })
+
+    test('target=draft on an accepted invoice -> 409 illegal transition and the invoice is unmoved', async () => {
+      const accepted = await acceptedOriginal(token, entity.id, `INV-T-${freshTin()}`)
+      const res = await rawFetch(`/api/invoice/v1/invoices/${accepted.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'draft' },
+      })
+      assertErrorEnvelope(res, 409, 'transition target=draft from accepted')
+      expect((res.body as { error: string }).error).toBe(ILLEGAL_TRANSITION_ERROR)
+      expect((await getInvoice(token, accepted.id)).status, 'a refused transition must not move the invoice').toBe('accepted')
     })
 
     test('transition with an unknown target -> 400 {error: string}', async () => {

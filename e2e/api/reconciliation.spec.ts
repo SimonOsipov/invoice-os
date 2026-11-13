@@ -62,12 +62,16 @@ test.describe('reconciliation sweep (API E2E, over the deployed gateway)', () =>
 
     const tin = freshTin()
     const entity = await createEntity(token, { name: `Zz RECON ${tin}`, tin })
-    // A role with no members; PublishPolicy refuses only a deleted role or an inactive delegate.
-    const role = await createWorkflowRole(token, { title: freshRoleTitle() })
-    const policy = await createApprovalPolicy(token, { name: freshPolicyName(), scopes: { entity_ids: [entity.id] } })
+    let roleKey: string | undefined
+    let policyId: string | undefined
     let invoiceId: string | undefined
     let pollError: unknown
     try {
+      // A role with no members; PublishPolicy refuses only a deleted role or an inactive delegate.
+      const role = await createWorkflowRole(token, { title: freshRoleTitle() })
+      roleKey = role.key
+      const policy = await createApprovalPolicy(token, { name: freshPolicyName(), scopes: { entity_ids: [entity.id] } })
+      policyId = policy.id
       await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: role.key }] })
       await moveToFront(token, [policy.id])
       await publishApprovalPolicy(token, policy.id)
@@ -107,12 +111,16 @@ test.describe('reconciliation sweep (API E2E, over the deployed gateway)', () =>
       pollError = err
     } finally {
       // Cleanup errors never replace the poll's error. The edit demotes the invoice to draft and Store.Edit cancels its live run.
-      try {
-        if (invoiceId) await editInvoice(token, invoiceId, { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] })
-        await deleteApprovalPolicy(token, policy.id)
-        await deleteWorkflowRole(token, role.key)
-      } catch (err) {
-        pollError ??= err
+      const steps: (() => Promise<unknown>)[] = []
+      if (invoiceId) steps.push(() => editInvoice(token, invoiceId!, { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] }))
+      if (policyId) steps.push(() => deleteApprovalPolicy(token, policyId!))
+      if (roleKey) steps.push(() => deleteWorkflowRole(token, roleKey!))
+      for (const step of steps) {
+        try {
+          await step()
+        } catch (err) {
+          pollError ??= err
+        }
       }
     }
     if (pollError) throw pollError

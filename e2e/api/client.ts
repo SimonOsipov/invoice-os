@@ -325,6 +325,18 @@ export async function provisionStaffAccount(prefix: string, password?: string): 
   return { ...account, userId }
 }
 
+// One staff token per process for failedByStaffCancel; a rejected attempt is dropped so the next call retries.
+const staffTokens = new Map<string, Promise<string>>()
+export function getStaffToken(prefix: string): Promise<string> {
+  let p = staffTokens.get(prefix)
+  if (!p) {
+    p = provisionStaffAccount(prefix).then(async (a) => (await signInSession(a.email, a.password)).access_token)
+    p.catch(() => staffTokens.delete(prefix))
+    staffTokens.set(prefix, p)
+  }
+  return p
+}
+
 // POST /auth/mock/invitation-token (internal/gateway/mockinvitation.go answers 204); mock build only.
 // Replaces a pending invite's token, so a spec knows the value the mail would carry.
 export async function setInvitationToken(tenantId: string, invitationId: string, token: string): Promise<void> {
@@ -1004,15 +1016,20 @@ export async function failedByStaffCancel(
     throw new Error(`failedByStaffCancel: invoice ${invoice.id} was not enqueued: ${results[0]?.reason ?? 'no result'}`)
   }
 
+  // state=queued: the only state cancel accepts (internal/staffjobs/handlers.go ListHandler).
+  const findJobId = async () => {
+    const res = await rawFetch(`/api/submission/v1/staff/jobs?tenant=${tenantId}&state=queued`, { headers: staffAuth })
+    const jobs = (res.body as { jobs?: { id: string; invoice_number: string }[] }).jobs ?? []
+    return jobs.find((j) => j.invoice_number === invoice.invoice_number)?.id
+  }
+
   let jobId = undefined as string | undefined
   let cancelled = false
   try {
     await expect
       .poll(
         async () => {
-          const res = await rawFetch(`/api/submission/v1/staff/jobs?tenant=${tenantId}`, { headers: staffAuth })
-          const jobs = (res.body as { jobs?: { id: string; invoice_number: string }[] }).jobs ?? []
-          jobId = jobs.find((j) => j.invoice_number === invoice.invoice_number)?.id
+          jobId = await findJobId()
           return jobId !== undefined
         },
         { message: `no staff job listed for ${invoice.invoice_number}`, timeout: 60_000, intervals: [500, 1000, 2000] },
@@ -1033,8 +1050,13 @@ export async function failedByStaffCancel(
       .toBe('failed/null')
     return inv
   } finally {
-    // An aborted spec would leave the -0004 job retrying for about 78 minutes.
-    if (jobId && !cancelled) await cancel(jobId).catch(() => undefined)
+    // An aborted spec would leave the -0004 job retrying for about 78 minutes: one best-effort cancel, no poll.
+    if (!cancelled) {
+      jobId ??= await findJobId().catch(() => undefined)
+      if (jobId) {
+        await rawFetch(`/api/submission/v1/staff/jobs/${jobId}/cancel`, { method: 'POST', headers: staffAuth, body: { reason } }).catch(() => undefined)
+      }
+    }
   }
 }
 

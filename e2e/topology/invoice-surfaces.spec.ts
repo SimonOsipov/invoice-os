@@ -25,7 +25,7 @@ import {
   createInvoice,
   validateInvoice,
   failedByStaffCancel,
-  provisionStaffAccount,
+  getStaffToken as getStaffTokenFor,
   approveUntilClosed,
   decideInvoiceApproval,
   firmApproverTokens,
@@ -249,10 +249,7 @@ const MOCK_TIN_PENDING = '99999999-0003'
 const MOCK_TIN_UNBUILDABLE = '99999999-0010'
 // internal/submission/mock_script.go mockTINUnavailable: the job retries, so a staff cancel fails the invoice with a NULL failure_kind.
 const MOCK_TIN_UNAVAILABLE = '99999999-0004'
-// The staff token failedByStaffCancel needs, provisioned once per file.
-let staffToken: Promise<string> | undefined
-const getStaffToken = (): Promise<string> =>
-  (staffToken ??= provisionStaffAccount('invoice-surfaces').then(async (a) => (await signInSession(a.email, a.password)).access_token))
+const getStaffToken = () => getStaffTokenFor('invoice-surfaces')
 // internal/invoice/send_again.go sendAgainResolvedReason, byte for byte.
 const SEND_AGAIN_RESOLVED_REASON = 'This invoice is marked resolved outside ASComply and cannot be sent again.'
 
@@ -6736,17 +6733,28 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
 
     await dvOpenDetail(page, entity.name, invoiceNumber)
     const badge = page.getByTestId('invoice-detail').getByTestId('invoice-status-badge')
-    const submitting = submitAndAwait(token, inv.id, 'submitted')
-    await expect
-      .poll(
-        async () => {
-          await page.reload()
-          return (await badge.textContent({ timeout: 5_000 }).catch(() => null)) ?? ''
-        },
-        { message: 'the badge reads QUEUED or SUBMITTED', timeout: 30_000 },
-      )
-      .toMatch(/QUEUED|SUBMITTED/)
-    await submitting
+    // Settled at creation (no unhandled rejection) and awaited on every exit, so no poll outlives the test.
+    const submitting = submitAndAwait(token, inv.id, 'submitted').then(
+      () => undefined,
+      (err: unknown) => err ?? new Error('submitAndAwait failed'),
+    )
+    let pollFailure: { err: unknown } | undefined
+    try {
+      await expect
+        .poll(
+          async () => {
+            await page.reload()
+            return (await badge.textContent({ timeout: 5_000 }).catch(() => null)) ?? ''
+          },
+          { message: 'the badge reads QUEUED or SUBMITTED', timeout: 30_000 },
+        )
+        .toMatch(/QUEUED|SUBMITTED/)
+    } catch (err) {
+      pollFailure = { err }
+    }
+    const submitError = await submitting
+    if (pollFailure) throw pollFailure.err
+    if (submitError) throw submitError
     await expect(badge).toContainText('SUBMITTED')
     await expectStripStates(page, { queued: 'current', accepted: 'unreached' })
 

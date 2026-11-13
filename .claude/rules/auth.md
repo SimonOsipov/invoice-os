@@ -148,6 +148,7 @@ paths:
 
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.
 - Serve the mock routes only when `GATEWAY_MOCK_ISSUER` is `true` and `ENVIRONMENT` is not `production`.
+- On the nightly (`DEPLOY_ENV=nightly`), serve the mock routes only with `X-Mock-Issuer-Token` equal to `GATEWAY_MOCK_ISSUER_TOKEN`. Refuse every request when it is unset.
 - Check the staff claim on the server in any console that reads real data.
 - Fail the console gate closed when `VITE_LANDING_URL` is unset.
 - Open a console only for a session that the gateway has just renewed or exchanged, with `app_metadata.staff` true.

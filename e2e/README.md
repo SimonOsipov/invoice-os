@@ -84,6 +84,7 @@ deployed database, so parallel workers would race — entity-namespace contentio
 environments only.
 
 The suite needs `GATEWAY_TOKEN` and, off CI, a signed-in `gcloud` that can read `ascomply-preview` (secrets and ID tokens).
+Against the nightly, the suite also reads `MOCK_ISSUER_TOKEN`, else `nightly-mock-issuer-token` through gcloud.
 
 ```bash
 GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api

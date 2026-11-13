@@ -180,9 +180,9 @@ func (celEvaluator) evalLinesContext(ctx context.Context, p Payload, r Rule) ([]
 // celLineViolations returns one violation per element whose body is false, or
 // nil when the expression is not element-wise or no element is blamed. An
 // element whose body errors is not blamed (P13: CEL absorbs it in the whole),
-// but a single element's cost overrun or an ended context is returned. Under a
-// cost limit the elements share one budget; when it runs out the pass stops and
-// returns nil (the caller reports the invoice-level violation).
+// but an ended context is returned. Under a cost limit the elements share one
+// budget; any overrun, per element or shared, stops the pass and returns nil
+// (the caller reports the invoice-level violation).
 func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]Violation, error) {
 	if r.Target == "" {
 		return nil, nil
@@ -217,8 +217,8 @@ func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]V
 	for i, el := range els {
 		res, det, err := prg.ContextEval(ctx, map[string]any{v: el})
 		if err != nil {
-			if err = celEvalErr(err); errors.Is(err, errCELTooExpensive) {
-				return nil, err
+			if errors.Is(celEvalErr(err), errCELTooExpensive) {
+				return nil, nil // see the budget case below
 			}
 			if cerr := ctxErr(ctx); cerr != nil {
 				return nil, cerr

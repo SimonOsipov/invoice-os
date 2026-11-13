@@ -183,12 +183,15 @@ func TestCEL_CostLimitOnExpr(t *testing.T) {
 	}
 }
 
+// A single element over the limit on its own, after the whole expression
+// already went false within it, reports the invoice-level violation.
 func TestCEL_CostLimitOnLinePass(t *testing.T) {
 	expr := "invoice.line_items.all(x, !has(x.stop) && (has(x.ok) || " + nested100(3) + "))"
 	p := linesPayload(map[string]any{"stop": true}, map[string]any{})
-	_, err := celEvaluator{}.evalLinesContext(limited(), p, celRule("k", "line_items", expr))
-	if !errors.Is(err, errCELTooExpensive) {
-		t.Fatalf("err = %v, want errCELTooExpensive from the per-line pass", err)
+	r := celRule("k", "line_items", expr)
+	vs, err := celEvaluator{}.evalLinesContext(limited(), p, r)
+	if err != nil || len(vs) != 1 || vs[0].Path != r.Target {
+		t.Fatalf("vs=%v err=%v, want one invoice-level violation at %q and no error", vs, err, r.Target)
 	}
 }
 

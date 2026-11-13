@@ -322,7 +322,7 @@ func TestTemplate_CarriesTheQ12Corrections(t *testing.T) {
 			t.Errorf("mail holds %q", bad)
 		}
 	}
-	for _, want := range []string{"ASComply Africa · Lagos, Nigeria", "This link expires in 24 hours."} {
+	for _, want := range []string{"ASComply Africa · Lagos, Nigeria", "This link expires in 1 hour."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("mail does not hold %q", want)
 		}
@@ -469,7 +469,7 @@ func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
 		}
 	}
 	for _, leak := range []string{
-		"Confirm email address", "You are registered", "Registration", "24 hours", "If you did not register",
+		"Confirm email address", "You are registered", "Registration", "1 hour", "If you did not register",
 		"Organisation", "Admin", "Add your company", "You received this email because",
 	} {
 		if strings.Contains(out, leak) {
@@ -569,7 +569,7 @@ func TestConfirmation_InviteeBranchLinksToTheSetPasswordPage(t *testing.T) {
 		"Invitation", "Confirm your email address and choose a password to join your team on ASComply.",
 		"Your account is ready.", "Choose a password to continue.",
 		"An ASComply account was created for " + adaEmail + " from your invite. Confirm the address and choose your password.",
-		"This link expires in 24 hours.",
+		"This link expires in 1 hour.",
 		"If you did not expect an invite to ASComply, ignore this email.",
 		"You received this email because an ASComply invite to this address was used to create an account.",
 	} {

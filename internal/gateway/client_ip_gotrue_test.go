@@ -138,7 +138,7 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		{"sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), throttle(), log, nil, nil), "/auth/sign-in", jsonType, signInBody(regEmail, regPassword, vhState), []string{"POST /token"}},
 		{"refresh", RefreshHandler(f.URL, testClient(), log), "/auth/refresh", jsonType, refreshBody(rpRefresh), []string{"POST /token"}},
 		{"sign-out", SignOutHandler(f.URL, testClient(), sessions, log, nil), "/auth/sign-out", jsonType, refreshBody(rpRefresh), []string{"POST /token", "POST /logout"}},
-		{"register", RegisterHandler(f.URL, testClient(), 0, log, noPending, nil), "/auth/register", jsonType, `{"email":"` + regEmail + `","password":"` + regPassword + `"}`, []string{"POST /signup"}},
+		{"register", RegisterHandler(f.URL, testClient(), 0, log, noPending, nil, false), "/auth/register", jsonType, `{"email":"` + regEmail + `","password":"` + regPassword + `"}`, []string{"POST /signup"}},
 		{"invitation register", InvitationRegisterHandler(f.URL, testClient(), 0, log, invitePreviewing("none").preview, claiming(inviteAddress, true, nil).registrations(), nil),
 			"/auth/invitation/register", jsonType, tokenBody(inviteToken), []string{"POST /signup"}},
 		{"resend verification", ResendVerificationHandler(f.URL, testClient(), 0, resendThrottle(time.Now), true, log), "/auth/resend-verification", jsonType, resendBody(regEmail), []string{"POST /resend"}},

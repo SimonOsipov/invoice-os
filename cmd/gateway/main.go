@@ -297,7 +297,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perAddress.Shared(pool, log)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool)),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool), platform.Posture(platform.DeployEnv()).Ephemeral()),
 		ResendByAddress:      perAddress,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),

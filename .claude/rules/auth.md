@@ -147,6 +147,7 @@ paths:
 - Send a caller whose `live_membership` is not false, with no answers, to `signin=no-workspace`.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.
+- Sign up a `/auth/register` registration with a random password. Send the caller's password only on a preview or the nightly, and only when GoTrue `GET /settings` answers 200 with `mailer_autoconfirm` true.
 - Create no account on register for an address with a pending invite. Answer it as any other register.
 - Back one registration with each invite token.
 

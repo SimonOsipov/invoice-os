@@ -94,7 +94,7 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool)))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool), false))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
 	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log, nil))

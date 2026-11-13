@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -21,6 +23,7 @@ const (
 	maxRegisterBodyBytes = 4 << 10
 	// Caps what is read from GoTrue: an error body and a session body are both small.
 	maxGoTrueBodyBytes = 64 << 10
+	maxSettingsBytes   = 16 << 10
 	// Repeats tenancy's maxNameChars on purpose: the gateway does not import tenancy.
 	maxAnswerNameChars  = 200
 	maxConsentTextChars = 500
@@ -35,8 +38,10 @@ const DefaultRegisterMinResponse = 2 * time.Second
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
 // A nil tokens signs up without the unsubscribe token.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc) http.Handler {
+// It sends the caller's password only when forward is true and GoTrue's GET /settings reports mailer_autoconfirm true; otherwise a random one.
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc, forward bool) http.Handler {
 	signup := authURL.JoinPath("signup").String()
+	settings := authURL.JoinPath("settings").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
@@ -61,8 +66,8 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if in.Email == "" || in.Password == "" {
-			writeError(w, http.StatusBadRequest, "email and password are required")
+		if in.Email == "" {
+			writeError(w, http.StatusBadRequest, "email is required")
 			return
 		}
 		if isFreeMail(in.Email) {
@@ -70,7 +75,6 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			return
 		}
 
-		body := map[string]any{"email": in.Email, "password": in.Password}
 		data := map[string]any{}
 		if in.WorkspaceName != nil || in.DisplayName != nil || in.Kind != nil {
 			reg, msg := registrationAnswers(in.WorkspaceName, in.DisplayName, in.Kind)
@@ -88,6 +92,11 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			}
 			data["marketing_consent"] = map[string]string{"text": *t, "at": time.Now().UTC().Format(time.RFC3339)}
 		}
+		password := randomPassword()
+		if forward && in.Password != "" && idpAutoconfirms(r, client, settings, log) {
+			password = in.Password
+		}
+		body := map[string]any{"email": in.Email, "password": password}
 		if len(data) > 0 {
 			body["data"] = data
 		}
@@ -95,6 +104,40 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
 		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil, tokens, in.Email)
 	})
+}
+
+// randomPassword returns 32 random bytes as base64url; nobody learns it.
+func randomPassword() string {
+	pw := make([]byte, 32)
+	rand.Read(pw) // never fails on Go 1.24+
+	return base64.RawURLEncoding.EncodeToString(pw)
+}
+
+// idpAutoconfirms reports whether GoTrue's GET /settings answers 200 with mailer_autoconfirm true.
+// An unreadable answer logs one WARN with the status only and reports false.
+func idpAutoconfirms(r *http.Request, client *http.Client, settings string, log *slog.Logger) bool {
+	status := 0
+	var got struct {
+		Autoconfirm *bool `json:"mailer_autoconfirm"`
+	}
+	ok := false
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, settings, nil)
+	if err == nil {
+		req.Header.Set(platform.HeaderUserIP, gotrueAddress(r))
+		var resp *http.Response
+		if resp, err = client.Do(req); err == nil {
+			defer resp.Body.Close()
+			status = resp.StatusCode
+			lr := io.LimitReader(resp.Body, maxSettingsBytes)
+			ok = status == http.StatusOK && json.NewDecoder(lr).Decode(&got) == nil && got.Autoconfirm != nil
+			_, _ = io.Copy(io.Discard, lr)
+		}
+	}
+	if !ok {
+		log.WarnContext(r.Context(), "registration: idp settings unreadable", slog.Int("upstream_status", status))
+		return false
+	}
+	return *got.Autoconfirm
 }
 
 // signUp posts body to GoTrue's /signup and answers with the floor held.

@@ -18,8 +18,7 @@ func noPendingInvite(context.Context, string) (bool, error) { return false, nil 
 
 // registerHandler builds the gateway's register handler; pass forward to RegisterHandler's new parameter, never a constant.
 func registerHandler(authURL *url.URL, forward bool) http.Handler {
-	_ = forward
-	return gateway.RegisterHandler(authURL, idpHTTP, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), noPendingInvite, nil)
+	return gateway.RegisterHandler(authURL, idpHTTP, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), noPendingInvite, nil, forward)
 }
 
 // idp-es256 runs the fork's mail posture (autoconfirm on, SMTP blank), so this is the fork's

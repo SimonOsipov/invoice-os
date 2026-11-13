@@ -205,7 +205,7 @@ func registerWith(t *testing.T, authURL *url.URL, p *pendingProbe, body string) 
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
-	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -217,7 +217,7 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -300,8 +300,8 @@ func TestRegister_Pending202AndOnlySignupCalled(t *testing.T) {
 	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
 		t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
 	}
-	if want := map[string]any{"email": regEmail, "password": regPassword}; !maps.Equal(sent, want) {
-		t.Errorf("signup body = %v, want exactly %v", sent, want)
+	if pw, _ := sent["password"].(string); len(sent) != 2 || sent["email"] != regEmail || !randomPasswordShape.MatchString(pw) {
+		t.Errorf("signup body = %v, want exactly the email and a random password", sent)
 	}
 }
 
@@ -397,9 +397,7 @@ func TestRegister_BadBody400NoUpstreamCall(t *testing.T) {
 	for _, c := range []struct{ name, body string }{
 		{"malformed JSON", `{"email":`},
 		{"empty email", registerBody("", regPassword)},
-		{"empty password", registerBody(regEmail, "")},
 		{"missing email", `{"password":"` + regPassword + `"}`},
-		{"missing password", `{"email":"` + regEmail + `"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
@@ -702,17 +700,17 @@ func TestRegister_BusinessAndLookalikeDomainsReachGoTrue(t *testing.T) {
 	}
 }
 
-// An empty field is reported before a free-mail domain.
+// An empty email is reported before a free-mail domain.
 func TestRegister_EmptyFieldCheckPrecedesFreeMail(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 
-	rec := doRegister(t, fake.URL, nil, registerBody("user@gmail.com", ""))
+	rec := doRegister(t, fake.URL, nil, registerBody("", regPassword))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
-	if got := errorBody(t, rec); got != "email and password are required" {
-		t.Errorf("error = %q, want %q", got, "email and password are required")
+	if got := errorBody(t, rec); got != "email is required" {
+		t.Errorf("error = %q, want %q", got, "email is required")
 	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
@@ -1102,8 +1100,10 @@ func TestRegister_UninvitedAddressStillSignsUp(t *testing.T) {
 		t.Fatalf("GoTrue saw %+v, want exactly one /signup call", calls)
 	}
 	var sent map[string]any
-	if err := json.Unmarshal(calls[0].Body, &sent); err != nil || !maps.Equal(sent, map[string]any{"email": regEmail, "password": regPassword}) {
-		t.Errorf("signup body = %s (decode err %v), want exactly the email and password", calls[0].Body, err)
+	err := json.Unmarshal(calls[0].Body, &sent)
+	pw, _ := sent["password"].(string)
+	if err != nil || len(sent) != 2 || sent["email"] != regEmail || !randomPasswordShape.MatchString(pw) {
+		t.Errorf("signup body = %s (decode err %v), want exactly the email and a random password", calls[0].Body, err)
 	}
 }
 
@@ -1114,8 +1114,8 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 	for _, c := range []struct{ name, body, want string }{
 		{"not JSON", `not json`, "invalid request body"},
 		{"body over the 4 KiB cap", registerBody(regEmail, strings.Repeat("p", 5<<10)), "invalid request body"},
-		{"empty object", `{}`, "email and password are required"},
-		{"no password", `{"email":"new@corp.example"}`, "email and password are required"},
+		{"empty object", `{}`, "email is required"},
+		{"no email", `{"password":"x"}`, "email is required"},
 		{"free-mail address", registerBody("x@gmail.com", regPassword), "a business email address is required; personal email providers are not accepted"},
 		{"empty workspace name", registerBodyWithAnswers(regEmail, map[string]any{"workspace_name": "", "display_name": "Ada"}), "workspace_name must be 1 to 200 characters"},
 		{"501-character consent", registerBodyWithAnswers(regEmail, map[string]any{"marketing_consent_text": strings.Repeat("a", 501)}), "marketing_consent_text must be 1 to 500 characters"},
@@ -1144,7 +1144,7 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 func TestRegister_LookupFailureIsUnavailableWithoutGoTrue(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	p := probing(lookupErr)
-	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil)
+	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false)
 
 	rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword))
 
@@ -1167,7 +1167,7 @@ func TestRegister_NilPendingLookupIsNotConfigured(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
-	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil).ServeHTTP(rec, req)
+	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil, false).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
@@ -1197,7 +1197,7 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
-			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil).ServeHTTP(rec, req)
+			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil, false).ServeHTTP(rec, req)
 
 			if n := len(p.calls()); n != 1 {
 				t.Fatalf("lookup asked %d times, want 1", n)
@@ -1286,7 +1286,7 @@ func TestRegister_UnusableTenancyAnswerRefusesSignUp(t *testing.T) {
 			tenancyURL, _ := url.Parse(srv.URL)
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			log, buf := captureLog()
-			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil)
+			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil, false)
 
 			rec, _ := serveRegisterFrom(t.Context(), broken, registerBody(regEmail, regPassword))
 
@@ -1350,7 +1350,7 @@ func registerWithTokens(t *testing.T, authURL *url.URL, floor time.Duration, log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens), body)
+	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens, false), body)
 }
 
 func TestRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
@@ -1518,7 +1518,7 @@ func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T)
 		}
 		answer(http.StatusOK, gtNewUser)(w, r)
 	}
-	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil)
+	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil, false)
 	post := func(xff string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, xff))
@@ -1562,8 +1562,7 @@ var randomPasswordShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // registerHandler builds RegisterHandler with forward; pass forward to RegisterHandler's new parameter, never a constant.
 func registerHandler(authURL *url.URL, client *http.Client, floor time.Duration, log *slog.Logger, forward bool) http.Handler {
-	_ = forward
-	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil)
+	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, forward)
 }
 
 // signupPasswords is the password of each POST /signup the fake saw.

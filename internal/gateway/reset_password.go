@@ -179,7 +179,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			return
 		}
 
-		status, gt, err := putGoTrueBearerJSON(ctx, client, user, confirmed.AccessToken, map[string]string{"password": password})
+		status, gt, err := putGoTrueBearerJSON(ctx, client, user, confirmed.AccessToken, gotrueAddress(r), map[string]string{"password": password})
 		samePassword := status == http.StatusUnprocessableEntity && gt.ErrorCode == "same_password"
 		if err != nil || (status != http.StatusOK && !samePassword) {
 			attrs := []any{slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode)}
@@ -191,7 +191,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			return
 		}
 
-		status, gone, err := postGoTrueBearer(ctx, client, logout, confirmed.AccessToken)
+		status, gone, err := postGoTrueBearer(ctx, client, logout, confirmed.AccessToken, gotrueAddress(r))
 		loggedOut := err == nil && status >= 200 && status < 300
 		signedOut := loggedOut || (err == nil && gone)
 		if !signedOut {

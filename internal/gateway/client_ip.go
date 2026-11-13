@@ -9,6 +9,12 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
+// gotrueAddress is the X-User-Address value for a GoTrue call: the caller's /64 or IPv4, or
+// "unattributable". GoTrue's per-address limiters key on it.
+func gotrueAddress(r *http.Request) string {
+	return checkIPKey(clientIP(r, platform.Posture(platform.DeployEnv())))
+}
+
 // clientIP is the caller's address, or "" when it cannot be trusted. Hosted takes the
 // X-Forwarded-For entry second from the right (the load balancer appends <client>, <rule IP>),
 // preview the rightmost, local the RemoteAddr host. Never the leftmost: a client writes it.

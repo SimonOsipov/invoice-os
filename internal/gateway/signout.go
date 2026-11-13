@@ -67,7 +67,7 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 			claims.Subject = ""
 		}
 
-		status, gone, err := postGoTrueBearer(ctx, client, logout, sess.AccessToken)
+		status, gone, err := postGoTrueBearer(ctx, client, logout, sess.AccessToken, gotrueAddress(r))
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "sign-out: gotrue logout unreachable", slog.String("error", err.Error()))

@@ -286,6 +286,9 @@ function submitWire(zip: Record<string, Uint8Array>, invoiceId: string): SubmitW
   return JSON.parse(new TextDecoder().decode(body)) as SubmitWire
 }
 
+// A free-text value the API stores verbatim; the export must prefix it with ' (formula lead).
+const FORMULA_CITY = '=HYPERLINK("https://example.test","x")'
+
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
   let entityId: string
@@ -301,6 +304,7 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
       entity_id: entityId,
       invoice_number: invoiceNumber,
       buyer_state: 'NG-LA',
+      buyer_city: FORMULA_CITY,
       line_items: [{ description: 'Widget', quantity: '1', unit_price: '100', line_total: '100', tax_category: 'STANDARD_VAT', price_unit: 'KGM' }],
     })
     invoiceId = created.id
@@ -333,6 +337,8 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(row, 'invoices.csv carries the invoice this spec created').toBeDefined()
     expect(row!.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
     expect(row!.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+    expect(row!.buyer_city, 'a formula-led buyer_city is exported with a leading quote').toBe(`'${FORMULA_CITY}`)
+    expect(storedText(row!.buyer_city), 'the reader rule restores the seeded buyer_city').toBe(FORMULA_CITY)
 
     expect(row!.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
     expect((await getInvoice(token, invoiceId)).qr_payload, 'GET qr_payload of a never-submitted invoice').toBeNull()

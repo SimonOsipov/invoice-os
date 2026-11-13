@@ -644,8 +644,7 @@ export function reviewTabs(
 
 // --- Unreadable-rows CSV (AC-5, §7.4 "Download this list (CSV)") ---
 //
-// RFC-4180 quoting: a field is wrapped in double quotes, with embedded double quotes
-// doubled, whenever it contains a comma, a double quote or a newline. Header row is
+// Cells go through `csvCell`. Header row is
 // exactly `Row,Field,Why it could not be read`; `row: null` renders as an empty cell,
 // never the string 'null' -- there are no *rows* to download once the raw source line is
 // gone (`[raw-source-line-dropped]`), only this rendered table.

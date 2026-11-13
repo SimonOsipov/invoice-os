@@ -9,7 +9,7 @@
 import { apiFetch, ApiError } from '@invoice-os/api-client/client'
 import { TENANTS } from '../topology/targets'
 import { resolveTarget } from '../targets'
-import { googleIdToken, serviceUrl } from './preview'
+import { googleIdToken, previewSecret, previewSuffix, serviceUrl } from './preview'
 
 // Re-exported so specs can do `import { ApiError } from '../api/client'`
 // against this one seam, without reaching into the api-client package
@@ -90,14 +90,45 @@ export const PERSONAS: { A: Persona; B: Persona } = {
   },
 }
 
+// mockIssuerTokenHeader in cmd/gateway/mockissuer.go. On the nightly the mock routes refuse a request without it.
+const MOCK_ISSUER_HEADER = 'X-Mock-Issuer-Token'
+
+let nightlyMockToken: string | undefined
+
+// The mock-route header: MOCK_ISSUER_TOKEN, else on the nightly gateway the nightly-mock-issuer-token secret
+// (read once, kept in memory). Off the nightly with no variable: none. Never logs the value.
+export function mockIssuerHeaders(): Record<string, string> {
+  let token = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
+  if (!token) {
+    let nightly = false
+    try {
+      nightly = previewSuffix() === 'nightly'
+    } catch {
+      // not a preview gateway
+    }
+    if (nightly) {
+      if (nightlyMockToken === undefined) {
+        try {
+          nightlyMockToken = previewSecret('mock-issuer-token').trim()
+        } catch {
+          throw new Error('mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read nightly-mock-issuer-token')
+        }
+      }
+      token = nightlyMockToken
+    }
+  }
+  return token ? { [MOCK_ISSUER_HEADER]: token } : {}
+}
+
 // login(): the only way to mint a Bearer token (mock issuer, ephemeral ES256
-// key — no shared secret). POST /auth/login is UN-prefixed (outside /api/,
+// key — no shared secret; on the nightly the mint needs the mock issuer token). POST /auth/login is UN-prefixed (outside /api/,
 // the mock issuer is mounted outside the proxied prefix). The domain role
 // (e.g. "admin") is resolved server-side from `memberships`, never from the
 // login request's `role` (always 'authenticated' here).
-export async function login(persona: Persona): Promise<string> {
+export async function login(persona: Pick<Persona, 'subject' | 'tenantId'>): Promise<string> {
   const { access_token } = await apiFetch<{ access_token: string }>(`${apiBase()}/auth/login`, {
     method: 'POST',
+    headers: mockIssuerHeaders(),
     body: { subject: persona.subject, role: 'authenticated', tenant_id: persona.tenantId },
   })
   return access_token
@@ -279,7 +310,7 @@ export interface MemberGrant {
 
 // POST /auth/mock/member (internal/gateway/mockmember.go answers 204); mock build only.
 export async function grantMembership(grant: MemberGrant): Promise<void> {
-  const res = await rawFetch('/auth/mock/member', { method: 'POST', body: grant })
+  const res = await rawFetch('/auth/mock/member', { method: 'POST', headers: mockIssuerHeaders(), body: grant })
   if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
@@ -297,21 +328,21 @@ export async function provisionStaffAccount(prefix: string, password?: string): 
 // POST /auth/mock/invitation-token (internal/gateway/mockinvitation.go answers 204); mock build only.
 // Replaces a pending invite's token, so a spec knows the value the mail would carry.
 export async function setInvitationToken(tenantId: string, invitationId: string, token: string): Promise<void> {
-  const res = await rawFetch('/auth/mock/invitation-token', { method: 'POST', body: { tenant_id: tenantId, invitation_id: invitationId, token } })
+  const res = await rawFetch('/auth/mock/invitation-token', { method: 'POST', headers: mockIssuerHeaders(), body: { tenant_id: tenantId, invitation_id: invitationId, token } })
   if (res.status !== 204) throw new Error(`invitation token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
 // POST /auth/mock/deletion-link-token (internal/gateway/mockdeletionlink.go answers 204); mock build only.
 // Replaces the admin's live cancel link token; 404 where the admin has no live link.
 export async function setDeletionLinkToken(tenantId: string, userId: string, token: string): Promise<void> {
-  const res = await rawFetch('/auth/mock/deletion-link-token', { method: 'POST', body: { tenant_id: tenantId, user_id: userId, token } })
+  const res = await rawFetch('/auth/mock/deletion-link-token', { method: 'POST', headers: mockIssuerHeaders(), body: { tenant_id: tenantId, user_id: userId, token } })
   if (res.status !== 204) throw new Error(`deletion link token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
 // POST /auth/mock/readiness-confirm-token (internal/gateway/mockreadinessconfirm.go answers 204); mock build only.
 // Replaces the token of the address's newest live held readiness check; 404 where it has none.
 export async function setReadinessConfirmToken(email: string, token: string): Promise<void> {
-  const res = await rawFetch('/auth/mock/readiness-confirm-token', { method: 'POST', body: { email, token } })
+  const res = await rawFetch('/auth/mock/readiness-confirm-token', { method: 'POST', headers: mockIssuerHeaders(), body: { email, token } })
   if (res.status !== 204) throw new Error(`readiness confirm token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 

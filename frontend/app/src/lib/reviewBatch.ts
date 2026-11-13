@@ -51,6 +51,7 @@ import { severityStyle, violationLine, type LineTarget, type Severity, type Viol
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
+import { csvCell } from './csvCell'
 import type { StatusStyle } from '../types'
 // Type-only: importRun.ts:74 already imports routeAfterImport FROM this file, so a
 // runtime import back would be this codebase's first reviewBatch.ts <-> importRun.ts
@@ -654,13 +655,6 @@ export const UNREADABLE_CSV_HEADER = 'Row,Field,Why it could not be read'
 // document path builds omits Row (internal/importer/document.go), so the column would be
 // empty on every line. SW-11 (reviewBatch.test.ts) pins the cells following the header.
 export const UNREADABLE_CSV_HEADER_DOC = 'Field,Why it could not be read'
-
-// A field is quoted iff it contains a comma, a double quote, CR or LF; embedded quotes
-// are doubled. The em dash needs no quoting (it is neither) and must survive verbatim --
-// escaping it would put visible quotes around a placeholder in Excel.
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
-}
 
 export function unreadableCsv(rows: UnreadableRow[], unit: ReviewUnit): string {
   const lines = rows.map((r) =>

@@ -126,6 +126,8 @@ jobs:
           service_account: ${{ env.DEPLOYER }}
       # buildx sends the client's credential helper to the builder.
       - run: gcloud auth configure-docker africa-south1-docker.pkg.dev --quiet
+      - name: Keep the serving and rollback images within the cleanup limit
+        run: bash "$RUNNER_TEMP/prod-image.sh" pin "$IMAGE_NAME"
       - name: Stamp the build sha into the image
         run: sh scripts/ci/stamp-build-sha.sh "$SHA"
       # Vite bakes VITE_* in at build time; these are production's public values.

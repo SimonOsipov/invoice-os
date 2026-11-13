@@ -622,3 +622,62 @@ func TestDevEnv_InvariantsProbeRunsAfterARedInvariant(t *testing.T) {
 	requireProblemWith(t, "REGISTRY on images", probeProblems(editJobLine(t, yml, "invariants",
 		"REGISTRY: "+previewsRegistry, "REGISTRY: africa-south1-docker.pkg.dev/ascomply-preview/images")), "REGISTRY")
 }
+
+const pinStepName = "Keep the serving and rollback images within the cleanup limit"
+
+// pinOrderProblems: build has the pin step, and it comes before Build and push.
+func pinOrderProblems(yml string) []string {
+	pin, push := -1, -1
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "build" {
+			continue
+		}
+		for i, s := range j.steps() {
+			switch s.keys["name"] {
+			case pinStepName:
+				pin = i
+			case "Build and push":
+				push = i
+			}
+		}
+	}
+	switch {
+	case pin < 0:
+		return []string{"build: no step " + pinStepName}
+	case push < 0:
+		return []string{"build: no step Build and push"}
+	case pin > push:
+		return []string{"build: the pin step runs after Build and push"}
+	}
+	return nil
+}
+
+func TestDeployProd_BuildPinsBeforeItPushes(t *testing.T) {
+	t.Parallel()
+	pin := stepOf(t, "deploy-prod.yml", "build", pinStepName)
+	b := pinBox(t, 0)
+	runner := filepath.Join(b.root, "runner")
+	if err := os.MkdirAll(runner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(requireProdImageScript(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(runner, "prod-image.sh"), string(script))
+	b.env["RUNNER_TEMP"], b.env["IMAGE_NAME"] = runner, "gateway"
+	if r := b.step(pin); r.code != 0 {
+		t.Fatalf("%s: exit %d stderr %q", pinStepName, r.code, r.stderr)
+	}
+	if got := b.gcloudCalls("run services describe gateway "); len(got) != 1 {
+		t.Errorf("gcloud log %q: want one run services describe gateway", b.lines("gcloud.log"))
+	}
+
+	yml := readWorkflow(t, "deploy-prod.yml")
+	requireNoProblems(t, "deploy-prod.yml", pinOrderProblems(yml))
+	block := "      - name: " + pinStepName + "\n        run: bash \"$RUNNER_TEMP/prod-image.sh\" pin \"$IMAGE_NAME\"\n"
+	moved := mutateOnce(t, mutateOnce(t, yml, block, ""),
+		"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n",
+		block+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+	requireProblemWith(t, "pin moved after the push", pinOrderProblems(moved), "after Build and push")
+}

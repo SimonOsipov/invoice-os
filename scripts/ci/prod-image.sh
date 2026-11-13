@@ -4,8 +4,9 @@
 #   prod-image.sh push <dir> <image> <build args>...   build, push $REGISTRY/<image> untagged, record its digest in <dir>/<image>
 #   prod-image.sh ref <dir> <image>                    print $REGISTRY/<image>@<digest> from <dir>/<image>
 #   prod-image.sh refs <dir> <image>...                print "<image> <ref>" per image; all resolve or none print
+#   prod-image.sh pin <image>                          tag keep-<hex> on a serving or rollback version near the cleanup limit
 #
-# Needs REGISTRY. push needs docker buildx, and jq for the build's metadata.
+# Needs REGISTRY; pin also PROJECT and REGION. push needs docker buildx, and jq for the build's metadata.
 set -euo pipefail
 
 die() { echo "::error::$*" >&2; exit 1; }
@@ -82,10 +83,88 @@ cmd_refs() {
   printf '%s' "$out"
 }
 
-[ $# -ge 1 ] || die "usage: prod-image.sh push|ref|refs ..."
+# Equals keep_count of the keep-recent policy on images (invoice-os-infra terraform/registry.tf).
+KEEP_VERSIONS=50
+# Ten legs of margin, so a failed pin never decides alone.
+PIN_RANK=$((KEEP_VERSIONS - 10))
+
+# Sets $json to the output of a retried read; a read that fails 3 times ends pin with exit 0 (fail open).
+pin_read() {
+  if ! json=$(retry "$@"); then
+    echo "::error::pin $pin_image: $* failed 3 times; nothing pinned, the build goes on" >&2
+    exit 0
+  fi
+}
+
+# Adds the digests the jobs or service use to $protected, one per line.
+pin_job_image() {
+  pin_read gcloud run jobs describe "$1" --project "$PROJECT" --region "$REGION" --format json
+  protected+=$(jq -r '.spec.template.spec.template.spec.containers[0].image // empty' <<<"$json")$'\n'
+}
+
+pin_service_images() {
+  pin_read gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" --format json
+  protected+=$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$json")$'\n'
+  local revs rev
+  revs=$(jq -r '([.status.traffic[]? | select((.percent // 0) > 0) | .revisionName]
+    + [.spec.traffic[]? | select(.tag == "rollback") | .revisionName]) | unique | map(select(. != null))[]' <<<"$json")
+  for rev in $revs; do
+    pin_read gcloud run revisions describe "$rev" --project "$PROJECT" --region "$REGION" --format json
+    protected+=$(jq -r '.status.imageDigest // empty' <<<"$json")$'\n'
+  done
+}
+
+cmd_pin() {
+  [ $# -eq 1 ] || die "usage: prod-image.sh pin <image>"
+  pin_image=$1
+  check_image "$pin_image"
+  : "${REGISTRY:?}"
+  [ -n "${PROJECT:-}" ] || die "PROJECT is not set"
+  [ -n "${REGION:-}" ] || die "REGION is not set"
+  local protected= json ref d
+  case "$pin_image" in
+    migrate) pin_job_image migrate; pin_job_image migrate-bootstrap ;;
+    deploycheck) pin_job_image deploy-check ;;
+    *) pin_service_images "$pin_image" ;;
+  esac
+  # Only $REGISTRY/<image>@sha256:...; a tag reference is never deleted and another registry is not ours.
+  local digests=
+  while read -r ref; do
+    [[ "$ref" == "$REGISTRY/$pin_image@"* ]] || continue
+    d=${ref#*@}
+    [[ "$d" =~ $digest_re ]] && digests+="$d"$'\n'
+  done <<<"$protected"
+  digests=$(printf '%s' "$digests" | sort -u)
+  [ -n "$digests" ] || return 0
+
+  pin_read gcloud artifacts docker images list "$REGISTRY/$pin_image" --include-tags --format json
+  local listing=$json state tag_cmd
+  while read -r d; do
+    [ -n "$d" ] || continue
+    # missing | tagged | the rank: the larger of the rows at least as new by createTime and by updateTime.
+    state=$(jq -r --arg d "$d" '(map(select(.version == $d)) | first) as $r
+      | if $r == null then "missing" elif (($r.tags // []) | length) > 0 then "tagged"
+        else [(map(select(.createTime >= $r.createTime)) | length), (map(select(.updateTime >= $r.updateTime)) | length)] | max end' <<<"$listing")
+    case "$state" in
+      missing) echo "::warning::$pin_image@$d is not in the registry" >&2; continue ;;
+      tagged) continue ;;
+    esac
+    [ "$state" -ge "$PIN_RANK" ] || continue
+    tag_cmd=(gcloud artifacts docker tags add "$REGISTRY/$pin_image@$d" "$REGISTRY/$pin_image:keep-${d#sha256:}")
+    if "${tag_cmd[@]}" >&2; then
+      echo "kept $pin_image@$d: rank $state, pinned at $PIN_RANK of $KEEP_VERSIONS"
+    elif [ "$state" -ge $((KEEP_VERSIONS - 1)) ]; then
+      die "pin $pin_image: tags add for @$d at rank $state failed; it would be deleted by this push; the leg stops. Run: ${tag_cmd[*]}"
+    else
+      echo "::error::pin $pin_image: tags add for @$d at rank $state failed; the build goes on. Run: ${tag_cmd[*]}" >&2
+    fi
+  done <<<"$digests"
+}
+
+[ $# -ge 1 ] || die "usage: prod-image.sh push|ref|refs|pin ..."
 sub=$1
 shift
 case "$sub" in
-  push | ref | refs) [ -n "${REGISTRY:-}" ] || die "REGISTRY is not set"; "cmd_$sub" "$@" ;;
+  push | ref | refs | pin) [ -n "${REGISTRY:-}" ] || die "REGISTRY is not set"; "cmd_$sub" "$@" ;;
   *) die "unknown subcommand '$sub'" ;;
 esac

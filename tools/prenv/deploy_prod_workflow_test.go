@@ -349,6 +349,20 @@ func TestDevEnv_InvariantsProbePushesByDigestToPreviews(t *testing.T) {
 	}
 }
 
+func TestDevEnv_InvariantsProbeRetriesUntilTheListingShowsThePush(t *testing.T) {
+	t.Parallel()
+	d := "sha256:" + hex64("e")
+	b, step := probeBox(t, "["+listRow(d, "[]", manifestType)+"]")
+	b.put("list.0.json", "[]") // the first listing lags the push
+	r := b.step(step)
+	if r.code != 0 {
+		t.Fatalf("exit %d stderr %q stdout %q", r.code, r.stderr, r.stdout)
+	}
+	if s := sleepsIn(t, b.bin); !slices.Equal(s, []string{"20"}) {
+		t.Errorf("sleeps = %v, want [20]", s)
+	}
+}
+
 func TestDevEnv_InvariantsProbeFailsWhenThePushDidNotLandUntagged(t *testing.T) {
 	t.Parallel()
 	d := "sha256:" + hex64("e")

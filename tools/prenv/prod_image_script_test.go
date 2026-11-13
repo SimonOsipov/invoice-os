@@ -43,14 +43,14 @@ esac
 
 // The gcloud shim logs argv to $D/gcloud.log. `run jobs update` prints CALL <argv> on stdout, so a test sees
 // the order against the step's own echo. `run <kind> describe <name>` prints $D/run.<kind>.describe.<name>.json,
-// failing its first fails.<same key> calls; `tags add` fails when tags-fails exists. `artifacts docker images list` prints $D/list.json; its first
+// failing its first fails.<same key> calls; `tags add` fails when tags-fails exists. `artifacts docker images list` prints $D/list.<call index>.json if present, else $D/list.json; its first
 // list-fails calls exit 1.
 const prodGcloudShim = `printf '%s\n' "$*" >> "$D/gcloud.log"
 case "$1 $2 $3" in
 "artifacts docker images")
   n=$(cat "$D/list-n" 2>/dev/null || echo 0); echo $((n + 1)) > "$D/list-n"
   [ "$n" -ge "$(cat "$D/list-fails" 2>/dev/null || echo 0)" ] || { echo "ERROR: list failed" >&2; exit 1; }
-  cat "$D/list.json" ;;
+  cat "$D/list.$n.json" 2>/dev/null || cat "$D/list.json" ;;
 "run jobs update") echo "CALL $*" ;;
 "run services describe" | "run revisions describe" | "run jobs describe")
   k="$1.$2.$3.$4"; n=$(cat "$D/n.$k" 2>/dev/null || echo 0); echo $((n + 1)) > "$D/n.$k"

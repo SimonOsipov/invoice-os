@@ -369,20 +369,9 @@ func TestTransition_MultiHopHistoryIntegrityChain(t *testing.T) {
 }
 
 // TestTransition_LineEditedInvoiceIllegalDraftToQueued (INVED-01-04 T19, QA
-// F3): mutating a line via Store.Edit demotes a validated invoice to draft
-// ([edit-lines-demote]); the SECOND path into queued -- the generic
-// transitions route, POST /v1/invoices/{id}/transitions {"target":"queued"}
-// -- must refuse it too, closing the gap Submitter.BatchSubmit's own
-// eligibility check (T12, batch_submit_adversarial_test.go) does not cover
-// on its own. TransitionHandler does NOT special-case queued the way it
-// refuses target=validated (handlers.go:391 only refuses THAT one target),
-// so the closure has to be mechanism-level: after the line edit the invoice
-// is draft, and draft->queued is not a legal edge in legalTransitions, so
-// transitionTx's existing legality guard alone refuses it with
-// ErrIllegalTransition -- no new guard required. This test drives
-// Store.Transition directly (the same function TransitionHandler calls)
-// rather than round-tripping HTTP, since the store-level outcome is what the
-// guard actually is.
+// F3): a line edit demotes a validated invoice to draft ([edit-lines-demote]),
+// and draft -> queued is not in legalTransitions, so Store.Transition refuses
+// it with ErrIllegalTransition. Drives the store directly.
 func TestTransition_LineEditedInvoiceIllegalDraftToQueued(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

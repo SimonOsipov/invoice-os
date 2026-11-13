@@ -513,7 +513,7 @@ func TestHandlers_RejectionReasonsSurfaceConsistentlyAcrossEndpoints(t *testing.
 	}
 
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) { return base, nil }
-	_, transResp := doInvoiceTransition(t, transition, &id, invoiceID, `{"target":"accepted"}`)
+	_, transResp := doInvoiceTransition(t, transition, &id, invoiceID, `{"target":"draft"}`)
 	if string(transResp.RejectionReasons) != string(seededReasons) {
 		t.Errorf("TransitionHandler rejection_reasons = %s, want %s", transResp.RejectionReasons, seededReasons)
 	}
@@ -540,32 +540,15 @@ func TestHandlers_RejectionReasonsSurfaceConsistentlyAcrossEndpoints(t *testing.
 	}
 }
 
-// TestStoreTransition_RejectedViaHandlerPathCarriesPreviousCycleReasons_F3Characterization
-// (QA Mode B, Part 3) CHARACTERIZES a KNOWINGLY ACCEPTED residual risk
-// (Stage-1 architecture validation finding F3, task-255's implementation
-// notes) -- this test documents CURRENT behavior, it does NOT assert
-// desired behavior. Do not "fix" the code to make this test show empty
-// reasons; that would wipe the reasons MarkRejectedTx writes moments
-// earlier in the SAME tx (markTerminalTx runs the outcome callback BEFORE
-// transitionTx), destroying every APP rejection reason in production --
-// exactly the trap task-255's own architecture notes forbid.
-//
-// POST /v1/invoices/{id}/transitions {"target":"rejected"} is exactly as
-// legal and unguarded as the {"target":"accepted"} path this subtask DOES
-// close (legalTransitions[StatusQueued] includes StatusRejected, store.go;
-// TransitionHandler refuses only StatusValidated, handlers.go). Under
-// retention, a queued invoice that still carries a PREVIOUS cycle's
-// rejection_reasons (e.g. mid-resubmit after an earlier reject/fix loop)
-// and is driven straight to `rejected` via THIS path -- bypassing
-// MarkRejectedTx entirely, so nothing writes fresh reasons for THIS
-// rejection -- lands on `rejected` still carrying the STALE, previous-cycle
-// reasons, indistinguishable on the wire from a genuine new rejection.
-//
-// If this test ever goes RED: either F3 was deliberately fixed elsewhere
-// (update this test to match the new behavior and remove the F3 note from
-// task-255's implementation notes) or something regressed transitionTx's
-// asymmetry -- investigate before touching this assertion either way.
-func TestStoreTransition_RejectedViaHandlerPathCarriesPreviousCycleReasons_F3Characterization(t *testing.T) {
+// TestStoreTransition_RejectedCarriesPreviousCycleReasons_F3Characterization
+// (QA Mode B, Part 3) characterizes an accepted residual risk (task-255 finding
+// F3): Store.Transition(queued -> rejected), driven directly, writes no reasons
+// of its own, so a queued invoice's previous-cycle reasons survive onto the
+// rejected row. Do not clear on rejected in transitionTx: markTerminalTx runs
+// MarkRejectedTx's outcome closure first, and the clear would wipe the reasons
+// it just wrote. If this goes RED, F3 was fixed or transitionTx's asymmetry
+// regressed; investigate before touching the assertion.
+func TestStoreTransition_RejectedCarriesPreviousCycleReasons_F3Characterization(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
@@ -590,7 +573,7 @@ func TestStoreTransition_RejectedViaHandlerPathCarriesPreviousCycleReasons_F3Cha
 
 	got, err := store.Transition(c, invID, StatusRejected)
 	if err != nil {
-		t.Fatalf("Transition(queued->rejected): %v (want nil -- this path is legal and unguarded today)", err)
+		t.Fatalf("Transition(queued->rejected): %v (want nil -- the edge is legal)", err)
 	}
 	if got.Status != StatusRejected {
 		t.Fatalf("Transition returned status = %q, want %q", got.Status, StatusRejected)
@@ -601,7 +584,7 @@ func TestStoreTransition_RejectedViaHandlerPathCarriesPreviousCycleReasons_F3Cha
 		t.Fatalf("read back rejection_reasons: %v", err)
 	}
 
-	// CHARACTERIZATION, not desired behavior: the handler path writes no
+	// CHARACTERIZATION, not desired behavior: Store.Transition writes no
 	// reasons of its own, so the stale, previous-cycle reasons survive onto
 	// this NEW `rejected` row -- misattributed as if they belonged to it.
 	if reasons != staleReasons {

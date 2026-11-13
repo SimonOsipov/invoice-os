@@ -1782,30 +1782,20 @@ func TestListHandler_NoIdentity401(t *testing.T) {
 
 // --- Transition handler tests (INV-HTTP-07..11) -----------------------------
 
-// TestTransitionHandler_200 (INV-HTTP-07): a legal target must produce 200
-// with the updated Invoice's status in the body, AND transition must be
-// called with the exact path id + decoded target.
-//
-// RETARGETED from "validated" to "queued" by M4-04-06/task-113. This test's
-// SUBJECT is unchanged and was never the target's identity: it is the 200, the
-// body's status, and the exact id/target passthrough. "validated" is no longer
-// expressible here -- TransitionHandler now refuses it with a 409 pre-call
-// guard ([validated-is-earned] [R1]: that status is earned only via POST
-// /v1/invoices/{id}/validate), which would turn this test into an assertion
-// about the guard rather than about its own subject. "queued" is canonical
-// (invoice.go:32) and clears !target.valid() identically, so every original
-// assertion still runs unchanged. The refused target's own coverage is GAPI-15.
+// TestTransitionHandler_200 (INV-HTTP-07): a legal target gives 200 with the
+// updated Invoice's status, and transition gets the exact path id + target.
+// Targets draft: validated and the fiscal statuses are refused before the store.
 func TestTransitionHandler_200(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	want := Invoice{ID: invoiceID, Status: StatusQueued}
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
-		if gotID != invoiceID || target != StatusQueued {
-			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusQueued)
+		if gotID != invoiceID || target != StatusDraft {
+			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusDraft)
 		}
 		return want, nil
 	}
-	body, err := json.Marshal(transitionRequest{Target: "queued"})
+	body, err := json.Marshal(transitionRequest{Target: "draft"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -1814,8 +1804,8 @@ func TestTransitionHandler_200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if resp.Status != string(StatusQueued) {
-		t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
+	if resp.Status != string(StatusDraft) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusDraft)
 	}
 }
 
@@ -1827,7 +1817,7 @@ func TestTransitionHandler_Illegal409(t *testing.T) {
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 		return Invoice{}, ErrIllegalTransition
 	}
-	body, err := json.Marshal(transitionRequest{Target: "accepted"})
+	body, err := json.Marshal(transitionRequest{Target: "draft"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -1959,17 +1949,14 @@ func TestTransitionHandler_MissingOrEmptyTarget400_StoreNotCalled(t *testing.T) 
 // numbered in the 13-row Test Specs table, but required by the story's error
 // model): the store returning ErrNotFound must map to 404.
 //
-// RETARGETED to "queued" by M4-04-06/task-113 (subject unchanged -- the
-// ErrNotFound -> 404 mapping). Under "validated" the new pre-call guard would
-// 409 before the store ran at all, so the stub's ErrNotFound would never be
-// reached and this test would silently stop testing its own mapping.
+// Targets draft so the stub's ErrNotFound is reachable.
 func TestTransitionHandler_NotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 		return Invoice{}, ErrNotFound
 	}
-	body, err := json.Marshal(transitionRequest{Target: "queued"})
+	body, err := json.Marshal(transitionRequest{Target: "draft"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -2007,31 +1994,9 @@ func TestTransitionHandler_NoIdentity401(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// task-113 / M4-04-06 -- Mode A RED specs for the HTTP half of GAPI-01..17:
-// the new ValidateHandler (GAPI-01..09) and the transitions guard
-// (GAPI-15..17). GAPI-10..14 (Gate.Evaluate/Validate, no HTTP layer) live in
-// gate_test.go instead.
-//
-// GAPI-01..09 run against ValidateHandler, currently gate_qa_scaffold.go's
-// blanket-501 stub (see that file's header) -- every test below fails on
-// the real status-code assertion it names, not a compile error.
-//
-// GAPI-15..17 run against the REAL, shipped TransitionHandler above
-// (handlers.go) -- this section adds NO scaffold and touches NO existing
-// test. The `target == StatusValidated` -> 409 pre-call guard
-// ([validated-is-earned] [R1]) is simply absent from TransitionHandler
-// today, so GAPI-15 (POST .../transitions {"target":"validated"}) currently
-// falls through to the stub `transition` closure and returns whatever it
-// returns (200, called=true) -- the OPPOSITE of the 409/not-called this
-// spec demands, which is exactly what makes it discriminate the guard's
-// absence. GAPI-16/17 assert properties that are ALREADY true of the
-// shipped handler (a non-"validated" target is unaffected by a guard that
-// only checks target==validated; the pre-existing !target.valid() 400
-// check is untouched) -- they are boundary/regression coverage for the
-// guard's NARROWNESS, proving it does not overreach, not new RED specs; they
-// are expected to already pass and to keep passing once the guard lands
-// (see this story's task-113 return-to-orchestrator notes for the explicit
-// call-out).
+// HTTP half of GAPI-01..17: ValidateHandler (GAPI-01..09) and the transitions
+// guards (GAPI-15..17). GAPI-10..14 (Gate.Evaluate/Validate, no HTTP layer) live
+// in gate_test.go.
 //
 // Spec-to-test map (task-113's Test Specs table):
 //
@@ -2045,7 +2010,7 @@ func TestTransitionHandler_NoIdentity401(t *testing.T) {
 //	GAPI-08 TestValidateHandler_NoActiveRuleSet503
 //	GAPI-09 TestValidateHandler_MalformedID400
 //	GAPI-15 TestTransitionHandler_ValidatedTarget409GuardPreCall
-//	GAPI-16 TestTransitionHandler_QueuedTargetStillReachesStub200
+//	GAPI-16 TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled
 //	GAPI-17 TestTransitionHandler_NonsenseTargetStill400UnknownStatus
 // ---------------------------------------------------------------------------
 
@@ -2816,15 +2781,8 @@ func TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey(t *testing.T) {
 
 // --- Transitions guard tests (GAPI-15..17, [validated-is-earned] [R1]) -----
 
-// TestTransitionHandler_ValidatedTarget409GuardPreCall (GAPI-15): POST
-// .../transitions {"target":"validated"} must 409 BEFORE the store is
-// called -- the stub transition func must never run. This is the guard's
-// own discriminating test: TransitionHandler today has no guard, so
-// target=="validated" clears the shipped !target.valid() check and falls
-// straight through to the stub, which returns success -- yielding 200 with
-// called==true, the OPPOSITE of what this test demands. It fails on BOTH
-// the status-code assertion and the not-called assertion until the guard
-// is added.
+// TestTransitionHandler_ValidatedTarget409GuardPreCall (GAPI-15): target
+// "validated" answers 409 before the store is called.
 func TestTransitionHandler_ValidatedTarget409GuardPreCall(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -2852,48 +2810,11 @@ func TestTransitionHandler_ValidatedTarget409GuardPreCall(t *testing.T) {
 	}
 }
 
-// TestTransitionHandler_QueuedTargetStillReachesStub200 (GAPI-16): a
-// non-"validated" legal target (queued) must be UNAFFECTED by the guard --
-// still reaches the stub and still 200s. Proves the guard is narrow
-// (target==validated only), not a blanket refusal of the whole endpoint.
-// Already true of the shipped handler (there is no guard yet to overreach);
-// stays true once the guard lands, since it only special-cases
-// target==StatusValidated.
-func TestTransitionHandler_QueuedTargetStillReachesStub200(t *testing.T) {
-	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invoiceID := uuid.NewString()
-	want := Invoice{ID: invoiceID, Status: StatusQueued}
-	called := false
-	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
-		called = true
-		if gotID != invoiceID || target != StatusQueued {
-			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusQueued)
-		}
-		return want, nil
-	}
-	body, err := json.Marshal(transitionRequest{Target: "queued"})
-	if err != nil {
-		t.Fatalf("marshal transition request: %v", err)
-	}
-	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, string(body))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 -- the guard is narrow (target==validated only), not a blanket refusal "+
-			"[validated-is-earned] [R1] (body=%s)", rec.Code, rec.Body.String())
-	}
-	if !called {
-		t.Error("the stub transition func was NOT called -- a non-validated target must still reach the store")
-	}
-	if resp.Status != string(StatusQueued) {
-		t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
-	}
-}
-
-// wantFiscalStatusRefusal restates the production const fiscalStatusRefusal.
+// wantFiscalStatusRefusal restates the Go const fiscalStatusRefusal (handlers.go).
 const wantFiscalStatusRefusal = "this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions"
 
 // TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled: every fiscal
-// target answers 409 with the sentence before the store runs. Replaces GAPI-16.
+// target answers 409 with the sentence before the store runs (GAPI-16).
 func TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, target := range []Status{StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed} {
@@ -4496,7 +4417,7 @@ func topLevelKeyOrder(t *testing.T, body []byte) []string {
 
 // TestGetHandler_FailureKindMarshalsNull (BUG-06-04, task-386, AC-1/AC-7): a
 // failed invoice with no stored kind (legacy pre-migration row, or one that
-// failed through POST /transitions per story BUG-06 S0 F1) must still carry
+// failed with no kind) must still carry
 // an explicit "failure_kind":null -- never an absent key. Raw-byte technique
 // mirrors TestGetHandler_QRPNGBase64MarshalsNull.
 func TestGetHandler_FailureKindMarshalsNull(t *testing.T) {
@@ -6369,37 +6290,6 @@ func TestStatusForErr_AwaitingApprovalIs409(t *testing.T) {
 	}
 	if msg != awaitingApprovalReason {
 		t.Errorf("statusForErr(ErrAwaitingApproval) msg = %q, want %q", msg, awaitingApprovalReason)
-	}
-}
-
-// TestTransitionHandler_QueuedRefusedWhenAwaitingApproval: the store's refusal
-// surfaces unchanged through TransitionHandler — 409, and the body's error is
-// awaitingApprovalReason byte-for-byte. Fails today: 500 "internal server error".
-func TestTransitionHandler_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
-	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invoiceID := uuid.NewString()
-	called := 0
-	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
-		called++
-		if gotID != invoiceID {
-			t.Errorf("transition called with id %q, want %q", gotID, invoiceID)
-		}
-		if target != StatusQueued {
-			t.Errorf("transition called with target %q, want %q", target, StatusQueued)
-		}
-		return Invoice{}, ErrAwaitingApproval
-	}
-
-	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, `{"target":"queued"}`)
-
-	if called != 1 {
-		t.Errorf("transition called %d times, want 1", called)
-	}
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
-	}
-	if resp.Error != awaitingApprovalReason {
-		t.Errorf("error = %q, want %q", resp.Error, awaitingApprovalReason)
 	}
 }
 

@@ -1129,28 +1129,15 @@ func ListHandler(
 	}
 }
 
+// fiscalStatusRefusal is the 409 sentence for a hand-set fiscal status.
+const fiscalStatusRefusal = "this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions"
+
 // TransitionHandler returns POST /v1/invoices/{id}/transitions ([D12]: a
-// single endpoint, {"target":...}). Same identity-first-401 order, decodes
-// the body (400 on decode error), 400 "unknown status" if target is not one
-// of the 7 canonical Status values -- WITHOUT ever calling transition (the
-// store's own legality/redundancy checks are a distinct, later 409) -- then
-// 409 if target is validated ([validated-is-earned] [R1]: that status is
-// reachable ONLY through POST /v1/invoices/{id}/validate, the gate) -- else
-// calls transition, maps ErrNotFound/ErrRedundantTransition/
-// ErrIllegalTransition (and anything else) via statusForErr, 200 + updated
-// Invoice on success.
-//
-// The validated guard lives HERE and not in Store.Transition on purpose. The
-// two placements have IDENTICAL production reach -- cmd/invoice/main.go is
-// Store.Transition's sole production consumer, and it passes the method value
-// straight into this factory -- but the store placement additionally destroys
-// the state-machine suite: legalTransitions[StatusDraft] = {StatusValidated}
-// makes validated the only reachable second state, so the transition tests
-// route through it. Trading that proof for a guard with no additional reach is
-// a bad trade. Residual risk, named: a future IN-PROCESS caller of
-// Store.Transition could promote without validating -- there is none today.
-// Hand-off: if M4-05 adds a second production consumer of Store.Transition,
-// re-evaluate this placement.
+// single endpoint, {"target":...}). Order: 401 without identity, 403 for a
+// non-approver, 400 for a bad body or unknown target, 409 for validated
+// (earned via /validate) and for every target but draft (fiscalStatusRefusal),
+// all before any row is read. Only draft reaches transition; statusForErr
+// maps its errors.
 //
 // callerRole gates transmission: only an admin or a reviewer may drive a
 // transition, matching the shipped capability matrix. It is not assumed to
@@ -1188,17 +1175,15 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 			return
 		}
 
-		// validated is EARNED, never asserted ([validated-is-earned] [R1]). A
-		// pre-call refusal, written exactly like the !target.valid() check above
-		// it: no sentinel, no statusForErr case, no store change. Without it any
-		// caller could mark an invoice validated having never run a rule --
-		// status='validated' with violations='[]' and rule_set_version_id=NULL,
-		// precisely the lie this story exists to make impossible. Narrow on
-		// purpose: only this one target is refused, every other target still
-		// reaches the store untouched (GAPI-16), and a garbage target still 400s
-		// at the check above before ever reaching here (GAPI-17).
+		// validated is earned via /validate, never asserted ([validated-is-earned]).
 		if target == StatusValidated {
 			writeError(w, http.StatusConflict, "validated is earned via POST /v1/invoices/{id}/validate, not via this endpoint")
+			return
+		}
+
+		// Every status but draft is earned by validation or the submission path.
+		if target != StatusDraft {
+			writeError(w, http.StatusConflict, fiscalStatusRefusal)
 			return
 		}
 

@@ -1477,10 +1477,8 @@ func touchesBuyer(changed []string) bool {
 //     rejection_reasons are RETAINED across the demotion, not cleared
 //     ([reason-lifecycle], reversed by M5-09-02/task-255) -- the only
 //     remaining clear lives in transitionTx itself, gated on
-//     target == accepted, because POST /transitions {"target":"accepted"}
-//     bypasses MarkAcceptedTx entirely and must clear too. Either way the
-//     content write and the demotion are one atomic unit -- a failure at
-//     either step (including this audit's own actor CHECK) rolls back the
+//     target == accepted. Either way the content write and the demotion are
+//     one atomic unit -- a failure at either step (including this audit's own actor CHECK) rolls back the
 //     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit),
 //     the line replace included. A draft `before` has nothing to demote from
 //     and stays draft.
@@ -2346,28 +2344,16 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 // invoice.transitioned audit row. It does not check legalTransitions; the
 // caller does (transitionCausedTx) or owns an edge outside it (support.go).
 func applyTransitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
-	// [reason-lifecycle] (M5-09-02/task-255, reversing M5-05's wipe-on-
-	// demotion): accepted is the only status whose entry clears
-	// rejection_reasons, and this is the ONLY place that still does so, now
-	// that Store.Edit's rejected->draft demotion retains them. It has to
-	// live HERE rather than in MarkAcceptedTx's outcome closure (actor.go)
-	// because accepted has a second live writer that never calls
-	// MarkAcceptedTx: POST /transitions {"target":"accepted"} on a queued
-	// invoice (legalTransitions[StatusQueued], unguarded by
-	// TransitionHandler, which refuses only validated). Riding the same
-	// UPDATE ... RETURNING keeps the clear atomic with the status write for
-	// BOTH callers -- no second statement, so a rolled-back transition never
-	// leaves an observable partial clear. '[]' is a SQL literal, not a bind
-	// parameter, so it does not renumber $2 (id).
+	// [reason-lifecycle] (M5-09-02/task-255): entry to accepted clears
+	// rejection_reasons, and only here, since Store.Edit's rejected->draft
+	// demotion retains them. MarkAcceptedTx is the only writer of accepted;
+	// the clear rides the same UPDATE ... RETURNING, so it is atomic with the
+	// status write. '[]' is a SQL literal, so $2 (id) is not renumbered.
 	//
-	// Deliberately NOT symmetric with rejected, even though the same
-	// reasoning applies there too (a residual risk recorded, not coded
-	// around, in M5-09-02's Stage-1 architecture validation, finding F3):
-	// rejected's two writers are MarkRejectedTx's outcome closure and the
-	// identical {"target":"rejected"} handler path, and markTerminalTx runs
-	// the outcome callback BEFORE transitionTx (actor.go) -- so clearing on
-	// rejected here would wipe the reasons MarkRejectedTx had just written
-	// moments earlier in the SAME tx, destroying every APP rejection reason.
+	// Not symmetric with rejected: markTerminalTx runs MarkRejectedTx's outcome
+	// closure BEFORE transitionTx, so clearing on rejected here would wipe the
+	// reasons it had just written in the same tx.
+	//
 	// [kept-marks-clear-on-promote] (INVCR-01-15, D6, task-291): draft has exactly
 	// ONE outgoing edge (draft->validated, legalTransitions), so target ==
 	// StatusValidated unambiguously means "promoting a draft" -- no other status

@@ -56,13 +56,18 @@ func TestDevEnvMockIssuerToken_NotUnmaskedOrExportedToAnOutput(t *testing.T) {
 			t.Errorf("%s: token step %d must follow install %d and auth %d and precede the first spec step %d", name, at[0], install, auth, spec)
 		}
 	}
+	others := 0
 	for name, j := range jobs {
 		if name == "e2e" || name == "topology" || name == "nightly-ai" {
 			continue
 		}
+		others++
 		text := strings.Join(stripHashComments(j.lines), "\n")
 		if strings.Contains(text, "mock-token") || strings.Contains(text, "MOCK_ISSUER_TOKEN") {
 			t.Errorf("job %s names mock-token or MOCK_ISSUER_TOKEN", name)
 		}
+	}
+	if others < 10 {
+		t.Errorf("scanned %d other jobs, want at least 10", others)
 	}
 }

@@ -1045,7 +1045,7 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 		t.Errorf("secret %s not created", n)
 	}
 	calls := r.file(t, "calls")
-	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS"))+1 || strings.Count(calls, "--labels preview-pr=nightly") != n {
+	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS"))+1 || strings.Count(calls, "--labels preview-pr=nightly ") != n {
 		t.Errorf("creates or labels wrong:\n%s", calls)
 	}
 	if tok := r.file(t, "created-nightly-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {

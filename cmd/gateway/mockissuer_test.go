@@ -524,12 +524,19 @@ func gateRoutes(t *testing.T, logs *strings.Builder) []gateRoute {
 
 func serveGate(t *testing.T, r gateRoute, method, body string, hdr map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	h := http.Header{}
+	for k, v := range hdr {
+		h.Set(k, v)
+	}
+	return serveGateHeader(t, r, method, body, h)
+}
+
+func serveGateHeader(t *testing.T, r gateRoute, method, body string, hdr http.Header) *httptest.ResponseRecorder {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req := httptest.NewRequestWithContext(ctx, method, r.path, strings.NewReader(body))
-	for k, v := range hdr {
-		req.Header.Set(k, v)
-	}
+	req.Header = hdr
 	rec := httptest.NewRecorder()
 	r.h.ServeHTTP(rec, req)
 	return rec
@@ -586,6 +593,13 @@ func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
 		"upper case":             {"X-Mock-Issuer-Token": strings.ToUpper(gateToken)},
 		"X-Gateway-Token":        {"X-Gateway-Token": gateToken},
 		"Authorization Bearer":   {"Authorization": "Bearer " + gateToken},
+		"leading space":          {"X-Mock-Issuer-Token": " " + gateToken},
+		"trailing space":         {"X-Mock-Issuer-Token": gateToken + " "},
+		"trailing newline":       {"X-Mock-Issuer-Token": gateToken + "\n"},
+		"one character shorter":  {"X-Mock-Issuer-Token": gateToken[:len(gateToken)-1]},
+		"the token twice":        {"X-Mock-Issuer-Token": gateToken + gateToken},
+		"a single space":         {"X-Mock-Issuer-Token": " "},
+		"one MiB":                {"X-Mock-Issuer-Token": strings.Repeat("0a1b2c3d", 1<<17)},
 	}
 	for _, r := range routes {
 		for name, hdr := range wrong {
@@ -593,6 +607,13 @@ func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
 				wantRefused(t, r, serveGate(t, r, r.method, r.body, hdr), &logs)
 			})
 		}
+		// Header.Get reads the first value, so a right value after a wrong one must not open the route.
+		t.Run(r.name+"/a wrong value then the right one", func(t *testing.T) {
+			hdr := http.Header{}
+			hdr.Add("X-Mock-Issuer-Token", gateToken+"x")
+			hdr.Add("X-Mock-Issuer-Token", gateToken)
+			wantRefused(t, r, serveGateHeader(t, r, r.method, r.body, hdr), &logs)
+		})
 	}
 }
 
@@ -706,6 +727,25 @@ func TestTaggedMockRoutesServeWithTheToken(t *testing.T) {
 		}
 		if _, err := verifier.Verify(t.Context(), tok.AccessToken); err != nil {
 			t.Errorf("the minted token does not verify against the served JWKS: %v", err)
+		}
+	})
+
+	// HTTP header names are case-insensitive: the server canonicalises a lower-case name before the gate reads it.
+	t.Run("header name in lower case over HTTP", func(t *testing.T) {
+		srv := httptest.NewServer(routes[1].h)
+		t.Cleanup(srv.Close)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+routes[1].path, strings.NewReader(`{`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header["x-mock-issuer-token"] = []string{gateToken}
+		res, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("POST { with a lower-case header name and the right value = %d, want 400 (the gate passed)", res.StatusCode)
 		}
 	})
 

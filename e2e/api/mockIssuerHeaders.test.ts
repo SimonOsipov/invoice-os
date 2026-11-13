@@ -66,6 +66,25 @@ describe('mockIssuerHeaders', () => {
     expect(exec).not.toHaveBeenCalled()
   })
 
+  it('MOCK_ISSUER_TOKEN is sent trimmed, and a blank one falls back to the nightly secret', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', ' \ttok-7\n ')
+    const c = await load(NIGHTLY)
+    await c.login(PERSONA)
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '  \n')
+    exec.mockReturnValue('tok-8\n')
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-7', 'tok-8'])
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('MOCK_ISSUER_TOKEN set off the nightly gateway is still sent', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-9')
+    const c = await load('https://gateway.test')
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-9'])
+    expect(exec).not.toHaveBeenCalled()
+  })
+
   it('MOCK_ISSUER_TOKEN is read on every call', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-a')
     const c = await load(NIGHTLY)
@@ -121,6 +140,26 @@ describe('mockIssuerHeaders', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     await c.grantMembership(GRANT)
     expect(seen.map(headerOf)).toEqual(['tok-6'])
+  })
+
+  it('no console line carries the token, on a success, a refusal or a failed read', async () => {
+    const lines: string[] = []
+    for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+      vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void lines.push(a.map(String).join(' ')))
+    }
+    vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-4')
+    const c = await load(NIGHTLY)
+    await c.login(PERSONA)
+    status = 401
+    await c.grantMembership(GRANT).catch(() => undefined)
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockImplementation(() => {
+      throw new Error('gcloud: not signed in')
+    })
+    await c.login(PERSONA).catch(() => undefined)
+    vi.restoreAllMocks()
+    expect(seen.length).toBe(2)
+    expect(lines.join('\n')).not.toContain('tok-4')
   })
 
   it('a refusal error does not carry the token', async () => {

@@ -121,7 +121,7 @@ export function mockIssuerHeaders(): Record<string, string> {
 }
 
 // login(): the only way to mint a Bearer token (mock issuer, ephemeral ES256
-// key — no shared secret; on the nightly the mint needs the mock issuer token). POST /auth/login is UN-prefixed (outside /api/,
+// key). POST /auth/login is UN-prefixed (outside /api/,
 // the mock issuer is mounted outside the proxied prefix). The domain role
 // (e.g. "admin") is resolved server-side from `memberships`, never from the
 // login request's `role` (always 'authenticated' here).

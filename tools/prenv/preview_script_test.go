@@ -1651,6 +1651,12 @@ func nlGoodSvcs() []invSvc {
 // runInvariants runs `preview.sh invariants` over the listed secret names and services.
 func runInvariants(t *testing.T, secrets []string, svcs []invSvc) previewRun {
 	t.Helper()
+	return runInvariantsWith(t, secrets, svcs, nil)
+}
+
+// runInvariantsWith is runInvariants with extra files in the shim dir (curl-body-<endpoint>, curl-code-<endpoint>).
+func runInvariantsWith(t *testing.T, secrets []string, svcs []invSvc, files map[string]string) previewRun {
+	t.Helper()
 	var list []map[string]any
 	for _, s := range svcs {
 		env := []map[string]any{}
@@ -1673,6 +1679,9 @@ func runInvariants(t *testing.T, secrets []string, svcs []invSvc) previewRun {
 	return runPreview(t, func(dir string) {
 		writeIn(t, dir, "have", strings.Join(secrets, "\n")+"\n")
 		writeIn(t, dir, "list-services", string(b))
+		for name, body := range files {
+			writeIn(t, dir, name, body)
+		}
 	}, "invariants")
 }
 
@@ -1996,5 +2005,189 @@ func TestPreviewJobRetriesOnlyOnTooManyConnections(t *testing.T) {
 				t.Errorf("no 30 s backoff before the retry: %q", r.file(t, "order"))
 			}
 		})
+	}
+}
+
+// imagesWritePerms are the six permissions that let a caller replace or remove a production image.
+var imagesWritePerms = []string{
+	"artifactregistry.repositories.uploadArtifacts",
+	"artifactregistry.tags.create",
+	"artifactregistry.tags.update",
+	"artifactregistry.tags.delete",
+	"artifactregistry.versions.delete",
+	"artifactregistry.repositories.deleteArtifacts",
+}
+
+const (
+	imagesEP = "images:testIamPermissions"
+	prodEP   = "ascomply-prod:testIamPermissions"
+	imgHeld  = "Preview invariants hold"
+)
+
+// prodImagesRepo is the repository deploy-prod.yml deploys from: the last path segment of its REGISTRY.
+func prodImagesRepo(t *testing.T) string {
+	t.Helper()
+	wf, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/deploy-prod.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*REGISTRY:\s*(\S+)`).FindSubmatch(wf)
+	if m == nil {
+		t.Fatal("no REGISTRY in deploy-prod.yml")
+	}
+	reg := string(m[1])
+	repo := reg[strings.LastIndex(reg, "/")+1:]
+	if repo == "" {
+		t.Fatalf("REGISTRY %q has no repository segment", reg)
+	}
+	return repo
+}
+
+func imgInvariants(t *testing.T, files map[string]string) previewRun {
+	t.Helper()
+	return runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), files)
+}
+
+// imgCalls are the logged curl calls whose last argument ends in suffix.
+func imgCalls(t *testing.T, r previewRun, suffix string) []string {
+	t.Helper()
+	var out []string
+	for _, l := range strings.Split(r.file(t, "curl-calls"), "\n") {
+		if f := strings.Fields(l); len(f) > 0 && strings.HasSuffix(f[len(f)-1], suffix) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// errLines returns the ::error:: lines of both streams that contain every want.
+func errLines(r previewRun, want ...string) []string {
+	var out []string
+next:
+	for _, l := range strings.Split(r.stdout+"\n"+r.stderr, "\n") {
+		if !strings.Contains(l, "::error::") {
+			continue
+		}
+		for _, w := range want {
+			if !strings.Contains(l, w) {
+				continue next
+			}
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+func TestPreviewInvariantsRefuseWriteOnTheProductionImages(t *testing.T) {
+	t.Parallel()
+	repo := prodImagesRepo(t)
+	for _, p := range imagesWritePerms {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			r := imgInvariants(t, map[string]string{"curl-body-" + imagesEP: `{"permissions":["` + p + `"]}`})
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(errLines(r, p, repo)) == 0 {
+				t.Errorf("no ::error:: line names %s and %s:\n%s\n%s", p, repo, r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("success line printed:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsAskTheProductionRepositoryForEveryWritePermission(t *testing.T) {
+	t.Parallel()
+	repo := prodImagesRepo(t)
+	r := imgInvariants(t, nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	url := "https://artifactregistry.googleapis.com/v1/projects/ascomply-preview/locations/africa-south1/repositories/" + repo + ":testIamPermissions"
+	calls := imgCalls(t, r, ":testIamPermissions")
+	var asked []string
+	for _, c := range calls {
+		if strings.HasSuffix(c, url) {
+			asked = append(asked, c)
+		}
+	}
+	if len(asked) != 1 {
+		t.Fatalf("want one call to %s, got %d in:\n%s", url, len(asked), strings.Join(calls, "\n"))
+	}
+	body := flagValue(asked[0], "-d")
+	for _, p := range imagesWritePerms {
+		if !strings.Contains(body, p) {
+			t.Errorf("-d body %q lacks %s", body, p)
+		}
+	}
+	if len(imgCalls(t, r, "/ascomply-prod:testIamPermissions")) != 1 {
+		t.Errorf("the ascomply-prod call is gone:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+func TestPreviewInvariantsPassWithNoProductionImageWrite(t *testing.T) {
+	t.Parallel()
+	r := imgInvariants(t, map[string]string{"curl-body-" + imagesEP: `{}`, "curl-body-" + prodEP: `{}`})
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, imgHeld) || !strings.Contains(r.stdout, "no write on the production image repository") {
+		t.Errorf("success line does not name the production image repository:\n%s", r.stdout)
+	}
+	if len(imgCalls(t, r, "/"+prodImagesRepo(t)+":testIamPermissions")) != 1 {
+		t.Errorf("the production image repository was never asked:\n%s", r.file(t, "curl-calls"))
+	}
+}
+
+func TestPreviewInvariantsPassOnA403FromTheImageRepository(t *testing.T) {
+	t.Parallel()
+	r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: "403"})
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(imgCalls(t, r, "/"+prodImagesRepo(t)+":testIamPermissions")) != 1 {
+		t.Errorf("the production image repository was never asked:\n%s", r.file(t, "curl-calls"))
+	}
+	if !strings.Contains(r.stdout, "no write on the production image repository") {
+		t.Errorf("success line does not name the production image repository:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewInvariantsFailOnAnUnexpectedImageRepositoryAnswer(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"404", "500", "000"} {
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+			r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: code})
+			if r.code == 0 {
+				t.Fatalf("an answer of HTTP %s passed:\n%s\n%s", code, r.stdout, r.stderr)
+			}
+			if len(errLines(r, "HTTP "+code)) == 0 {
+				t.Errorf("no ::error:: line names HTTP %s:\n%s\n%s", code, r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("success line printed:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReportBothIAMProblems(t *testing.T) {
+	t.Parallel()
+	repo := prodImagesRepo(t)
+	r := imgInvariants(t, map[string]string{
+		"curl-body-" + prodEP:   `{"permissions":["run.services.get"]}`,
+		"curl-body-" + imagesEP: `{"permissions":["artifactregistry.tags.update"]}`,
+	})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run.services.get", "ascomply-prod")) == 0 {
+		t.Errorf("the ascomply-prod problem is not reported:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "artifactregistry.tags.update", repo)) == 0 {
+		t.Errorf("the image repository problem is not reported:\n%s\n%s", r.stdout, r.stderr)
 	}
 }

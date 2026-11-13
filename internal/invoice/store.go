@@ -1478,9 +1478,9 @@ func touchesBuyer(changed []string) bool {
 //     ([reason-lifecycle], reversed by M5-09-02/task-255) -- the only
 //     remaining clear lives in transitionTx itself, gated on
 //     target == accepted. Either way the content write and the demotion are
-//     one atomic unit -- a failure at either step (including this audit's own actor CHECK) rolls back the
-//     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit),
-//     the line replace included. A draft `before` has nothing to demote from
+//     one atomic unit -- a failure at either step (including this audit's own
+//     actor CHECK) rolls back the whole edit, never a partial one
+//     (ContentAuditFailureRollsBackWholeEdit), the line replace included. A draft `before` has nothing to demote from
 //     and stays draft.
 //  9. re-attach afterLines and return `after` -- draft (demoted) after a
 //     validated content change, the demoted row's OWN state after a draft

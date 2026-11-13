@@ -5610,9 +5610,8 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   // losing its `done` once the cursor passes it.
   //
   // The submit is driven from the register, this file's own proven path
-  // (submitSelected). SUBMIT-SITE NOTE: this adds one entry to
-  // e2e/submitSiteSweep.test.ts's TOPOLOGY_MANIFEST and raises its exact topology floor
-  // to the measured 13 (it read 11 against a population of 12 before this story).
+  // (submitSelected). SUBMIT-SITE NOTE: this test has an entry in
+  // e2e/submitSiteSweep.test.ts's TOPOLOGY_MANIFEST.
   test('detail surface: a FIRS rejection redens the final node only', async ({ page }) => {
     test.setTimeout(150_000)
     const errors = collectErrors(page)

@@ -1435,7 +1435,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
 
     // task-575 upgrade (AC-19..27): the dashboard rollup's awaiting_approval overlay, the
-    // ?awaiting_approval=true list filter, and the transitions door that actually enforces
+    // ?awaiting_approval=true list filter, and the batch-submit door that actually enforces
     // it are three copies of one predicate (internal/dashboard/store.go, internal/invoice/
     // store.go, internal/approval/gate.go's TransmitClearTx). This must run ABOVE :1154:
     // below that boundary a probe policy may govern, and the agreement should be read
@@ -1448,7 +1448,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // straight to the failed test -- see the comment at the closed-sibling fixture below).
     // Both this fixture's run and the closed sibling's are proved before either predicate is
     // read, so what gets counted below is known.
-    test('rollup, the awaiting_approval list filter, and the enforcing transitions door agree on one self-seeded open run', async () => {
+    test('rollup, the awaiting_approval list filter, and the enforcing batch door agree on one self-seeded open run', async () => {
       const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-AGREE-${freshTin()}`) })
       const validated = await validateInvoice(token, created.id)
       expect(validated.status, 'the clean fixture should promote draft -> validated, arming the seeded firm run').toBe('validated')

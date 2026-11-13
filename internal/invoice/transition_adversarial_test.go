@@ -400,7 +400,7 @@ func TestTransition_LineEditedInvoiceIllegalDraftToQueued(t *testing.T) {
 	}
 
 	if _, err := store.Transition(c, inv.ID, StatusQueued); !errors.Is(err, ErrIllegalTransition) {
-		t.Fatalf("Transition(draft -> queued) after a line edit err = %v, want ErrIllegalTransition -- the generic transitions route must refuse the second path into queued too (QA F3)", err)
+		t.Fatalf("Transition(draft -> queued) after a line edit err = %v, want ErrIllegalTransition -- the store must refuse the second path into queued too (QA F3)", err)
 	}
 
 	var status string

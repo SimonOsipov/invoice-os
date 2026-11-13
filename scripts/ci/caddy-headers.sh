@@ -38,10 +38,13 @@ sec() {
     [ "$n" = 1 ] || { echo "FAIL $l: '$w' x$n, want 1"; fail=1; }
   done
 }
-# cc <port> <path> <want> [-sI]: want no-cache, no-store or - (no Cache-Control line).
+# cc <port> <path> <want> [-sI]: want no-cache, no-store or - (no Cache-Control line). Status must be 200, or 404 for no-store.
 cc() {
-  local h n
-  h=$(curl -s${4#-s} -o /dev/null -D - "http://127.0.0.1:$1$2" | tr -d '\r')
+  local flag=${4:--s} h n code want=200
+  [ "$3" = no-store ] && want=404
+  h=$(curl -s${flag#-s} -o /dev/null -D - "http://127.0.0.1:$1$2" | tr -d '\r')
+  code=$(printf '%s\n' "$h" | head -n1 | cut -d' ' -f2)
+  [ "$code" = "$want" ] || { echo "FAIL $2: want $want, got '$code'"; fail=1; }
   n=$(printf '%s\n' "$h" | grep -ic '^cache-control:')
   if [ "$3" = - ]; then
     [ "$n" = 0 ] || { echo "FAIL $2: Cache-Control present, want none"; fail=1; }
@@ -49,9 +52,10 @@ cc() {
     [ "$n" = 1 ] && printf '%s\n' "$h" | grep -qix "cache-control: $3" || { echo "FAIL $2: want one Cache-Control: $3"; fail=1; }
   fi
 }
-# cond <port> <path> <req-header> <validator-header>: 304 on revalidation, with the security headers.
+# cond <port> <path> <req-header> <validator-header> <cache>: 304 on revalidation, with the security headers and
+# the Cache-Control a 200 would carry (no-cache or - for none).
 cond() {
-  local v h code
+  local v h code n
   v=$(curl -s -o /dev/null -D - "http://127.0.0.1:$1$2" | tr -d '\r' | sed -n "s/^$4: //Ip")
   [ -n "$v" ] || { echo "FAIL $2: no $4 to revalidate with"; fail=1; return; }
   h=$(curl -s -o /dev/null -D - -H "$3: $v" "http://127.0.0.1:$1$2" | tr -d '\r')
@@ -59,6 +63,9 @@ cond() {
   echo "$2 ($3) -> $code"
   [ "$code" = 304 ] || { echo "FAIL $2 with $3: want 304, got $code"; fail=1; }
   sec "$2 $3" "$h"
+  n=$(printf '%s\n' "$h" | grep -ic '^cache-control:')
+  if [ "$5" = - ]; then [ "$n" = 0 ] || { echo "FAIL $2 304: Cache-Control present, want none"; fail=1; }
+  else [ "$n" = 1 ] && printf '%s\n' "$h" | grep -qix "cache-control: $5" || { echo "FAIL $2 304: want one Cache-Control: $5"; fail=1; }; fi
 }
 
 for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health /check/health /assets/index-abc123.js.map; do
@@ -95,8 +102,8 @@ cc "$port" / no-cache
 cc "$port" /invoices/42 no-cache
 cc "$port" /invoices/42 no-cache -sI
 cc "$port" /assets/index-abc123.js -
-cond "$port" / If-None-Match etag
-cond "$port" /assets/index-abc123.js If-Modified-Since last-modified
+cond "$port" / If-None-Match etag no-cache
+cond "$port" /assets/index-abc123.js If-Modified-Since last-modified -
 
 # Strict fixture (landing, library): a site that ships /404.html. docker cp, not a bind mount:
 # a macOS bind mount is case-insensitive and would serve /Privacy.
@@ -156,7 +163,7 @@ for p in / /privacy /privacy/ /library /library/invoices/import-files /check/; d
 for p in /assets/index-abc123.js /library/_landing/assets/index-abc123.js /robots.txt; do cc "$sport" "$p" -; done
 for p in /nope-xyz /index.html; do cc "$sport" "$p" no-store; done
 cc "$sport" /nope-xyz no-store -sI
-cond "$sport" /privacy If-None-Match etag
+cond "$sport" /privacy If-None-Match etag no-cache
 curl -s -o /dev/null -w '%{content_type}' "http://127.0.0.1:$sport/library/_landing/assets/index-abc123.js" | grep -qi javascript \
   || { echo "FAIL: /library/_landing/assets js is not javascript"; fail=1; }
 

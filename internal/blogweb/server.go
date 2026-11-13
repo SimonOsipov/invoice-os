@@ -61,7 +61,7 @@ func New(cfg Config) (http.Handler, error) {
 	return gzhttp.GzipHandler(securityHeaders(s)), nil
 }
 
-// securityHeaders sets the values of the Caddyfile `header` block.
+// securityHeaders sets the security headers on every response.
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := w.Header()

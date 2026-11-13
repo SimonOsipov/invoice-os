@@ -26,6 +26,13 @@
 		}
 	}
 
+	# A 304 carries no Content-Type, so a page's 304 is told by its address: no file extension.
+	@pageAddress not path_regexp \.[A-Za-z0-9]+$
+	header @pageAddress {
+		Cache-Control "no-cache"
+		match status 304
+	}
+
 	# The LB cannot add the HSTS header to its own redirects, so these hosts route here.
 	@apex host ascomply.com
 	handle @apex {

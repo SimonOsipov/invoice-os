@@ -1,7 +1,7 @@
 import { expect, test, type APIResponse } from '@playwright/test'
 import { resolveTarget } from '../targets'
 
-// Values copied from the root Caddyfile `header` block and internal/blogweb/server.go securityHeaders.
+// Values copied from the root Caddyfile and internal/blogweb/server.go securityHeaders.
 
 const NOSNIFF = 'nosniff'
 const REFERRER = 'strict-origin-when-cross-origin'
@@ -47,7 +47,7 @@ function misses(label: string, res: APIResponse, status: number, cache?: (v: str
 
 const exactly = (want: string) => (v: string[]) =>
   v.length === 1 && v[0] === want ? null : `[${v.join(' | ')}], want one "${want}"`
-const revalidatable = (v: string[]) =>
+const cacheable = (v: string[]) =>
   v.some((x) => /no-cache|no-store/.test(x)) ? `[${v.join(' | ')}], want neither no-cache nor no-store` : null
 
 for (const target of TARGETS) {
@@ -69,7 +69,7 @@ for (const target of TARGETS) {
             maxRedirects: 0,
           }),
           200,
-          revalidatable,
+          cacheable,
         ),
       )
 

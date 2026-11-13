@@ -18,7 +18,10 @@
 // with fake Evaluators/GuardFunc only.
 package validation
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // RuleType is the rule-row "type" column value — one of the nine
 // parameterized types plus the "cel" escape hatch (story Core AC #3). The
@@ -148,4 +151,10 @@ type lineEvaluator interface {
 // no violation. Injected as a field on Engine (rather than hard-wired to
 // the CEL backend) so the pipeline built in this subtask is unit-testable
 // with a fake before the real CEL guard backend lands in M3-04-05.
-type GuardFunc func(expr string, p Payload) (bool, error)
+type GuardFunc func(ctx context.Context, expr string, p Payload) (bool, error)
+
+// ctxLineEvaluator is a lineEvaluator that honours the request context and the
+// cost limit it carries. The engine prefers it over lineEvaluator.
+type ctxLineEvaluator interface {
+	evalLinesContext(ctx context.Context, p Payload, r Rule) ([]Violation, error)
+}

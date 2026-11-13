@@ -115,24 +115,35 @@ func checkCustomRule(eng *Engine, w customRuleWire) error {
 
 // evaluate judges one item by the named sets, one single-rule RuleSet per rule so
 // a custom rule cannot touch a golden result (D4). A fault becomes a violation (D5).
-// ids lists the revision ids evaluated, [] when the item names no set.
-func (cs *customSets) evaluate(ctx context.Context, eng *Engine, p Payload, rs RuleSet, names []string, log *slog.Logger) (vs []Violation, ids []string) {
+// ids lists the revision ids evaluated, [] when the item names no set. An ended ctx
+// returns its error with no fault violation; a cost overrun is a fault like any other.
+func (cs *customSets) evaluate(ctx context.Context, eng *Engine, p Payload, rs RuleSet, names []string, log *slog.Logger) (vs []Violation, ids []string, err error) {
 	ids = []string{}
 	for _, name := range names {
 		for _, i := range cs.byName[name] {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			r := cs.rules[i]
 			ids = append(ids, cs.revIDs[i])
-			res, err := eng.Evaluate(p, RuleSet{ID: rs.ID, Version: rs.Version, Rules: []Rule{r}})
+			res, err := eng.EvaluateContext(withCELCostLimit(ctx, celCostLimit), p, RuleSet{ID: rs.ID, Version: rs.Version, Rules: []Rule{r}})
 			if err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return nil, nil, cerr
+				}
+				fault := "error"
+				if errors.Is(err, errCELTooExpensive) {
+					fault = "cost_limit"
+				}
 				log.WarnContext(ctx, "validation: batch validate: custom rule fault",
-					slog.String("rule_key", r.Key), slog.String("revision_id", cs.revIDs[i]), slog.Any("err", err))
+					slog.String("rule_key", r.Key), slog.String("revision_id", cs.revIDs[i]), slog.String("fault", fault), slog.Any("err", err))
 				vs = append(vs, Violation{RuleKey: r.Key, Severity: r.Severity, Message: customFaultMessage, Path: r.Target})
 				continue
 			}
 			vs = append(vs, res.Violations...)
 		}
 	}
-	return vs, ids
+	return vs, ids, nil
 }
 
 // validCustomSeverity: a custom rule blocks (error) or warns (warning); info is refused (D3).
@@ -150,7 +161,7 @@ type customRuleCheck struct {
 
 // checkCustomRuleBody is the save-time check (D9): the staff desk's static checks, then
 // the publish probe on an empty invoice and on the sample. The error text is the 422 reason.
-func checkCustomRuleBody(eng *Engine, in customRuleCheck) error {
+func checkCustomRuleBody(ctx context.Context, eng *Engine, in customRuleCheck) error {
 	if !validCustomSeverity(Severity(in.Severity)) {
 		return errors.New("severity must be error or warning")
 	}
@@ -182,7 +193,10 @@ func checkCustomRuleBody(eng *Engine, in customRuleCheck) error {
 		return fmt.Errorf("embedded sample invoice: %w", err)
 	}
 	for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
-		if _, err := eng.Evaluate(p, RuleSet{Rules: []Rule{r}}); err != nil {
+		if _, err := eng.EvaluateContext(withCELCostLimit(ctx, celCostLimit), p, RuleSet{Rules: []Rule{r}}); err != nil {
+			if errors.Is(err, errCELTooExpensive) {
+				return errors.New("the rule is too expensive to run")
+			}
 			return fmt.Errorf("the rule does not evaluate: %s", rootCause(err))
 		}
 	}
@@ -212,7 +226,10 @@ func CheckCustomRuleHandler(eng *Engine) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if err := checkCustomRuleBody(eng, in); err != nil {
+		if err := checkCustomRuleBody(r.Context(), eng, in); err != nil {
+			if r.Context().Err() != nil {
+				return // the client is gone; nothing to answer
+			}
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}

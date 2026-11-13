@@ -40,6 +40,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - A service trusts identity headers only behind `App.RequireGateway` in `internal/platform/peer.go`. It refuses a request without the gateway token.
 - `auth.RequireStaff` admits only a caller whose verified identity has `Staff`.
 - The mock issuer routes (`/auth/login`, `/auth/mock/*`, `/.well-known/jwks.json`) exist only in a `-tags mockissuer` build. `MockIssuerEnabled` also needs `GATEWAY_MOCK_ISSUER=true` and an environment other than `production`. `cmd/gateway/build.tags` is empty on `main`.
+- On the nightly, the mock POST routes and a no-`Origin` OPTIONS to `/auth/login` need `X-Mock-Issuer-Token`. `/.well-known/jwks.json` stays open. PR previews serve the routes open (SECAUD-47).
 
 ## Network
 
@@ -66,7 +67,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h (IPv6 per /64), holds an upload slot at most 90 s and logs no address, IP or file name.
 - `GET` and `POST /readiness-check/confirm` (gateway) and `POST /internal/public-checks/confirm` (worker): a 256-bit confirm token. The GET changes nothing; the POST consumes the link once within 24 hours and sends the held results. Accepted ceiling: no Armor rule covers the route, since a random token cannot be enumerated.
 - The held results (`readiness_check_requests`): invoice amounts and buyer details of an unconfirmed address, kept at most 25 hours. The file and the client IP are never stored. `invoice_gateway` has no grant on the table.
-- `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
+- `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant. A custom rule's CEL runs under a fixed cost limit (`celCostLimit`) and stops when the request ends.
 - `POST /internal/public-checks/run` and `/mapping` (worker): a visitor's file, address and mapping, forwarded by the gateway. They sit behind `RequireGateway` and the ID token, keep the file in memory (`MultipartReader` only) and log no address, file name or result data. They answer 503 `ceiling` once the day's NULL-tenant AI spend reaches `AISpendCeilingUSD`.
 
 ## Accepted ceilings

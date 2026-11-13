@@ -442,8 +442,8 @@ func aiCheckProblems(jobs map[string]workflowJob) []string {
 	if !slices.Equal(needsOf(ai), []string{"changes", "commit-authors", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts"}) {
 		bad("nightly-ai needs are wrong")
 	}
-	if !slices.Equal(blockLines(ai.lines, 4, "permissions"), []string{"contents: read"}) || strings.Contains(strings.Join(ai.lines, "\n"), "id-token") {
-		bad("nightly-ai permissions are not contents: read alone")
+	if !slices.Equal(blockLines(ai.lines, 4, "permissions"), []string{"contents: read", "id-token: write"}) {
+		bad("nightly-ai permissions are not contents: read and id-token: write")
 	}
 	env := strings.Join(blockLines(ai.lines, 4, "env"), "\n")
 	for _, v := range []struct{ name, out string }{
@@ -1473,7 +1473,6 @@ func TestDevEnvNightly_AICheckJobIsNightlyOnly(t *testing.T) {
 	rows := []struct{ old, repl, want string }{
 		{"name: AI features and accuracy", "name: AI", "nightly-ai name"},
 		{"timeout-minutes: 30", "timeout-minutes: 40", "nightly-ai timeout-minutes"},
-		{"      contents: read\n", "      contents: read\n      id-token: write\n", "nightly-ai permissions"},
 		{nlAINeeds, strings.Replace(nlAINeeds, ", topology", "", 1), "nightly-ai needs"},
 		{nlAINeeds, strings.Replace(nlAINeeds, ", contacts", "", 1), "nightly-ai needs"},
 		{"      needs.changes.outputs.nightly == 'true' &&\n", "", "nightly-ai if"},

@@ -25,6 +25,7 @@ paths:
 - Read the new-device mail only on the nightly, from the real inbox, in `e2e/api/unsubscribe.spec.ts`. Elsewhere take the unsubscribe token from the access token with `unsubscribeTokenOf`.
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
+- Call a mock route only through the `e2e/api/client.ts` helpers. Never call it through the Playwright `request` fixture or a `page`, because a trace records request headers.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
 - Serve `/auth/mock/member`, `/auth/mock/invitation-token`, `/auth/mock/deletion-link-token` and `/auth/mock/readiness-confirm-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.

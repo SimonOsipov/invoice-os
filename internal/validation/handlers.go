@@ -208,8 +208,11 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string, custom 
 			// fact valid ([batch-payload-rooting]). This wrap is one typed
 			// line inside the one function that owns it; VB-12 (a fully valid
 			// invoice -> zero violations) is what discriminates it.
-			result, err := eng.Evaluate(Payload{"invoice": it.Invoice}, rs)
+			result, err := eng.EvaluateContext(r.Context(), Payload{"invoice": it.Invoice}, rs)
 			if err != nil {
+				if r.Context().Err() != nil {
+					return // the client is gone; nothing to log or answer
+				}
 				// A config fault (unknown rule type, bad regex, broken CEL) is
 				// a property of the RULE-SET, not of this item -- it would fail
 				// identically for every item, so the WHOLE batch fails with a
@@ -223,7 +226,10 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string, custom 
 				return
 			}
 			violations := result.Violations
-			custom, ids := cs.evaluate(r.Context(), eng, Payload{"invoice": it.Invoice}, rs, it.CustomRuleSets, log)
+			custom, ids, err := cs.evaluate(r.Context(), eng, Payload{"invoice": it.Invoice}, rs, it.CustomRuleSets, log)
+			if err != nil {
+				return // request context ended
+			}
 			if len(custom) > 0 {
 				violations = append(violations, custom...)
 				sortViolations(violations)

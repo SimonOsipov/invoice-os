@@ -26,6 +26,7 @@
 package validation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -50,7 +51,7 @@ func (f fakeEval) Eval(p Payload, r Rule) (*Violation, error) {
 // reports (result, err) -- used by every test below except
 // TestEngine_WhenGuardSkips, which varies the guard's result per sub-case.
 func newFakeGuard(result bool, err error) GuardFunc {
-	return func(expr string, p Payload) (bool, error) {
+	return func(_ context.Context, expr string, p Payload) (bool, error) {
 		return result, err
 	}
 }

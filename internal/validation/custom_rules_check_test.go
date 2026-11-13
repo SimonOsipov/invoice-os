@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const checkToken = "check-test"
@@ -263,6 +265,7 @@ func TestCheckCustomRule_RefusalTextsAreExact(t *testing.T) {
 		{"cel is not boolean", checkBody(TypeCEL, `{"expr":"invoice.total + 1"}`), "params.expr must compile to a boolean expression"},
 		{"regex does not compile", checkBody(TypeFormat, `{"pattern":"("}`), "params.pattern does not compile"},
 		{"severity info", with(checkBody(TypeRequired, `{}`), "severity", "info"), "severity must be error or warning"},
+		{"cel too expensive", checkBody(TypeCEL, celParams(nested100(5))), "the rule is too expensive to run"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -292,5 +295,51 @@ func TestRootCause(t *testing.T) {
 				t.Errorf("rootCause = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func celParams(expr string) string {
+	b, _ := json.Marshal(map[string]string{"expr": expr})
+	return string(b)
+}
+
+func TestCheckCustomRule_TooExpensiveExprIs422(t *testing.T) {
+	start := time.Now()
+	got := checkError(t, checkBody(TypeCEL, celParams(nested100(5))))
+	if got != "the rule is too expensive to run" {
+		t.Errorf("error = %q", got)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %v, want under 5s", d)
+	}
+}
+
+func TestCheckCustomRule_TooExpensiveWhenIs422(t *testing.T) {
+	b := checkBody(TypeRequired, `{}`)
+	b["when"] = nested100(3) + " && true"
+	if got := checkError(t, b); got != "the rule is too expensive to run" {
+		t.Errorf("error = %q", got)
+	}
+}
+
+func TestCheckCustomRule_WithinLimitNestedIsAccepted(t *testing.T) {
+	if rec := sendCheck(t, checkBody(TypeCEL, celParams(nested100(2)))); rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckCustomRule_EndedRequestContextIsNotARuleRefusal(t *testing.T) {
+	raw, err := json.Marshal(checkBody(TypeRequired, `{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("POST", "/v1/custom-rules/check", strings.NewReader(string(raw))).WithContext(ctx)
+	r.Header.Set(headerS2SToken, checkToken)
+	rec := httptest.NewRecorder()
+	S2SMiddleware(checkToken)(CheckCustomRuleHandler(NewDefaultEngine())).ServeHTTP(rec, r)
+	if rec.Code == http.StatusUnprocessableEntity || strings.Contains(rec.Body.String(), "does not evaluate") {
+		t.Fatalf("status %d body %q, want no rule refusal for a gone client", rec.Code, rec.Body.String())
 	}
 }

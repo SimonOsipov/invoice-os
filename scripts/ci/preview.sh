@@ -19,6 +19,7 @@
 #   preview.sh check-mail-off nightly     unmount them from the worker
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
+#   preview.sh mock-token nightly         print the nightly mock issuer token
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
@@ -137,14 +138,16 @@ cmd_secrets() {
   [ -n "$ip" ] || die "the preview Cloud SQL instance has no private IP"
   dsn() { printf 'postgres://%s:%s@%s:5432/%s?sslmode=require%s' "$1" "$2" "$ip" "$db" "$3"; }
 
-  for name in "${PR_SECRETS[@]}"; do
+  local names=("${PR_SECRETS[@]}")
+  [ "$pr" != nightly ] || names+=(mock-issuer-token)
+  for name in "${names[@]}"; do
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
       [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"
       continue
     fi
     case "$name" in
-      gateway-token | s2s-token | gotrue-jwt-secret) openssl rand -hex 32 ;;
+      gateway-token | s2s-token | gotrue-jwt-secret | mock-issuer-token) openssl rand -hex 32 ;;
       gotrue-jwt-keys | mock-issuer-key) go run ./tools/prenv jwk-es256 ;;
       database-superuser-url) dsn postgres "$(shared postgres-password)" '' ;;
       database-migration-url) dsn invoice_migrator "$(shared migrator-password)" '' ;;
@@ -282,6 +285,7 @@ secrets_of() {
   esac
   local out=() kv
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done
+  [ "$pr$2" != nightlygateway ] || out+=(GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest)
   case "$2" in
     invoice | submission | worker)
       out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
@@ -642,6 +646,7 @@ case "${1:-}" in
   check-mail-on) mail_arg "${2:-}"; cmd_check_mail_on ;;
   check-mail-off) mail_arg "${2:-}"; cmd_check_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
+  mock-token) mail_arg "${2:-}"; read_secret latest --secret nightly-mock-issuer-token --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
@@ -652,5 +657,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
 esac

@@ -1,13 +1,18 @@
 package validation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type loadCall struct {
@@ -412,5 +417,224 @@ func TestBatch_DuplicateKeyAcrossSetsIs400WithNoLoad(t *testing.T) {
 	})
 	if rec.Code != http.StatusBadRequest || len(calls) != 0 {
 		t.Errorf("got %d with %d loader calls, want 400 and 0 (body=%s)", rec.Code, len(calls), rec.Body.String())
+	}
+}
+
+func heavyRule(id, key string) map[string]any {
+	return cwire(id, key, TypeCEL, "buyer.email", celParams(nested100(5)), "warning", "heavy")
+}
+
+func faultsFor(vs []Violation, key string) []Violation {
+	var out []Violation
+	for _, v := range vs {
+		if v.RuleKey == key {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func withoutKey(vs []Violation, key string) []Violation {
+	var out []Violation
+	for _, v := range vs {
+		if v.RuleKey != key {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func TestBatch_OverLimitCustomRuleFaultsAloneAndOthersRun(t *testing.T) {
+	items := []any{item("a", "e1"), item("b", "e1")}
+	var calls []loadCall
+	start := time.Now()
+	with := wantOK(t, runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices":         items,
+		"custom_rule_sets": map[string]any{"e1": []any{heavyRule("rev1", "custom:heavy"), requiredEmail("rev2", "custom:email")}},
+	}))
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("batch took %v, want under 10s", d)
+	}
+	without := wantOK(t, runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices":         items,
+		"custom_rule_sets": map[string]any{"e1": []any{requiredEmail("rev2", "custom:email")}},
+	}))
+	for i, res := range with.Results {
+		heavy := faultsFor(res.Violations, "custom:heavy")
+		if len(heavy) != 1 || heavy[0].Message != customFaultMessage || heavy[0].Severity != "warning" {
+			t.Errorf("item %d heavy violations = %+v, want one warning customFaultMessage", i, heavy)
+		}
+		if !reflect.DeepEqual(withoutKey(res.Violations, "custom:heavy"), without.Results[i].Violations) {
+			t.Errorf("item %d other violations changed: %+v vs %+v", i, withoutKey(res.Violations, "custom:heavy"), without.Results[i].Violations)
+		}
+	}
+}
+
+func TestBatch_OverLimitCustomWhenFaultsAlone(t *testing.T) {
+	gated := cwire("rev1", "custom:gated", TypeRequired, "buyer.email", `{}`, "error", "email needed")
+	gated["when"] = nested100(3) + " && true"
+	var calls []loadCall
+	body := wantOK(t, runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices":         []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{gated, requiredEmail("rev2", "custom:email")}},
+	}))
+	vs := body.Results[0].Violations
+	if f := faultsFor(vs, "custom:gated"); len(f) != 1 || f[0].Message != customFaultMessage {
+		t.Errorf("gated violations = %+v, want one fault", f)
+	}
+	if f := faultsFor(vs, "custom:email"); len(f) != 1 || f[0].Message != "email needed" {
+		t.Errorf("sibling violations = %+v, want its own violation", f)
+	}
+	if len(goldenOnly(vs)) != 2 {
+		t.Errorf("golden violations = %+v, want 2", goldenOnly(vs))
+	}
+}
+
+func logLine(logs, key string) string {
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, "custom rule fault") && strings.Contains(l, "rule_key="+key) {
+			return l
+		}
+	}
+	return ""
+}
+
+func TestBatch_CustomFaultLogNamesTheCostLimit(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	raw, _ := json.Marshal(map[string]any{
+		"invoices": []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{heavyRule("rev1", "custom:heavy"),
+			cwire("rev2", "custom:broken", TypeCEL, "buyer.email", `{"expr":"invoice.missing.x == 1"}`, "error", "m")}},
+	})
+	var calls []loadCall
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(recordingLoader(goldenFake(), &calls), NewDefaultEngine(), nil, log).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", bytes.NewReader(raw)))
+	wantOK(t, rec)
+	if l := logLine(buf.String(), "custom:heavy"); !strings.Contains(l, "fault=cost_limit") {
+		t.Errorf("heavy log line = %q, want fault=cost_limit", l)
+	}
+	if l := logLine(buf.String(), "custom:broken"); !strings.Contains(l, "fault=error") {
+		t.Errorf("broken log line = %q, want fault=error", l)
+	}
+}
+
+func TestCustomSets_EvaluateReturnsContextError(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	eng := NewDefaultEngine()
+	cs, err := newCustomSets(eng, map[string][]customRuleWire{"e1": {
+		{ID: "r1", Key: "custom:c", Type: TypeCEL, Target: "buyer.email", Params: json.RawMessage(`{"expr":"invoice.missing.x == 1"}`), Severity: "error", Message: "m"},
+		{ID: "r2", Key: "custom:r", Type: TypeRequired, Target: "buyer.email", Params: json.RawMessage(`{}`), Severity: "error", Message: "m"},
+	}}, []batchItem{{Ref: "a", CustomRuleSets: []string{"e1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, _, err := cs.evaluate(cancelledCtx(), eng, Payload{"invoice": failingInvoice()}, goldenFake(), []string{"e1"}, log)
+	if !errors.Is(err, context.Canceled) || len(vs) != 0 {
+		t.Errorf("vs=%+v err=%v, want Canceled and no violations", vs, err)
+	}
+	if strings.Contains(buf.String(), "custom rule fault") {
+		t.Errorf("log = %q, want no fault line", buf.String())
+	}
+}
+
+func TestBatch_ContextEndDuringCustomRulesStopsTheBatch(t *testing.T) {
+	// 100 x 100 x 10 nested: cost 641,411, under the limit, about 0.1s per run
+	slow := celParams(nestedAll(100, 100, 10))
+	rule := cwire("rev1", "custom:slow", TypeCEL, "buyer.email", slow, "error", "slow")
+	var w customRuleWire
+	raw, _ := json.Marshal(rule)
+	_ = json.Unmarshal(raw, &w)
+	one := Rule{Key: w.Key, Type: w.Type, Target: w.Target, Params: w.Params, Severity: w.Severity, Message: w.Message, Scope: "document", Enabled: true}
+	if _, err := NewDefaultEngine().EvaluateContext(limited(), emptyInvoice(), RuleSet{Rules: []Rule{one}}); err != nil {
+		t.Fatalf("the slow rule must run under the limit: %v", err)
+	}
+	items := make([]any, 200)
+	for i := range items {
+		items[i] = item(fmt.Sprint(i), "e1")
+	}
+	body, _ := json.Marshal(map[string]any{"invoices": items, "custom_rule_sets": map[string]any{"e1": []any{rule}}})
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	var calls []loadCall
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	BatchValidateHandler(recordingLoader(goldenFake(), &calls), NewDefaultEngine(), nil, log).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", bytes.NewReader(body)).WithContext(ctx))
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("handler took %v, want under 5s", d)
+	}
+	if strings.Contains(rec.Body.String(), "results") {
+		t.Errorf("body = %q, want no results", rec.Body.String())
+	}
+	if l := buf.String(); strings.Contains(l, "custom rule fault") || strings.Contains(l, "ERROR") {
+		t.Errorf("log = %q, want no fault and no error line", l)
+	}
+}
+
+func TestBatch_GoldenRuleAboveTheLimitIsStillJudged(t *testing.T) {
+	lines := make([]any, 500)
+	for i := range lines {
+		lines[i] = map[string]any{"id": fmt.Sprint(i + 1)}
+	}
+	lines[499] = map[string]any{"id": "499"} // the last two share an id, so the all() runs to the end
+	rs := RuleSet{ID: "g-id", Version: 7, Rules: []Rule{celRule("no-duplicate-line-items", "line_items", dupIDsExpr)}}
+	var calls []loadCall
+	rec := runCustomBatch(t, rs, &calls, map[string]any{
+		"invoices": []any{map[string]any{"ref": "a", "invoice": map[string]any{"line_items": lines}}},
+	})
+	body := wantOK(t, rec)
+	if got := batchKeys(body.Results[0].Violations); !reflect.DeepEqual(got, []string{"no-duplicate-line-items"}) {
+		t.Errorf("violations = %v, want the duplicate-line violation", got)
+	}
+}
+
+// serveBatchWithDeadline posts body with a request context that ends after d.
+func serveBatchWithDeadline(t *testing.T, rs RuleSet, body map[string]any, d time.Duration) (*httptest.ResponseRecorder, string) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	var calls []loadCall
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	BatchValidateHandler(recordingLoader(rs, &calls), NewDefaultEngine(), nil, log).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", bytes.NewReader(raw)).WithContext(ctx))
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("handler took %v, want under 5s", el)
+	}
+	return rec, buf.String()
+}
+
+// The last item has no later item to notice the ended context, so the handler
+// must stop on the custom-rule error itself.
+func TestBatch_ContextEndInTheOnlyItemsCustomRuleAnswersNothing(t *testing.T) {
+	rule := cwire("rev1", "custom:slow", TypeCEL, "buyer.email", celParams(nestedAll(100, 100, 10)), "error", "slow")
+	rec, logs := serveBatchWithDeadline(t, goldenFake(), map[string]any{
+		"invoices":         []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{rule}},
+	}, 50*time.Millisecond)
+	if strings.Contains(rec.Body.String(), "results") {
+		t.Errorf("body = %q, want no results", rec.Body.String())
+	}
+	if strings.Contains(logs, "custom rule fault") || strings.Contains(logs, "ERROR") {
+		t.Errorf("log = %q, want no fault and no error line", logs)
+	}
+}
+
+func TestBatch_ContextEndDuringAGoldenRuleIsNotAServerFault(t *testing.T) {
+	rs := RuleSet{ID: "g-slow", Version: 1, Rules: []Rule{celRule("golden-slow", "", nested100(5))}}
+	rec, logs := serveBatchWithDeadline(t, rs, map[string]any{"invoices": []any{item("a")}}, 100*time.Millisecond)
+	if rec.Code == http.StatusInternalServerError || rec.Body.Len() != 0 {
+		t.Errorf("status %d body %q, want no 500 and an empty body", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(logs, "ERROR") {
+		t.Errorf("log = %q, want no error line", logs)
 	}
 }

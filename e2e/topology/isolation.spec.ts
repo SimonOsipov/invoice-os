@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { GATEWAY_URL, TENANTS } from './targets'
+import { login } from '../api/client'
 import { isE2eMemberEmail, isSeededMember } from '../realAccounts'
 
 // M2-14 deliverable (3): live cross-tenant isolation over the full edge path. For a
@@ -18,11 +19,7 @@ interface Me {
 }
 
 async function resolveTenant(request: APIRequestContext, t: { id: string; subject: string }): Promise<Me> {
-  const login = await request.post(`${GATEWAY_URL}/auth/login`, {
-    data: { subject: t.subject, role: 'authenticated', tenant_id: t.id },
-  })
-  expect(login.ok(), `auth/login for ${t.id} returned HTTP ${login.status()}`).toBeTruthy()
-  const { access_token } = (await login.json()) as { access_token: string }
+  const access_token = await login({ subject: t.subject, tenantId: t.id })
 
   const me = await request.get(`${GATEWAY_URL}/api/tenancy/v1/me`, {
     headers: { Authorization: `Bearer ${access_token}` },
@@ -65,7 +62,7 @@ test('cross-tenant isolation: each token reads exactly its own tenant + domain r
 // service-layer proof (internal/tenancy/tenancy_test.go TestStoreListMemberships_*).
 //
 // The row shape below is a SECOND, independent mirror of e2e/api/client.ts's `Membership` —
-// this file drives Playwright's own request context and imports nothing from api/. Widened
+// this file reads through Playwright's request context and mints through api/ login(). Widened
 // to six keys with that one; a TS generic validates no JSON at runtime, so a stale mirror
 // here is stale-not-broken and would go unnoticed.
 type MembershipRow = { user_id: string; role: string; status: string; display_name: string | null; email: string | null; client_access: 'all' | string[] | null }
@@ -74,11 +71,7 @@ async function fetchMemberships(
   request: APIRequestContext,
   t: { id: string; subject: string },
 ): Promise<{ memberships: MembershipRow[] }> {
-  const login = await request.post(`${GATEWAY_URL}/auth/login`, {
-    data: { subject: t.subject, role: 'authenticated', tenant_id: t.id },
-  })
-  expect(login.ok(), `auth/login for ${t.id} returned HTTP ${login.status()}`).toBeTruthy()
-  const { access_token } = (await login.json()) as { access_token: string }
+  const access_token = await login({ subject: t.subject, tenantId: t.id })
 
   const res = await request.get(`${GATEWAY_URL}/api/tenancy/v1/memberships`, {
     headers: { Authorization: `Bearer ${access_token}` },

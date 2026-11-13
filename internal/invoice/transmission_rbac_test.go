@@ -46,7 +46,7 @@ import (
 // the production constant fails here instead of agreeing with itself.
 const wantNotApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
 
-const transitionToQueuedBody = `{"target":"queued"}`
+const transitionToDraftBody = `{"target":"draft"}`
 
 // fixedRoleStub is adminRoleStub's parameterized sibling -- these specs drive
 // the gate across roles, the no-membership ("", nil) shape, and a resolver error.
@@ -140,12 +140,25 @@ func TestTransition_PreparerRefused(t *testing.T) {
 		return Invoice{ID: gotID, Status: target}, nil
 	}
 
-	rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub("preparer", nil), &id, invoiceID, transitionToQueuedBody)
+	rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub("preparer", nil), &id, invoiceID, transitionToDraftBody)
 
 	assertTransmitRefused(t, rec, resp.Error)
 	if called {
 		t.Error("transition was called for a preparer; the refusal must precede the store")
 	}
+}
+
+// A preparer sending a fiscal target gets the role 403, not the fiscal 409.
+func TestTransitionHandler_PreparerWithAFiscalTargetIs403(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		t.Error("transition was called for a preparer")
+		return Invoice{}, nil
+	}
+
+	rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub("preparer", nil), &id, uuid.NewString(), `{"target":"accepted"}`)
+
+	assertTransmitRefused(t, rec, resp.Error)
 }
 
 // --- AC-2: admin AND reviewer both keep transmitting -------------------------
@@ -187,7 +200,7 @@ func TestTransition_AdminAndReviewerAllowed(t *testing.T) {
 				return Invoice{ID: gotID, Status: target}, nil
 			}
 
-			rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub(role, nil), &id, invoiceID, transitionToQueuedBody)
+			rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub(role, nil), &id, invoiceID, transitionToDraftBody)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -195,8 +208,8 @@ func TestTransition_AdminAndReviewerAllowed(t *testing.T) {
 			if calls != 1 {
 				t.Errorf("transition called %d times, want 1", calls)
 			}
-			if resp.Status != string(StatusQueued) {
-				t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
+			if resp.Status != string(StatusDraft) {
+				t.Errorf("status = %q, want %q", resp.Status, StatusDraft)
 			}
 		})
 	}
@@ -228,7 +241,7 @@ func TestTransmitGate_NoMembershipRefused(t *testing.T) {
 			called = true
 			return Invoice{ID: gotID, Status: target}, nil
 		}
-		rec, resp := doInvoiceTransitionAs(t, transition, noMembership, &id, uuid.NewString(), transitionToQueuedBody)
+		rec, resp := doInvoiceTransitionAs(t, transition, noMembership, &id, uuid.NewString(), transitionToDraftBody)
 		assertTransmitRefused(t, rec, resp.Error)
 		if called {
 			t.Error("transition was called for a subject with no membership")
@@ -262,7 +275,7 @@ func TestTransmitGate_ResolverErrorFailsClosed(t *testing.T) {
 			called = true
 			return Invoice{ID: gotID, Status: target}, nil
 		}
-		rec, resp := doInvoiceTransitionAs(t, transition, boom, &id, uuid.NewString(), transitionToQueuedBody)
+		rec, resp := doInvoiceTransitionAs(t, transition, boom, &id, uuid.NewString(), transitionToDraftBody)
 		assertTransmitRefused(t, rec, resp.Error)
 		if called {
 			t.Error("transition was called after the role resolver errored")
@@ -340,9 +353,9 @@ func TestTransmitGate_NoExistenceOracle(t *testing.T) {
 			}
 		}
 		assertIndistinguishable(t, []transmitProbe{
-			{"real id", probe(knownID, transitionToQueuedBody)},
-			{"unknown id", probe(uuid.NewString(), transitionToQueuedBody)},
-			{"malformed id", probe("not-a-uuid", transitionToQueuedBody)},
+			{"real id", probe(knownID, transitionToDraftBody)},
+			{"unknown id", probe(uuid.NewString(), transitionToDraftBody)},
+			{"malformed id", probe("not-a-uuid", transitionToDraftBody)},
 			{"malformed json", probe(knownID, malformedJSON)},
 		})
 	})
@@ -378,7 +391,7 @@ func TestTransmitGate_UnauthenticatedStillFourOhOne(t *testing.T) {
 			t.Error("transition was called for an unauthenticated request")
 			return Invoice{}, nil
 		}
-		rec, _ := doInvoiceTransitionAs(t, transition, countingRole, nil, uuid.NewString(), transitionToQueuedBody)
+		rec, _ := doInvoiceTransitionAs(t, transition, countingRole, nil, uuid.NewString(), transitionToDraftBody)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("status = %d, want %d (body=%s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
 		}
@@ -440,7 +453,7 @@ func TestTransition_RealStore_ReviewerAllowedPreparerRefused(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "transmit gate transition tenant")
 	entityID := seedEntity(t, super, tenantID, "transmit gate transition entity")
-	// Two invoices, not one: a second transition on the reviewer's now-queued
+	// Two invoices, not one: a second transition on the reviewer's now-draft
 	// row would answer ErrRedundantTransition and mask the gate's own verdict.
 	reviewerInv := seedInvoiceAtStatus(t, super, tenantID, entityID, "TRANSMIT-GATE-REVIEWER", StatusValidated)
 	preparerInv := seedInvoiceAtStatus(t, super, tenantID, entityID, "TRANSMIT-GATE-PREPARER", StatusValidated)
@@ -454,18 +467,18 @@ func TestTransition_RealStore_ReviewerAllowedPreparerRefused(t *testing.T) {
 	reviewerID := auth.Identity{Subject: reviewer, Role: "authenticated", TenantID: tenantID}
 	preparerID := auth.Identity{Subject: preparer, Role: "authenticated", TenantID: tenantID}
 
-	rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &reviewerID, reviewerInv, transitionToQueuedBody)
+	rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &reviewerID, reviewerInv, transitionToDraftBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reviewer status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if resp.Status != string(StatusQueued) {
-		t.Errorf("reviewer response status = %q, want %q", resp.Status, StatusQueued)
+	if resp.Status != string(StatusDraft) {
+		t.Errorf("reviewer response status = %q, want %q", resp.Status, StatusDraft)
 	}
-	if got := mustInvoiceStatus(t, super, reviewerInv); got != string(StatusQueued) {
-		t.Errorf("reviewer invoice status = %q, want %q", got, StatusQueued)
+	if got := mustInvoiceStatus(t, super, reviewerInv); got != string(StatusDraft) {
+		t.Errorf("reviewer invoice status = %q, want %q", got, StatusDraft)
 	}
 
-	rec, resp = doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &preparerID, preparerInv, transitionToQueuedBody)
+	rec, resp = doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &preparerID, preparerInv, transitionToDraftBody)
 	assertTransmitRefused(t, rec, resp.Error)
 	if got := mustInvoiceStatus(t, super, preparerInv); got != string(StatusValidated) {
 		t.Errorf("preparer invoice status = %q, want %q -- a refused transition must not move the row", got, StatusValidated)
@@ -498,7 +511,7 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 	})
 
 	t.Run("transition", func(t *testing.T) {
-		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, transitionInv, transitionToQueuedBody)
+		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, transitionInv, transitionToDraftBody)
 		assertTransmitRefused(t, rec, resp.Error)
 		if got := mustInvoiceStatus(t, super, transitionInv); got != string(StatusValidated) {
 			t.Errorf("invoice status = %q, want %q", got, StatusValidated)

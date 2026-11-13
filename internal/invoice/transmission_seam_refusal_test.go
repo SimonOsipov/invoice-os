@@ -50,7 +50,7 @@ func TestTransmitGate_SeamErrorFromRoleLookupKeepsItsRefusal(t *testing.T) {
 				t.Error("transition called after a refused role lookup")
 				return Invoice{}, nil
 			}
-			rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub(c.role, c.err), &id, uuid.NewString(), transitionToQueuedBody)
+			rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub(c.role, c.err), &id, uuid.NewString(), transitionToDraftBody)
 			if rec.Code != http.StatusForbidden || resp.Error != c.want {
 				t.Errorf("got %d %q, want 403 %q", rec.Code, resp.Error, c.want)
 			}

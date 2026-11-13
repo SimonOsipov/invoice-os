@@ -84,18 +84,14 @@ const METRIC = {
 // internal/submission/mock_script.go mockTINAccept
 const MOCK_TIN_ACCEPT = '99999999-0001'
 
+// internal/submission/mock_script.go mockTINUnbuildable: Transform fails, so the invoice fails as payload_not_built.
+const MOCK_TIN_UNBUILDABLE = '99999999-0010'
+
 async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
-  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
+  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber), buyer_tin: MOCK_TIN_UNBUILDABLE })
   await validateInvoice(tok, created.id)
   await approveUntilClosed(created.id, await firmApproverTokens())
-  for (const target of ['queued', 'failed']) {
-    const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${tok}` },
-      body: { target },
-    })
-    expect(res.status, `createFailedInvoice setup: -> ${target} should return 200`).toBe(200)
-  }
+  await submitAndAwait(tok, created.id, 'failed')
   return created.id
 }
 

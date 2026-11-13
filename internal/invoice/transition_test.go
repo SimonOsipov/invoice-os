@@ -19,7 +19,7 @@
 //
 // M5-09-02 (task-255) adds two more, at the bottom of this file:
 //
-//	AC-3 TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
+//	AC-3 TestStoreTransition_AcceptedClearsRejectionReasons
 //	AC-4 TestStoreTransition_AcceptedClearFailureStillRollsBack
 //
 // TestRLS_InvoicesTransitionCrossTenantRefused lives in
@@ -1047,21 +1047,11 @@ func TestCanSubmit_UnknownStatusIsFalseAndNeverPanics(t *testing.T) {
 
 // --- M5-09-02 (task-255): the clear moves into transitionTx -----------------
 
-// TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
-// (M5-09-02/task-255, AC-3): `accepted` has TWO live writers -- the worker's
-// MarkAcceptedTx (proved by TestMarkAcceptedTx_ClearsRejectionReasons,
-// outcome_loop_test.go) and THIS one, a direct POST /v1/invoices/{id}/
-// transitions {"target":"accepted"} on a queued invoice, which
-// TransitionHandler refuses nothing for (it guards only StatusValidated,
-// handlers.go:372-374) and cmd/invoice/main.go:60 wires production-reachable.
-// This test drives Store.Transition directly and NEVER calls MarkAcceptedTx
-// -- so it is deliberately blind to whatever MarkAcceptedTx's own outcome
-// closure does. It FAILS if the clear is placed in MarkAcceptedTx instead of
-// transitionTx: that placement would leave THIS path's invoice accepted with
-// its rejection_reasons still populated, which M5-09-05's detail surface
-// would then render as a rejection card sitting on an accepted invoice --
-// exactly the regression this subtask's design note names as load-bearing.
-func TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons(t *testing.T) {
+// TestStoreTransition_AcceptedClearsRejectionReasons (M5-09-02/task-255, AC-3):
+// drives Store.Transition directly and never MarkAcceptedTx, so it fails if the
+// clear moves out of transitionTx into MarkAcceptedTx's outcome closure (the
+// sibling is TestMarkAcceptedTx_ClearsRejectionReasons, outcome_loop_test.go).
+func TestStoreTransition_AcceptedClearsRejectionReasons(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
@@ -1093,7 +1083,7 @@ func TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons(t *testing
 		t.Fatalf("read back rejection_reasons: %v", err)
 	}
 	if reasons != "[]" {
-		t.Errorf("rejection_reasons after Transition(->accepted) = %q, want %q (this path bypasses MarkAcceptedTx entirely -- the clear must live in transitionTx, not MarkAcceptedTx's outcome closure)", reasons, "[]")
+		t.Errorf("rejection_reasons after Transition(->accepted) = %q, want %q (the clear must live in transitionTx, not MarkAcceptedTx's outcome closure)", reasons, "[]")
 	}
 	if typeofReasons != "array" {
 		t.Errorf("jsonb_typeof(rejection_reasons) after Transition(->accepted) = %q, want %q (never JSON null)", typeofReasons, "array")
@@ -1173,7 +1163,7 @@ func TestStoreTransition_AcceptedClearFailureStillRollsBack(t *testing.T) {
 
 // TestTransition_DemotionToDraftCancelsOpenRun (AC-9, AC-10): a validated invoice with
 // one open run --> Store.Transition(ctx, id, StatusDraft) (the POST
-// /v1/invoices/{id}/transitions path TransitionHandler lets through, handlers.go:695-698)
+// /v1/invoices/{id}/transitions path TransitionHandler passes to the store)
 // --> invoice is draft, run cancelled with closed_by = the caller's subject, exactly
 // one cancellation audit row. Fails today: the run stays open.
 //

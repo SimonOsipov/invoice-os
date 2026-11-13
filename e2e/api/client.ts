@@ -325,6 +325,18 @@ export async function provisionStaffAccount(prefix: string, password?: string): 
   return { ...account, userId }
 }
 
+// One staff token per process for failedByStaffCancel; a rejected attempt is dropped so the next call retries.
+const staffTokens = new Map<string, Promise<string>>()
+export function getStaffToken(prefix: string): Promise<string> {
+  let p = staffTokens.get(prefix)
+  if (!p) {
+    p = provisionStaffAccount(prefix).then(async (a) => (await signInSession(a.email, a.password)).access_token)
+    p.catch(() => staffTokens.delete(prefix))
+    staffTokens.set(prefix, p)
+  }
+  return p
+}
+
 // POST /auth/mock/invitation-token (internal/gateway/mockinvitation.go answers 204); mock build only.
 // Replaces a pending invite's token, so a spec knows the value the mail would carry.
 export async function setInvitationToken(tenantId: string, invitationId: string, token: string): Promise<void> {
@@ -939,7 +951,7 @@ export function getInvoice(token: string, id: string): Promise<GetInvoiceResult>
 export async function submitAndAwait(
   token: string,
   id: string,
-  want: 'accepted' | 'rejected',
+  want: 'accepted' | 'rejected' | 'failed' | 'submitted',
   timeoutMs = 120_000,
 ): Promise<GetInvoiceResult> {
   // Shape of internal/invoice/batch_submit.go's BatchSubmitResultItem; Reason is omitted when enqueued.
@@ -967,6 +979,85 @@ export async function submitAndAwait(
     )
     .toBe(want)
   return inv
+}
+
+// Precondition: the invoice is validated, its approval run is closed, and its buyer TIN is 99999999-0004.
+// Submits it, then cancels the retrying job through the staff route: queued -> failed with a NULL failure_kind.
+export async function failedByStaffCancel(
+  token: string,
+  staffToken: string,
+  tenantId: string,
+  invoice: { id: string; invoice_number: string },
+): Promise<GetInvoiceResult> {
+  // Dynamic import: ctl and nightly tools load this module outside the Playwright runner.
+  const { expect } = await import('@playwright/test')
+  const staffAuth = { Authorization: `Bearer ${staffToken}` }
+  const reason = `e2e fixture cancel ${crypto.randomUUID()}`
+  const cancel = async (jobId: string) => {
+    let res: { status: number; body: unknown } = { status: 0, body: undefined }
+    await expect
+      .poll(
+        async () => {
+          res = await rawFetch(`/api/submission/v1/staff/jobs/${jobId}/cancel`, { method: 'POST', headers: staffAuth, body: { reason } })
+          return res.status
+        },
+        { message: 'cancel answers something other than 409', timeout: 60_000, intervals: [500, 1000, 2000] },
+      )
+      .not.toBe(409)
+    return res
+  }
+
+  const { results } = await apiFetch<{ results: { enqueued: boolean; reason?: string }[] }>(`${apiBase()}/api/invoice/v1/invoices/submissions`, {
+    method: 'POST',
+    body: { invoice_ids: [invoice.id], idempotency_key: crypto.randomUUID() },
+    token,
+  })
+  if (!results[0]?.enqueued) {
+    throw new Error(`failedByStaffCancel: invoice ${invoice.id} was not enqueued: ${results[0]?.reason ?? 'no result'}`)
+  }
+
+  // state=queued: the only state cancel accepts (internal/staffjobs/handlers.go ListHandler).
+  const findJobId = async () => {
+    const res = await rawFetch(`/api/submission/v1/staff/jobs?tenant=${tenantId}&state=queued`, { headers: staffAuth })
+    const jobs = (res.body as { jobs?: { id: string; invoice_number: string }[] }).jobs ?? []
+    return jobs.find((j) => j.invoice_number === invoice.invoice_number)?.id
+  }
+
+  let jobId = undefined as string | undefined
+  let cancelled = false
+  try {
+    await expect
+      .poll(
+        async () => {
+          jobId = await findJobId()
+          return jobId !== undefined
+        },
+        { message: `no staff job listed for ${invoice.invoice_number}`, timeout: 60_000, intervals: [500, 1000, 2000] },
+      )
+      .toBe(true)
+    const res = await cancel(jobId!)
+    expect(res.status, `cancel answered ${JSON.stringify(res.body)}`).toBe(200)
+    cancelled = true
+    let inv!: GetInvoiceResult
+    await expect
+      .poll(
+        async () => {
+          inv = await getInvoice(token, invoice.id)
+          return `${inv.status}/${inv.failure_kind}`
+        },
+        { message: `failedByStaffCancel: invoice ${invoice.id} did not reach failed`, timeout: 60_000, intervals: [1_000] },
+      )
+      .toBe('failed/null')
+    return inv
+  } finally {
+    // An aborted spec would leave the -0004 job retrying for about 78 minutes: one best-effort cancel, no poll.
+    if (!cancelled) {
+      jobId ??= await findJobId().catch(() => undefined)
+      if (jobId) {
+        await rawFetch(`/api/submission/v1/staff/jobs/${jobId}/cancel`, { method: 'POST', headers: staffAuth, body: { reason } }).catch(() => undefined)
+      }
+    }
+  }
 }
 
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
@@ -1472,13 +1563,6 @@ export interface CheckMapping {
 
 export function checkMapping(token: string, body: CheckMappingRequest): Promise<CheckMapping> {
   return apiFetch<CheckMapping>(`${apiBase()}/api/invoice/v1/imports/check-mapping`, { method: 'POST', body, token })
-}
-
-// transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
-// The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
-// earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.
-export function transitionInvoice(token: string, id: string, target: Invoice['status']): Promise<Invoice> {
-  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', body: { target }, token })
 }
 
 // ---- Dashboard rollup wire types, mirrored from internal/dashboard/

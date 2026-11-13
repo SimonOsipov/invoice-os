@@ -24,7 +24,8 @@ import {
   createEntity,
   createInvoice,
   validateInvoice,
-  transitionInvoice,
+  failedByStaffCancel,
+  getStaffToken as getStaffTokenFor,
   approveUntilClosed,
   decideInvoiceApproval,
   firmApproverTokens,
@@ -35,6 +36,7 @@ import {
   me,
   editInvoice,
   provisionRealAccount,
+  submitAndAwait,
   signInSession,
   listWorkflowRoles,
   staffWorkflowRole,
@@ -245,6 +247,9 @@ const MOCK_TIN_REJECT = '99999999-0002'
 const MOCK_TIN_PENDING = '99999999-0003'
 // internal/submission/mock_script.go mockTINUnbuildable: fails as payload_not_built, a resendable kind.
 const MOCK_TIN_UNBUILDABLE = '99999999-0010'
+// internal/submission/mock_script.go mockTINUnavailable: the job retries, so a staff cancel fails the invoice with a NULL failure_kind.
+const MOCK_TIN_UNAVAILABLE = '99999999-0004'
+const getStaffToken = () => getStaffTokenFor('invoice-surfaces')
 // internal/invoice/send_again.go sendAgainResolvedReason, byte for byte.
 const SEND_AGAIN_RESOLVED_REASON = 'This invoice is marked resolved outside ASComply and cannot be sent again.'
 
@@ -2214,17 +2219,14 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   // returns Retryable under River's unmodified attempt^4 policy, ~78 minutes before
   // MarkFailed, which both blows this test's budget and parks a `queued` row that would
   // turn list polling on for every later topology spec against this same PR environment.
-  // Both edges below are legal (validated->queued, queued->failed) and TransitionHandler
-  // refuses only `target === validated` -- no submission job is ever created, so this
-  // fixture is terminal before the browser even opens.
+  // `-0004` retries too, so failedByStaffCancel submits it and cancels the job: terminal
+  // before the browser opens.
   const invoiceNumber = `INV-M509-FAILED-${Date.now()}`
-  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNAVAILABLE) })
   await validateInvoice(token, inv.id)
-  // TransmitClearTx gates this transition server-side too (EXISTS(state='approved')) -- the
-  // governed tenant's open run must close before the queued edge is legal here.
+  // TransmitClearTx gates the submission on a closed approval run.
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
-  await transitionInvoice(token, inv.id, 'queued')
-  await transitionInvoice(token, inv.id, 'failed')
+  await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, inv)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
@@ -2290,15 +2292,12 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M509 resolve ${Date.now()}`, tin: freshTin() })
 
-  // Same sanctioned failed-fixture chain as the dead-end test above -- the -0006
-  // timeout trigger is forbidden there for the same reason it would be here.
+  // Same failed-fixture chain as the dead-end test above (-0004 plus a staff cancel, never -0006).
   const invoiceNumber = `INV-M509-RESOLVE-${Date.now()}`
-  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNAVAILABLE) })
   await validateInvoice(token, inv.id)
-  // Same server-side gate as the dead-end test above (TransmitClearTx).
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
-  await transitionInvoice(token, inv.id, 'queued')
-  await transitionInvoice(token, inv.id, 'failed')
+  await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, inv)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
@@ -2375,7 +2374,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
 // together, on a real deployed environment -- four links never exercised as one. This reads
 // a seeded row (DEMO-2026-1004, db/seed.dev.sql), not an API-created fixture: it's the one
 // way to prove a kind stamped by real code (BUG-06-02/03) round-trips the whole stack, since
-// this suite's own fixtures reach `failed` only through POST /transitions, which is always
+// this suite's own fixtures reach `failed` through a staff cancel, which leaves it
 // null (see the test above). 'acknowledged_no_verdict' is the kind gated here -- it carries
 // the operationally critical double-filing warning ("twice"), the single word BUG-06-05's
 // own vitest suite (invoices.test.ts) also anchors on, so this assertion and that unit test
@@ -4410,12 +4409,11 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     entityName = `AUDIT-09 strip ${Date.now()}`
     const entity = await createEntity(creatorToken, { name: entityName, tin: freshTin() })
     invoiceNumber = `INV-AUDIT09-STRIP-${Date.now()}`
-    const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNAVAILABLE) })
     await validateInvoice(validatorToken, invoice.id)
-    // TransmitClearTx gates the queued edge on a closed run.
+    // TransmitClearTx gates the submission on a closed run.
     await approveUntilClosed(invoice.id, await firmApproverTokens(SHARD.a.id))
-    await transitionInvoice(token, invoice.id, 'queued')
-    await transitionInvoice(token, invoice.id, 'failed')
+    await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, invoice)
   })
 
   // setViewportSize resolves before the page has necessarily re-laid out; every measurement
@@ -4559,12 +4557,11 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
     entityName = `Zenith activity ${Date.now()}`
     const entity = await createEntity(token, { name: entityName, tin: freshTin() })
     invoiceNumber = `INV-AUDIT0904-${Date.now()}`
-    const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNAVAILABLE) })
     await validateInvoice(token, invoice.id)
-    // TransmitClearTx gates the queued edge on a closed run.
+    // TransmitClearTx gates the submission on a closed run.
     await approveUntilClosed(invoice.id, await firmApproverTokens(SHARD.a.id))
-    await transitionInvoice(token, invoice.id, 'queued')
-    await transitionInvoice(token, invoice.id, 'failed')
+    await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, invoice)
   })
 
   // setViewportSize resolves before the page has necessarily re-laid out; window.innerWidth
@@ -5150,14 +5147,13 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
 
     // Driven over the API side channel, never through the cluster's own buttons: this block
     // measures that cluster, so building its fixture with it would make the fixture depend
-    // on the thing under test. Same sanctioned chain as the failed dead-end test above --
-    // TransmitClearTx gates `queued` on a closed approval run.
+    // on the thing under test. Same chain as the failed dead-end test above --
+    // TransmitClearTx gates the submission on a closed approval run.
     numbers.failed = `INV-BUG1404-FAILED-${stamp}`
-    const failed = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(numbers.failed) })
+    const failed = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(numbers.failed, MOCK_TIN_UNAVAILABLE) })
     await validateInvoice(token, failed.id)
     await approveUntilClosed(failed.id, await firmApproverTokens(SHARD.a.id))
-    await transitionInvoice(token, failed.id, 'queued')
-    await transitionInvoice(token, failed.id, 'failed')
+    await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, failed)
     ids.failed = failed.id
   })
 
@@ -5611,9 +5607,8 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   // losing its `done` once the cursor passes it.
   //
   // The submit is driven from the register, this file's own proven path
-  // (submitSelected). SUBMIT-SITE NOTE: this adds one entry to
-  // e2e/submitSiteSweep.test.ts's TOPOLOGY_MANIFEST and raises its exact topology floor
-  // to the measured 13 (it read 11 against a population of 12 before this story).
+  // (submitSelected). SUBMIT-SITE NOTE: this test has an entry in
+  // e2e/submitSiteSweep.test.ts's TOPOLOGY_MANIFEST.
   test('detail surface: a FIRS rejection redens the final node only', async ({ page }) => {
     test.setTimeout(150_000)
     const errors = collectErrors(page)
@@ -6606,11 +6601,10 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-01 ${Date.now()}`, tin: freshTin() })
     const invoiceNumber = `INV-DV01-${Date.now()}`
-    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNAVAILABLE) })
     await validateInvoice(token, inv.id)
     await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
-    await transitionInvoice(token, inv.id, 'queued')
-    await transitionInvoice(token, inv.id, 'failed')
+    await failedByStaffCancel(token, await getStaffToken(), SHARD.a.id, inv)
 
     await dvOpenDetail(page, entity.name, invoiceNumber)
     const detail = page.getByTestId('invoice-detail')
@@ -6723,48 +6717,65 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-02 ${Date.now()}`, tin: freshTin() })
     const invoiceNumber = `INV-DV02-${Date.now()}`
-    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_PENDING) })
     await validateInvoice(token, inv.id)
     await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
-    await transitionInvoice(token, inv.id, 'queued')
-    await transitionInvoice(token, inv.id, 'submitted')
 
-    // No submission job exists for a hand-driven `submitted`; the finally leaves no in-flight row behind.
-    // A failed cleanup must not replace the body's own error.
-    let bodyFailed = false
+    // Pins the detail read on the first server-written submitted body; the mock converges to accepted ~10 s later.
+    let pinned: unknown
+    await page.route(new RegExp(`/api/invoice/v1/invoices/${inv.id}(\\?.*)?$`), async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const res = await route.fetch()
+      const body = await res.json()
+      if (!pinned && body.status === 'submitted') pinned = body
+      await route.fulfill({ response: res, json: pinned ?? body })
+    })
+
+    await dvOpenDetail(page, entity.name, invoiceNumber)
+    const badge = page.getByTestId('invoice-detail').getByTestId('invoice-status-badge')
+    // Settled at creation (no unhandled rejection) and awaited on every exit, so no poll outlives the test.
+    const submitting = submitAndAwait(token, inv.id, 'submitted').then(
+      () => undefined,
+      (err: unknown) => err ?? new Error('submitAndAwait failed'),
+    )
+    let pollFailure: { err: unknown } | undefined
     try {
-      await dvOpenDetail(page, entity.name, invoiceNumber)
-      await expect(page.getByTestId('invoice-detail').getByTestId('invoice-status-badge')).toContainText('SUBMITTED')
-      await expectStripStates(page, { queued: 'current', accepted: 'unreached' })
-
-      const read = await dvRead(
-        page,
-        {
-          badge: page.getByTestId('invoice-detail').getByTestId('invoice-status-badge'),
-          queued: stripNode(page, 'queued').locator('span[aria-hidden="true"]').first(),
-          final: stripNode(page, 'accepted').locator('span[aria-hidden="true"]').first(),
-        },
-        { tokens: ['--status-amber-bg', '--bg-2'] },
-      )
-      const t = read.targets
-      dvExpectCorners(t.badge, '4px', 'status badge')
-      expect(t.badge.text.trim(), 'badge text').toBe('SUBMITTED')
-      expect(read.tokens['--status-amber-bg'], 'the two looks differ, so the equalities below discriminate').not.toBe(read.tokens['--bg-2'])
-      expect(t.queued.style['background-color'], 'queued node is the current look').toBe(read.tokens['--status-amber-bg'])
-      expect(t.final.style['background-color'], 'final node is the unreached look').toBe(read.tokens['--bg-2'])
-      await dvAttach(page, testInfo, 'dv-02', read)
-
-      expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+      await expect
+        .poll(
+          async () => {
+            await page.reload()
+            return (await badge.textContent({ timeout: 5_000 }).catch(() => null)) ?? ''
+          },
+          { message: 'the badge reads QUEUED or SUBMITTED', timeout: 30_000 },
+        )
+        .toMatch(/QUEUED|SUBMITTED/)
     } catch (err) {
-      bodyFailed = true
-      throw err
-    } finally {
-      try {
-        await transitionInvoice(token, inv.id, 'accepted')
-      } catch (err) {
-        if (!bodyFailed) throw err
-      }
+      pollFailure = { err }
     }
+    const submitError = await submitting
+    if (pollFailure) throw pollFailure.err
+    if (submitError) throw submitError
+    await expect(badge).toContainText('SUBMITTED')
+    await expectStripStates(page, { queued: 'current', accepted: 'unreached' })
+
+    const read = await dvRead(
+      page,
+      {
+        badge,
+        queued: stripNode(page, 'queued').locator('span[aria-hidden="true"]').first(),
+        final: stripNode(page, 'accepted').locator('span[aria-hidden="true"]').first(),
+      },
+      { tokens: ['--status-amber-bg', '--bg-2'] },
+    )
+    const t = read.targets
+    dvExpectCorners(t.badge, '4px', 'status badge')
+    expect(t.badge.text.trim(), 'badge text').toBe('SUBMITTED')
+    expect(read.tokens['--status-amber-bg'], 'the two looks differ, so the equalities below discriminate').not.toBe(read.tokens['--bg-2'])
+    expect(t.queued.style['background-color'], 'queued node is the current look').toBe(read.tokens['--status-amber-bg'])
+    expect(t.final.style['background-color'], 'final node is the unreached look').toBe(read.tokens['--bg-2'])
+    await dvAttach(page, testInfo, 'dv-02', read)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 
   test('DV-03 accepted invoice detail and the XML modal', async ({ page }, testInfo) => {

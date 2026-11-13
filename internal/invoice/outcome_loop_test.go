@@ -338,17 +338,11 @@ func TestStoreEdit_RetainedReasonsSurviveRevalidate(t *testing.T) {
 	}
 }
 
-// TestMarkAcceptedTx_ClearsRejectionReasons (M5-09-02/task-255, AC-3): an
-// invoice at queued carrying rejection_reasons from an EARLIER rejection
-// cycle -- MarkAcceptedTx must clear them to '[]' on acceptance. This is
-// the worker's direct-write path, the sibling of
-// TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
-// (transition_test.go), which proves the SAME invariant through the OTHER
-// live writer of accepted (the POST /transitions handler path). Both must
-// hold because the clear lives in transitionTx -- which markTerminalTx
-// (and therefore MarkAcceptedTx) calls on the SAME tx as the outcome write
-// -- not in MarkAcceptedTx's own outcome closure (actor.go:146-152, which
-// writes only irn/csid/qr_payload and is left unmodified).
+// TestMarkAcceptedTx_ClearsRejectionReasons (M5-09-02/task-255, AC-3): a queued
+// invoice carrying an earlier cycle's rejection_reasons has them cleared to '[]'
+// by MarkAcceptedTx. The clear lives in transitionTx; the sibling
+// TestStoreTransition_AcceptedClearsRejectionReasons (transition_test.go)
+// drives Store.Transition directly.
 func TestMarkAcceptedTx_ClearsRejectionReasons(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

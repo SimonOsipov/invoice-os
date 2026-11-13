@@ -73,7 +73,7 @@ paths:
 - Answer it with 429 `too many requests` on GoTrue's 429 `over_request_rate_limit`. Answer 502 `invitation resend is unavailable` for any other GoTrue failure.
 - Answer `/auth/invitation/resend` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_missing` when it reads `none`. Send both before the GoTrue call.
 - Spend the resend per-address budget on `/auth/invitation/resend` and refund a GoTrue 4xx.
-- Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Expect it to give `POST /auth/verify`, `/auth/reset-password` and `/auth/invitation/password` one budget of 30 an hour per IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Expect it to give the retired `/auth/verify` path (now 405), `/auth/reset-password` and `/auth/invitation/password` one budget of 30 an hour per IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
@@ -84,7 +84,7 @@ paths:
 - Read the confirm token and the `state` from the `POST /auth/invitation/password` form body only. The GET page makes no GoTrue call.
 - Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` for a confirm link, when the request carries no valid `state`.
 - Answer it with 303 to `<AUTH_SITE_URL>/?confirm=invite#token=<token>` for `invite=1`, when the request carries no valid `state`.
-- Render the set-password page for every signup link with a valid `state`. Serve no `POST /auth/verify`.
+- Render the set-password page for every signup link with a valid `state`. Answer a POST to `/auth/verify` with 405.
 - Render a page only for a 43-character base64url `state`.
 - Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.

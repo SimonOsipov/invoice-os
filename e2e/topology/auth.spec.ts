@@ -1580,7 +1580,7 @@ async function openMailedLink(page: Page, invite = false): Promise<URL> {
 
 test('the emailed link reaches the confirm page through the app, and a bogus click lands on the failed notice', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  const posts = recordPosts(page, '/auth/verify')
+  const posts = recordPosts(page, '/auth/invitation/password') // SECAUD-07-04 rewrites this test for the set-password page
   const confirmUrl = await openMailedLink(page)
   expect(confirmUrl.searchParams.get('state'), 'the confirm page state').toMatch(STATE_43)
   const button = page.getByRole('button')
@@ -1615,7 +1615,7 @@ test('the emailed link reaches the confirm page through the app, and a bogus cli
   await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
   await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
-  expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
+  expect(posts.length, 'POST /auth/invitation/password requests sent by the double-click').toBe(1)
   for (const width of [...WIDE_WIDTHS, 375]) {
     await page.setViewportSize({ width, height: 1080 })
     await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')

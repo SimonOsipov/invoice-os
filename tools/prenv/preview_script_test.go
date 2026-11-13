@@ -2088,8 +2088,8 @@ func TestPreviewInvariantsRefuseWriteOnTheProductionImages(t *testing.T) {
 			if r.code != 1 {
 				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
 			}
-			if len(errLines(r, p, repo)) == 0 {
-				t.Errorf("no ::error:: line names %s and %s:\n%s\n%s", p, repo, r.stdout, r.stderr)
+			if len(errLines(r, p, " on "+repo+".")) == 0 {
+				t.Errorf("no ::error:: line names %s on %s:\n%s\n%s", p, repo, r.stdout, r.stderr)
 			}
 			if strings.Contains(r.stdout, imgHeld) {
 				t.Errorf("success line printed:\n%s", r.stdout)
@@ -2141,6 +2141,19 @@ func TestPreviewInvariantsPassWithNoProductionImageWrite(t *testing.T) {
 	}
 }
 
+func TestPreviewInvariantsNameEveryHeldImagePermissionAndPassOnAnEmptySet(t *testing.T) {
+	t.Parallel()
+	r := imgInvariants(t, map[string]string{"curl-body-" + imagesEP: `{"permissions":["artifactregistry.tags.create","artifactregistry.versions.delete"]}`})
+	if r.code != 1 || len(errLines(r, "artifactregistry.tags.create", "artifactregistry.versions.delete", prodImagesRepo(t))) != 1 {
+		t.Errorf("exit %d; want exit 1 and one ::error:: line naming both held permissions:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	// An empty permission list is the same as none held.
+	r = imgInvariants(t, map[string]string{"curl-body-" + imagesEP: `{"permissions":[]}`})
+	if r.code != 0 || !strings.Contains(r.stdout, imgHeld) {
+		t.Errorf("empty permission list: exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+}
+
 func TestPreviewInvariantsPassOnA403FromTheImageRepository(t *testing.T) {
 	t.Parallel()
 	r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: "403"})
@@ -2157,7 +2170,7 @@ func TestPreviewInvariantsPassOnA403FromTheImageRepository(t *testing.T) {
 
 func TestPreviewInvariantsFailOnAnUnexpectedImageRepositoryAnswer(t *testing.T) {
 	t.Parallel()
-	for _, code := range []string{"404", "500", "000"} {
+	for _, code := range []string{"404", "500", "000", "401", "429", "302", "201"} {
 		t.Run(code, func(t *testing.T) {
 			t.Parallel()
 			r := imgInvariants(t, map[string]string{"curl-code-" + imagesEP: code})

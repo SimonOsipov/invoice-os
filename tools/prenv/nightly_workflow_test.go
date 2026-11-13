@@ -922,6 +922,12 @@ func authSvcJSON(serving, newest, labels, image string) string {
 "status":{"latestCreatedRevisionName":"` + newest + `","latestReadyRevisionName":"` + newest + `","traffic":[{"revisionName":"` + serving + `","percent":100}]}}`
 }
 
+// authSvcTraffic is authSvcJSON with the status.traffic array and latestReadyRevisionName chosen by the caller.
+func authSvcTraffic(traffic, newest, ready, labels string) string {
+	return `{"metadata":{"name":"auth"},"spec":{"template":{"metadata":{"labels":` + labels + `},"spec":{"containers":[{"image":"r/auth@sha256:D"}]}}},
+"status":{"latestCreatedRevisionName":"` + newest + `","latestReadyRevisionName":"` + ready + `","traffic":` + traffic + `}}`
+}
+
 func runAuthStep(t *testing.T, svc string) (envText string, calls []string) {
 	t.Helper()
 	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
@@ -957,6 +963,14 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 		{"label latest", authSvcJSON("auth-2", "auth-2", `{"commit":"latest"}`, "r/auth@sha256:D")},
 		{"39 hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha[:39]+`"}`, "r/auth@sha256:D")},
 		{"upper-case hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+strings.ToUpper(strings.Repeat("b", 40))+`"}`, "r/auth@sha256:D")},
+		{"41 hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha+`b"}`, "r/auth@sha256:D")},
+		{"40 hex after a prefix", authSvcJSON("auth-2", "auth-2", `{"commit":"x`+sha+`"}`, "r/auth@sha256:D")},
+		{"40 hex before a suffix", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha+`-x"}`, "r/auth@sha256:D")},
+		{"40 non-hex letters", authSvcJSON("auth-2", "auth-2", `{"commit":"`+strings.Repeat("g", 40)+`"}`, "r/auth@sha256:D")},
+		{"traffic split over two revisions", authSvcTraffic(`[{"revisionName":"auth-2","percent":50},{"revisionName":"auth-1","percent":50}]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
+		{"no traffic entry", authSvcTraffic(`[]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
+		{"latest revision, but not the newest ready", authSvcTraffic(`[{"latestRevision":true,"percent":100}]`, "auth-3", "auth-2", `{"commit":"`+sha+`"}`)},
+		{"no labels at all", authSvcJSON("auth-2", "auth-2", `null`, "r/auth@sha256:D")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -964,6 +978,18 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 				t.Errorf("GITHUB_ENV = %q, want only the token", env)
 			}
 		})
+	}
+}
+
+func TestNightly_ProdCheckAuthStepFollowsTheLatestRevisionAndIgnoresTheTag(t *testing.T) {
+	t.Parallel()
+	sha, tagSha := strings.Repeat("b", 40), strings.Repeat("c", 40)
+	// 100 % on "latest": the serving revision is the newest ready one; the label wins over the image's tag.
+	svc := strings.Replace(authSvcTraffic(`[{"latestRevision":true,"percent":100},{"revisionName":"auth-1","tag":"rollback"}]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`),
+		"r/auth@sha256:D", "r/images/auth:"+tagSha, 1)
+	env, _ := runAuthStep(t, svc)
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+sha+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want AUTH_BUILD=%s (the label), not the image tag %s", env, sha, tagSha)
 	}
 }
 

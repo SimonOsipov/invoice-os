@@ -355,6 +355,8 @@ func TestDevEnv_InvariantsProbeFailsWhenThePushDidNotLandUntagged(t *testing.T) 
 	other := listRow("sha256:"+hex64("f"), `["latest"]`, indexType)
 	for _, tc := range []struct{ name, listing string }{
 		{"digest absent from the listing", "[" + other + "]"},
+		{"digest absent, another untagged manifest listed", "[" + listRow("sha256:"+hex64("f"), "[]", manifestType) + "]"},
+		{"empty listing", "[]"},
 		{"digest carries a tag", "[" + listRow(d, `["x"]`, manifestType) + "," + other + "]"},
 		{"digest is an image index", "[" + listRow(d, "[]", indexType) + "," + other + "]"},
 		{"digest listed twice", "[" + listRow(d, "[]", manifestType) + "," + listRow(d, "[]", manifestType) + "]"},
@@ -627,13 +629,15 @@ const pinStepName = "Keep the serving and rollback images within the cleanup lim
 
 // pinOrderProblems: build has the pin step, and it comes before Build and push.
 func pinOrderProblems(yml string) []string {
-	pin, push := -1, -1
+	take, pin, push := -1, -1, -1
 	for _, j := range workflowJobsOf(yml) {
 		if j.name != "build" {
 			continue
 		}
 		for i, s := range j.steps() {
 			switch s.keys["name"] {
+			case takeScriptStep:
+				take = i
 			case pinStepName:
 				pin = i
 			case "Build and push":
@@ -648,6 +652,8 @@ func pinOrderProblems(yml string) []string {
 		return []string{"build: no step Build and push"}
 	case pin > push:
 		return []string{"build: the pin step runs after Build and push"}
+	case take < 0 || take > pin:
+		return []string{"build: " + takeScriptStep + " does not come before the pin step"}
 	}
 	return nil
 }
@@ -680,6 +686,87 @@ func TestDeployProd_BuildPinsBeforeItPushes(t *testing.T) {
 		"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n",
 		block+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
 	requireProblemWith(t, "pin moved after the push", pinOrderProblems(moved), "after Build and push")
+
+	// The pin step reads $RUNNER_TEMP/prod-image.sh, so the step that writes it comes first.
+	takeBlock := "      - name: " + takeScriptStep + "\n        run: |\n          git fetch --no-tags --depth 1 origin \"$GITHUB_SHA\"\n" +
+		"          git show \"$GITHUB_SHA:scripts/ci/prod-image.sh\" >\"$RUNNER_TEMP/prod-image.sh\"\n"
+	late := mutateOnce(t, mutateOnce(t, yml, takeBlock, ""), "      - name: "+pinStepName+"\n", takeBlock+"      - name: "+pinStepName+"\n")
+	requireNoProblems(t, "take moved to just before the pin (still in order)", pinOrderProblems(late))
+	after := mutateOnce(t, mutateOnce(t, yml, takeBlock, ""), "      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n", takeBlock+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+	requireProblemWith(t, "take moved to the end of build", pinOrderProblems(after), "does not come before the pin step")
+}
+
+// buildLegProblems: every build leg builds, and no line of the job skips a build, reads a tag or pushes one.
+func buildLegProblems(yml string) []string {
+	var p []string
+	lines := 0
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "build" {
+			continue
+		}
+		for _, l := range stripHashComments(j.lines) {
+			t := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "- ")))
+			if t == "" {
+				continue
+			}
+			lines++
+			for _, bad := range []string{"docker push", "docker build", "docker tag", "gcloud artifacts", "steps.exists", "docker buildx imagetools"} {
+				if strings.Contains(t, bad) {
+					p = append(p, "build: "+strings.TrimSpace(l)+" ("+bad+")")
+				}
+			}
+			if strings.HasPrefix(t, "if:") {
+				p = append(p, "build: a step is conditional: "+strings.TrimSpace(l))
+			}
+		}
+	}
+	if lines < 40 {
+		p = append(p, fmt.Sprintf("build: scanned %d lines, want the whole job", lines))
+	}
+	return p
+}
+
+// A re-added `exists` step or a tag push cannot be observed by a run test, which only runs the steps that exist.
+func TestDeployProd_BuildLegsNeverSkipOrReadOrPushATag(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "deploy-prod.yml")
+	requireNoProblems(t, "deploy-prod.yml", buildLegProblems(yml))
+	add := func(step string) string {
+		return mutateOnce(t, yml, "      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n", step+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+	}
+	requireProblemWith(t, "an exists step", buildLegProblems(add("      - id: exists\n        run: gcloud artifacts docker images describe \"$X\"\n")), "gcloud artifacts")
+	requireProblemWith(t, "a docker push", buildLegProblems(add("      - run: docker push \"$X\"\n")), "docker push")
+	requireProblemWith(t, "a skipped Build and push", buildLegProblems(
+		mutateOnce(t, yml, "      - name: Build and push\n", "      - name: Build and push\n        if: steps.exists.outputs.built != 'true'\n")), "conditional")
+}
+
+// buildMatrixImages are the images of build's matrix, in file order.
+func buildMatrixImages(yml string) []string {
+	re := regexp.MustCompile(`^- \{ image: ([a-z-]+),`)
+	var out []string
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "build" {
+			continue
+		}
+		for _, l := range stripHashComments(j.lines) {
+			if m := re.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+				out = append(out, m[1])
+			}
+		}
+	}
+	return out
+}
+
+// deploy and migrate read digests/<image> for each of these; a missing leg blocks every deploy.
+func TestDeployProd_EveryDeployedImageHasExactlyOneBuildLeg(t *testing.T) {
+	t.Parallel()
+	got := buildMatrixImages(readWorkflow(t, "deploy-prod.yml"))
+	want := append(slices.Clone(prodServices), "migrate", "deploycheck")
+	slices.Sort(got)
+	slices.Sort(want)
+	if len(got) == 0 || !slices.Equal(got, want) {
+		t.Errorf("build matrix images:\n%v\nwant the 18 services, migrate and deploycheck:\n%v", got, want)
+	}
 }
 
 const labelStep = "Check the commit label the nightly reads"

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,8 @@ import (
 const prodRegistry = "registry.test/proj/images"
 
 // The docker shim logs one argv line per call to $D/docker.log. Files in $D steer it: inspect-rc (exit of
-// `buildx inspect`, 1 when absent), create-fails (the first N `buildx create` calls fail), build-fails, meta.json
+// `buildx inspect`, 1 when absent), create-fails (the first N `buildx create` calls fail), build-fails, build-fails-late (fails
+// after writing the metadata), meta.json
 // (written to the --metadata-file path; no file = no metadata).
 const prodDockerShim = `printf '%s\n' "$*" >> "$D/docker.log"
 [ "$1" = buildx ] || exit 0
@@ -34,6 +36,7 @@ build)
     [ "$prev" = --metadata-file ] && cp "$D/meta.json" "$a" 2>/dev/null
     prev=$a
   done
+  [ ! -e "$D/build-fails-late" ] || { echo "ERROR: push failed after the metadata was written" >&2; exit 1; }
   exit 0 ;;
 esac
 `
@@ -297,12 +300,24 @@ func TestProdImagePushFailsWithoutItsDigest(t *testing.T) {
 	}{
 		{"builder cannot be created", func(b *prodBox) { b.put("create-fails", "99"); b.meta(good, prodRegistry+"/gateway") }},
 		{"build fails", func(b *prodBox) { b.put("build-fails", "1"); b.meta(good, prodRegistry+"/gateway") }},
+		{"build fails after writing its metadata", func(b *prodBox) { b.put("build-fails-late", "1"); b.meta(good, prodRegistry+"/gateway") }},
 		{"no metadata written", func(b *prodBox) {}},
 		{"metadata without a digest", func(b *prodBox) { b.put("meta.json", `{"image.name":"`+prodRegistry+`/gateway"}`) }},
 		{"63 hex", func(b *prodBox) { b.meta("sha256:"+strings.Repeat("a", 63), prodRegistry+"/gateway") }},
 		{"upper-case hex", func(b *prodBox) { b.meta("sha256:"+hex64("A"), prodRegistry+"/gateway") }},
 		{"another image's name", func(b *prodBox) { b.meta(good, prodRegistry+"/auth") }},
 		{"unparseable JSON", func(b *prodBox) { b.put("meta.json", "not json {") }},
+		{"null digest", func(b *prodBox) {
+			b.put("meta.json", `{"containerimage.digest":null,"image.name":"`+prodRegistry+`/gateway"}`)
+		}},
+		{"empty digest", func(b *prodBox) { b.meta("", prodRegistry+"/gateway") }},
+		{"sha512 digest", func(b *prodBox) { b.meta("sha512:"+hex64("a"), prodRegistry+"/gateway") }},
+		{"digest with a prefix", func(b *prodBox) { b.meta("x"+good, prodRegistry+"/gateway") }},
+		{"digest with a second line", func(b *prodBox) { b.meta(good+"\nsha256:"+hex64("b"), prodRegistry+"/gateway") }},
+		{"no image name", func(b *prodBox) { b.put("meta.json", `{"containerimage.digest":"`+good+`"}`) }},
+		{"a tagged image name", func(b *prodBox) { b.meta(good, prodRegistry+"/gateway:latest") }},
+		{"an image name that extends ours", func(b *prodBox) { b.meta(good, prodRegistry+"/gateway-x") }},
+		{"another registry", func(b *prodBox) { b.meta(good, "other.test/proj/images/gateway") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -355,7 +370,7 @@ func TestProdImageRefusesABadImageNameOrMissingEnv(t *testing.T) {
 			t.Errorf("%s: called docker %v or gcloud %v before refusing", what, d, g)
 		}
 	}
-	for _, image := range []string{"../x", "Gateway", "", "gate way", "-x"} {
+	for _, image := range []string{"../x", "Gateway", "", "gate way", "-x", "9x", "gate/way", "gateway\nx", "gateway\n", "gate_way", "../digests/gateway", "digests/gateway"} {
 		for sub, args := range calls(image) {
 			b := prepare()
 			refused(t, b, b.script(args...), fmt.Sprintf("%s %q", sub, image))
@@ -406,6 +421,13 @@ func TestProdImageRefRefusesAMissingOrMalformedDigest(t *testing.T) {
 		{"upper-case hex", "sha256:" + hex64("C") + "\n"},
 		{"two lines", d + "\n" + d + "\n"},
 		{"a tag reference", prodRegistry + "/gateway:" + strings.Repeat("c", 40) + "\n"},
+		{"no final newline", d},
+		{"CRLF", d + "\r\n"},
+		{"trailing space", d + " \n"},
+		{"sha512 prefix", "sha512:" + hex64("c") + "\n"},
+		{"72 bytes, one non-hex", "sha256:" + strings.Repeat("c", 63) + "g\n"},
+		{"a blank first line", "\n" + d},
+		{"a trailing NUL byte", d + "\n\x00"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -416,6 +438,9 @@ func TestProdImageRefRefusesAMissingOrMalformedDigest(t *testing.T) {
 			r := b.script("ref", "digests", "gateway")
 			if r.code == 0 || r.stdout != "" || !strings.Contains(r.stderr, "gateway") {
 				t.Errorf("exit %d stdout %q stderr %q, want a failure with empty stdout and gateway named", r.code, r.stdout, r.stderr)
+			}
+			if tc.body == "\x00missing" && !strings.Contains(r.stderr, "no digest recorded") {
+				t.Errorf("stderr %q does not say that no digest was recorded", r.stderr)
 			}
 		})
 	}
@@ -652,6 +677,25 @@ func TestProdImagePinCountsAVersionWhoseUpdateTimeMoved(t *testing.T) {
 	requireTagged(t, b, tagCmd(pinRollback))
 }
 
+func TestProdImagePinRanksByTheLargerOfBothOrders(t *testing.T) {
+	t.Parallel()
+	// The rollback digest is at rank 39 by createTime and, with its updateTime moved ahead of every row, at rank 1 by updateTime.
+	// One more newer row makes it rank 40 by createTime: the larger order decides.
+	for _, c := range []struct {
+		synth int
+		want  []string
+	}{{34, nil}, {35, []string{tagCmd(pinRollback)}}} {
+		b := pinBox(t, c.synth)
+		b.put("list.json", pinListing(t, c.synth, func(rows []map[string]any) {
+			rowOf(t, rows, pinRollback)["updateTime"] = "2027-01-01T00:00:00.000000Z"
+		}))
+		if r := b.script("pin", "gateway"); r.code != 0 {
+			t.Fatalf("%d synthetic rows: exit %d stderr %q", c.synth, r.code, r.stderr)
+		}
+		requireTagged(t, b, c.want...)
+	}
+}
+
 func TestProdImagePinReadsTheJobsForMigrateAndDeploycheck(t *testing.T) {
 	t.Parallel()
 	const m = pinRollback
@@ -821,6 +865,11 @@ func TestProdImagePinWarnsWhenAProtectedImageIsGone(t *testing.T) {
 	if !strings.Contains(r.stderr, "::warning::gateway@"+pinRollback+" is not in the registry") {
 		t.Errorf("stderr %q has no warning naming the rollback digest", r.stderr)
 	}
+	for _, l := range nonBlankLines(r.stderr) {
+		if !strings.HasPrefix(l, "::warning::") {
+			t.Errorf("stderr line %q is not a warning; a missing digest ends in the warning alone", l)
+		}
+	}
 	requireTagged(t, b)
 }
 
@@ -837,6 +886,199 @@ func TestProdImagePinRefusesBadInput(t *testing.T) {
 		}
 		if got := b.lines("gcloud.log"); len(got) != 0 {
 			t.Errorf("%s: gcloud calls %q, want none", c.name, got)
+		}
+	}
+}
+
+// editJSON decodes raw, lets edit change it, and encodes it again.
+func editJSON(t *testing.T, raw string, edit func(m map[string]any)) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatal(err)
+	}
+	edit(m)
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// addTraffic appends a traffic entry to both spec.traffic and status.traffic of a service describe.
+func addTraffic(t *testing.T, raw string, entry map[string]any) string {
+	t.Helper()
+	return editJSON(t, raw, func(m map[string]any) {
+		for _, part := range []string{"spec", "status"} {
+			p := m[part].(map[string]any)
+			p["traffic"] = append(p["traffic"].([]any), entry)
+		}
+	})
+}
+
+func TestProdImagePinStopsAtEveryRankFromTheLastStopUp(t *testing.T) {
+	t.Parallel()
+	// rank is the first digest at 49 or more: the serving digest sits two ranks below the rollback one, and fails open below 49.
+	for _, c := range []struct{ synth, rank int }{{44, 49}, {45, 50}, {55, 58}} {
+		b := pinBox(t, c.synth)
+		b.put("tags-fails", "1")
+		r := b.script("pin", "gateway")
+		if r.code != 1 || !strings.Contains(r.stderr, fmt.Sprintf("rank %d failed; it would be deleted by this push; the leg stops", c.rank)) {
+			t.Errorf("rank %d: exit %d stderr %q, want exit 1 and the leg-stops error", c.rank, r.code, r.stderr)
+		}
+	}
+	// A pin that works at those ranks never stops the leg.
+	b := pinBox(t, 55)
+	r := b.script("pin", "gateway")
+	if r.code != 0 || strings.Contains(r.stderr, "::error::") {
+		t.Errorf("rank 60 with tags add working: exit %d stderr %q, want exit 0 and no error", r.code, r.stderr)
+	}
+	requireTagged(t, b, tagCmd(pinServing), tagCmd(pinRollback))
+	if !strings.Contains(r.stdout, "kept gateway@"+pinRollback+": rank 60, pinned at 40 of 50") {
+		t.Errorf("stdout %q has no kept line for rank 60", r.stdout)
+	}
+}
+
+func TestProdImagePinTagsEachProtectedDigestOnce(t *testing.T) {
+	t.Parallel()
+	b := pinBox(t, 35) // the rollback digest is at rank 40, the serving one at 38
+	// The template, the rollback revision and the rollback traffic entry all name the rollback digest.
+	b.put(svcKey+".json", strings.Replace(pinFixture(t, "gateway-service.json"),
+		pinRegistry+"/gateway:9ad5fad6fe39dd9859a095811ce529a875e3f7e0", pinRegistry+"/gateway@"+pinRollback, 1))
+	if r := b.script("pin", "gateway"); r.code != 0 {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	requireTagged(t, b, tagCmd(pinRollback))
+}
+
+func TestProdImagePinTagsOnlyThisPackagesDigests(t *testing.T) {
+	t.Parallel()
+	// The rollback revision's image is the rollback digest, which sits in gateway's listing at rank 41, but the reference is
+	// in another package, in a package whose name starts with gateway, in another registry, or is not a digest.
+	own := pinRegistry + "/gateway@" + pinRollback
+	for name, ref := range map[string]string{
+		"another package":      pinRegistry + "/auth@" + pinRollback,
+		"a longer package":     pinRegistry + "/gateway-evil@" + pinRollback,
+		"another registry":     "other.test/proj/images/gateway@" + pinRollback,
+		"a malformed digest":   pinRegistry + "/gateway@sha256:xyz",
+		"a tag named like one": pinRegistry + "/gateway:" + strings.TrimPrefix(pinRollback, "sha256:"),
+	} {
+		b := pinBox(t, 36)
+		b.put(revRollback+".json", strings.ReplaceAll(pinFixture(t, "revision-gateway-00380-mac.json"), own, ref))
+		r := b.script("pin", "gateway")
+		if r.code != 0 {
+			t.Fatalf("%s: exit %d stderr %q", name, r.code, r.stderr)
+		}
+		requireTagged(t, b)
+		if strings.Contains(r.stderr, "::warning::") {
+			t.Errorf("%s: stderr %q warns about a reference that is not this package's digest", name, r.stderr)
+		}
+	}
+	// Control: the same revision naming gateway's digest tags it.
+	b := pinBox(t, 36)
+	if r := b.script("pin", "gateway"); r.code != 0 {
+		t.Fatalf("control: exit %d stderr %q", r.code, r.stderr)
+	}
+	requireTagged(t, b, tagCmd(pinRollback))
+}
+
+func TestProdImagePinProtectsTheTemplateImage(t *testing.T) {
+	t.Parallel()
+	// The service's template names a digest no revision names; it is untagged and past the margin in the real listing.
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(pinListing(t, 35, nil)), &rows); err != nil {
+		t.Fatal(err)
+	}
+	var old string
+	for _, r := range rows {
+		if tags, _ := r["tags"].([]any); len(tags) == 0 && r["version"] != pinServing && r["version"] != pinRollback &&
+			r["createTime"].(string) < rowOf(t, rows, pinRollback)["createTime"].(string) {
+			old = r["version"].(string)
+			break
+		}
+	}
+	if old == "" {
+		t.Fatal("no untagged real row older than the rollback digest")
+	}
+	b := pinBox(t, 35) // rollback at rank 40, serving at 38
+	b.put(svcKey+".json", strings.Replace(pinFixture(t, "gateway-service.json"),
+		pinRegistry+"/gateway:9ad5fad6fe39dd9859a095811ce529a875e3f7e0", pinRegistry+"/gateway@"+old, 1))
+	if r := b.script("pin", "gateway"); r.code != 0 {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	want := []string{tagCmd(pinRollback), tagCmd(old)}
+	slices.Sort(want)
+	requireTagged(t, b, want...)
+}
+
+func TestProdImagePinReadsEveryRevisionWithTrafficAndNoOther(t *testing.T) {
+	t.Parallel()
+	const split, idle = "gateway-00382-xyz", "gateway-00384-new"
+	oldest := fmt.Sprintf("sha256:%064x", 1) // the oldest of 40 synthetic rows: rank 40
+	b := pinBox(t, 40)
+	svc := addTraffic(t, pinFixture(t, "gateway-service.json"), map[string]any{"revisionName": split, "percent": 20})
+	svc = addTraffic(t, svc, map[string]any{"revisionName": idle, "percent": 0, "tag": "c-aaaaaaaaaaaa"})
+	b.put(svcKey+".json", svc)
+	b.put("run.revisions.describe."+split+".json", strings.ReplaceAll(pinFixture(t, "revision-gateway-00383-biy.json"), pinServing, oldest))
+	b.put("run.revisions.describe."+idle+".json", strings.ReplaceAll(pinFixture(t, "revision-gateway-00383-biy.json"), pinServing, fmt.Sprintf("sha256:%064x", 2)))
+	if r := b.script("pin", "gateway"); r.code != 0 {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if got := b.gcloudCalls("run revisions describe " + idle); len(got) != 0 {
+		t.Errorf("read the 0 %% revision: %q", got)
+	}
+	if got := b.gcloudCalls("run revisions describe " + split); len(got) != 1 {
+		t.Errorf("revision with 20 %% read %d times, want once", len(got))
+	}
+	// Serving (rank 43), rollback (45) and the split revision's digest (40); the idle one's digest (rank 39) is not protected.
+	requireTagged(t, b, tagCmd(oldest), tagCmd(pinServing), tagCmd(pinRollback))
+}
+
+func TestProdImagePinCountsATieAsAhead(t *testing.T) {
+	t.Parallel()
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(pinListing(t, 34, nil)), &rows); err != nil { // the rollback digest is at rank 39
+		t.Fatal(err)
+	}
+	roll := rowOf(t, rows, pinRollback)
+	rows = append(rows, map[string]any{"version": "sha256:" + hex64("9"), "tags": []string{}, "createTime": roll["createTime"], "updateTime": roll["updateTime"]})
+	raw, _ := json.Marshal(rows)
+	b := pinBox(t, 34)
+	b.put("list.json", string(raw))
+	if r := b.script("pin", "gateway"); r.code != 0 {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	requireTagged(t, b, tagCmd(pinRollback))
+}
+
+func TestProdImagePinWarnsOnAnEmptyListing(t *testing.T) {
+	t.Parallel()
+	b := pinBox(t, 0)
+	b.put("list.json", "[]")
+	r := b.script("pin", "gateway")
+	if r.code != 0 || strings.Count(r.stderr, "is not in the registry") != 2 {
+		t.Errorf("exit %d stderr %q, want exit 0 and a warning for each of the two protected digests", r.code, r.stderr)
+	}
+	requireTagged(t, b)
+}
+
+func TestProdImagePinNeedsNoWriteOutsideTagsAdd(t *testing.T) {
+	t.Parallel()
+	// Every gcloud call of the first-day state and the margin state is a read or the one tags add.
+	for _, synth := range []int{0, 35, 55} {
+		b := pinBox(t, synth)
+		if r := b.script("pin", "gateway"); r.code != 0 {
+			t.Fatalf("%d synthetic rows: exit %d stderr %q", synth, r.code, r.stderr)
+		}
+		calls := b.lines("gcloud.log")
+		if len(calls) == 0 {
+			t.Fatalf("%d synthetic rows: no gcloud calls", synth)
+		}
+		for _, c := range calls {
+			if !strings.HasPrefix(c, "run services describe ") && !strings.HasPrefix(c, "run revisions describe ") &&
+				!strings.HasPrefix(c, "artifacts docker images list ") && !strings.HasPrefix(c, "artifacts docker tags add ") {
+				t.Errorf("%d synthetic rows: pin made the call %q", synth, c)
+			}
 		}
 	}
 }

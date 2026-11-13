@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prod-image.sh — production images, pushed by digest and deployed by digest (SECAUD-06). No subcommand reads a registry tag.
+# prod-image.sh — production images, pushed by digest and deployed by digest (SECAUD-06).
 #
 #   prod-image.sh push <dir> <image> <build args>...   build, push $REGISTRY/<image> untagged, record its digest in <dir>/<image>
 #   prod-image.sh ref <dir> <image>                    print $REGISTRY/<image>@<digest> from <dir>/<image>

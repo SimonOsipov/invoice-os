@@ -96,6 +96,8 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
   const signupAddr = `nightly-${env.NIGHTLY_RUN_ID}-signup@${env.RESEND_RECEIVING_DOMAIN}`
   const blogAddr = `nightly-${env.NIGHTLY_RUN_ID}-blog@${env.RESEND_RECEIVING_DOMAIN}`
   const signupPassword = crypto.randomUUID().slice(0, 16)
+  const chosen = crypto.randomUUID().slice(0, 16)
+  const other = crypto.randomUUID().slice(0, 16)
   let signupHtml = ''
   let signupLink = ''
   let blogHtml = ''
@@ -242,26 +244,38 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
 
     await steps.run('signup mail uses the brand layout', () => brandStep(signupHtml))
 
-    await steps.run('signup link confirms the address', async () => {
-      const before = await rawFetch('/auth/sign-in', {
-        method: 'POST',
-        body: {
-          email: signupAddr,
-          password: signupPassword,
-          state: mintSignInState(),
-        },
-      })
-      if (before.status !== 403) throw new Error(`sign-in before the link answered ${before.status}, want 403`)
+    // The register password is discarded (nightly autoconfirm is off); the link sets the real one.
+    const openSignupLink = async (password: string) => {
       const page = await freshPage()
       await seedConsent(page, false)
       await page.goto(signupLink, { waitUntil: 'commit' })
       await page.waitForURL((u) => u.origin === new URL(gateway).origin && u.pathname === '/auth/verify' && u.searchParams.has('state'), {
         timeout: 30_000,
       })
-      await page.getByRole('button', { name: 'Confirm my email', exact: true }).click()
+      await page.getByLabel('Password', { exact: true }).fill(password)
+      await page.getByRole('button', { name: 'Confirm and set password', exact: true }).click()
       await page.waitForURL((u) => u.href.startsWith(landing), { timeout: 30_000 })
+      return page
+    }
+    const signInStatus = async (password: string) =>
+      (await rawFetch('/auth/sign-in', { method: 'POST', body: { email: signupAddr, password, state: mintSignInState() } })).status
+
+    await steps.run('signup link sets the password', async () => {
+      const before = await signInStatus(signupPassword)
+      if (before !== 401) throw new Error(`sign-in before the link answered ${before}, want 401`)
+      const page = await openSignupLink(chosen)
       await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toHaveCount(0)
-      await signInSession(signupAddr, signupPassword)
+      await signInSession(signupAddr, chosen)
+      const old = await signInStatus(signupPassword)
+      if (old !== 401) throw new Error(`the registration password answered ${old}, want 401`)
+    })
+
+    await steps.run('signup link works once', async () => {
+      const page = await openSignupLink(other)
+      await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible({ timeout: 30_000 })
+      await signInSession(signupAddr, chosen)
+      const second = await signInStatus(other)
+      if (second !== 401) throw new Error(`the second password answered ${second}, want 401`)
     })
 
     await steps.run('newsletter mail arrives', async () => {

@@ -228,6 +228,22 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
       - run: bash scripts/ci/preview.sh invariants
+      # Proves a push by digest lands in previews as one untagged image manifest, before production relies on it.
+      - name: Push a probe image by digest
+        if: ${{ !cancelled() }}
+        env:
+          REGISTRY: africa-south1-docker.pkg.dev/ascomply-preview/previews
+        run: |
+          gcloud auth configure-docker africa-south1-docker.pkg.dev --quiet
+          ctx="$RUNNER_TEMP/probe"; mkdir -p "$ctx"; printf '%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"$ctx/run.txt"; printf 'FROM scratch\nCOPY run.txt /\n' >"$ctx/Dockerfile"
+          digest=$(bash scripts/ci/prod-image.sh push "$RUNNER_TEMP/probe-digests" prod-image-probe -f "$ctx/Dockerfile" "$ctx")
+          retry() { for n in 1 2 3; do "$@" && return 0; if [ "$n" -lt 3 ]; then sleep 20; fi; done; return 1; }
+          if ! retry gcloud artifacts docker images list "$REGISTRY/prod-image-probe" --include-tags --format json \
+            | jq -e --arg d "$digest" '[.[] | select(.version == $d)] | length == 1 and (.[0].tags | length) == 0 and .[0].metadata.mediaType == "application/vnd.oci.image.manifest.v1+json"' >/dev/null; then
+            echo "::error::the probe push by digest did not land as one untagged image manifest in previews"
+            exit 1
+          fi
+          echo "probe $digest: one untagged image manifest"
 
   # The PR's secrets and bucket exist before anything deploys; the URLs follow from the PR number.
   prepare-env:

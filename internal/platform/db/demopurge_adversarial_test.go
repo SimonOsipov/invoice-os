@@ -453,7 +453,7 @@ func TestPurgePackageEmitsNoUnscopedDeleteStatement(t *testing.T) {
 	}
 	for _, f := range files {
 		for _, lit := range byFile[f] {
-			if strings.Contains(lit, "auth.purge_unconfirmed_account") { // deletes one auth.users row by id, not tenant data
+			if strings.HasPrefix(strings.TrimSpace(lit), "CREATE OR REPLACE FUNCTION auth.purge_unconfirmed_account(") { // the one literal: deletes an auth.users row by id, not tenant data
 				continue
 			}
 			if !strings.Contains(lit, tenantPredicate) {

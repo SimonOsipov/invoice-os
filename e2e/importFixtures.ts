@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 // M4-08-07 (task-176): a THIRD, independent in-memory CSV generator for
 // e2e/topology/import-wizard.spec.ts's UI-driven wizard specs. NOT shared with
 // e2e/api/import.spec.ts's or e2e/api/perf.spec.ts's own buildPerfCsv() -- the
@@ -190,14 +192,10 @@ export function buildSingleInvoiceCsv(invoiceNumber: string): string {
 // columns and zero rows, no error) -- the wizard's Map step still renders and
 // invoice_number is still placed by hand exactly like every other fixture in this file;
 // only the final Import response differs.
-// A header has no data field to salt: a trailing blank-line count, unique per call, varies the bytes; encoding/csv skips empty lines.
-const usedBlankLines = new Set<number>()
+// A header has no data field to salt: 128 random bits become trailing blank lines (\n = 0, \r\n = 1); encoding/csv skips both.
 export function buildHeaderOnlyCsv(): string {
-  let blankLines: number
-  do blankLines = 1 + Math.floor(Math.random() * 200_000)
-  while (usedBlankLines.has(blankLines))
-  usedBlankLines.add(blankLines)
-  return PERF_HEADER + '\n'.repeat(blankLines)
+  const bits = [...randomBytes(16)].flatMap((b) => Array.from({ length: 8 }, (_, i) => (b >> i) & 1))
+  return PERF_HEADER + bits.map((bit) => (bit ? '\r\n' : '\n')).join('')
 }
 
 // steerMarker(): the fake AI's steering marker (internal/platform/ai/fake.go's

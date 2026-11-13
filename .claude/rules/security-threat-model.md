@@ -36,6 +36,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 - `Verifier.Verify` in `internal/platform/auth/verify.go` checks the JWT signature against the issuer's JWKS, then the issuer and claims in `validate`.
 - `injectIdentity` in `internal/gateway/gateway.go` deletes every client `X-User-*` header, sets identity from the verified token only, and sets `X-User-Address` from `clientIP`.
+- Every gateway call to GoTrue sets `X-User-Address` from `clientIP`. `GOTRUE_RATE_LIMIT_HEADER` names it (`TestDockerfileRateLimitHeader_NamesTheHeaderTheGatewaySends`).
 - A service trusts identity headers only behind `App.RequireGateway` in `internal/platform/peer.go`. It refuses a request without the gateway token.
 - `auth.RequireStaff` admits only a caller whose verified identity has `Staff`.
 - The mock issuer routes (`/auth/login`, `/auth/mock/*`, `/.well-known/jwks.json`) exist only in a `-tags mockissuer` build. `MockIssuerEnabled` also needs `GATEWAY_MOCK_ISSUER=true` and an environment other than `production`. `cmd/gateway/build.tags` is empty on `main`.
@@ -46,7 +47,8 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `auth` admits the gateway and the worker.
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
-- Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request`, `/blog/*` and the two `/readiness-check/*` routes per client IP. Sign-in and refresh have no per-IP limit. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request`, `/blog/*` and the two `/readiness-check/*` routes per client IP. `POST /auth/verify`, `/auth/reset-password` and `/auth/invitation/password` share one budget of 30 an hour per IP (rule `link-redeem`, priority 1080). No Armor rule covers sign-in or refresh. GoTrue limits `/token` per client address. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- The gateway also counts the three routes per client IP as `link-redeem-ip` (`TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances`).
 - On Cloud Run every service but the gateway and the static sites is ingress-internal and admits only a caller with a Google ID token. `platform.IDTokenTransport` adds it in `X-Serverless-Authorization`; `TraceTransport` includes it.
 
 ## Postures

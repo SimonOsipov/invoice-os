@@ -32,6 +32,7 @@ paths:
 - The `email` job needs four secrets: `nightly-gotrue-smtp-pass`, `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`. The `e2e` job's worker window needs three of them: `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
+- Raise `GOTRUE_RATE_LIMIT_VERIFY`, `_OTP` and `_TOKEN_REFRESH` on every preview `auth`; never set `GOTRUE_MAILER_OTP_*` or `GOTRUE_RATE_LIMIT_HEADER` there.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
 - Give no preview service a Sentry DSN, and no PR preview an OpenRouter key. The one exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` as `OPENROUTER_API_KEY` and set no `AI_FAKE` or `JEV_FAKE`. They also set `OPENROUTER_APP_NAME` and `OPENROUTER_APP_URL`. The `Preview invariants` job fails on any other OpenRouter secret or variable and on any Sentry one.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.

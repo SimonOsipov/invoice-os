@@ -234,6 +234,10 @@ env_file() {
         # No mail: a preview confirms a sign-up at once.
         echo "GOTRUE_MAILER_AUTOCONFIRM: 'true'"
         echo "GOTRUE_DB_MAX_POOL_SIZE: '$(gotrue_pool)'"
+        # E2E shares one runner IP; lift GoTrue's per-IP rates. Link length and expiry stay the image's.
+        echo "GOTRUE_RATE_LIMIT_VERIFY: '100000'"
+        echo "GOTRUE_RATE_LIMIT_OTP: '100000'"
+        echo "GOTRUE_RATE_LIMIT_TOKEN_REFRESH: '100000'"
         ;;
       invoice) echo "VALIDATION_URL: $(url validation "$pr")" ;;
       submission) echo "GATEWAY_URL: $(url gateway "$pr")" ;;

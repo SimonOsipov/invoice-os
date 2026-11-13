@@ -220,8 +220,9 @@ func TestGoTrueAddress_NoUsableAddressIsUnattributable(t *testing.T) {
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
 			got := gaVerifyAddress(t, c.env, c.xff, "")
-			if !slices.Equal(got, []string{unattributableIPKey}) {
-				t.Errorf("%s = %q, want exactly [%q] and never an empty value", platform.HeaderUserIP, got, unattributableIPKey)
+			// The literal, not the constant: it is the value GoTrue keys on.
+			if !slices.Equal(got, []string{"unattributable"}) {
+				t.Errorf("%s = %q, want exactly [\"unattributable\"] and never an empty value", platform.HeaderUserIP, got)
 			}
 		})
 	}

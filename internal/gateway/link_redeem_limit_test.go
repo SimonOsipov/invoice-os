@@ -299,6 +299,37 @@ func TestLinkRedeemLimit_AClientAddressHeaderDoesNotChooseTheKey(t *testing.T) {
 	gaRequireAddress(t, calls, gaWant)
 }
 
+// A client writes the leftmost forwarded entries; only the one the load balancer appended keys the count.
+func TestLinkRedeemLimit_AForgedLeftmostForwardedEntryDoesNotChooseTheKey(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	h, f := lrVerifyRoute(t, lrThrottle(time.Now))
+	rt := lrRoutes()[0]
+	for i := range LinkRedeemPerIP + 1 {
+		rt.post(h, lrToken(i), fmt.Sprintf("192.0.2.%d, %s, 130.211.0.1", i+1, gaWant))
+	}
+	if got := lrVerifyCalls(f); got != LinkRedeemPerIP {
+		t.Errorf("GoTrue /verify calls for 31 POSTs with 31 forged leftmost entries = %d, want %d: the client chose the key", got, LinkRedeemPerIP)
+	}
+}
+
+// ::ffff:a.b.c.d is a.b.c.d. Left mapped it would key every IPv4 client under one /64 and share one count.
+func TestLinkRedeemLimit_AnIPv4MappedAddressCountsAsItsIPv4(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	h, f := lrVerifyRoute(t, lrThrottle(time.Now))
+	rt := lrRoutes()[0]
+	for i := range LinkRedeemPerIP {
+		rt.post(h, lrToken(i), lrXFF("::ffff:203.0.113.7"))
+	}
+	if got := lrVerifyCalls(f); got != LinkRedeemPerIP {
+		t.Fatalf("GoTrue /verify calls = %d, want %d", got, LinkRedeemPerIP)
+	}
+	lrRequireSeeOther(t, "plain IPv4 of the mapped address", rt.post(h, lrToken(100), lrXFF("203.0.113.7")), rt.failed)
+	rt.post(h, lrToken(101), lrXFF("::ffff:203.0.113.8"))
+	if got := lrVerifyCalls(f); got != LinkRedeemPerIP+1 {
+		t.Errorf("another mapped IPv4 address did not reach GoTrue: /verify calls = %d, want %d", got, LinkRedeemPerIP+1)
+	}
+}
+
 func TestLinkRedeemLimit_ARequestRefusedBeforeVerifyCountsNothing(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "production")
 	rows := []struct {

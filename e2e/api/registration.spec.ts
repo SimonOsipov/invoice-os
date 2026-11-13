@@ -1,7 +1,7 @@
 // Registration and workspace provisioning over the deployed gateway.
 // The fork's GoTrue has signup on, SMTP blanked and autoconfirm on, so it mails nothing; the
 // emailed-link path is proven by the IdP suite (make test-idp) and the nightly e2e/mail spec.
-// The set-password page serves every signup link; POST /auth/verify is retired.
+// The set-password page serves every signup link; a POST to `/auth/verify` answers 405.
 // /auth/login mints any subject in a mock build, an empty tenant included.
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
@@ -185,7 +185,7 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(body).not.toContain('Confirm my email')
   })
 
-  test('POST /auth/verify answers 405', async () => {
+  test('a POST to `/auth/verify` answers 405', async () => {
     const res = await fetch(`${apiBase()}/auth/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

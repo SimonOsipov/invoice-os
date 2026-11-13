@@ -52,8 +52,8 @@ type gotrueFake struct {
 	userStatus int
 	userBody   string
 
-	userGets, passwordGrants, resends atomic.Int32
-	grantOK                           atomic.Bool // the password grant mints a session
+	userGets, passwordGrants, resends, verifies atomic.Int32
+	grantOK                                     atomic.Bool // the password grant mints a session
 }
 
 func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
@@ -85,6 +85,7 @@ func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
 			}
 			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`"}`)
 		case "POST /verify":
+			g.verifies.Add(1)
 			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
 		case "POST /logout":
 			w.WriteHeader(http.StatusNoContent)
@@ -202,7 +203,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 		return instance{
 			api:       api,
 			h:         h,
-			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, nil),
+			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)),
 			resend:    reg.ResendVerification,
 			subscribe: blogSubscribeHandlers(notificationsURL, instToken, 0, log, pool).Subscribe,
 		}
@@ -470,5 +471,66 @@ func TestTwoInstances_TheReadinessCheckIPLimitCountsAcrossInstances(t *testing.T
 	}
 	if hours < 23 || hours > 24.01 {
 		t.Errorf("the count expires in %.2f h, want a 24 h window", hours)
+	}
+}
+
+// The per-IP link-redeem limit built by main's own builder counts across instances under scope link-redeem-ip, for 1 h, and stores a hash.
+func TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances(t *testing.T) {
+	r := newTwoInstances(t)
+	ctx := context.Background()
+	superPool, err := pgxpool.New(ctx, os.Getenv("DATABASE_SUPERUSER_URL"))
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	t.Cleanup(superPool.Close)
+	const ip = "198.51.100.78"
+	sum := sha256.Sum256([]byte(ip))
+	clean := func() {
+		_, _ = superPool.Exec(ctx, `DELETE FROM gateway_throttle_counts WHERE scope = 'link-redeem-ip' AND key_hash = $1`, sum[:])
+	}
+	clean()
+	t.Cleanup(clean)
+
+	verify := func(h http.Handler) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+uuid.NewString()+"&type=signup"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = ip + ":4000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for i := range 30 {
+		inst := r.a
+		if i%2 == 1 {
+			inst = r.b
+		}
+		if rec := verify(inst.h.Verify); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") == "https://site.example/?verify=failed" {
+			t.Fatalf("verify %d = %d Location %q, want 303 to a success notice", i+1, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+	if n := r.gotrue.verifies.Load(); n != 30 {
+		t.Fatalf("GoTrue /verify calls after 30 POSTs = %d, want 30", n)
+	}
+	for name, inst := range map[string]instance{"A": r.a, "B": r.b} {
+		rec := verify(inst.h.Verify)
+		if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || loc != "https://site.example/?verify=failed" {
+			t.Errorf("31st verify on %s = %d Location %q, want 303 to /?verify=failed: the count is not shared", name, rec.Code, loc)
+		}
+	}
+	if n := r.gotrue.verifies.Load(); n != 30 {
+		t.Errorf("GoTrue /verify calls after the refused POSTs = %d, want still 30", n)
+	}
+
+	var row string
+	var minutes float64
+	if err := superPool.QueryRow(ctx, `SELECT t::text, extract(epoch FROM expires_at - now()) / 60 FROM gateway_throttle_counts t
+		WHERE scope = 'link-redeem-ip' AND key_hash = $1`, sum[:]).Scan(&row, &minutes); err != nil {
+		t.Fatalf("no row of scope link-redeem-ip keyed by sha256(%q): %v", ip, err)
+	}
+	if strings.Contains(row, ip) {
+		t.Errorf("a column holds the address text: %s", row)
+	}
+	if minutes < 59 || minutes > 60 {
+		t.Errorf("the count expires in %.2f min, want between 59 and 60", minutes)
 	}
 }

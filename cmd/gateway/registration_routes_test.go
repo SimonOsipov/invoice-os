@@ -259,7 +259,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"POST /auth/request-password-reset":    "withCORS(" + recv + ".RequestPasswordReset)",
 		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
 		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
-		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger, ` + hand + `.AccountEvents)`,
+		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger, ` + hand + `.AccountEvents, ` + hand + `.LinkRedeemByIP)`,
 		"POST /auth/invitation/password":       hand + ".InvitationPassword",
 
 		// A mailed link's page and its same-origin form POST (or RFC 8058 one-click) take no CORS wrap.

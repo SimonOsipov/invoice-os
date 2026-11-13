@@ -75,6 +75,8 @@ var gtSession = `{"access_token":"` + sessionAT + `","token_type":"bearer","expi
 type gotrueCall struct {
 	Method, Path string
 	Body         []byte
+	// Address is every X-User-Address value the call carried.
+	Address []string
 }
 
 // fakeGoTrue answers every request with status and body, recording each call.
@@ -90,7 +92,7 @@ func newFakeGoTrue(t *testing.T, status int, body string) *fakeGoTrue {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b})
+		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b, gaAddress(r)})
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -223,7 +225,7 @@ func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, lo
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, site, testClient(), log, nil, store, nil).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -1495,5 +1497,39 @@ func TestRegister_ARepeatRegistrationAnswersTheSame(t *testing.T) {
 		if !strings.Contains(string(c.Body), `"unsubscribe":"tok"`) {
 			t.Errorf("signup %d body = %s, want the token", i, c.Body)
 		}
+	}
+}
+
+// GoTrue's per-address limiter answers before it looks at the account, so a new and a repeat address get one answer.
+func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	f := newGaGoTrue(t)
+	f.routes["POST /signup"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-User-Address") == gaWant {
+			answer(http.StatusTooManyRequests, gtOverRequestRateLimit)(w, r)
+			return
+		}
+		answer(http.StatusOK, gtNewUser)(w, r)
+	}
+	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil)
+	post := func(xff string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, xff))
+		return rec
+	}
+
+	// A caller GoTrue does not limit registers normally, so the limit below is the address's.
+	if rec := post("198.51.100.9, 203.0.113.50, 130.211.0.1"); rec.Code != http.StatusAccepted {
+		t.Fatalf("unlimited address: status %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	newAddr, repeatAddr := post(gaXFF), post(gaXFF)
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"new address": newAddr, "repeat address": repeatAddr} {
+		if rec.Code != http.StatusTooManyRequests || strings.TrimSpace(rec.Body.String()) != jsonError("too many requests") {
+			t.Errorf("%s: status %d, body %q; want 429 %s", name, rec.Code, rec.Body.String(), jsonError("too many requests"))
+		}
+	}
+	if newAddr.Body.String() != repeatAddr.Body.String() {
+		t.Errorf("new body %q differs from repeat body %q", newAddr.Body.String(), repeatAddr.Body.String())
 	}
 }

@@ -64,7 +64,7 @@ func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 	}
 	post(reg.RequestPasswordReset, "/auth/request-password-reset", fmt.Sprintf(`{"email":%q}`, email))
 	post(h.SignOut, "/auth/sign-out", `{"refresh_token":"r"}`)
-	reset := resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, h.AccountEvents)
+	reset := resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, h.AccountEvents, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now))
 	if rec := serveForm(reset, "/auth/reset-password", "token=t&type=recovery&password=new-password-1"); rec.Code != http.StatusSeeOther || !strings.HasSuffix(rec.Header().Get("Location"), "/?reset=1") {
 		t.Fatalf("reset = %d %q, want 303 to ?reset=1", rec.Code, rec.Header().Get("Location"))
 	}

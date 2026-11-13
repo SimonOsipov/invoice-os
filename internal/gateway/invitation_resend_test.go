@@ -124,9 +124,7 @@ func TestInvitationResend_OnlyTheCooldownIsHeld(t *testing.T) {
 		warnMsg   string
 	}{
 		{"429 instance mail cap", http.StatusTooManyRequests, gtInstanceMailCap, false, invResendCapMsg},
-		{"429 over_request_rate_limit", http.StatusTooManyRequests, gtOverRequestRateLimit, false, "invitation-resend: gotrue resend failed"},
 		{"429 with an empty msg", http.StatusTooManyRequests, `{"code":429,"error_code":"over_email_send_rate_limit","msg":""}`, false, ""},
-		{"429 cooldown wording under another error_code", http.StatusTooManyRequests, `{"code":429,"error_code":"over_request_rate_limit","msg":"For security purposes, you can only request this after 42 seconds."}`, false, "invitation-resend: gotrue resend failed"},
 		{"302", http.StatusFound, `{}`, false, "invitation-resend: gotrue resend failed"},
 		{"400", http.StatusBadRequest, `{"code":400,"error_code":"email_address_not_authorized","msg":"Email address is not authorized"}`, false, "invitation-resend: gotrue resend failed"},
 		{"403", http.StatusForbidden, `{"code":403,"error_code":"not_admin","msg":"forbidden"}`, false, "invitation-resend: gotrue resend failed"},

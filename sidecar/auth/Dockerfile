@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build -o /out/authsentry ./cmd/authsentry
 FROM ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b
 COPY --from=wrap /out/authsentry /usr/local/bin/authsentry
 
-# Environment-independent settings. Per-environment values and secrets are set on the Cloud Run service.
+# Environment-independent settings. The rate-limit header is the one the gateway sends (platform.HeaderUserIP). Per-environment values and secrets are set on the Cloud Run service.
 ENV GOTRUE_DB_DRIVER=postgres \
     GOTRUE_DB_MAX_POOL_SIZE=10 \
     GOTRUE_JWT_AUD=authenticated \
@@ -26,7 +26,10 @@ ENV GOTRUE_DB_DRIVER=postgres \
     GOTRUE_SMTP_USER=resend \
     GOTRUE_SMTP_ADMIN_EMAIL=no-reply@ascomply.com \
     GOTRUE_SMTP_SENDER_NAME=ASComply \
-    GOTRUE_LOG_LEVEL=info
+    GOTRUE_LOG_LEVEL=info \
+    GOTRUE_MAILER_OTP_LENGTH=10 \
+    GOTRUE_MAILER_OTP_EXP=3600 \
+    GOTRUE_RATE_LIMIT_HEADER=X-User-Address
 
 # The upstream image sets CMD ["auth"] and no ENTRYPOINT. The wrapper runs its args as GoTrue.
 ENTRYPOINT ["/usr/local/bin/authsentry"]

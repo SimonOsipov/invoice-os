@@ -198,7 +198,7 @@ func TestRenderInvite_StatesSevenDays(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Errorf("mail does not hold %q", want)
 	}
-	for _, bad := range []string{"24 hours", "What happens next"} {
+	for _, bad := range []string{"1 hour", "What happens next"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("mail holds %q", bad)
 		}

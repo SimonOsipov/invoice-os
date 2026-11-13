@@ -70,10 +70,10 @@ paths:
 - Answer `POST /auth/invitation/resend` for a live token with 200 `sent` when GoTrue mailed.
 - Answer it with 200 `held` on GoTrue's 60 s cooldown 429.
 - Answer it with 200 `maybe` when the account state is `unknown`.
-- Answer 502 `invitation resend is unavailable` for any other GoTrue failure.
+- Answer it with 429 `too many requests` on GoTrue's 429 `over_request_rate_limit`. Answer 502 `invitation resend is unavailable` for any other GoTrue failure.
 - Answer `/auth/invitation/resend` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_missing` when it reads `none`. Send both before the GoTrue call.
 - Spend the resend per-address budget on `/auth/invitation/resend` and refund a GoTrue 4xx.
-- Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Expect it to give `POST /auth/verify`, `/auth/reset-password` and `/auth/invitation/password` one budget of 30 an hour per IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
@@ -95,6 +95,10 @@ paths:
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address (FLAKE-00 Q5).
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
+- Count `POST /auth/verify`, `/auth/reset-password` and `/auth/invitation/password` together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call; over the limit, redirect to the route's failed notice. A preview logs and admits.
+- Send `X-User-Address` from `checkIPKey(clientIP)` on every GoTrue call except the session check's `GET /user` and the fleet probe. Never copy it from the client.
+- Keep `GOTRUE_MAILER_OTP_LENGTH=10` and `GOTRUE_MAILER_OTP_EXP=3600` in `sidecar/auth/Dockerfile`; the mail copy follows `GOTRUE_MAILER_OTP_EXP` (`TestLinkExpiryCopyMatchesTheIdPLifetime`).
+- In `idp-up.sh`, `idp-mail`, `idp-es256` and `idp-short` raise GoTrue's per-IP rates: gateway-backed IdP tests there share one local key. `idp-hs256` keeps the defaults; it carries the limiter proof.
 - Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429.
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.

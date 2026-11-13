@@ -85,23 +85,42 @@ func TestIdP_TamperedLinkFailsAndLeavesTheRealOneUsable(t *testing.T) {
 func TestIdP_ExpiredLinkFails(t *testing.T) {
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0, nil)
-	u := registrant(t, gw)
-	link := confirmationLink(t, u.email)
 
-	// GoTrue's default GOTRUE_MAILER_OTP_EXP is 24h, measured from confirmation_sent_at.
-	if _, err := superConn(t).Exec(context.Background(),
-		`UPDATE auth.users SET confirmation_sent_at = now() - interval '25 hours' WHERE email = $1`, u.email); err != nil {
-		t.Fatal(err)
+	// The Dockerfile's GOTRUE_MAILER_OTP_EXP is 1 h, measured from confirmation_sent_at.
+	backdate := func(t *testing.T, email string, d time.Duration) {
+		t.Helper()
+		if _, err := superConn(t).Exec(context.Background(),
+			`UPDATE auth.users SET confirmation_sent_at = now() - make_interval(secs => $2) WHERE email = $1`, email, d.Seconds()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := follow(t, link); got != siteURL+"/?verify=failed" {
-		t.Errorf("expired link = %q, want %s/?verify=failed", got, siteURL)
-	}
-	if emailConfirmed(t, u.email) {
-		t.Error("an expired token confirmed the account")
-	}
-	if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
-		t.Errorf("password grant after an expired link: status %d, body %v; want 400 email_not_confirmed", status, body)
-	}
+
+	t.Run("59_minutes_old_confirms", func(t *testing.T) {
+		u := registrant(t, gw)
+		link := confirmationLink(t, u.email)
+		backdate(t, u.email, 59*time.Minute)
+		if got := follow(t, link); got != siteURL+"/?verified=1" {
+			t.Errorf("59-minute-old link = %q, want %s/?verified=1", got, siteURL)
+		}
+		if !emailConfirmed(t, u.email) {
+			t.Error("a 59-minute-old link did not confirm the account")
+		}
+	})
+
+	t.Run("61_minutes_old_fails", func(t *testing.T) {
+		u := registrant(t, gw)
+		link := confirmationLink(t, u.email)
+		backdate(t, u.email, 61*time.Minute)
+		if got := follow(t, link); got != siteURL+"/?verify=failed" {
+			t.Errorf("expired link = %q, want %s/?verify=failed", got, siteURL)
+		}
+		if emailConfirmed(t, u.email) {
+			t.Error("an expired token confirmed the account")
+		}
+		if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
+			t.Errorf("password grant after an expired link: status %d, body %v; want 400 email_not_confirmed", status, body)
+		}
+	})
 }
 
 // GoTrue answers a repeat within the minute 429 over_email_send_rate_limit and sends nothing.

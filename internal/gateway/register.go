@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -257,7 +258,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 
 // VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
 // The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs, events AccountEvents) http.Handler {
+func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
 	}
@@ -276,6 +277,10 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 		}
 		token := r.PostForm.Get("token")
 		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != "signup" {
+			http.Redirect(w, r, failed, http.StatusSeeOther)
+			return
+		}
+		if !admitLinkRedeem(r, perIP, enforce, "verify", log) {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -336,6 +341,7 @@ func postGoTrue(r *http.Request, client *http.Client, target string, body, ok an
 		return 0, gt, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(platform.HeaderUserIP, gotrueAddress(r))
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, gt, err
@@ -353,12 +359,13 @@ func postGoTrue(r *http.Request, client *http.Client, target string, body, ok an
 }
 
 // postGoTrueBearer posts an empty body with bearer as the Authorization and returns the status and sessionGone.
-func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer string) (status int, gone bool, err error) {
+func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer, address string) (status int, gone bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
 		return 0, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set(platform.HeaderUserIP, address)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, false, err
@@ -370,7 +377,7 @@ func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer s
 }
 
 // putGoTrueBearerJSON puts body as JSON with bearer as the Authorization and returns the status and any error fields.
-func putGoTrueBearerJSON(ctx context.Context, client *http.Client, target, bearer string, body any) (int, gotrueError, error) {
+func putGoTrueBearerJSON(ctx context.Context, client *http.Client, target, bearer, address string, body any) (int, gotrueError, error) {
 	var gt gotrueError
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -382,6 +389,7 @@ func putGoTrueBearerJSON(ctx context.Context, client *http.Client, target, beare
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set(platform.HeaderUserIP, address)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, gt, err

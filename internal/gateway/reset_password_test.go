@@ -50,6 +50,8 @@ const (
 type rpCall struct {
 	Method, Path, RawQuery, Auth, ContentType string
 	Body                                      []byte
+	// Address is every X-User-Address value the call carried.
+	Address []string
 }
 
 func (c rpCall) String() string { return c.Method + " " + c.Path }
@@ -80,7 +82,7 @@ func newResetGoTrue(t *testing.T) *resetGoTrue {
 		b, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(b))
 		f.mu.Lock()
-		f.calls = append(f.calls, rpCall{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("Content-Type"), b})
+		f.calls = append(f.calls, rpCall{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("Content-Type"), b, gaAddress(r)})
 		f.mu.Unlock()
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/verify"):
@@ -139,7 +141,7 @@ func newResetHandler(t *testing.T, f *resetGoTrue, log *slog.Logger) http.Handle
 		log = slog.New(slog.DiscardHandler)
 	}
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return ResetPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, log, nil)
+	return ResetPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, log, nil, lrThrottle(time.Now), true)
 }
 
 // resetRig is the form handler sharing one session cache and one throttle with the checks that observe them:
@@ -168,7 +170,7 @@ func newResetRig(t *testing.T) *resetRig {
 	log, buf := captureLog()
 	r := &resetRig{
 		sessionRig: rg, user: user, gotrue: f, throttle: th, log: buf,
-		handler: ResetPasswordHandler(f.URL, siteURL(t), testClient(), rg.sessions, th, log, nil),
+		handler: ResetPasswordHandler(f.URL, siteURL(t), testClient(), rg.sessions, th, log, nil, lrThrottle(time.Now), true),
 		tokS1:   rg.signer.token(t, subjectS1, sid1),
 	}
 	if rec := rg.get(r.tokS1); rec.Code != http.StatusOK || user.Hits() != 1 {
@@ -468,7 +470,7 @@ func TestResetPassword_NotConfigured503(t *testing.T) {
 	page := httptest.NewRecorder()
 	ResetPasswordPageHandler(nil).ServeHTTP(page, httptest.NewRequest(http.MethodGet, rpPath+"?"+rpQuery(rpToken), nil))
 	handlers["page"] = page
-	form := ResetPasswordHandler(f.URL, nil, testClient(), liveSessions(t), NewSignInThrottle("sign-in", 10, 10, SignInWindow, newTestClock().Now), slog.New(slog.DiscardHandler), nil)
+	form := ResetPasswordHandler(f.URL, nil, testClient(), liveSessions(t), NewSignInThrottle("sign-in", 10, 10, SignInWindow, newTestClock().Now), slog.New(slog.DiscardHandler), nil, lrThrottle(time.Now), true)
 	handlers["form"] = rpPostRaw(t.Context(), form, rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode())
 	for name, rec := range handlers {
 		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "registration is not configured") {
@@ -1042,7 +1044,7 @@ func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
 		sessions := NewSessionChecker(f.URL, testClient(), time.Now, log)
 		sessions.Shared(deadPool(t))
 		th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-		h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log, nil)
+		h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log, nil, lrThrottle(time.Now), true)
 		want := rpOK
 		if refuse {
 			want = rpFailed

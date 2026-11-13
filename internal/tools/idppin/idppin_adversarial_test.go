@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -112,6 +114,9 @@ var d3Env = map[string]string{
 	"GOTRUE_SMTP_ADMIN_EMAIL":                 "no-reply@ascomply.com",
 	"GOTRUE_SMTP_SENDER_NAME":                 "ASComply",
 	"GOTRUE_LOG_LEVEL":                        "info",
+	"GOTRUE_MAILER_OTP_LENGTH":                "10",
+	"GOTRUE_MAILER_OTP_EXP":                   "3600",
+	"GOTRUE_RATE_LIMIT_HEADER":                "X-User-Address",
 }
 
 var envPairRE = regexp.MustCompile(`^([A-Z_][A-Z0-9_]*)=(\S*)$`)
@@ -177,5 +182,20 @@ func TestDockerfileCommitsTheD3EnvBlockAndNoSecret(t *testing.T) {
 	}
 	if strings.Contains(body, "# syntax=") {
 		t.Error("the Dockerfile carries a # syntax= directive")
+	}
+}
+
+// The image limits per the header the gateway sends; a mismatch makes GoTrue read an empty key and limit nothing.
+func TestDockerfileRateLimitHeader_NamesTheHeaderTheGatewaySends(t *testing.T) {
+	raw, err := os.ReadFile(committedDockerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := dockerfileEnv(t, string(raw))
+	if len(env) == 0 {
+		t.Fatal("no ENV in the committed Dockerfile; the scan is broken")
+	}
+	if got := env["GOTRUE_RATE_LIMIT_HEADER"]; got != platform.HeaderUserIP {
+		t.Errorf("GOTRUE_RATE_LIMIT_HEADER = %q, want platform.HeaderUserIP %q", got, platform.HeaderUserIP)
 	}
 }

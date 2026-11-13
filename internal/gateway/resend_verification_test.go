@@ -38,7 +38,7 @@ func sequenceGoTrue(t *testing.T, answers ...gtAnswer) *fakeGoTrue {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		a := answers[min(len(f.calls), len(answers)-1)]
-		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b})
+		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b, gaAddress(r)})
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(a.status)

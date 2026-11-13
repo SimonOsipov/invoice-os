@@ -279,7 +279,7 @@ func TestAccountEvents_ResetRequestTimingUnchanged(t *testing.T) {
 func aeResetHandler(t *testing.T, f *resetGoTrue, rec AccountEvents) http.Handler {
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return ResetPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nopLog(), rec)
+	return ResetPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nopLog(), rec, lrThrottle(time.Now), true)
 }
 
 func aeResetPost(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
@@ -357,12 +357,12 @@ func aeInviteValues() url.Values {
 func aeInviteHandler(t *testing.T, f *resetGoTrue, rec AccountEvents) http.Handler {
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), testHandoffStore(), rec)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), testHandoffStore(), rec, lrThrottle(time.Now), true)
 }
 
 func TestAccountEvents_VerifyHandoffRecordsASignIn(t *testing.T) {
 	rec := &recEvents{}
-	h := VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), rec)
+	h := VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), rec, lrThrottle(time.Now), true)
 
 	vhCode(t, vhClick(h, vhState))
 
@@ -402,7 +402,7 @@ func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
 	fillStore(t, full, HandoffMaxLive)
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
 	rec3 := &recEvents{}
-	h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), full, rec3)
+	h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), full, rec3, lrThrottle(time.Now), true)
 	if loc := ipPost(t, h, aeInviteValues()).Header().Get("Location"); strings.Contains(loc, "handoff=") {
 		t.Fatalf("a full store minted a code: %q", loc)
 	}
@@ -493,15 +493,15 @@ func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
 		}},
 		{"reset completed", EventPasswordResetCompleted, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-			h := ResetPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, log, rec)
+			h := ResetPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, log, rec, lrThrottle(time.Now), true)
 			return aeResetPost(t, h)
 		}},
 		{"verify hand-off", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
-			return vhClick(VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), log, nil, testHandoffStore(), rec), vhState)
+			return vhClick(VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), log, nil, testHandoffStore(), rec, lrThrottle(time.Now), true), vhState)
 		}},
 		{"invitation set-password", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-			h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), rec)
+			h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), rec, lrThrottle(time.Now), true)
 			return ipPost(t, h, aeInviteValues())
 		}},
 	}

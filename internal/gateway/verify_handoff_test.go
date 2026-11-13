@@ -40,7 +40,7 @@ func vhClick(h http.Handler, state string) *httptest.ResponseRecorder {
 func vhVerifier(t *testing.T, store *HandoffStore, status int, body string) (http.Handler, *fakeGoTrue) {
 	t.Helper()
 	fake := newFakeGoTrue(t, status, body)
-	return VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), nil, store, nil), fake
+	return VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), nil, store, nil, lrThrottle(time.Now), true), fake
 }
 
 func nopLog() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -178,7 +178,7 @@ func TestVerify_ConcurrentClicksMintAtMostOneCodePerVerifiedAnswer(t *testing.T)
 		t.Fatal(err)
 	}
 	store := testHandoffStore()
-	h := VerifyHandler(authURL, siteURL(t), testClient(), nopLog(), nil, store, nil)
+	h := VerifyHandler(authURL, siteURL(t), testClient(), nopLog(), nil, store, nil, lrThrottle(time.Now), true)
 
 	recs := make([]*httptest.ResponseRecorder, 2)
 	var wg sync.WaitGroup
@@ -241,7 +241,7 @@ func TestVerify_StatelessClickConfirmsWithoutACode(t *testing.T) {
 			store := testHandoffStore()
 			fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(coMetaFull)))
 			sink := newRecSink(nil)
-			h := VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), sink, store, nil)
+			h := VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), sink, store, nil, lrThrottle(time.Now), true)
 
 			requireRedirect(t, vhClick(h, c.state), verifiedLocation)
 
@@ -268,7 +268,7 @@ func TestVerify_SessionlessAnswerConfirmsWithoutACode(t *testing.T) {
 			store := testHandoffStore()
 			fake := newFakeGoTrue(t, http.StatusOK, c.body)
 			sink := newRecSink(nil)
-			h := VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), sink, store, nil)
+			h := VerifyHandler(fake.URL, siteURL(t), testClient(), nopLog(), sink, store, nil, lrThrottle(time.Now), true)
 
 			requireRedirect(t, vhClick(h, vhState), verifiedLocation)
 
@@ -293,7 +293,7 @@ func TestVerify_FullStoreConfirmsWithoutACodeAndWarns(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(coMetaFull)))
 	sink := newRecSink(nil)
 	log, buf := captureLog()
-	h := VerifyHandler(fake.URL, siteURL(t), testClient(), log, sink, store, nil)
+	h := VerifyHandler(fake.URL, siteURL(t), testClient(), log, sink, store, nil, lrThrottle(time.Now), true)
 
 	requireRedirect(t, vhClick(h, vhState), verifiedLocation)
 
@@ -321,7 +321,7 @@ func TestVerify_RefusalLogsTheGoTrueErrorCode(t *testing.T) {
 	store := testHandoffStore()
 	fake := newFakeGoTrue(t, http.StatusForbidden, gtOTPExpired)
 	log, buf := captureLog()
-	h := VerifyHandler(fake.URL, siteURL(t), testClient(), log, nil, store, nil)
+	h := VerifyHandler(fake.URL, siteURL(t), testClient(), log, nil, store, nil, lrThrottle(time.Now), true)
 
 	requireRedirect(t, vhClick(h, vhState), failedLocation)
 
@@ -361,7 +361,7 @@ func TestVerify_EachCodeRedeemsItsOwnClickSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := testHandoffStore()
-	h := VerifyHandler(authURL, siteURL(t), testClient(), nopLog(), nil, store, nil)
+	h := VerifyHandler(authURL, siteURL(t), testClient(), nopLog(), nil, store, nil, lrThrottle(time.Now), true)
 
 	first := vhCode(t, vhClick(h, vhState))
 	rec := httptest.NewRecorder()

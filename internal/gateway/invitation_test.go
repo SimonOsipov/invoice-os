@@ -498,7 +498,7 @@ func newDroppingGoTrue(t *testing.T) *fakeGoTrue {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b})
+		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b, gaAddress(r)})
 		f.mu.Unlock()
 		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 			_ = conn.Close()
@@ -1919,5 +1919,33 @@ func TestInvitationRegister_TheShortCircuitLooksUpNoToken(t *testing.T) {
 	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+func TestInvitationResend_AGoTrueAddressLimitAnswers429(t *testing.T) {
+	rows := []struct {
+		name   string
+		body   string
+		status int
+		want   string
+	}{
+		{"address limit", gtOverRequestRateLimit, http.StatusTooManyRequests, jsonError("too many requests")},
+		// The error_code decides, not the wording.
+		{"address limit in cooldown wording", `{"code":429,"error_code":"over_request_rate_limit","msg":"For security purposes, you can only request this after 42 seconds."}`, http.StatusTooManyRequests, jsonError("too many requests")},
+		// Control: the 60 s mail cooldown stays a hold.
+		{"mail cooldown", gtOverEmailSendRateLimit, http.StatusOK, resendHeld},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusTooManyRequests, c.body)
+			h := newInviteResend(fake.URL, invitePreviewing("unconfirmed"), nil)
+
+			rec := serveInviteResend(h, http.MethodPost, tokenBody(inviteToken))
+
+			if n := len(fake.Calls()); n != 1 {
+				t.Fatalf("GoTrue saw %d calls, want 1", n)
+			}
+			requireInviteAnswer(t, rec, c.status, c.want, c.name)
+		})
 	}
 }

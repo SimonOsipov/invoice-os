@@ -54,7 +54,7 @@ func TestRecoveryTemplate_CarriesItsCopy(t *testing.T) {
 		"Reset your ASComply password", "Password reset", "Reset your password.", "Choose a new password",
 		"Use this link to choose a new password for your ASComply account.", "Choose a new one to sign in.",
 		"Use the button to choose a new password.",
-		"This link expires in 24 hours.", "If you did not ask for this, ignore this email.",
+		"This link expires in 1 hour.", "If you did not ask for this, ignore this email.",
 		"You received this email because a password reset was requested for this address.",
 	} {
 		if !strings.Contains(got, want) {

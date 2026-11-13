@@ -1494,6 +1494,41 @@ func TestPreviewMailPreflightReportsAFailureThatIsNotNotFound(t *testing.T) {
 	}
 }
 
+func TestPreviewAuthKeepsTheImageLinkSettings(t *testing.T) {
+	t.Parallel()
+	rates := []string{"GOTRUE_RATE_LIMIT_VERIFY: '100000'", "GOTRUE_RATE_LIMIT_OTP: '100000'", "GOTRUE_RATE_LIMIT_TOKEN_REFRESH: '100000'"}
+	banned := []string{"GOTRUE_MAILER_OTP_", "GOTRUE_RATE_LIMIT_HEADER"}
+	check := func(label, body string) {
+		for _, w := range rates {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s lacks %q", label, w)
+			}
+		}
+		for _, b := range banned {
+			if strings.Contains(body, b) {
+				t.Errorf("%s names %q", label, b)
+			}
+		}
+	}
+	check("PR 7 auth env", nameGoldens(t, "7")["env-auth"])
+	check("nightly auth env", nameGoldens(t, "nightly")["env-auth"])
+	on := runPreviewEnv(t, blogIDEnv, func(dir string) {
+		writeIn(t, dir, "revisions-worker-nightly", "worker-nightly-00001-aaa\n")
+		writeIn(t, dir, "latest-worker-nightly", "worker-nightly-00001-aaa\n")
+	}, "mail-on", "nightly")
+	off := runPreview(t, nil, "mail-off", "nightly")
+	for label, r := range map[string]previewRun{"mail-on": on, "mail-off": off} {
+		for _, b := range banned {
+			if strings.Contains(r.file(t, "calls"), b) {
+				t.Errorf("%s argv names %q", label, b)
+			}
+		}
+	}
+	if !strings.Contains(on.file(t, "calls"), "GOTRUE_MAILER_AUTOCONFIRM=false") {
+		t.Errorf("mail-on argv lacks GOTRUE_MAILER_AUTOCONFIRM=false")
+	}
+}
+
 func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "mail-off", "nightly")

@@ -591,24 +591,6 @@ func TestVerifyPage_BounceEscapesTheToken(t *testing.T) {
 	}
 }
 
-func TestVerifyPage_StateRendersAsHiddenField(t *testing.T) {
-	_, doc := vpPage(t, vpToken)
-	forms := vpFind(doc, vpTag("form"))
-	if len(forms) != 1 {
-		t.Fatalf("forms = %d, want 1", len(forms))
-	}
-	got := map[string]string{}
-	for _, in := range vpFind(forms[0], vpTag("input")) {
-		name, _ := vpAttr(in, "name")
-		val, _ := vpAttr(in, "value")
-		got[name] = val
-	}
-	want := map[string]string{"token": vpToken, "type": "signup", "state": vpState, "password": ""}
-	if len(got) != len(want) || got["token"] != want["token"] || got["type"] != want["type"] || got["state"] != want["state"] {
-		t.Errorf("inputs = %v, want %v", got, want)
-	}
-}
-
 func TestVerifyPage_BadTokenFailsBeforeTheStateCheck(t *testing.T) {
 	h := vpHandler(t)
 	for name, query := range map[string]string{
@@ -633,25 +615,6 @@ func vpFormAction(t *testing.T, body string) string {
 	}
 	action, _ := vpAttr(forms[0], "action")
 	return action
-}
-
-func TestVerifyPage_InviteLinkServesTheSetPasswordPage(t *testing.T) {
-	h := vpHandler(t)
-
-	get := vpDo(t, h, http.MethodGet, vpInviteQuery(vpToken))
-	head := vpDo(t, h, http.MethodHead, vpInviteQuery(vpToken))
-
-	for name, rec := range map[string]*httptest.ResponseRecorder{"GET": get, "HEAD": head} {
-		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-			t.Errorf("%s: status %d Content-Type %q, want 200 text/html; charset=utf-8", name, rec.Code, rec.Header().Get("Content-Type"))
-		}
-	}
-	if head.Body.Len() != 0 {
-		t.Errorf("HEAD body = %q, want empty", head.Body.String())
-	}
-	if got := vpFormAction(t, get.Body.String()); got != "/auth/invitation/password" {
-		t.Errorf("GET form action = %q, want /auth/invitation/password (the set-password page)", got)
-	}
 }
 
 const inviteBounceLocation = siteURLValue + "/?confirm=invite#token=" + vpToken

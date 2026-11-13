@@ -1653,6 +1653,8 @@ func TestRegister_AnUnreadableSettingsAnswerFailsClosed(t *testing.T) {
 		{"field missing", answer(http.StatusOK, `{}`), registerBody(regEmail, regPassword), 1, 200},
 		{"field is the string true", answer(http.StatusOK, `{"mailer_autoconfirm":"true"}`), registerBody(regEmail, regPassword), 1, 200},
 		{"field is the number 1", answer(http.StatusOK, `{"mailer_autoconfirm":1}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is null", answer(http.StatusOK, `{"mailer_autoconfirm":null}`), registerBody(regEmail, regPassword), 1, 200},
+		{"status 302 with autoconfirm true", answer(http.StatusFound, `{"mailer_autoconfirm":true}`), registerBody(regEmail, regPassword), 1, 302},
 		{"body over 16 KiB", answer(http.StatusOK, `{"mailer_autoconfirm":true,"pad":"`+strings.Repeat("a", 20<<10)+`"}`), registerBody(regEmail, regPassword), 1, 200},
 		{"autoconfirm true with no caller password", answer(http.StatusOK, `{"mailer_autoconfirm":true}`), noPassword, 0, 0},
 	}

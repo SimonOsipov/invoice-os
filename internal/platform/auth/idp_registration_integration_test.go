@@ -695,6 +695,8 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			if !emailConfirmed(t, u.email) {
 				t.Error("the account is not confirmed after the clicks")
 			}
+			// A click that mints no code must still leave the chosen password working.
+			accessToken(t, base, u)
 			for range verified {
 				sink.next(t)
 			}
@@ -704,6 +706,58 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 				t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
 			}
 		})
+	}
+}
+
+// Two tabs post two different passwords for one link: the last password set stays, and only it signs in.
+func TestIdP_TwoConcurrentClicksWithTwoPasswordsLeaveExactlyOneSignIn(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw)
+	action, values := confirmForm(t, confirmationLink(t, u.email))
+	passwords := []string{"pw-tab-a-" + uuid.NewString(), "pw-tab-b-" + uuid.NewString()}
+
+	locations := make(chan string, 2)
+	start := make(chan struct{})
+	for _, pw := range passwords {
+		form := url.Values{}
+		for k, v := range values {
+			form[k] = v
+		}
+		form.Set("password", pw)
+		go func() {
+			<-start
+			status, location, err := postForm(action, form)
+			if err != nil || status != http.StatusSeeOther {
+				location = fmt.Sprintf("status %d, err %v", status, err)
+			}
+			locations <- location
+		}()
+	}
+	close(start)
+
+	landed := 0
+	for range 2 {
+		if loc := <-locations; strings.HasPrefix(loc, siteURL+"/?verified=1") {
+			landed++
+		} else if loc != siteURL+"/?verify=failed" {
+			t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer", loc)
+		}
+	}
+	if landed < 1 {
+		t.Fatal("no click landed on ?verified=1")
+	}
+	if !emailConfirmed(t, u.email) {
+		t.Error("the account is not confirmed after the clicks")
+	}
+	working := 0
+	for _, pw := range passwords {
+		if status, _ := signIn(t, base, idpUser{email: u.email, password: pw}); status == http.StatusOK {
+			working++
+		}
+	}
+	if working != 1 {
+		t.Errorf("%d of the two posted passwords sign in, want exactly 1", working)
 	}
 }
 

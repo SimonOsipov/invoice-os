@@ -86,7 +86,7 @@ paths:
 - Answer it with 303 to `<AUTH_SITE_URL>/?confirm=invite#token=<token>` for `invite=1`, when the request carries no valid `state`.
 - Render the set-password page for every signup link with a valid `state`. Answer a POST to `/auth/verify` with 405.
 - Render a page only for a 43-character base64url `state`.
-- Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
+- Hand a session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Share hand-off codes between gateway instances through `gateway_handoff_codes`, as `invoice_gateway` (`DATABASE_GATEWAY_URL`). Store `sha256(code)`, never the code.

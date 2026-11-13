@@ -119,7 +119,7 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 	})
 }
 
-// passwordLinkFlow is what differs between the reset and the invitee set-password POST.
+// passwordLinkFlow is what differs between the reset and the signup set-password POST.
 type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
 	onConfirmed                           func(r *http.Request, user gotrueUser)

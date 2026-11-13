@@ -33,7 +33,7 @@ func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, 
 	writeResetPage(w, r.Method, http.StatusOK, renderPasswordPage(invitationPageHTML, token, state, ""))
 }
 
-// InvitationPasswordHandler answers the invitee page's form POST: confirm the address, set the password, end every session.
+// InvitationPasswordHandler answers the set-password page's form POST: confirm the address, set the password, end every session.
 func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()

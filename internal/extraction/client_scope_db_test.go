@@ -217,10 +217,16 @@ func cseUploadedThenCited(t *testing.T) (r *extraction.Reader, up context.Contex
 
 	hash := strings.Repeat("d", 64)
 	var doc string
+	subject, _ := auth.IdentityFromContext(up)
 	if err := db.WithinRequestTenantTx(up, stRequire(t).app, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
+		if err := tx.QueryRow(ctx,
 			`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, 11) RETURNING id`,
-			tenant, "cse/"+tenant+"/"+hash, hash).Scan(&doc)
+			tenant, "cse/"+tenant+"/"+hash, hash).Scan(&doc); err != nil {
+			return err
+		}
+		// The fence keeps document.Store out of this package: write the row Upsert writes.
+		_, err := tx.Exec(ctx, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`, tenant, doc, subject.Subject)
+		return err
 	}); err != nil {
 		t.Fatalf("upload as a member: %v", err)
 	}
@@ -274,5 +280,33 @@ func TestClientScope_ANonUploaderIsRefusedTheExtractionOfABoundDocument(t *testi
 	_, boundDetail := r.Detail(other, job)
 	if unknownDetail == nil || boundDetail == nil || unknownDetail.Error() != boundDetail.Error() {
 		t.Errorf("Detail refusals: bound = %v, unknown = %v, want the same error", boundDetail, unknownDetail)
+	}
+}
+
+func TestClientScope_ACoUploaderReadsTheExtractionOfACitedDocument(t *testing.T) {
+	r, uploader, tenant, job, entA := cseUploadedThenCited(t)
+	ctx := t.Context()
+	co := cseMember(t, ctx, tenant, "reviewer", entA)
+	never := cseMember(t, ctx, tenant, "reviewer", entA)
+	coSubject, _ := auth.IdentityFromContext(co)
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO document_uploaders (tenant_id, document_id, user_id)
+		 SELECT tenant_id, document_id, $2 FROM extraction_jobs WHERE id = $1`, job, coSubject.Subject); err != nil {
+		t.Fatalf("seed the co-uploader: %v", err)
+	}
+
+	d, err := r.Detail(co, job)
+	if err != nil || len(d.Fields) != 1 || len(d.Pages) != 1 {
+		t.Errorf("Detail as the co-uploader = %d field(s), %d page(s), err %v, want 1, 1, nil", len(d.Fields), len(d.Pages), err)
+	}
+	if key, err := r.PageImageKey(co, job, 1); err != nil || key == "" {
+		t.Errorf("PageImageKey as the co-uploader = %q, %v, want a key", key, err)
+	}
+	// Negative half: a limited member who never uploaded is refused the same job.
+	if _, err := r.Detail(uploader, job); err != nil {
+		t.Fatalf("control: Detail as the first uploader: %v", err)
+	}
+	if _, err := r.Detail(never, job); !errors.Is(err, extraction.ErrNotFound) {
+		t.Errorf("Detail as a member who never uploaded: err = %v, want ErrNotFound", err)
 	}
 }

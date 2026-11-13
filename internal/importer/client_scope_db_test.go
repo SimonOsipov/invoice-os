@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1417,9 +1418,8 @@ func TestClientScope_ALimitedMemberCannotImportAnotherMembersUncitedUpload(t *te
 	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entB)
 	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
 	doc := storeDocumentBy(t, f.docSvc, f.tenant, u1.Subject, "u1.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"UH-1"}})).ID
-	var uploader string
-	if err := f.super.QueryRow(context.Background(), `SELECT uploaded_by::text FROM documents WHERE id = $1`, doc).Scan(&uploader); err != nil || uploader != u1.Subject {
-		t.Fatalf("control: uploaded_by = %q, %v, want %s", uploader, err, u1.Subject)
+	if got := csUploaders(t, f, doc); !slices.Equal(got, []string{u1.Subject}) {
+		t.Fatalf("control: uploaders = %v, want [%s]", got, u1.Subject)
 	}
 	csRequireBoundTo(t, f, doc, "")
 	csCanOpen(t, f, u2, doc)
@@ -1435,4 +1435,56 @@ func TestClientScope_ALimitedMemberCannotImportAnotherMembersUncitedUpload(t *te
 		}
 	}
 	csRequireBoundTo(t, f, doc, "")
+}
+
+// csUploaders reads the document's uploader ids from document_uploaders, sorted.
+func csUploaders(t *testing.T, f csFixture, doc string) []string {
+	t.Helper()
+	rows, err := f.super.Query(context.Background(), `SELECT user_id::text FROM document_uploaders WHERE document_id = $1 ORDER BY 1`, doc)
+	if err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan an uploader: %v", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	return out
+}
+
+func TestClientScope_ACoUploaderImportsTheirDedupedUpload(t *testing.T) {
+	f := newCSFixture(t, "CS co-uploader imports")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	body := csvBody(t, []string{"Inv No"}, [][]string{{"CO-1"}})
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, u1.Subject, "co.csv", "text/csv", body).ID
+	if again := storeDocumentBy(t, f.docSvc, f.tenant, u2.Subject, "co.csv", "text/csv", body).ID; again != doc {
+		t.Fatalf("control: the same bytes from a second member made document %s, want %s", again, doc)
+	}
+	csRequireBoundTo(t, f, doc, "")
+
+	rec := csImportFor(t, f, f.entA)(u2, doc)
+	if rec.Code/100 != 2 {
+		t.Errorf("import for A by the co-uploader: %d %s, want 2xx", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1 AND document_id = $2`, f.entA, doc); n != 1 {
+		t.Errorf("batches of A citing the document = %d, want 1", n)
+	}
+	csRequireBoundTo(t, f, doc, f.entA)
+	if got, want := csUploaders(t, f, doc), []string{u1.Subject, u2.Subject}; !slices.Equal(got, sortedCopy(want)) {
+		t.Errorf("uploaders = %v, want %v", got, sortedCopy(want))
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -440,34 +441,51 @@ func TestClientScope_UnreadableDocumentWithATakenNumberAnswersAsAnUnknownOne(t *
 	}
 }
 
-// scUpload stores a document through document.Store.Upsert under who's identity, so the column default and the seam are exercised.
+// scUpload stores a document through document.Store.Upsert under who's identity, so the seam and the uploader insert are exercised.
 func scUpload(t *testing.T, f csFixture, who context.Context, seed string) string {
 	t.Helper()
-	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	return scUploadBytes(t, f, who, strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", ""))
+}
+
+// scUploadBytes uploads the content hash h; the same h from a second member is a dedupe hit.
+func scUploadBytes(t *testing.T, f csFixture, who context.Context, h string) string {
+	t.Helper()
 	d, _, err := document.NewStore(f.app).Upsert(who, document.Document{
 		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11,
 	})
 	if err != nil {
-		t.Fatalf("Upsert(%s): %v", seed, err)
+		t.Fatalf("Upsert(%s): %v", h, err)
 	}
 	return d.ID
 }
 
-// scBinding reads documents.entity_id and uploaded_by as the superuser; "" is SQL NULL.
-func scBinding(t *testing.T, f csFixture, doc string) (entity, uploader string) {
+// scBinding reads documents.entity_id ("" is NULL) and the sorted uploader ids from document_uploaders as the superuser.
+func scBinding(t *testing.T, f csFixture, doc string) (entity string, uploaders []string) {
 	t.Helper()
-	var e, u *string
-	if err := f.super.QueryRow(context.Background(),
-		`SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, doc).Scan(&e, &u); err != nil {
+	ctx := context.Background()
+	var e *string
+	if err := f.super.QueryRow(ctx, `SELECT entity_id::text FROM documents WHERE id = $1`, doc).Scan(&e); err != nil {
 		t.Fatalf("read binding of %s: %v", doc, err)
 	}
 	if e != nil {
 		entity = *e
 	}
-	if u != nil {
-		uploader = *u
+	rows, err := f.super.Query(ctx, `SELECT user_id::text FROM document_uploaders WHERE document_id = $1 ORDER BY 1`, doc)
+	if err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
 	}
-	return entity, uploader
+	defer rows.Close()
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan an uploader: %v", err)
+		}
+		uploaders = append(uploaders, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	return entity, uploaders
 }
 
 func scSubject(t *testing.T, ctx context.Context) string {
@@ -486,8 +504,8 @@ func TestClientScope_ALimitedMemberCannotCiteAnotherMembersUncitedUpload(t *test
 	d := scUpload(t, f, u1, "b-upload")
 	unknown := uuid.NewString()
 
-	if _, got := scBinding(t, f, d); got != scSubject(t, u1) {
-		t.Errorf("uploaded_by = %q after the upload, want %s", got, scSubject(t, u1))
+	if _, got := scBinding(t, f, d); !slices.Equal(got, []string{scSubject(t, u1)}) {
+		t.Errorf("uploaders = %v after the upload, want [%s]", got, scSubject(t, u1))
 	}
 	before := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant)
 	if before == 0 {
@@ -523,22 +541,82 @@ func TestClientScope_UploaderLegacyAndFullAccessCitationsOfAnUncitedDocumentBind
 	for _, c := range []struct {
 		name, number, doc string
 		who               context.Context
-		uploader          string
+		uploaders         []string
 	}{
-		{"the uploader citing their own upload", "SC-OK-1", doc1, u, scSubject(t, u)},
-		{"a limited member citing a legacy document", "SC-OK-2", legacy, u2, ""},
-		{"an All clients member citing another member's upload", "SC-OK-3", doc3, allClients, scSubject(t, u1)},
+		{"the uploader citing their own upload", "SC-OK-1", doc1, u, []string{scSubject(t, u)}},
+		{"a limited member citing a legacy document", "SC-OK-2", legacy, u2, nil},
+		{"an All clients member citing another member's upload", "SC-OK-3", doc3, allClients, []string{scSubject(t, u1)}},
 	} {
 		if code, body := scPost(f, c.who, f.entA, c.number, &c.doc); code != http.StatusCreated {
 			t.Errorf("%s: %d %s, want 201", c.name, code, body)
 		}
-		entity, uploader := scBinding(t, f, c.doc)
+		entity, uploaders := scBinding(t, f, c.doc)
 		if entity != f.entA {
 			t.Errorf("%s: documents.entity_id = %q, want %s", c.name, entity, f.entA)
 		}
-		if uploader != c.uploader {
-			t.Errorf("%s: documents.uploaded_by = %q, want %q", c.name, uploader, c.uploader)
+		if !slices.Equal(uploaders, c.uploaders) {
+			t.Errorf("%s: uploaders = %v, want %v", c.name, uploaders, c.uploaders)
 		}
+	}
+}
+
+func TestClientScope_ACoUploaderCitesTheirDedupedUpload(t *testing.T) {
+	f := newCSFixture(t, "SC co-uploader cites")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+
+	d := scUploadBytes(t, f, u1, h)
+	if again := scUploadBytes(t, f, u2, h); again != d {
+		t.Fatalf("control: the same bytes from a second member made document %s, want %s", again, d)
+	}
+
+	if code, body := scPost(f, u2, f.entA, "SC-CO-1", &d); code != http.StatusCreated {
+		t.Errorf("the co-uploader citing the deduped upload for A: %d %s, want 201", code, body)
+	}
+	entity, uploaders := scBinding(t, f, d)
+	if entity != f.entA {
+		t.Errorf("documents.entity_id = %q after the co-uploader's citation, want %s", entity, f.entA)
+	}
+	want := []string{scSubject(t, u1), scSubject(t, u2)}
+	slices.Sort(want)
+	if !slices.Equal(uploaders, want) {
+		t.Errorf("uploaders = %v, want %v", uploaders, want)
+	}
+}
+
+func TestClientScope_AMemberWhoNeverUploadedCannotCiteACoUploadedDocument(t *testing.T) {
+	f := newCSFixture(t, "SC co-uploaded refused")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u3 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	d := scUploadBytes(t, f, u1, h)
+	scUploadBytes(t, f, u2, h)
+	unknown := uuid.NewString()
+
+	want := []string{scSubject(t, u1), scSubject(t, u2)}
+	slices.Sort(want)
+	if _, got := scBinding(t, f, d); !slices.Equal(got, want) {
+		t.Fatalf("control: uploaders = %v, want %v (the refusal below must come from the uploader clause)", got, want)
+	}
+	before := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant)
+	if before == 0 {
+		t.Fatal("control: the tenant holds no invoice, the counter below would report 0 for anything")
+	}
+
+	uCode, uBody := scPost(f, u3, f.entA, "SC-CO-U", &unknown)
+	if uCode != http.StatusBadRequest || uBody != scUnknownBody {
+		t.Fatalf("citing an unknown id: %d %s, want 400 %s", uCode, uBody, scUnknownBody)
+	}
+	if code, body := scPost(f, u3, f.entA, "SC-CO-D", &d); code != uCode || body != uBody {
+		t.Errorf("a member who never uploaded citing the co-uploaded document: %d %s, want %d %s (the unknown id's answer)", code, body, uCode, uBody)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant); n != before {
+		t.Errorf("invoices = %d, want %d", n, before)
+	}
+	if entity, _ := scBinding(t, f, d); entity != "" {
+		t.Errorf("documents.entity_id = %s after the refused citation, want NULL", entity)
 	}
 }
 

@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -419,14 +421,52 @@ func csCiteAs(t *testing.T, f csFixture, who context.Context, entity, doc, numbe
 	}
 }
 
-// csBinding reads documents.entity_id and uploaded_by as the superuser; nil is SQL NULL.
-func csBinding(t *testing.T, super *pgxpool.Pool, doc string) (entity, uploader *string) {
+// csBinding reads documents.entity_id (nil is NULL) and the sorted uploader ids from document_uploaders as the superuser.
+func csBinding(t *testing.T, super *pgxpool.Pool, doc string) (entity *string, uploaders []string) {
 	t.Helper()
-	if err := super.QueryRow(context.Background(),
-		`SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, doc).Scan(&entity, &uploader); err != nil {
+	ctx := context.Background()
+	if err := super.QueryRow(ctx, `SELECT entity_id::text FROM documents WHERE id = $1`, doc).Scan(&entity); err != nil {
 		t.Fatalf("read binding of %s: %v", doc, err)
 	}
-	return entity, uploader
+	rows, err := super.Query(ctx, `SELECT user_id::text FROM document_uploaders WHERE document_id = $1 ORDER BY 1`, doc)
+	if err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan an uploader: %v", err)
+		}
+		uploaders = append(uploaders, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	return entity, uploaders
+}
+
+// csEntityOf reads documents.entity_id as the superuser; nil is NULL.
+func csEntityOf(t *testing.T, super *pgxpool.Pool, doc string) *string {
+	t.Helper()
+	var entity *string
+	if err := super.QueryRow(context.Background(), `SELECT entity_id::text FROM documents WHERE id = $1`, doc).Scan(&entity); err != nil {
+		t.Fatalf("read documents.entity_id of %s: %v", doc, err)
+	}
+	return entity
+}
+
+// csWantUploaders asserts the document's uploader set is exactly the subjects of who.
+func csWantUploaders(t *testing.T, f csFixture, what, doc string, who ...context.Context) {
+	t.Helper()
+	var want []string
+	for _, w := range who {
+		want = append(want, subjectOf(t, w))
+	}
+	slices.Sort(want)
+	if _, got := csBinding(t, f.super, doc); !slices.Equal(got, want) {
+		t.Errorf("%s: uploaders = %v, want %v", what, got, want)
+	}
 }
 
 func subjectOf(t *testing.T, ctx context.Context) string {
@@ -443,30 +483,177 @@ func csCitedUpload(t *testing.T, f csFixture, uploader context.Context) string {
 	t.Helper()
 	d := csUpload(t, f, uploader, "uploaded-then-cited")
 	csCiteAs(t, f, f.admin, f.entB, d.ID, "CS-UP-B")
-	if entity, _ := csBinding(t, f.super, d.ID); entity == nil || *entity != f.entB {
+	if entity := csEntityOf(t, f.super, d.ID); entity == nil || *entity != f.entB {
 		t.Fatalf("control: documents.entity_id = %v after the admin cited it for B, want %s", entity, f.entB)
 	}
 	return d.ID
 }
 
-func TestClientScope_UploadRecordsItsUploaderAndADedupeKeepsTheFirst(t *testing.T) {
+func TestClientScope_EveryMemberWhoUploadsTheBytesIsAnUploader(t *testing.T) {
 	f := newCSFixture(t)
-	u1, u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA), csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+	u1, u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA), csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+
+	if n := mustCount(t, f.super, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'uploaded_by'`); n != 0 {
+		t.Errorf("documents.uploaded_by columns = %d, want 0 (document_uploaders replaces it)", n)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'entity_id'`); n != 1 {
+		t.Fatalf("control: documents.entity_id columns = %d, want 1", n)
+	}
 
 	first := csUpload(t, f, u1, "same-bytes")
-	if _, got := csBinding(t, f.super, first.ID); got == nil || *got != subjectOf(t, u1) {
-		t.Errorf("uploaded_by after the first upload = %v, want %s", got, subjectOf(t, u1))
-	}
+	csWantUploaders(t, f, "after the first upload", first.ID, u1)
 	second := csUpload(t, f, u2, "same-bytes")
 	if second.ID != first.ID {
 		t.Fatalf("control: the second upload of the same bytes made a new row %s, want %s", second.ID, first.ID)
 	}
-	if _, got := csBinding(t, f.super, first.ID); got == nil || *got != subjectOf(t, u1) {
-		t.Errorf("uploaded_by after the dedupe by another member = %v, want the first uploader %s", got, subjectOf(t, u1))
+	csWantUploaders(t, f, "after the dedupe by a second member", first.ID, u1, u2)
+	csUpload(t, f, u1, "same-bytes")
+	csWantUploaders(t, f, "after the first member uploads again", first.ID, u1, u2)
+	if n := mustCount(t, f.super, `SELECT count(*) FROM document_uploaders WHERE document_id = $1`, first.ID); n != 2 {
+		t.Errorf("document_uploaders rows = %d, want 2", n)
 	}
-	if _, got := csBinding(t, f.super, f.docZ); got != nil {
-		t.Errorf("uploaded_by of a superuser-inserted document = %q, want NULL", *got)
+	if _, got := csBinding(t, f.super, f.docZ); len(got) != 0 {
+		t.Errorf("uploaders of a superuser-inserted document = %v, want none", got)
 	}
+}
+
+// csCoUploaded: two members limited to A upload the same bytes; the admin then cites the document for B.
+func csCoUploaded(t *testing.T, f csFixture) (u1, u2 context.Context, doc string) {
+	t.Helper()
+	u1, u2 = csMember(t, f.super, f.tenant, "reviewer", false, f.entA), csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	d := csUpload(t, f, u1, "co-uploaded")
+	if again := csUpload(t, f, u2, "co-uploaded"); again.ID != d.ID {
+		t.Fatalf("control: the second upload of the same bytes made a new row %s, want %s", again.ID, d.ID)
+	}
+	csCiteAs(t, f, f.admin, f.entB, d.ID, "CS-CO-B")
+	if entity := csEntityOf(t, f.super, d.ID); entity == nil || *entity != f.entB {
+		t.Fatalf("control: documents.entity_id = %v after the admin cited it for B, want %s", entity, f.entB)
+	}
+	return u1, u2, d.ID
+}
+
+func TestClientScope_ACoUploaderReadsTheirDocumentAfterAnotherClientCitesIt(t *testing.T) {
+	f := newCSFixture(t)
+	_, u2, doc := csCoUploaded(t, f)
+
+	if got, err := f.store.GetLinked(u2, doc); err != nil || got.ID != doc {
+		t.Errorf("GetLinked as the co-uploader = %q, %v, want found", got.ID, err)
+	}
+	objects := &fakeObjects{}
+	svc := document.NewService(f.store, objects)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(svc.OpenLinked, nil))
+	mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(svc.OpenLinked, nil))
+	for route, suffix := range map[string]string{"download": "", "sheet": "/sheet"} {
+		objects.getObject = document.Object{Body: io.NopCloser(strings.NewReader("Inv No\nU-1\n")), Size: 12}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/documents/"+doc+suffix, nil).WithContext(u2))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s as the co-uploader: %d %s, want 200", route, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestClientScope_AMemberWhoNeverUploadedIsRefusedACoUploadedBoundDocument(t *testing.T) {
+	f := newCSFixture(t)
+	_, u2, doc := csCoUploaded(t, f)
+	u3 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+
+	// Positive half: a co-uploader reads the very document u3 is refused.
+	if got, err := f.store.GetLinked(u2, doc); err != nil || got.ID != doc {
+		t.Errorf("control: GetLinked as the co-uploader = %q, %v, want found", got.ID, err)
+	}
+	if _, err := f.store.GetLinked(u3, doc); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked as a member limited to A who never uploaded: err = %v, want ErrNotFound", err)
+	}
+	if got := csDownloadAs(f, u3, doc); got.Code != http.StatusNotFound {
+		t.Errorf("download as a member who never uploaded: %d %q, want 404", got.Code, got.Body.String())
+	} else if unknown := csDownloadAs(f, u3, uuid.NewString()); got.Body.String() != unknown.Body.String() || !strings.Contains(got.Body.String(), "not found") {
+		t.Errorf("download of the bound document: %q, want the unknown id's body %q", got.Body.String(), unknown.Body.String())
+	}
+}
+
+// csDownloadAs serves GET /v1/documents/{id} as who with a fake object store.
+func csDownloadAs(f csFixture, who context.Context, id string) *httptest.ResponseRecorder {
+	objects := &fakeObjects{getObject: document.Object{Body: io.NopCloser(strings.NewReader("hello world")), Size: 11}}
+	svc := document.NewService(f.store, objects)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(svc.OpenLinked, nil))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/documents/"+id, nil).WithContext(who))
+	return rec
+}
+
+func TestClientScope_AnUploadOfBytesBoundOutsideTheCallerGrantsNothing(t *testing.T) {
+	f := newCSFixture(t)
+	u1 := csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	svc := document.NewService(f.store, &fakeObjects{})
+	store := func(who context.Context) (document.Document, bool) {
+		d, reused, err := svc.Store(who, "up.csv", "text/csv", 11, strings.NewReader("bound-to-b!"))
+		if err != nil {
+			t.Fatalf("Service.Store: %v", err)
+		}
+		return d, reused
+	}
+
+	d, reused := store(u1)
+	if reused {
+		t.Fatal("control: the first upload reports reused")
+	}
+	csCiteAs(t, f, f.admin, f.entB, d.ID, "CS-OUT-B")
+
+	again, reused := store(u2)
+	if again.ID != d.ID || !reused {
+		t.Errorf("a dedupe upload of bytes bound to B = %s reused=%v, want the same document %s with reused=true (the answer at PR head)", again.ID, reused, d.ID)
+	}
+	if _, err := f.store.GetLinked(u2, d.ID); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked as the uploader of bytes bound outside their set: err = %v, want ErrNotFound", err)
+	}
+	if got, unknown := csDownloadAs(f, u2, d.ID), csDownloadAs(f, u2, uuid.NewString()); got.Code != http.StatusNotFound || got.Body.String() != unknown.Body.String() {
+		t.Errorf("download: %d %q, want the unknown id's 404 %d %q", got.Code, got.Body.String(), unknown.Code, unknown.Body.String())
+	}
+	csWantUploaders(t, f, "after the out-of-scope dedupe", d.ID, u1)
+	if got, err := f.store.GetLinked(u1, d.ID); err != nil || got.ID != d.ID {
+		t.Errorf("control: GetLinked as the first uploader (limited to B) = %q, %v, want found", got.ID, err)
+	}
+}
+
+func TestClientScope_ADedupeUploadDoesNotWaitForAnOpenCitation(t *testing.T) {
+	f := newCSFixture(t)
+	u1 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	d := csUpload(t, f, u1, "open-citation")
+	csCiteAs(t, f, f.admin, f.entA, d.ID, "CS-WAIT-A1")
+
+	ctx := context.Background()
+	tx, err := f.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the holding transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// A repeat citation of a bound document takes the bind trigger's row lock and writes no new row version.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-WAIT-A2', $3)`,
+		f.tenant, f.entA, d.ID); err != nil {
+		t.Fatalf("hold an open repeat citation: %v", err)
+	}
+
+	timed, cancel := context.WithTimeout(u2, 5*time.Second)
+	defer cancel()
+	h := hashHex("open-citation")
+	start := time.Now()
+	got, _, err := f.store.Upsert(timed, document.Document{StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11})
+	if err != nil {
+		t.Fatalf("a dedupe upload while a repeat citation is open (waited %s): %v", time.Since(start), err)
+	}
+	if got.ID != d.ID {
+		t.Fatalf("control: the dedupe upload made document %s, want %s", got.ID, d.ID)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("end the holding transaction: %v", err)
+	}
+	csWantUploaders(t, f, "after the dedupe upload", d.ID, u1, u2)
 }
 
 func TestClientScope_TheUploaderReadsTheirDocumentAfterAnotherClientCitesIt(t *testing.T) {

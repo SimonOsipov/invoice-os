@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -44,16 +46,18 @@ func bdExec(t *testing.T, sql string, args ...any) {
 func bdRequireMigration(t *testing.T) {
 	t.Helper()
 	var cols, fns int
+	var uploaders *string
 	if err := h.super.QueryRow(context.Background(),
 		`SELECT (SELECT count(*) FROM information_schema.columns
-		          WHERE table_schema = 'public' AND table_name = 'documents' AND column_name IN ('entity_id', 'uploaded_by')),
+		          WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'entity_id'),
 		        (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-		          WHERE n.nspname = 'public' AND p.proname IN ('document_readable', 'bind_document_client', 'documents_binding_guard'))`,
-	).Scan(&cols, &fns); err != nil {
+		          WHERE n.nspname = 'public' AND p.proname IN ('document_readable', 'bind_document_client', 'documents_binding_guard')),
+		        to_regclass('public.document_uploaders')::text`,
+	).Scan(&cols, &fns, &uploaders); err != nil {
 		t.Fatalf("read the binding objects: %v", err)
 	}
-	if cols != 2 || fns != 3 {
-		t.Fatalf("documents has %d of entity_id/uploaded_by and public has %d of document_readable/bind_document_client/documents_binding_guard, want 2 and 3: the document_client_binding migration is not applied", cols, fns)
+	if cols != 1 || fns != 3 || uploaders == nil {
+		t.Fatalf("documents.entity_id %d (want 1), binding functions %d (want 3), document_uploaders %v (want present): the document_client_binding migration is not applied", cols, fns, uploaders)
 	}
 }
 
@@ -66,21 +70,29 @@ func bdSeed(t *testing.T) *bdFix {
 		bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, $3)`, e, f.tenant, fmt.Sprintf("bd-client-%d", i))
 	}
 	t.Cleanup(func() {
-		for _, tb := range []string{"extraction_page_images", "extraction_jobs", "invoices", "import_batches", "documents", "business_entities"} {
+		for _, tb := range []string{"extraction_page_images", "extraction_jobs", "invoices", "import_batches", "document_uploaders", "documents", "business_entities"} {
 			_, _ = h.super.Exec(context.Background(), `DELETE FROM `+tb+` WHERE tenant_id = $1`, f.tenant)
 		}
 	})
 	return f
 }
 
-// bdDoc inserts a document; an empty entity or uploader is NULL.
+// bdDoc inserts a document; an empty entity is NULL and an empty uploader adds no document_uploaders row.
 func bdDoc(t *testing.T, f *bdFix, entity, uploader string) string {
 	t.Helper()
 	id := uuid.NewString()
-	bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes, entity_id, uploaded_by)
-		VALUES ($1, $2, $3, $4, 1024, nullif($5, '')::uuid, nullif($6, '')::uuid)`,
-		id, f.tenant, "bd-"+uuid.NewString(), docHash(), entity, uploader)
+	bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes, entity_id)
+		VALUES ($1, $2, $3, $4, 1024, nullif($5, '')::uuid)`,
+		id, f.tenant, "bd-"+uuid.NewString(), docHash(), entity)
+	if uploader != "" {
+		bdAddUploader(t, f, id, uploader)
+	}
 	return id
+}
+
+func bdAddUploader(t *testing.T, f *bdFix, doc, user string) {
+	t.Helper()
+	bdExec(t, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`, f.tenant, doc, user)
 }
 
 // bdApp opens the tenant transaction as invoice_app and writes the caller's settings the way the seam will.
@@ -315,9 +327,9 @@ func TestRLS_CitationWithoutADocumentBindsNothing(t *testing.T) {
 	}
 }
 
-// bdRace holds tx1's citation for e1 open, runs tx2's citation for e2 until it waits on the document row, then
-// ends tx1. blocked is false when tx2 never waited.
-func bdRace(t *testing.T, f *bdFix, doc, e1, e2 string, commit1 bool) (err1, err2 error, blocked bool) {
+// bdRace holds tx1's citation for e1 open, runs tx2's citation for e2 as who2 until it waits on the document row,
+// then ends tx1. blocked is false when tx2 never waited.
+func bdRace(t *testing.T, f *bdFix, doc, e1, e2 string, commit1 bool, who2 bdWho) (err1, err2 error, blocked bool) {
 	t.Helper()
 	ctx := context.Background()
 	inserted, release := make(chan struct{}), make(chan bool, 1)
@@ -343,7 +355,7 @@ func bdRace(t *testing.T, f *bdFix, doc, e1, e2 string, commit1 bool) (err1, err
 		t.Fatalf("tx1 never inserted its citation")
 	}
 	go func() {
-		done2 <- bdApp(f.tenant, bdWho{}, func(tx pgx.Tx) error {
+		done2 <- bdApp(f.tenant, who2, func(tx pgx.Tx) error {
 			var pid int
 			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
 				return err
@@ -396,7 +408,7 @@ func TestRLS_ConcurrentFirstCitationsBindOneClient(t *testing.T) {
 	f := bdSeed(t)
 	doc := bdDoc(t, f, "", "")
 
-	err1, err2, blocked := bdRace(t, f, doc, f.a, f.b, true)
+	err1, err2, blocked := bdRace(t, f, doc, f.a, f.b, true, bdWho{})
 
 	if !blocked {
 		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
@@ -416,7 +428,7 @@ func TestRLS_ConcurrentFirstCitationBindsWhenTheWinnerRollsBack(t *testing.T) {
 	f := bdSeed(t)
 	doc := bdDoc(t, f, "", "")
 
-	err1, err2, blocked := bdRace(t, f, doc, f.a, f.b, false)
+	err1, err2, blocked := bdRace(t, f, doc, f.a, f.b, false, bdWho{})
 
 	if !blocked {
 		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
@@ -438,7 +450,7 @@ func TestRLS_ConcurrentFirstCitationsForOneClientBothSucceed(t *testing.T) {
 	f := bdSeed(t)
 	doc := bdDoc(t, f, "", "")
 
-	err1, err2, blocked := bdRace(t, f, doc, f.a, f.a, true)
+	err1, err2, blocked := bdRace(t, f, doc, f.a, f.a, true, bdWho{})
 
 	if !blocked {
 		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
@@ -452,10 +464,76 @@ func TestRLS_ConcurrentFirstCitationsForOneClientBothSucceed(t *testing.T) {
 	}
 }
 
+// bdRaceNonUploader: the document has one uploader (not the caller); tx1 cites it with full access and holds,
+// tx2 is a member limited to A who never uploaded it.
+func bdRaceNonUploader(t *testing.T, e2 func(f *bdFix) string, commit1 bool) (f *bdFix, doc string, err1, err2 error, blocked bool) {
+	t.Helper()
+	f = bdSeed(t)
+	doc = bdDoc(t, f, "", uuid.NewString())
+	err1, err2, blocked = bdRace(t, f, doc, f.a, e2(f), commit1, bdWho{scope: bdSet(f.a), user: bdStr(uuid.NewString())})
+	return f, doc, err1, err2, blocked
+}
+
+func TestRLS_ConcurrentCitationByANonUploaderWaitsForTheBinding(t *testing.T) {
+	requireHarness(t)
+
+	f, doc, err1, err2, blocked := bdRaceNonUploader(t, func(f *bdFix) string { return f.a }, true)
+
+	if !blocked {
+		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
+	}
+	if err1 != nil {
+		t.Errorf("the binder's citation for A: %v", err1)
+	}
+	if err2 != nil {
+		t.Errorf("the non-uploader's citation for A after the binder committed: %v", err2)
+	}
+	bdWantEntity(t, "after the race", doc, &f.a)
+	if inv, batch := bdCitations(t, doc); inv != 2 || batch != 0 {
+		t.Errorf("citations = %d invoices, %d batches, want 2 and 0", inv, batch)
+	}
+}
+
+func TestRLS_ConcurrentCitationByANonUploaderForAnotherClientIsRefusedAfterTheWait(t *testing.T) {
+	requireHarness(t)
+
+	f, doc, err1, err2, blocked := bdRaceNonUploader(t, func(f *bdFix) string { return f.b }, true)
+
+	if !blocked {
+		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
+	}
+	if err1 != nil {
+		t.Errorf("the binder's citation for A: %v", err1)
+	}
+	bdWantRefused(t, "the non-uploader's citation for B", err2)
+	bdWantEntity(t, "after the race", doc, &f.a)
+	if inv, batch := bdCitations(t, doc); inv != 1 || batch != 0 {
+		t.Errorf("citations = %d invoices, %d batches, want 1 and 0", inv, batch)
+	}
+}
+
+func TestRLS_ConcurrentCitationByANonUploaderIsRefusedWhenTheWinnerRollsBack(t *testing.T) {
+	requireHarness(t)
+
+	_, doc, err1, err2, blocked := bdRaceNonUploader(t, func(f *bdFix) string { return f.a }, false)
+
+	if !blocked {
+		t.Error("tx2 did not wait on the document row while tx1's first citation was open")
+	}
+	if !errors.Is(err1, errBdRollback) {
+		t.Errorf("tx1 ended with %v, want its requested rollback", err1)
+	}
+	bdWantRefused(t, "the non-uploader's citation after the binder rolled back", err2)
+	bdWantEntity(t, "after the rollback", doc, nil)
+	if inv, batch := bdCitations(t, doc); inv != 0 || batch != 0 {
+		t.Errorf("citations = %d invoices, %d batches, want 0 and 0", inv, batch)
+	}
+}
+
 func TestRLS_AppCannotRebindADocument(t *testing.T) {
 	requireHarness(t)
 	f := bdSeed(t)
-	doc := bdDoc(t, f, "", "")
+	doc := bdDoc(t, f, "", uuid.NewString())
 	bdBind(t, f, f.a, doc)
 	update := func(sql string, args ...any) error {
 		return bdApp(f.tenant, bdWho{}, func(tx pgx.Tx) error {
@@ -468,10 +546,11 @@ func TestRLS_AppCannotRebindADocument(t *testing.T) {
 		sql, code string
 		args      []any
 	}{
-		"entity_id to B":    {`UPDATE documents SET entity_id = $2 WHERE id = $1`, "23001", []any{doc, f.b}},
-		"entity_id to NULL": {`UPDATE documents SET entity_id = NULL WHERE id = $1`, "23001", []any{doc}},
-		"filename":          {`UPDATE documents SET filename = 'x' WHERE id = $1`, "42501", []any{doc}},
-		"uploaded_by":       {`UPDATE documents SET uploaded_by = $2 WHERE id = $1`, "42501", []any{doc, uuid.NewString()}},
+		"entity_id to B":     {`UPDATE documents SET entity_id = $2 WHERE id = $1`, "23001", []any{doc, f.b}},
+		"entity_id to NULL":  {`UPDATE documents SET entity_id = NULL WHERE id = $1`, "23001", []any{doc}},
+		"filename":           {`UPDATE documents SET filename = 'x' WHERE id = $1`, "42501", []any{doc}},
+		"an uploader row":    {`UPDATE document_uploaders SET user_id = $2 WHERE document_id = $1`, "42501", []any{doc, uuid.NewString()}},
+		"an uploader delete": {`DELETE FROM document_uploaders WHERE document_id = $1`, "42501", []any{doc}},
 	} {
 		err := update(c.sql, c.args...)
 		var pgErr *pgconn.PgError
@@ -480,6 +559,9 @@ func TestRLS_AppCannotRebindADocument(t *testing.T) {
 		}
 	}
 	bdWantEntity(t, "after the refused updates", doc, &f.a)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM document_uploaders WHERE document_id = $1`, doc); n != 1 {
+		t.Errorf("document_uploaders rows after the refused UPDATE and DELETE = %d, want 1", n)
+	}
 }
 
 // bdMatrix is one document of each read shape, with one job and one page image each.
@@ -619,6 +701,21 @@ func TestRLS_DocumentRuleAgreesAcrossGoAndPolicies(t *testing.T) {
 	if readable == 0 || hidden == 0 {
 		t.Errorf("the matrix reads %d cells and hides %d, want both non-zero", readable, hidden)
 	}
+
+	// Two uploaders of a document bound to B: both read it under scope {A}, a third caller does not.
+	u2, u3 := uuid.NewString(), uuid.NewString()
+	shared := bdDoc(t, m.f, m.f.b, m.user)
+	bdAddUploader(t, m.f, shared, u2)
+	cpExtractionRows(t, m.f.tenant, shared)
+	for who, c := range map[string]struct {
+		user string
+		want bool
+	}{"U": {m.user, true}, "U2": {u2, true}, "U3": {u3, false}} {
+		got := bdRead(t, m.f, bdWho{scope: bdSet(m.f.a), user: bdStr(c.user)}, shared)
+		if got != (bdCell{c.want, c.want, c.want}) {
+			t.Errorf("document bound to B with uploaders U and U2, caller %s under {A}: Go rule %v, job %v, page image %v, want %v for all", who, got.goRule, got.job, got.page, c.want)
+		}
+	}
 }
 
 func TestRLS_LimitedScopeReadsByUploaderClientOrCitation(t *testing.T) {
@@ -635,6 +732,71 @@ func TestRLS_LimitedScopeReadsByUploaderClientOrCitation(t *testing.T) {
 						name, sc.label, ulabel, c.goRule, c.job, c.page, want)
 				}
 			}
+		}
+	}
+}
+
+func TestRLS_DocumentUploadersIsTenantIsolated(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	f, g := bdSeed(t), bdSeed(t)
+	userT, userU := uuid.NewString(), uuid.NewString()
+	docT, docU := bdDoc(t, f, "", userT), bdDoc(t, g, "", userU)
+
+	var rls, forced bool
+	if err := h.super.QueryRow(ctx, `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'public.document_uploaders'::regclass`).Scan(&rls, &forced); err != nil {
+		t.Fatalf("read the RLS flags: %v", err)
+	}
+	if !rls || !forced {
+		t.Errorf("document_uploaders relrowsecurity %v, relforcerowsecurity %v, want both true", rls, forced)
+	}
+
+	for role, pool := range map[string]*pgxpool.Pool{"invoice_app": h.app, "invoice_migrator": h.mig} {
+		err := db.WithinTenantTx(ctx, pool, f.tenant, func(tx pgx.Tx) error {
+			if n := mustCount(t, tx, `SELECT count(*) FROM document_uploaders WHERE document_id = $1`, docT); n != 1 {
+				t.Errorf("%s under tenant T sees %d of T's rows, want 1", role, n)
+			}
+			if n := mustCount(t, tx, `SELECT count(*) FROM document_uploaders`); n != 1 {
+				t.Errorf("%s under tenant T sees %d rows in all, want only T's 1", role, n)
+			}
+			if n := mustCount(t, tx, `SELECT count(*) FROM document_uploaders WHERE tenant_id = $1`, g.tenant); n != 0 {
+				t.Errorf("%s under tenant T sees %d of U's rows, want 0", role, n)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s under tenant T: %v", role, err)
+		}
+	}
+
+	err := db.WithinTenantTx(ctx, h.app, f.tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`, g.tenant, docU, uuid.NewString())
+		return err
+	})
+	assertRLSViolation(t, err)
+	if err := db.WithinTenantTx(ctx, h.app, f.tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`, f.tenant, docT, uuid.NewString())
+		return err
+	}); err != nil {
+		t.Errorf("control: invoice_app under T inserting a T row: %v", err)
+	}
+
+	if n := mustCount(t, h.app, `SELECT count(*) FROM document_uploaders`); n != 0 {
+		t.Errorf("invoice_app with no tenant set sees %d rows, want 0", n)
+	}
+	for name, c := range map[string]struct {
+		sql  string
+		args []any
+	}{
+		"UPDATE": {`UPDATE document_uploaders SET user_id = $2 WHERE document_id = $1`, []any{docT, uuid.NewString()}},
+		"DELETE": {`DELETE FROM document_uploaders WHERE document_id = $1`, []any{docT}},
+	} {
+		err := db.WithinTenantTx(ctx, h.app, f.tenant, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, c.sql, c.args...)
+			return err
+		})
+		if !isRLSViolation(err) {
+			t.Errorf("invoice_app %s on document_uploaders: err = %v, want SQLSTATE 42501", name, err)
 		}
 	}
 }
@@ -694,23 +856,17 @@ func TestRLS_DocumentReadableIsExecutableByTheAppRoleOnly(t *testing.T) {
 	}
 }
 
-func bdDocumentColumns(t *testing.T) (entityID, uploadedBy bool) {
+// bdDocumentShape reports documents.entity_id, documents.uploaded_by and the table document_uploaders.
+func bdDocumentShape(t *testing.T) (entityID, uploadedBy, uploaders bool) {
 	t.Helper()
-	rows, err := h.super.Query(context.Background(),
-		`SELECT column_name FROM information_schema.columns
-		  WHERE table_schema = 'public' AND table_name = 'documents' AND column_name IN ('entity_id', 'uploaded_by')`)
-	if err != nil {
-		t.Fatalf("read documents columns: %v", err)
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'entity_id'),
+		        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'uploaded_by'),
+		        to_regclass('public.document_uploaders') IS NOT NULL`,
+	).Scan(&entityID, &uploadedBy, &uploaders); err != nil {
+		t.Fatalf("read the document shape: %v", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		entityID, uploadedBy = entityID || name == "entity_id", uploadedBy || name == "uploaded_by"
-	}
-	return entityID, uploadedBy
+	return entityID, uploadedBy, uploaders
 }
 
 func bdBindingFunctions(t *testing.T) int {
@@ -741,8 +897,8 @@ func TestRLS_DocumentBindingMigrationDownRestoresChildScope(t *testing.T) {
 	v := migrationVersion(t, bindingMigrationGlob)
 	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
 
-	if e, u := bdDocumentColumns(t); e || u {
-		t.Errorf("after the Down: documents.entity_id present %v, documents.uploaded_by present %v, want neither", e, u)
+	if e, c, u := bdDocumentShape(t); e || c || u {
+		t.Errorf("after the Down: documents.entity_id %v, documents.uploaded_by %v, document_uploaders %v, want all absent", e, c, u)
 	}
 	if n := bdBindingFunctions(t); n != 0 {
 		t.Errorf("after the Down: %d of document_readable, bind_document_client, documents_binding_guard remain, want 0", n)
@@ -759,8 +915,8 @@ func TestRLS_DocumentBindingMigrationDownRestoresChildScope(t *testing.T) {
 
 	reapply()
 
-	if e, u := bdDocumentColumns(t); !e || !u {
-		t.Errorf("after the Up: documents.entity_id present %v, documents.uploaded_by present %v, want both", e, u)
+	if e, c, u := bdDocumentShape(t); !e || c || !u {
+		t.Errorf("after the Up: documents.entity_id %v, documents.uploaded_by %v, document_uploaders %v, want true, false, true", e, c, u)
 	}
 	if n := bdBindingFunctions(t); n != 3 {
 		t.Errorf("after the Up: %d of the three functions exist, want 3", n)
@@ -803,14 +959,14 @@ func TestRLS_DocumentBindingMigrationBackfillsAndRoundTrips(t *testing.T) {
 		uuid.NewString(), tenant, a, aOnly)
 
 	u1, u2 := uuid.NewString(), uuid.NewString()
-	audit := func(docID, actor string, at time.Time) {
-		bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, 'document.created', jsonb_build_object('id', $3::text), $4)`,
-			tenant, actor, docID, at)
+	audit := func(event, docID, actor string, at time.Time) {
+		bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, $3, jsonb_build_object('id', $4::text), $5)`,
+			tenant, actor, event, docID, at)
 	}
-	audit(both, "system", t0.Add(-time.Hour))
-	audit(both, u1, t0)
-	audit(both, u2, t1)
-	audit(aOnly, "system", t0)
+	audit("document.created", both, "system", t0.Add(-time.Hour))
+	audit("document.created", both, u1, t0)
+	audit("document.reused", both, u2, t1) // after B's batch at t0: not an uploader
+	audit("document.created", aOnly, "system", t0)
 
 	snapshot := func() string {
 		var s string
@@ -830,26 +986,90 @@ func TestRLS_DocumentBindingMigrationBackfillsAndRoundTrips(t *testing.T) {
 	reapply()
 
 	for name, c := range map[string]struct {
-		doc            string
-		entity, upload *string
+		doc       string
+		entity    *string
+		uploaders []string
 	}{
-		"cited by B's batch then A's invoice": {both, &b, &u1},
+		"cited by B's batch then A's invoice": {both, &b, []string{u1}},
 		"cited by A's invoice only":           {aOnly, &a, nil},
 		"uncited":                             {uncited, nil, nil},
 	} {
-		var entity, uploader *string
-		if err := h.super.QueryRow(ctx, `SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, c.doc).Scan(&entity, &uploader); err != nil {
+		var entity *string
+		if err := h.super.QueryRow(ctx, `SELECT entity_id::text FROM documents WHERE id = $1`, c.doc).Scan(&entity); err != nil {
 			t.Fatalf("read the backfilled %s: %v", name, err)
 		}
 		if bdShow(entity) != bdShow(c.entity) {
 			t.Errorf("%s: entity_id = %s, want %s", name, bdShow(entity), bdShow(c.entity))
 		}
-		if bdShow(uploader) != bdShow(c.upload) {
-			t.Errorf("%s: uploaded_by = %s, want %s", name, bdShow(uploader), bdShow(c.upload))
+		if got := bdUploaders(t, c.doc); !slices.Equal(got, c.uploaders) {
+			t.Errorf("%s: uploaders = %v, want %v", name, got, c.uploaders)
 		}
 	}
 	if after := snapshot(); after != before {
 		t.Errorf("the citation rows changed across the migration:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// bdUploaders returns the document's uploader ids from document_uploaders, sorted.
+func bdUploaders(t *testing.T, doc string) []string {
+	t.Helper()
+	rows, err := h.super.Query(context.Background(), `SELECT user_id::text FROM document_uploaders WHERE document_id = $1 ORDER BY 1`, doc)
+	if err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan an uploader: %v", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	return out
+}
+
+// The backfill form of the co-uploader gate: a reuser counts only before the document's first citation.
+func TestRLS_BackfillRecordsAReuserOnlyBeforeTheFirstCitation(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	v := migrationVersion(t, bindingMigrationGlob)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+
+	tenant, b := caThrowawayTenant(t), uuid.NewString()
+	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, 'br-b')`, b, tenant)
+	t.Cleanup(func() {
+		for _, tb := range []string{"import_batches", "documents", "business_entities"} {
+			_, _ = h.super.Exec(ctx, `DELETE FROM `+tb+` WHERE tenant_id = $1`, tenant)
+		}
+	})
+	doc := uuid.NewString()
+	bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4, 1024)`,
+		doc, tenant, "br-"+uuid.NewString(), docHash())
+	t1 := time.Now().Add(-5 * time.Hour)
+	t2, t3, t4 := t1.Add(time.Hour), t1.Add(2*time.Hour), t1.Add(3*time.Hour)
+	a1, b1, c1 := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	bdExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id, created_at) VALUES ($1, $2, $3, $4, $5)`,
+		uuid.NewString(), tenant, b, doc, t3)
+	for _, r := range []struct {
+		event, actor string
+		at           time.Time
+	}{
+		{"document.created", a1, t1}, {"document.reused", b1, t2}, {"document.reused", "worker", t2}, {"document.reused", c1, t4},
+	} {
+		bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, $3, jsonb_build_object('id', $4::text), $5)`,
+			tenant, r.actor, r.event, doc, r.at)
+	}
+
+	reapply()
+
+	want := []string{a1, b1}
+	slices.Sort(want)
+	if got := bdUploaders(t, doc); !slices.Equal(got, want) {
+		t.Errorf("uploaders = %v, want %v (the creator and the reuser before B's batch; not c1 after it, not the non-uuid actor)", got, want)
 	}
 }
 
@@ -893,15 +1113,15 @@ func TestRLS_DocumentBindingBackfillBreaksTiesBatchFirst(t *testing.T) {
 
 	reapply()
 
-	var entity, uploader *string
-	if err := h.super.QueryRow(ctx, `SELECT entity_id::text, uploaded_by::text FROM documents WHERE id = $1`, batchBeatsInvoice).Scan(&entity, &uploader); err != nil {
+	var entity *string
+	if err := h.super.QueryRow(ctx, `SELECT entity_id::text FROM documents WHERE id = $1`, batchBeatsInvoice).Scan(&entity); err != nil {
 		t.Fatalf("read the backfilled document: %v", err)
 	}
 	if bdShow(entity) != b {
 		t.Errorf("batch and invoice at one instant: entity_id = %s, want the batch's client %s", bdShow(entity), b)
 	}
-	if bdShow(uploader) != strings.ToLower(upper) {
-		t.Errorf("upper-case uuid actor: uploaded_by = %s, want %s", bdShow(uploader), strings.ToLower(upper))
+	if got := bdUploaders(t, batchBeatsInvoice); !slices.Equal(got, []string{strings.ToLower(upper)}) {
+		t.Errorf("upper-case uuid actor: uploaders = %v, want one lower-case row %s", got, strings.ToLower(upper))
 	}
 	bdWantEntity(t, "two batches at one instant, the lower id", lowerIDWins, &a)
 }

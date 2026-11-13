@@ -202,6 +202,32 @@ func TestCheck_NeedsNoIdentityAndReturnsNumberFailuresAndCounts(t *testing.T) {
 	}
 }
 
+func TestCheck_DeadlineStopsSlowRuleEvaluation(t *testing.T) {
+	r := newRig()
+	list := make([]string, 100)
+	for i := range list {
+		list[i] = fmt.Sprint(i)
+	}
+	lit := "[" + strings.Join(list, ",") + "]"
+	expr := "e >= 0"
+	for _, v := range []string{"e", "d", "c", "b", "a"} {
+		expr = lit + ".all(" + v + ", " + expr + ")"
+	}
+	params, _ := json.Marshal(map[string]string{"expr": expr})
+	r.l.rules = []validation.Rule{{Key: "slow", Type: validation.TypeCEL, Params: params,
+		Severity: "error", Message: "slow", Scope: "document", Enabled: true}}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := r.c.Check(ctx, csvReq("Inv,Total\nA,1\n"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %v, want under 5s", d)
+	}
+}
+
 func TestCheck_CarriesTheEvaluatedPayload(t *testing.T) {
 	r := newRig()
 	res, err := r.c.Check(context.Background(), csvReq("Inv,Total,Buyer\nA,1075.00,Beta Ltd\n", "buyer_name", "Buyer"))

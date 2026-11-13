@@ -402,7 +402,10 @@ func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (
 				return draftFault("rule %s: %s", r.Key, err.Error())
 			}
 			for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
-				if _, err := eng.Evaluate(p, RuleSet{Version: rs.Version, Rules: one}); err != nil {
+				if _, err := eng.EvaluateContext(ctx, p, RuleSet{Version: rs.Version, Rules: one}); err != nil {
+					if ctx.Err() != nil {
+						return err
+					}
 					return draftFault("the draft does not evaluate: rule %s: %s", r.Key, err.Error())
 				}
 			}
@@ -481,15 +484,18 @@ func (s *Store) TestDraft(ctx context.Context, eng *Engine, invoice map[string]a
 		res.Draft.RuleSetVersionID, _ = uuid.Parse(draftID)
 		if draftErr == nil {
 			var r Result
-			if r, draftErr = eng.Evaluate(Payload{"invoice": invoice}, draft); draftErr == nil {
+			if r, draftErr = eng.EvaluateContext(ctx, Payload{"invoice": invoice}, draft); draftErr == nil {
 				res.Draft.Violations = r.Violations
 			}
+		}
+		if draftErr != nil && ctx.Err() != nil {
+			return draftErr
 		}
 		if draftErr != nil {
 			msg := draftErr.Error()
 			res.Draft.Error = &msg
 		}
-		r, err := eng.Evaluate(Payload{"invoice": invoice}, inForce)
+		r, err := eng.EvaluateContext(ctx, Payload{"invoice": invoice}, inForce)
 		if err != nil {
 			return fmt.Errorf("validation: evaluate version in force: %w", err)
 		}

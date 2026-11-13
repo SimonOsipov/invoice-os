@@ -202,8 +202,11 @@ func (c *Checker) Check(ctx context.Context, req Request) (Result, error) {
 		if res.Invoices[i].Payload == nil {
 			continue
 		}
-		out, err := c.Engine.Evaluate(validation.Payload{"invoice": res.Invoices[i].Payload}, sets[dateOf[i]])
+		out, err := c.Engine.EvaluateContext(ctx, validation.Payload{"invoice": res.Invoices[i].Payload}, sets[dateOf[i]])
 		if err != nil {
+			if cerr := ctx.Err(); cerr != nil {
+				return Result{}, cerr
+			}
 			return Result{}, err
 		}
 		res.Invoices[i].NotChecked = droppedBy[dateOf[i]]

@@ -29,6 +29,7 @@
 package validation
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func mustGuard(t *testing.T, expr string, p Payload) (bool, error) {
 				t.Fatalf("celGuard panicked (pre-implementation STUB): %v", rec)
 			}
 		}()
-		ok, err = celGuard(expr, p)
+		ok, err = celGuard(context.Background(), expr, p)
 	}()
 	return ok, err
 }

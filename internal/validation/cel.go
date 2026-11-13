@@ -8,12 +8,64 @@
 package validation
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/interpreter"
 	"github.com/google/cel-go/parser"
 )
+
+// celCostLimit caps one custom-rule CEL evaluation, in cel-go cost units.
+const celCostLimit uint64 = 1_000_000
+
+// celInterruptEvery is how many comprehension iterations pass between context polls.
+const celInterruptEvery = 100
+
+// errCELTooExpensive reports an evaluation that overran the cost limit.
+var errCELTooExpensive = errors.New("validation: cel cost limit exceeded")
+
+type celCostLimitKey struct{}
+
+// withCELCostLimit makes every CEL evaluation under ctx run with a cost limit of n.
+func withCELCostLimit(ctx context.Context, n uint64) context.Context {
+	return context.WithValue(ctx, celCostLimitKey{}, n)
+}
+
+// celCostLimitFrom returns the limit ctx carries, 0 for none.
+func celCostLimitFrom(ctx context.Context) uint64 {
+	n, _ := ctx.Value(celCostLimitKey{}).(uint64)
+	return n
+}
+
+func celProgramOpts(ctx context.Context) []cel.ProgramOption {
+	opts := []cel.ProgramOption{cel.InterruptCheckFrequency(celInterruptEvery)}
+	if n := celCostLimitFrom(ctx); n > 0 {
+		opts = append(opts, cel.CostLimit(n))
+	}
+	return opts
+}
+
+// celEvalErr maps a cost overrun to errCELTooExpensive; other errors, context
+// errors included, pass through unchanged.
+func celEvalErr(err error) error {
+	var ce interpreter.EvalCancelledError
+	if errors.As(err, &ce) && ce.Cause == interpreter.CostLimitExceeded {
+		return fmt.Errorf("%w: %w", errCELTooExpensive, err)
+	}
+	return err
+}
+
+// ctxErr wraps the context error once ctx has ended, else nil. cel-go polls the
+// context only inside a comprehension.
+func ctxErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("validation: evaluation stopped: %w", err)
+	}
+	return nil
+}
 
 // evalCELBool compiles and evaluates a CEL expression against a payload and
 // requires a bool result. The activation binds the single top-level variable
@@ -24,7 +76,7 @@ import (
 // never coerced. Shared verbatim by celEvaluator.Eval and celGuard so the
 // `type: cel` rule's expr and any rule's `when` guard compile+evaluate
 // identically.
-func evalCELBool(expr string, p Payload) (bool, error) {
+func evalCELBool(ctx context.Context, expr string, p Payload) (bool, error) {
 	env, err := newCELEnv()
 	if err != nil {
 		return false, err
@@ -33,13 +85,17 @@ func evalCELBool(expr string, p Payload) (bool, error) {
 	if iss != nil && iss.Err() != nil {
 		return false, fmt.Errorf("validation: cel compile %q: %w", expr, iss.Err())
 	}
-	prg, err := env.Program(ast)
+	prg, err := env.Program(ast, celProgramOpts(ctx)...)
 	if err != nil {
 		return false, fmt.Errorf("validation: cel program %q: %w", expr, err)
 	}
-	out, _, err := prg.Eval(map[string]any{"invoice": p["invoice"]})
+	out, _, err := prg.ContextEval(ctx, map[string]any{"invoice": p["invoice"]})
 	if err != nil {
-		return false, fmt.Errorf("validation: cel eval %q: %w", expr, err)
+		return false, fmt.Errorf("validation: cel eval %q: %w", expr, celEvalErr(err))
+	}
+	// a comprehension stopped by the context yields an error value that && / || can absorb into a bool
+	if err := ctxErr(ctx); err != nil {
+		return false, err
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
@@ -89,7 +145,11 @@ func (c celEvaluator) Eval(p Payload, r Rule) (*Violation, error) {
 	return &vs[0], nil
 }
 
-func (celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
+func (c celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
+	return c.evalLinesContext(context.Background(), p, r)
+}
+
+func (celEvaluator) evalLinesContext(ctx context.Context, p Payload, r Rule) ([]Violation, error) {
 	var params struct {
 		Expr string `json:"expr"`
 	}
@@ -99,7 +159,7 @@ func (celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
 	if params.Expr == "" {
 		return nil, fmt.Errorf("validation: cel rule %q: empty expr", r.Key)
 	}
-	ok, err := evalCELBool(params.Expr, p)
+	ok, err := evalCELBool(ctx, params.Expr, p)
 	if err != nil {
 		return nil, fmt.Errorf("validation: cel rule %q: %w", r.Key, err)
 	}
@@ -107,7 +167,11 @@ func (celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
 		return nil, nil
 	}
 	// ceiling: one violation per failing line, unbounded below the batch body cap; cap it with a measure of the import report size
-	if vs := celLineViolations(params.Expr, p, r); len(vs) > 0 {
+	vs, err := celLineViolations(ctx, params.Expr, p, r)
+	if err != nil {
+		return nil, fmt.Errorf("validation: cel rule %q: %w", r.Key, err)
+	}
+	if len(vs) > 0 {
 		return vs, nil
 	}
 	return []Violation{*violation(r)}, nil
@@ -115,41 +179,65 @@ func (celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
 
 // celLineViolations returns one violation per element whose body is false, or
 // nil when the expression is not element-wise or no element is blamed. An
-// element whose body errors is not blamed (P13: CEL absorbs it in the whole).
-func celLineViolations(expr string, p Payload, r Rule) []Violation {
+// element whose body errors is not blamed (P13: CEL absorbs it in the whole),
+// but an ended context is returned. Under a cost limit the elements share one
+// budget; any overrun, per element or shared, stops the pass and returns nil
+// (the caller reports the invoice-level violation).
+func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]Violation, error) {
 	if r.Target == "" {
-		return nil
+		return nil, nil
 	}
 	v, body, ok := elementWiseBody(expr, r.Target)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	env, err := cel.NewEnv(cel.Variable(v, cel.DynType))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	a, iss := env.Compile(body)
 	if iss != nil && iss.Err() != nil {
-		return nil
+		return nil, nil
 	}
-	prg, err := env.Program(a)
+	prg, err := env.Program(a, celProgramOpts(ctx)...)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	raw, present := resolvePath(p, r.Target)
 	if !present {
-		return nil
+		return nil, nil
 	}
 	els, isList := raw.([]any)
 	if !isList {
-		return nil
+		return nil, nil
 	}
 	field := judgedField(a.NativeRep().Expr(), v)
 	var out []Violation
+	budget := celCostLimitFrom(ctx)
 	for i, el := range els {
-		res, _, err := prg.Eval(map[string]any{v: el})
+		res, det, err := prg.ContextEval(ctx, map[string]any{v: el})
 		if err != nil {
+			if errors.Is(celEvalErr(err), errCELTooExpensive) {
+				return nil, nil // see the budget case below
+			}
+			if cerr := ctxErr(ctx); cerr != nil {
+				return nil, cerr
+			}
 			continue
+		}
+		if cerr := ctxErr(ctx); cerr != nil {
+			return nil, cerr
+		}
+		if budget > 0 {
+			var spent uint64
+			if c := det.ActualCost(); c != nil {
+				spent = *c
+			}
+			if spent > budget {
+				// the whole expression already ran within the limit: stop blaming lines, report the invoice-level violation
+				return nil, nil
+			}
+			budget -= spent
 		}
 		if b, isBool := res.Value().(bool); isBool && !b {
 			out = append(out, *violation(r))
@@ -157,7 +245,7 @@ func celLineViolations(expr string, p Payload, r Rule) []Violation {
 			out[len(out)-1].Field = field
 		}
 	}
-	return out
+	return out, nil
 }
 
 // judgedField returns the one field name selected from v in e, or "" when v
@@ -267,6 +355,6 @@ func elementWiseBody(expr, target string) (v, body string, ok bool) {
 // engine/config-fault class as celEvaluator -- Decision N15), NOT a silent
 // skip. The executor wires this as the Engine's guard (engine.go's
 // NewEngine second argument) at task-47 (M3-04-08 wiring subtask).
-func celGuard(expr string, p Payload) (bool, error) {
-	return evalCELBool(expr, p)
+func celGuard(ctx context.Context, expr string, p Payload) (bool, error) {
+	return evalCELBool(ctx, expr, p)
 }

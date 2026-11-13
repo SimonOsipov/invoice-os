@@ -1,7 +1,3 @@
-//go:build purgeimpl
-
-// Names UnconfirmedPurge and stale, which do not exist yet. 07-06 deletes the build tag.
-
 package notifications
 
 import (

@@ -1,7 +1,3 @@
-//go:build purgeimpl
-
-// Names notifications.UnconfirmedPurge, which does not exist yet. 07-06 deletes the build tag.
-
 package auth_test
 
 import (

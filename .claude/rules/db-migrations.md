@@ -89,6 +89,7 @@ paths:
 - `db.Reset` accepts a `pr-<N>` name only. The shard seeds also accept the exact name `nightly`.
 - The migrate job runs the account-state grant on every run, as `supabase_auth_admin`. It logs `not_ready` until GoTrue has created `auth.users`. The next run restores the policy `invitee_account_state_read` after a GoTrue upgrade drops it.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
+- Create `auth.purge_unconfirmed_account` in `db.GrantAccountStateRead`, as `supabase_auth_admin`. Grant `EXECUTE` on it to `invoice_app` only.
 - Connect as `invoice_gateway` only from the gateway's hand-off store, registrant and account-event outboxes, session revocations, throttle counts and the sign-up unsubscribe token. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs` and `account_event_handoffs`, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, and `EXECUTE` on `mail_unsubscribe_token(text)` (no privilege on `mail_unsubscribes`), nothing else.
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.

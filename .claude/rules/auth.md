@@ -160,3 +160,4 @@ paths:
 - Open an app-borrowed console record only after a fresh exchange. The boot asks the app for a new code.
 - Send an expired app-borrowed console session back through the app, never to the landing.
 - Answer the app's `?auth=console&console=support&state=<s>` only with a live staff seat. Otherwise take the normal front door.
+- The worker removes an account still unconfirmed 7 days after its last confirmation or reset mail, through `auth.purge_unconfirmed_account`. The function re-checks confirmation and age in its own DELETE.

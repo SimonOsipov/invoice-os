@@ -388,28 +388,27 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 					t.Errorf("%s overrides the image's hook URI", c)
 				}
 			}
-			// Only idp-mail raises the per-IP rates: every gateway-backed test shares its loopback key.
-			// The other four keep the image's rates, and idp-hs256 carries the limiter proof.
+			// idp-mail, idp-es256 and idp-short raise the per-IP rates: their tests share one loopback key.
+			// idp-hs256 carries the limiter proof and idp-rebuild keeps the defaults.
 			rates := []string{"GOTRUE_RATE_LIMIT_VERIFY", "GOTRUE_RATE_LIMIT_OTP", "GOTRUE_RATE_LIMIT_TOKEN_REFRESH"}
-			mailRun := stubLines(r.log, "RUN", "idp-mail")
-			if len(mailRun) != 1 {
-				t.Fatalf("idp-mail started %d times, want 1", len(mailRun))
-			}
-			for _, v := range append([]string{rateLimitVar}, rates...) {
-				want := "100000"
-				if v == rateLimitVar {
-					want = "100"
+			for _, c := range append([]string{"idp-mail"}, idpContainers...) {
+				run := stubLines(r.log, "RUN", c)
+				if len(run) != 1 {
+					t.Fatalf("%s started %d times, want 1", c, len(run))
 				}
-				if n := strings.Count(mailRun[0], "-e "+v+"="); n != 1 || argvEnv(mailRun[0], v) != want {
-					t.Errorf("idp-mail passes %s %d times as %q, want once as %s: %s", v, n, argvEnv(mailRun[0], v), want, mailRun[0])
-				}
-			}
-			for _, c := range idpContainers {
+				raised := c == "idp-mail" || c == "idp-es256" || c == "idp-short"
 				for _, v := range rates {
-					if strings.Contains(stubLines(r.log, "RUN", c)[0], v) {
-						t.Errorf("%s sets %s; only idp-mail raises the per-IP rates", c, v)
+					n, got := strings.Count(run[0], "-e "+v+"="), argvEnv(run[0], v)
+					if raised && (n != 1 || got != "100000") {
+						t.Errorf("%s passes %s %d times as %q, want once as 100000: %s", c, v, n, got, run[0])
+					}
+					if !raised && strings.Contains(run[0], v) {
+						t.Errorf("%s sets %s; only idp-mail, idp-es256 and idp-short raise it", c, v)
 					}
 				}
+			}
+			if v := argvEnv(stubLines(r.log, "RUN", "idp-mail")[0], rateLimitVar); v != "100" {
+				t.Errorf("idp-mail %s = %q, want 100", rateLimitVar, v)
 			}
 			// The image owns the code length, the lifetime and the limiter header.
 			for _, l := range strings.Split(r.log, "\n") {

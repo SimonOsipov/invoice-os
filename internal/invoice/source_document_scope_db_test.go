@@ -108,7 +108,8 @@ func scPost(f csFixture, who context.Context, entity, number string, doc *string
 }
 
 func scCreate(f csFixture, who context.Context, entity, number string, doc *string) error {
-	_, err := f.store.Create(who, CreateInput{EntityID: entity, InvoiceNumber: number, SourceDocumentID: doc})
+	_, err := f.store.Create(who, CreateInput{EntityID: entity, InvoiceNumber: number, SourceDocumentID: doc,
+		LineItems: []LineItemInput{{Description: strPtr("SC line")}}})
 	return err
 }
 
@@ -137,6 +138,12 @@ func TestClientScope_CreateCitingAnUnreadableDocumentAnswersAsAnUnknownOne(t *te
 			t.Errorf("citing %s: %d %s, want %d %s (the unknown id's answer)", name, code, body, uCode, uBody)
 		}
 	}
+	// A full-access caller has no scope to refuse on; another tenant's document and an unknown id still answer alike.
+	aCode, aBody := scPost(f, f.admin, f.entA, "SC-1-AU", &unknown)
+	fCode, fBody := scPost(f, f.admin, f.entA, "SC-1-AF", &foreign)
+	if aCode != http.StatusBadRequest || aBody != scUnknownBody || fCode != aCode || fBody != aBody {
+		t.Errorf("admin citing an unknown id / another tenant's document: %d %s / %d %s, want 400 %s for both", aCode, aBody, fCode, fBody, scUnknownBody)
+	}
 }
 
 func TestClientScope_CreateCitingAnotherClientsDocumentWritesNothing(t *testing.T) {
@@ -151,6 +158,10 @@ func TestClientScope_CreateCitingAnotherClientsDocumentWritesNothing(t *testing.
 	if n := scInvoicesNumbered(t, f, "SC-2-CTRL"); n != 1 {
 		t.Fatalf("control invoices = %d, want 1", n)
 	}
+	lineItemsOf := `SELECT count(*) FROM line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.tenant_id = $1 AND i.invoice_number = $2`
+	if n := mustCount(t, f.super, lineItemsOf, f.tenant, "SC-2-CTRL"); n != 1 {
+		t.Fatalf("control line items = %d, want 1 -- the counter below would report 0 for anything", n)
+	}
 	before := auditCount(t, f.app, f.tenant, "invoice.created")
 
 	for i := 1; i <= 2; i++ {
@@ -162,7 +173,7 @@ func TestClientScope_CreateCitingAnotherClientsDocumentWritesNothing(t *testing.
 	if n := scInvoicesNumbered(t, f, "SC-2-N"); n != 0 {
 		t.Errorf("invoices written = %d, want 0", n)
 	}
-	if n := mustCount(t, f.super, `SELECT count(*) FROM line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.tenant_id = $1 AND i.invoice_number = 'SC-2-N'`, f.tenant); n != 0 {
+	if n := mustCount(t, f.super, lineItemsOf, f.tenant, "SC-2-N"); n != 0 {
 		t.Errorf("line items written = %d, want 0", n)
 	}
 	if n := auditCount(t, f.app, f.tenant, "invoice.created"); n != before {
@@ -212,7 +223,7 @@ func TestClientScope_RefusedCitationLeavesTheDocumentHidden(t *testing.T) {
 	}
 
 	if code, body := scPost(f, f.limited, f.entA, "SC-4-N", &d); code != http.StatusBadRequest {
-		t.Fatalf("citing B's document: %d %s, want 400", code, body)
+		t.Errorf("citing B's document: %d %s, want 400", code, body)
 	}
 	hidden("after")
 }

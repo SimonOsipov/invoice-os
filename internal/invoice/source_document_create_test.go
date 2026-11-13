@@ -113,9 +113,7 @@ func TestCreateHandler_PersistsOwnTenantSourceDocument(t *testing.T) {
 
 // TestRLS_CreateRefusesAnotherTenantsSourceDocument (SD-4, AC-4): tenant A
 // naming tenant B's document is refused with a body byte-equal to a
-// never-existed uuid's. No code is added for this -- invoices_tenant_source_
-// document_fk is composite, so the INSERT itself raises 23503 inside Create's
-// tx and store.go maps it to ErrValidation.
+// never-existed uuid's.
 func TestRLS_CreateRefusesAnotherTenantsSourceDocument(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -223,7 +221,7 @@ func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 		t.Fatalf("row deleted: status = %d, want 400 (body=%s)", absentRec.Code, absentBody)
 	}
 	if presentBody != absentBody {
-		t.Errorf("the same id answers %q while tenant B's row exists and %q after it is deleted -- the refusal is reading existence, not the FK",
+		t.Errorf("the same id answers %q while tenant B's row exists and %q after it is deleted -- the refusal is reading existence",
 			presentBody, absentBody)
 	}
 }

@@ -22,12 +22,8 @@
 //   - List's out-of-range clamp is ASYMMETRIC: limit>200 clamps down to 200
 //     (still 200 OK); limit<1, offset<0, and non-integer values are 400s.
 //
-// The transitions-200 success case (validated -> queued) drives its own
-// clean-invoice fixture (own copy, mirroring the deterministic
-// e2e/topology/invoice-surfaces.spec.ts:cleanInvoiceFields — proven to
-// promote draft->validated against this same deployed fleet) through
-// validateInvoice first, asserting status==="validated" so a non-clean
-// fixture fails loudly at setup, not as a confusing downstream 409.
+// The transitions route no longer sets a fiscal status: every target but `draft` answers 409
+// (FISCAL_STATUS_REFUSAL). A fixture reaches queued, failed or accepted through batch submit.
 //
 // Isolation: fresh entity per file (freshTin(), no DELETE endpoint exists);
 // crypto.randomUUID() for every not-found case (a syntactically valid,
@@ -67,6 +63,9 @@ import {
   reorderApprovalPolicies,
   approveUntilClosed,
   firmApproverTokens,
+  failedByStaffCancel,
+  provisionStaffAccount,
+  signInSession,
   PERSONAS,
   type Entity,
 } from './client'
@@ -112,29 +111,17 @@ function twoLineInvoiceFields(invoiceNumber: string) {
   }
 }
 
-// createFailedInvoice(): the draft->validated->queued->failed chain the
-// rejection_reasons test below drives inline, extracted here since the
-// resolve-outside tests need a fresh failed fixture several times.
+// The staff token for failedByStaffCancel, provisioned once per file.
+let staffToken: Promise<string> | undefined
+const getStaffToken = (): Promise<string> =>
+  (staffToken ??= provisionStaffAccount('contract-invoice').then(async (a) => (await signInSession(a.email, a.password)).access_token))
+
+// A failed invoice with a NULL failure_kind: buyer TIN -0004 retries, then a staff cancel fails it.
 async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
-  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
-  await validateInvoice(tok, created.id)
+  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber), buyer_tin: MOCK_TIN_RETRYING })
+  expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
   await approveUntilClosed(created.id, await firmApproverTokens())
-
-  // Assert both legs: under enforcement a refused queued POST makes the following
-  // validated -> failed illegal too, and it would 409 just as silently.
-  const queuedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${tok}` },
-    body: { target: 'queued' },
-  })
-  expect(queuedRes.status, 'createFailedInvoice setup: validated -> queued should return 200').toBe(200)
-
-  const failedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${tok}` },
-    body: { target: 'failed' },
-  })
-  expect(failedRes.status, 'createFailedInvoice setup: queued -> failed should return 200').toBe(200)
+  await failedByStaffCancel(tok, await getStaffToken(), PERSONAS.A.tenantId, { id: created.id, invoice_number: invoiceNumber })
   return created.id
 }
 
@@ -173,6 +160,12 @@ const MOCK_TIN_ACCEPT = '99999999-0001'
 const MOCK_TIN_REJECT = '99999999-0002'
 
 const CREDIT_NOTE_OVER_CAP = 'credit-note-over-cap' // internal/invoice/note_checks.go ruleCreditNoteOverCap
+
+// internal/submission/mock_script.go: -0004 answers a retryable 503 on every attempt (mockAllocations).
+const MOCK_TIN_RETRYING = '99999999-0004'
+
+// internal/invoice/handlers.go fiscalStatusRefusal, byte for byte.
+const FISCAL_STATUS_REFUSAL = 'this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions'
 
 // internal/submission/mock_script.go mockTINUnbuildable: the mock adapter fails Transform for this buyer TIN.
 const MOCK_TIN_UNBUILDABLE = '99999999-0010'
@@ -343,24 +336,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // honestly. Allowed to fail at the deploy gate -- that would be a real finding in the
     // Go serialization, not a broken test (the underlying cause is Out of Scope here).
     test('a failed invoice\'s rejection_reasons and violations come back as arrays, never null', async () => {
-      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-R-FAILED-${freshTin()}`) })
-      const validated = await validateInvoice(token, created.id)
-      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+      const failedId = await createFailedInvoice(token, entity.id, `INV-R-FAILED-${freshTin()}`)
 
-      await approveUntilClosed(created.id, await firmApproverTokens())
-      await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
-      })
-      const failedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'failed' },
-      })
-      expect(failedRes.status, 'queued -> failed should return 200').toBe(200)
-
-      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+      const res = await rawFetch(`/api/invoice/v1/invoices/${failedId}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       expect(res.status).toBe(200)
@@ -529,24 +507,10 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   })
 
   test.describe('transitions', () => {
-    test('validated -> queued is gated on the firm run: 409 while undecided (both doors), 200 once approveUntilClosed closes it', async () => {
-      // Drive a CLEAN invoice all the way to validated first (assert
-      // status==="validated" so a non-clean fixture fails loudly here, not
-      // as a confusing 409 below); validating arms the seeded firm run.
+    test('batch submit is gated on the firm run: skipped awaiting_approval while undecided, enqueued once approveUntilClosed closes it', async () => {
       const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-T-${freshTin()}`) })
       const validated = await validateInvoice(token, created.id)
       expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
-
-      // Undecided: the transitions door 409s with the exact sentence.
-      const blocked = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
-      })
-      assertErrorEnvelope(blocked, 409, 'validated -> queued while undecided')
-      expect((blocked.body as { error: string }).error, 'the 409 should carry the awaiting-approval sentence verbatim').toBe(
-        AWAITING_APPROVAL_REASON,
-      )
 
       // Undecided: the batch door skips it, machine-token reason, status still validated.
       const batchBlocked = await rawFetch('/api/invoice/v1/invoices/submissions', {
@@ -562,14 +526,15 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
       await approveUntilClosed(created.id, await firmApproverTokens())
 
-      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+      const batchOpen = await rawFetch('/api/invoice/v1/invoices/submissions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
+        body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
       })
-      expect(res.status, 'validated -> queued should return 200 once the run closes approved').toBe(200)
-      const body = res.body as Record<string, unknown>
-      expect(body.status, 'the transitioned invoice should be queued').toBe('queued')
+      expect(batchOpen.status, 'batch-submit should return 200 once the run closes approved').toBe(200)
+      const openResults = (batchOpen.body as Record<string, unknown>).results as Record<string, unknown>[]
+      expect(openResults[0].enqueued, 'an approved validated invoice should be enqueued').toBe(true)
+      expect(openResults[0].status, 'the enqueued invoice should be queued').toBe('queued')
     })
 
     test('target=validated is guarded (only earned via /validate) -> 409 {error: string}', async () => {
@@ -582,14 +547,22 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       assertErrorEnvelope(res, 409, 'transition target=validated guard')
     })
 
-    test('illegal transition (draft -> submitted) -> 409 {error: string}', async () => {
-      const created = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-T-${freshTin()}` })
-      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'submitted' },
-      })
-      assertErrorEnvelope(res, 409, 'illegal transition draft -> submitted')
+    test('every fiscal target is refused with 409 and the invoice is unmoved', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-T-${freshTin()}`) })
+      expect((await validateInvoice(token, created.id)).status, 'the clean fixture should promote draft -> validated').toBe('validated')
+      await approveUntilClosed(created.id, await firmApproverTokens())
+
+      for (const target of ['queued', 'submitted', 'accepted', 'rejected', 'failed']) {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { target },
+        })
+        assertErrorEnvelope(res, 409, `transition target=${target}`)
+        expect((res.body as { error: string }).error, `target=${target} carries the fiscal refusal`).toBe(FISCAL_STATUS_REFUSAL)
+      }
+
+      expect((await getInvoice(token, created.id)).status, 'a refused transition must not move the invoice').toBe('validated')
     })
 
     test('transition with an unknown target -> 400 {error: string}', async () => {
@@ -615,7 +588,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/transitions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
+        body: { target: 'draft' },
       })
       assertErrorEnvelope(res, 404, 'transition not-found')
     })
@@ -914,11 +887,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(results[0].reason, 'the skip reason must be not_validated').toBe('not_validated')
     })
 
-    test('POST /transitions {"target":"queued"} on a draft (demoted-from-validated) invoice is refused with 409', async () => {
-      // The API-only second door onto the same refusal Core AC 2 names: the existing
-      // `illegal transition (draft -> submitted)` case above pins draft -> submitted; this
-      // pins draft -> queued specifically, reached via the validated -> edit -> demoted
-      // path, not a never-validated draft.
+    test('POST /transitions {"target":"queued"} on a draft (demoted-from-validated) invoice is refused with the fiscal-status 409', async () => {
+      // The demoted-draft skip itself is pinned by the batch-door test above.
       const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
       const validated = await validateInvoice(token, created.id)
       expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
@@ -936,6 +906,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         body: { target: 'queued' },
       })
       assertErrorEnvelope(res, 409, 'draft (demoted-from-validated) -> queued transition')
+      expect((res.body as { error: string }).error).toBe(FISCAL_STATUS_REFUSAL)
     })
 
     test('PATCH a malformed line numeric -> 400, never a 500', async () => {
@@ -1390,32 +1361,22 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(decidedPreparerBody.submit_blocked_reason, 'the role reason survives the approval closing').toBe(NOT_APPROVER_REASON)
     })
 
-    test("a preparer's submit_blocked_reason survives a queued invoice, where an admin's is null", async () => {
+    test("a preparer's submit_blocked_reason survives a non-editable invoice, where an admin's is null", async () => {
       const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
-      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`), buyer_tin: MOCK_TIN_ACCEPT })
       const validated = await validateInvoice(token, created.id)
       expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
       await approveUntilClosed(created.id, await firmApproverTokens())
+      await submitAndAwait(token, created.id, 'accepted')
 
-      // A plain transition, not a batch submit: it enqueues no job, so nothing moves this
-      // fixture off `queued` mid-test (reconciliation's queued_never_sent drift is audit-only).
-      const queued = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
-      })
-      expect(queued.status, 'setup: an admin transition to queued should return 200').toBe(200)
-
-      const adminRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
-      const adminBody = adminRes.body as Record<string, unknown>
-      expect(adminBody.status, 'setup: the invoice should be queued').toBe('queued')
-      expect(adminBody.can_submit, 'a queued invoice is not submittable').toBe(false)
-      // Null for an admin because queued is not editable -- so on THIS status the role arm
+      const adminBody = await getInvoice(token, created.id)
+      expect(adminBody.status, 'setup: the invoice should be accepted').toBe('accepted')
+      expect(adminBody.can_submit, 'an accepted invoice is not submittable').toBe(false)
+      // Null for an admin because accepted is not editable -- so on THIS status the role arm
       // is the only thing that can put a sentence in the field.
-      expect(adminBody.submit_blocked_reason, 'an admin gets no reason on a queued invoice').toBeNull()
+      expect(adminBody.submit_blocked_reason, 'an admin gets no reason on an accepted invoice').toBeNull()
 
-      const preparerRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${preparerToken}` } })
-      const preparerBody = preparerRes.body as Record<string, unknown>
+      const preparerBody = await getInvoice(preparerToken, created.id)
       expect(preparerBody.can_submit, 'a preparer cannot submit any invoice').toBe(false)
       expect(preparerBody.submit_blocked_reason, 'the role refusal is emitted on every status, not only the editable ones').toBe(NOT_APPROVER_REASON)
     })
@@ -1536,16 +1497,15 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
       // Copy 3, the ENFORCING door (task-575 AC-27 upgrade): the same self-seeded, still-open
       // fixture that copies 1 and 2 report is the one copy 3 actually refuses.
-      const blocked = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+      const blocked = await rawFetch('/api/invoice/v1/invoices/submissions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-        body: { target: 'queued' },
+        body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
       })
-      assertErrorEnvelope(blocked, 409, 'the self-seeded open run must refuse a queued transition')
-      expect(
-        (blocked.body as { error: string }).error,
-        'the 409 must carry the same awaiting-approval sentence the transitions door uses elsewhere',
-      ).toBe(AWAITING_APPROVAL_REASON)
+      expect(blocked.status, 'batch-submit answers 200 with the skip in the result').toBe(200)
+      const blockedResult = (blocked.body as { results: { enqueued: boolean; reason?: string }[] }).results[0]
+      expect(blockedResult.enqueued, 'the self-seeded open run must not enqueue').toBe(false)
+      expect(blockedResult.reason, 'the skip carries the awaiting-approval token').toBe('awaiting_approval')
     })
 
     // The wire half of the agreement invariant: ONE gate call feeds both responses, so the
@@ -1903,14 +1863,15 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         expect(detailBody.can_submit, 'an approved invoice is submittable for an admin').toBe(true)
         expect(detailBody.submit_blocked_reason, 'an allowed gate names no refusal').toBeNull()
 
-        const submitted = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/transitions`, {
+        const submitted = await rawFetch('/api/invoice/v1/invoices/submissions', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
-          body: { target: 'queued' },
+          body: { invoice_ids: [invoiceId], idempotency_key: crypto.randomUUID() },
         })
-        expect(submitted.status, 'the wire advertised can_submit, so the door it advertises must accept').toBe(200)
-        const submittedBody = submitted.body as Record<string, unknown>
-        expect(submittedBody.status, 'the invoice reaches queued').toBe('queued')
+        expect(submitted.status, 'batch-submit returns 200').toBe(200)
+        const submittedResult = (submitted.body as { results: { enqueued: boolean; status: string }[] }).results[0]
+        expect(submittedResult.enqueued, 'the wire advertised can_submit, so the door it advertises must accept').toBe(true)
+        expect(submittedResult.status, 'the invoice reaches queued').toBe('queued')
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }

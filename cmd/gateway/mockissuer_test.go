@@ -194,7 +194,7 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty body mints whatever DEPLOY_ENV says", func(t *testing.T) {
+	t.Run("an empty body mints under a non-nightly DEPLOY_ENV", func(t *testing.T) {
 		t.Setenv("DEPLOY_ENV", "production")
 		_, hosted := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 		if hosted == nil {
@@ -214,8 +214,8 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	})
 }
 
-// The mint serves any identity wherever MockIssuerEnabled is set; DEPLOY_ENV must not gate it.
-func TestTaggedMockLoginIgnoresDeployEnv(t *testing.T) {
+// The mint serves any identity wherever MockIssuerEnabled is set; a non-nightly DEPLOY_ENV must not gate it.
+func TestTaggedMockLoginIgnoresANonNightlyDeployEnv(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
 	t.Setenv("DEPLOY_ENV", "production")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

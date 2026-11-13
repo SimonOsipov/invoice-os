@@ -1512,13 +1512,6 @@ export function checkMapping(token: string, body: CheckMappingRequest): Promise<
   return apiFetch<CheckMapping>(`${apiBase()}/api/invoice/v1/imports/check-mapping`, { method: 'POST', body, token })
 }
 
-// transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
-// The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
-// earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.
-export function transitionInvoice(token: string, id: string, target: Invoice['status']): Promise<Invoice> {
-  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', body: { target }, token })
-}
-
 // ---- Dashboard rollup wire types, mirrored from internal/dashboard/
 // dashboard.go's Counts/Bucket/Client/RuleCount/Rollup -- covers the fields
 // the API specs use. Client embeds Bucket ANONYMOUSLY so encoding/json

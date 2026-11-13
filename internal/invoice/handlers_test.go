@@ -1984,19 +1984,15 @@ func TestTransitionHandler_NotFound404(t *testing.T) {
 }
 
 // TestTransitionHandler_NoIdentity401 (INV-HTTP-11): no identity in the
-// request context must 401 before transition ever runs.
-//
-// RETARGETED to "queued" by M4-04-06/task-113 for CONSISTENCY, not necessity:
-// the identity check runs first, so this test 401s before reaching the new
-// validated-target guard either way and was never at risk. Retargeted so that
-// no test in this file posts a target the endpoint now refuses.
+// request context must 401 before transition ever runs, even for a fiscal
+// target the handler would otherwise refuse with 409.
 func TestTransitionHandler_NoIdentity401(t *testing.T) {
 	invoiceID := uuid.NewString()
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 		t.Fatal("transition must not run without an identity")
 		return Invoice{}, nil
 	}
-	body, err := json.Marshal(transitionRequest{Target: "queued"})
+	body, err := json.Marshal(transitionRequest{Target: "accepted"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -2890,6 +2886,48 @@ func TestTransitionHandler_QueuedTargetStillReachesStub200(t *testing.T) {
 	}
 	if resp.Status != string(StatusQueued) {
 		t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
+	}
+}
+
+// wantFiscalStatusRefusal restates the production const fiscalStatusRefusal.
+const wantFiscalStatusRefusal = "this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions"
+
+// TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled: every fiscal
+// target answers 409 with the sentence before the store runs. Replaces GAPI-16.
+func TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, target := range []Status{StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed} {
+		t.Run(string(target), func(t *testing.T) {
+			transition := func(ctx context.Context, gotID string, got Status) (Invoice, error) {
+				t.Errorf("transition called with target %q; a fiscal target must be refused before the store", got)
+				return Invoice{ID: gotID, Status: got}, nil
+			}
+			rec, resp := doInvoiceTransition(t, transition, &id, uuid.NewString(), `{"target":"`+string(target)+`"}`)
+
+			if rec.Code != http.StatusConflict {
+				t.Errorf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if resp.Error != wantFiscalStatusRefusal {
+				t.Errorf("error = %q, want %q", resp.Error, wantFiscalStatusRefusal)
+			}
+		})
+	}
+}
+
+// TestTransitionHandler_RefusesAFiscalTargetForAnUnknownId: the refusal runs
+// before any row is read, so an unknown id is 409, never 404.
+func TestTransitionHandler_RefusesAFiscalTargetForAnUnknownId(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		return Invoice{}, ErrNotFound
+	}
+	rec, resp := doInvoiceTransition(t, transition, &id, uuid.NewString(), `{"target":"accepted"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 and never 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != wantFiscalStatusRefusal {
+		t.Errorf("error = %q, want %q", resp.Error, wantFiscalStatusRefusal)
 	}
 }
 

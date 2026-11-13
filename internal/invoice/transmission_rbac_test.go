@@ -148,6 +148,19 @@ func TestTransition_PreparerRefused(t *testing.T) {
 	}
 }
 
+// A preparer sending a fiscal target gets the role 403, not the fiscal 409.
+func TestTransitionHandler_PreparerWithAFiscalTargetIs403(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		t.Error("transition was called for a preparer")
+		return Invoice{}, nil
+	}
+
+	rec, resp := doInvoiceTransitionAs(t, transition, fixedRoleStub("preparer", nil), &id, uuid.NewString(), `{"target":"accepted"}`)
+
+	assertTransmitRefused(t, rec, resp.Error)
+}
+
 // --- AC-2: admin AND reviewer both keep transmitting -------------------------
 
 func TestBatchSubmit_AdminAndReviewerAllowed(t *testing.T) {

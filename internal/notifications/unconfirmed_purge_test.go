@@ -64,8 +64,8 @@ func TestUnconfirmedPurge_AListFailureEndsTheRun(t *testing.T) {
 	}
 }
 
-// A pool that cannot connect makes every purge call fail, so the joined error counts the candidates reached.
-func TestUnconfirmedPurge_AFailingAccountDoesNotStopTheOthers(t *testing.T) {
+// A pool that cannot connect makes the first purge call fail; the run stops there.
+func TestUnconfirmedPurge_AFailingPurgeStopsTheRun(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://nobody@127.0.0.1:1/none?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
@@ -81,9 +81,11 @@ func TestUnconfirmedPurge_AFailingAccountDoesNotStopTheOthers(t *testing.T) {
 
 	runErr := (&UnconfirmedPurge{Pool: pool, Account: &fakeAccounts{users: users}, Logger: logger, Now: time.Now}).RunOnce(context.Background())
 
-	joined, ok := runErr.(interface{ Unwrap() []error })
-	if !ok || len(joined.Unwrap()) != 3 {
-		t.Fatalf("RunOnce = %v, want a joined error with one entry for each of the 3 stale accounts", runErr)
+	if runErr == nil {
+		t.Fatal("RunOnce = nil, want the purge error")
+	}
+	if _, ok := runErr.(interface{ Unwrap() []error }); ok {
+		t.Errorf("RunOnce = %v, want one error, not a joined one", runErr)
 	}
 	for _, text := range []string{runErr.Error(), buf.String()} {
 		if strings.Contains(text, "leak.test") {
@@ -95,6 +97,90 @@ func TestUnconfirmedPurge_AFailingAccountDoesNotStopTheOthers(t *testing.T) {
 			}
 		}
 	}
+}
+
+func staleUsers(n int) []gotrueadmin.AdminUser {
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	users := make([]gotrueadmin.AdminUser, n)
+	for i := range users {
+		users[i] = gotrueadmin.AdminUser{ID: uuid.NewString(), CreatedAt: old}
+	}
+	return users
+}
+
+// The lister drops a user once purged, as GoTrue does, so a run that pages by offset while deleting skips rows.
+func TestUnconfirmedPurge_RemovesEveryStaleAccountAcrossPages(t *testing.T) {
+	acct := &fakeAccounts{users: staleUsers(250)}
+	var calls int
+	purge := func(_ context.Context, id string) (bool, error) {
+		calls++
+		for i, u := range acct.users {
+			if u.ID == id {
+				acct.users = append(acct.users[:i:i], acct.users[i+1:]...)
+				break
+			}
+		}
+		return true, nil
+	}
+
+	err := (&UnconfirmedPurge{Account: acct, Purge: purge, Now: time.Now}).RunOnce(context.Background())
+
+	if err != nil {
+		t.Fatalf("RunOnce = %v", err)
+	}
+	if calls != 250 || len(acct.users) != 0 {
+		t.Errorf("purge calls = %d, accounts left = %d, want 250 and 0", calls, len(acct.users))
+	}
+}
+
+func TestUnconfirmedPurge_AFirstPurgeErrorEndsTheRunAndKeepsTheCount(t *testing.T) {
+	users := staleUsers(5)
+	boom := errors.New("function missing")
+	var calls int
+	purge := func(_ context.Context, id string) (bool, error) {
+		calls++
+		if calls == 3 {
+			return false, boom
+		}
+		return true, nil
+	}
+	buf, logger := purgeLog()
+
+	err := (&UnconfirmedPurge{Account: &fakeAccounts{users: users}, Purge: purge, Logger: logger, Now: time.Now}).RunOnce(context.Background())
+
+	if !errors.Is(err, boom) || calls != 3 {
+		t.Fatalf("RunOnce = %v after %d calls, want the purge error after 3", err, calls)
+	}
+	if !strings.Contains(buf.String(), `"accounts":2`) {
+		t.Errorf("log %q lacks the 2 accounts removed before the error", buf)
+	}
+}
+
+func TestUnconfirmedPurge_AListFailureOnALaterPageKeepsTheCount(t *testing.T) {
+	listErr := errors.New("page 2 failed")
+	acct := &laterPageFails{fakeAccounts: fakeAccounts{users: staleUsers(100)}, err: listErr}
+	buf, logger := purgeLog()
+
+	err := (&UnconfirmedPurge{Account: acct, Purge: func(context.Context, string) (bool, error) { return true, nil }, Logger: logger, Now: time.Now}).RunOnce(context.Background())
+
+	if !errors.Is(err, listErr) {
+		t.Fatalf("RunOnce = %v, want the list error", err)
+	}
+	if !strings.Contains(buf.String(), `"accounts":100`) {
+		t.Errorf("log %q lacks the 100 accounts removed before the list failure", buf)
+	}
+}
+
+type laterPageFails struct {
+	fakeAccounts
+	err error
+}
+
+func (l *laterPageFails) ListUsers(ctx context.Context, page, perPage int) ([]gotrueadmin.AdminUser, error) {
+	if page > 1 {
+		return nil, l.err
+	}
+	return l.fakeAccounts.ListUsers(ctx, page, perPage)
 }
 
 func TestUnconfirmedPurge_PagesTheListAt100(t *testing.T) {

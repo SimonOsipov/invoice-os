@@ -1569,7 +1569,7 @@ test('deployed app: a real sign-in names the account holder on the identity card
 })
 
 // frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
-const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
 async function openMailedLink(page: Page, invite = false): Promise<URL> {
@@ -2604,7 +2604,7 @@ async function registerThroughLanding(page: Page, account: RealAccount, kind: Te
 }
 
 // The registration an API call makes with the answers the window sends and a password the test knows.
-// A fork mails no link, so a window registrant's random password is unknowable (SECAUD-07).
+// A fork mails no link, so a window registrant's random password is unknowable.
 async function registerTwin(account: RealAccount, kind: TenantKind, marketing: boolean): Promise<void> {
   const res = await rawFetch('/auth/register', {
     method: 'POST',

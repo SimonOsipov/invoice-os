@@ -13,7 +13,7 @@ import { captureNavigation } from './navigation.test.util'
 const DIALOG = '[role="dialog"]'
 const STATUS = '[role="status"]'
 const VERIFIED = 'Your email address is verified. Please sign in.'
-const FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
+const FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 let container: HTMLDivElement
@@ -252,10 +252,18 @@ describe('verify notice: the Sign in button', () => {
   it('failed shows the sign-in prompt and a Sign in button', async () => {
     await bootAt(`/?verify=failed&state=${STATE}`)
     onlyNotice(FAILED)
-    expect(noticeButtons()).toEqual(['Sign in', 'Dismiss'])
+    expect(noticeButtons()).toEqual(['Forgot password', 'Sign in', 'Dismiss'])
     const signIn = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')!
     await act(async () => signIn.click())
     expect(dialogs().length).toBe(1)
+  })
+
+  it('failed Forgot password opens the forgot view', async () => {
+    await bootAt(`/?verify=failed&state=${STATE}`)
+    const forgot = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Forgot password')!
+    await act(async () => forgot.click())
+    expect(dialogs().length).toBe(1)
+    expect(Array.from(document.querySelectorAll('[role="dialog"] h3'), (h) => h.textContent)).toEqual(['Reset your password'])
   })
 
   it('failed Sign in without a state bounces like the header', async () => {

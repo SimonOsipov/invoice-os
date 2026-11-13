@@ -20,8 +20,8 @@ describe('csvCell', () => {
   })
 
   it('csvCell_leavesOtherCellsAsBefore', () => {
-    expect(['Acme', 'a=b', ' =1', 'a,b', 'say "hi"', '—', ''].map(csvCell)).toEqual([
-      'Acme', 'a=b', ' =1', '"a,b"', '"say ""hi"""', '—', '',
+    expect(['Acme', 'a=b', ' =1', 'a,b', 'say "hi"', 'a\nb', '—', ''].map(csvCell)).toEqual([
+      'Acme', 'a=b', ' =1', '"a,b"', '"say ""hi"""', '"a\nb"', '—', '',
     ])
   })
 })

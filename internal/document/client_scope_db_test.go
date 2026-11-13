@@ -34,6 +34,26 @@ func csExec(t *testing.T, super *pgxpool.Pool, query string, args ...any) {
 	}
 }
 
+// csExecLegacy seeds a pre-migration row: the replica role skips the bind trigger.
+func csExecLegacy(t *testing.T, super *pgxpool.Pool, query string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy seed: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		t.Fatalf("seed legacy (%s): %v", query, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy seed: %v", err)
+	}
+}
+
 func csMember(t *testing.T, super *pgxpool.Pool, tenant, role string, all bool, clients ...string) context.Context {
 	t.Helper()
 	user := uuid.NewString()
@@ -135,12 +155,12 @@ func TestClientScope_LinkIsAnyVisibleInvoiceOrBatch(t *testing.T) {
 	f := newCSFixture(t)
 	both := csDocument(t, f.super, f.tenant)
 	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-BOTH-A', $3)`, f.tenant, f.entA, both)
-	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-BOTH-B', $3)`, f.tenant, f.entB, both)
+	csExecLegacy(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-BOTH-B', $3)`, f.tenant, f.entB, both)
 	onlyB := csDocument(t, f.super, f.tenant)
 	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-ONLY-B', $3)`, f.tenant, f.entB, onlyB)
 	bothMixed := csDocument(t, f.super, f.tenant)
 	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-MIX-B', $3)`, f.tenant, f.entB, bothMixed)
-	csExec(t, f.super, `INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+	csExecLegacy(t, f.super, `INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
 		VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, f.tenant, f.entA, bothMixed)
 	noClients := csMember(t, f.super, f.tenant, "reviewer", false)
 

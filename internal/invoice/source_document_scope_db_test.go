@@ -44,6 +44,28 @@ func scCiteByInvoice(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, num
 	return id
 }
 
+// scCiteByInvoiceLegacy models a pre-migration row: the replica role skips the bind trigger.
+func scCiteByInvoiceLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, number string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy citation: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4)`,
+		tenant, entity, number, doc); err != nil {
+		t.Fatalf("seed legacy citing invoice: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy citation: %v", err)
+	}
+}
+
 func scCiteByBatch(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) string {
 	t.Helper()
 	var id string
@@ -243,7 +265,7 @@ func TestClientScope_LimitedMemberCitesADocumentItsClientAlsoCites(t *testing.T)
 	f := newCSFixture(t, "SC own client cites")
 	d := seedDocument(t, f.super, f.tenant)
 	scCiteByInvoice(t, f.super, f.tenant, f.entA, d, "SC-A-CITE")
-	scCiteByInvoice(t, f.super, f.tenant, f.entB, d, "SC-B-CITE")
+	scCiteByInvoiceLegacy(t, f.super, f.tenant, f.entB, d, "SC-B-CITE")
 
 	if err := scCreate(f, f.limited, f.entA, "SC-6-N", &d); err != nil {
 		t.Fatalf("Create citing a document A's invoice also cites: %v", err)
@@ -251,25 +273,54 @@ func TestClientScope_LimitedMemberCitesADocumentItsClientAlsoCites(t *testing.T)
 	assertCitedBy(t, f, "SC-6-N", d)
 }
 
-func TestClientScope_FullAccessMembersCiteAnyClientsDocument(t *testing.T) {
-	f := newCSFixture(t, "SC full access cites")
+func TestClientScope_EveryCallerCitesABoundDocumentOnlyForItsClient(t *testing.T) {
+	f := newCSFixture(t, "SC bound cites")
+	d := seedDocument(t, f.super, f.tenant)
+	scCiteByInvoice(t, f.super, f.tenant, f.entB, d, "SC-B-CITE")
+	unknown := uuid.NewString()
+
+	scInHouse(t, f.super, f.tenant)
+	callers := map[string]context.Context{
+		"admin": f.admin, "all-clients member": scAllClientsMember(t, f.super, f.tenant), "in-house limited member": f.limited,
+	}
+	lineItems := `SELECT count(*) FROM line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.tenant_id = $1`
+	invoices := `SELECT count(*) FROM invoices WHERE tenant_id = $1`
+	wantInvoices, wantLines := mustCount(t, f.super, invoices, f.tenant), mustCount(t, f.super, lineItems, f.tenant)
+	if wantInvoices == 0 {
+		t.Fatalf("control: the tenant holds no invoice, the counters below would report 0 for anything")
+	}
+	before := auditCount(t, f.app, f.tenant, "invoice.created")
+
+	for name, who := range callers {
+		slug := strings.ReplaceAll(name, " ", "-")
+		uCode, uBody := scPost(f, who, f.entA, "SC-7-U-"+slug, &unknown)
+		if uCode != http.StatusBadRequest || uBody != scUnknownBody {
+			t.Fatalf("%s citing an unknown id: %d %s, want 400 %s", name, uCode, uBody, scUnknownBody)
+		}
+		if code, body := scPost(f, who, f.entA, "SC-7-D-"+slug, &d); code != uCode || body != uBody {
+			t.Errorf("%s citing B's document for A: %d %s, want %d %s (the unknown id's answer)", name, code, body, uCode, uBody)
+		}
+	}
+	if n := mustCount(t, f.super, invoices, f.tenant); n != wantInvoices {
+		t.Errorf("invoices = %d, want %d", n, wantInvoices)
+	}
+	if n := mustCount(t, f.super, lineItems, f.tenant); n != wantLines {
+		t.Errorf("line items = %d, want %d", n, wantLines)
+	}
+	if n := auditCount(t, f.app, f.tenant, "invoice.created"); n != before {
+		t.Errorf("invoice.created rows = %d, want %d", n, before)
+	}
+}
+
+func TestClientScope_BoundDocumentWithATakenNumberAnswersAsAnUnknownOne(t *testing.T) {
+	f := newCSFixture(t, "SC bound taken number")
 	d := seedDocument(t, f.super, f.tenant)
 	scCiteByInvoice(t, f.super, f.tenant, f.entB, d, "SC-B-CITE")
 
-	for name, who := range map[string]context.Context{"admin": f.admin, "all-clients member": scAllClientsMember(t, f.super, f.tenant)} {
-		number := "SC-7-" + strings.ReplaceAll(name, " ", "-")
-		if err := scCreate(f, who, f.entA, number, &d); err != nil {
-			t.Errorf("%s citing B's document: %v", name, err)
-			continue
-		}
-		assertCitedBy(t, f, number, d)
+	// CS-A-1 is taken for A by the fixture.
+	if code, body := scPost(f, f.admin, f.entA, "CS-A-1", &d); code != http.StatusBadRequest || body != scUnknownBody {
+		t.Errorf("taken number citing B's document: %d %s, want 400 %s (not a 409)", code, body, scUnknownBody)
 	}
-	scInHouse(t, f.super, f.tenant)
-	if err := scCreate(f, f.limited, f.entA, "SC-7-inhouse", &d); err != nil {
-		t.Errorf("limited member of an in-house tenant citing B's document: %v", err)
-		return
-	}
-	assertCitedBy(t, f, "SC-7-inhouse", d)
 }
 
 func assertCitedBy(t *testing.T, f csFixture, number, doc string) {

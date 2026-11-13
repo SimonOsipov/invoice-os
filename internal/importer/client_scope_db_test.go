@@ -326,7 +326,7 @@ func TestClientScope_NoteOriginalsHideAnotherClient(t *testing.T) {
 	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NO-A")
 	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	csLinkBatchLegacy(t, f.super, f.tenant, f.entB, doc)
 	if _, err := f.super.Exec(context.Background(),
 		`UPDATE import_batches SET created_at = now() - interval '1 hour' WHERE document_id = $1 AND entity_id = $2`, doc, f.entA); err != nil {
 		t.Fatalf("age A's batch: %v", err)
@@ -529,7 +529,7 @@ func TestClientScope_SheetRouteFollowsTheLink(t *testing.T) {
 	batch(linkedB, f.entB)
 	batch(linkedA, f.entA)
 	batch(linkedBoth, f.entA)
-	batch(linkedBoth, f.entB)
+	csLinkBatchLegacy(t, f.super, f.tenant, f.entB, linkedBoth)
 	if _, err := f.super.Exec(context.Background(),
 		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-SHEET-B', $3)`,
 		f.tenant, f.entB, invoiceB); err != nil {
@@ -583,6 +583,40 @@ func csLinkInvoice(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, numbe
 		tenant, entity, number, doc); err != nil {
 		t.Fatalf("seed invoice: %v", err)
 	}
+}
+
+// csLegacyTx runs fn in a superuser transaction that skips the bind trigger: a pre-migration citation.
+func csLegacyTx(t *testing.T, super *pgxpool.Pool, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy citation: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("seed legacy citation: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy citation: %v", err)
+	}
+}
+
+func csLinkInvoiceLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, number string) {
+	t.Helper()
+	csLegacyTx(t, super,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4)`,
+		tenant, entity, number, doc)
+}
+
+func csLinkBatchLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) {
+	t.Helper()
+	csLegacyTx(t, super,
+		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+		 VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, tenant, entity, doc)
 }
 
 func csLinkBatch(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) {
@@ -700,7 +734,7 @@ func TestClientScope_AnInvoiceUnderAHiddenClientStillCountsAsFiledForAVisibleBat
 	doc := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, doc, docNoNumberValues())
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FILED-B2")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FILED-B2")
 
 	if _, err := f.svc.SupplyInvoiceNumber(f.limited, f.entA, doc, "INV-3"); !errors.Is(err, ErrDocumentAlreadyFiled) {
 		t.Errorf("SupplyInvoiceNumber as a reviewer limited to A: err = %v, want ErrDocumentAlreadyFiled", err)
@@ -805,7 +839,7 @@ func TestClientScope_ADocumentCitedByBothClientsAndTheFullAccessRolesReadOnEvery
 	header := []string{"Inv No"}
 	both := storeDocumentAs(t, f.docSvc, f.tenant, "both.csv", "text/csv", csvBody(t, header, [][]string{{"BOTH-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entA, both)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, both, "CS-BOTH-B")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, both, "CS-BOTH-B")
 	hidden := storeDocumentAs(t, f.docSvc, f.tenant, "hidden.csv", "text/csv", csvBody(t, header, [][]string{{"HID-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entB, hidden)
 
@@ -880,31 +914,40 @@ func TestClientScope_TheSettledExtractionRoutesFollowTheDocumentRule(t *testing.
 
 	bothClients := seed(docCleanValues("CS-SET-AB"), func(d string) {
 		csLinkBatch(t, f.super, f.tenant, f.entA, d)
-		csLinkBatch(t, f.super, f.tenant, f.entB, d)
+		csLinkBatchLegacy(t, f.super, f.tenant, f.entB, d)
 	})
 	if res, err := f.svc.ImportDocument(f.limited, f.entA, bothClients); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
 		t.Errorf("ImportDocument(document cited by A's and B's batch) as a reviewer limited to A = %+v, %v, want one invoice filed", res, err)
 	}
 
+	// Full access reads B's document and files it under B; filing it under A is refused once B holds it.
 	adminID, _ := auth.IdentityFromContext(f.admin)
+	adminCtx := auth.WithIdentity(context.Background(), adminID)
 	adminDoc := seed(docCleanValues("CS-SET-ADMIN"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), adminID), f.entA, adminDoc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as admin = %+v, %v, want one invoice filed", res, err)
+	batchesForA := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA)
+	if _, err := f.svc.ImportDocument(adminCtx, f.entA, adminDoc); err == nil {
+		t.Errorf("ImportDocument(document cited only by B's batch) for A as admin: err = nil, want a refusal")
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != batchesForA {
+		t.Errorf("import_batches for A = %d after the refused admin import, want %d", n, batchesForA)
+	}
+	if res, err := f.svc.ImportDocument(adminCtx, f.entB, adminDoc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as admin = %+v, %v, want one invoice filed", res, err)
 	}
 	allClients := csMember(t, f.super, f.tenant, "preparer")
 	if _, err := f.super.Exec(context.Background(), `UPDATE memberships SET all_clients = true WHERE user_id = $1`, allClients.Subject); err != nil {
 		t.Fatalf("set all_clients: %v", err)
 	}
 	doc := seed(docCleanValues("CS-SET-ALL"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), allClients), f.entA, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as an All clients member = %+v, %v, want one invoice filed", res, err)
+	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), allClients), f.entB, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as an All clients member = %+v, %v, want one invoice filed", res, err)
 	}
 	if _, err := f.super.Exec(context.Background(), `UPDATE tenants SET kind = 'in_house' WHERE id = $1`, f.tenant); err != nil {
 		t.Fatalf("set in_house: %v", err)
 	}
 	doc = seed(docCleanValues("CS-SET-IH"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(f.limited, f.entA, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as an in-house member = %+v, %v, want one invoice filed", res, err)
+	if res, err := f.svc.ImportDocument(f.limited, f.entB, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as an in-house member = %+v, %v, want one invoice filed", res, err)
 	}
 }
 
@@ -957,7 +1000,7 @@ func TestClientScope_AFiledDocumentHidesAnInvisibleInvoiceID(t *testing.T) {
 	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-FH-1"))
 	dtSetVerdict(t, f.super, doc, "debit note")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
 
 	res, err := f.svc.ImportDocument(f.limited, f.entA, doc)
 	if err != nil || len(res.Errors) != 1 {
@@ -1007,7 +1050,7 @@ func TestClientScope_NoteOriginalsWhenOnlyAnInvoiceIsVisible(t *testing.T) {
 	dtSetVerdict(t, f.super, doc, "credit note")
 	dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B2")
 	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
-	seedInvoiceForDocument(t, f.super, f.tenant, f.entA, doc, "CS-FILED-A")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entA, doc, "CS-FILED-A")
 
 	// The reading passes the document rule through A's invoice, yet the only batch is B's.
 	if _, err := f.store.SettledExtraction(f.limited, doc); err != nil {
@@ -1058,7 +1101,12 @@ func TestClientScope_NoteOriginalsFiledInvoiceOfAHiddenClientReadsAsNull(t *test
 	dtSetVerdict(t, f.super, doc, "credit note")
 	dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-FH-A")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	filedB := seedInvoiceForDocument(t, f.super, f.tenant, f.entB, doc, "CS-FH-NOTE-B")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FH-NOTE-B")
+	var filedB string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT id FROM invoices WHERE tenant_id = $1 AND invoice_number = 'CS-FH-NOTE-B'`, f.tenant).Scan(&filedB); err != nil {
+		t.Fatalf("read the legacy invoice: %v", err)
+	}
 
 	member, err := f.store.NoteOriginals(f.limited, doc)
 	admin, aerr := f.store.NoteOriginals(f.admin, doc)

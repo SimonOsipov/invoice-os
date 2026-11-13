@@ -254,3 +254,58 @@ func TestTransitionHandler_RealStore_FiscalTargetByCallerState(t *testing.T) {
 		assertFiscalRowUnchanged(t, f.read(t, invID), before)
 	})
 }
+
+// An admin of another tenant gets the fiscal 409 for a fiscal target, and the store's
+// own 404 for draft (the control: the store was reached, RLS hid the row).
+func TestTransitionHandler_RealStore_FiscalTargetOnAnotherTenantsInvoice(t *testing.T) {
+	f := newFiscalFixture(t, "fiscal cross a")
+	otherTenant := seedTenant(t, f.super, "fiscal cross b tenant")
+	otherEntity := seedEntity(t, f.super, otherTenant, "fiscal cross b entity")
+	queuedID := seedInvoiceAtStatus(t, f.super, otherTenant, otherEntity, "FISCAL-CROSS-Q", StatusQueued)
+	validatedID := seedInvoiceAtStatus(t, f.super, otherTenant, otherEntity, "FISCAL-CROSS-V", StatusValidated)
+
+	code, msg := f.post(t, f.store.CallerRole, &f.admin, queuedID, "accepted")
+	if code != http.StatusConflict || msg != wantFiscalStatusRefusal {
+		t.Errorf("accepted on another tenant's invoice: got %d %q, want 409 %q", code, msg, wantFiscalStatusRefusal)
+	}
+	if code, _ := f.post(t, f.store.CallerRole, &f.admin, validatedID, "draft"); code != http.StatusNotFound {
+		t.Errorf("control: draft on another tenant's invoice: got %d, want 404 (the store ran and RLS hid the row)", code)
+	}
+
+	for id, want := range map[string]Status{queuedID: StatusQueued, validatedID: StatusValidated} {
+		var got string
+		if err := f.super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, id).Scan(&got); err != nil {
+			t.Fatalf("read other tenant's invoice: %v", err)
+		}
+		if got != string(want) {
+			t.Errorf("other tenant's invoice %s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// draft is no way around the refusal: only validated and rejected have a draft edge,
+// so draft from a fiscal source stays the store's illegal 409, and rejected -> draft still moves.
+func TestTransitionHandler_RealStore_DraftFromAFiscalSourceStaysIllegal(t *testing.T) {
+	for _, source := range []Status{StatusQueued, StatusSubmitted, StatusAccepted, StatusFailed} {
+		t.Run(string(source), func(t *testing.T) {
+			f := newFiscalFixture(t, "fiscal draft from "+string(source))
+			invID := f.seedAt(t, "FISCAL-DRAFT-SRC", source)
+			before := f.read(t, invID)
+
+			code, msg := f.post(t, f.store.CallerRole, &f.admin, invID, "draft")
+
+			if code != http.StatusConflict || msg == "" || msg == wantFiscalStatusRefusal {
+				t.Errorf("draft from %s: got %d %q, want the store's illegal-transition 409", source, code, msg)
+			}
+			assertFiscalRowUnchanged(t, f.read(t, invID), before)
+		})
+	}
+
+	t.Run("rejected moves", func(t *testing.T) {
+		f := newFiscalFixture(t, "fiscal draft from rejected")
+		invID := f.seedAt(t, "FISCAL-DRAFT-REJ", StatusRejected)
+		if code, msg := f.post(t, f.store.CallerRole, &f.admin, invID, "draft"); code != http.StatusOK {
+			t.Errorf("draft from rejected: got %d %q, want 200", code, msg)
+		}
+	})
+}

@@ -2805,10 +2805,13 @@ func TestTransitionHandler_ValidatedTarget409GuardPreCall(t *testing.T) {
 		t.Error("the stub transition func WAS called -- the guard must be a PRE-CALL check that refuses " +
 			"target=validated before Store.Transition ever runs")
 	}
-	if resp.Error == "" {
-		t.Error("expected a non-empty error message in the body")
+	if resp.Error != wantValidatedRefusal {
+		t.Errorf("error = %q, want %q -- validated keeps its own sentence, not the fiscal one", resp.Error, wantValidatedRefusal)
 	}
 }
+
+// wantValidatedRefusal restates the validated 409 sentence in TransitionHandler (handlers.go).
+const wantValidatedRefusal = "validated is earned via POST /v1/invoices/{id}/validate, not via this endpoint"
 
 // wantFiscalStatusRefusal restates the Go const fiscalStatusRefusal (handlers.go).
 const wantFiscalStatusRefusal = "this status is set by the submission path; submit the invoice with POST /v1/invoices/submissions"

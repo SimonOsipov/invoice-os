@@ -289,15 +289,9 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
   const topologyMatches = withOrdinals(topologyRaw)
 
   describe('topology', () => {
-    // AC-9 as literally worded said "fails below 7"; the story's own author confirmed that
-    // was a miscount (7 was meant as "5 submitSelected callers + detail-submit-confirm +
-    // review-bulk-confirm", forgetting it should then ADD the 2 transition calls to
-    // reach 9, not stop at 7). A floor below the measured population lets someone delete a
-    // real submit site and stay green.
-    //
-    // Floor = the manifest size (21). Adding a site means raising it: the suite enforces the
-    // manifest, not the floor.
-    it('floor: at least 21 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+    // A floor below the measured population lets someone delete a real submit site and stay
+    // green. Floor = the manifest size (21). Adding a site means raising it.
+    it('floor: at least 21 submit-driving sites (the measured population)', () => {
       expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 21`).toBeGreaterThanOrEqual(21)
     })
 
@@ -338,10 +332,8 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    matches nothing here. Nothing in e2e/ does this today for the needles this file cares
 //    about.
 //
-// 4. THE FLOOR IS EXACT, NOT SOFT -- it equals today's full measured population, 13 (7
-//    submitSelected callers + 1 detail-submit-confirm + 1 review-bulk-confirm + 4
-//    failedByStaffCancel/submitAndAwait), so deleting even ONE real site fails the floor directly,
-//    independent of the manifest.
+// 4. THE FLOOR IS EXACT, NOT SOFT -- it equals the manifest size (21), so
+//    deleting even ONE real site fails the floor directly, independent of the manifest.
 //
 //    What remains genuinely unguarded: a single commit that removes one real site and adds
 //    an unrelated one elsewhere (or edits an existing manifest entry's file/label/needle/

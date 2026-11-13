@@ -1595,7 +1595,7 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	}
 }
 
-// One link-redeem throttle serves the confirm, reset and invitee POSTs, and only a preview admits over the limit.
+// One link-redeem throttle serves the confirm, reset and invitee POSTs, and only a preview admits over the limit, on every route.
 func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 	rows := []struct {
 		name, env string
@@ -1648,13 +1648,16 @@ func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 			if got := verifies(calls()); got != gateway.LinkRedeemPerIP {
 				t.Fatalf("GoTrue /verify calls after %d POSTs = %d, want %d", gateway.LinkRedeemPerIP, got, gateway.LinkRedeemPerIP)
 			}
-			post(gateway.LinkRedeemPerIP)
+			// One over-limit POST on each route: the reset route is built apart from handoffHandlers, so its own enforce must hold too.
+			for i := range len(routes) {
+				post(gateway.LinkRedeemPerIP + i)
+			}
 			want := gateway.LinkRedeemPerIP
 			if c.admits {
-				want++
+				want += len(routes)
 			}
 			if got := verifies(calls()); got != want {
-				t.Errorf("GoTrue /verify calls after the 31st POST = %d, want %d (DEPLOY_ENV=%q)", got, want, c.env)
+				t.Errorf("GoTrue /verify calls after one over-limit POST on each of the %d routes = %d, want %d (DEPLOY_ENV=%q)", len(routes), got, want, c.env)
 			}
 		})
 	}

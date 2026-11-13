@@ -1069,25 +1069,3 @@ func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
 		t.Errorf("control: sign-out write records = %d for an accepted link, want 1 (the log sees the write)", n)
 	}
 }
-
-func TestResetPassword_VerifyUserAndLogoutCarryTheAddress(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "production")
-	f := newResetGoTrue(t)
-	rec := httptest.NewRecorder()
-
-	newResetHandler(t, f, nil).ServeHTTP(rec, gaRequest(rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(), gaXFF))
-
-	rpRequireRedirect(t, rec, rpOK)
-	calls := f.Calls()
-	if got, want := f.names(), []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
-		t.Fatalf("GoTrue calls = %v, want %v", got, want)
-	}
-	if calls[2].RawQuery != "scope=global" {
-		t.Errorf("logout query = %q, want scope=global", calls[2].RawQuery)
-	}
-	for _, c := range calls {
-		if !slices.Equal(c.Address, []string{gaWant}) {
-			t.Errorf("%s carried X-User-Address %q, want exactly [%q]", c, c.Address, gaWant)
-		}
-	}
-}

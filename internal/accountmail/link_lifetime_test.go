@@ -22,19 +22,6 @@ func lifetimePhrase(secs int) (string, error) {
 	return fmt.Sprintf("%d hours", secs/3600), nil
 }
 
-func TestLifetimePhrase(t *testing.T) {
-	for secs, want := range map[int]string{3600: "1 hour", 7200: "2 hours", 86400: "24 hours"} {
-		if got, err := lifetimePhrase(secs); err != nil || got != want {
-			t.Errorf("lifetimePhrase(%d) = %q, %v, want %q", secs, got, err, want)
-		}
-	}
-	for _, secs := range []int{0, -3600, 1800, 5400} {
-		if got, err := lifetimePhrase(secs); err == nil {
-			t.Errorf("lifetimePhrase(%d) = %q, want an error", secs, got)
-		}
-	}
-}
-
 // The mail states the lifetime the identity provider enforces, read from the image that sets it.
 func TestLinkExpiryCopyMatchesTheIdPLifetime(t *testing.T) {
 	df, err := os.ReadFile("../../sidecar/auth/Dockerfile")

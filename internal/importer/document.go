@@ -614,6 +614,9 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 		return invoice.Invoice{}, err
 	}
 	created, err := s.inv.Create(ctx, in)
+	if errors.Is(err, invoice.ErrSourceDocumentBound) {
+		return invoice.Invoice{}, ErrNotFound
+	}
 	if err != nil {
 		return invoice.Invoice{}, err
 	}

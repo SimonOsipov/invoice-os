@@ -8,30 +8,16 @@ package invoice
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
-
-// pgConstraint extracts the violated CONSTRAINT NAME from err. Several
-// negative specs below could be satisfied by EITHER of the two new CHECKs
-// (e.g. SourceRows=[1] with no document violates both), so a bare SQLSTATE
-// 23514 assertion would pass for the wrong reason.
-func pgConstraint(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.ConstraintName
-	}
-	return ""
-}
 
 // sourceRowsOf reads the column directly via the superuser pool: it is NOT
 // on Invoice/invoiceColumns.

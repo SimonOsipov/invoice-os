@@ -563,6 +563,9 @@ func TestStoreCreate_BoundElsewhereIsItsOwnErrorAndKeepsTheValidationText(t *tes
 			t.Errorf("%s: err = %v, want ErrValidation with the text %q", name, err, "invoice: validation")
 		}
 	}
+	if !errors.Is(bound, ErrSourceDocumentBound) || errors.Is(otherErr, ErrSourceDocumentBound) {
+		t.Errorf("bound elsewhere: errors.Is(ErrSourceDocumentBound) = false, or another 23503 matches it (%v, %v)", bound, otherErr)
+	}
 	if bound == ErrValidation || !errors.Is(boundAgain, bound) {
 		t.Errorf("bound elsewhere: err is the bare ErrValidation or not one stable sentinel (%v, %v), want its own sentinel wrapping ErrValidation", bound, boundAgain)
 	}

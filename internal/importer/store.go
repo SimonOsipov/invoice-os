@@ -77,12 +77,22 @@ func pgCode(err error) string {
 	return ""
 }
 
+// pgConstraint extracts the violated constraint name from err, or "".
+func pgConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
 // CreateBatch inserts one import_batches row (tenant_id from the caller's
 // identity, status 'processing', counts zeroed, errors '[]') and returns its
 // generated id. A foreign_key_violation (23503, a non-existent entity_id) or
 // an invalid_text_representation (22P02, a malformed entity_id uuid) maps to
 // ErrValidation, mirroring internal/invoice.Store.Create's entity_id
-// handling — a bogus entity_id must never 500.
+// handling — a bogus entity_id must never 500. A document bound to another
+// client (23503 documents_bound_client) is ErrNotFound, like an unknown one.
 //
 // filename and documentID each go through a nullif(arg, empty string) guard
 // in the INSERT below, so a blank value persists as SQL NULL, never the
@@ -104,6 +114,9 @@ func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID 
 			 RETURNING id`,
 			identity.TenantID, entityID, filename, documentID, headerRow,
 		).Scan(&id); err != nil {
+			if pgCode(err) == "23503" && pgConstraint(err) == "documents_bound_client" {
+				return ErrNotFound
+			}
 			switch pgCode(err) {
 			case "23503", "22P02":
 				return ErrValidation

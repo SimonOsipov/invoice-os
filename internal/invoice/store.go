@@ -341,6 +341,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			case "23505":
 				return ErrDuplicateNumber
 			case "23503", "22P02", "22007", "22008", "22021", "22003":
+				if pgConstraint(err) == "documents_bound_client" {
+					return ErrSourceDocumentBound
+				}
 				return ErrValidation
 			}
 			return err

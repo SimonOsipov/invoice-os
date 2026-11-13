@@ -59,7 +59,7 @@ func celEvalErr(err error) error {
 }
 
 // ctxErr wraps the context error once ctx has ended, else nil. cel-go polls the
-// context only inside a comprehension, so callers check at each step.
+// context only inside a comprehension.
 func ctxErr(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("validation: evaluation stopped: %w", err)

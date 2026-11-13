@@ -286,17 +286,22 @@ func TestCEL_ContextEndingInComprehensionIsNotAbsorbed(t *testing.T) {
 	}
 }
 
-// The same absorption in the per-line pass: the last element's body is absorbed.
+// The same in the per-line pass: an element body that is absorbed, or that
+// errors outright, must not hide the context error.
 func TestCEL_ContextEndingInLineBodyIsNotAbsorbed(t *testing.T) {
 	lines := make([]any, 1)
 	lines[0] = map[string]any{"inner": bigLinesPayload(false)["invoice"].(map[string]any)["line_items"]}
 	p := Payload{"invoice": map[string]any{"line_items": lines}}
-	expr := "invoice.line_items.all(x, x.inner.all(y, true) && has(x.note))"
-	ctx := newFlipCtx()
-	_ = ctx.Err() // the first call closes Done; the loop has no check of its own before the first element
-	vs, err := celLineViolations(ctx, expr, p, celRule("k", "line_items", expr))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("vs=%v err=%v, want the context error", vs, err)
+	for name, expr := range map[string]string{
+		"absorbed": "invoice.line_items.all(x, x.inner.all(y, true) && has(x.note))",
+		"errored":  "invoice.line_items.all(x, x.inner.all(y, true))",
+	} {
+		ctx := newFlipCtx()
+		_ = ctx.Err() // the first call closes Done; the loop has no check of its own before the first element
+		vs, err := celLineViolations(ctx, expr, p, celRule("k", "line_items", expr))
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: vs=%v err=%v, want the context error", name, vs, err)
+		}
 	}
 }
 

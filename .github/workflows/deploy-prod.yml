@@ -1,4 +1,4 @@
-# Production on Google Cloud (GKE-09): build each image once, migrate, start new revisions at 0 %,
+# Production on Google Cloud (GKE-09): each run builds every image and deploys the digest it pushed, migrate, start new revisions at 0 %,
 # check them from inside the production network, then move traffic. A failed step leaves traffic on
 # the previous revisions. Workload Identity admits only a run on main (invoice-os-infra deployers.tf).
 # Rollback: rollback-prod.yml.

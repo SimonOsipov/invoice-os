@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prod-image.sh — production images, pushed by digest and deployed by digest (SECAUD-06).
+# prod-image.sh — production images, pushed by digest and deployed by digest.
 #
 #   prod-image.sh push <dir> <image> <build args>...   build, push $REGISTRY/<image> untagged, record its digest in <dir>/<image>
 #   prod-image.sh ref <dir> <image>                    print $REGISTRY/<image>@<digest> from <dir>/<image>
@@ -83,7 +83,7 @@ cmd_refs() {
   printf '%s' "$out"
 }
 
-# Equals keep_count of the keep-recent policy on images (invoice-os-infra terraform/registry.tf).
+# Equals keep_count of keep-recent on images from invoice-os-infra PR #43 on (20 before it).
 KEEP_VERSIONS=50
 # Ten legs of margin, so a failed pin never decides alone.
 PIN_RANK=$((KEEP_VERSIONS - 10))

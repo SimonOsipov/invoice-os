@@ -800,6 +800,41 @@ func TestProdImagePinGoesOnWhenAReadKeepsFailing(t *testing.T) {
 	}
 }
 
+// A read that exits 0 but prints no usable JSON fails open like a read that keeps failing.
+func TestProdImagePinGoesOnWhenAReadPrintsNoJSON(t *testing.T) {
+	t.Parallel()
+	reads := []struct{ name, key, prefix string }{
+		{"service", svcKey, "run services describe"},
+		{"revision", revServing, "run revisions describe"},
+		{"listing", "list", "artifacts docker images list"},
+	}
+	outputs := map[string]string{
+		"not json":       "not json\n",
+		"null":           "null\n",
+		"warning, brace": "WARNING: x\n{",
+		"warning, JSON":  "WARNING: x\n[]\n",
+		"number":         "7\n",
+	}
+	for _, rd := range reads {
+		for name, out := range outputs {
+			if rd.key != "list" && name == "warning, JSON" {
+				continue
+			}
+			b := pinBox(t, 35)
+			b.put(rd.key+".json", out)
+			r := b.script("pin", "gateway")
+			if r.code != 0 {
+				t.Errorf("%s/%s: exit %d stderr %q", rd.name, name, r.code, r.stderr)
+				continue
+			}
+			if n := strings.Count(r.stderr, "::error::pin gateway:"); n != 1 || !strings.Contains(r.stderr, rd.prefix) || !strings.Contains(r.stderr, "the build goes on") {
+				t.Errorf("%s/%s: stderr %q, want one ::error::pin gateway: naming %q and 'the build goes on'", rd.name, name, r.stderr, rd.prefix)
+			}
+			requireTagged(t, b)
+		}
+	}
+}
+
 func TestProdImagePinGoesOnWhenTaggingFails(t *testing.T) {
 	t.Parallel()
 	b := pinBox(t, 35)

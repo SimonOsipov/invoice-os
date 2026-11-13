@@ -88,28 +88,38 @@ KEEP_VERSIONS=50
 # Ten legs of margin, so a failed pin never decides alone.
 PIN_RANK=$((KEEP_VERSIONS - 10))
 
-# Sets $json to the output of a retried read; a read that fails 3 times ends pin with exit 0 (fail open).
+# Sets $json to the output of a retried read; a read that fails 3 times, or prints other than $shape
+# (a jq test: object, or array of objects), ends pin with exit 0 (fail open).
 pin_read() {
+  local shape=$1
+  shift
   if ! json=$(retry "$@"); then
     echo "::error::pin $pin_image: $* failed 3 times; nothing pinned, the build goes on" >&2
     exit 0
   fi
+  if ! jq -e "$shape" >/dev/null 2>&1 <<<"$json"; then
+    echo "::error::pin $pin_image: $* printed no usable JSON; nothing pinned, the build goes on" >&2
+    exit 0
+  fi
 }
+
+pin_object='type == "object"'
+pin_array='type == "array" and all(type == "object")'
 
 # Adds the digests the jobs or service use to $protected, one per line.
 pin_job_image() {
-  pin_read gcloud run jobs describe "$1" --project "$PROJECT" --region "$REGION" --format json
+  pin_read "$pin_object" gcloud run jobs describe "$1" --project "$PROJECT" --region "$REGION" --format json
   protected+=$(jq -r '.spec.template.spec.template.spec.containers[0].image // empty' <<<"$json")$'\n'
 }
 
 pin_service_images() {
-  pin_read gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" --format json
+  pin_read "$pin_object" gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" --format json
   protected+=$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$json")$'\n'
   local revs rev
   revs=$(jq -r '([.status.traffic[]? | select((.percent // 0) > 0) | .revisionName]
     + [.spec.traffic[]? | select(.tag == "rollback") | .revisionName]) | unique | map(select(. != null))[]' <<<"$json")
   for rev in $revs; do
-    pin_read gcloud run revisions describe "$rev" --project "$PROJECT" --region "$REGION" --format json
+    pin_read "$pin_object" gcloud run revisions describe "$rev" --project "$PROJECT" --region "$REGION" --format json
     protected+=$(jq -r '.status.imageDigest // empty' <<<"$json")$'\n'
   done
 }
@@ -121,7 +131,7 @@ cmd_pin() {
   : "${REGISTRY:?}"
   [ -n "${PROJECT:-}" ] || die "PROJECT is not set"
   [ -n "${REGION:-}" ] || die "REGION is not set"
-  local protected= json ref d
+  local protected="" json ref d
   case "$pin_image" in
     migrate) pin_job_image migrate; pin_job_image migrate-bootstrap ;;
     deploycheck) pin_job_image deploy-check ;;
@@ -137,7 +147,7 @@ cmd_pin() {
   digests=$(printf '%s' "$digests" | sort -u)
   [ -n "$digests" ] || return 0
 
-  pin_read gcloud artifacts docker images list "$REGISTRY/$pin_image" --include-tags --format json
+  pin_read "$pin_array" gcloud artifacts docker images list "$REGISTRY/$pin_image" --include-tags --format json
   local listing=$json state tag_cmd
   while read -r d; do
     [ -n "$d" ] || continue

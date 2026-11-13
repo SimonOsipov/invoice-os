@@ -1106,7 +1106,7 @@ func TestCSVRecords_StreamCSVKeepsTheAuditIdRaw(t *testing.T) {
 		}
 		row := fixtureRow(audit.ExportCSVHeader, "a")
 		row[colIndex(t, audit.ExportCSVHeader, "actor_name")] = "@evil"
-		row[colIndex(t, audit.ExportCSVHeader, "id")] = "42"
+		row[colIndex(t, audit.ExportCSVHeader, "id")] = "-42" // a leading - the mask must not prefix
 		return w.Write(row)
 	})
 	if err != nil {
@@ -1117,8 +1117,8 @@ func TestCSVRecords_StreamCSVKeepsTheAuditIdRaw(t *testing.T) {
 	if got := rows[1][colIndex(t, audit.ExportCSVHeader, "actor_name")]; got != "'@evil" {
 		t.Errorf("actor_name = %q, want '@evil", got)
 	}
-	if got := rows[1][colIndex(t, audit.ExportCSVHeader, "id")]; got != "42" {
-		t.Errorf("id = %q, want 42", got)
+	if got := rows[1][colIndex(t, audit.ExportCSVHeader, "id")]; got != "-42" {
+		t.Errorf("id = %q, want -42", got)
 	}
 }
 

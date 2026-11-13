@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -324,5 +325,21 @@ func TestCheckCustomRule_TooExpensiveWhenIs422(t *testing.T) {
 func TestCheckCustomRule_WithinLimitNestedIsAccepted(t *testing.T) {
 	if rec := sendCheck(t, checkBody(TypeCEL, celParams(nested100(2)))); rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckCustomRule_EndedRequestContextIsNotARuleRefusal(t *testing.T) {
+	raw, err := json.Marshal(checkBody(TypeRequired, `{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("POST", "/v1/custom-rules/check", strings.NewReader(string(raw))).WithContext(ctx)
+	r.Header.Set(headerS2SToken, checkToken)
+	rec := httptest.NewRecorder()
+	S2SMiddleware(checkToken)(CheckCustomRuleHandler(NewDefaultEngine())).ServeHTTP(rec, r)
+	if rec.Code == http.StatusUnprocessableEntity || strings.Contains(rec.Body.String(), "does not evaluate") {
+		t.Fatalf("status %d body %q, want no rule refusal for a gone client", rec.Code, rec.Body.String())
 	}
 }

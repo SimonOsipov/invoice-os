@@ -77,9 +77,6 @@ func ctxErr(ctx context.Context) error {
 // `type: cel` rule's expr and any rule's `when` guard compile+evaluate
 // identically.
 func evalCELBool(ctx context.Context, expr string, p Payload) (bool, error) {
-	if err := ctxErr(ctx); err != nil {
-		return false, err
-	}
 	env, err := newCELEnv()
 	if err != nil {
 		return false, err
@@ -95,6 +92,10 @@ func evalCELBool(ctx context.Context, expr string, p Payload) (bool, error) {
 	out, _, err := prg.ContextEval(ctx, map[string]any{"invoice": p["invoice"]})
 	if err != nil {
 		return false, fmt.Errorf("validation: cel eval %q: %w", expr, celEvalErr(err))
+	}
+	// a comprehension stopped by the context yields an error value that && / || can absorb into a bool
+	if err := ctxErr(ctx); err != nil {
+		return false, err
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
@@ -179,8 +180,9 @@ func (celEvaluator) evalLinesContext(ctx context.Context, p Payload, r Rule) ([]
 // celLineViolations returns one violation per element whose body is false, or
 // nil when the expression is not element-wise or no element is blamed. An
 // element whose body errors is not blamed (P13: CEL absorbs it in the whole),
-// but a cost overrun or an ended context is returned. Under a cost limit the
-// elements share one budget, so work stays bounded however many lines there are.
+// but a single element's cost overrun or an ended context is returned. Under a
+// cost limit the elements share one budget; when it runs out the pass stops and
+// returns nil (the caller reports the invoice-level violation).
 func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]Violation, error) {
 	if r.Target == "" {
 		return nil, nil
@@ -213,9 +215,6 @@ func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]V
 	var out []Violation
 	budget := celCostLimitFrom(ctx)
 	for i, el := range els {
-		if err := ctxErr(ctx); err != nil {
-			return nil, err
-		}
 		res, det, err := prg.ContextEval(ctx, map[string]any{v: el})
 		if err != nil {
 			if err = celEvalErr(err); errors.Is(err, errCELTooExpensive) {
@@ -226,13 +225,17 @@ func celLineViolations(ctx context.Context, expr string, p Payload, r Rule) ([]V
 			}
 			continue
 		}
+		if cerr := ctxErr(ctx); cerr != nil {
+			return nil, cerr
+		}
 		if budget > 0 {
 			var spent uint64
 			if c := det.ActualCost(); c != nil {
 				spent = *c
 			}
 			if spent > budget {
-				return nil, fmt.Errorf("%w: line budget spent", errCELTooExpensive)
+				// the whole expression already ran within the limit: stop blaming lines, report the invoice-level violation
+				return nil, nil
 			}
 			budget -= spent
 		}

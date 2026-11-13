@@ -227,6 +227,9 @@ func CheckCustomRuleHandler(eng *Engine) http.HandlerFunc {
 			return
 		}
 		if err := checkCustomRuleBody(r.Context(), eng, in); err != nil {
+			if r.Context().Err() != nil {
+				return // the client is gone; nothing to answer
+			}
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}

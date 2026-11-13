@@ -192,15 +192,108 @@ func TestCEL_CostLimitOnLinePass(t *testing.T) {
 	}
 }
 
-func TestCEL_LinePassSharesOneBudget(t *testing.T) {
-	expr := "invoice.line_items.all(x, !has(x.stop) && " + nested100(2) + ")"
+// A line pass that overruns its shared budget after the whole expression ran
+// within the limit reports the invoice-level violation, not a cost fault.
+func TestCEL_LinePassOverrunFallsBackToInvoiceViolation(t *testing.T) {
+	expr := "invoice.line_items.all(x, !has(x.stop) && " + nested100(2) + " && has(x.ok))"
 	lines := []map[string]any{{"stop": true}}
 	for i := 0; i < 39; i++ {
 		lines = append(lines, map[string]any{})
 	}
-	_, err := celEvaluator{}.evalLinesContext(limited(), linesPayload(lines...), celRule("k", "line_items", expr))
-	if !errors.Is(err, errCELTooExpensive) {
-		t.Fatalf("err = %v, want errCELTooExpensive (each line alone is under the limit)", err)
+	r := celRule("k", "line_items", expr)
+	vs, err := celEvaluator{}.evalLinesContext(limited(), linesPayload(lines...), r)
+	if err != nil || len(vs) != 1 || vs[0].Path != r.Target {
+		t.Fatalf("vs=%v err=%v, want one invoice-level violation at %q and no error", vs, err, r.Target)
+	}
+}
+
+// The per-line pass stops once the shared budget is spent: it returns no line
+// violations at all instead of blaming every remaining line.
+func TestCEL_LinePassSharesOneBudget(t *testing.T) {
+	expr := "invoice.line_items.all(x, !has(x.stop) && " + nested100(2) + " && has(x.ok))"
+	lines := []map[string]any{{"stop": true}}
+	for i := 0; i < 39; i++ {
+		lines = append(lines, map[string]any{})
+	}
+	vs, err := celLineViolations(limited(), expr, linesPayload(lines...), celRule("k", "line_items", expr))
+	if err != nil || vs != nil {
+		t.Fatalf("vs=%d err=%v, want the pass to stop with no violations and no error", len(vs), err)
+	}
+	// the same lines with an unlimited budget are all blamed
+	if vs, _ := celLineViolations(context.Background(), expr, linesPayload(lines...), celRule("k", "line_items", expr)); len(vs) != 40 {
+		t.Errorf("unlimited blamed %d lines, want 40", len(vs))
+	}
+}
+
+// flipCtx ends on its second Err call and closes Done on the first, so cel-go
+// sees an ended context inside the first comprehension it runs.
+type flipCtx struct {
+	context.Context
+	mu    sync.Mutex
+	calls int
+	done  chan struct{}
+}
+
+func newFlipCtx() *flipCtx {
+	return &flipCtx{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *flipCtx) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.calls == 1 {
+		close(c.done)
+		return nil
+	}
+	return context.Canceled
+}
+
+func (c *flipCtx) Done() <-chan struct{} { return c.done }
+
+func bigLinesPayload(note bool) Payload {
+	lines := make([]any, 250)
+	for i := range lines {
+		lines[i] = map[string]any{}
+	}
+	inv := map[string]any{"line_items": lines}
+	if note {
+		inv["note"] = "x"
+	}
+	return Payload{"invoice": inv}
+}
+
+// An interrupted comprehension is an error value that && / || can absorb into a
+// bool; the context error must win.
+func TestCEL_ContextEndingInComprehensionIsNotAbsorbed(t *testing.T) {
+	cases := map[string]struct {
+		expr string
+		note bool
+	}{
+		"and": {"invoice.line_items.all(x, true) && has(invoice.note)", false},
+		"or":  {"invoice.line_items.all(x, true) || has(invoice.note)", true},
+	}
+	for name, c := range cases {
+		ctx := newFlipCtx()
+		_ = ctx.Err() // the first call closes Done; every later call reports Canceled
+		ok, err := evalCELBool(ctx, c.expr, bigLinesPayload(c.note))
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: ok=%v err=%v, want the context error", name, ok, err)
+		}
+	}
+}
+
+// The same absorption in the per-line pass: the last element's body is absorbed.
+func TestCEL_ContextEndingInLineBodyIsNotAbsorbed(t *testing.T) {
+	lines := make([]any, 1)
+	lines[0] = map[string]any{"inner": bigLinesPayload(false)["invoice"].(map[string]any)["line_items"]}
+	p := Payload{"invoice": map[string]any{"line_items": lines}}
+	expr := "invoice.line_items.all(x, x.inner.all(y, true) && has(x.note))"
+	ctx := newFlipCtx()
+	_ = ctx.Err() // the first call closes Done; the loop has no check of its own before the first element
+	vs, err := celLineViolations(ctx, expr, p, celRule("k", "line_items", expr))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("vs=%v err=%v, want the context error", vs, err)
 	}
 }
 

@@ -848,6 +848,9 @@ describe('legacy pair record (SECAUD-17-11)', () => {
     // A reload before the answer finds the token again.
     expect(loadSession()?.renewal).toEqual({ receivedAt: 0, legacyRefreshToken: 'R-old' })
     expect(storage.getItem(SESSION_KEY)).toBe(legacy)
+    // Saving the not-yet-adopted session keeps the pair too.
+    saveSession(first!)
+    expect(storage.getItem(SESSION_KEY)).toBe(legacy)
 
     // Control: the current shape carries no legacy token.
     storage.setItem(SESSION_KEY, JSON.stringify({ ...HANDOFF, received_at: 9 }))

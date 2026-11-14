@@ -2191,4 +2191,15 @@ describe('cookie-held refresh token (SECAUD-17-11)', () => {
     expect(screen.queryByRole('alert'), 'the caller leaves, the form shows no retry notice').toBeNull()
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
+
+  // Only `renewable` can tell this from a retryable failure: the status is not a 401.
+  it('create_withoutRenewalFailsToSignInOnAnyFailure', async () => {
+    workspacesReply = fail(500, 'boom')
+
+    const { hrefWrites } = await firstWorkspace(false)
+
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

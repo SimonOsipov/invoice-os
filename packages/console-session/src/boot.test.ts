@@ -653,6 +653,10 @@ describe('app-borrowed session (SUPP-11-02)', () => {
     const token = staffToken('both')
     const ok = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: null, answer: () => granted(token) })
     expect(ok.boot).toEqual({ kind: 'open', session: { token, borrowed: false } })
+    // With an app base the borrowed path is allowed, but renewable true still stores a landing record.
+    const withApp = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => granted(token) })
+    expect(withApp.boot).toEqual({ kind: 'open', session: { token, borrowed: false } })
+    expect(store.local.getItem(OPS_KEY)).toBe(v3Raw(token))
     for (const renewable of [null, '', false]) {
       const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: null, answer: () => reply(200, { access_token: token, renewable }) })
       expect(/&console=support&signin=failed$/.test(leaveUrl(boot)), String(renewable)).toBe(true)

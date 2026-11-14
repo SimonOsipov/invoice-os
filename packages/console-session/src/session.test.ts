@@ -210,7 +210,7 @@ describe('v3 records (SECAUD-17-10)', () => {
     expect(parseStoredConsoleSession(v3Raw(T), OPS_KEY)).toEqual({ token: T, borrowed: false })
     expect(parseStoredConsoleSession(v3BorrowedRaw(T), OPS_KEY)).toEqual({ token: T, borrowed: true })
     expect(warn).not.toHaveBeenCalled()
-    for (const rec of [{ v: 3 }, { v: 3, token: '' }, { v: 3, token: T, from: 'x' }, { v: 4, token: T }]) {
+    for (const rec of [{ v: 3 }, { v: 3, token: '' }, { v: 3, token: T, from: 'x' }, { v: 4, token: T }, { v: 3, token: T, extra: 1 }, { v: 3, token: T, from: 'app', extra: 1 }]) {
       warn.mockClear()
       expect(parseStoredConsoleSession(JSON.stringify(rec), OPS_KEY), JSON.stringify(rec)).toBeNull()
       expect(warn, JSON.stringify(rec)).toHaveBeenCalledTimes(1)

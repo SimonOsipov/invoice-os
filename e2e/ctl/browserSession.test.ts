@@ -84,6 +84,10 @@ describe('checkSavedState reads the saved access token and never boots the app',
     const file = state(urls.OPS_CONSOLE_URL, 'invoice-os.ops-session', { v: 3, token: staff }, [cookie('ops')])
     expect(await checkSavedState('developer', account, urls, file)).toEqual({ ok: false })
     expect(launch, 'booting a console renews with the saved cookie').not.toHaveBeenCalled()
+    // Even a state that reads like a live app record under the console origin is not reused.
+    me.mockResolvedValue({ tenant: { id: TENANT }, user: { role: 'admin' } })
+    const odd = state(urls.OPS_CONSOLE_URL, 'invoice-os.session', { token: staff, handoff: true }, [cookie('ops')])
+    expect(await checkSavedState('developer', account, urls, odd)).toEqual({ ok: false })
   })
 
   it('an app state whose token is due is stale', async () => {

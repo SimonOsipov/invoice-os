@@ -728,3 +728,52 @@ func TestSiteFor_EdgeHostsKeepVerbatimAndNeverPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_EveryResponseCarriesTheSecurityHeaders(t *testing.T) {
+	want := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+	}
+	assertHeaders := func(t *testing.T, name string, w *httptest.ResponseRecorder, code int) {
+		t.Helper()
+		if w.Code != code {
+			t.Errorf("%s: status %d, want %d", name, w.Code, code)
+		}
+		for k, v := range want {
+			if got := w.Header().Values(k); len(got) != 1 || got[0] != v {
+				t.Errorf("%s: %s = %q, want exactly %q", name, k, got, v)
+			}
+		}
+	}
+	r := newRig(t)
+	for _, c := range []struct {
+		method, path string
+		code         int
+	}{
+		{"GET", "/", 200}, {"GET", "/p", 200}, {"GET", "/blog/p", 200}, {"GET", "/nope", 404},
+		{"GET", "/assets/app.js", 200}, {"GET", "/favicon.ico", 200}, {"GET", "/health", 200},
+		{"GET", "/assets/app.js.map", 404}, {"GET", "/robots.txt", 200}, {"GET", "/sitemap.xml", 200},
+		{"GET", "/index.html", 301}, {"HEAD", "/p", 200}, {"POST", "/", 405},
+	} {
+		assertHeaders(t, c.method+" "+c.path, r.do(c.method, c.path), c.code)
+	}
+
+	gz := r.do("GET", "/assets/app.js", "Accept-Encoding", "gzip")
+	if gz.Header().Get("Content-Encoding") != "gzip" {
+		t.Errorf("gzip row: Content-Encoding %q", gz.Header().Get("Content-Encoding"))
+	}
+	assertHeaders(t, "gzip /assets/app.js", gz, 200)
+
+	lm := r.do("GET", "/assets/app.js").Header().Get("Last-Modified")
+	if lm == "" {
+		t.Fatal("no Last-Modified on static file")
+	}
+	assertHeaders(t, "304 /assets/app.js", r.do("GET", "/assets/app.js", "If-Modified-Since", lm), 304)
+
+	r = newRig(t) // fresh: earlier GETs filled the snapshot cache
+	r.g.set(func() { r.g.status = 500 })
+	for _, p := range []string{"/p", "/sitemap.xml"} {
+		assertHeaders(t, "503 "+p, r.do("GET", p), 503)
+	}
+}

@@ -8,10 +8,29 @@
 :{$PORT:8080} {
 	encode gzip
 
-	# No site may frame the apps; the header block covers every response, /health and the .map 404 included.
+	# No site may frame the apps, and every response carries these headers, /health and the .map 404 included.
 	header {
 		Content-Security-Policy "frame-ancestors 'none'"
 		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+	}
+
+	# A page revalidates on every load; /assets/ keeps its cache. status 2xx leaves the 404's no-store.
+	header {
+		Cache-Control "no-cache"
+		match {
+			status 2xx
+			header Content-Type text/html*
+		}
+	}
+
+	# A 304 carries no Content-Type, so a page's 304 is told by its address: no file extension.
+	@pageAddress not path_regexp \.[A-Za-z0-9]+$
+	header @pageAddress {
+		Cache-Control "no-cache"
+		match status 304
 	}
 
 	# The LB cannot add the HSTS header to its own redirects, so these hosts route here.

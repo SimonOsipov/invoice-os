@@ -554,13 +554,13 @@ func TestVerify_IgnoresRedirectTo(t *testing.T) {
 func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 	secrets := []string{verifyToken, sessionAT, sessionRT, vhState}
 	for _, c := range []struct {
-		name, body, want string // want "" = a Location carrying a code
+		name, body, want string
 		status           int
 		state            string
 		wantLog          int // a failure logs the upstream status
 	}{
 		{"verified with a session body", gtSession, siteURLValue + "/?verified=1", http.StatusOK, "", 0},
-		{"verified with a state", gtSession, "", http.StatusOK, vhState, 0},
+		{"verified with a state", gtSession, siteURLValue + "/?verified=1", http.StatusOK, vhState, 0},
 		{"failed", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, "", http.StatusForbidden},
 		{"failed with a state", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, vhState, http.StatusForbidden},
 	} {
@@ -579,10 +579,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 			}
 			loc := rec.Header().Get("Location")
 			all := secrets
-			if c.want == "" {
-				code := vhCode(t, rec)
-				all = append(slices.Clone(secrets), code)
-			} else if loc != c.want {
+			if loc != c.want {
 				t.Errorf("Location = %q, want %q", loc, c.want)
 			}
 			if c.wantLog != 0 && !logHasValue(buf, c.wantLog) {
@@ -596,7 +593,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 					t.Errorf("response body carries %q", s)
 				}
 			}
-			// The success Location carries the code and nothing else secret.
+			// The success Location carries nothing secret.
 			for _, s := range secrets {
 				if strings.Contains(loc, s) {
 					t.Errorf("Location carries %q", s)

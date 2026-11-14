@@ -132,8 +132,8 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 	}{
 		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil, lrThrottle(time.Now), true), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout"}},
-		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, lrThrottle(time.Now), true, nil), ipPath, rpFormType, withState.Encode(),
-			[]string{"POST /verify", "PUT /user", "POST /logout", "POST /token"}},
+		{"invitee set-password", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, lrThrottle(time.Now), true, nil), ipPath, rpFormType, withState.Encode(),
+			[]string{"POST /verify", "PUT /user", "POST /logout"}},
 		{"sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), throttle(), log, nil, nil), "/auth/sign-in", jsonType, signInBody(regEmail, regPassword, vhState), []string{"POST /token"}},
 		{"refresh", RefreshHandler(f.URL, testClient(), log), "/auth/refresh", jsonType, refreshBody(rpRefresh), []string{"POST /token"}},
 		{"sign-out", SignOutHandler(f.URL, testClient(), sessions, log, nil), "/auth/sign-out", jsonType, refreshBody(rpRefresh), []string{"POST /token", "POST /logout"}},

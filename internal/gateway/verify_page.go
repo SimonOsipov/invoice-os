@@ -30,6 +30,6 @@ func VerifyPageHandler(siteURL *url.URL, address LinkAddress, perIP *SignInThrot
 		if inv := r.URL.Query()["invite"]; len(inv) == 1 && inv[0] == "1" {
 			confirm = "invite"
 		}
-		serveSetPasswordPage(w, r, site, failed, confirm)
+		serveSetPasswordPage(w, r, site, failed, confirm, address, perIP, enforce, log)
 	}), nil
 }

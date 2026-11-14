@@ -98,10 +98,6 @@ func main() {
 	}
 	app.Mux.Handle("GET /emails/recovery.html", recoveryMail)
 	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
-	verifyPage, err := gateway.VerifyPageHandler(siteURL, nil, nil, false, app.Logger)
-	if err != nil {
-		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
-	}
 
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := registrantSink(gwPool, gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken))
@@ -118,7 +114,6 @@ func main() {
 	app.Mux.Handle("POST /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("OPTIONS /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
-	app.Mux.Handle("GET /auth/verify", verifyPage)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, previewer, registrations, poolTokens(gwPool), app.Logger)
@@ -162,6 +157,11 @@ func main() {
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	store := handoffStore(gwPool, app.Logger)
 	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, gwPool)
+	verifyPage, err := gateway.VerifyPageHandler(siteURL, gateway.PoolLinkAddress(gwPool), h.LinkRedeemByIP, platform.Posture(platform.DeployEnv()) != platform.PosturePreview, app.Logger)
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
+	}
+	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -413,7 +413,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
 
-		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, perIP, enforce, nil),
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, perIP, enforce, gateway.PoolLinkAddress(pool)),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,

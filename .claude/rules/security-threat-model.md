@@ -49,7 +49,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
 - Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request`, `/blog/*` and the two `/readiness-check/*` routes per client IP. The retired `/auth/verify` path (now 405), `/auth/reset-password` and `/auth/invitation/password` share one budget of 30 an hour per IP (rule `link-redeem`, priority 1080). No Armor rule covers sign-in or refresh. GoTrue limits `/token` per client address. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
-- The gateway also counts the two routes `/auth/reset-password` and `/auth/invitation/password` per client IP as `link-redeem-ip` (`TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances`).
+- The gateway also counts `/auth/reset-password`, `/auth/invitation/password` and every confirm-link address lookup per client IP as `link-redeem-ip`. A found lookup is refunded. No Armor rule covers `GET /auth/verify`, so this count is the only limit on a lookup (`TestTwoInstances_TheLinkRedeemLimitCountsAcrossInstances`, `TestVerifyPage_AMissedLookupSpendsTheLinkRedeemCount`).
 - On Cloud Run every service but the gateway and the static sites is ingress-internal and admits only a caller with a Google ID token. `platform.IDTokenTransport` adds it in `X-Serverless-Authorization`; `TraceTransport` includes it.
 
 ## Postures

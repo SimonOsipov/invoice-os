@@ -44,7 +44,7 @@ export function VerifyNotice({ outcome, onDismiss, onRequestReset, onSignIn }: {
             {outcome === 'failed' ? 'Forgot password' : 'Request a new link'}
           </Button>
         )}
-        {outcome === 'failed' && onSignIn && (
+        {(outcome === 'failed' || outcome === 'verified') && onSignIn && (
           <Button variant="text" onClick={onSignIn} style={{ color: 'inherit', borderBottomColor: 'currentColor' }}>
             Sign in
           </Button>

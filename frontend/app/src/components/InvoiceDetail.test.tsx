@@ -152,6 +152,8 @@ interface DetailFetchOptions {
   // order; the last entry repeats once exhausted. The source-document GET never touches
   // this -- see below.
   detailSequence?: InvoiceDetailRecord[]
+  // GET /imports/<id> answers, in order, repeating the last; absent means the fetch would hit the fallback.
+  batchSequence?: { undoable: boolean }[]
   // POST .../invoices/submissions responses, consumed FIFO (last entry repeats once
   // exhausted). Every call is recorded into the returned `submitCalls`, win or lose.
   submitResponses?: MockResponse[]
@@ -213,6 +215,8 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
   const decideCalls: DecideCall[] = []
   const explainCalls: { rule_key: string; path: string }[] = []
   const patchCalls: unknown[] = []
+  const batchGets: string[] = []
+  const undoPosts: string[] = []
   const NO_RUN: MockResponse = { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) }
 
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
@@ -372,6 +376,16 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         },
       )
     }
+    if (url.includes('/v1/imports/')) {
+      if (method === 'POST') {
+        undoPosts.push(url)
+        return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ id: 'b1', status: 'undone', discarded_invoices: 1 }) })
+      }
+      const seq = opts.batchSequence ?? [{ undoable: false }]
+      const batch = seq[batchGets.length] ?? seq.at(-1)
+      batchGets.push(url)
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ id: 'b1', ...batch }) })
+    }
     // getInvoice GET: the first call is always `detail`; later calls consume
     // detailSequence in order, repeating the last entry once exhausted.
     const record =
@@ -380,7 +394,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(record) })
   })
   vi.stubGlobal('fetch', fetchMock)
-  return { fetchMock, submitCalls, resolveCalls, decideCalls, explainCalls, patchCalls, sendAgainCalls }
+  return { fetchMock, submitCalls, resolveCalls, decideCalls, explainCalls, patchCalls, sendAgainCalls, batchGets, undoPosts }
 }
 
 beforeEach(() => {
@@ -7927,5 +7941,49 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     expect(screen.queryByTestId('detail-approve')).toBeNull()
+  })
+})
+
+describe('SECAUD-50-04: Undo import on invoice detail', () => {
+  const ID = 'inv-failed-1'
+
+  it('invoice detail offers the undo for an undoable import', async () => {
+    mockDetailFetch(detailRecord({ status: 'validated', can_submit: true, import_batch_id: 'b1' }), [], { batchSequence: [{ undoable: true }] })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const undo = await screen.findByTestId('undo-import')
+    const bar = screen.getByTestId('invoice-actions')
+    expect(bar.contains(undo)).toBe(true)
+    expect(screen.getByTestId('detail-submit').compareDocumentPosition(undo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('invoice detail hides the undo when the batch is not undoable', async () => {
+    const { batchGets } = mockDetailFetch(detailRecord({ import_batch_id: 'b1' }), [], { batchSequence: [{ undoable: false }] })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await waitFor(() => expect(batchGets).toHaveLength(1))
+    await screen.findByTestId('invoice-actions')
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+  })
+
+  it('an invoice with no batch makes no batch request', async () => {
+    const { batchGets } = mockDetailFetch(detailRecord({ import_batch_id: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-actions')
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+    expect(batchGets).toHaveLength(0)
+  })
+
+  it('invoice detail refetches after an undo', async () => {
+    const live = detailRecord({ status: 'validated', import_batch_id: 'b1' })
+    const { fetchMock, undoPosts } = mockDetailFetch(live, [], {
+      batchSequence: [{ undoable: true }, { undoable: false }],
+      detailSequence: [{ ...live, status: 'discarded' }],
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('undo-import'))
+    fireEvent.click(screen.getByTestId('undo-import-confirm'))
+    await waitFor(() => expect(undoPosts).toHaveLength(1))
+    await screen.findByText('DISCARDED')
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith(`/invoices/${ID}`))).toHaveLength(2)
+    expect(screen.queryByTestId('undo-import')).toBeNull()
   })
 })

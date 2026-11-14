@@ -81,6 +81,8 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../lib/notes'
 import { NotesCard } from './NotesCard'
+import { UndoImportControl } from './UndoImportControl'
+import { useUndoableBatch } from '../lib/useUndoableBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ExplainPanel } from './ExplainPanel'
@@ -244,6 +246,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // this overlay instead, and `inv` layers it over detail.data.
   const [live, setLive] = useState<InvoiceDetailRecord | null>(null)
   const inv = live ?? detail.data
+  const undoBatch = useUndoableBatch(ctx, inv?.import_batch_id ?? null)
 
   // Only a commercial fiscal record can start a note; any other invoice makes no request (topology console gate).
   const notesWanted = inv != null && shouldShowFiscalRecord(inv) && !isNote(inv)
@@ -969,6 +972,20 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           </button>
                         </>
                       )}
+                    {undoBatch.undoable && inv.import_batch_id != null && (
+                      <UndoImportControl
+                        ctx={ctx}
+                        batchId={inv.import_batch_id}
+                        size={34}
+                        onSettled={() => {
+                          gen.current++
+                          setLive(null)
+                          detail.run()
+                          history.run()
+                          undoBatch.refetch()
+                        }}
+                      />
+                    )}
                     {/* Shown only on a fiscal record; an accepted note is disabled with the wire's reason. */}
                     {shouldShowFiscalRecord(inv) &&
                       (['credit_note', 'debit_note'] as const).map((type) => (

@@ -3545,3 +3545,39 @@ describe('the note panel', () => {
     expect(saveButton()!.title).toBe(HELD_TITLE)
   })
 })
+
+describe('SECAUD-50-04: Undo import on the extraction page', () => {
+  function withBatch(detail: ExtractionDetail, batch: { undoable: boolean }) {
+    return wire(async (_job, url) => (url.includes('/imports/') ? { id: 'b1', ...batch } : detail))
+  }
+  const batchReads = (w: Wire) => w.calls().filter((c) => c.url.includes('/imports/'))
+
+  it('extraction page offers the undo for an undoable import', async () => {
+    const w = withBatch(mkDetail({ import_batch_id: 'b1' }), { undoable: true })
+    render(review({ ctx: w.ctx, onOpenInvoice: vi.fn() }))
+    await flush()
+
+    const undo = screen.getByTestId('undo-import')
+    const exit = exitButton()!
+    expect(exit.parentElement!.contains(undo)).toBe(true)
+    expect(undo.compareDocumentPosition(exit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the undo is absent when the batch is not undoable', async () => {
+    const w = withBatch(mkDetail({ import_batch_id: 'b1' }), { undoable: false })
+    render(review({ ctx: w.ctx, onOpenInvoice: vi.fn() }))
+    await flush()
+
+    expect(batchReads(w)).toHaveLength(1)
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+  })
+
+  it('a detail with no batch makes no batch request', async () => {
+    const w = withBatch(mkDetail({ import_batch_id: null }), { undoable: true })
+    render(review({ ctx: w.ctx, onOpenInvoice: vi.fn() }))
+    await flush()
+
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+    expect(batchReads(w)).toHaveLength(0)
+  })
+})

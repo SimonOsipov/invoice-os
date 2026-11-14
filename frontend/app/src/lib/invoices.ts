@@ -945,6 +945,7 @@ const INVOICE_STATUS_STYLE: Partial<Record<InvoiceStatus, StatusStyle>> = {
   accepted: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ACCEPTED' },
   rejected: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'REJECTED' },
   failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' },
+  discarded: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'DISCARDED' },
 }
 
 // Out-of-enum values reach this at runtime (JSON.parse'd server data, no enum

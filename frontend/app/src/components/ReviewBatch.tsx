@@ -62,6 +62,7 @@ import {
 import { ReviewAlreadyImportedTab } from './ReviewAlreadyImportedTab'
 import { ReviewInvoicesTab } from './ReviewInvoicesTab'
 import { ReviewUnreadableTab } from './ReviewUnreadableTab'
+import { UndoImportControl } from './UndoImportControl'
 import type { PlatformCtx } from '../types'
 
 interface ReviewShellData {
@@ -234,6 +235,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   // 2" for an import the server completed. reviewShellStateAll is 'batch' iff ANY batch
   // in the run is 'completed' (BULK-01-06) — byte-identical to the singular
   // reviewShellState over exactly one batch.
+  if (reviewShellStateAll(batches) === 'undone') return <UndoneRun ctx={ctx} />
   if (reviewShellStateAll(batches) === 'rejected') {
     // Single-batch rendering stays byte-identical (the shipped e2e at
     // import-wizard.spec.ts:1002-1014 pins it): the ORIGINAL RejectedFile, unchanged,
@@ -403,7 +405,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           entirely at exactly one file (nothing to disambiguate there, matching
           showsSourceFile's own ">1" threshold). Reused, never re-derived, by
           RejectedRun above for the all-rejected multi-file surface. */}
-      {files.length > 1 && <FilesStripView files={files} />}
+      {files.length > 1 && <FilesStripView ctx={ctx} files={files} batches={batches} onSettled={shell.run} />}
 
       {unvalidatedDrafts > 0 && (
         <div
@@ -488,6 +490,9 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         <button onClick={ctx.closeCreate} className="v2-btn v2-btn-ghost pf-btn" style={{ marginLeft: 'auto', height: 38, padding: '0 16px', fontSize: 13 }}>
           Finish · go to invoices
         </button>
+        {batches.length === 1 && batches[0].undoable && (
+          <UndoImportControl ctx={ctx} batchId={batches[0].id} size={38} onSettled={shell.run} />
+        )}
       </div>
     </div>
   )
@@ -543,6 +548,26 @@ function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch:
       <div className="label" style={{ marginBottom: 4 }}>Batch id</div>
       <div className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all', marginBottom: 18 }}>{batch.id}</div>
 
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
+          Choose another file
+        </button>
+        <button onClick={ctx.skipUpload} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
+          Enter one invoice instead
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Every batch of the run was undone (a revisit, or the refetch after an undo).
+function UndoneRun({ ctx }: { ctx: PlatformCtx }) {
+  return (
+    <div data-testid="review-undone" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--fg-1)', marginBottom: 8 }}>Import undone</div>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
+        Its invoices were discarded. They keep their history and no longer appear in the invoice list, the register or the evidence bundle. The file can now be imported for another client.
+      </p>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
           Choose another file
@@ -616,23 +641,35 @@ function RejectedRun({ ctx, batches, run, unit }: { ctx: PlatformCtx; batches: I
 // are aggregated across every batch id via reviewQueryAll), so none is rendered here
 // rather than fabricating one from `rows_valid` (rows are not invoices -- several rows
 // can group into one). Flagged in this subtask's own report, not silently dropped.
-function FilesStripView({ files }: { files: FileStripRow[] }) {
+function FilesStripView({
+  ctx,
+  files,
+  batches,
+  onSettled,
+}: {
+  ctx: PlatformCtx
+  files: FileStripRow[]
+  batches: ImportBatch[]
+  onSettled: () => void
+}) {
   return (
     <div data-testid="review-files-strip" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="label">Files in this run</div>
       {files.map((f) => {
-        const ok = f.reason == null
+        const ok = f.reason == null && !f.undone
+        const undoable = batches.some((b) => b.id === f.id && b.undoable)
         return (
           <div key={f.id} data-testid="review-files-strip-row" style={{ padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', flex: 'none' }} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: f.undone ? 'var(--fg-4)' : ok ? 'var(--status-green-text)' : 'var(--status-red-text)', flex: 'none' }} />
               <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', wordBreak: 'break-all', flex: 1 }}>{f.filename}</span>
               <span
                 className="mono"
-                style={{ fontSize: 10.5, fontWeight: 600, color: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', letterSpacing: '0.04em', textTransform: 'uppercase', flex: 'none' }}
+                style={{ fontSize: 10.5, fontWeight: 600, color: f.undone ? 'var(--fg-3)' : ok ? 'var(--status-green-text)' : 'var(--status-red-text)', letterSpacing: '0.04em', textTransform: 'uppercase', flex: 'none' }}
               >
-                {ok ? 'Imported' : 'Rejected'}
+                {f.undone ? 'Undone' : ok ? 'Imported' : 'Rejected'}
               </span>
+              {undoable && <UndoImportControl ctx={ctx} batchId={f.id} size={30} onSettled={onSettled} />}
             </div>
             {/* Reason is read from `reason` alone, never from a batch's own `status`
                 ([reason-comes-from-errors-not-status]) -- filesStrip already resolved

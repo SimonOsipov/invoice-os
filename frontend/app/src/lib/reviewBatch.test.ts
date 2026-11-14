@@ -2666,6 +2666,21 @@ describe('reviewShellStateAll (BULK-01-06, AC-4)', () => {
   })
 })
 
+describe('reviewShellStateAll reads undone (SECAUD-50-04)', () => {
+  it('reviewShellStateAll reads undone', () => {
+    const undone: Pick<ImportBatch, 'status'> = { status: 'undone' }
+    expect(reviewShellStateAll([undone, undone])).toBe('undone')
+    expect(reviewShellStateAll([undone, { status: 'completed' }])).toBe('batch')
+    expect(reviewShellStateAll([{ status: 'failed' }])).toBe('rejected')
+  })
+
+  it('filesStrip marks an undone batch', () => {
+    const rows = filesStrip([{ ...mkBatch('b1', 'a.csv'), status: 'undone' }, mkBatch('b2', 'b.csv')], null, 'spreadsheet')
+    expect(rows[0]).toMatchObject({ undone: true, reason: null })
+    expect(rows[1].undone).toBe(false)
+  })
+})
+
 describe('channelTilesAll: sums the frozen channel and labels the min non-null rule-set version (BULK-01-06, AC-5)', () => {
   it('BULK-06-11: two batches with 2 and 1 unreadable rows sum to 3; versions [null,3] label NG-MBS v3; [null,null] labels "not evaluated", never v0', () => {
     const twoUnreadable: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {

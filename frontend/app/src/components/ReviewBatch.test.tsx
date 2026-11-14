@@ -948,3 +948,86 @@ describe('ENGI-14-05: a draft left unvalidated by a twice-changed rule set', () 
     expect(text).not.toContain('Nothing was stored')
   })
 })
+
+describe('SECAUD-50-04: the Undo import control on the review step', () => {
+  it('undo control renders only for an undoable batch', async () => {
+    mockReviewFetchAll([batch({ undoable: false })], TOTALS)
+    const first = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(first.container.textContent ?? '').toContain(BATCH_ANCHOR))
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+    cleanup()
+
+    mockReviewFetchAll([batch({ undoable: true })], TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    const undo = (await screen.findByTestId('undo-import')) as HTMLButtonElement
+    const finish = screen.getByText('Finish · go to invoices')
+    expect(undo.disabled).toBe(false)
+    expect(finish.compareDocumentPosition(undo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(container.querySelector('[data-testid="review-files-strip-row"] [data-testid="undo-import"]')).toBeNull()
+  })
+
+  it('undo control sits in each strip row of a multi-file run', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.csv', undoable: true }), batch({ id: 'b2', filename: 'b.csv', undoable: false })]
+    mockReviewFetchAll(batches, TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    await screen.findByTestId('undo-import')
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="review-files-strip-row"]'))
+    expect(rows).toHaveLength(2)
+    expect(rows[0].querySelector('[data-testid="undo-import"]')).not.toBeNull()
+    expect(rows[1].querySelector('[data-testid="undo-import"]')).toBeNull()
+    expect(screen.getAllByTestId('undo-import')).toHaveLength(1)
+  })
+
+  it('an all-undone review renders the undone panel', async () => {
+    const batches = [batch({ id: 'b1', status: 'undone' }), batch({ id: 'b2', status: 'undone' })]
+    mockReviewFetchAll(batches, TOTALS)
+    const ctx = reviewCtx(['b1', 'b2'])
+    const { container } = render(<ReviewBatch ctx={ctx} />)
+    const panel = await screen.findByTestId('review-undone')
+    expect(panel.textContent).toContain('Import undone')
+    fireEvent.click(screen.getByText('Choose another file'))
+    fireEvent.click(screen.getByText('Enter one invoice instead'))
+    expect(ctx.restartImport).toHaveBeenCalledTimes(1)
+    expect(ctx.skipUpload).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('div.money')).toBeNull()
+  })
+
+  it('a mixed run labels the undone row Undone', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.csv' }), batch({ id: 'b2', filename: 'b.csv', status: 'undone' })]
+    mockReviewFetchAll(batches, TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="review-files-strip-row"]'))
+    expect(rows[1].textContent).toContain('Undone')
+    expect(rows[1].textContent).not.toContain('Rejected')
+  })
+
+  it('a review undone in another tab renders as undone after a 409', async () => {
+    let reads = 0
+    const completed = batch({ undoable: true })
+    const undone = batch({ status: 'undone' })
+    const fetchMock = vi.fn((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST' && url.endsWith('/imports/b1/undo')) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({ error: 'only a completed import can be undone' }),
+        })
+      }
+      if (url.includes('/imports/b1')) {
+        reads++
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(reads === 1 ? completed : undone) })
+      }
+      if (url.includes('/violation-summary')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ rules: [] }) })
+      }
+      return Promise.resolve(listResponse(0))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    fireEvent.click(await screen.findByTestId('undo-import'))
+    fireEvent.click(screen.getByTestId('undo-import-confirm'))
+    await screen.findByTestId('review-undone')
+    expect(screen.queryByTestId('undo-import')).toBeNull()
+  })
+})

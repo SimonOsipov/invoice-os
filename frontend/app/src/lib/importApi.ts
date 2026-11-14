@@ -130,7 +130,7 @@ export interface ImportReport {
 }
 
 // GET /v1/imports/{id} response (the import_batches row; 08/task-284 AC-2, per 07's own
-// R1/R2). Exactly 11 fields -- `filename` (BULK-01-01: the uploaded part's name, or null
+// R1/R2). Exactly 12 fields -- `filename` (BULK-01-01: the uploaded part's name, or null
 // when not recorded), no `ready_invoices`/`invoices_clean`/`invoices_with_violations` (07
 // R2 -- those are live off the list endpoint's own totals, never stored on the batch).
 //
@@ -592,6 +592,17 @@ export async function getImportBatch(authedFetch: AuthedFetch, base: string, id:
   // from getInvoice/getInvoiceHistory/editInvoice, which interpolate their `id` raw --
   // flagged rather than silently "fixed" across all four, which is not this subtask's call.
   return authedFetch<ImportBatch>(`${base}/api/invoice/v1/imports/${encodeURIComponent(id)}`)
+}
+
+// POST /v1/imports/{id}/undo -- discards the batch's invoices and releases its file.
+export interface UndoImportResult {
+  id: string
+  status: 'undone'
+  discarded_invoices: number
+}
+
+export async function undoImport(authedFetch: AuthedFetch, base: string, id: string): Promise<UndoImportResult> {
+  return authedFetch<UndoImportResult>(`${base}/api/invoice/v1/imports/${encodeURIComponent(id)}/undo`, { method: 'POST' })
 }
 
 export function uploadPercent(p: UploadPhase): number | null {

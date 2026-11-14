@@ -521,7 +521,7 @@ export function routeAfterImport(report: ImportReport, resolvedInvoiceId: string
 // 0`, `rows_invalid > 0`) therefore renders the BATCH surface: routeAfterImport answers
 // a different question ("is there one invoice to open") and legitimately says `rejected`
 // for the same import -- the two are not required to agree.
-export type ReviewShellState = 'batch' | 'rejected'
+export type ReviewShellState = 'batch' | 'rejected' | 'undone'
 
 export function reviewShellState(batch: Pick<ImportBatch, 'status'>): ReviewShellState {
   // `!== 'completed'`, matching reportSummary's own direction but over a DIFFERENT type
@@ -534,6 +534,7 @@ export function reviewShellState(batch: Pick<ImportBatch, 'status'>): ReviewShel
 // byte-identical to reviewShellState over exactly one batch, which it will eventually
 // replace once BULK-01-07 switches ReviewBatch.tsx's call site.
 export function reviewShellStateAll(batches: Pick<ImportBatch, 'status'>[]): ReviewShellState {
+  if (batches.length > 0 && batches.every((b) => b.status === 'undone')) return 'undone'
   return batches.some((b) => b.status === 'completed') ? 'batch' : 'rejected'
 }
 
@@ -734,6 +735,7 @@ export interface FileStripRow {
   id: string // ImportBatch.id for a batch row; RunFile.id for a run-only failure row
   filename: string // resolved label; never '', never the literal null
   reason: string | null // null iff the file produced at least one ready invoice
+  undone: boolean // the batch was undone; its reason is null
 }
 
 // `rows_valid` is the batch-level proxy for "produced at least one ready invoice":
@@ -757,7 +759,8 @@ export function filesStrip(batches: ImportBatch[], run: ImportRun | null, unit: 
   const batchRows: FileStripRow[] = batches.map((b) => ({
     id: b.id,
     filename: filenameLabel(b.filename),
-    reason: batchReason(b, unit),
+    reason: b.status === 'undone' ? null : batchReason(b, unit),
+    undone: b.status === 'undone',
   }))
   // Run-only failures: a file whose outcome never became a batch at all
   // (FileOutcome's 'failed' kind carries no batchId), so it is never represented among
@@ -765,7 +768,7 @@ export function filesStrip(batches: ImportBatch[], run: ImportRun | null, unit: 
   // importRun.ts's own runFailures loop.
   const runOnlyFailures: FileStripRow[] = []
   for (const f of run?.files ?? []) {
-    if (f.outcome.kind === 'failed') runOnlyFailures.push({ id: f.id, filename: f.name, reason: f.outcome.message })
+    if (f.outcome.kind === 'failed') runOnlyFailures.push({ id: f.id, filename: f.name, reason: f.outcome.message, undone: false })
   }
   return [...batchRows, ...runOnlyFailures]
 }

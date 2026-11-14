@@ -196,8 +196,8 @@ func TestIdP_SignInWrongPassword401(t *testing.T) {
 // Green against the current code by design: the right-password row is the control.
 func TestIdP_UnconfirmedAccountWithAWrongPasswordLooksUnknown(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0, nil)
-	r := registrant(t, gw)
+	// Signed up at GoTrue directly: a gateway registrant's password is never stored, so it cannot reach email_not_confirmed.
+	r := signUpMailed(t, base, "idp-mail-", "example.test")
 	wrong := idpUser{email: r.email, password: r.password + "-wrong"}
 	unknown := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
 

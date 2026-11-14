@@ -763,7 +763,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			log, _ := captureLog()
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
-			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil).ServeHTTP(reg, regReq)
+			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
 			inv, _ := postInvitee(inviteeHandler(authURL, 0, p, claiming(regEmail, true, nil)), tokenBody(inviteToken))

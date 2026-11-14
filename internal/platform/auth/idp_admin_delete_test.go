@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -211,5 +212,51 @@ func TestIdP_AdminUserEmailReadsTheSignInEmail(t *testing.T) {
 	}
 	if got, err := emailAs(t, admin, u.id); err != nil || got != "" {
 		t.Errorf("UserEmail after DeleteUser = %q, %v; want \"\", nil", got, err)
+	}
+}
+
+// adminTimeSet reports whether the named AdminUser time field is set, by name so a missing field fails the test, not the build.
+func adminTimeSet(t *testing.T, u gotrueadmin.AdminUser, name string) bool {
+	t.Helper()
+	f := reflect.ValueOf(u).FieldByName(name)
+	if !f.IsValid() {
+		t.Errorf("AdminUser has no field %s", name)
+		return false
+	}
+	if f.Kind() == reflect.Ptr {
+		return !f.IsNil() && !f.Elem().Interface().(time.Time).IsZero()
+	}
+	return !f.Interface().(time.Time).IsZero()
+}
+
+func TestIdP_AdminListCarriesTheConfirmationTimes(t *testing.T) {
+	base := idpMailURL(t)
+	u := signUpMailed(t, base, "list-", "example.test")
+	admin := adminClient(t, base)
+
+	var mine *gotrueadmin.AdminUser
+	for page := 1; mine == nil; page++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		users, err := admin.ListUsers(ctx, page, 100)
+		cancel()
+		if err != nil {
+			t.Fatalf("ListUsers page %d: %v", page, err)
+		}
+		for i := range users {
+			if users[i].Email == u.email {
+				mine = &users[i]
+			}
+		}
+		if len(users) < 100 {
+			break
+		}
+	}
+	if mine == nil {
+		t.Fatal("ListUsers did not return the signed-up account")
+	}
+	for name, want := range map[string]bool{"CreatedAt": true, "ConfirmationSentAt": true, "EmailConfirmedAt": false, "RecoverySentAt": false} {
+		if got := adminTimeSet(t, *mine, name); got != want {
+			t.Errorf("AdminUser.%s set = %v, want %v for an unconfirmed account that was mailed once", name, got, want)
+		}
 	}
 }

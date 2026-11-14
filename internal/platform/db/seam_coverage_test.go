@@ -223,6 +223,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/notifications/erase_by_id.go"},                                           // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
 	{file: "internal/notifications/newsletter.go"},                                            // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
 	{file: "internal/notifications/unsubscribe.go"},                                           // mail_unsubscribes carries no tenant, so no tenant seam can scope it; the store reads and locks it on the pool
+	{file: "internal/notifications/unconfirmed_purge.go"},                                     // the hourly purge in cmd/worker; it calls one function by account id and reads no tenant data
 	{file: "internal/systemhealth/store.go", fn: "Record"},                                    // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 	{file: "internal/blog/public.go", fn: "readPublic"},                                       // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
 	{file: "internal/gateway/handoff_pg.go"},                                                  // sign-in hand-off codes: no tenant and no identity yet
@@ -1010,7 +1011,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /auth/reset-password":                               {verdict: scExempt, reason: "no database; renders the reset page"},
 	"GET /readiness-check/confirm":                           {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
-	"GET /auth/verify":                                       {verdict: scExempt, reason: "no database; renders the confirm page, or redirects a stateless open to landing"},
+	"GET /auth/verify":                                       {verdict: scExempt, reason: "no database; renders the set-password page, or redirects a stateless open to landing"},
 	"GET /blog/categories":                                   {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/covers/{id}/{version}":                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/posts":                                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
@@ -1169,7 +1170,6 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/sign-in":                                     {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/sign-out":                                    {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /unsubscribe":                                      {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
-	"POST /auth/verify":                                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /contacts/demo-request":                            {verdict: scExempt, reason: "no database; hands the form to notifications"},
 	"POST /readiness-check/confirm":                          {verdict: scExempt, reason: "no database; forwards the press to the worker with the gateway token"},
 	"POST /readiness-check/mapping":                          {verdict: scExempt, reason: "no database; forwards the file to the worker"},

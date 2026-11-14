@@ -9,9 +9,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// UnconfirmedPurgeDays is the age past its last confirmation or reset mail at which an unconfirmed account is removed.
+const UnconfirmedPurgeDays = 7
+
 // GrantAccountStateRead gives auth_hook_reader the three-column read of auth.users that
-// public.invitee_account_state needs. It runs as supabase_auth_admin and reports false, with
+// public.invitee_account_state needs, and invoice_app the guarded auth.purge_unconfirmed_account. It runs as supabase_auth_admin and reports false, with
 // no write, while GoTrue has not yet created auth.users.
+// ceiling: any invoice_app service can delete one account by id that is unconfirmed past the age
 // ceiling: one connection per call; it runs once at boot, so pool it if a hot caller appears
 func GrantAccountStateRead(ctx context.Context, authAdminDSN string) (bool, error) {
 	conn, err := pgx.Connect(ctx, authAdminDSN)
@@ -39,6 +43,11 @@ func GrantAccountStateRead(ctx context.Context, authAdminDSN string) (bool, erro
     CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_reader USING (true);
   END IF;
 END $$`,
+		purgeFunctionSQL,
+		`REVOKE EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) FROM PUBLIC`,
+		revokeStrayPurgeGrantsSQL,
+		`GRANT USAGE ON SCHEMA auth TO invoice_app`,
+		`GRANT EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) TO invoice_app`,
 	} {
 		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return false, fmt.Errorf("db: grant account state read: %w", err)
@@ -49,6 +58,30 @@ END $$`,
 	}
 	return true, nil
 }
+
+// Leaves EXECUTE to the owner and invoice_app only, so a stray grant does not survive a boot.
+const revokeStrayPurgeGrantsSQL = `DO $$ DECLARE r oid; BEGIN
+  FOR r IN SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a
+   WHERE p.oid = 'auth.purge_unconfirmed_account(uuid)'::regprocedure AND a.grantee NOT IN (0, p.proowner, 'invoice_app'::regrole)
+  LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) FROM %I', pg_get_userbyid(r));
+  END LOOP;
+END $$`
+
+// The DELETE re-checks confirmation and age under the row lock, so a confirm that commits first wins.
+var purgeFunctionSQL = fmt.Sprintf(`CREATE OR REPLACE FUNCTION auth.purge_unconfirmed_account(p_user_id uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE n integer;
+BEGIN
+  DELETE FROM auth.users u
+   WHERE u.id = p_user_id
+     AND u.email_confirmed_at IS NULL
+     AND NOT u.is_sso_user
+     AND NOT u.is_anonymous
+     AND GREATEST(u.created_at, u.confirmation_sent_at, u.recovery_sent_at) < pg_catalog.now() - interval '%d days';
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n > 0;
+END $fn$`, UnconfirmedPurgeDays)
 
 // AuthAdminDSN swaps the credentials of migrationDSN for supabase_auth_admin and password.
 // Its errors hold neither the DSN nor the password.

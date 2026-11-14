@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -247,7 +248,6 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"POST /auth/register":    "withCORS(" + recv + ".Register)",
 		"OPTIONS /auth/register": "withCORS(" + recv + ".Register)",
 		"GET /auth/verify":       page,
-		"POST /auth/verify":      hand + ".Verify",
 
 		"POST /auth/resend-verification":    "withCORS(" + recv + ".ResendVerification)",
 		"OPTIONS /auth/resend-verification": "withCORS(" + recv + ".ResendVerification)",
@@ -285,6 +285,54 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		if s[0].handler != want {
 			t.Errorf("%s handler = %s, want %s", pattern, s[0].handler, want)
 		}
+	}
+}
+
+// main cannot run in a test, so its route table is read from source; the mux answer is then run over the /auth/verify patterns it holds.
+func TestGatewayRoutes_PostVerifyIsNoRoute(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, _ := mainRoutes(t, src)
+	if got := sitesFor(sites, "GET /auth/verify"); len(got) != 1 {
+		t.Fatalf("GET /auth/verify is registered %d times, want once", len(got))
+	}
+	if got := sitesFor(sites, "POST /auth/verify"); len(got) != 0 {
+		t.Errorf("main registers POST /auth/verify (%s); the route is retired", got[0].handler)
+	}
+
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	page, err := gateway.VerifyPageHandler(site)
+	if err != nil {
+		t.Fatalf("VerifyPageHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	for _, s := range sites {
+		switch {
+		case s.pattern == "GET /auth/verify":
+			mux.Handle(s.pattern, page)
+		case strings.HasSuffix(s.pattern, " /auth/verify"):
+			// Stands in for whatever handler main mounts there: it confirms at GoTrue.
+			mux.HandleFunc(s.pattern, func(w http.ResponseWriter, _ *http.Request) {
+				if resp, err := http.Post(authURL.JoinPath("verify").String(), "application/json", nil); err == nil {
+					resp.Body.Close()
+				}
+				w.WriteHeader(http.StatusSeeOther)
+			})
+		}
+	}
+
+	rec := serveForm(mux, "/auth/verify", "token=T&type=signup&state="+verifyState)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, HEAD" {
+		t.Errorf("POST /auth/verify = %d Allow %q, want 405 GET, HEAD", rec.Code, rec.Header().Get("Allow"))
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("POST /auth/verify reached GoTrue: %v", got)
+	}
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup&state="+verifyState, ""); rec.Code != http.StatusOK {
+		t.Errorf("control: GET /auth/verify = %d, want 200", rec.Code)
 	}
 }
 
@@ -945,5 +993,62 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 	}
 	if got := sink.calls(); len(got) != 1 {
 		t.Errorf("sink saw %+v after one POST, want one call", got)
+	}
+}
+
+func TestRegistrationHandlers_ForwardOnlyOnAnEphemeralPosture(t *testing.T) {
+	const caller = "Corr3ct-Horse-Battery"
+	rows := []struct {
+		env     string
+		forward bool
+	}{{"", false}, {"production", false}, {"staging", false}, {"pr-12", true}, {"nightly", true}}
+	for _, c := range rows {
+		t.Run("DEPLOY_ENV="+c.env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", c.env)
+			var mu sync.Mutex
+			var settingsCalls int
+			var signup []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				defer mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method + " " + r.URL.Path {
+				case "GET /settings":
+					settingsCalls++
+					_, _ = w.Write([]byte(`{"mailer_autoconfirm":true}`))
+				case "POST /signup":
+					signup = b
+					_, _ = w.Write([]byte(`{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[{}]}`))
+				}
+			}))
+			t.Cleanup(srv.Close)
+			authURL, _ := url.Parse(srv.URL)
+			site, _ := url.Parse("https://site.example")
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
+
+			rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"`+caller+`"}`)
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			var sent struct {
+				Password string `json:"password"`
+			}
+			if err := json.Unmarshal(signup, &sent); err != nil || sent.Password == "" {
+				t.Fatalf("signup body %q holds no password (err %v)", signup, err)
+			}
+			if got := sent.Password == caller; got != c.forward {
+				t.Errorf("caller's password forwarded = %v, want %v", got, c.forward)
+			}
+			if !c.forward && !regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`).MatchString(sent.Password) {
+				t.Errorf("signup password has length %d, want 43 base64url characters", len(sent.Password))
+			}
+			if want := map[bool]int{true: 1, false: 0}[c.forward]; settingsCalls != want {
+				t.Errorf("GET /settings calls = %d, want %d", settingsCalls, want)
+			}
+		})
 	}
 }

@@ -1325,7 +1325,7 @@ describe('FREECHK-09-08: the unsubscribe section', () => {
         UNSUBSCRIBE_U1,
         'Pressing the button stops all marketing email to that address. We record the unsubscribe on our own server. When Resend holds the address as a contact, we also opt it out of our marketing email there. While we hold that record, no later form, demo request or readiness check opts the address back in.',
         'You will still get email about your account and your own requests, such as password resets, sign-in alerts and readiness check results. The blog newsletter has its own unsubscribe link.',
-        'To make each link work, we keep a random code on our own server for each address we email and for each address entered in the create-an-account form. We delete that record when an ASComply account with that address is deleted, unless another account still holds the address.',
+        'To make each link work, we keep a random code on our own server for each address we email and for each address entered in the create-an-account form. We delete that record when an ASComply account with that address is deleted, unless another account still holds the address or the account was deleted because nobody confirmed the address.',
       ].join(' '),
     )
     const readiness = clean(html.split(/(?=<h2[ >])/).find((p) => p.includes('If you run the readiness check</h2>'))!)

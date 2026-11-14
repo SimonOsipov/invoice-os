@@ -21,7 +21,6 @@ afterEach(() => {
 
 const VALID: RegisterValues = {
   email: 'ada@okafor.ng',
-  password: 'pw-123456',
   displayName: 'Ada Okafor',
   workspaceName: 'Okafor & Partners',
   kind: 'firm',
@@ -62,10 +61,9 @@ describe('validateRegisterForm', () => {
   it('validateRegisterForm names every missing field', () => {
     expect(validateRegisterForm(VALID), 'control: a complete form has no errors').toEqual({})
 
-    const empty = validateRegisterForm({ email: '', password: '', displayName: '', workspaceName: '', kind: '', marketing: false })
+    const empty = validateRegisterForm({ email: '', displayName: '', workspaceName: '', kind: '', marketing: false })
     expect(empty).toEqual({
       email: 'Enter your work email.',
-      password: 'Choose a password.',
       displayName: 'Enter your name.',
       workspaceName: 'Enter your company or workspace name.',
       kind: 'Choose how this workspace files invoices.',
@@ -99,11 +97,6 @@ describe('validateRegisterForm', () => {
     const tooLong = 'Use 200 characters or fewer.'
     expect(validateRegisterForm({ ...VALID, displayName: 'a'.repeat(201) })).toEqual({ displayName: tooLong })
     expect(validateRegisterForm({ ...VALID, workspaceName: 'a'.repeat(201) })).toEqual({ workspaceName: tooLong })
-
-    const spaced: RegisterValues = { ...VALID, password: ' pw ' }
-    expect(validateRegisterForm(spaced), 'the password is never trimmed').toEqual({})
-    expect(spaced.password).toBe(' pw ')
-    expect(validateRegisterForm({ ...VALID, password: '   ' }), 'a blank password is still a password').toEqual({})
   })
 })
 
@@ -115,16 +108,16 @@ describe('registerAccount', () => {
 
     const cases: [RegisterValues, Record<string, unknown>][] = [
       [
-        { email: ' Ada@Corp.example ', password: ' pw ', displayName: '  Ada Okafor ', workspaceName: ' Okafor & Partners  ', kind: 'in_house', marketing: false },
-        { email: 'Ada@Corp.example', password: ' pw ', display_name: 'Ada Okafor', workspace_name: 'Okafor & Partners', kind: 'in_house' },
+        { email: ' Ada@Corp.example ', displayName: '  Ada Okafor ', workspaceName: ' Okafor & Partners  ', kind: 'in_house', marketing: false },
+        { email: 'Ada@Corp.example', display_name: 'Ada Okafor', workspace_name: 'Okafor & Partners', kind: 'in_house' },
       ],
       [
-        { email: 'b@corp.example', password: '   ', displayName: 'B', workspaceName: 'W', kind: 'firm', marketing: false },
-        { email: 'b@corp.example', password: '   ', display_name: 'B', workspace_name: 'W', kind: 'firm' },
+        { email: 'b@corp.example', displayName: 'B', workspaceName: 'W', kind: 'firm', marketing: false },
+        { email: 'b@corp.example', display_name: 'B', workspace_name: 'W', kind: 'firm' },
       ],
       [
-        { email: 'c@corp.example', password: 'pw', displayName: 'C\u0000', workspaceName: 'W\u0000x', kind: 'firm', marketing: false },
-        { email: 'c@corp.example', password: 'pw', display_name: 'C\u0000', workspace_name: 'W\u0000x', kind: 'firm' },
+        { email: 'c@corp.example', displayName: 'C\u0000', workspaceName: 'W\u0000x', kind: 'firm', marketing: false },
+        { email: 'c@corp.example', display_name: 'C\u0000', workspace_name: 'W\u0000x', kind: 'firm' },
       ],
     ]
     for (const [values] of cases) await registerAccount(values)
@@ -137,7 +130,8 @@ describe('registerAccount', () => {
       expect(headers.get('Content-Type')).toBe('application/json')
       expect(headers.has('Authorization')).toBe(false)
       const body = JSON.parse(init.body as string) as Record<string, unknown>
-      expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+      expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'workspace_name'])
+      expect(body).not.toHaveProperty('password')
       expect(body).toStrictEqual(want)
     })
   })
@@ -174,20 +168,19 @@ describe('registerAccount marketing consent', () => {
     const ticked = await post({ ...VALID, marketing: true })
     expect(ticked).toHaveProperty('marketing_consent_text')
     expect(ticked.marketing_consent_text).toBe(MARKETING_CONSENT_TEXT)
-    expect(Object.keys(ticked).sort(), 'ticked adds that one key').toEqual(['display_name', 'email', 'kind', 'marketing_consent_text', 'password', 'workspace_name'])
+    expect(Object.keys(ticked).sort(), 'ticked adds that one key').toEqual(['display_name', 'email', 'kind', 'marketing_consent_text', 'workspace_name'])
     expect(ticked).toStrictEqual({
       email: VALID.email,
-      password: VALID.password,
       display_name: VALID.displayName,
       workspace_name: VALID.workspaceName,
       kind: 'firm',
       marketing_consent_text: MARKETING_CONSENT_TEXT,
     })
 
-    const padded = await post({ email: ' d@corp.example ', password: 'pw', displayName: ' D ', workspaceName: ' W ', kind: 'in_house', marketing: true })
+    const padded = await post({ email: ' d@corp.example ', displayName: ' D ', workspaceName: ' W ', kind: 'in_house', marketing: true })
     expect(padded, 'a ticked body still trims every other field').toStrictEqual({
       email: 'd@corp.example',
-      password: 'pw',
+     
       display_name: 'D',
       workspace_name: 'W',
       kind: 'in_house',
@@ -195,7 +188,7 @@ describe('registerAccount marketing consent', () => {
     })
 
     const unticked = await post({ ...VALID, marketing: false })
-    expect(Object.keys(unticked).sort(), 'control: the five-key body is unchanged').toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+    expect(Object.keys(unticked).sort(), 'control: the four-key body is unchanged').toEqual(['display_name', 'email', 'kind', 'workspace_name'])
     expect('marketing_consent_text' in unticked, 'no key at all, not "" / null / false').toBe(false)
     expect(JSON.stringify(unticked)).not.toContain('marketing')
   })

@@ -24,6 +24,8 @@ export const DELETION_GRACE_DAYS = 30
 export const BACKUP_DAYS = 7
 // Bucket soft delete; the rule file records the source. Pinned by value.
 export const FILE_RECOVERY_DAYS = 7
+// Pinned to UnconfirmedPurgeDays (unconfirmedPurgeDays in privacyCodeFacts.test.util.ts).
+export const UNCONFIRMED_DAYS = 7
 // Pinned to actor.RemovedName (deletedMark in privacyCodeFacts.test.util.ts).
 export const DELETED_MARK = '(deleted)'
 // Each label is pinned to the app source that renders it (appLabels in privacyCodeFacts.test.util.ts).
@@ -363,6 +365,10 @@ export function Privacy() {
             word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
           <p style={P}>
+            If you do not confirm your email address within {UNCONFIRMED_DAYS} days of the last confirmation or
+            password-reset email, we delete the account.
+          </p>
+          <p style={P}>
             Each time someone signs in to your account through the sign-in form, fails to sign in with a wrong password, is
             blocked after too many attempts, signs out, or asks for or completes a password reset, our own server records
             it in the audit log of your workspace, with the IP address and the browser and operating system.
@@ -493,7 +499,7 @@ export function Privacy() {
           <p style={P}>
             To make each link work, we keep a random code on our own server for each address we email and for each
             address entered in the create-an-account form. We delete that record when an ASComply account with that
-            address is deleted, unless another account still holds the address.
+            address is deleted, unless another account still holds the address or the account was deleted because nobody confirmed the address.
           </p>
 
           <h2 style={H2}>If you ask for an explanation</h2>

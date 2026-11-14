@@ -814,7 +814,7 @@ export function firstSessionIsNotASignInRow(
   const marked = gw.match(/AccountEvent\{Event: EventSignedIn,[^}]*FirstSession: true\}/g) ?? []
   const fn = found(/func MoveHandoffs\b[\s\S]*$/.exec(mover)?.[0], 'MoveHandoffs')
   const block = found(/if h\.firstSession \{([\s\S]*?)account_event_memberships\(/.exec(fn)?.[1], 'the first-session block')
-  return marked.length === 2 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
+  return marked.length === 1 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
 }
 
 // Column names of the CREATE TABLE in migrations/*_readiness_checks.sql, in order.
@@ -989,4 +989,19 @@ export function signupKeepsAnUnsubscribeCode(src: string = readSource('internal/
   const signUp = goFunc(src, /func signUp\b/, 'signUp')
   const add = goFunc(src, /func addUnsubscribeToken\b/, 'addUnsubscribeToken')
   return /\baddUnsubscribeToken\(/i.test(signUp) && /data\[accountmail\.UnsubscribeMetadataKey\]\s*=\s*token\b/i.test(add)
+}
+
+// The age in days at which the worker removes an unconfirmed account, from the Go constant; the worker must run the purge under its own leader.
+export function unconfirmedPurgeDays(
+  constants: string = readSource('internal/platform/db/account_state_read.go'),
+  worker: string = readSource('cmd/worker/main.go'),
+): number {
+  const days = Number(found(/\bUnconfirmedPurgeDays\s*=\s*(\d+)\b/.exec(constants)?.[1], 'UnconfirmedPurgeDays'))
+  found(/codelist\.NewWorker\(time\.Hour,\s*leader\.Lead\("unconfirmed-purge",/.exec(worker), 'the unconfirmed-purge worker line')
+  return days
+}
+
+// The purge deletes the sign-in account through its guarded SQL function and never calls an erase.
+export function unconfirmedPurgeKeepsAddressData(src: string = readSource('internal/notifications/unconfirmed_purge.go')): boolean {
+  return /\bauth\.purge_unconfirmed_account\b/.test(src) && !/\bEnqueueErasure(ByID)?\s*\(/.test(src)
 }

@@ -3,8 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -301,11 +299,9 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "")
 			return
 		}
-		pw := make([]byte, 32)
-		rand.Read(pw) // never fails on Go 1.24+
 		body := map[string]any{
 			"email":    email,
-			"password": base64.RawURLEncoding.EncodeToString(pw),
+			"password": randomPassword(),
 			"data":     map[string]any{"invited": true},
 		}
 		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }

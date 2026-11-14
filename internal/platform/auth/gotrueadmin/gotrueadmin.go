@@ -156,8 +156,13 @@ func (c *Client) call(ctx context.Context, method, userID string) (*http.Respons
 	return c.do(ctx, method, "/admin/users/"+userID, nil)
 }
 
-// AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe.
-type AdminUser struct{ ID, Email, Unsubscribe string }
+// AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe. The times are
+// GoTrue's; a mail never sent leaves its time nil.
+type AdminUser struct {
+	ID, Email, Unsubscribe                               string
+	CreatedAt                                            time.Time
+	EmailConfirmedAt, ConfirmationSentAt, RecoverySentAt *time.Time
+}
 
 // ListUsers reads one page of accounts. A non-2xx answer is a *StatusError with the status only.
 func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser, error) {
@@ -174,6 +179,11 @@ func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser,
 		Users []struct {
 			ID    string `json:"id"`
 			Email string `json:"email"`
+
+			CreatedAt          time.Time  `json:"created_at"`
+			EmailConfirmedAt   *time.Time `json:"email_confirmed_at"`
+			ConfirmationSentAt *time.Time `json:"confirmation_sent_at"`
+			RecoverySentAt     *time.Time `json:"recovery_sent_at"`
 			// Raw: an account can write any JSON into its own user_metadata; a non-string value reads as absent.
 			UserMetadata struct {
 				Unsubscribe json.RawMessage `json:"unsubscribe"`
@@ -187,7 +197,10 @@ func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]AdminUser,
 	for i, u := range out.Users {
 		var unsub string
 		_ = json.Unmarshal(u.UserMetadata.Unsubscribe, &unsub)
-		users[i] = AdminUser{ID: u.ID, Email: u.Email, Unsubscribe: unsub}
+		users[i] = AdminUser{
+			ID: u.ID, Email: u.Email, Unsubscribe: unsub, CreatedAt: u.CreatedAt,
+			EmailConfirmedAt: u.EmailConfirmedAt, ConfirmationSentAt: u.ConfirmationSentAt, RecoverySentAt: u.RecoverySentAt,
+		}
 	}
 	return users, nil
 }

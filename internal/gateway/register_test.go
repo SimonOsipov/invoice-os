@@ -80,10 +80,12 @@ type gotrueCall struct {
 }
 
 // fakeGoTrue answers every request with status and body, recording each call.
+// A non-nil settings answers GET /settings instead.
 type fakeGoTrue struct {
-	URL   *url.URL
-	mu    sync.Mutex
-	calls []gotrueCall
+	URL      *url.URL
+	mu       sync.Mutex
+	calls    []gotrueCall
+	settings http.HandlerFunc
 }
 
 func newFakeGoTrue(t *testing.T, status int, body string) *fakeGoTrue {
@@ -93,7 +95,12 @@ func newFakeGoTrue(t *testing.T, status int, body string) *fakeGoTrue {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.calls = append(f.calls, gotrueCall{r.Method, r.URL.Path, b, gaAddress(r)})
+		settings := f.settings
 		f.mu.Unlock()
+		if settings != nil && r.Method == http.MethodGet && r.URL.Path == "/settings" {
+			settings(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -198,7 +205,7 @@ func registerWith(t *testing.T, authURL *url.URL, p *pendingProbe, body string) 
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
-	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -210,7 +217,7 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -225,7 +232,7 @@ func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, lo
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	confirmHandler(t, authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -293,8 +300,8 @@ func TestRegister_Pending202AndOnlySignupCalled(t *testing.T) {
 	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
 		t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
 	}
-	if want := map[string]any{"email": regEmail, "password": regPassword}; !maps.Equal(sent, want) {
-		t.Errorf("signup body = %v, want exactly %v", sent, want)
+	if pw, _ := sent["password"].(string); len(sent) != 2 || sent["email"] != regEmail || !randomPasswordShape.MatchString(pw) {
+		t.Errorf("signup body = %v, want exactly the email and a random password", sent)
 	}
 }
 
@@ -390,9 +397,7 @@ func TestRegister_BadBody400NoUpstreamCall(t *testing.T) {
 	for _, c := range []struct{ name, body string }{
 		{"malformed JSON", `{"email":`},
 		{"empty email", registerBody("", regPassword)},
-		{"empty password", registerBody(regEmail, "")},
 		{"missing email", `{"password":"` + regPassword + `"}`},
-		{"missing password", `{"email":"` + regEmail + `"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
@@ -434,13 +439,13 @@ func TestRegister_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	base := fake.URL.JoinPath("auth", "v1")
 
 	doRegister(t, base, nil, registerBody(regEmail, regPassword))
-	doVerify(t, base, siteURL(t), nil, "token="+verifyToken+"&type=signup")
+	doVerify(t, base, siteURL(t), nil, verifyQuery)
 
 	var got []string
 	for _, c := range fake.Calls() {
 		got = append(got, c.Method+" "+c.Path)
 	}
-	if want := []string{"POST /auth/v1/signup", "POST /auth/v1/verify"}; !slices.Equal(got, want) {
+	if want := []string{"POST /auth/v1/signup", "POST /auth/v1/verify", "PUT /auth/v1/user", "POST /auth/v1/logout"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
 	}
 }
@@ -448,7 +453,7 @@ func TestRegister_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 func TestVerify_Success303ToSite(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
 
-	rec := doVerify(t, fake.URL, siteURL(t), nil, "token="+verifyToken+"&type=signup")
+	rec := doVerify(t, fake.URL, siteURL(t), nil, verifyQuery)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303: %s", rec.Code, rec.Body.String())
@@ -457,8 +462,8 @@ func TestVerify_Success303ToSite(t *testing.T) {
 		t.Errorf("Location = %q, want %q", loc, siteURLValue+"/?verified=1")
 	}
 	calls := fake.Calls()
-	if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != "/verify" {
-		t.Fatalf("GoTrue saw %+v, want exactly one POST /verify", calls)
+	if len(calls) == 0 || calls[0].Method != http.MethodPost || calls[0].Path != "/verify" {
+		t.Fatalf("GoTrue saw %+v, want POST /verify first", calls)
 	}
 	var sent map[string]any
 	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
@@ -470,7 +475,7 @@ func TestVerify_Success303ToSite(t *testing.T) {
 }
 
 func TestVerify_Failure303(t *testing.T) {
-	const good = "token=" + verifyToken + "&type=signup"
+	const good = verifyQuery
 	for _, c := range []struct {
 		name      string
 		status    int // GoTrue's; 0 = unreachable
@@ -541,7 +546,7 @@ func TestVerify_IgnoresRedirectTo(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 
 			rec := doVerify(t, fake.URL, siteURL(t), nil,
-				"token="+verifyToken+"&type=signup&redirect_to="+url.QueryEscape(evil))
+				verifyQuery+"&redirect_to="+url.QueryEscape(evil))
 
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d, want 303", rec.Code)
@@ -573,7 +578,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 			log, buf := captureLog()
-			query := "token=" + verifyToken + "&type=signup"
+			query := verifyQuery
 			if c.state != "" {
 				query += "&state=" + c.state
 			}
@@ -695,17 +700,17 @@ func TestRegister_BusinessAndLookalikeDomainsReachGoTrue(t *testing.T) {
 	}
 }
 
-// An empty field is reported before a free-mail domain.
+// An empty email is reported before a free-mail domain.
 func TestRegister_EmptyFieldCheckPrecedesFreeMail(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 
-	rec := doRegister(t, fake.URL, nil, registerBody("user@gmail.com", ""))
+	rec := doRegister(t, fake.URL, nil, registerBody("", regPassword))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
-	if got := errorBody(t, rec); got != "email and password are required" {
-		t.Errorf("error = %q, want %q", got, "email and password are required")
+	if got := errorBody(t, rec); got != "email is required" {
+		t.Errorf("error = %q, want %q", got, "email is required")
 	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
@@ -1095,8 +1100,10 @@ func TestRegister_UninvitedAddressStillSignsUp(t *testing.T) {
 		t.Fatalf("GoTrue saw %+v, want exactly one /signup call", calls)
 	}
 	var sent map[string]any
-	if err := json.Unmarshal(calls[0].Body, &sent); err != nil || !maps.Equal(sent, map[string]any{"email": regEmail, "password": regPassword}) {
-		t.Errorf("signup body = %s (decode err %v), want exactly the email and password", calls[0].Body, err)
+	err := json.Unmarshal(calls[0].Body, &sent)
+	pw, _ := sent["password"].(string)
+	if err != nil || len(sent) != 2 || sent["email"] != regEmail || !randomPasswordShape.MatchString(pw) {
+		t.Errorf("signup body = %s (decode err %v), want exactly the email and a random password", calls[0].Body, err)
 	}
 }
 
@@ -1107,8 +1114,8 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 	for _, c := range []struct{ name, body, want string }{
 		{"not JSON", `not json`, "invalid request body"},
 		{"body over the 4 KiB cap", registerBody(regEmail, strings.Repeat("p", 5<<10)), "invalid request body"},
-		{"empty object", `{}`, "email and password are required"},
-		{"no password", `{"email":"new@corp.example"}`, "email and password are required"},
+		{"empty object", `{}`, "email is required"},
+		{"no email", `{"password":"x"}`, "email is required"},
 		{"free-mail address", registerBody("x@gmail.com", regPassword), "a business email address is required; personal email providers are not accepted"},
 		{"empty workspace name", registerBodyWithAnswers(regEmail, map[string]any{"workspace_name": "", "display_name": "Ada"}), "workspace_name must be 1 to 200 characters"},
 		{"501-character consent", registerBodyWithAnswers(regEmail, map[string]any{"marketing_consent_text": strings.Repeat("a", 501)}), "marketing_consent_text must be 1 to 500 characters"},
@@ -1137,7 +1144,7 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 func TestRegister_LookupFailureIsUnavailableWithoutGoTrue(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	p := probing(lookupErr)
-	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil)
+	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false)
 
 	rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword))
 
@@ -1160,7 +1167,7 @@ func TestRegister_NilPendingLookupIsNotConfigured(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
-	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil).ServeHTTP(rec, req)
+	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil, false).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
@@ -1190,7 +1197,7 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
-			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil).ServeHTTP(rec, req)
+			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil, false).ServeHTTP(rec, req)
 
 			if n := len(p.calls()); n != 1 {
 				t.Fatalf("lookup asked %d times, want 1", n)
@@ -1279,7 +1286,7 @@ func TestRegister_UnusableTenancyAnswerRefusesSignUp(t *testing.T) {
 			tenancyURL, _ := url.Parse(srv.URL)
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			log, buf := captureLog()
-			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil)
+			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil, false)
 
 			rec, _ := serveRegisterFrom(t.Context(), broken, registerBody(regEmail, regPassword))
 
@@ -1343,7 +1350,7 @@ func registerWithTokens(t *testing.T, authURL *url.URL, floor time.Duration, log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens), body)
+	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens, false), body)
 }
 
 func TestRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
@@ -1511,7 +1518,7 @@ func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T)
 		}
 		answer(http.StatusOK, gtNewUser)(w, r)
 	}
-	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil)
+	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil, false)
 	post := func(xff string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, xff))
@@ -1531,5 +1538,243 @@ func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T)
 	}
 	if newAddr.Body.String() != repeatAddr.Body.String() {
 		t.Errorf("new body %q differs from repeat body %q", newAddr.Body.String(), repeatAddr.Body.String())
+	}
+}
+
+// answerSettings makes GET /settings answer with h.
+func (f *fakeGoTrue) answerSettings(h http.HandlerFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settings = h
+}
+
+// settingsGoTrue is a fake whose /signup answers like a new account and whose GET /settings answers h.
+func settingsGoTrue(t *testing.T, h http.HandlerFunc) *fakeGoTrue {
+	t.Helper()
+	f := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	f.answerSettings(h)
+	return f
+}
+
+const settingsUnreadableMsg = "registration: idp settings unreadable"
+
+var randomPasswordShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// registerHandler builds RegisterHandler with forward; pass forward to RegisterHandler's new parameter, never a constant.
+func registerHandler(authURL *url.URL, client *http.Client, floor time.Duration, log *slog.Logger, forward bool) http.Handler {
+	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, forward)
+}
+
+// signupPasswords is the password of each POST /signup the fake saw.
+func signupPasswords(t *testing.T, f *fakeGoTrue) []string {
+	t.Helper()
+	var out []string
+	for _, c := range f.Calls() {
+		if c.Method != http.MethodPost || c.Path != "/signup" {
+			continue
+		}
+		var sent struct {
+			Password string `json:"password"`
+		}
+		if err := json.Unmarshal(c.Body, &sent); err != nil {
+			t.Fatalf("signup body %q is not JSON: %v", c.Body, err)
+		}
+		out = append(out, sent.Password)
+	}
+	return out
+}
+
+// callNames is "METHOD /path" of each call, in order.
+func callNames(f *fakeGoTrue) []string {
+	var out []string
+	for _, c := range f.Calls() {
+		out = append(out, c.Method+" "+c.Path)
+	}
+	return out
+}
+
+func requireRandomPassword(t *testing.T, got, caller string) {
+	t.Helper()
+	if got == caller {
+		t.Errorf("signup password equals the caller's")
+	}
+	if !randomPasswordShape.MatchString(got) {
+		t.Errorf("signup password has length %d, want 43 base64url characters", len(got))
+	}
+}
+
+func TestRegister_SignsUpWithARandomPasswordWhenTheIdPMails(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":false}`))
+	h := registerHandler(fake.URL, testClient(), 0, nopLog(), true)
+
+	for range 2 {
+		rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword))
+		requirePending202(t, rec)
+	}
+
+	got := signupPasswords(t, fake)
+	if len(got) != 2 {
+		t.Fatalf("GoTrue saw %d signups, want 2: %v", len(got), callNames(fake))
+	}
+	for _, pw := range got {
+		requireRandomPassword(t, pw, regPassword)
+	}
+	if got[0] == got[1] {
+		t.Error("two registers sent the same password")
+	}
+}
+
+func TestRegister_SendsTheCallerPasswordWhenTheIdPAutoconfirms(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+	rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), true), registerBody(regEmail, regPassword))
+
+	requirePending202(t, rec)
+	if got, want := callNames(fake), []string{"GET /settings", "POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	if got := signupPasswords(t, fake); !slices.Equal(got, []string{regPassword}) {
+		t.Errorf("signup passwords = %d sent, want exactly the caller's", len(got))
+	}
+}
+
+func TestRegister_AnUnreadableSettingsAnswerFailsClosed(t *testing.T) {
+	noPassword := `{"email":"` + regEmail + `"}`
+	rows := []struct {
+		name     string
+		settings http.HandlerFunc
+		body     string
+		warns    int
+		upstream float64
+	}{
+		{"status 500 with autoconfirm true", answer(http.StatusInternalServerError, `{"mailer_autoconfirm":true}`), registerBody(regEmail, regPassword), 1, 500},
+		{"transport error", dropped, registerBody(regEmail, regPassword), 1, 0},
+		{"malformed JSON", answer(http.StatusOK, `{`), registerBody(regEmail, regPassword), 1, 200},
+		{"field missing", answer(http.StatusOK, `{}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is the string true", answer(http.StatusOK, `{"mailer_autoconfirm":"true"}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is the number 1", answer(http.StatusOK, `{"mailer_autoconfirm":1}`), registerBody(regEmail, regPassword), 1, 200},
+		{"field is null", answer(http.StatusOK, `{"mailer_autoconfirm":null}`), registerBody(regEmail, regPassword), 1, 200},
+		{"status 302 with autoconfirm true", answer(http.StatusFound, `{"mailer_autoconfirm":true}`), registerBody(regEmail, regPassword), 1, 302},
+		{"body over 16 KiB", answer(http.StatusOK, `{"mailer_autoconfirm":true,"pad":"`+strings.Repeat("a", 20<<10)+`"}`), registerBody(regEmail, regPassword), 1, 200},
+		{"autoconfirm true with no caller password", answer(http.StatusOK, `{"mailer_autoconfirm":true}`), noPassword, 0, 0},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := settingsGoTrue(t, c.settings)
+			log, buf := captureLog()
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, log, true), c.body)
+
+			requirePending202(t, rec)
+			got := signupPasswords(t, fake)
+			if len(got) != 1 {
+				t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
+			}
+			requireRandomPassword(t, got[0], regPassword)
+			warns := recordsNamed(t, buf, settingsUnreadableMsg)
+			if len(warns) != c.warns {
+				t.Fatalf("%d %q lines, want %d: %s", len(warns), settingsUnreadableMsg, c.warns, buf.String())
+			}
+			for _, w := range warns {
+				if w["level"] != "WARN" || w["upstream_status"] != c.upstream {
+					t.Errorf("line = level %v upstream_status %v, want WARN %v", w["level"], w["upstream_status"], c.upstream)
+				}
+			}
+		})
+	}
+}
+
+func TestRegister_ABodyWithoutAPasswordAnswers202(t *testing.T) {
+	for _, mode := range []struct {
+		name    string
+		forward bool
+	}{{"forwarding gateway", true}, {"non-forwarding gateway", false}} {
+		for _, body := range []string{`{"email":"` + regEmail + `"}`, registerBody(regEmail, "")} {
+			t.Run(mode.name+" "+body, func(t *testing.T) {
+				fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":false}`))
+
+				rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), mode.forward), body)
+
+				requirePending202(t, rec)
+				got := signupPasswords(t, fake)
+				if len(got) != 1 {
+					t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
+				}
+				requireRandomPassword(t, got[0], "")
+			})
+		}
+	}
+}
+
+func TestRegister_AMissingEmailAnswers400(t *testing.T) {
+	for _, body := range []string{`{}`, `{"password":"x"}`} {
+		t.Run(body, func(t *testing.T) {
+			fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), true), body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != "email is required" {
+				t.Errorf("error = %q, want %q", got, "email is required")
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want none: %v", n, callNames(fake))
+			}
+		})
+	}
+}
+
+func TestRegister_ANonForwardingGatewayNeverReadsSettings(t *testing.T) {
+	fake := settingsGoTrue(t, answer(http.StatusOK, `{"mailer_autoconfirm":true}`))
+
+	rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, nopLog(), false), registerBody(regEmail, regPassword))
+
+	requirePending202(t, rec)
+	if got, want := callNames(fake), []string{"POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	requireRandomPassword(t, signupPasswords(t, fake)[0], regPassword)
+}
+
+func TestRegister_NoPasswordReachesALogLine(t *testing.T) {
+	const canary = "settings-body-canary-7k2"
+	body := func(v string) http.HandlerFunc {
+		return answer(http.StatusOK, `{"mailer_autoconfirm":`+v+`,"canary":"`+canary+`"}`)
+	}
+	rows := []struct {
+		name       string
+		forward    bool
+		settings   http.HandlerFunc
+		callerSent bool
+		warns      int
+	}{
+		{"autoconfirm true", true, body("true"), true, 0},
+		{"autoconfirm false", true, body("false"), false, 0},
+		{"settings unreadable", true, body(`"true"`), false, 1},
+		{"non-forwarding gateway", false, body("true"), false, 0},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := settingsGoTrue(t, c.settings)
+			log, buf := captureLog()
+
+			rec, _ := serveRegisterFrom(t.Context(), registerHandler(fake.URL, testClient(), 0, log, c.forward), registerBody(regEmail, regPassword))
+
+			requirePending202(t, rec)
+			sent := signupPasswords(t, fake)
+			if len(sent) != 1 || (sent[0] == regPassword) != c.callerSent {
+				t.Fatalf("mode not in effect: caller's password forwarded = %v, want %v", len(sent) == 1 && sent[0] == regPassword, c.callerSent)
+			}
+			if n := len(recordsNamed(t, buf, settingsUnreadableMsg)); n != c.warns {
+				t.Fatalf("%d %q lines, want %d: %s", n, settingsUnreadableMsg, c.warns, buf.String())
+			}
+			for _, secret := range []string{regPassword, sent[0], regEmail, canary} {
+				if strings.Contains(buf.String(), secret) {
+					t.Errorf("a log line holds a secret of %d characters: %s", len(secret), buf.String())
+				}
+			}
+		})
 	}
 }

@@ -218,12 +218,8 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
-	rec := serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
-	if loc := rec.Header().Get("Location"); loc != "https://site.example/?verify=failed" {
-		t.Errorf("Verify Location = %q, want https://site.example/?verify=failed", loc)
-	}
 	mu.Lock()
-	if want := []string{"POST /signup", "POST /verify"}; !slices.Equal(calls, want) {
+	if want := []string{"POST /signup"}; !slices.Equal(calls, want) {
 		t.Errorf("GoTrue saw %v, want %v", calls, want)
 	}
 	before := len(calls)
@@ -232,7 +228,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	reset := resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now))
-	rec = serveForm(reset, "/auth/reset-password", "token=T&type=recovery&password=new-password-1")
+	rec := serveForm(reset, "/auth/reset-password", "token=T&type=recovery&password=new-password-1")
 	if loc := rec.Header().Get("Location"); loc != "https://site.example/?reset=failed" {
 		t.Errorf("reset form Location = %q, want https://site.example/?reset=failed", loc)
 	}
@@ -243,8 +239,8 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	}
 }
 
-// verifyMux mounts main's two /auth/verify patterns over the real handlers.
-func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux {
+// verifyMux mounts main's GET /auth/verify over the real handler; POST /auth/verify is no route.
+func verifyMux(t *testing.T, site *url.URL) *http.ServeMux {
 	t.Helper()
 	page, err := gateway.VerifyPageHandler(site)
 	if err != nil {
@@ -252,7 +248,6 @@ func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux 
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /auth/verify", page)
-	mux.Handle("POST /auth/verify", verify)
 	return mux
 }
 
@@ -262,7 +257,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
-	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
+	mux := verifyMux(t, site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
 	mux.Handle("/auth/resend-verification", reg.ResendVerification)
@@ -278,8 +273,8 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup&state="+verifyState, ""); rec.Code != http.StatusOK {
 		t.Fatalf("GET /auth/verify = %d, want 200", rec.Code)
 	}
-	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /auth/verify = %d, want 303", rec.Code)
+	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /auth/verify = %d, want 405", rec.Code)
 	}
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/request-password-reset", `{"email":"a@corp.example"}`); rec.Code != http.StatusAccepted {
 		t.Fatalf("POST /auth/request-password-reset = %d, want 202", rec.Code)
@@ -290,8 +285,8 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	if rec := serveForm(mux, "/auth/reset-password", "token=T&type=recovery&password=new-password-1"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("POST /auth/reset-password = %d, want 303", rec.Code)
 	}
-	if got := countCalls(calls(), "POST /verify"); got != 2 {
-		t.Fatalf("the verify and reset forms made %d GoTrue /verify calls, want 2", got)
+	if got := countCalls(calls(), "POST /verify"); got != 1 {
+		t.Fatalf("the reset form made %d GoTrue /verify calls, want 1", got)
 	}
 	before := len(calls())
 
@@ -323,11 +318,11 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 // verifyState is a well-formed 43-char base64url state (gateway.stateShape).
 const verifyState = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
 
-// Opening the link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.
+// Opening the link, by GET or HEAD, spends nothing, and the page's form posts to the set-password route.
 func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
-	authURL, calls := fakeAuth(t)
+	_, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
+	mux := verifyMux(t, site)
 	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
 	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {
@@ -347,16 +342,8 @@ func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	}
 
 	action, values := pageForm(t, statedLink, page)
-	if values.Get("token") != "T" || values.Get("type") != "signup" || values.Get("state") != verifyState {
-		t.Fatalf("form values = %v, want token=T, type=signup and state=%s", values, verifyState)
-	}
-	rec := serveForm(mux, action, values.Encode())
-
-	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "https://site.example/?verified=1&handoff=") {
-		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1&handoff=<code>", rec.Code, loc)
-	}
-	if got, want := calls(), []string{"POST /verify"}; !slices.Equal(got, want) {
-		t.Errorf("GoTrue saw %v, want %v", got, want)
+	if action != "http://gateway.test/auth/invitation/password" || values.Get("token") != "T" || values.Get("type") != "signup" || values.Get("state") != verifyState {
+		t.Fatalf("form = %s %v, want /auth/invitation/password with token=T, type=signup and state=%s", action, values, verifyState)
 	}
 }
 

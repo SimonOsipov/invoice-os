@@ -20,7 +20,7 @@ paths:
 - Log a user id as `user.id`, never `user_id`. `scrubLog` drops `user.*` from Sentry Logs (`TestSentryLogBridge_DropsUserDotAttributes`).
 - Never wait on a vendor in signup, sign-in or the demo route.
 - Write a registrant to `registrant_handoffs` before the response, once. The worker moves the row into a `registrant_intake` River job. Without `DATABASE_GATEWAY_URL` the gateway posts to notifications in the background.
-- Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
+- Hand a registrant off after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
 - Send the demo route's call once, with no retry. Answer 502 when the sink fails.
 - Store a contact with no `tenant_id` and no RLS. Write no tenant predicate.
 - Merge a contact with `COALESCE`. A set fact never changes. A trigger refuses any update of it.
@@ -88,6 +88,7 @@ paths:
 - When Resend has no contact but another account's Resend delivery stamp is set, restore the contact unsubscribed (`TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed`).
 - Make no Resend suppression call in an erase.
 - Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
+- Exception: remove an account whose address was never confirmed only through `notifications.UnconfirmedPurge`. It deletes the GoTrue account, erases no address-keyed row and calls no vendor.
 - The sweep deletes the person's accepted invitations and, when no other account holds the address, the pending and revoked invitations to it (`TestErase_SweepDeletesTheInvitations`).
 - The erase sweep deletes the address's `readiness_checks` rows when no other account holds the address.
 - The erase sweep deletes the address's `readiness_check_requests` rows when no other account holds the address (`TestErase_SweepDeletesTheHeldChecks`).

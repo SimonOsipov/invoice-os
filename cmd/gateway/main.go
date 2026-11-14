@@ -162,7 +162,6 @@ func main() {
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	store := handoffStore(gwPool, app.Logger)
 	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, gwPool)
-	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -297,7 +296,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perAddress.Shared(pool, log)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool)),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool), platform.Posture(platform.DeployEnv()).Ephemeral()),
 		ResendByAddress:      perAddress,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),
@@ -380,16 +379,16 @@ func registrantSink(pool *pgxpool.Pool, sink gateway.ContactSink) gateway.Contac
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword, ConsoleHandoff http.Handler
-	SignInThrottle                                                                 *gateway.SignInThrottle
-	LinkRedeemByIP                                                                 *gateway.SignInThrottle
-	AccountEvents                                                                  gateway.AccountEvents
+	SignIn, Exchange, Refresh, SignOut, InvitationPassword, ConsoleHandoff http.Handler
+	SignInThrottle                                                         *gateway.SignInThrottle
+	LinkRedeemByIP                                                         *gateway.SignInThrottle
+	AccountEvents                                                          gateway.AccountEvents
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
 // Every minter and exchange share one code store: a sign-in code is redeemable only through exchange; an export code only through export-download.
-// A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+// A nil siteURL makes InvitationPassword answer 503 (TestRegistrationHandlers_NotConfigured503).
 // A nil store means the in-process one; a nil pool keeps the sign-in throttle in-process.
 func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs, pool *pgxpool.Pool) handoff {
 	if store == nil {
@@ -404,7 +403,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Transport:     platform.IDTokenTransport(nil),
 	}
 	events := gateway.NewAccountEvents(pool, log)
-	// One count for the confirm, reset and invitee routes; a preview logs and admits.
+	// One count for the reset and set-password routes; a preview logs and admits.
 	perIP := gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)
 	perIP.Shared(pool, log)
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
@@ -413,7 +412,6 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store, events, perIP, enforce),
 
 		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events, perIP, enforce),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
@@ -428,7 +426,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, /auth/invitation/resend, GET and POST /auth/verify and /auth/reset-password answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, /auth/invitation/resend, GET /auth/verify and /auth/reset-password answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)

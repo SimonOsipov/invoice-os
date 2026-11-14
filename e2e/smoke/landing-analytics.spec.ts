@@ -206,7 +206,6 @@ routedTest('landing analytics: sign_up is held until Accept on the routed produc
   await expect(dialog).toBeVisible()
   const id = randomUUID()
   await dialog.getByLabel('Work email', { exact: true }).fill(`land07-${id}@example.com`)
-  await dialog.getByLabel('Password', { exact: true }).fill(id.slice(0, 16))
   await dialog.getByLabel('Your name', { exact: true }).fill('Landing Analytics')
   await dialog.getByLabel('Workspace name', { exact: true }).fill(`Landing Analytics ${id.slice(0, 8)}`)
   await dialog.getByRole('radio', { name: 'For our own company — in-house' }).check() // KINDS in frontend/landing/src/components/RegisterModal.tsx

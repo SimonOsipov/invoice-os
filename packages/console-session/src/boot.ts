@@ -28,12 +28,14 @@ async function answerFrom(url: string, body: unknown): Promise<{ access_token?: 
   })
 }
 
-// A landing session needs `renewable: true`; a support session borrowed from the app (console-handoff) accepts false.
+// A landing session needs `renewable: true`; a support session borrowed from the app (console-handoff) accepts false; any other value fails.
 export async function redeemHandoffCode(gateway: string, code: string, state: string, borrowed = false): Promise<ConsoleSession> {
   const a = await answerFrom(`${gateway}/auth/exchange`, { code, state })
   const token = a?.access_token
-  const renewable = a?.renewable === true
-  if (!nonEmpty(token) || (!borrowed && !renewable)) throw new ApiError('malformed', 'answer without a renewable session', 200)
+  const renewable = a?.renewable
+  if (!nonEmpty(token) || typeof renewable !== 'boolean' || (!borrowed && !renewable)) {
+    throw new ApiError('malformed', 'answer without a renewable session', 200)
+  }
   return { token, borrowed: !renewable }
 }
 

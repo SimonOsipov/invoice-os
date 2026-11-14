@@ -517,7 +517,7 @@ describe('storage that throws (AC-15)', () => {
 const appStart = (target: string) => new RegExp(`^${APP}/\\?auth=console&console=${target}&state=([A-Za-z0-9_-]{43})$`)
 const BORROWED = v3BorrowedRaw(OLD_TOKEN)
 const FRONT_DOOR_SUPPORT = /^https:\/\/www\.test\/\?state=[A-Za-z0-9_-]{43}&console=support$/
-const access = (token: string) => reply(200, { access_token: token })
+const access = (token: string) => reply(200, { access_token: token, renewable: false })
 
 describe('app-borrowed session (SUPP-11-02)', () => {
   it('boot_authAppLeavesToTheAppWithAFreshState', async () => {
@@ -797,6 +797,19 @@ describe('cookie-held refresh token (SECAUD-17-10)', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ url: EXCHANGE, ...cookieMode })
     expect(store.local.getItem(OPS_KEY)).toBe(v3BorrowedRaw(T))
+  })
+
+  it('boot_supportHandoffWithMalformedRenewableFails', async () => {
+    const rows: [string, unknown][] = [
+      ['null', { access_token: T, renewable: null }],
+      ['empty string', { access_token: T, renewable: '' }],
+      ['missing', { access_token: T }],
+    ]
+    for (const [name, body] of rows) {
+      const { boot } = await run({ ...held, target: 'support', app: APP, answer: () => reply(200, body) })
+      expect(leaveUrl(boot), name).toMatch(/&console=support&signin=failed$/)
+      expect(store.local.getItem(OPS_KEY), name).toBeNull()
+    }
   })
 
   it('reload_landingRecordRenewsThroughTheCookie', async () => {

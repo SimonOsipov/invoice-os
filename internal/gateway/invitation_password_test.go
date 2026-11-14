@@ -186,7 +186,7 @@ func TestInvitationPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T)
 		{"verify 403 otp_expired", answer(http.StatusForbidden, rpOTPExpired), nil, true},
 		{"verify 200 without access_token", answer(http.StatusOK, `{"user":{"id":"`+subjectS1+`","email":"`+rpEmail+`"}}`), nil, true},
 		{"verify 202 with a complete session", answer(http.StatusAccepted, `{"access_token":"`+rpAccess+`","user":{"id":"`+subjectS1+`","email":"`+rpEmail+`"}}`), nil, true},
-		{"PUT 422 weak_password", nil, answer(http.StatusUnprocessableEntity, rpWeakPassword), false},
+		{"PUT 422 weak_password", answer(http.StatusOK, coSession(coUser(coMetaFull))), answer(http.StatusUnprocessableEntity, rpWeakPassword), false},
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
@@ -198,9 +198,13 @@ func TestInvitationPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T)
 				f.user = c.user
 			}
 
-			rec := ipPost(t, newInviteHandler(t, f, nil, nil), rpValues(rpToken, "signup", rpPass))
+			sink := newRecSink(nil)
+			rec := ipPost(t, newInviteHandler(t, f, nil, sink), rpValues(rpToken, "signup", rpPass))
 
 			rpRequireRedirect(t, rec, ipFailed)
+			if got := sink.got(); len(got) != 0 {
+				t.Errorf("a refused link or password handed off %+v, want no contact", got)
+			}
 			if f.count(http.MethodPost, "/verify") != 1 {
 				t.Errorf("verify calls = %d, want 1", f.count(http.MethodPost, "/verify"))
 			}

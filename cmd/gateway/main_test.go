@@ -912,7 +912,7 @@ func pageForm(t *testing.T, pageURL, body string) (string, url.Values) {
 	return page.ResolveReference(action).String(), values
 }
 
-func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
+func TestRegistrationHandlers_WiresRegister(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
@@ -926,11 +926,7 @@ func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
-	rec = serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
-		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
-	}
-	if got, want := calls(), []string{"POST /signup", "POST /verify"}; !slices.Equal(got, want) {
+	if got, want := calls(), []string{"POST /signup"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
 	}
 }
@@ -954,9 +950,8 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 				"ResendVerification":   serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
 				"RequestPasswordReset": serveRegistration(reg.RequestPasswordReset, http.MethodPost, "/auth/request-password-reset", `{"email":"new@corp.example"}`),
 			}
-			// handoffHandlers builds Verify and needs a GoTrue URL to build the rest, so only AUTH_SITE_URL unset reaches it.
+			// handoffHandlers needs a GoTrue URL to build the rest, so only AUTH_SITE_URL unset reaches it.
 			if unset == "AUTH_SITE_URL" {
-				answers["Verify"] = serveForm(handoffVerify(authURL, nil, nil), "/auth/verify", "token=T&type=signup")
 				log := slog.New(slog.DiscardHandler)
 				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil, nil).InvitationPassword
 				answers["InvitationPassword"] = serveForm(invitee, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd")
@@ -1622,20 +1617,15 @@ func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 			}
 			reset := resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, h.AccountEvents, h.LinkRedeemByIP)
 			routes := []struct {
-				h            http.Handler
-				path, typ    string
-				withPassword bool
+				h         http.Handler
+				path, typ string
 			}{
-				{h.Verify, "/auth/verify", "signup", false},
-				{reset, "/auth/reset-password", "recovery", true},
-				{h.InvitationPassword, "/auth/invitation/password", "signup", true},
+				{reset, "/auth/reset-password", "recovery"},
+				{h.InvitationPassword, "/auth/invitation/password", "signup"},
 			}
 			post := func(i int) {
 				rt := routes[i%len(routes)]
-				body := url.Values{"token": {fmt.Sprintf("%056x", i)}, "type": {rt.typ}}
-				if rt.withPassword {
-					body.Set("password", "new-password-1")
-				}
+				body := url.Values{"token": {fmt.Sprintf("%056x", i)}, "type": {rt.typ}, "password": {"new-password-1"}}
 				req := httptest.NewRequest(http.MethodPost, rt.path, strings.NewReader(body.Encode()))
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				req.Header.Set("X-Forwarded-For", "198.51.100.1, 203.0.113.7, 130.211.0.1")

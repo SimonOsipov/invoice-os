@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS, UNCONFIRMED_DAYS } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -96,6 +96,8 @@ import {
   rulePutsUnsubscribeInEveryBroadcast,
   sidebarOpensAccountPage,
   syncBlogAddsSegmentAndTopic,
+  unconfirmedPurgeDays,
+  unconfirmedPurgeKeepsAddressData,
   workerNamesHubSpot,
 } from './privacyCodeFacts.test.util'
 
@@ -1127,6 +1129,7 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
       'DELETION_GRACE_DAYS=30',
       'BACKUP_DAYS=7',
       'FILE_RECOVERY_DAYS=7',
+      'UNCONFIRMED_DAYS=7',
     ])
   })
 
@@ -1266,9 +1269,6 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     const planted = gw.replace('Email: user.Email, FirstSession: true}', 'Email: user.Email}')
     expect(planted).not.toBe(gw)
     expect(firstSessionIsNotASignInRow(planted, mover)).toBe(false)
-    const reg = gw.replace('Email: confirmed.User.Email, FirstSession: true}', 'Email: confirmed.User.Email}')
-    expect(reg).not.toBe(gw)
-    expect(firstSessionIsNotASignInRow(reg, mover)).toBe(false)
     const noContinue = mover.replace(/(INSERT INTO account_known_devices[\s\S]*?\n\s*)continue\n/, '$1')
     expect(noContinue).not.toBe(mover)
     expect(firstSessionIsNotASignInRow(gw, noContinue)).toBe(false)
@@ -1393,5 +1393,45 @@ describe('SECAUD-20-07: the readiness hold sentences state what the code does', 
   it('readinessHeldPurgedHourly reads the worker', () => {
     expect(readinessHeldPurgedHourly()).toBe(true)
     expect(readinessHeldPurgedHourly(swap('cmd/worker/main.go', /NewWorker\(time\.Hour, leader\.Lead\("readiness-request-purge"/, 'NewWorker(24*time.Hour, leader.Lead("readiness-request-purge"'))).toBe(false)
+  })
+})
+
+describe('SECAUD-07-06: the page states the unconfirmed-account purge', () => {
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const SENTENCE = (days: unknown): string =>
+    `If you do not confirm your email address within ${days} days of the last confirmation or password-reset email, we delete the account.`
+
+  it('the page quotes the age from the code constant, and a changed constant breaks the claim', () => {
+    expect(html).toContain(SENTENCE(UNCONFIRMED_DAYS))
+    expect(UNCONFIRMED_DAYS).toBe(unconfirmedPurgeDays())
+    const changed = swap('internal/platform/db/account_state_read.go', /(?<head>UnconfirmedPurgeDays\s*=\s*)7\b/, '$<head>8')
+    expect(unconfirmedPurgeDays(changed)).not.toBe(UNCONFIRMED_DAYS)
+  })
+
+  it('unconfirmedPurgeDays needs the hourly worker line', () => {
+    expect(UNCONFIRMED_DAYS).toBe(7)
+    expect(unconfirmedPurgeDays()).toBe(UNCONFIRMED_DAYS)
+    const noLine = swap('cmd/worker/main.go', /leader\.Lead\("unconfirmed-purge",/, 'leader.Lead("unconfirmed-purge-x",')
+    expect(() => unconfirmedPurgeDays(undefined, noLine)).toThrow()
+  })
+
+  it('U4 names the account deleted because nobody confirmed the address', () => {
+    expect(html).toContain(
+      'We delete that record when an ASComply account with that address is deleted, unless another account still holds the address or the account was deleted because nobody confirmed the address.',
+    )
+  })
+
+  it('unconfirmedPurgeKeepsAddressData reads the purge task and fails on either erase call', () => {
+    expect(() => readSource('internal/notifications/unconfirmed_purge.go')).not.toThrow()
+    expect(unconfirmedPurgeKeepsAddressData()).toBe(true)
+    const src = readSource('internal/notifications/unconfirmed_purge.go')
+    expect(unconfirmedPurgeKeepsAddressData(src + '\nfunc x() { _ = EnqueueErasureByID(ctx, tx, rc, id) }\n')).toBe(false)
+    expect(unconfirmedPurgeKeepsAddressData(src + '\nfunc x() { _ = EnqueueErasure(ctx, tx, rc, id) }\n')).toBe(false)
+    expect(unconfirmedPurgeKeepsAddressData(src.replace(/auth\.purge_unconfirmed_account/g, 'x'))).toBe(false)
   })
 })

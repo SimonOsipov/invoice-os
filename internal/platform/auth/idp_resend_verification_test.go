@@ -102,7 +102,7 @@ func TestIdP_ResendAnswersAlikeForEveryAccountState(t *testing.T) {
 	}
 
 	confirmed := registrant(t, gw)
-	if got := follow(t, confirmationLink(t, confirmed.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, confirmed.email), confirmed.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	record("confirmed address", confirmed.email)
@@ -196,14 +196,14 @@ func TestIdP_ResentLinkVerifiesAndEarlierLinksStop(t *testing.T) {
 
 	l3, l4 := links[2], links[3]
 	for name, l := range map[string]string{"the registration link": l1, "the previous resend's link": l3} {
-		if got := follow(t, l); got != siteURL+"/?verify=failed" {
+		if got := follow(t, l, r.password); got != siteURL+"/?verify=failed" {
 			t.Errorf("%s = %q, want %s/?verify=failed", name, got, siteURL)
 		}
 	}
 	if emailConfirmed(t, r.email) {
 		t.Fatal("an earlier link confirmed the account")
 	}
-	if got := follow(t, l4); got != siteURL+"/?verified=1" {
+	if got := follow(t, l4, r.password); got != siteURL+"/?verified=1" {
 		t.Errorf("the newest link = %q, want %s/?verified=1", got, siteURL)
 	}
 	accessToken(t, base, r)

@@ -3,6 +3,7 @@
 import { actorLabel } from './actor'
 import type { AuditEvent } from './audit'
 import { auditEventView } from './auditVocabulary'
+import { csvCell } from './csvCell'
 import { pad2 } from './format'
 import { formatBytes } from './sourceDocument'
 
@@ -10,12 +11,6 @@ export const AUDIT_CSV_HEADER: string[] = [
   'When', 'Who', 'Actor kind', 'Actor id', 'What',
   'Event identifier', 'Company', 'Company scope', 'Event id',
 ]
-
-// RFC-4180 quoting, copied from reviewBatch.ts:675's csvCell -- it's module-local there
-// and not exported, so this is a copy, not an import.
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
-}
 
 // Copied from AuditRow.tsx:96-98's company_scope rule, not reconstructed.
 function csvCompany(event: AuditEvent): string {

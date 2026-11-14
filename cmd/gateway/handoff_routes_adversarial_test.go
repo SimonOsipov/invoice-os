@@ -175,14 +175,14 @@ func TestHandoffHandlersWiring(t *testing.T) {
 
 	store, throttle, perIP := assigned["gateway.NewHandoffStore"], assigned["gateway.NewSignInThrottle"], assigned["link-redeem-ip throttle"]
 	for callee, want := range map[string]string{
-		"gateway.NewHandoffStore":   "gateway.HandoffTTL, time.Now",
-		"link-redeem-ip throttle":   `"link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now`,
-		"gateway.NewSignInThrottle": `"sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now`,
-		"gateway.SignInHandler":     "authURL, client, " + store + ", " + throttle + ", log, sink, events",
-		"gateway.ExchangeHandler":   store + ", cookies",
-		"gateway.RefreshHandler":    "authURL, client, log, cookies",
-		"gateway.SignOutHandler":    "authURL, client, " + sessions + ", log, events, cookies",
-		"gateway.VerifyHandler":     "authURL, siteURL, client, log, sink, " + store + ", events, " + perIP + ", enforce",
+		"gateway.NewHandoffStore":           "gateway.HandoffTTL, time.Now",
+		"link-redeem-ip throttle":           `"link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now`,
+		"gateway.NewSignInThrottle":         `"sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now`,
+		"gateway.SignInHandler":             "authURL, client, " + store + ", " + throttle + ", log, sink, events",
+		"gateway.ExchangeHandler":           store + ", cookies",
+		"gateway.RefreshHandler":            "authURL, client, log, cookies",
+		"gateway.SignOutHandler":            "authURL, client, " + sessions + ", log, events, cookies",
+		"gateway.InvitationPasswordHandler": "authURL, siteURL, client, " + sessions + ", " + throttle + ", sink, log, " + store + ", events, " + perIP + ", enforce",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {

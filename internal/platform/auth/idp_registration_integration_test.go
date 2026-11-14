@@ -71,7 +71,7 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register, resend, reset-request, confirm and reset pages, and verify handlers where the mailed links point, and returns its JSON log.
+// startGateway serves the real register, resend, reset-request, set-password and reset pages and handlers where the mailed links point, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	mux, logs := gatewayMux(t, authBase, minResponse, sink)
@@ -94,7 +94,7 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool)))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool), false))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
 	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log, nil))
@@ -104,7 +104,6 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	}
 	mux.Handle("GET /auth/verify", verifyPage)
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
-	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, store, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now), true))
 	mux.Handle("POST /auth/exchange", gateway.ExchangeHandler(store, nil))
 	inviteeSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, store, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now), true))
@@ -461,41 +460,43 @@ func postForm(action string, values url.Values) (int, string, error) {
 	return resp.StatusCode, resp.Header.Get("Location"), nil
 }
 
-// follow opens the mailed link's page and clicks its button without the state, and returns the redirect target.
+// follow opens the mailed link's page and posts password without the state, and returns the redirect target.
 // The unchanged ?verified=1 comparisons keep testing the stateless path.
-func follow(t *testing.T, link string) string {
+func follow(t *testing.T, link, password string) string {
 	t.Helper()
 	action, values := confirmForm(t, link)
 	values.Del("state")
+	values.Set("password", password)
 	status, location, err := postForm(action, values)
 	if err != nil {
 		t.Fatalf("POST %s: %v", action, err)
 	}
 	if status != http.StatusSeeOther {
-		t.Fatalf("clicking the confirm button: status %d, want 303", status)
+		t.Fatalf("posting the set-password form: status %d, want 303", status)
 	}
 	return location
 }
 
-// clickWithState clicks the link's button carrying state and returns the redirect target.
-func clickWithState(t *testing.T, link, state string) string {
+// clickWithState posts password on the link's page carrying state and returns the redirect target.
+func clickWithState(t *testing.T, link, state, password string) string {
 	t.Helper()
 	action, values := confirmFormWithState(t, link, state)
+	values.Set("password", password)
 	status, location, err := postForm(action, values)
 	if err != nil {
 		t.Fatalf("POST %s: %v", action, err)
 	}
 	if status != http.StatusSeeOther {
-		t.Fatalf("clicking the confirm button: status %d, want 303", status)
+		t.Fatalf("posting the set-password form: status %d, want 303", status)
 	}
 	return location
 }
 
-// followSignedIn clicks the link with a fresh state, requires the hand-off redirect, and returns its code and the state.
-func followSignedIn(t *testing.T, link string) (code, state string) {
+// followSignedIn posts password on the link's page with a fresh state, requires the hand-off redirect, and returns its code and the state.
+func followSignedIn(t *testing.T, link, password string) (code, state string) {
 	t.Helper()
 	state = newState(t)
-	loc := clickWithState(t, link, state)
+	loc := clickWithState(t, link, state, password)
 	u, err := url.Parse(loc)
 	if err != nil || !strings.HasPrefix(loc, siteURL+"/?verified=1&handoff=") {
 		t.Fatalf("confirm redirect = %q (%v), want %s/?verified=1&handoff=<code>", loc, err, siteURL)
@@ -517,8 +518,8 @@ func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 		t.Error("the registered user is already confirmed; idp-mail autoconfirms")
 	}
 	status, body := signIn(t, base, u)
-	if status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
-		t.Errorf("password grant before verification: status %d, body %v; want 400 email_not_confirmed", status, body)
+	if status != http.StatusBadRequest || body["error_code"] != "invalid_credentials" {
+		t.Errorf("password grant before verification: status %d, body %v; want 400 invalid_credentials (the registered password was discarded)", status, body)
 	}
 }
 
@@ -598,13 +599,13 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	if emailConfirmed(t, u.email) {
 		t.Fatal("opening the link confirmed the account")
 	}
-	if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
-		t.Fatalf("password grant after opening the link: status %d, body %v; want 400 email_not_confirmed", status, body)
+	if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "invalid_credentials" {
+		t.Fatalf("password grant after opening the link: status %d, body %v; want 400 invalid_credentials", status, body)
 	}
 	if n := sink.count(); n != 0 {
 		t.Fatalf("opening the link handed off %d registrants, want 0", n)
 	}
-	if got := follow(t, link); got != siteURL+"/?verified=1" {
+	if got := follow(t, link, u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 
@@ -638,6 +639,7 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			gw, _ := startGateway(t, base, 0, sink)
 			u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
 			action, values := confirmForm(t, confirmationLink(t, u.email))
+			values.Set("password", u.password)
 			state := values.Get("state")
 			if !stateful {
 				values.Del("state")
@@ -673,6 +675,9 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 				case stateful && strings.HasPrefix(a.location, siteURL+"/?verified=1&handoff="):
 					verified++
 					codes = append(codes, strings.TrimPrefix(a.location, siteURL+"/?verified=1&handoff="))
+				// Two verified clicks revoke each other's session at the password change, so neither mints a code.
+				case stateful && a.location == siteURL+"/?verified=1":
+					verified++
 				default:
 					t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer under %s", a.location, siteURL)
 				}
@@ -681,9 +686,6 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 				t.Fatal("no click landed on ?verified=1")
 			}
 			if stateful {
-				if len(codes) != verified {
-					t.Fatalf("%d codes for %d verified clicks, want one each", len(codes), verified)
-				}
 				for _, code := range codes {
 					if status, session := exchange(t, gw, code, state); status != http.StatusOK || session["access_token"] == "" {
 						t.Errorf("exchange of a delivered code: status %d, body %v; want 200", status, session)
@@ -693,6 +695,8 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			if !emailConfirmed(t, u.email) {
 				t.Error("the account is not confirmed after the clicks")
 			}
+			// A click that mints no code must still leave the chosen password working.
+			accessToken(t, base, u)
 			for range verified {
 				sink.next(t)
 			}
@@ -705,16 +709,68 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 	}
 }
 
+// Two tabs post two different passwords for one link: the last password set stays, and only it signs in.
+func TestIdP_TwoConcurrentClicksWithTwoPasswordsLeaveExactlyOneSignIn(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw)
+	action, values := confirmForm(t, confirmationLink(t, u.email))
+	passwords := []string{"pw-tab-a-" + uuid.NewString(), "pw-tab-b-" + uuid.NewString()}
+
+	locations := make(chan string, 2)
+	start := make(chan struct{})
+	for _, pw := range passwords {
+		form := url.Values{}
+		for k, v := range values {
+			form[k] = v
+		}
+		form.Set("password", pw)
+		go func() {
+			<-start
+			status, location, err := postForm(action, form)
+			if err != nil || status != http.StatusSeeOther {
+				location = fmt.Sprintf("status %d, err %v", status, err)
+			}
+			locations <- location
+		}()
+	}
+	close(start)
+
+	landed := 0
+	for range 2 {
+		if loc := <-locations; strings.HasPrefix(loc, siteURL+"/?verified=1") {
+			landed++
+		} else if loc != siteURL+"/?verify=failed" {
+			t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer", loc)
+		}
+	}
+	if landed < 1 {
+		t.Fatal("no click landed on ?verified=1")
+	}
+	if !emailConfirmed(t, u.email) {
+		t.Error("the account is not confirmed after the clicks")
+	}
+	working := 0
+	for _, pw := range passwords {
+		if status, _ := signIn(t, base, idpUser{email: u.email, password: pw}); status == http.StatusOK {
+			working++
+		}
+	}
+	if working != 1 {
+		t.Errorf("%d of the two posted passwords sign in, want exactly 1", working)
+	}
+}
+
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
-	if got := follow(t, link); got != siteURL+"/?verified=1" {
+	if got := follow(t, link, u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("first follow = %q, want %s/?verified=1", got, siteURL)
 	}
-	if got := follow(t, link); got != siteURL+"/?verify=failed" {
+	if got := follow(t, link, u.password); got != siteURL+"/?verify=failed" {
 		t.Errorf("second follow = %q, want %s/?verify=failed", got, siteURL)
 	}
 }
@@ -724,7 +780,7 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	gw, _ := startGateway(t, base, 0, nil)
 	answers := map[string]string{"workspace_name": "IdP Works", "display_name": "Ada", "kind": "in_house"}
 	u := registrant(t, gw, answers)
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 
@@ -821,7 +877,7 @@ func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
 		t.Fatalf("repeat register status = %d, want 202", resp.StatusCode)
 	}
 
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	status, session := signIn(t, base, u)

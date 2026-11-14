@@ -104,7 +104,7 @@ func (u idpUser) register(t *testing.T, base string) {
 
 func confirmByLink(t *testing.T, u idpUser) {
 	t.Helper()
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 }

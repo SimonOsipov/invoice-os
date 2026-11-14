@@ -77,7 +77,7 @@ func sessionRows(t *testing.T, email string) int {
 func confirmedRegistrant(t *testing.T, gw string) idpUser {
 	t.Helper()
 	u := registrant(t, gw)
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	return u
@@ -374,7 +374,7 @@ func TestIdP_ResetTakesBackAnUnconfirmedAccount(t *testing.T) {
 	attackerPassword := h.password
 	const victimPassword = "pw-victim-reset"
 
-	requireSignIn(t, base, h, attackerPassword, http.StatusBadRequest, "email_not_confirmed")
+	requireSignIn(t, base, h, attackerPassword, http.StatusBadRequest, "invalid_credentials")
 	requestResetAccepted(t, gw, h.email)
 	action, values := confirmForm(t, recoveryLink(t, h.email, 2))
 	if got := submitReset(t, action, values, victimPassword); got != siteURL+"/?reset=1" {

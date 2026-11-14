@@ -66,6 +66,12 @@ describe('auditCsv', () => {
     expect(lines.length, 'expected the header line plus one line per event (4 total)').toBe(4)
   })
 
+  it('auditCsv_neutralisesAFormulaActorName', () => {
+    const csv = auditCsv([makeEvent({ actor_name: '=HYPERLINK("https://example.test","x")' })])
+
+    expect(csv.split('\n')[1]).toContain(`,"'=HYPERLINK(""https://example.test"",""x"")",`)
+  })
+
   it('auditCsv_quotesCommasQuotesAndNewlines: a comma, a double quote and a newline are RFC-4180 escaped', () => {
     const event = makeEvent({ actor_name: 'Okafor, "Chi"\nJr' })
 

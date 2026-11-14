@@ -173,8 +173,8 @@ func TestIdP_UnconfirmedInviteeGetsNoTokenToJoinWith(t *testing.T) {
 	w := newPreRegisteredInviteWorld(t, "logfix03c-", pw, false)
 	u := idpUser{email: w.email, password: pw}
 	status, body := signIn(t, w.base, u)
-	if status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
-		t.Fatalf("password grant before any click: status %d, body %v; want 400 email_not_confirmed", status, body)
+	if status != http.StatusBadRequest || body["error_code"] != "invalid_credentials" {
+		t.Fatalf("password grant before any click: status %d, body %v; want 400 invalid_credentials (the registered password was discarded)", status, body)
 	}
 }
 

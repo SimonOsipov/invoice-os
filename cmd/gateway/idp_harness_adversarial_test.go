@@ -215,7 +215,7 @@ var mailKinds = []struct{ templateVar, subjectVar, urlpathVar, page, subject, pa
 
 const rateLimitVar = "GOTRUE_RATE_LIMIT_EMAIL_SENT"
 
-// assertMailBranding pins idp-mail's template URL, subject and link path for each mail: one of each, the subject by name, the mail cap at 100.
+// assertMailBranding pins idp-mail's template URL, subject and link path for each mail: one of each, the subject by name, the mail cap at 1000.
 func assertMailBranding(t *testing.T, log, container, osName string, verifyPort int) {
 	t.Helper()
 	runs := stubLines(log, "RUN", container)
@@ -254,8 +254,8 @@ func assertMailBranding(t *testing.T, log, container, osName string, verifyPort 
 	if strings.Contains(runs[0], "ASComply") {
 		t.Errorf("%s carries a subject in argv; a value with spaces passes by name: %s", container, runs[0])
 	}
-	if n := strings.Count(runs[0], "-e "+rateLimitVar+"="); n != 1 || argvEnv(runs[0], rateLimitVar) != "100" {
-		t.Errorf("%s passes %s %d times as %q, want once as 100: %s", container, rateLimitVar, n, argvEnv(runs[0], rateLimitVar), runs[0])
+	if n := strings.Count(runs[0], "-e "+rateLimitVar+"="); n != 1 || argvEnv(runs[0], rateLimitVar) != "1000" {
+		t.Errorf("%s passes %s %d times as %q, want once as 1000: %s", container, rateLimitVar, n, argvEnv(runs[0], rateLimitVar), runs[0])
 	}
 }
 
@@ -407,8 +407,8 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 					}
 				}
 			}
-			if v := argvEnv(stubLines(r.log, "RUN", "idp-mail")[0], rateLimitVar); v != "100" {
-				t.Errorf("idp-mail %s = %q, want 100", rateLimitVar, v)
+			if v := argvEnv(stubLines(r.log, "RUN", "idp-mail")[0], rateLimitVar); v != "1000" {
+				t.Errorf("idp-mail %s = %q, want 1000", rateLimitVar, v)
 			}
 			// The image owns the code length, the lifetime and the limiter header.
 			for _, l := range strings.Split(r.log, "\n") {

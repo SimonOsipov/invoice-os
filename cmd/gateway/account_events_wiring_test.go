@@ -71,17 +71,11 @@ func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 
 	g.grantOK.Store(true)
 	state := "state=" + handoffState
-	if rec := serveForm(h.Verify, "/auth/verify", "token=t&type=signup&"+state); !strings.Contains(rec.Header().Get("Location"), "&handoff=") {
-		t.Fatalf("verify = %d %q, want a hand-off", rec.Code, rec.Header().Get("Location"))
+	if rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=t&type=signup&password=new-password-1&"+state); !strings.Contains(rec.Header().Get("Location"), "&handoff=") {
+		t.Fatalf("set-password = %d %q, want a hand-off", rec.Code, rec.Header().Get("Location"))
 	}
 	if n := rows(gateway.EventSignedIn); n != 1 {
-		t.Errorf("signed_in rows after the verify hand-off = %d, want 1", n)
-	}
-	if rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=t&type=signup&password=new-password-1&"+state); !strings.Contains(rec.Header().Get("Location"), "&handoff=") {
-		t.Fatalf("invitation password = %d %q, want a hand-off", rec.Code, rec.Header().Get("Location"))
-	}
-	if n := rows(gateway.EventSignedIn); n != 2 {
-		t.Errorf("signed_in rows after the invitation hand-off = %d, want 2", n)
+		t.Errorf("signed_in rows after the set-password hand-off = %d, want 1", n)
 	}
 
 	for _, event := range []string{gateway.EventSignInFailed, gateway.EventPasswordResetRequested, gateway.EventSignedOut, gateway.EventPasswordResetCompleted} {

@@ -71,13 +71,13 @@ func TestIdP_TamperedLinkFailsAndLeavesTheRealOneUsable(t *testing.T) {
 	q.Set("token", tok[:len(tok)-1]+string(flip))
 	parsed.RawQuery = q.Encode()
 
-	if got := follow(t, parsed.String()); got != siteURL+"/?verify=failed" {
+	if got := follow(t, parsed.String(), u.password); got != siteURL+"/?verify=failed" {
 		t.Errorf("tampered link = %q, want %s/?verify=failed", got, siteURL)
 	}
 	if emailConfirmed(t, u.email) {
 		t.Fatal("a tampered token confirmed the account")
 	}
-	if got := follow(t, link); got != siteURL+"/?verified=1" {
+	if got := follow(t, link, u.password); got != siteURL+"/?verified=1" {
 		t.Errorf("the real link after a tampered attempt = %q, want %s/?verified=1", got, siteURL)
 	}
 }
@@ -99,7 +99,7 @@ func TestIdP_ExpiredLinkFails(t *testing.T) {
 		u := registrant(t, gw)
 		link := confirmationLink(t, u.email)
 		backdate(t, u.email, 59*time.Minute)
-		if got := follow(t, link); got != siteURL+"/?verified=1" {
+		if got := follow(t, link, u.password); got != siteURL+"/?verified=1" {
 			t.Errorf("59-minute-old link = %q, want %s/?verified=1", got, siteURL)
 		}
 		if !emailConfirmed(t, u.email) {
@@ -111,14 +111,14 @@ func TestIdP_ExpiredLinkFails(t *testing.T) {
 		u := registrant(t, gw)
 		link := confirmationLink(t, u.email)
 		backdate(t, u.email, 61*time.Minute)
-		if got := follow(t, link); got != siteURL+"/?verify=failed" {
+		if got := follow(t, link, u.password); got != siteURL+"/?verify=failed" {
 			t.Errorf("expired link = %q, want %s/?verify=failed", got, siteURL)
 		}
 		if emailConfirmed(t, u.email) {
 			t.Error("an expired token confirmed the account")
 		}
-		if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
-			t.Errorf("password grant after an expired link: status %d, body %v; want 400 email_not_confirmed", status, body)
+		if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "invalid_credentials" {
+			t.Errorf("password grant after an expired link: status %d, body %v; want 400 invalid_credentials", status, body)
 		}
 	})
 }
@@ -132,13 +132,17 @@ func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 		t.Fatalf("control: mailpit holds %d mails after one registration, want 1", n)
 	}
 
-	status, body, err := register(gw, u.email, u.password)
+	other := "pw-other-" + u.password
+	status, body, err := register(gw, u.email, other)
 	if err != nil || status != http.StatusAccepted || !strings.Contains(body, `"verification_pending"`) {
 		t.Fatalf("repeat registration: status %d, body %s, err %v; want 202 verification_pending", status, body, err)
 	}
 	if n := mailCount(t, u.email); n != 1 {
 		t.Errorf("mailpit holds %d mails after a repeat within the minute, want 1 (GoTrue rate-limits the resend)", n)
 	}
+	// invalid_credentials, not email_not_confirmed: no registration password was stored.
+	requireSignIn(t, base, u, u.password, http.StatusBadRequest, "invalid_credentials")
+	requireSignIn(t, base, u, other, http.StatusBadRequest, "invalid_credentials")
 }
 
 // GoTrue answers a confirmed address 200 with a sanitized user and sends nothing.
@@ -146,7 +150,7 @@ func TestIdP_VerifiedAddressRegisteringAgainSendsNoMailAndKeepsThePassword(t *te
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q", got)
 	}
 

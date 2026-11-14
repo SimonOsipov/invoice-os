@@ -360,24 +360,6 @@ func aeInviteHandler(t *testing.T, f *resetGoTrue, rec AccountEvents) http.Handl
 	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), testHandoffStore(), rec, lrThrottle(time.Now), true)
 }
 
-func TestAccountEvents_VerifyHandoffRecordsASignIn(t *testing.T) {
-	rec := &recEvents{}
-	h := VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), rec, lrThrottle(time.Now), true)
-
-	vhCode(t, vhClick(h, vhState))
-
-	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != aeUserID || e.Email != aeEmail || !e.FirstSession {
-		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, aeUserID, aeEmail)
-	}
-
-	resp := vhClick(h, "")
-	if loc := resp.Header().Get("Location"); strings.Contains(loc, "handoff=") {
-		t.Fatalf("a verify with no state minted a code: %q", loc)
-	}
-	rec.requireNames(t, EventSignedIn)
-}
-
 func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
 	f := newResetGoTrue(t)
 	rec := &recEvents{}
@@ -495,9 +477,6 @@ func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
 			h := ResetPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, log, rec, lrThrottle(time.Now), true)
 			return aeResetPost(t, h)
-		}},
-		{"verify hand-off", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
-			return vhClick(VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), log, nil, testHandoffStore(), rec, lrThrottle(time.Now), true), vhState)
 		}},
 		{"invitation set-password", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)

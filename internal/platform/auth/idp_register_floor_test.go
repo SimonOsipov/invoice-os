@@ -58,7 +58,7 @@ func TestIdP_RegisterWaitsTheMinimumForEveryAccountState(t *testing.T) {
 
 	confirmed := fresh()
 	record("second new address", confirmed)
-	if got := follow(t, confirmationLink(t, confirmed.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, confirmed.email), confirmed.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	record("confirmed address", confirmed)

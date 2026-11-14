@@ -135,6 +135,7 @@ func TestIdP_PurgeFunctionIsNarrow(t *testing.T) {
 }
 
 func TestIdP_PurgeGrantRevokesAStrayExecute(t *testing.T) {
+	_ = idpMailURL(t)
 	grantAccountStateRead(t)
 	su := superConn(t)
 	const fn = `auth.purge_unconfirmed_account(uuid)`

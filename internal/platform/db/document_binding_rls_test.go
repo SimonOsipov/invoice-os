@@ -530,6 +530,36 @@ func TestRLS_ConcurrentCitationByANonUploaderIsRefusedWhenTheWinnerRollsBack(t *
 	}
 }
 
+// The other order: tx2 is the uploader, so the bind predicate is true for them and they queue on the same row lock.
+func TestRLS_ConcurrentCitationByTheUploaderFollowsTheBindingAfterTheWait(t *testing.T) {
+	requireHarness(t)
+
+	for name, c := range map[string]struct {
+		e2     func(f *bdFix) string
+		refuse bool
+	}{
+		"for the bound client": {func(f *bdFix) string { return f.a }, false},
+		"for another client":   {func(f *bdFix) string { return f.b }, true},
+	} {
+		f := bdSeed(t)
+		uploader := uuid.NewString()
+		doc := bdDoc(t, f, "", uploader)
+		err1, err2, blocked := bdRace(t, f, doc, f.a, c.e2(f), true, bdWho{scope: bdSet(f.a), user: &uploader})
+		if !blocked {
+			t.Errorf("%s: tx2 did not wait on the document row while tx1's first citation was open", name)
+		}
+		if err1 != nil {
+			t.Errorf("%s: the binder's citation for A: %v", name, err1)
+		}
+		if c.refuse {
+			bdWantRefused(t, name+": the uploader's citation", err2)
+		} else if err2 != nil {
+			t.Errorf("%s: the uploader's citation after the binder committed: %v", name, err2)
+		}
+		bdWantEntity(t, name+": after the race", doc, &f.a)
+	}
+}
+
 func TestRLS_AppCannotRebindADocument(t *testing.T) {
 	requireHarness(t)
 	f := bdSeed(t)
@@ -779,6 +809,18 @@ func TestRLS_DocumentUploadersIsTenantIsolated(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Errorf("control: invoice_app under T inserting a T row: %v", err)
+	}
+	// A T row that names tenant U's document passes the policy and must still fail the composite foreign key.
+	err = db.WithinTenantTx(ctx, h.app, f.tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`, f.tenant, docU, uuid.NewString())
+		return err
+	})
+	var fkErr *pgconn.PgError
+	if !errors.As(err, &fkErr) || fkErr.Code != "23503" {
+		t.Errorf("invoice_app under T inserting a T row for U's document: err = %v, want SQLSTATE 23503", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM document_uploaders WHERE document_id = $1`, docU); n != 1 {
+		t.Errorf("uploader rows of U's document = %d, want only U's own 1", n)
 	}
 
 	if n := mustCount(t, h.app, `SELECT count(*) FROM document_uploaders`); n != 0 {
@@ -1032,7 +1074,8 @@ func bdUploaders(t *testing.T, doc string) []string {
 	return out
 }
 
-// The backfill form of the co-uploader gate: a reuser counts only before the document's first citation.
+// The backfill form of the co-uploader gate: a reuser counts only before the document's first citation,
+// whether that citation is a batch or an invoice.
 func TestRLS_BackfillRecordsAReuserOnlyBeforeTheFirstCitation(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -1042,34 +1085,49 @@ func TestRLS_BackfillRecordsAReuserOnlyBeforeTheFirstCitation(t *testing.T) {
 	tenant, b := caThrowawayTenant(t), uuid.NewString()
 	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, 'br-b')`, b, tenant)
 	t.Cleanup(func() {
-		for _, tb := range []string{"import_batches", "documents", "business_entities"} {
+		for _, tb := range []string{"invoices", "import_batches", "documents", "business_entities"} {
 			_, _ = h.super.Exec(ctx, `DELETE FROM `+tb+` WHERE tenant_id = $1`, tenant)
 		}
 	})
-	doc := uuid.NewString()
-	bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4, 1024)`,
-		doc, tenant, "br-"+uuid.NewString(), docHash())
+	newDoc := func() string {
+		id := uuid.NewString()
+		bdExec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4, 1024)`,
+			id, tenant, "br-"+uuid.NewString(), docHash())
+		return id
+	}
+	byBatch, byInvoice := newDoc(), newDoc()
 	t1 := time.Now().Add(-5 * time.Hour)
 	t2, t3, t4 := t1.Add(time.Hour), t1.Add(2*time.Hour), t1.Add(3*time.Hour)
-	a1, b1, c1 := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	bdExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id, created_at) VALUES ($1, $2, $3, $4, $5)`,
-		uuid.NewString(), tenant, b, doc, t3)
-	for _, r := range []struct {
-		event, actor string
-		at           time.Time
-	}{
-		{"document.created", a1, t1}, {"document.reused", b1, t2}, {"document.reused", "worker", t2}, {"document.reused", c1, t4},
-	} {
-		bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, $3, jsonb_build_object('id', $4::text), $5)`,
-			tenant, r.actor, r.event, doc, r.at)
+		uuid.NewString(), tenant, b, byBatch, t3)
+	bdExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, created_at) VALUES ($1, $2, $3, 'br-1', $4, $5)`,
+		uuid.NewString(), tenant, b, byInvoice, t3)
+	type upload struct{ created, before, after string }
+	ups := map[string]*upload{
+		byBatch:   {uuid.NewString(), uuid.NewString(), uuid.NewString()},
+		byInvoice: {uuid.NewString(), uuid.NewString(), uuid.NewString()},
+	}
+	for doc, u := range ups {
+		for _, r := range []struct {
+			event, actor string
+			at           time.Time
+		}{
+			{"document.created", u.created, t1}, {"document.reused", u.before, t2}, {"document.reused", "worker", t2}, {"document.reused", u.after, t4},
+		} {
+			bdExec(t, `INSERT INTO audit_log (tenant_id, actor, event, payload, created_at) VALUES ($1, $2, $3, jsonb_build_object('id', $4::text), $5)`,
+				tenant, r.actor, r.event, doc, r.at)
+		}
 	}
 
 	reapply()
 
-	want := []string{a1, b1}
-	slices.Sort(want)
-	if got := bdUploaders(t, doc); !slices.Equal(got, want) {
-		t.Errorf("uploaders = %v, want %v (the creator and the reuser before B's batch; not c1 after it, not the non-uuid actor)", got, want)
+	for name, doc := range map[string]string{"cited by a batch": byBatch, "cited by an invoice": byInvoice} {
+		u := ups[doc]
+		want := []string{u.created, u.before}
+		slices.Sort(want)
+		if got := bdUploaders(t, doc); !slices.Equal(got, want) {
+			t.Errorf("%s: uploaders = %v, want %v (the creator and the reuser before the citation; not %s after it, not the non-uuid actor)", name, got, want, u.after)
+		}
 	}
 }
 

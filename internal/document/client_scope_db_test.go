@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -395,7 +396,7 @@ func TestClientScope_DocumentLinkStateIsExecutableByTheAppRoleOnly(t *testing.T)
 	}
 }
 
-// csUpload stores a CSV document through Store.Upsert under who's identity, so the column default and the seam are exercised.
+// csUpload stores a CSV document through Store.Upsert under who's identity.
 func csUpload(t *testing.T, f csFixture, who context.Context, seed string) document.Document {
 	t.Helper()
 	h := hashHex(seed)
@@ -515,6 +516,17 @@ func TestClientScope_EveryMemberWhoUploadsTheBytesIsAnUploader(t *testing.T) {
 	if _, got := csBinding(t, f.super, f.docZ); len(got) != 0 {
 		t.Errorf("uploaders of a superuser-inserted document = %v, want none", got)
 	}
+
+	// An in-process actor (a non-uuid subject) names no member: its upload, new or deduped, records nobody.
+	worker := auth.WithIdentity(context.Background(), auth.Identity{Subject: "worker", Role: "authenticated", TenantID: f.tenant})
+	if again := csUpload(t, f, worker, "same-bytes"); again.ID != first.ID {
+		t.Fatalf("control: the in-process dedupe made a new row %s, want %s", again.ID, first.ID)
+	}
+	csWantUploaders(t, f, "after an in-process dedupe", first.ID, u1, u2)
+	fresh := csUpload(t, f, worker, "worker-only-bytes")
+	if _, got := csBinding(t, f.super, fresh.ID); len(got) != 0 {
+		t.Errorf("uploaders of an in-process upload = %v, want none", got)
+	}
 }
 
 // csCoUploaded: two members limited to A upload the same bytes; the admin then cites the document for B.
@@ -614,6 +626,21 @@ func TestClientScope_AnUploadOfBytesBoundOutsideTheCallerGrantsNothing(t *testin
 		t.Errorf("download: %d %q, want the unknown id's 404 %d %q", got.Code, got.Body.String(), unknown.Code, unknown.Body.String())
 	}
 	csWantUploaders(t, f, "after the out-of-scope dedupe", d.ID, u1)
+	store(u2)
+	csWantUploaders(t, f, "after a second out-of-scope dedupe", d.ID, u1)
+	// The dedupe grants no citation either: the document stays bound to B and A gets no invoice for it.
+	err := db.WithinRequestTenantTx(u2, f.app, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(),
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-OUT-A', $3)`, f.tenant, f.entA, d.ID)
+		return err
+	})
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" || pgErr.ConstraintName != "documents_bound_client" {
+		t.Errorf("citing the bound document for A after the dedupe: err = %v, want 23503 documents_bound_client", err)
+	}
+	if entity := csEntityOf(t, f.super, d.ID); entity == nil || *entity != f.entB {
+		t.Errorf("documents.entity_id = %v after the refused citation, want %s", entity, f.entB)
+	}
 	if got, err := f.store.GetLinked(u1, d.ID); err != nil || got.ID != d.ID {
 		t.Errorf("control: GetLinked as the first uploader (limited to B) = %q, %v, want found", got.ID, err)
 	}

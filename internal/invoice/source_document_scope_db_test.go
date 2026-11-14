@@ -620,8 +620,6 @@ func TestClientScope_AMemberWhoNeverUploadedCannotCiteACoUploadedDocument(t *tes
 	}
 }
 
-// The sentinel is pinned by identity, not by name: ErrSourceDocumentBound does not exist yet and
-// naming it would stop the whole package compiling. The green step adds the errors.Is line.
 func TestStoreCreate_BoundElsewhereIsItsOwnErrorAndKeepsTheValidationText(t *testing.T) {
 	f := newCSFixture(t, "SC bound sentinel")
 	d := seedDocument(t, f.super, f.tenant)

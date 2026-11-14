@@ -2299,11 +2299,16 @@ test('deployed app: signing out in one tab ends the other tab on the same device
     await aFrontDoor
     expect(await refreshCookie(context, 'app'), 'the cookie survived the sign-out').toBeNull()
 
+    // The tabs share one stored record and A's sign-out removed it: B has nothing to renew, so it ends at once and sends no renewal.
+    const refreshesB: string[] = []
+    b.on('request', (r) => {
+      if (r.url() === REFRESH_URL) refreshesB.push(requestLine(r))
+    })
     const bFrontDoor = frontDoor(b)
-    const answered = await renewInTab(b, 'Audit')
-    expect(answered.status(), "B's renewal after the sign-out").toBe(401)
-    expect(await isCookieMode(answered.request()), "B's renewal was not cookie-mode").toBe(true)
+    await b.clock.fastForward('01:05:00')
+    await b.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Audit' }).click()
     expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
+    expect(refreshesB, 'B sent a renewal with no stored session').toEqual([])
     await expect(headerSignIn(b)).toBeVisible()
     expect(await storedSession(context), 'B kept a stored session').toBeNull()
     expect(cookie1, 'control: the cookie existed before the sign-out').toBeTruthy()

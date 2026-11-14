@@ -238,6 +238,8 @@ func main() {
 	// instead. Its literal /preview sibling above is unaffected by
 	// registration order (ServeMux resolves by specificity).
 	app.Mux.HandleFunc("GET /v1/imports/{id}", importer.GetHandler(impStore.GetBatch, app.Logger))
+	// Discards a completed import's invoices and releases its document; refused once any invoice was sent.
+	app.Mux.HandleFunc("POST /v1/imports/{id}/undo", importer.UndoHandler(impStore.UndoBatch, app.Logger))
 
 	// GET /v1/documents/{id} -- the source-document download (DOC-01-05). Bytes are
 	// proxied through the service after an RLS-scoped row lookup rather than handed

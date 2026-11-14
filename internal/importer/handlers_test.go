@@ -724,6 +724,10 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrTooManyRows": true,
 		// Cell-budget refusal, a 400; not a membership error.
 		"ErrTooManyCells": true,
+		// Undo refusals: a 403 and two 409s; not membership errors.
+		"ErrUndoForbidden": true,
+		"ErrNotUndoable":   true,
+		"ErrImportSent":    true,
 	}
 
 	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}

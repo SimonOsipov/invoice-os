@@ -1888,7 +1888,7 @@ func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
 		gotKeys = append(gotKeys, k)
 	}
 	slices.Sort(gotKeys)
-	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "import_batch_id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1908,7 +1908,7 @@ func TestExtractionDetail_DocumentTypeMarshalsAsExplicitNull(t *testing.T) {
 		t.Fatalf("unmarshal the detail: %v", err)
 	}
 	gotKeys := slices.Sorted(maps.Keys(decoded))
-	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "import_batch_id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}

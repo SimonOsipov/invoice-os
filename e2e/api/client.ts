@@ -2282,6 +2282,7 @@ export interface ExtractionDetail {
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
+  import_batch_id: string | null
 }
 
 export function getExtractionDetail(token: string, jobId: string): Promise<ExtractionDetail> {

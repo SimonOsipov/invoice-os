@@ -621,6 +621,7 @@ describe('getExtractionDetail', () => {
       failure_kind: null,
       document_type: null,
       ai_text_truncated: false,
+      import_batch_id: null,
       document: mkDocument(),
       pages: [],
       fields: [],

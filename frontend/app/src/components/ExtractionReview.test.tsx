@@ -174,6 +174,7 @@ function mkDetail(o: Partial<ExtractionDetail> = {}): ExtractionDetail {
     document: mkDocument(),
     pages: THREE_PAGES,
     fields: THREE_FIELDS,
+    import_batch_id: null,
     ...o,
   }
 }

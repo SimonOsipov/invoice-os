@@ -150,13 +150,15 @@ export interface ImportBatch {
   filename: string | null
   // The source document the batch was imported from, or null for a spreadsheet import.
   document_id: string | null
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'undone'
   rows_total: number
   rows_valid: number
   rows_invalid: number
   errors: RowError[]
   rule_set_version: number | null
   created_at: string
+  // True exactly when the undo route would succeed for the caller.
+  undoable: boolean
 }
 
 // GET /api/submission/v1/extractions. Mirrors extraction.JobState / extraction.JobsResponse

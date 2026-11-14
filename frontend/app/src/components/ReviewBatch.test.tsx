@@ -44,6 +44,7 @@ function batch(over: Partial<ImportBatch> = {}): ImportBatch {
     errors: [],
     rule_set_version: 3,
     created_at: '2026-08-01T00:00:00Z',
+    undoable: false,
     ...over,
   }
 }

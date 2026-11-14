@@ -1204,6 +1204,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/imports/document/invoice":                      {verdict: scCovered},
 	"POST /v1/imports/preview":                               {verdict: scCovered},
 	"POST /v1/imports/suggest-mapping":                       {verdict: scCovered},
+	"POST /v1/imports/{id}/undo":                             {verdict: scCovered},
 	"POST /v1/invitations":                                   {verdict: scCovered},
 	"POST /v1/invitations/accept":                            {verdict: scExempt, reason: "the caller has no membership yet"},
 	"POST /v1/invitations/{id}/accept":                       {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},

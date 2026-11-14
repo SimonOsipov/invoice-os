@@ -2588,6 +2588,7 @@ function mkBatch(id: string, filename: string | null, overrides: Partial<ImportB
     errors: [],
     rule_set_version: 5,
     created_at: '2026-07-30T00:00:00Z',
+    undoable: false,
     ...overrides,
   }
 }

@@ -282,3 +282,48 @@ export async function assertFitsNarrow(
 
   return measured
 }
+
+// Settled boxes of `control` and every locator it must clear; a missing box reads as null.
+async function controlBoxes(control: Locator, container: Locator, others: Locator[]): Promise<{ c: Rect; box: Rect; others: Rect[] } | null> {
+  await settleAnimations(control, container, ...others)
+  const [c, box, ...rest] = await Promise.all([control.boundingBox(), container.boundingBox(), ...others.map((o) => o.boundingBox())])
+  if (!c || !box || rest.some((r) => !r)) return null
+  return { c, box, others: rest as Rect[] }
+}
+
+// At every width: `control` sits inside `container`, overlaps none of `others`, and (wide only) shares `centreWith`'s vertical centre.
+export async function assertControlFits(
+  page: Page,
+  control: Locator,
+  container: Locator,
+  others: Locator[],
+  centreWith: Locator | null,
+  label: string,
+): Promise<void> {
+  const entry = page.viewportSize()
+  try {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+      await page.setViewportSize({ width, height: 900 })
+      const wide = (WIDE_WIDTHS as readonly number[]).includes(width)
+      await expect
+        .poll(
+          async () => {
+            const m = await controlBoxes(control, container, centreWith && wide ? [...others, centreWith] : others)
+            if (!m) return 'an element has no box'
+            if (!enclosesRect(m.box, m.c, 1)) return 'not enclosed by its container'
+            if (m.others.slice(0, others.length).some((o) => rectsOverlap(m.c, o))) return 'overlaps a sibling'
+            if (centreWith && wide) {
+              const ref = m.others[others.length]
+              if (Math.abs(m.c.y + m.c.height / 2 - (ref.y + ref.height / 2)) > 1) return 'centre differs from its sibling'
+            }
+            return 'ok'
+          },
+          { message: `${label} at ${width}px wide`, timeout: 10_000 },
+        )
+        .toBe('ok')
+      await assertPageDoesNotScrollSideways(page, `${label} at ${width}px wide`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}

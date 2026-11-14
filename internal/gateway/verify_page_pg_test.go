@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// The RLS database has no auth.confirm_link_address: the real lookup must fail closed, not render an unnamed page.
-func TestRLS_GatewayPoolLinkAddress_AMissingFunctionIsTheFailedNotice(t *testing.T) {
+// The app role cannot run auth.confirm_link_address (absent, or no grant on a database that has it): the real lookup must fail closed, not render an unnamed page.
+func TestRLS_GatewayPoolLinkAddress_ALookupErrorIsTheFailedNotice(t *testing.T) {
 	d := requireHandoffDB(t)
 	log, buf := captureLog()
-	h := vpHandlerWith(t, PoolLinkAddress(d.a), vpLimit(5), true, log)
+	h := vpHandlerWith(t, PoolLinkAddress(d.app), vpLimit(5), true, log)
 
 	rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken))
 

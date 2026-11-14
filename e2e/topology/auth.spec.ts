@@ -5,6 +5,7 @@ import { shoot } from '../argos'
 import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, openNewInvoice, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
+import { clearRefreshCookie, refreshCookie, type Audience } from '../sessionCookie'
 import { ensureMember } from '../realAccounts'
 import {
   acceptById,
@@ -1829,9 +1830,9 @@ test('deployed app: a 197-character name stays inside the identity card at every
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The app record keeps the renewal clock; the refresh token lives only in the gateway cookie.
 interface StoredRenewal {
   token: string
-  refresh_token: string
   received_at: number
 }
 
@@ -1841,15 +1842,19 @@ async function storedRenewal(page: Page): Promise<StoredRenewal> {
 }
 
 // Moves received_at back past GOTRUE_JWT_EXP (3600 s), whatever the page clock reads.
-async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}): Promise<void> {
+async function ageStoredSession(page: Page): Promise<void> {
   await page.evaluate(
-    ({ key, patch, ageMs }) => {
+    ({ key, ageMs }) => {
       const s = JSON.parse(localStorage.getItem(key)!)
-      localStorage.setItem(key, JSON.stringify({ ...s, ...patch, received_at: s.received_at - ageMs }))
+      localStorage.setItem(key, JSON.stringify({ ...s, received_at: s.received_at - ageMs }))
     },
-    { key: SESSION_KEY, patch, ageMs: 61 * 60_000 },
+    { key: SESSION_KEY, ageMs: 61 * 60_000 },
   )
 }
+
+// A cookie-mode request carries X-Auth-Session: cookie (internal/gateway/session_cookie.go).
+const isCookieMode = async (r: Request) => (await r.headerValue('x-auth-session')) === 'cookie'
+const cookieValue = async (context: BrowserContext, audience: Audience) => (await refreshCookie(context, audience))?.value
 
 // Gateway requests in send order. The browser's CORS preflights are not application requests.
 function recordGatewayRequests(page: Page): Request[] {
@@ -1894,7 +1899,9 @@ test("deployed app: a real session renews itself past the access token's lifetim
   await signInAtFrontDoor(page, account, '/')
   const first = await storedRenewal(page)
   expect(JWT_IN_URL.test(first.token), 'the stored token is not a JWT').toBe(true)
-  expect(first.refresh_token, 'the hand-off stored no refresh token').toBeTruthy()
+  expect(Object.keys(first), 'the stored record holds a refresh token').not.toContain('refresh_token')
+  const cookie1 = await cookieValue(page.context(), 'app')
+  expect(cookie1, 'the hand-off set no app refresh cookie').toBeTruthy()
 
   await test.step('past the lifetime by the browser clock, the next request renews first', async () => {
     // Settle the dashboard's loads, so "after the jump" holds only requests the jump caused.
@@ -1912,7 +1919,11 @@ test("deployed app: a real session renews itself past the access token's lifetim
     expect(requestLine(after[0]), 'the first gateway request after the jump').toBe('POST /auth/refresh')
     await expect.poll(async () => (await storedRenewal(page)).token, { message: 'the stored token did not change' }).not.toBe(first.token)
     const renewed = await storedRenewal(page)
-    expect(renewed.refresh_token, 'the stored refresh token did not rotate').not.toBe(first.refresh_token)
+    expect(Object.keys(renewed), 'the renewed record holds a refresh token').not.toContain('refresh_token')
+    const refreshes = after.filter((r) => r.url() === REFRESH_URL)
+    expect(refreshes.map(requestLine), 'one renewal for the jump').toEqual(['POST /auth/refresh'])
+    expect(await isCookieMode(refreshes[0]), 'the renewal was not cookie-mode').toBe(true)
+    await expect.poll(() => cookieValue(page.context(), 'app'), { message: 'the app refresh cookie did not rotate' }).not.toBe(cookie1)
     for (const req of after.filter(isApi)) {
       expect(await req.headerValue('authorization'), `${requestLine(req)} did not carry the renewed token`).toBe(`Bearer ${renewed.token}`)
     }
@@ -1920,6 +1931,7 @@ test("deployed app: a real session renews itself past the access token's lifetim
   })
 
   const second = await storedRenewal(page)
+  const cookie2 = (await cookieValue(page.context(), 'app'))!
   let third = second
 
   await test.step('a due stored session renews before the workspace mounts', async () => {
@@ -1945,6 +1957,7 @@ test("deployed app: a real session renews itself past the access token's lifetim
 
     const after = sent.slice(mark)
     expect(requestLine(after[0]), 'the first gateway request after the reload').toBe('POST /auth/refresh')
+    expect(await isCookieMode(after[0]), 'the boot renewal was not cookie-mode').toBe(true)
     third = await storedRenewal(page)
     expect(third.token, 'the boot renewal did not change the stored token').not.toBe(second.token)
     for (const req of after.filter(isApi)) {
@@ -1952,10 +1965,12 @@ test("deployed app: a real session renews itself past the access token's lifetim
     }
   })
 
-  expect(third.refresh_token, 'the boot renewal did not rotate the refresh token').not.toBe(second.refresh_token)
+  expect(Object.keys(third), 'the boot-renewed record holds a refresh token').not.toContain('refresh_token')
+  const cookie3 = await cookieValue(page.context(), 'app')
+  expect(cookie3, 'the boot renewal did not rotate the refresh cookie').not.toBe(cookie2)
   expect(statuses.filter((s) => s.startsWith('401 ')), 'a response in the journey was 401').toEqual([])
   expect(
-    leakingUrls(urls, first.token, first.refresh_token, second.token, second.refresh_token, third.token, third.refresh_token),
+    leakingUrls(urls, first.token, second.token, third.token, cookie1, cookie2, cookie3),
     'a token, a refresh token or a JWT appeared in these URLs',
   ).toEqual([])
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
@@ -1971,15 +1986,19 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   await signInAtFrontDoor(page, account, '/audit')
   await expect(page, 'the first sign-in did not settle on /audit').toHaveURL(/\/audit$/)
   const signedIn = await storedRenewal(page)
+  const signedInCookie = await cookieValue(page.context(), 'app')
 
-  // An unknown refresh token of GoTrue's length: refused as refresh_token_not_found.
-  await ageStoredSession(page, { refresh_token: 'aaaaaaaaaaaa' })
+  // No cookie: the renewal has no refresh token to send and is refused.
+  await clearRefreshCookie(page.context(), 'app')
+  await ageStoredSession(page)
   const urlMark = urls.length
   const markAt = markNextCommit(page, sent)
   const refusal = page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST')
   // Commit only: the refusal navigates to landing, which may beat the reload's load event.
   await page.reload({ waitUntil: 'commit' })
-  expect((await refusal).status(), 'the refused renewal').toBe(401)
+  const refused = await refusal
+  expect(refused.status(), 'the refused renewal').toBe(401)
+  expect(await isCookieMode(refused.request()), 'the refused renewal was not cookie-mode').toBe(true)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
   expect(sent.slice(markAt()).map(requestLine), 'the reloaded app sent more than the refused renewal').toEqual(['POST /auth/refresh'])
   expect(
@@ -1997,9 +2016,10 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the destination was not restored after the new sign-in').toHaveURL(/\/audit$/)
   const again = await storedRenewal(page)
+  const againCookie = await cookieValue(page.context(), 'app')
 
   expect(
-    leakingUrls(urls, signedIn.token, signedIn.refresh_token, again.token, again.refresh_token),
+    leakingUrls(urls, signedIn.token, again.token, signedInCookie, againCookie),
     'a token, a refresh token or a JWT appeared in these URLs',
   ).toEqual([])
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
@@ -2055,6 +2075,8 @@ test('deployed app: signing out on one device ends the session on every device',
     const copiedA = await storedSession(a.context)
     expect(copiedA, 'A stored no session').not.toBeNull()
     const recordA = JSON.parse(copiedA!) as StoredRenewal
+    const rtB = (await cookieValue(b.context, 'app'))!
+    expect(rtB, 'B has no app refresh cookie').toBeTruthy()
     const recordB = await storedRenewal(b.page)
 
     await test.step('A signs out: the server revokes before A leaves', async () => {
@@ -2104,7 +2126,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await expect(headerSignIn(b.page)).toBeVisible()
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
-      const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
+      const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: rtB } })
       expect([renewed.status, renewed.body], "B's refresh token after the sign-out").toEqual([401, { error: INVALID_REFRESH }])
     })
 
@@ -2120,6 +2142,7 @@ test('deployed app: signing out on one device ends the session on every device',
         .toBe('/')
     })
     const againB = await storedRenewal(b.page)
+    const rtAgainB = (await cookieValue(b.context, 'app'))!
 
     const c = await open()
     await test.step("A's copied record replayed in a fresh context mounts, is refused and ends", async () => {
@@ -2159,7 +2182,7 @@ test('deployed app: signing out on one device ends the session on every device',
       expect(urls.length, `no URLs were recorded in ${name}`).toBeGreaterThan(0)
     }
     expect(
-      leakingUrls([...a.urls, ...b.urls, ...c.urls], recordA.token, recordA.refresh_token, recordB.token, recordB.refresh_token, againB.token, againB.refresh_token),
+      leakingUrls([...a.urls, ...b.urls, ...c.urls], recordA.token, recordB.token, againB.token, rtB, rtAgainB),
       'a token, a refresh token or a JWT appeared in these URLs',
     ).toEqual([])
     for (const [name, errors] of [['A', a.errors], ['B', b.errors], ['C', c.errors]] as const) {
@@ -2174,6 +2197,158 @@ test('deployed app: signing out on one device ends the session on every device',
   }
 })
 
+test('deployed app: a reload with an expired access token renews through the cookie and keeps the workspace', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('renewal-reload')
+  const errors = collectErrors(page)
+  const urls = recordUrls(page)
+  await signInAtFrontDoor(page, account, '/audit')
+  await expect(page, 'the sign-in did not settle on /audit').toHaveURL(/\/audit$/)
+  const signedIn = await storedRenewal(page)
+  const cookie1 = await cookieValue(page.context(), 'app')
+
+  await ageStoredSession(page)
+  const renewal = refreshAnswer(page)
+  await page.reload()
+  const answered = await renewal
+  expect(answered.status(), 'the reload renewal').toBe(200)
+  expect(await isCookieMode(answered.request()), 'the reload renewal was not cookie-mode').toBe(true)
+  await expectInWorkspace(page, account)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'the reload left the destination').toHaveURL(/\/audit$/)
+
+  const renewed = await storedRenewal(page)
+  expect(renewed.token, 'the reload did not change the stored token').not.toBe(signedIn.token)
+  expect(Object.keys(renewed), 'the renewed record holds a refresh token').not.toContain('refresh_token')
+  const cookie2 = await cookieValue(page.context(), 'app')
+  expect(cookie2, 'the reload did not rotate the refresh cookie').not.toBe(cookie1)
+  expect(leakingUrls(urls, signedIn.token, renewed.token, cookie1, cookie2), 'a token, a cookie value or a JWT appeared in these URLs').toEqual([])
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Tab B's clock jumps past the access token's lifetime; B's own timer may send the renewal, so the answer is armed first.
+async function renewInTab(tab: Page, nav: string): Promise<Response> {
+  const renewed = refreshAnswer(tab)
+  await tab.clock.fastForward('01:05:00')
+  await tab.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: nav }).click()
+  return renewed
+}
+
+test('deployed app: a second tab renews through the shared cookie and the first tab adopts its token', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('renewal-second-tab')
+  const context = await browser.newContext()
+  try {
+    const a = await context.newPage()
+    const errors = gatedErrors(a, [])
+    const urls = recordUrls(a)
+    await signInAtFrontDoor(a, account, '/')
+    const tokenA = (await storedRenewal(a)).token
+    const cookie1 = await cookieValue(context, 'app')
+
+    const b = await context.newPage()
+    const errorsB = gatedErrors(b, [])
+    await b.clock.install()
+    await b.goto(APP_URL)
+    await expectInWorkspace(b, account)
+    await b.waitForLoadState('networkidle')
+
+    const answered = await renewInTab(b, 'Audit')
+    expect(answered.status(), "B's renewal").toBe(200)
+    expect(await isCookieMode(answered.request()), "B's renewal was not cookie-mode").toBe(true)
+    await expect.poll(async () => (await storedRenewal(b)).token, { message: 'B stored no new token' }).not.toBe(tokenA)
+    const tokenB = (await storedRenewal(b)).token
+    const cookie2 = await cookieValue(context, 'app')
+    expect(cookie2, 'the shared cookie did not rotate').not.toBe(cookie1)
+
+    const sentA = recordGatewayRequests(a)
+    await a.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
+    await expect.poll(() => sentA.filter(isApi).length, { message: 'A sent no data request' }).toBeGreaterThan(0)
+    for (const req of sentA.filter(isApi)) {
+      expect(await req.headerValue('authorization'), `${requestLine(req)} did not carry B's token`).toBe(`Bearer ${tokenB}`)
+    }
+    expect(sentA.filter((r) => r.url() === REFRESH_URL).map(requestLine), 'A sent a renewal').toEqual([])
+
+    expect(leakingUrls(urls, tokenA, tokenB, cookie1, cookie2), 'a token, a cookie value or a JWT appeared in these URLs').toEqual([])
+    expect([...errors, ...errorsB], 'console errors on the journey').toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test('deployed app: signing out in one tab ends the other tab on the same device', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('sign-out-tabs')
+  const context = await browser.newContext()
+  try {
+    const a = await context.newPage()
+    const b = await context.newPage()
+    const errorsA = gatedErrors(a, [expectedStatusDropper(a, 401, /\/api\//)])
+    const errorsB = gatedErrors(b, [expectedStatusDropper(b, 401, /\/auth\/refresh$/), expectedStatusDropper(b, 401, /\/api\//)])
+    await b.clock.install()
+    await signInAtFrontDoor(a, account, '/')
+    await b.goto(APP_URL)
+    await expectInWorkspace(b, account)
+    await b.waitForLoadState('networkidle')
+    const cookie1 = (await cookieValue(context, 'app'))!
+
+    const signedOut = a.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
+    const aFrontDoor = frontDoor(a)
+    await a.getByRole('button', { name: 'Sign out' }).click()
+    expect((await signedOut).status(), 'the sign-out answer').toBe(204)
+    await aFrontDoor
+    expect(await refreshCookie(context, 'app'), 'the cookie survived the sign-out').toBeNull()
+
+    const bFrontDoor = frontDoor(b)
+    const answered = await renewInTab(b, 'Audit')
+    expect(answered.status(), "B's renewal after the sign-out").toBe(401)
+    expect(await isCookieMode(answered.request()), "B's renewal was not cookie-mode").toBe(true)
+    expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
+    await expect(headerSignIn(b)).toBeVisible()
+    expect(await storedSession(context), 'B kept a stored session').toBeNull()
+    expect(cookie1, 'control: the cookie existed before the sign-out').toBeTruthy()
+    expect([...errorsA, ...errorsB], 'console errors on the journey').toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test("deployed app: a staff member's app and console sessions keep separate cookies", async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await provisionStaffAccount('separate-cookies')
+  const errors = gatedErrors(page, [])
+  const urls = recordUrls(page)
+  const context = page.context()
+
+  await passFrontDoor(page, account, '/')
+  await DESTINATION_READY.app(page)
+  const rtApp = await cookieValue(context, 'app')
+  expect(rtApp, 'the app sign-in set no app cookie').toBeTruthy()
+
+  await visitConsole(page, 'ops')
+  await signInThroughLanding(page, 'ops', account)
+  await DESTINATION_READY.ops(page)
+  const rtOps = await cookieValue(context, 'ops')
+  expect(rtOps, 'the ops sign-in set no ops cookie').toBeTruthy()
+  expect(rtOps, 'the ops cookie equals the app cookie').not.toBe(rtApp)
+  expect(await cookieValue(context, 'app'), 'the ops sign-in changed the app cookie').toBe(rtApp)
+
+  await page.goto(APP_URL)
+  await DESTINATION_READY.app(page)
+  await ageStoredSession(page)
+  const renewal = refreshAnswer(page)
+  await page.reload()
+  const answered = await renewal
+  expect(answered.status(), 'the app renewal after the ops sign-in').toBe(200)
+  expect(await isCookieMode(answered.request()), 'the app renewal was not cookie-mode').toBe(true)
+  await DESTINATION_READY.app(page)
+  expect(await cookieValue(context, 'app'), 'the app cookie did not rotate').not.toBe(rtApp)
+  expect(await cookieValue(context, 'ops'), 'the app renewal changed the ops cookie').toBe(rtOps)
+
+  expect(leakingUrls(urls, rtApp, rtOps), 'a cookie value or a JWT appeared in these URLs').toEqual([])
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
 // Both consoles take a staff session. Each journey drives landing's real form against real GoTrue accounts.
 const CONSOLE_TARGETS: readonly ConsoleTarget[] = ['ops', 'support']
 const NOT_STAFF = 'This account cannot open the ASComply consoles.'
@@ -2183,7 +2358,7 @@ const isRefresh = (r: Request | Response) => r.url() === REFRESH_URL
 const refreshAnswer = (page: Page) => page.waitForResponse((r) => isRefresh(r) && r.request().method() === 'POST')
 
 // The console origin's stored session in this context, or null.
-async function consoleRecord(context: BrowserContext, target: ConsoleTarget): Promise<{ v: number; token: string; refresh_token?: string; from?: 'app' } | null> {
+async function consoleRecord(context: BrowserContext, target: ConsoleTarget): Promise<{ v: number; token: string; from?: 'app'; refresh_token?: string } | null> {
   const { origins } = await context.storageState()
   const entry = origins.find((o) => o.origin === new URL(consoleUrl(target)).origin)?.localStorage.find((e) => e.name === CONSOLE_SESSION_KEY[target])
   return entry ? JSON.parse(entry.value) : null
@@ -2238,18 +2413,27 @@ test('deployed consoles: a staff session signs in through landing, opens each co
 
         const stored = await consoleRecord(context, target)
         expect(stored, `${target} stored no session`).not.toBeNull()
-        expect(stored!.v, 'the stored record version').toBe(2)
+        expect(stored!.v, 'the stored record version').toBe(3)
+        expect(Object.keys(stored!).sort(), 'the stored record keys').toEqual(['token', 'v'])
         expect(JWT_IN_URL.test(stored!.token), 'the stored token is not a JWT').toBe(true)
         expect((claimsOf(stored!.token).app_metadata as { staff?: unknown }).staff, 'staff on the stored token').toBe(true)
 
+        const cookie = await cookieValue(context, target)
+        expect(cookie, `${target} set no refresh cookie`).toBeTruthy()
+        const renewal = refreshAnswer(page)
         await page.reload()
+        const answered = await renewal
+        expect(answered.status(), `the ${target} renewal on reload`).toBe(200)
+        expect(await isCookieMode(answered.request()), `the ${target} reload renewal was not cookie-mode`).toBe(true)
         await DESTINATION_READY[target](page)
         const renewed = await consoleRecord(context, target)
         expect(renewed, `${target} lost its session on reload`).not.toBeNull()
+        expect(Object.keys(renewed!).sort(), 'the reloaded record keys').toEqual(['token', 'v'])
+        expect(renewed!.v, 'the reloaded record version').toBe(3)
 
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
         expect(
-          leakingUrls(urls, stored!.token, stored!.refresh_token, renewed!.token, renewed!.refresh_token),
+          leakingUrls(urls, stored!.token, renewed!.token, cookie, await cookieValue(context, target)),
           'a token, a refresh token or a JWT appeared in these URLs',
         ).toEqual([])
         expect(errors, `console errors on the ${target} journey:\n${errors.join('\n')}`).toEqual([])
@@ -2295,7 +2479,8 @@ test('deployed app: a staff click on the support icon opens the Support Console 
     const stored = await consoleRecord(context, 'support')
     expect(stored, 'the console stored no session').not.toBeNull()
     expect(Object.keys(stored!).sort(), 'the borrowed record keys').toEqual(['from', 'token', 'v'])
-    expect([stored!.v, stored!.from], 'the borrowed record version and origin').toEqual([2, 'app'])
+    expect([stored!.v, stored!.from], 'the borrowed record version and origin').toEqual([3, 'app'])
+    expect(await refreshCookie(context, 'support'), 'a borrowed session set a support cookie').toBeNull()
     expect((claimsOf(stored!.token).app_metadata as { staff?: unknown }).staff, 'staff on the stored token').toBe(true)
 
     const before = urls.length
@@ -2305,7 +2490,7 @@ test('deployed app: a staff click on the support icon opens the Support Console 
     expect(await consoleRecord(context, 'support'), 'the console lost its session on reload').not.toBeNull()
 
     expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
-    expect(leakingUrls(urls, appToken, stored!.token, stored!.refresh_token), 'a token or a JWT appeared in these URLs').toEqual([])
+    expect(leakingUrls(urls, appToken, stored!.token), 'a token or a JWT appeared in these URLs').toEqual([])
     expect(appErrors, `console errors on the app tab:\n${appErrors.join('\n')}`).toEqual([])
     expect(popupErrors.flat(), `console errors on the console tab:\n${popupErrors.flat().join('\n')}`).toEqual([])
   } finally {
@@ -2429,7 +2614,10 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
   const forgedToken = `${b64u({ alg: 'none', typ: 'JWT' })}.${b64u({ sub: crypto.randomUUID(), app_metadata: { staff: true }, exp: Math.floor(Date.now() / 1000) + 3600 })}.`
   const records = {
     v1: JSON.stringify({ v: 1, operator: { id: 'amara', name: 'Amara Okafor' } }),
-    forged: JSON.stringify({ v: 2, token: forgedToken, refresh_token: 'aaaaaaaaaaaa' }),
+    // No cookie: the console's boot renewal is refused.
+    forged: JSON.stringify({ v: 3, token: forgedToken }),
+    // A v3 record never holds a refresh token: it is removed without a request.
+    withRefreshToken: JSON.stringify({ v: 3, token: forgedToken, refresh_token: 'aaaaaaaaaaaa' }),
   }
 
   for (const target of CONSOLE_TARGETS) {
@@ -2438,7 +2626,7 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
         const context = await browser.newContext()
         try {
           const page = await context.newPage()
-          // Only the forged record reaches /auth/refresh, and only that answer is expected.
+          // Only the forged v3 record reaches /auth/refresh, and only that answer is expected.
           const errors = gatedErrors(page, kind === 'forged' ? [expectedStatusDropper(page, 401, /\/auth\/refresh$/)] : [])
           const urls = recordUrls(page)
           const warnings: string[] = []
@@ -2450,14 +2638,17 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
 
           await visitConsole(page, target)
           if (refused) {
-            expect((await refused).status(), `the ${target} refresh of the forged record`).toBe(401)
+            const answered = await refused
+            expect(answered.status(), `the ${target} refresh of the forged record`).toBe(401)
+            expect(await isCookieMode(answered.request()), `the ${target} refresh was not cookie-mode`).toBe(true)
             expect(await consoleRecord(context, target), `${target} kept the forged record`).toBeNull()
           } else {
-            // A v1 record is ignored, never sent to the gateway. The warning proves the console read it.
+            // A v1 record, or a v3 one with a refresh token, is ignored and never sent to the gateway. The warning proves the console read it.
             await expect
-              .poll(() => warnings.some((w) => w.includes(`ignoring unusable stored session at "${CONSOLE_SESSION_KEY[target]}"`)), { message: `the ${target} console never read the v1 record` })
+              .poll(() => warnings.some((w) => w.includes(`ignoring unusable stored session at "${CONSOLE_SESSION_KEY[target]}"`)), { message: `the ${target} console never read the ${kind} record` })
               .toBe(true)
-            expect(urls.filter((u) => u === REFRESH_URL), `${target} sent the v1 record to /auth/refresh`).toEqual([])
+            expect(urls.filter((u) => u === REFRESH_URL), `${target} sent the ${kind} record to /auth/refresh`).toEqual([])
+            expect(await consoleRecord(context, target), `${target} kept the ${kind} record`).toBeNull()
           }
           expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
           expect(errors, `console errors on the ${target} ${kind} load:\n${errors.join('\n')}`).toEqual([])
@@ -2483,8 +2674,10 @@ test('deployed consoles: a console load renews the stored session and stays in t
         const seeded = await seedStaffSession(page, target, account)
         const first = await consoleRecord(context, target)
         expect(first, `${target} stored no session after the first load`).not.toBeNull()
+        expect(Object.keys(first!).sort(), 'the first record keys').toEqual(['token', 'v'])
         // The refresh token always rotates; two access tokens minted in one second can be identical.
-        expect(first!.refresh_token, 'the first load did not renew the seeded pair').not.toBe(seeded.refresh_token)
+        const cookie1 = await cookieValue(context, target)
+        expect(cookie1, `${target} has no refresh cookie after the load`).toBeTruthy()
 
         const renewal = refreshAnswer(page)
         await page.reload()
@@ -2494,11 +2687,13 @@ test('deployed consoles: a console load renews the stored session and stays in t
 
         const second = await consoleRecord(context, target)
         expect(second, `${target} stored no session after the reload`).not.toBeNull()
-        expect(second!.refresh_token, 'the reload did not change the stored pair').not.toBe(first!.refresh_token)
+        expect(Object.keys(second!).sort(), 'the second record keys').toEqual(['token', 'v'])
+        const cookie2 = await cookieValue(context, target)
+        expect(cookie2, 'the reload did not rotate the refresh cookie').not.toBe(cookie1)
 
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
         expect(
-          leakingUrls(urls, seeded.token, seeded.refresh_token, first!.token, first!.refresh_token, second!.token, second!.refresh_token),
+          leakingUrls(urls, seeded.token, first!.token, second!.token, cookie1, cookie2),
           'a token, a refresh token or a JWT appeared in these URLs',
         ).toEqual([])
         expect(errors, `console errors on the ${target} journey:\n${errors.join('\n')}`).toEqual([])
@@ -2506,6 +2701,47 @@ test('deployed consoles: a console load renews the stored session and stays in t
         await context.close()
       }
     })
+  }
+})
+
+test('deployed consoles: a legacy stored refresh token is adopted into the cookie once and leaves storage', async ({ browser }) => {
+  test.setTimeout(180_000)
+  const account = await provisionStaffAccount('console-legacy')
+  const pair = await signInSession(account.email, account.password)
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    const errors = gatedErrors(page, [])
+    const urls = recordUrls(page)
+    const refreshes: Request[] = []
+    page.on('request', (r) => {
+      if (isRefresh(r) && r.method() === 'POST') refreshes.push(r)
+    })
+    await seedRawConsoleRecord(context, 'ops', JSON.stringify({ v: 2, token: pair.access_token, refresh_token: pair.refresh_token }))
+
+    await page.goto(consoleUrl('ops'))
+    await DESTINATION_READY.ops(page)
+    expect(refreshes.length, 'refreshes on the first load').toBe(1)
+    expect(await isCookieMode(refreshes[0]), 'the adoption refresh was not cookie-mode').toBe(true)
+    expect(refreshes[0].postDataJSON(), 'the adoption refresh body').toEqual({ refresh_token: pair.refresh_token })
+    const record = await consoleRecord(context, 'ops')
+    expect(record, 'ops stored no session').not.toBeNull()
+    expect(Object.keys(record!).sort(), 'the adopted record keys').toEqual(['token', 'v'])
+    expect(record!.v, 'the adopted record version').toBe(3)
+    const cookie1 = await cookieValue(context, 'ops')
+    expect(cookie1, 'the adoption set no ops cookie').toBeTruthy()
+
+    await page.reload()
+    await DESTINATION_READY.ops(page)
+    expect(refreshes.length, 'refreshes after the reload').toBe(2)
+    expect(refreshes[1].postData() ?? '', 'the reload refresh carried a body').not.toContain('refresh_token')
+    const cookie2 = await cookieValue(context, 'ops')
+    expect(cookie2, 'the reload did not rotate the cookie').not.toBe(cookie1)
+
+    expect(leakingUrls(urls, pair.access_token, pair.refresh_token, record!.token, cookie1, cookie2), 'a token, a cookie value or a JWT appeared in these URLs').toEqual([])
+    expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
   }
 })
 
@@ -2524,6 +2760,8 @@ test('deployed consoles: signing out of the Support Console ends the Ops Console
     const seededSupport = await seedStaffSession(support, 'support', account)
     const opsBefore = await consoleRecord(context, 'ops')
     expect(opsBefore, 'the Ops Console stored no session').not.toBeNull()
+    const opsCookie = await cookieValue(context, 'ops')
+    const supportCookie = await cookieValue(context, 'support')
     expect(await consoleRecord(context, 'support'), 'the Support Console stored no session').not.toBeNull()
 
     const signedOut = support.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
@@ -2543,7 +2781,7 @@ test('deployed consoles: signing out of the Support Console ends the Ops Console
 
     expect(opsUrls.length + supportUrls.length, 'no URLs were recorded').toBeGreaterThan(0)
     expect(
-      leakingUrls([...opsUrls, ...supportUrls], seededOps.token, seededOps.refresh_token, seededSupport.token, seededSupport.refresh_token, opsBefore!.token, opsBefore!.refresh_token),
+      leakingUrls([...opsUrls, ...supportUrls], seededOps.token, seededSupport.token, opsBefore!.token, opsCookie, supportCookie),
       'a token, a refresh token or a JWT appeared in these URLs',
     ).toEqual([])
     expect(opsErrors, `console errors in the Ops Console:\n${opsErrors.join('\n')}`).toEqual([])

@@ -33,12 +33,12 @@ export async function openWithHandoff(page: Page, target: 'app' | ConsoleTarget,
   const state = mintSignInState()
   const code = await signInForCode(account.email, account.password, state)
   await page.context().addInitScript(
-    ({ origin, value }) => {
-      if (location.origin !== origin || sessionStorage.getItem('e2e.handoff-armed')) return
-      sessionStorage.setItem('e2e.handoff-armed', '1')
+    ({ origin, value, flag }) => {
+      if (location.origin !== origin || sessionStorage.getItem(flag)) return
+      sessionStorage.setItem(flag, '1')
       sessionStorage.setItem('invoice-os.signInState', value)
     },
-    { origin: new URL(base).origin, value: JSON.stringify({ v: 1, s: state, at: Date.now() }) },
+    { origin: new URL(base).origin, value: JSON.stringify({ v: 1, s: state, at: Date.now() }), flag: `e2e.handoff-armed.${state}` },
   )
   const exchanged = page.waitForResponse((r) => r.url().endsWith('/auth/exchange') && r.request().method() === 'POST')
   await page.goto(`${base}/?handoff=${code}`)

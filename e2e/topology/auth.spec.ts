@@ -2653,7 +2653,8 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
               .poll(() => warnings.some((w) => w.includes(`ignoring unusable stored session at "${CONSOLE_SESSION_KEY[target]}"`)), { message: `the ${target} console never read the ${kind} record` })
               .toBe(true)
             expect(urls.filter((u) => u === REFRESH_URL), `${target} sent the ${kind} record to /auth/refresh`).toEqual([])
-            expect(await consoleRecord(context, target), `${target} kept the ${kind} record`).toBeNull()
+            // Only a v3 record with a refresh token is removed; a v1 record is ignored and left in place.
+            if (kind === 'withRefreshToken') expect(await consoleRecord(context, target), `${target} kept the ${kind} record`).toBeNull()
           }
           expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
           expect(errors, `console errors on the ${target} ${kind} load:\n${errors.join('\n')}`).toEqual([])

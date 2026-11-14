@@ -90,15 +90,39 @@ func (s *Store) StaffPreview(ctx context.Context, tenantID string, r Request) (P
 	return p, nil
 }
 
-// StaffAssemble is Assemble for the path tenant, with generated_by "ASComply support".
+// StaffAssemble is Assemble for the path tenant, with generated_by "ASComply support". It audits
+// the download with one staff row and the tenant's support row.
 func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error {
-	return s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx, id uuid.UUID) error {
-		return assemble(ctx, tx, r, w, assembleOpts{
-			tenantID:    id.String(),
-			subject:     audit.SupportActor,
-			maxInvoices: s.maxInvoices,
-			now:         time.Now(),
-			onStart:     onStart,
+	staff, err := db.StaffActor(ctx)
+	if err != nil {
+		return err
+	}
+	id, err := uuid.Parse(tenantID)
+	if err != nil {
+		return ErrTenantNotFound
+	}
+	read := func(fw io.Writer) (*bundleWriter, error) {
+		var bw *bundleWriter
+		err := s.withinStaffTenant(ctx, id.String(), func(tx pgx.Tx, id uuid.UUID) error {
+			var err error
+			bw, err = buildBundle(ctx, tx, r, fw, assembleOpts{
+				tenantID:    id.String(),
+				subject:     audit.SupportActor,
+				maxInvoices: s.maxInvoices,
+				now:         time.Now(),
+				onStart:     onStart,
+			})
+			return err
 		})
-	})
+		return bw, err
+	}
+	// Unreachable parse error: the read refuses a malformed entity before a byte is sent.
+	entity, _ := uuid.Parse(r.EntityID)
+	return s.streamAudited(ctx, w, id.String(), staff.String(), r, read,
+		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.exported", TenantID: id, SubjectID: entity, Payload: p})
+		},
+		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.export_failed", TenantID: id, SubjectID: entity, Payload: p})
+		})
 }

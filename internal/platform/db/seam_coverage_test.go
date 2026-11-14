@@ -729,6 +729,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                          // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                             // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/archive/bundle_audit.go", fn: "recordBundleEvent"},                     // audits a bundle download after its READ ONLY read; the read gated the caller; serves a locked workspace
 	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served
 	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
 	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
@@ -1143,7 +1144,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/staff/ai-calls":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/ai-calls/totals":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}/entities":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
-	"GET /v1/staff/tenants/{id}/evidence-bundle":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"GET /v1/staff/tenants/{id}/evidence-bundle":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts, then writes the audit rows in a short tenant tx"},
 	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":     {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/rules":                                          {verdict: scCovered},
 	"PATCH /v1/rules/{key}":                                  {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},

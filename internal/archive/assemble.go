@@ -41,32 +41,32 @@ func (e *TooManyInvoicesError) Error() string {
 	return fmt.Sprintf("archive: %d invoices exceeds the bundle limit of %d", e.Count, e.Limit)
 }
 
-// assemble drives subtasks 03-06 in entry order over one already-open tx (D-37).
+// buildBundle drives subtasks 03-06 in entry order over one already-open tx (D-37).
 // Nothing touches w until the entity resolves and the invoice count clears the
-// cap (AC-2, AC-3): w is not referenced before newBundleWriter. bw.Close is
-// never deferred -- every early return leaves the archive with no central
-// directory (AC-7).
-func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assembleOpts) error {
+// cap (AC-2, AC-3): w is not referenced before newBundleWriter. It returns the
+// writer even on error (nil before newBundleWriter) and never calls bw.Close:
+// every early return leaves the archive with no central directory (AC-7).
+func buildBundle(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assembleOpts) (*bundleWriter, error) {
 	if o.maxInvoices <= 0 {
-		return fmt.Errorf("archive: maxInvoices must be positive, got %d", o.maxInvoices)
+		return nil, fmt.Errorf("archive: maxInvoices must be positive, got %d", o.maxInvoices)
 	}
 
 	entity, err := selectEntity(ctx, tx, r.EntityID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	count, err := countInvoices(ctx, tx, r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if count > o.maxInvoices {
-		return &TooManyInvoicesError{Count: count, Limit: o.maxInvoices}
+		return nil, &TooManyInvoicesError{Count: count, Limit: o.maxInvoices}
 	}
 
 	generatedBy, err := resolveGeneratedBy(ctx, tx, o.subject)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if o.onStart != nil {
@@ -76,20 +76,17 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 	bw := newBundleWriter(w)
 
 	if err := writeEntityStages(ctx, tx, bw, "", r); err != nil {
-		return err
+		return bw, err
 	}
 
-	if err := bw.writeManifest(ManifestParams{
+	err = bw.writeManifest(ManifestParams{
 		TenantID:    o.tenantID,
 		Entity:      entity,
 		Request:     r,
 		GeneratedBy: generatedBy,
 		Now:         o.now,
-	}); err != nil {
-		return err
-	}
-
-	return bw.Close()
+	})
+	return bw, err
 }
 
 // prefixedBodies writes body files under dir.

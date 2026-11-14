@@ -71,11 +71,18 @@ func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 
 	g.grantOK.Store(true)
 	state := "state=" + handoffState
-	if rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=t&type=signup&password=new-password-1&"+state); !strings.Contains(rec.Header().Get("Location"), "&handoff=") {
-		t.Fatalf("set-password = %d %q, want a hand-off", rec.Code, rec.Header().Get("Location"))
+	// A confirm mints no session: set-password records no signed_in row.
+	if rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=t&type=signup&password=new-password-1&"+state); rec.Code != http.StatusSeeOther || !strings.HasSuffix(rec.Header().Get("Location"), "/?verified=1") {
+		t.Fatalf("set-password = %d %q, want 303 to ?verified=1", rec.Code, rec.Header().Get("Location"))
+	}
+	if n := rows(gateway.EventSignedIn); n != 0 {
+		t.Errorf("signed_in rows after set-password = %d, want 0", n)
+	}
+	if c := post(h.SignIn, "/auth/sign-in", fmt.Sprintf(`{"email":%q,"password":"new-password-1","state":%q}`, email, handoffState)); c != http.StatusOK {
+		t.Fatalf("sign-in = %d, want 200", c)
 	}
 	if n := rows(gateway.EventSignedIn); n != 1 {
-		t.Errorf("signed_in rows after the set-password hand-off = %d, want 1", n)
+		t.Errorf("signed_in rows after the sign-in = %d, want 1", n)
 	}
 
 	for _, event := range []string{gateway.EventSignInFailed, gateway.EventPasswordResetRequested, gateway.EventSignedOut, gateway.EventPasswordResetCompleted} {

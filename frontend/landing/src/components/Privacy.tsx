@@ -388,9 +388,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it
-            with the IP address and the browser and operating system of that request. The first session after someone
-            confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser
-            and operating system are added to the list above without an email. Every member who reads the
+            with the IP address and the browser and operating system of that request. Every member who reads the
             workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's
             admins, and the member a record is about when that member can read the workspace-wide entries, see its IP
             address and browser and operating system. ASComply's support staff can also read them.

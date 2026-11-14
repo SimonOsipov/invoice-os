@@ -7,9 +7,11 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { me, mintSignInState, rawFetch, requestPasswordReset, signInSession } from '../api/client'
 import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
+import { isHandoffNavigation, signInDialog, submitSignIn } from '../personaSession'
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { collectSourcedErrors, expectedStatusDropper } from '../topology/consoleGate'
+import { enclosesRect, PHONE_WIDTHS } from '../topology/layout'
 import { brandLayoutFacts, CheckSteps, judgeBrandLayout, judgeSends, mailTextDiff, nightlySendsToday, overBudget, readAccounts, requireEnv } from './mailChecks'
 import { contactTopics, getContact, getReceived, listSent, waitForMail } from './resendClient'
 
@@ -26,6 +28,11 @@ const BLOG_LINK = 'https://www.ascomply.com/blog/subscribe/confirm?token='
 const BLOG_SUBSCRIBED = 'You are subscribed.'
 const RESET_SUBJECT = 'Reset your ASComply password'
 const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+// COPY.verified in VerifyNotice.tsx
+const VERIFIED_NOTICE = 'Your email address is verified. Please sign in.'
+const CONTINUE_ONLY = 'Continue only if this is your address.'
+// The set-password page's masked form: first character, ***@, domain.
+const maskOf = (addr: string) => addr[0] + '***@' + addr.split('@')[1]
 // frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
 const INVITE_INVALID = 'This invite is no longer valid'
@@ -172,8 +179,13 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
       // The first sign-in of an invitee reads /v1/me before it has a workspace: a 403.
       const errors = collectSourcedErrors(page, expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/))
       await page.goto(passwordLink)
+      await expect(page.locator('main')).toContainText(maskOf(inviteAddr))
       await page.getByLabel('Password', { exact: true }).fill(invitePassword)
       await page.getByRole('button', { name: 'Confirm and set password', exact: true }).click()
+      await expect(page.getByRole('status').filter({ hasText: VERIFIED_NOTICE })).toBeVisible({ timeout: 30_000 })
+      await page.getByRole('status').filter({ hasText: VERIFIED_NOTICE }).getByRole('button', { name: 'Sign in', exact: true }).click()
+      await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+      await submitSignIn(page, inviteAddr, invitePassword)
       await page.getByTestId('join-name').fill('Mail Invitee')
       await page.getByRole('button', { name: `Join ${admin.workspaceName}`, exact: true }).click()
       const identity = await readSessionIdentity(page)
@@ -245,16 +257,39 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
     await steps.run('signup mail uses the brand layout', () => brandStep(signupHtml))
 
     // The register password is discarded (nightly autoconfirm is off); the link sets the real one.
-    const openSignupLink = async (password: string) => {
+    const openSignupLink = async (password: string, named: boolean) => {
       const page = await freshPage()
       await seedConsent(page, false)
       await page.goto(signupLink, { waitUntil: 'commit' })
       await page.waitForURL((u) => u.origin === new URL(gateway).origin && u.pathname === '/auth/verify' && u.searchParams.has('state'), {
         timeout: 30_000,
       })
+      const main = page.locator('main')
+      if (named) {
+        await expect(main).toContainText(maskOf(signupAddr))
+        await expect(main).toContainText(CONTINUE_ONLY)
+        expect(await main.innerText(), 'the page names the full address').not.toContain(signupAddr)
+        for (const width of PHONE_WIDTHS) {
+          await page.setViewportSize({ width, height: 800 })
+          const [mainBox, spanBox] = await Promise.all([main.boundingBox(), main.locator('span.address').boundingBox()])
+          expect(enclosesRect(mainBox!, spanBox!, 1), `the address leaves the card at ${width}px`).toBe(true)
+        }
+      } else {
+        expect(await main.innerText(), 'a spent link names an address').not.toContain('***@')
+      }
       await page.getByLabel('Password', { exact: true }).fill(password)
+      const navs: string[] = []
+      page.on('framenavigated', (f) => {
+        if (f === page.mainFrame()) navs.push(f.url())
+      })
       await page.getByRole('button', { name: 'Confirm and set password', exact: true }).click()
       await page.waitForURL((u) => u.href.startsWith(landing), { timeout: 30_000 })
+      if (named) {
+        const first = new URL(navs[0])
+        expect([first.origin, first.pathname, first.search], 'the press lands on the verified landing').toEqual([new URL(landing).origin, '/', '?verified=1'])
+        expect(navs.filter((u) => isHandoffNavigation(u) || u.startsWith(resolveTarget('APP_URL'))), 'app navigations after the press').toEqual([])
+        await expect(page.getByRole('status').filter({ hasText: VERIFIED_NOTICE })).toBeVisible({ timeout: 30_000 })
+      }
       return page
     }
     const signInStatus = async (password: string) =>
@@ -263,15 +298,19 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
     await steps.run('signup link sets the password', async () => {
       const before = await signInStatus(signupPassword)
       if (before !== 401) throw new Error(`sign-in before the link answered ${before}, want 401`)
-      const page = await openSignupLink(chosen)
+      const page = await openSignupLink(chosen, true)
       await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toHaveCount(0)
+      await page.getByRole('status').filter({ hasText: VERIFIED_NOTICE }).getByRole('button', { name: 'Sign in', exact: true }).click()
+      await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+      await submitSignIn(page, signupAddr, chosen)
+      await page.waitForURL((u) => u.href.startsWith(resolveTarget('APP_URL')), { timeout: 30_000 })
       await signInSession(signupAddr, chosen)
       const old = await signInStatus(signupPassword)
       if (old !== 401) throw new Error(`the registration password answered ${old}, want 401`)
     })
 
     await steps.run('signup link works once', async () => {
-      const page = await openSignupLink(other)
+      const page = await openSignupLink(other, false)
       await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible({ timeout: 30_000 })
       await signInSession(signupAddr, chosen)
       const second = await signInStatus(other)

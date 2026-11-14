@@ -385,7 +385,7 @@ func TestVerify_NonPostIs405WithoutUpstreamCall(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, ipPath+"?token="+verifyToken+"&type=signup", nil)
 
-			confirmHandler(t, fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, req)
+			confirmHandler(t, fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, lrThrottle(time.Now), true).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
 				t.Errorf("%s = %d Allow %q, want 405 Allow POST", method, rec.Code, rec.Header().Get("Allow"))
@@ -407,7 +407,7 @@ func TestVerify_QueryTokenIsIgnored(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, ipPath+"?token="+verifyToken+"&type=signup", nil)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	confirmHandler(t, fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, req)
+	confirmHandler(t, fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, lrThrottle(time.Now), true).ServeHTTP(rec, req)
 
 	requireRedirect(t, rec, failedLocation)
 	if n := len(fake.Calls()); n != 0 {
@@ -422,7 +422,7 @@ func TestVerify_NilSiteURLIs503WithoutUpstreamCall(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
 	rec := httptest.NewRecorder()
 
-	confirmHandler(t, fake.URL, nil, testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore(), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(t.Context(), verifyQuery))
+	confirmHandler(t, fake.URL, nil, testClient(), slog.New(slog.DiscardHandler), nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(t.Context(), verifyQuery))
 
 	if rec.Code != http.StatusServiceUnavailable || errorBody(t, rec) != "registration is not configured" {
 		t.Errorf("answer = %d %s, want 503 registration is not configured", rec.Code, rec.Body.String())

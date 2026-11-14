@@ -56,8 +56,8 @@ const A0_OLD = jwt(ME, nowSec(OLD_AT), 'A0')
 // The renewed token is minted when the refresh answers.
 const renewedToken = () => jwt(ME, nowSec(Date.now()), 'A1')
 
-function record(token: string, receivedAt: number, me: Me = ME, refresh = 'R0'): string {
-  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: receivedAt })
+function record(token: string, receivedAt: number, me: Me = ME): string {
+  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: receivedAt })
 }
 
 // The /auth/login mint below answers this token.
@@ -112,7 +112,7 @@ function interceptHref() {
 type Reply = () => Promise<unknown>
 const answer = (status: number, body: unknown): Reply => () =>
   Promise.resolve({ ok: status >= 200 && status < 300, status, statusText: String(status), json: () => Promise.resolve(body) })
-const renewed = (refresh = 'R1'): Reply => () => answer(200, { access_token: renewedToken(), refresh_token: refresh })()
+const renewed = (): Reply => () => answer(200, { access_token: renewedToken() })()
 const REFUSED = answer(401, { error: 'invalid or expired refresh token' })
 const UNAVAILABLE = answer(502, { error: 'renewal is unavailable' })
 
@@ -120,6 +120,8 @@ interface Call {
   url: string
   auth: string | null
   body: unknown
+  credentials: string | undefined
+  session: string | null
   // A refresh was sent and not yet answered when this request went out.
   duringRefresh: boolean
 }
@@ -143,11 +145,13 @@ function deferRefresh(): { release: (r: Reply) => void } {
 function routeFetch() {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init?: { headers?: Headers; body?: string }) => {
+    vi.fn((url: string, init?: { headers?: Headers; body?: string; credentials?: string }) => {
       calls.push({
         url,
         auth: init?.headers?.get('Authorization') ?? null,
         body: init?.body === undefined ? undefined : JSON.parse(init.body),
+        credentials: init?.credentials,
+        session: init?.headers?.get('X-Auth-Session') ?? null,
         duringRefresh: refreshesOut > 0,
       })
       if (url === REFRESH) {
@@ -192,7 +196,7 @@ class FakeXhr {
     if (name === 'Authorization') this.auth = value
   }
   send() {
-    calls.push({ url: `xhr:${this.url}`, auth: this.auth, body: undefined, duringRefresh: refreshesOut > 0 })
+    calls.push({ url: `xhr:${this.url}`, auth: this.auth, body: undefined, credentials: undefined, session: null, duringRefresh: refreshesOut > 0 })
   }
 }
 
@@ -268,7 +272,7 @@ async function reload(path: string) {
 
 // A hand-off boot whose code answers `token` with refresh token RH.
 async function bootHandoff(token: string) {
-  exchangeReply = answer(200, { access_token: token, refresh_token: 'RH' })
+  exchangeReply = answer(200, { access_token: token, renewable: true })
   ensureSignInState()
   const nav = await bootWith(null, `/?handoff=${'a'.repeat(43)}`)
   await waitForVerifiedWorkspace()
@@ -341,13 +345,14 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await settle()
 
     expect(calls[0]?.url).toBe(REFRESH)
-    expect(calls[0]?.body).toEqual({ refresh_token: 'R0' })
+    expect(calls[0]?.body).toBeUndefined()
     expect(calls[0]?.auth, 'the refresh carries no bearer').toBeNull()
     expect(refreshes()).toHaveLength(1)
     expect(apiCalls().length).toBeGreaterThan(0)
     expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
     expect(storedRecord()?.token).toBe(renewedToken())
-    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 
   it('a due in-house hand-off session renews and stays in-house', async () => {
@@ -388,7 +393,7 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
   // A code is a sign-in the user just made; only an unexpired stored session beats it.
   it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
     const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
-    exchangeReply = answer(200, { access_token: NEW_T, refresh_token: 'RN' })
+    exchangeReply = answer(200, { access_token: NEW_T, renewable: true })
     meReply = answer(200, OTHER_ME)
     ensureSignInState()
     const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), `/?handoff=${'a'.repeat(43)}`)
@@ -396,9 +401,10 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await settle()
 
     expect(calls.filter((c) => c.url === EXCHANGE), 'the code is redeemed').toHaveLength(1)
-    expect(refreshes(), 'the old refresh token is never sent').toEqual([])
+    expect(refreshes(), 'no refresh is sent for the old record').toEqual([])
     expect(storedRecord()?.token).toBe(NEW_T)
-    expect(storedRecord()?.refresh_token).toBe('RN')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
     expect(storedRecord()?.me).toEqual(OTHER_ME)
     expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
@@ -503,7 +509,8 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(JSON.parse(sessionStorage.getItem(DEEP_LINK_KEY) ?? 'null')?.path).toBe('/invoices')
     expect(storedRecord(), 'the stored record survives a transient end').not.toBeNull()
     expect(storedRecord()?.token).toBe(A0_FRESH)
-    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 })
 
@@ -543,7 +550,8 @@ describe('an ended renewal and the next boot', () => {
     expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
     expect(readDestination()?.path).toBe('/audit')
     expect(storedRecord()?.token).toBe(A0_OLD)
-    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
 
     refreshReply = renewed()
     const mark = calls.length
@@ -552,8 +560,9 @@ describe('an ended renewal and the next boot', () => {
     await settle()
 
     expect(calls[mark]?.url, 'the next boot renews the kept record first').toBe(REFRESH)
-    expect(calls[mark]?.body).toEqual({ refresh_token: 'R0' })
-    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(calls[mark]?.body).toBeUndefined()
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
     expect(second.hrefWrites).toEqual([])
   })
 })
@@ -723,7 +732,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     mark = calls.length
     expect(await probe(capturedCtx)).toBe('resolved')
     expect(calls[mark]?.url, 'due: the renewal comes first').toBe(REFRESH)
-    expect(calls[mark]?.body).toEqual({ refresh_token: 'RH' })
+    expect(calls[mark]?.body).toBeUndefined()
     expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${renewedToken()}`])
     expect(hrefWrites).toEqual([])
   })
@@ -744,7 +753,8 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     expect(refreshes(mark)).toHaveLength(1)
     expect(probes(mark), 'the expired token is never sent').toEqual([])
     expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
-    expect(storedRecord()?.refresh_token).toBe('RH')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 
   it('byte transports use the renewed token', async () => {
@@ -845,7 +855,7 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
   it("another user's record survives a foreign-subject end", async () => {
     const { hrefWrites } = await mountFresh()
     // Another tab signed in a different user.
-    const X_RAW = record(jwt(OTHER_ME, nowSec(NOW), 'X'), NOW, OTHER_ME, 'RX')
+    const X_RAW = record(jwt(OTHER_ME, nowSec(NOW), 'X'), NOW, OTHER_ME)
     localStorage.setItem(SESSION_KEY, X_RAW)
     vi.setSystemTime(MID_RENEW_AT)
     const mark = calls.length
@@ -858,5 +868,169 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(localStorage.getItem(SESSION_KEY), "the other user's record is untouched").toBe(X_RAW)
     expect(refreshes(mark), 'nothing is renewed for the foreign record').toEqual([])
     expect(probes(mark)).toEqual([])
+  })
+})
+
+// SECAUD-17-11: the gateway cookie holds the refresh token; the stored record keeps the renewal clock only.
+describe('cookie-held refresh token (SECAUD-17-11)', () => {
+  const COOKIE_REFRESH = { url: REFRESH, auth: null, body: undefined, credentials: 'include', session: 'cookie' }
+  const asCookieCall = (c: Call) => ({ url: c.url, auth: c.auth, body: c.body, credentials: c.credentials, session: c.session })
+  const LEGACY_BODY = { ...COOKIE_REFRESH, body: { refresh_token: 'R-old' } }
+
+  function cookieRecord(token: string, receivedAt: number, me: Me = ME): string {
+    return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: receivedAt })
+  }
+  // A pair record written before this shipped.
+  const legacyPair = (token: string, receivedAt: number) => JSON.stringify({ ...JSON.parse(record(token, receivedAt)), refresh_token: 'R-old' })
+  const cookieRenewed: Reply = () => answer(200, { access_token: renewedToken() })()
+  const holdsNoRefreshToken = () => {
+    const raw = localStorage.getItem(SESSION_KEY) ?? ''
+    expect(raw, 'control: a record is stored').not.toBe('')
+    expect(raw).not.toContain('refresh_token')
+    expect(raw).not.toContain('R-old')
+    expect(raw).not.toContain('R1')
+  }
+
+  async function mountCookie(raw: string, path = '/') {
+    const nav = await bootWith(raw, path)
+    await waitForVerifiedWorkspace()
+    await settle()
+    return nav
+  }
+
+  it('renewal_inTabStoresAccessOnly', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+    expect(refreshes(), 'a fresh boot renews nothing').toEqual([])
+    vi.setSystemTime(MID_RENEW_AT)
+    const mark = calls.length
+
+    await probe(capturedCtx)
+
+    expect(refreshes(mark).map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${renewedToken()}`])
+    expect(storedRecord()?.token).toBe(renewedToken())
+    expect(storedRecord()?.received_at).toBe(MID_RENEW_AT)
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
+    holdsNoRefreshToken()
+  })
+
+  it('reload_expiredRecordRenewsThroughTheCookie', async () => {
+    refreshReply = cookieRenewed
+    const { hrefWrites } = await mountCookie(cookieRecord(A0_OLD, OLD_AT))
+
+    expect(refreshes().map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    expect(calls[0]?.url, 'the renewal comes before any API request').toBe(REFRESH)
+    expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`), 'the expired token is never sent').toEqual([])
+    expect(storedRecord()?.token).toBe(renewedToken())
+    holdsNoRefreshToken()
+    expect(hrefWrites).toEqual([])
+  })
+
+  it('reload_liveRecordOpensWithoutARequest', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+
+    expect(refreshes()).toEqual([])
+    expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+
+    // A reload (or a second tab) on the same record: still no request.
+    const seen = calls.length
+    await reload('/')
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(refreshes(seen)).toEqual([])
+    expect(apiCalls(seen).filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+  })
+
+  it('renewal_adoptsAnotherTabsToken', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+    // Another tab renewed: a different token, received just now.
+    vi.setSystemTime(MID_RENEW_AT)
+    const T2 = jwt(ME, nowSec(MID_RENEW_AT), 'A2')
+    localStorage.setItem(SESSION_KEY, cookieRecord(T2, MID_RENEW_AT))
+    const mark = calls.length
+
+    await probe(capturedCtx)
+
+    expect(refreshes(mark), 'adopting sends no refresh').toEqual([])
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${T2}`])
+    expect(storedRecord()?.token).toBe(T2)
+  })
+
+  it('legacyPair_adoptsThroughTheCookieThenRewritesTheRecord', async () => {
+    const refresh = deferRefresh()
+    const legacy = legacyPair(A0_DUE, DUE_AT)
+    await bootWith(legacy)
+
+    expect(refreshes().map(asCookieCall), 'the adoption refresh posts the stored token once').toEqual([LEGACY_BODY])
+    // [legacy-adopt-order]: the mount does not rewrite the record while the refresh is out.
+    expect(localStorage.getItem(SESSION_KEY)).toBe(legacy)
+
+    await act(async () => refresh.release(cookieRenewed))
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(storedRecord()?.token).toBe(renewedToken())
+    expect(storedRecord()?.received_at).toBe(NOW)
+    holdsNoRefreshToken()
+    expect(refreshes()).toHaveLength(1)
+
+    // Later renewals ride the cookie alone.
+    refreshReply = cookieRenewed
+    vi.setSystemTime(NOW + 0.8 * HOUR)
+    const mark = calls.length
+    await probe(capturedCtx)
+    expect(refreshes(mark).map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    holdsNoRefreshToken()
+  })
+
+  it('legacyPair_transientFailureKeepsTheRecordAndTheNextLoadRetries', async () => {
+    const legacy = legacyPair(A0_DUE, DUE_AT)
+    const failures: [string, Reply][] = [
+      ['502', UNAVAILABLE],
+      ['network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ]
+    for (const [name, fail] of failures) {
+      calls = []
+      localStorage.clear()
+      refreshReply = fail
+      await bootWith(legacy)
+      await settle(60)
+
+      expect(refreshes().length, name).toBeGreaterThanOrEqual(1)
+      expect(refreshes().map(asCookieCall).filter((c) => c.body === undefined), `${name}: every attempt posts the legacy token`).toEqual([])
+      expect(refreshes().map(asCookieCall)[0], name).toEqual(LEGACY_BODY)
+      expect(localStorage.getItem(SESSION_KEY), `${name}: the legacy record is kept as it was`).toBe(legacy)
+
+      // The reload: the gateway is back, the same record is adopted.
+      refreshReply = cookieRenewed
+      const seen = calls.length
+      await reload('/')
+      await waitForVerifiedWorkspace()
+      await settle()
+      expect(refreshes(seen).map(asCookieCall)[0], name).toEqual(LEGACY_BODY)
+      expect(storedRecord()?.token, name).toBe(renewedToken())
+      holdsNoRefreshToken()
+      cleanup()
+      capturedCtx = undefined
+    }
+  })
+
+  it('legacyPair_refusedTokenRemovesTheRecordAndLeaves', async () => {
+    refreshReply = REFUSED
+    const { hrefWrites } = await bootWith(legacyPair(A0_DUE, DUE_AT))
+
+    await waitFor(() => expect(hrefWrites, 'a refused adoption navigates to landing').toHaveLength(1))
+    await settle()
+
+    expect(refreshes().map(asCookieCall)).toEqual([LEGACY_BODY])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
+    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
   })
 })

@@ -44,7 +44,7 @@ func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 	sessions := gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log)
-	h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, pool)
+	h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil, pool)
 	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite, pool)
 
 	rows := func(event string) int {

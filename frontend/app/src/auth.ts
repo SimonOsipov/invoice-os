@@ -96,10 +96,11 @@ export interface Me {
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
-// The refresh token and the local epoch ms it arrived at.
+// The local epoch ms the access token arrived at; the refresh token lives in the gateway cookie.
+// legacyRefreshToken is a pre-cookie stored token, posted once to move it into the cookie.
 export interface Renewal {
-  refreshToken: string
   receivedAt: number
+  legacyRefreshToken?: string
 }
 
 export interface Session {
@@ -111,7 +112,7 @@ export interface Session {
   verified: boolean
   // Set only for a session redeemed from a landing hand-off code.
   handoff?: true
-  // Set only on a hand-off session whose exchange or refresh answered a refresh token.
+  // Set only on a renewable hand-off session.
   renewal?: Renewal
 }
 

@@ -83,7 +83,7 @@ describe('loadBlog through withSession', () => {
   const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
   beforeEach(() => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test/')
-    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === SESSION_KEY ? JSON.stringify({ v: 2, token: 'OLD', refresh_token: 'R' }) : null) })
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === SESSION_KEY ? JSON.stringify({ v: 3, token: 'OLD' }) : null) })
     renew.mockReset()
   })
   afterEach(() => {
@@ -99,7 +99,7 @@ describe('loadBlog through withSession', () => {
   }
 
   it('a 401 on every read renews once and retries each read', async () => {
-    renew.mockResolvedValue({ token: jwt({ app_metadata: { staff: true } }), refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: jwt({ app_metadata: { staff: true } }), borrowed: false })
     const [p, c, a] = [flaky(POSTS), flaky([]), flaky([])]
     const d = { fetchPosts: () => withSession(p), fetchCategories: () => withSession(c), fetchAuthors: () => withSession(a), expire: vi.fn() }
     expect((await loadBlog(d)).status).toBe('ready')

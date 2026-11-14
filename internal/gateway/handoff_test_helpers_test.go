@@ -42,7 +42,7 @@ func vhExchange(store *HandoffStore, code, state string) *httptest.ResponseRecor
 	body, _ := json.Marshal(map[string]string{"code": code, "state": state})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/exchange", strings.NewReader(string(body)))
-	ExchangeHandler(store).ServeHTTP(rec, req)
+	ExchangeHandler(store, nil).ServeHTTP(rec, req)
 	return rec
 }
 

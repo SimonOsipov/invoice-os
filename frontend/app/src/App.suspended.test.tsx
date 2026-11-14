@@ -70,7 +70,6 @@ const HANDOFF_RECORD = JSON.stringify({
   me: { tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' }, user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' } },
   verified: true,
   handoff: true,
-  refresh_token: 'R1',
   received_at: Date.now(),
 })
 const GATEWAY = 'https://gw.test'
@@ -257,7 +256,7 @@ describe('AC-4: the suspended card replaces the workspace', () => {
       await new Promise((r) => setTimeout(r, 30))
     })
 
-    expect(posts(), "the notice's Sign out revokes once").toEqual([{ refresh_token: 'R1' }])
+    expect(posts(), "the notice's Sign out revokes once").toEqual([undefined])
 
     // App.signOut's whole observable contract: the persisted session goes, the in-memory one
     // goes with it, and the user lands on a front door. VITE_LANDING_URL is unset here, so

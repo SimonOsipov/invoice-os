@@ -616,3 +616,139 @@ func TestCORSPreflightOtherGrantHeadersUnchanged(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Credentials = %q, want none (bearer auth, no cookies)", got)
 	}
 }
+
+// sessionCORSHandler lets the app origin be a session origin and the landing a plain allowed one.
+func sessionCORSHandler(t *testing.T) (http.Handler, *sentinel) {
+	t.Helper()
+	c, err := ParseSessionOrigins("app=" + scApp)
+	if err != nil {
+		t.Fatalf("ParseSessionOrigins: %v", err)
+	}
+	next := &sentinel{}
+	return SessionCORS([]string{scApp, scLanding}, c)(next), next
+}
+
+func sessionPreflight(h http.Handler, origin string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodOptions, "/auth/refresh", nil)
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	r.Header.Set("Access-Control-Request-Headers", "x-auth-session, content-type")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func sessionPost(h http.Handler, origin string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func TestSessionCORS_SessionOriginGetsCredentialsAndTheHeader(t *testing.T) {
+	h, next := sessionCORSHandler(t)
+
+	pre := sessionPreflight(h, scApp)
+
+	if next.reached || pre.Code != http.StatusNoContent {
+		t.Fatalf("preflight = %d, forwarded %v, want 204 answered here", pre.Code, next.reached)
+	}
+	if got := pre.Header().Get("Access-Control-Allow-Origin"); got != scApp {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, scApp)
+	}
+	if got := pre.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if got := allowHeaderSet(pre.Header()); !got["x-auth-session"] || !got["content-type"] {
+		t.Errorf("Access-Control-Allow-Headers granted %v, want X-Auth-Session and Content-Type", got)
+	}
+
+	post := sessionPost(h, scApp)
+	if got := post.Header().Get("Access-Control-Allow-Origin"); got != scApp {
+		t.Errorf("POST Access-Control-Allow-Origin = %q, want %q", got, scApp)
+	}
+	if got := post.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("POST Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if got := post.Header().Get("Vary"); got != "Origin" {
+		t.Errorf("POST Vary = %q, want Origin", got)
+	}
+}
+
+func TestSessionCORS_OtherAllowedOriginGetsNoCredentials(t *testing.T) {
+	h, _ := sessionCORSHandler(t)
+
+	pre := sessionPreflight(h, scLanding)
+	if got := pre.Header().Get("Access-Control-Allow-Origin"); got != scLanding {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, scLanding)
+	}
+	if got := pre.Header().Get("Access-Control-Allow-Headers"); got != corsAllowHeaders {
+		t.Errorf("Access-Control-Allow-Headers = %q, want today's %q", got, corsAllowHeaders)
+	}
+	post := sessionPost(h, scLanding)
+	if got := post.Header().Get("Access-Control-Allow-Origin"); got != scLanding {
+		t.Errorf("POST Access-Control-Allow-Origin = %q, want %q", got, scLanding)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{"preflight": pre, "POST": post} {
+		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+			t.Errorf("%s: Access-Control-Allow-Credentials = %q, want none", name, got)
+		}
+	}
+
+	// Positive pair: the session origin on the same handler does get credentials.
+	if got := sessionPreflight(h, scApp).Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("session origin Access-Control-Allow-Credentials = %q, want true", got)
+	}
+}
+
+func TestSessionCORS_DisallowedOriginGetsNothing(t *testing.T) {
+	h, _ := sessionCORSHandler(t)
+
+	pre := sessionPreflight(h, scEvil)
+
+	if pre.Code != http.StatusNoContent {
+		t.Errorf("preflight = %d, want 204", pre.Code)
+	}
+	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials", "Access-Control-Allow-Headers", "Access-Control-Allow-Methods"} {
+		if got := pre.Header().Get(name); got != "" {
+			t.Errorf("%s = %q, want none", name, got)
+		}
+	}
+	if got := sessionPost(h, scEvil).Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("POST Access-Control-Allow-Credentials = %q, want none", got)
+	}
+
+	// Positive pair: the session origin on the same handler is granted, credentials included.
+	granted := sessionPreflight(h, scApp)
+	if granted.Header().Get("Access-Control-Allow-Origin") != scApp || granted.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Errorf("session origin grant = %v, want its origin and credentials", granted.Header())
+	}
+}
+
+func TestSessionCORS_NeverAWildcard(t *testing.T) {
+	h, _ := sessionCORSHandler(t)
+	granted := 0
+	for _, origin := range []string{scApp, scLanding, scEvil, "*", "null", ""} {
+		for _, rec := range []*httptest.ResponseRecorder{sessionPreflight(h, origin), sessionPost(h, origin)} {
+			for name, values := range rec.Header() {
+				for _, v := range values {
+					if strings.TrimSpace(v) == "*" {
+						t.Errorf("origin %q: %s = %q, want never *", origin, name, v)
+					}
+				}
+			}
+			if rec.Header().Get("Access-Control-Allow-Credentials") == "true" {
+				granted++
+			}
+		}
+	}
+	// Positive control: the session origin did get credentials, so the scan saw a grant.
+	if granted != 2 {
+		t.Errorf("credentialed answers = %d, want 2 (the session origin's preflight and POST)", granted)
+	}
+}

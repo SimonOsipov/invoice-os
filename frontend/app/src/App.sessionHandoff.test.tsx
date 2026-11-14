@@ -127,16 +127,19 @@ let meReply: Reply = ok(ME)
 let entityRows: unknown[] = []
 let meQueue: Reply[] = []
 let workspacesReply: Reply = ok({ tenant: ME.tenant })
-let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
+let refreshReply: Reply = ok({ access_token: T2 })
 let workspacesCalls: { auth: string | null; body: unknown }[] = []
 let refreshBodies: unknown[] = []
+// What the cookie-mode calls carried (SECAUD-17-11).
+let cookieInits: { url: string; credentials: string | undefined; session: string | null }[] = []
 let mineReply: Reply | null = null
 
 function routeFetch() {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
+    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string; credentials?: string }) => {
       fetchUrls.push(url)
+      cookieInits.push({ url, credentials: init?.credentials, session: init?.headers?.get('X-Auth-Session') ?? null })
       if (url === `${GATEWAY}/auth/exchange`) {
         exchangeBodies.push(JSON.parse(init?.body ?? 'null'))
         exchangeAuth.push(init?.headers?.get('Authorization') ?? null)
@@ -234,9 +237,10 @@ beforeEach(() => {
   entityRows = []
   meQueue = []
   workspacesReply = ok({ tenant: ME.tenant })
-  refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
+  refreshReply = ok({ access_token: T2 })
   workspacesCalls = []
   refreshBodies = []
+  cookieInits = []
   mineReply = ok({ invitations: [] })
   routeFetch()
 })
@@ -697,13 +701,13 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
   })
 
   // The refresh token is stored in the same record as the access token.
-  it('a hand-off boot stores the refresh token with its receipt time', async () => {
+  it('a hand-off boot stores the receipt time and no refresh token', async () => {
     configure()
     ensureSignInState()
     // Readable iat/exp, so the renewable session is not due at once.
     const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
     const live = `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, iat: nowSec(), exp: nowSec() + 3600 })}.sig`
-    exchangeReply = ok({ access_token: live, refresh_token: 'R0' })
+    exchangeReply = ok({ access_token: live, renewable: true })
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     interceptHref()
     const before = Date.now()
@@ -711,7 +715,7 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
     await waitForVerifiedWorkspace()
     const rec = storedRecord()
     expect(rec?.token).toBe(live)
-    expect(rec?.refresh_token).toBe('R0')
+    expect(rec).not.toHaveProperty('refresh_token')
     // Backdated by the gateway's HandoffTTL (60 s): the code may have waited that long.
     expect(rec?.received_at).toBeGreaterThanOrEqual(before - 60_000)
     expect(rec?.received_at).toBeLessThanOrEqual(Date.now() - 60_000)
@@ -1206,7 +1210,7 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     const expired = jwt(A_ME.user.id, nowSec() - 3600)
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), received_at: Date.now() - 7_200_000 }),
     )
     ensureSignInState()
     holdPendingVerify()
@@ -1230,7 +1234,7 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     const expired = jwt(A_ME.user.id, nowSec() - 3600)
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), received_at: Date.now() - 7_200_000 }),
     )
     const old = Date.now() - 12 * 60 * 1000
     mintSignInState(old)
@@ -1251,7 +1255,7 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     const expired = jwt(A_ME.user.id, nowSec() - 3600)
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), received_at: Date.now() - 7_200_000 }),
     )
     const old = Date.now() - 12 * 60 * 1000
     mintSignInState(old)
@@ -1269,7 +1273,7 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     const expired = jwt(A_ME.user.id, nowSec() - 3600)
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), received_at: Date.now() - 7_200_000 }),
     )
     const S = ensureSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
@@ -1795,7 +1799,7 @@ describe('the first sign-in provisions the registered workspace', () => {
   function registered(opts: { exchange?: Reply; me?: Reply[] } = {}) {
     configure()
     ensureSignInState()
-    exchangeReply = opts.exchange ?? ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    exchangeReply = opts.exchange ?? ok({ access_token: T_ANSWERS, renewable: true })
     meQueue = opts.me ?? [fail(403, 'forbidden'), ok(ME)]
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
@@ -1826,7 +1830,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     expect(Math.max(...preWorkspace.map((f) => f.prompts)), 'no button, field, link or dialog before the workspace').toBe(0)
     expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
-    expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
+    expect(refreshBodies).toEqual([null])
     expect(meAuth).toEqual([`Bearer ${T_ANSWERS}`, `Bearer ${T2}`])
     expect(hrefWrites, 'no landing navigation').toEqual([])
     // No confirmation step: the first render with a user is the signed-in workspace.
@@ -1834,7 +1838,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     const rec = storedRecord()
     expect(rec?.token).toBe(T2)
-    expect(rec?.refresh_token).toBe('R1')
+    expect(rec).not.toHaveProperty('refresh_token')
     // Refreshed just now, so not backdated by the hand-off TTL.
     expect(rec?.received_at).toBeGreaterThanOrEqual(before)
     expect(rec?.me).toEqual(ME)
@@ -1874,7 +1878,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     await waitForVerifiedWorkspace()
     expect(fetchUrls.filter((u) => u.endsWith('/auth/exchange'))).toHaveLength(1)
     expect(workspacesCalls).toHaveLength(1)
-    expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
+    expect(refreshBodies).toEqual([null])
   })
 
   it('a registered account still blocked after a 409 reports no-workspace', async () => {
@@ -1962,7 +1966,7 @@ describe('a hung redemption times out', () => {
           signals.exchange.push(init?.signal ?? undefined)
           return hangAt === 'exchange'
             ? hang(init?.signal)
-            : ok({ access_token: registered ? T_ANSWERS : T, refresh_token: 'R0' })()
+            : ok({ access_token: registered ? T_ANSWERS : T, renewable: true })()
         }
         if (url === `${GATEWAY}/api/tenancy/v1/me`) {
           signals.me.push(init?.signal ?? undefined)
@@ -1976,7 +1980,7 @@ describe('a hung redemption times out', () => {
           return hangAt === 'workspaces' ? hang(init?.signal) : ok({ tenant: ME.tenant })()
         }
         if (url === `${GATEWAY}/auth/refresh`) {
-          return hangAt === 'refresh' ? hang(init?.signal) : ok({ access_token: T2, refresh_token: 'R1' })()
+          return hangAt === 'refresh' ? hang(init?.signal) : ok({ access_token: T2 })()
         }
         return hang(init?.signal)
       }),
@@ -2053,7 +2057,7 @@ describe('a hung redemption times out', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) => {
-        if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, refresh_token: 'R0' })()
+        if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, renewable: true })()
         if (url === `${GATEWAY}/api/tenancy/v1/me`) return fail(403, 'forbidden')()
         if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return ok({ invitations: [], removed: false, live_membership: false })()
         return hang(init?.signal)
@@ -2092,5 +2096,110 @@ describe('a hung redemption times out', () => {
     expect(signals.me).toHaveLength(1)
     expect(signals.exchange[0], 'exchange signal').toBeInstanceOf(AbortSignal)
     expect(signals.me[0], '/me signal').toBeInstanceOf(AbortSignal)
+  })
+})
+
+// SECAUD-17-11: the exchange runs in cookie mode, and the stored record never holds a refresh token.
+describe('cookie-held refresh token (SECAUD-17-11)', () => {
+  const COOKIE = { credentials: 'include', session: 'cookie' }
+  const initsOf = (path: string) => cookieInits.filter((c) => c.url === `${GATEWAY}${path}`).map(({ url: _u, ...c }) => c)
+
+  it('handoff_storedRecordHoldsNoRefreshToken', async () => {
+    configure()
+    ensureSignInState()
+    // Readable iat/exp, so the renewable session is not due at once.
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    const live = `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, iat: nowSec(), exp: nowSec() + 3600 })}.sig`
+    exchangeReply = ok({ access_token: live, renewable: true })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    const before = Date.now()
+
+    await bootApp()
+    await waitForVerifiedWorkspace()
+
+    expect(initsOf('/auth/exchange'), 'the exchange runs in cookie mode').toEqual([COOKIE])
+    const raw = localStorage.getItem(SESSION_KEY) ?? ''
+    const rec = storedRecord()
+    expect(rec?.token).toBe(live)
+    expect(rec?.handoff).toBe(true)
+    // Backdated by the gateway's HandoffTTL (60 s): the code may have waited that long.
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rec?.received_at).toBeLessThanOrEqual(Date.now() - 60_000)
+    expect(rec).not.toHaveProperty('refresh_token')
+    expect(raw).not.toContain('refresh_token')
+    // A reload resumes from that record without redeeming again.
+    cleanup()
+    capturedCtx = undefined
+    exchangeBodies = []
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies).toHaveLength(0)
+  })
+
+  async function firstWorkspace(renewable: boolean) {
+    configure()
+    ensureSignInState()
+    exchangeReply = ok({ access_token: T, renewable })
+    meQueue = [fail(403, 'forbidden'), ok(ME)]
+    mineReply = ok({ invitations: [], removed: false, live_membership: false })
+    refreshReply = ok({ access_token: T2 })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const nav = interceptHref()
+    await bootApp()
+    await screen.findByTestId('join-create')
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByLabelText('For clients — an accounting or tax firm'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('join-create'))
+    })
+    return nav
+  }
+
+  it('create_withRenewalRenewsThroughTheCookie', async () => {
+    let creates = 0
+    workspacesReply = () => (++creates === 1 ? fail(401, 'unauthorized')() : ok({ tenant: ME.tenant })())
+
+    const { hrefWrites } = await firstWorkspace(true)
+    await waitForVerifiedWorkspace()
+
+    // The 401 renew, then the refresh that reads the new membership.
+    expect(initsOf('/auth/refresh')).toEqual([COOKIE, COOKIE])
+    expect(refreshBodies, 'no body').toEqual([null, null])
+    expect(creates).toBe(2)
+    expect(hrefWrites).toEqual([])
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
+  })
+
+  // A first-workspace Create on a session that cannot renew has nothing to retry with.
+  it('create_withoutRenewalFailsToSignIn', async () => {
+    workspacesReply = fail(401, 'unauthorized')
+
+    const { hrefWrites } = await firstWorkspace(false)
+
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(initsOf('/auth/exchange'), 'the offer came from a cookie-mode exchange').toEqual([COOKIE])
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
+    expect(workspacesCalls).toHaveLength(1)
+    expect(refreshBodies, 'no refresh is sent').toEqual([])
+    expect(fetchUrls.filter((u) => u.endsWith('/auth/refresh'))).toEqual([])
+    expect(screen.queryByRole('alert'), 'the caller leaves, the form shows no retry notice').toBeNull()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  // Only `renewable` can tell this from a retryable failure: the status is not a 401.
+  it('create_withoutRenewalFailsToSignInOnAnyFailure', async () => {
+    workspacesReply = fail(500, 'boom')
+
+    const { hrefWrites } = await firstWorkspace(false)
+
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

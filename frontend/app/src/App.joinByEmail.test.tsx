@@ -86,11 +86,11 @@ beforeEach(() => {
   calls = []
   meQueue = [fail(403, 'forbidden'), ok(ME)]
   replies = {
-    [`${GATEWAY}/auth/exchange`]: ok({ access_token: T, refresh_token: 'R0' }),
+    [`${GATEWAY}/auth/exchange`]: ok({ access_token: T, renewable: true }),
     [MINE]: ok({ invitations: [invite('inv-1', 'Obi Partners')] }),
     [ACCEPT('inv-1')]: ok({}),
     [`${GATEWAY}/api/tenancy/v1/workspaces`]: ok({ tenant: ME.tenant }),
-    [`${GATEWAY}/auth/refresh`]: ok({ access_token: T2, refresh_token: 'R1' }),
+    [`${GATEWAY}/auth/refresh`]: ok({ access_token: T2 }),
     [`${GATEWAY}/auth/sign-out`]: ok(''),
   }
   vi.stubGlobal(
@@ -157,7 +157,8 @@ describe('the Join screen in the app', () => {
     expect(posts('/invitations/inv-1/accept')).toHaveLength(1)
     // passive effect: the session is saved after the seat commits
     await waitFor(() => expect(storedSession()?.token).toBe(T2))
-    expect(storedSession().refresh_token).toBe('R1')
+    expect(storedSession()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedSession()).not.toHaveProperty('refresh_token')
     expect(screen.queryByTestId('join-screen')).toBeNull()
   })
 
@@ -237,7 +238,7 @@ describe('the Join screen in the app', () => {
     await joinScreen()
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(hrefWrites).toEqual([LANDING]))
-    expect(posts('/auth/sign-out').map((c) => c.body)).toEqual([{ refresh_token: 'R0' }])
+    expect(posts('/auth/sign-out').map((c) => c.body)).toEqual([null])
     const order = calls.map((c) => c.url)
     expect(order.indexOf(`${GATEWAY}/auth/sign-out`)).toBeGreaterThan(order.indexOf(MINE))
     expect(posts('/accept')).toEqual([])
@@ -280,7 +281,7 @@ describe('the Join screen in the app', () => {
   })
 
   it('app_createOwnProvisionsAndOpensTheNewWorkspace', async () => {
-    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, renewable: true })
     await boot()
     await joinScreen()
     fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
@@ -305,7 +306,7 @@ describe('the Join screen in the app', () => {
   })
 
   it('app_createOwnFailureReportsSignInFailed', async () => {
-    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, renewable: true })
     replies[`${GATEWAY}/api/tenancy/v1/workspaces`] = fail(500, 'boom')
     const hrefWrites = await boot()
     await joinScreen()
@@ -317,7 +318,7 @@ describe('the Join screen in the app', () => {
   })
 
   it('app_whileAJoinRunsNothingElseSendsAnything', async () => {
-    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, renewable: true })
     replies[MINE] = ok({ invitations: [invite('inv-1', 'Obi Partners'), invite('inv-2', 'Zulu Books')] })
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
@@ -345,7 +346,7 @@ describe('the Join screen in the app', () => {
   })
 
   it('app_joinThenCreateOwnInOneTickSendsOnlyTheFirst', async () => {
-    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, renewable: true })
     await boot()
     await joinScreen()
     await act(async () => {

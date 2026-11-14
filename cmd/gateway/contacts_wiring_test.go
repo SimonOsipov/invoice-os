@@ -77,7 +77,7 @@ func TestHandoffHandlers_SetPasswordHandsOffToTheSink(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	sink := newChanSink()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, cwSession), site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil)
+	h := handoffHandlers(goTrueAnswering(t, cwSession), site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil, nil)
 
 	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=tok&type=signup&password=chosen-pw-1")
 
@@ -92,7 +92,7 @@ func TestHandoffHandlers_SetPasswordHandsOffToTheSink(t *testing.T) {
 func TestHandoffHandlers_SignInHandsOffToTheSink(t *testing.T) {
 	sink := newChanSink()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil)
+	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.SignIn.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/sign-in",

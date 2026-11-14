@@ -39,7 +39,7 @@ function jwt(extra: Record<string, unknown> = {}): string {
   return `${b64url('{"alg":"RS256"}')}.${b64url(JSON.stringify(claims))}.sig`
 }
 function handoffRecord(token = jwt()): string {
-  return JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, refresh_token: 'R1', received_at: Date.now() - MIN })
+  return JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, received_at: Date.now() - MIN })
 }
 const UNVERIFIED = JSON.stringify({ v: 1, personaId: 'firm', token: null, me: null, verified: false })
 const UNVERIFIED_WITH_ME = JSON.stringify({ v: 1, personaId: 'firm', token: null, me: ME, verified: false })

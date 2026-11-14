@@ -3,7 +3,8 @@
 //
 // Persisted shape (localStorage[SESSION_KEY]):
 //   { v: SESSION_SCHEMA_VERSION, personaId: PersonaId, token: string|null, me: Me|null, verified: boolean, handoff?: true }
-//   a hand-off record may add the pair { refresh_token: string, received_at: number } (epoch ms at receipt).
+//   a hand-off record may add received_at: number (epoch ms at receipt); the refresh token lives in the gateway cookie.
+//   A legacy record also holds refresh_token until the adoption refresh answers 200.
 // `persona` is stored by id only and rehydrated from APP_PERSONAS — persona definitions
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
@@ -28,9 +29,7 @@ export function serializeSession(session: Session): string {
     // Written only when set, so a persona record stays byte-identical.
     ...(session.handoff ? { handoff: true } : {}),
     // Hand-off only, so serialize and parse stay symmetric.
-    ...(session.handoff && session.renewal
-      ? { refresh_token: session.renewal.refreshToken, received_at: session.renewal.receivedAt }
-      : {}),
+    ...(session.handoff && session.renewal ? { received_at: session.renewal.receivedAt } : {}),
   })
 }
 
@@ -42,15 +41,14 @@ export function handoffPersona(me: Me): Persona {
   return { ...APP_PERSONAS.firm, name: '', initials: '', email: '', mode: MODE_BY_KIND[me.tenant.kind], subject: me.user.id, tenantId: me.tenant.id }
 }
 
-// The pair is optional; when present it must be complete, well-typed and on a hand-off record.
+// received_at is optional, alone or with a legacy refresh_token; when present it must be well-typed and on a hand-off record.
 function renewalPairOk(p: { handoff?: unknown; refresh_token?: unknown; received_at?: unknown }): boolean {
   if (p.refresh_token === undefined && p.received_at === undefined) {
     return true
   }
   return (
     p.handoff === true &&
-    typeof p.refresh_token === 'string' &&
-    p.refresh_token !== '' &&
+    (p.refresh_token === undefined || (typeof p.refresh_token === 'string' && p.refresh_token !== '')) &&
     typeof p.received_at === 'number' &&
     Number.isFinite(p.received_at)
   )
@@ -96,9 +94,12 @@ export function parseStoredSession(raw: string | null): Session | null {
           me: parsed.me,
           verified: parsed.verified,
           handoff: true,
+          // ceiling: a legacy token is read as due at once (receivedAt 0); the record is rewritten after the adoption refresh answers 200, remove 30 days after the production deploy
           ...(parsed.refresh_token !== undefined
-            ? { renewal: { refreshToken: parsed.refresh_token, receivedAt: parsed.received_at } }
-            : {}),
+            ? { renewal: { receivedAt: 0, legacyRefreshToken: parsed.refresh_token } }
+            : parsed.received_at !== undefined
+              ? { renewal: { receivedAt: parsed.received_at } }
+              : {}),
         }
       }
       return {
@@ -131,6 +132,10 @@ export function loadSession(): Session | null {
 // Mirror a session to storage. Never throws — a throwing setItem (quota, native-Node
 // method, private-mode) degrades to console.warn so the app stays usable.
 export function saveSession(session: Session): void {
+  // A legacy record keeps its refresh_token until the adoption refresh answers 200 and the adopted session is saved.
+  if (session.renewal?.legacyRefreshToken !== undefined) {
+    return
+  }
   try {
     localStorage.setItem(SESSION_KEY, serializeSession(session))
   } catch (e) {
@@ -187,7 +192,7 @@ export function isTokenExpired(token: string | null, nowMs: number = Date.now())
 }
 
 // Boot-time session resolution: an expired token with no renewal is NOT a session (the
-// workspace would only 401). One with a renewal is kept: its refresh token outlives it.
+// workspace would only 401). One with a renewal is kept: its gateway cookie outlives it.
 //
 // This deliberately does NOT distinguish "expired" from "never signed in". It used to,
 // because the two left the app by different doors — expired to the landing page, absent to

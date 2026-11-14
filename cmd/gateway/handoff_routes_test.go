@@ -17,7 +17,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
-// handoffRoutes maps each hand-off pattern to the handoff field main must wrap in withCORS.
+// handoffRoutes maps each hand-off pattern to the handoff field main must wrap in withCORS,
+// or in withSessionCORS for the fields in handoffSessionFields.
 var handoffRoutes = map[string]string{
 	"POST /auth/sign-in":     "SignIn",
 	"OPTIONS /auth/sign-in":  "SignIn",
@@ -32,8 +33,12 @@ var handoffRoutes = map[string]string{
 	"OPTIONS /auth/console-handoff": "ConsoleHandoff",
 }
 
+// handoffSessionFields are the three routes that read or write the refresh-token cookie.
+var handoffSessionFields = map[string]bool{"Exchange": true, "Refresh": true, "SignOut": true}
+
 const (
 	handoffAllowedOrigin = "https://landing.example"
+	handoffSessionOrigin = "https://app.example"
 	handoffState         = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" // 43 base64url chars
 )
 
@@ -54,7 +59,7 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 		t.Errorf("control: OPTIONS /auth/login = %+v, want one registration under the mock-issuer if", s)
 	}
 
-	corsLocal, recv := false, ""
+	corsLocal, sessionLocal, recv := false, false, ""
 	for _, s := range stmts {
 		as, ok := s.(*ast.AssignStmt)
 		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
@@ -69,6 +74,10 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 			if types.ExprString(as.Lhs[0]) == "withCORS" {
 				corsLocal = true
 			}
+		case "gateway.SessionCORS":
+			if types.ExprString(as.Lhs[0]) == "withSessionCORS" && len(call.Args) == 2 {
+				sessionLocal = true
+			}
 		case "handoffHandlers":
 			if len(call.Args) == 0 || types.ExprString(call.Args[0]) != `probed["auth"]` {
 				t.Errorf("handoffHandlers base = %v, want probed[\"auth\"]", call.Args)
@@ -78,6 +87,9 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 	}
 	if !corsLocal {
 		t.Fatal("main has no top-level `withCORS := gateway.CORS(...)`; the wrap below names nothing")
+	}
+	if !sessionLocal {
+		t.Error("main has no top-level `withSessionCORS := gateway.SessionCORS(origins, cookies)`; the session routes would grant no credentials")
 	}
 	if recv == "" {
 		t.Fatal("main has no top-level `x := handoffHandlers(probed[\"auth\"], ...)`")
@@ -92,7 +104,11 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 		if !s[0].topLevel {
 			t.Errorf("%s is registered under a condition; it must be a top-level statement of main", pattern)
 		}
-		if want := "withCORS(" + recv + "." + field + ")"; s[0].handler != want {
+		wrap := "withCORS"
+		if handoffSessionFields[field] {
+			wrap = "withSessionCORS"
+		}
+		if want := wrap + "(" + recv + "." + field + ")"; s[0].handler != want {
 			t.Errorf("%s handler = %s, want %s", pattern, s[0].handler, want)
 		}
 	}
@@ -122,7 +138,7 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 	t.Cleanup(gotrue.Close)
 	authURL, _ := url.Parse(gotrue.URL)
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil, nil)
 
 	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd&state="+handoffState)
 
@@ -133,7 +149,7 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 	code := strings.TrimPrefix(loc, prefix)
 	exchange := func(state string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]string{"code": code, "state": state})
-		return postJSON(h.Exchange, "/auth/exchange", handoffAllowedOrigin, string(body))
+		return postNoOrigin(h.Exchange, "/auth/exchange", string(body))
 	}
 	rec = exchange(handoffState)
 	if rec.Code != http.StatusOK {
@@ -152,8 +168,13 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil)
-	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
+	cookies, err := gateway.ParseSessionOrigins("app=" + handoffSessionOrigin)
+	if err != nil {
+		t.Fatalf("ParseSessionOrigins: %v", err)
+	}
+	h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, cookies, nil)
+	origins := []string{handoffAllowedOrigin, handoffSessionOrigin}
+	withCORS, withSessionCORS := gateway.CORS(origins), gateway.SessionCORS(origins, cookies)
 	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh, "SignOut": h.SignOut}
 	mux := http.NewServeMux()
 	for pattern, field := range handoffRoutes {
@@ -164,7 +185,11 @@ func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux
 		if fields[field] == nil {
 			continue
 		}
-		mux.Handle(pattern, withCORS(fields[field]))
+		wrap := withCORS
+		if handoffSessionFields[field] {
+			wrap = withSessionCORS
+		}
+		mux.Handle(pattern, wrap(fields[field]))
 	}
 	return mux
 }
@@ -186,6 +211,53 @@ func postJSON(mux http.Handler, path, origin, body string) *httptest.ResponseRec
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
+}
+
+// postNoOrigin is a body-mode caller (prodcheck, e2e/api, ctl): no Origin, so /auth/exchange answers it.
+func postNoOrigin(mux http.Handler, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// postSession is a cookie-mode POST from origin, carrying the refresh-token cookie when cookie is set.
+func postSession(mux http.Handler, path, origin, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Origin", origin)
+	req.Header.Set("X-Auth-Session", "cookie")
+	req.Header.Set("Content-Type", "application/json")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// requireGrant asserts the exact origin and credentials grant on a session-route answer.
+func requireGrant(t *testing.T, what string, rec *httptest.ResponseRecorder, origin string) {
+	t.Helper()
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Errorf("%s Access-Control-Allow-Origin = %q, want %q", what, got, origin)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("%s Access-Control-Allow-Credentials = %q, want true", what, got)
+	}
+}
+
+// requireCookie asserts exactly one Set-Cookie of the given name, with the value (or cleared when value is "").
+func requireCookie(t *testing.T, what string, rec *httptest.ResponseRecorder, name, value string) *http.Cookie {
+	t.Helper()
+	got := rec.Result().Cookies()
+	if len(got) != 1 || got[0].Name != name || got[0].Value != value {
+		t.Fatalf("%s Set-Cookie = %q, want one %s=%q", what, rec.Header().Values("Set-Cookie"), name, value)
+	}
+	if value == "" && !strings.Contains(rec.Header().Get("Set-Cookie"), "Max-Age=0") {
+		t.Errorf("%s clear = %q, want Max-Age=0", what, rec.Header().Get("Set-Cookie"))
+	}
+	return got[0]
 }
 
 func handoffPaths() []string {
@@ -275,7 +347,7 @@ func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 		}
 	}
 
-	// The follow-up POST carries the grant and reaches the real handlers, which share one store.
+	// The sign-in comes from the landing and answers a code; the app origin redeems it in cookie mode.
 	rec := postJSON(mux, "/auth/sign-in", handoffAllowedOrigin,
 		`{"email":"a@example.com","password":"pw","state":"`+handoffState+`"}`)
 	if rec.Code != http.StatusOK {
@@ -284,42 +356,54 @@ func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
 		t.Errorf("POST /auth/sign-in Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("POST /auth/sign-in Access-Control-Allow-Credentials = %q, want none", got)
+	}
 	var in struct{ Code string }
 	if err := json.Unmarshal(rec.Body.Bytes(), &in); err != nil || in.Code == "" {
 		t.Fatalf("sign-in body %s carries no code (err %v)", rec.Body, err)
 	}
+
 	body, _ := json.Marshal(map[string]string{"code": in.Code, "state": handoffState})
-	rec = postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-A"`) {
-		t.Errorf("POST /auth/exchange = %d %s, want 200 with tok-A", rec.Code, rec.Body)
+	rec = postSession(mux, "/auth/exchange", handoffSessionOrigin, string(body), nil)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"access_token":"tok-A","renewable":true}` {
+		t.Fatalf("POST /auth/exchange = %d %s, want 200 {access_token tok-A, renewable true}", rec.Code, rec.Body)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
-		t.Errorf("POST /auth/exchange Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
-	}
+	requireGrant(t, "POST /auth/exchange", rec, handoffSessionOrigin)
+	requireCookie(t, "POST /auth/exchange", rec, "__Host-rt-app", "ref-A")
 
-	// The exchanged refresh token renews through the same mux and carries the grant.
-	var ex struct {
-		RefreshToken string `json:"refresh_token"`
+	// The cookie renews through the same mux: the body holds the access token only, the cookie rotates.
+	rec = postSession(mux, "/auth/refresh", handoffSessionOrigin, ``, &http.Cookie{Name: "__Host-rt-app", Value: "ref-A"})
+	var renewed map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &renewed); rec.Code != http.StatusOK || err != nil || len(renewed) != 1 || renewed["access_token"] != tokB {
+		t.Fatalf("POST /auth/refresh = %d %s, want 200 with only access_token tokB", rec.Code, rec.Body)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &ex); err != nil || ex.RefreshToken != "ref-A" {
-		t.Fatalf("exchange body %s carries no ref-A (err %v)", rec.Body, err)
-	}
-	body, _ = json.Marshal(map[string]string{"refresh_token": ex.RefreshToken})
-	rec = postJSON(mux, "/auth/refresh", handoffAllowedOrigin, string(body))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"`+tokB+`"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
-		t.Errorf("POST /auth/refresh = %d %s, want 200 with tokB and ref-B", rec.Code, rec.Body)
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
-		t.Errorf("POST /auth/refresh Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
-	}
+	requireGrant(t, "POST /auth/refresh", rec, handoffSessionOrigin)
+	requireCookie(t, "POST /auth/refresh", rec, "__Host-rt-app", "ref-B")
 
-	// The renewed refresh token signs out through the same mux and carries the grant.
-	rec = postJSON(mux, "/auth/sign-out", handoffAllowedOrigin, `{"refresh_token":"ref-B"}`)
+	// The rotated cookie signs out through the same mux, and the answer clears it.
+	rec = postSession(mux, "/auth/sign-out", handoffSessionOrigin, ``, &http.Cookie{Name: "__Host-rt-app", Value: "ref-B"})
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("POST /auth/sign-out = %d %s, want 204", rec.Code, rec.Body)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
-		t.Errorf("POST /auth/sign-out Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
+	requireGrant(t, "POST /auth/sign-out", rec, handoffSessionOrigin)
+	requireCookie(t, "POST /auth/sign-out", rec, "__Host-rt-app", "")
+
+	// The preflight from the session origin asks for the header and gets credentials on the session routes only.
+	for _, path := range handoffPaths() {
+		req := httptest.NewRequest(http.MethodOptions, path, nil)
+		req.Header.Set("Origin", handoffSessionOrigin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		req.Header.Set("Access-Control-Request-Headers", "x-auth-session, content-type")
+		pre := httptest.NewRecorder()
+		mux.ServeHTTP(pre, req)
+		wantSession := path != "/auth/sign-in"
+		if got := pre.Header().Get("Access-Control-Allow-Credentials") == "true"; got != wantSession {
+			t.Errorf("OPTIONS %s credentials = %v, want %v", path, got, wantSession)
+		}
+		if got := allowHeaderSet(pre.Header())["x-auth-session"]; got != wantSession {
+			t.Errorf("OPTIONS %s grants X-Auth-Session = %v, want %v", path, got, wantSession)
+		}
 	}
 }
 
@@ -345,14 +429,15 @@ func TestHandoffPreflightDisallowedOriginGetsNoGrant(t *testing.T) {
 		}
 	}
 
-	// A disallowed POST still reaches the handler (400 on an unknown code) and carries no grant.
+	// A browser origin without the session header is refused at the exchange (E4) and carries no grant.
 	rec := postJSON(mux, "/auth/exchange", origin, `{"code":"x","state":"`+handoffState+`"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("POST /auth/exchange from a disallowed origin = %d %s, want 400 from the exchange handler", rec.Code, rec.Body)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "origin not allowed") {
+		t.Errorf("POST /auth/exchange from a disallowed origin = %d %s, want 403 origin not allowed", rec.Code, rec.Body)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST /auth/exchange from a disallowed origin Access-Control-Allow-Origin = %q, want none", got)
 	}
+	// Refresh and sign-out keep body mode for a browser origin (the ceiling): 400 from the handler.
 	for _, path := range []string{"/auth/refresh", "/auth/sign-out"} {
 		rec = postJSON(mux, path, origin, `{}`)
 		if rec.Code != http.StatusBadRequest {

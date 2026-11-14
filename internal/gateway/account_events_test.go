@@ -173,7 +173,7 @@ func TestAccountEvents_UnrecordedSignInOutcomes(t *testing.T) {
 func aeSignOut(t *testing.T, tokenAnswer, logoutAnswer http.HandlerFunc, rec AccountEvents) *httptest.ResponseRecorder {
 	t.Helper()
 	f := newSignOutFake(t, tokenAnswer, logoutAnswer)
-	h := SignOutHandler(f.URL, testClient(), liveSessions(t), nopLog(), rec)
+	h := SignOutHandler(f.URL, testClient(), liveSessions(t), nopLog(), rec, nil)
 	return doSignOut(h, `{"refresh_token":"`+signOutR0+`"}`)
 }
 
@@ -466,7 +466,7 @@ func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
 	}{
 		{"sign-out", EventSignedOut, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
 			f := newSignOutFake(t, answer(200, signOutGranted(signOutAccess(t, subjectS1))), answer(204, ""))
-			return doSignOut(SignOutHandler(f.URL, testClient(), liveSessions(t), log, rec), `{"refresh_token":"`+signOutR0+`"}`)
+			return doSignOut(SignOutHandler(f.URL, testClient(), liveSessions(t), log, rec, nil), `{"refresh_token":"`+signOutR0+`"}`)
 		}},
 		{"reset request", EventPasswordResetRequested, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
 			h := RequestPasswordResetHandler(newFakeGoTrue(t, 200, `{}`).URL, testClient(), 0, resendThrottle(time.Now), true, log, rec)

@@ -44,7 +44,7 @@ func newRefresh(authURL *url.URL, log *slog.Logger) http.Handler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return RefreshHandler(authURL, testClient(), log)
+	return RefreshHandler(authURL, testClient(), log, nil)
 }
 
 func doRefresh(h http.Handler, body string) *httptest.ResponseRecorder {
@@ -299,4 +299,263 @@ func TestRefresh_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	if c := calls[0]; c.Path != "/prefix/token" || c.RawQuery != "grant_type=refresh_token" {
 		t.Errorf("GoTrue saw %s?%s, want /prefix/token?grant_type=refresh_token", c.Path, c.RawQuery)
 	}
+}
+
+func newCookieRefresh(t *testing.T, authURL *url.URL, log *slog.Logger) http.Handler {
+	t.Helper()
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return RefreshHandler(authURL, testClient(), log, testSessionCookies(t))
+}
+
+// doCookieRefresh renews in cookie mode from origin with the given request cookies.
+func doCookieRefresh(h http.Handler, origin, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return doSession(h, "/auth/refresh", body, cookieModeHeaders(origin), cookies...)
+}
+
+// sentTokens returns the refresh_token of each call GoTrue saw.
+func sentTokens(t *testing.T, calls []tokenCall) []string {
+	t.Helper()
+	var out []string
+	for _, c := range calls {
+		var m map[string]string
+		if err := json.Unmarshal(c.Body, &m); err != nil {
+			t.Fatalf("token body %q is not JSON: %v", c.Body, err)
+		}
+		out = append(out, m["refresh_token"])
+	}
+	return out
+}
+
+func TestRefresh_CookieModeRotatesTheCookie(t *testing.T) {
+	for name, body := range map[string]string{"empty body": ``, "empty object": `{}`} {
+		t.Run(name, func(t *testing.T) {
+			fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+
+			rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, body, rtCookie("app", refreshR0))
+
+			if got := requireOnlyKey(t, rec, "access_token"); got != refreshA1 {
+				t.Errorf("access_token = %q, want %q", got, refreshA1)
+			}
+			if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+				t.Errorf("GoTrue saw refresh tokens %q, want only the cookie's %q", got, refreshR0)
+			}
+			requireSetCookie(t, rec, "__Host-rt-app", refreshR1)
+			if strings.Contains(rec.Body.String(), refreshR1) {
+				t.Errorf("body holds the rotated token: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRefresh_CookieModeAdoptsABodyToken(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+
+	rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, refreshBody(refreshR0), rtCookie("app", scCookieOnly))
+
+	if got := requireOnlyKey(t, rec, "access_token"); got != refreshA1 {
+		t.Errorf("access_token = %q, want %q", got, refreshA1)
+	}
+	if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+		t.Errorf("GoTrue saw refresh tokens %q, want only the body's %q", got, refreshR0)
+	}
+	requireSetCookie(t, rec, "__Host-rt-app", refreshR1)
+}
+
+func TestRefresh_CookieModeBadBodyIs400(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	h := newCookieRefresh(t, fake.URL, nil)
+
+	rec := doCookieRefresh(h, scApp, `not json`, rtCookie("app", refreshR0))
+	requireRefusal(t, rec, http.StatusBadRequest, msgInvalidBody)
+	requireNoSetCookie(t, rec)
+	if n := fake.Hits(); n != 0 {
+		t.Errorf("GoTrue saw %d calls from a refused body, want 0", n)
+	}
+
+	// Positive pair: `{}` is a valid cookie-mode body on the same handler.
+	if rec := doCookieRefresh(h, scApp, `{}`, rtCookie("app", refreshR0)); rec.Code != http.StatusOK {
+		t.Errorf("`{}` = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRefresh_CookieModeRefusesAnOriginOutsideTheList(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	h := newCookieRefresh(t, fake.URL, nil)
+
+	for name, origin := range map[string]string{"landing": scLanding, "foreign": scEvil, "null": "null", "none": ""} {
+		t.Run(name, func(t *testing.T) {
+			rec := doCookieRefresh(h, origin, ``, rtCookie("app", refreshR0))
+			requireRefusal(t, rec, http.StatusForbidden, msgOriginNotAllowed)
+			requireNoSetCookie(t, rec)
+		})
+	}
+	if n := fake.Hits(); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+
+	// Positive pair: the same cookie from the app origin renews.
+	if rec := doCookieRefresh(h, scApp, ``, rtCookie("app", refreshR0)); rec.Code != http.StatusOK {
+		t.Errorf("app origin = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRefresh_BodyModeIgnoresTheCookie(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	h := newCookieRefresh(t, fake.URL, nil)
+	cookie := rtCookie("app", scCookieOnly)
+
+	// A pre-deploy tab: no header, a body token and a stray cookie. The cookie is neither read nor written.
+	rec := doSession(h, "/auth/refresh", refreshBody(refreshR0), map[string]string{"Origin": scApp}, cookie)
+	if at, rt := requireAnswer(t, rec.Body.Bytes()); at != refreshA1 || rt != refreshR1 {
+		t.Errorf("answer = (%q, %q), want (%q, %q)", at, rt, refreshA1, refreshR1)
+	}
+	if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+		t.Errorf("GoTrue saw %q, want only the body's %q", got, refreshR0)
+	}
+	requireNoSetCookie(t, rec)
+
+	// A cross-site form POST: the cookie and no header give 400, and GoTrue is not called.
+	before := fake.Hits()
+	rec = doSession(h, "/auth/refresh", ``, map[string]string{"Origin": scEvil}, cookie)
+	requireRefusal(t, rec, http.StatusBadRequest, msgInvalidBody)
+	requireNoSetCookie(t, rec)
+	if n := fake.Hits() - before; n != 0 {
+		t.Errorf("GoTrue saw %d calls from a cookie without the header, want 0", n)
+	}
+
+	// A parseable empty object gets past the body decode: still no header, so the cookie is not read.
+	rec = doSession(h, "/auth/refresh", `{}`, map[string]string{"Origin": scEvil}, cookie)
+	requireRefusal(t, rec, http.StatusBadRequest, msgRefreshRequired)
+	requireNoSetCookie(t, rec)
+	if n := fake.Hits() - before; n != 0 {
+		t.Errorf("GoTrue saw %d calls from a cookie and {} without the header, want 0", n)
+	}
+
+	// Positive pair: with the header, the same cookie is read.
+	if got := doCookieRefresh(h, scApp, ``, cookie); got.Code != http.StatusOK {
+		t.Errorf("cookie mode with the same cookie = %d, want 200: %s", got.Code, got.Body.String())
+	}
+}
+
+func TestRefresh_ReadsOnlyItsOwnAudienceCookie(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+
+	rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, ``, rtCookie("ops", refreshR0))
+
+	requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+	if n := fake.Hits(); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestRefresh_CookieModeWithoutACookieIs401AndClears(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+
+	rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, `{}`)
+
+	requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+	if n := fake.Hits(); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestRefresh_CookieModeRefusedBodyTokenKeepsTheCookie(t *testing.T) {
+	fake := newTokenFake(t, http.StatusBadRequest, gtRefreshNotFound)
+	h := newCookieRefresh(t, fake.URL, nil)
+
+	rec := doCookieRefresh(h, scApp, refreshBody(refreshR0), rtCookie("app", scCookieOnly))
+
+	requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+	if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+		t.Errorf("GoTrue saw %q, want only the body's %q", got, refreshR0)
+	}
+	requireNoSetCookie(t, rec)
+
+	// Contrast: the cookie's own token, refused the same way, is cleared.
+	requireClearCookie(t, doCookieRefresh(h, scApp, ``, rtCookie("app", scCookieOnly)), "__Host-rt-app")
+}
+
+func TestRefresh_CookieModeMapping(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		closed     bool
+		wantStatus int
+		wantMsg    string
+		wantClear  bool
+	}{
+		{"400", http.StatusBadRequest, gtRefreshAlreadyUsed, false, http.StatusUnauthorized, msgRefreshRefused, true},
+		{"401", http.StatusUnauthorized, `{"code":401,"msg":"unauthorized"}`, false, http.StatusUnauthorized, msgRefreshRefused, true},
+		{"429", http.StatusTooManyRequests, gtOverRequestRateLimit, false, http.StatusTooManyRequests, msgTooMany, false},
+		{"500", http.StatusInternalServerError, gtInternal, false, http.StatusBadGateway, msgRefreshUnavailable, false},
+		{"unreachable", 0, ``, true, http.StatusBadGateway, msgRefreshUnavailable, false},
+		{"200 without refresh_token", http.StatusOK, `{"access_token":"` + refreshA1 + `"}`, false, http.StatusBadGateway, msgRefreshUnavailable, false},
+		{"200 without access_token", http.StatusOK, `{"refresh_token":"` + refreshR1 + `"}`, false, http.StatusBadGateway, msgRefreshUnavailable, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			authURL := closedURL(t)
+			if !c.closed {
+				authURL = newTokenFake(t, c.status, c.body).URL
+			}
+
+			rec := doCookieRefresh(newCookieRefresh(t, authURL, nil), scApp, ``, rtCookie("app", refreshR0))
+
+			requireRefusal(t, rec, c.wantStatus, c.wantMsg)
+			if c.wantClear {
+				requireClearCookie(t, rec, "__Host-rt-app")
+			} else {
+				requireNoSetCookie(t, rec)
+			}
+		})
+	}
+}
+
+// A body token in cookie mode is legacy adoption: only a 200 touches the cookie, whatever else answers.
+func TestRefresh_CookieModeLegacyAdoptionOutcomes(t *testing.T) {
+	const live = "refresh-other-tab-live-7d2p"
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantStatus int
+		wantMsg    string
+	}{
+		{"401", http.StatusUnauthorized, gtRefreshNotFound, http.StatusUnauthorized, msgRefreshRefused},
+		{"400", http.StatusBadRequest, gtRefreshAlreadyUsed, http.StatusUnauthorized, msgRefreshRefused},
+		{"403", http.StatusForbidden, gtRefreshUserBanned, http.StatusUnauthorized, msgRefreshRefused},
+		{"429", http.StatusTooManyRequests, `{}`, http.StatusTooManyRequests, "too many requests"},
+		{"500", http.StatusInternalServerError, `{}`, http.StatusBadGateway, msgRefreshUnavailable},
+		{"503", http.StatusServiceUnavailable, `{}`, http.StatusBadGateway, msgRefreshUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newTokenFake(t, c.status, c.body)
+			rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+			requireRefusal(t, rec, c.wantStatus, c.wantMsg)
+			requireNoSetCookie(t, rec)
+			if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+				t.Errorf("GoTrue saw %q, want only the body's %q", got, refreshR0)
+			}
+		})
+	}
+
+	t.Run("unreachable", func(t *testing.T) {
+		rec := doCookieRefresh(newCookieRefresh(t, closedURL(t), nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+		requireRefusal(t, rec, http.StatusBadGateway, msgRefreshUnavailable)
+		requireNoSetCookie(t, rec)
+	})
+
+	// Positive pair: a 200 replaces the other tab's cookie with the adopted rotation.
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("adoption = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	requireSetCookie(t, rec, "__Host-rt-app", refreshR1)
 }

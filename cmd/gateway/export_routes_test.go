@@ -45,7 +45,7 @@ func TestExportRoutesWiring(t *testing.T) {
 		case "gatewayHandlers":
 			apiName = types.ExprString(as.Lhs[0])
 		case "handoffHandlers":
-			if len(call.Args) == 8 {
+			if len(call.Args) == 9 {
 				handoffStoreArg = types.ExprString(call.Args[6])
 			}
 		}

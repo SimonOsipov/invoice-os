@@ -3,6 +3,7 @@ import './instrument'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
+import { gatewayBase } from '@invoice-os/api-client'
 import { CrashBoundary } from '@invoice-os/monitoring'
 
 // v2 design tokens, then the v2 .asc-app product layer (owns the app's look).
@@ -15,11 +16,15 @@ import './styles/platform.css'
 
 import App from './App'
 import { BrandMark } from './icons'
+import { settlePendingSignOut } from './lib/revoke'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <CrashBoundary brand={<BrandMark size={20} />}>
-      <App />
-    </CrashBoundary>
-  </StrictMode>,
-)
+// An unanswered sign-out is sent again before the app reads its session.
+void settlePendingSignOut(gatewayBase() ?? '', window.location.search).then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <CrashBoundary brand={<BrandMark size={20} />}>
+        <App />
+      </CrashBoundary>
+    </StrictMode>,
+  )
+})

@@ -14,7 +14,7 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', GW + '/')
   vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (k === SESSION_KEY ? JSON.stringify({ v: 2, token: 'T', refresh_token: 'R' }) : null),
+    getItem: (k: string) => (k === SESSION_KEY ? JSON.stringify({ v: 3, token: 'T' }) : null),
   })
   fetchMock = vi.fn(async () => json(200, {}))
   vi.stubGlobal('fetch', fetchMock)

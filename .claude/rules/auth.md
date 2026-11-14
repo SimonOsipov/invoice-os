@@ -7,6 +7,8 @@ paths:
   - ".github/workflows/idp-release-watch.yml"
   - "internal/gateway/gateway.go"
   - "internal/gateway/register*.go"
+  - "internal/gateway/session_cookie*.go"
+  - "internal/gateway/cors*.go"
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
   - "internal/gateway/reset_password*"
@@ -27,7 +29,14 @@ paths:
   - "internal/gateway/mock*.go"
   - "cmd/gateway/mockissuer.go"
   - "packages/console-session/**"
+  - "packages/api-client/src/client.ts"
+  - "frontend/support-console/src/session.ts"
   - "frontend/app/src/App.tsx"
+  - "frontend/app/src/auth.ts"
+  - "frontend/app/src/lib/session.ts"
+  - "frontend/app/src/lib/renewal.ts"
+  - "frontend/app/src/lib/revoke.ts"
+  - "frontend/app/src/lib/sessionHandoff.ts"
   - "frontend/app/src/lib/signInState.ts"
   - "frontend/app/src/lib/consoleHandoff.ts"
   - "frontend/landing/src/App.tsx"
@@ -93,6 +102,15 @@ paths:
 - Expect the gateway to refuse boot on Cloud Run without `DATABASE_GATEWAY_URL`. Elsewhere an unset URL keeps the in-process store, for a single instance only.
 - Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict.
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
+- Keep a browser session's refresh token only in the gateway cookie `__Host-rt-<audience>`: HttpOnly, Secure, `Path=/`, no `Domain`. Set `SameSite=Strict` only when the request's `Sec-Fetch-Site` is `same-site` or `same-origin`, else `SameSite=None; Partitioned`. Never decide it from `Host`.
+- Read or write that cookie only on `/auth/exchange`, `/auth/refresh` and `/auth/sign-out`, only for a request that carries `X-Auth-Session: cookie` from an exact origin in `AUTH_SESSION_ORIGINS`. Answer that header from any other origin with 403 before the code store or GoTrue.
+- Never put a refresh token in the body of a cookie-mode answer. Answer `/auth/exchange` with 403 when it has an `Origin` and no `X-Auth-Session`.
+- Clear the cookie with `Max-Age=0` and the same attributes on every cookie-mode sign-out answer, on a cookie-mode refresh answered 401 for the cookie's own token (never for a refused body token), and on a cookie-mode exchange whose answer holds no refresh token.
+- Grant `Access-Control-Allow-Credentials: true` only on those three routes and only to an origin in `AUTH_SESSION_ORIGINS`. Never answer `*`.
+- Expect the gateway to refuse boot on Cloud Run without `AUTH_SESSION_ORIGINS`.
+- Store only the access token in a console's storage: `{v:3, token}`, or `{v:3, token, from:'app'}` for an app-borrowed session.
+- Store only the access token and `received_at` in the app's session record; the gateway cookie holds the refresh token.
+- When a sign-out gets no answer, leave a pending marker; send the sign-out again at the next load before anything else, never when the load carries `?handoff=`.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address.
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
 - Count `/auth/reset-password` and `/auth/invitation/password` together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call; over the limit, redirect to the route's failed notice. A preview logs and admits.
@@ -143,7 +161,7 @@ paths:
 - Show the first-workspace form to a caller with an empty list, `removed` false, `live_membership` false and no complete answers.
 - Provision for that caller only when they press Create a workspace.
 - Send that caller to `signin=failed` on a 401 after the refresh attempt.
-- Send that caller to `signin=failed` when a Create fails with no refresh token.
+- Send that caller to `signin=failed` when a Create fails on a session that cannot renew.
 - Send a caller whose `live_membership` is not false, with no answers, to `signin=no-workspace`.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.

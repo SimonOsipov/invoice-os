@@ -33,7 +33,7 @@ const flaky = (n: number) => {
 
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', GW + '/')
-  store(JSON.stringify({ v: 2, token: 'OLD', refresh_token: 'R' }))
+  store(JSON.stringify({ v: 3, token: 'OLD' }))
   renew.mockReset()
   vi.mocked(saveConsoleSession).mockClear()
 })
@@ -44,14 +44,14 @@ afterEach(() => {
 
 describe('withSession', () => {
   it('withSession: a 401 renews once and retries', async () => {
-    renew.mockResolvedValue({ token: STAFF, refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: STAFF, borrowed: false })
     const call = flaky(1)
     await expect(withSession(call)).resolves.toBe('ok')
     expect(call).toHaveBeenCalledTimes(2)
     expect(renew).toHaveBeenCalledTimes(1)
-    expect(renew).toHaveBeenCalledWith(GW, { token: 'OLD', refreshToken: 'R' })
+    expect(renew).toHaveBeenCalledWith(GW, undefined)
     expect(saveConsoleSession).toHaveBeenCalledTimes(1)
-    expect(saveConsoleSession).toHaveBeenCalledWith(SESSION_KEY, { token: STAFF, refreshToken: 'R2' })
+    expect(saveConsoleSession).toHaveBeenCalledWith(SESSION_KEY, { token: STAFF, borrowed: false })
   })
 
   it('withSession: a call that does not 401 runs once and never renews', async () => {
@@ -62,7 +62,7 @@ describe('withSession', () => {
   })
 
   it('withSession: parallel 401s share one renewal', async () => {
-    renew.mockImplementation(() => new Promise((r) => setTimeout(() => r({ token: STAFF, refreshToken: 'R2' }), 10)))
+    renew.mockImplementation(() => new Promise((r) => setTimeout(() => r({ token: STAFF, borrowed: false }), 10)))
     const calls = [flaky(1), flaky(1), flaky(1)]
     await expect(Promise.all(calls.map((c) => withSession(c)))).resolves.toEqual(['ok', 'ok', 'ok'])
     expect(renew).toHaveBeenCalledTimes(1)
@@ -84,7 +84,7 @@ describe('withSession', () => {
     expect(renew, 'a record with a refresh token tries to renew').toHaveBeenCalledTimes(1)
 
     renew.mockClear()
-    store(JSON.stringify({ v: 2, token: 'OLD', from: 'app' }))
+    store(JSON.stringify({ v: 3, token: 'OLD', from: 'app' }))
     const call = flaky(1)
     await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
     expect(call).toHaveBeenCalledTimes(1)
@@ -92,7 +92,7 @@ describe('withSession', () => {
   })
 
   it('withSession: a non-staff renewed token is refused', async () => {
-    renew.mockResolvedValue({ token: CUSTOMER, refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: CUSTOMER, borrowed: false })
     const call = flaky(1)
     await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
     expect(renew).toHaveBeenCalledTimes(1)
@@ -101,7 +101,7 @@ describe('withSession', () => {
   })
 
   it('withSession: a 401 on the retry is final', async () => {
-    renew.mockResolvedValue({ token: STAFF, refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: STAFF, borrowed: false })
     const call = flaky(2)
     await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
     expect(call).toHaveBeenCalledTimes(2)
@@ -145,7 +145,7 @@ describe('withSession edges', () => {
   })
 
   it('withSession: a later 401 renews again once the first renewal is done', async () => {
-    renew.mockResolvedValue({ token: STAFF, refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: STAFF, borrowed: false })
     await withSession(flaky(1))
     await withSession(flaky(1))
     expect(renew).toHaveBeenCalledTimes(2)
@@ -154,7 +154,7 @@ describe('withSession edges', () => {
   it('withSession: a refused renewal does not block the next one', async () => {
     renew.mockRejectedValueOnce(unauthorized())
     await expect(withSession(flaky(1))).rejects.toMatchObject({ status: 401 })
-    renew.mockResolvedValue({ token: STAFF, refreshToken: 'R2' })
+    renew.mockResolvedValue({ token: STAFF, borrowed: false })
     await expect(withSession(flaky(1))).resolves.toBe('ok')
     expect(renew).toHaveBeenCalledTimes(2)
   })
@@ -165,7 +165,7 @@ describe('withSession edges', () => {
     await expect(withSession(none)).rejects.toMatchObject({ status: 401 })
     expect(none).toHaveBeenCalledTimes(1)
 
-    store(JSON.stringify({ v: 2, token: 'OLD', refresh_token: 'R' }))
+    store(JSON.stringify({ v: 3, token: 'OLD' }))
     vi.stubEnv('VITE_GATEWAY_URL', '')
     const noGw = flaky(1)
     await expect(withSession(noGw)).rejects.toMatchObject({ status: 401 })
@@ -188,5 +188,57 @@ describe('expireOnce', () => {
     expireOnce()
     expireOnce()
     expect(expireConsole).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The real renew and save run over a stubbed fetch and storage; the mocks above delegate to them here.
+describe('withSession over the gateway cookie (SECAUD-17-10)', () => {
+  const T = STAFF
+  const T2 = jwt({ sub: 's1', n: 2, app_metadata: { staff: true } })
+  let local: Map<string, string>
+  let fetchCalls: { url: string; init: RequestInit }[]
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('@invoice-os/console-session')>('@invoice-os/console-session')
+    renew.mockImplementation(actual.renewConsoleSession)
+    vi.mocked(saveConsoleSession).mockImplementation(actual.saveConsoleSession)
+    local = new Map()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => local.get(k) ?? null,
+      setItem: (k: string, v: string) => void local.set(k, v),
+      removeItem: (k: string) => void local.delete(k),
+    })
+    fetchCalls = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      fetchCalls.push({ url, init })
+      return new Response(JSON.stringify({ access_token: T2 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+  })
+
+  it('withSession_renewsThroughTheCookie', async () => {
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    const call = flaky(1)
+    await expect(withSession(call)).resolves.toBe('ok')
+    expect(call).toHaveBeenCalledTimes(2)
+    expect(fetchCalls.map((c) => c.url)).toEqual([`${GW}/auth/refresh`])
+    expect(fetchCalls[0]?.init.body).toBeUndefined()
+    expect(fetchCalls[0]?.init.credentials).toBe('include')
+    expect(new Headers(fetchCalls[0]?.init.headers).get('X-Auth-Session')).toBe('cookie')
+    expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toEqual({ v: 3, token: T2 })
+  })
+
+  it('withSession_borrowedRethrowsThe401', async () => {
+    // Control first: the landing record does reach the gateway.
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    await withSession(flaky(1))
+    expect(fetchCalls).toHaveLength(1)
+
+    fetchCalls.length = 0
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T, from: 'app' }))
+    const call = flaky(1)
+    await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(fetchCalls).toHaveLength(0)
+    expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
   })
 })

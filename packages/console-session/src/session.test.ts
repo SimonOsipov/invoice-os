@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { clearConsoleSession, isStaffToken, loadConsoleSession, parseStoredConsoleSession, saveConsoleSession } from './session'
-import { b64url, installStorage, jwt, OPS_KEY, SUPPORT_KEY, throwingStorage } from './testkit'
+import { b64url, borrowedRaw, installStorage, jwt, OPS_KEY, recordRaw, SUPPORT_KEY, throwingStorage, v3BorrowedRaw, v3Raw } from './testkit'
 
 let warn: ReturnType<typeof vi.spyOn>
 let error: ReturnType<typeof vi.spyOn>
@@ -60,13 +60,13 @@ describe('isStaffToken (AC-1)', () => {
 })
 
 describe('parseStoredConsoleSession (AC-2)', () => {
-  it('parseStoredConsoleSession_acceptsOnlyV2', () => {
+  it('parseStoredConsoleSession_acceptsOnlyV3', () => {
     const rows: [string, string | null, unknown, number][] = [
       ['absent', null, null, 0],
       ['v1 operator record', JSON.stringify({ v: 1, operator: 'developer' }), null, 1],
-      ['v2 good', JSON.stringify({ v: 2, token: 'T', refresh_token: 'R' }), { token: 'T', refreshToken: 'R' }, 0],
-      ['v2 missing refresh', JSON.stringify({ v: 2, token: 'T' }), null, 1],
-      ['v2 missing token', JSON.stringify({ v: 2, refresh_token: 'R' }), null, 1],
+      ['v3 good', JSON.stringify({ v: 3, token: 'T' }), { token: 'T', borrowed: false }, 0],
+      ['v2 landing (the load reads it, the strict parse does not)', JSON.stringify({ v: 2, token: 'T', refresh_token: 'R' }), null, 1],
+      ['v3 missing token', JSON.stringify({ v: 3 }), null, 1],
       ['corrupt JSON', '{', null, 1],
     ]
     for (const [name, raw, want, warns] of rows) {
@@ -74,17 +74,17 @@ describe('parseStoredConsoleSession (AC-2)', () => {
       expect(parseStoredConsoleSession(raw, OPS_KEY), name).toEqual(want)
       expect(warn, name).toHaveBeenCalledTimes(warns)
     }
-    // Not two non-empty strings: refused, one warn each.
+    // Not a non-empty string token on a v3 record: refused, one warn each.
     for (const raw of [
-      JSON.stringify({ v: 2, token: '', refresh_token: 'R' }),
-      JSON.stringify({ v: 2, token: 'T', refresh_token: '' }),
-      JSON.stringify({ v: 2, token: 1, refresh_token: 'R' }),
-      JSON.stringify({ v: 2, token: 'T', refresh_token: ['R'] }),
+      JSON.stringify({ v: 3, token: '' }),
+      JSON.stringify({ v: 3, token: 'T', refresh_token: '' }),
+      JSON.stringify({ v: 3, token: 1 }),
+      JSON.stringify({ v: 3, token: ['T'] }),
       JSON.stringify({ v: 3, token: 'T', refresh_token: 'R' }),
-      JSON.stringify({ v: 1, token: 'T', refresh_token: 'R' }),
-      JSON.stringify({ v: '2', token: 'T', refresh_token: 'R' }),
-      JSON.stringify({ v: 2, token: 'T', refresh_token: null }),
-      JSON.stringify({ token: 'T', refresh_token: 'R' }),
+      JSON.stringify({ v: 1, token: 'T' }),
+      JSON.stringify({ v: '3', token: 'T' }),
+      JSON.stringify({ v: 3, token: 'T', refresh_token: null }),
+      JSON.stringify({ token: 'T' }),
       'null',
       '[]',
       '"v2"',
@@ -101,9 +101,9 @@ describe('parseStoredConsoleSession (AC-2)', () => {
 describe('console session storage (AC-15)', () => {
   it('consoleSession_storageThrowsNeverEscapes', () => {
     const ok = installStorage()
-    saveConsoleSession(OPS_KEY, { token: 'T', refreshToken: 'R' })
-    expect(JSON.parse(ok.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: 'T', refresh_token: 'R' })
-    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T', refreshToken: 'R' })
+    saveConsoleSession(OPS_KEY, { token: 'T', borrowed: false })
+    expect(JSON.parse(ok.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: 'T' })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T', borrowed: false })
     clearConsoleSession(OPS_KEY)
     expect(ok.local.getItem(OPS_KEY)).toBeNull()
     expect(warn).not.toHaveBeenCalled()
@@ -112,7 +112,7 @@ describe('console session storage (AC-15)', () => {
     expect(loadConsoleSession(OPS_KEY)).toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockClear()
-    expect(() => saveConsoleSession(OPS_KEY, { token: 'T', refreshToken: 'R' })).not.toThrow()
+    expect(() => saveConsoleSession(OPS_KEY, { token: 'T', borrowed: false })).not.toThrow()
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockClear()
     expect(() => clearConsoleSession(OPS_KEY)).not.toThrow()
@@ -124,14 +124,14 @@ describe('console session storage (AC-15)', () => {
 describe('console session keys (AC-15)', () => {
   it('consoleSession_keysAreIsolated', () => {
     const { local } = installStorage()
-    saveConsoleSession(OPS_KEY, { token: 'T-ops', refreshToken: 'R-ops' })
+    saveConsoleSession(OPS_KEY, { token: 'T-ops', borrowed: false })
     expect(loadConsoleSession(SUPPORT_KEY)).toBeNull()
-    saveConsoleSession(SUPPORT_KEY, { token: 'T-sup', refreshToken: 'R-sup' })
-    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T-ops', refreshToken: 'R-ops' })
-    expect(loadConsoleSession(SUPPORT_KEY)).toEqual({ token: 'T-sup', refreshToken: 'R-sup' })
+    saveConsoleSession(SUPPORT_KEY, { token: 'T-sup', borrowed: false })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T-ops', borrowed: false })
+    expect(loadConsoleSession(SUPPORT_KEY)).toEqual({ token: 'T-sup', borrowed: false })
     clearConsoleSession(SUPPORT_KEY)
     expect(local.getItem(SUPPORT_KEY)).toBeNull()
-    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T-ops', refreshToken: 'R-ops' })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: 'T-ops', borrowed: false })
     clearConsoleSession(OPS_KEY)
     expect(local.getItem(OPS_KEY)).toBeNull()
   })
@@ -139,16 +139,16 @@ describe('console session keys (AC-15)', () => {
 
 describe('borrowed record (SUPP-11-02)', () => {
   it('parse_acceptsTheBorrowedShape', () => {
-    expect(parseStoredConsoleSession(JSON.stringify({ v: 2, token: 'T', from: 'app' }), OPS_KEY)).toEqual({ token: 'T', refreshToken: null })
+    expect(parseStoredConsoleSession(JSON.stringify({ v: 3, token: 'T', from: 'app' }), OPS_KEY)).toEqual({ token: 'T', borrowed: true })
     expect(warn).not.toHaveBeenCalled()
   })
 
   it('parse_refusesMixedOrNullBorrowedShapes', () => {
     for (const rec of [
-      { v: 2, token: 'T', refresh_token: null },
-      { v: 2, token: 'T', refresh_token: 'R', from: 'app' },
-      { v: 2, token: 'T', from: 'landing' },
-      { v: 2, token: '', from: 'app' },
+      { v: 3, token: 'T', refresh_token: null },
+      { v: 3, token: 'T', refresh_token: 'R', from: 'app' },
+      { v: 3, token: 'T', from: 'landing' },
+      { v: 3, token: '', from: 'app' },
     ]) {
       warn.mockClear()
       expect(parseStoredConsoleSession(JSON.stringify(rec), OPS_KEY), JSON.stringify(rec)).toBeNull()
@@ -158,7 +158,62 @@ describe('borrowed record (SUPP-11-02)', () => {
 
   it('save_writesTheBorrowedShape', () => {
     const { local } = installStorage()
-    saveConsoleSession(OPS_KEY, { token: 'T', refreshToken: null })
-    expect(local.getItem(OPS_KEY)).toBe('{"v":2,"token":"T","from":"app"}')
+    saveConsoleSession(OPS_KEY, { token: 'T', borrowed: true })
+    expect(local.getItem(OPS_KEY)).toBe('{"v":3,"token":"T","from":"app"}')
+  })
+})
+
+describe('v3 records (SECAUD-17-10)', () => {
+  const T = 'T-access'
+  const R = 'R-secret'
+
+  it('save_writesOnlyTheAccessToken', () => {
+    const { local } = installStorage()
+    saveConsoleSession(OPS_KEY, { token: T, borrowed: false, legacyRefreshToken: R })
+    expect(JSON.parse(local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T })
+    expect(local.getItem(OPS_KEY)).not.toContain(R)
+    saveConsoleSession(OPS_KEY, { token: T, borrowed: true })
+    expect(JSON.parse(local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
+  })
+
+  it('legacyLanding_loadLeavesTheRecordUntouched', () => {
+    const { local } = installStorage({ local: { [OPS_KEY]: recordRaw(T, R) } })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false, legacyRefreshToken: R })
+    // [legacy-adopt-order]: the boot rewrites it after the adoption answers 200.
+    expect(local.getItem(OPS_KEY)).toBe(recordRaw(T, R))
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false, legacyRefreshToken: R })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('legacyBorrowed_isRewrittenAsV3', () => {
+    const { local } = installStorage({ local: { [OPS_KEY]: borrowedRaw(T) } })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: true })
+    expect(local.getItem(OPS_KEY)).toBe(v3BorrowedRaw(T))
+  })
+
+  it('v3WithARefreshToken_isRemoved', () => {
+    for (const rec of [
+      { v: 3, token: T, refresh_token: R },
+      { v: 3, token: T, from: 'app', refresh_token: R },
+      { v: 3, token: T, refresh_token: null },
+    ]) {
+      warn.mockClear()
+      const { local } = installStorage({ local: { [OPS_KEY]: JSON.stringify(rec) } })
+      expect(loadConsoleSession(OPS_KEY), JSON.stringify(rec)).toBeNull()
+      expect(warn, JSON.stringify(rec)).toHaveBeenCalledTimes(1)
+      expect(local.getItem(OPS_KEY), JSON.stringify(rec)).toBeNull()
+    }
+  })
+
+  it('parse_refusesOtherShapes', () => {
+    // The two good shapes first: a refusal means nothing if nothing is accepted.
+    expect(parseStoredConsoleSession(v3Raw(T), OPS_KEY)).toEqual({ token: T, borrowed: false })
+    expect(parseStoredConsoleSession(v3BorrowedRaw(T), OPS_KEY)).toEqual({ token: T, borrowed: true })
+    expect(warn).not.toHaveBeenCalled()
+    for (const rec of [{ v: 3 }, { v: 3, token: '' }, { v: 3, token: T, from: 'x' }, { v: 4, token: T }, { v: 3, token: T, extra: 1 }, { v: 3, token: T, from: 'app', extra: 1 }]) {
+      warn.mockClear()
+      expect(parseStoredConsoleSession(JSON.stringify(rec), OPS_KEY), JSON.stringify(rec)).toBeNull()
+      expect(warn, JSON.stringify(rec)).toHaveBeenCalledTimes(1)
+    }
   })
 })

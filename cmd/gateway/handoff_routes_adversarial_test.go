@@ -179,9 +179,9 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		"link-redeem-ip throttle":           `"link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now`,
 		"gateway.NewSignInThrottle":         `"sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now`,
 		"gateway.SignInHandler":             "authURL, client, " + store + ", " + throttle + ", log, sink, events",
-		"gateway.ExchangeHandler":           store,
-		"gateway.RefreshHandler":            "authURL, client, log",
-		"gateway.SignOutHandler":            "authURL, client, " + sessions + ", log, events",
+		"gateway.ExchangeHandler":           store + ", cookies",
+		"gateway.RefreshHandler":            "authURL, client, log, cookies",
+		"gateway.SignOutHandler":            "authURL, client, " + sessions + ", log, events, cookies",
 		"gateway.InvitationPasswordHandler": "authURL, siteURL, client, " + sessions + ", " + throttle + ", sink, log, " + store + ", events, " + perIP + ", enforce",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
@@ -308,10 +308,10 @@ func TestHandoffCodeRedeemsOnceAcrossRequests(t *testing.T) {
 		t.Errorf("sign-in answered a token, not a code: %s", rec.Body)
 	}
 	body, _ := json.Marshal(map[string]string{"code": in.Code, "state": handoffState})
-	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
+	if rec := postNoOrigin(mux, "/auth/exchange", string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
 		t.Fatalf("first POST /auth/exchange = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
 	}
-	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusBadRequest {
+	if rec := postNoOrigin(mux, "/auth/exchange", string(body)); rec.Code != http.StatusBadRequest {
 		t.Errorf("second POST /auth/exchange = %d %s, want 400", rec.Code, rec.Body)
 	}
 }

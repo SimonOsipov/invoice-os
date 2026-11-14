@@ -57,6 +57,8 @@ CLAUDE.md
 .playwright-mcp/
 # RALPH per-story scratch (design notes, checkpoints), never repo content.
 .ralph/
+# Per-SPA script policy written by cspPlugin at build time.
+frontend/*/csp.txt
 .ralph-install.log
 
 # ---- Editor / OS ----

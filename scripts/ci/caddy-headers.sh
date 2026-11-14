@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # scripts/ci/caddy-headers.sh: runs the root Caddyfile in the SPA Dockerfiles' Caddy image and
-# asserts every response carries the security headers, Cache-Control is right per response class, the
+# asserts every response carries the security headers and the per-image script policy, Cache-Control is right per response class, the
 # host redirects answer as the LB did, and a site with /404.html serves only its built addresses. Needs docker and curl.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 # ceiling: held at Caddy 2.11.7 (2.11.8 try_files matches a bare directory); move when a release passes this script.
 img=caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 # pinned equal to frontend/*/Dockerfile by TestCaddyPins_RepoPinned
 name="caddy-headers-$$"
+pname="caddy-headers-policy-$$"
 sname="caddy-headers-strict-$$"
 site=$(mktemp -d)
 ssite=$(mktemp -d)
-trap 'docker rm -f "$name" "$sname" >/dev/null 2>&1; rm -rf "$site" "$ssite"' EXIT INT TERM HUP
+policy=$(mktemp)
+trap 'docker rm -f "$name" "$sname" "$pname" >/dev/null 2>&1; rm -rf "$site" "$ssite" "$policy"' EXIT INT TERM HUP
 
 mkdir -p "$site/assets"
 echo '<!doctype html><title>SPA-INDEX</title>' >"$site/index.html"
@@ -22,18 +24,18 @@ port=$(docker port "$name" 8080/tcp | head -n1 | sed 's/.*://')
 for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$port/health" && break; sleep 0.2; done
 
 fail=0
-# Copied from the Caddyfile's first header block.
+# Copied from the Caddyfile's first header block; the CSP line is $csp.
 want_hdrs=(
-  "content-security-policy: frame-ancestors 'none'"
   "x-frame-options: DENY"
   "x-content-type-options: nosniff"
   "referrer-policy: strict-origin-when-cross-origin"
   "permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 )
-# sec <label> <headers-text>: each security header appears exactly once.
+csp="content-security-policy: frame-ancestors 'none'"
+# sec <label> <headers-text>: each security header and the CSP line appears exactly once.
 sec() {
   local l=$1 h=$2 w n
-  for w in "${want_hdrs[@]}"; do
+  for w in "$csp" "${want_hdrs[@]}"; do
     n=$(printf '%s\n' "$h" | tr -d '\r' | grep -Fxic -- "$w")
     [ "$n" = 1 ] || { echo "FAIL $l: '$w' x$n, want 1"; fail=1; }
   done
@@ -75,6 +77,23 @@ for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health
   [ -n "$hdrs" ] || { echo "FAIL $path: no response"; fail=1; continue; }
   sec "$path" "$hdrs"
 done
+
+# Policy container: the SPA fixture with a build's csp.txt mounted; every response carries that text.
+printf '%s' "script-src 'self' https://sentinel.example; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" >"$policy"
+docker run -d --name "$pname" -p 127.0.0.1::8080 -v "$root/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -v "$policy:/etc/caddy/csp.txt:ro" -v "$site:/srv:ro" "$img" >/dev/null || exit 1
+pport=$(docker port "$pname" 8080/tcp | head -n1 | sed 's/.*://')
+for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$pport/health" && break; sleep 0.2; done
+pcsp="content-security-policy: $(cat "$policy")"
+csp=$pcsp
+for path in / /invoices/42 /.env /assets/index-abc123.js /health /library/health /check/health /assets/index-abc123.js.map; do
+  hdrs=$(curl -s -o /dev/null -D - "http://127.0.0.1:$pport$path" | tr -d '\r')
+  echo "policy $path -> $(printf '%s\n' "$hdrs" | head -n1)"
+  [ -n "$hdrs" ] || { echo "FAIL policy $path: no response"; fail=1; continue; }
+  sec "policy $path" "$hdrs"
+done
+cond "$pport" / If-None-Match etag no-cache
+csp="content-security-policy: frame-ancestors 'none'"
 
 # row <port> <path> <want-status> <marker>: asserts status, body marker (- = empty body) and the security headers.
 # Optional 5th arg: -sI for a HEAD row (no body to match).
@@ -183,15 +202,19 @@ library.ascomply.com /libraryx https://www.ascomply.com/library/libraryx
 library.ascomply.com /invoices/x?q=1 https://www.ascomply.com/library/invoices/x?q=1
 library.ascomply.com /Library/x https://www.ascomply.com/library/Library/x'
 nrows=0
+for rp in "$port" "$pport"; do
+[ "$rp" = "$pport" ] && csp=$pcsp
 while read -r h path want; do
   nrows=$((nrows + 1))
-  hdrs=$(curl -s -o /dev/null -D - -H "Host: $h" "http://127.0.0.1:$port$path" | tr -d '\r')
+  hdrs=$(curl -s -o /dev/null -D - -H "Host: $h" "http://127.0.0.1:$rp$path" | tr -d '\r')
   code=$(printf '%s\n' "$hdrs" | head -n1 | cut -d' ' -f2)
   loc=$(printf '%s\n' "$hdrs" | sed -n 's/^[Ll]ocation: //p')
   sec "$h$path" "$hdrs"
   echo "$h$path -> $code $loc"
   { [ "$code" = 301 ] && [ "$loc" = "$want" ]; } || { echo "FAIL $h$path: want 301 $want"; fail=1; }
 done <<<"$redirects"
+done
+csp="content-security-policy: frame-ancestors 'none'"
 [ "$nrows" -gt 0 ] || { echo "FAIL: no redirect rows"; fail=1; }
 # A host that is not an old address must serve, not redirect.
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: www.ascomply.com" "http://127.0.0.1:$port/blog/x")

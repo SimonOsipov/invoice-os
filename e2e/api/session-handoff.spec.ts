@@ -24,6 +24,10 @@ const UNAUTHORIZED = 'unauthorized'
 // internal/gateway/signin_throttle.go SignInMaxFailures.
 const THROTTLE_LIMIT = 10
 
+// internal/gateway/session_cookie.go: a cookie-mode request from an origin outside AUTH_SESSION_ORIGINS.
+const ORIGIN_NOT_ALLOWED = 'origin not allowed'
+const SESSION_ROUTES = ['/auth/exchange', '/auth/refresh', '/auth/sign-out']
+
 const CODE_RE = /^[A-Za-z0-9_-]{43}$/
 const JWT_RE = /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/
 
@@ -39,6 +43,28 @@ function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = sorted.length >> 1
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+// A cookie-mode request from origin: the header is what selects the mode, and Cookie carries the refresh token.
+function cookieMode(origin: string, cookie?: string): Record<string, string> {
+  return { Origin: origin, 'X-Auth-Session': 'cookie', ...(cookie && { Cookie: cookie }) }
+}
+
+// The `name=value` pair of a Set-Cookie line, as a browser would send it back.
+function cookiePair(setCookie: string): string {
+  return setCookie.split(';')[0]
+}
+
+// Signs in and redeems the code in cookie mode from the app origin; returns the cookie the gateway set.
+async function cookieExchange(): Promise<{ app: string; setCookie: string; body: { access_token: string; renewable: boolean } }> {
+  const app = new URL(resolveTarget('APP_URL')).origin
+  const { email, password } = await registerFresh()
+  const state = mintSignInState()
+  const code = await signInForCode(email, password, state)
+  const res = await rawFetch('/auth/exchange', { method: 'POST', headers: cookieMode(app), body: { code, state } })
+  expect(res.status, JSON.stringify(res.body)).toBe(200)
+  expect(res.setCookie, 'the exchange sets one cookie').toHaveLength(1)
+  return { app, setCookie: res.setCookie[0], body: res.body as { access_token: string; renewable: boolean } }
 }
 
 test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
@@ -276,5 +302,87 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     const over = await rawFetch('/auth/sign-in', { method: 'POST', body })
     assertErrorEnvelope(over, 429, `attempt ${THROTTLE_LIMIT + 1}`)
     expect(errorOf(over)).toBe(TOO_MANY)
+  })
+
+  test('cookie mode: the exchange sets an HttpOnly cookie and answers no refresh token', async () => {
+    const { setCookie, body } = await cookieExchange()
+
+    expect(Object.keys(body).sort(), 'the cookie-mode exchange answer keys').toEqual(['access_token', 'renewable'])
+    expect(body.access_token).toMatch(JWT_RE)
+    expect(body.renewable).toBe(true)
+    expect(setCookie.startsWith('__Host-rt-app=')).toBe(true)
+    expect(setCookie.split(';')[0].length, 'the cookie holds a refresh token').toBeGreaterThan('__Host-rt-app='.length)
+    // A preview is cross-site from the gateway, and a node client sends no Sec-Fetch-Site.
+    for (const attribute of [/;\s*HttpOnly/i, /;\s*Secure/i, /;\s*Path=\//i, /;\s*SameSite=None/i, /;\s*Partitioned/i]) {
+      expect(setCookie, `the cookie attributes ${attribute}`).toMatch(attribute)
+    }
+    expect(setCookie, 'the cookie sets no Domain').not.toMatch(/;\s*Domain=/i)
+  })
+
+  test('cookie mode: a refresh rotates the cookie and a sign-out revokes and clears it', async () => {
+    const { app, setCookie } = await cookieExchange()
+
+    const refreshed = await rawFetch('/auth/refresh', { method: 'POST', headers: cookieMode(app, cookiePair(setCookie)) })
+    expect(refreshed.status, JSON.stringify(refreshed.body)).toBe(200)
+    expect(Object.keys(refreshed.body as object), 'the cookie-mode refresh answer keys').toEqual(['access_token'])
+    expect(refreshed.setCookie, 'the refresh rotates the cookie').toHaveLength(1)
+    const rotated = refreshed.setCookie[0]
+    expect(rotated.startsWith('__Host-rt-app=')).toBe(true)
+    expect(cookiePair(rotated), 'the cookie value did not rotate').not.toBe(cookiePair(setCookie))
+
+    const signOut = await rawFetch('/auth/sign-out', { method: 'POST', headers: cookieMode(app, cookiePair(rotated)) })
+    expect(signOut.status, JSON.stringify(signOut.body)).toBe(204)
+    expect(signOut.setCookie, 'the sign-out clears the cookie').toHaveLength(1)
+    expect(signOut.setCookie[0]).toMatch(/^__Host-rt-app=;/)
+    expect(signOut.setCookie[0]).toMatch(/Max-Age=0/i)
+
+    // The revoked session no longer renews.
+    const again = await rawFetch('/auth/refresh', { method: 'POST', headers: cookieMode(app, cookiePair(rotated)) })
+    expect([again.status, errorOf(again)], 'the cleared session renewing').toEqual([401, INVALID_REFRESH])
+  })
+
+  test('cookie mode: an origin outside the session list is refused', async () => {
+    const landing = new URL(resolveTarget('LANDING_URL')).origin
+    const { app, setCookie } = await cookieExchange()
+    const state = mintSignInState()
+    const { email, password } = await registerFresh()
+    const code = await signInForCode(email, password, state)
+
+    for (const path of SESSION_ROUTES) {
+      const res = await rawFetch(path, { method: 'POST', headers: cookieMode(landing, cookiePair(setCookie)), body: path === '/auth/exchange' ? { code, state } : undefined })
+      assertErrorEnvelope(res, 403, `${path} from the landing`)
+      expect(errorOf(res)).toBe(ORIGIN_NOT_ALLOWED)
+      expect(res.setCookie, `${path} sets no cookie for a refused origin`).toEqual([])
+    }
+
+    // The refusals touched neither the code nor the session.
+    const redeemed = await rawFetch('/auth/exchange', { method: 'POST', headers: cookieMode(app), body: { code, state } })
+    expect(redeemed.status, JSON.stringify(redeemed.body)).toBe(200)
+    const renewed = await rawFetch('/auth/refresh', { method: 'POST', headers: cookieMode(app, cookiePair(setCookie)) })
+    expect(renewed.status, JSON.stringify(renewed.body)).toBe(200)
+  })
+
+  test('the session routes grant credentials only to the session origins', async ({ request }) => {
+    const sessionOrigins = ['APP_URL', 'OPS_CONSOLE_URL', 'SUPPORT_CONSOLE_URL'].map((name) => new URL(resolveTarget(name)).origin)
+    const landing = new URL(resolveTarget('LANDING_URL')).origin
+    const preflight = (path: string, origin: string) =>
+      request.fetch(`${resolveTarget('GATEWAY_URL')}${path}`, {
+        method: 'OPTIONS',
+        headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'x-auth-session, content-type' },
+      })
+
+    for (const path of SESSION_ROUTES) {
+      for (const origin of sessionOrigins) {
+        const res = await preflight(path, origin)
+        expect(res.status(), `${path} preflight from ${origin}`).toBe(204)
+        expect(res.headers()['access-control-allow-origin'], `${path} grant to ${origin}`).toBe(origin)
+        expect(res.headers()['access-control-allow-credentials'], `${path} credentials for ${origin}`).toBe('true')
+        expect(res.headers()['access-control-allow-headers'].toLowerCase(), `${path} headers for ${origin}`).toContain('x-auth-session')
+      }
+      const other = await preflight(path, landing)
+      expect(other.status(), `${path} preflight from the landing`).toBe(204)
+      expect(other.headers()['access-control-allow-origin'], `${path} grant to the landing`).toBe(landing)
+      expect(other.headers()['access-control-allow-credentials'], `${path} credentials for the landing`).toBeUndefined()
+    }
   })
 })

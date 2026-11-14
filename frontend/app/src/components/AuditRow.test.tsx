@@ -542,4 +542,16 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     render(<AuditRow event={ev({ event: 'invoice.approval_approved', actor: 'sub-1', actor_name: 'Ada Obi', actor_kind: 'person', payload })} expanded={false} onToggle={() => {}} />)
     expect(screen.getByTestId('audit-what').textContent).toBe('Approved by Ada Obi as delegate for Finance Manager')
   })
+
+  it('AuditRow renders a support download as ASComply support', () => {
+    const base = { event: 'evidence_bundle.exported', actor: 'ASComply support', actor_name: 'ASComply support', actor_kind: 'raw' as const }
+    const { unmount } = render(<AuditRow event={ev(base)} expanded={false} onToggle={() => {}} />)
+    const row = screen.getByTestId('audit-row')
+    expect(row.textContent).toContain('Evidence bundle downloaded')
+    expect(row.textContent).toContain('ASComply support')
+    unmount()
+    render(<AuditRow event={ev({ ...base, actor: 'sub-1', actor_name: 'Ada Obi', actor_kind: 'person' })} expanded={false} onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-row').textContent).toContain('Ada Obi')
+    expect(screen.getByTestId('audit-row').textContent).not.toContain('ASComply support')
+  })
 })

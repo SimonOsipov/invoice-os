@@ -26,6 +26,8 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invoice.resolved_outside',
     'invoice.unresolved_outside',
     'invoice_register.exported',
+    'evidence_bundle.exported',
+    'evidence_bundle.export_failed',
   ],
   approvals: [
     'invoice.approval_armed',
@@ -223,9 +225,17 @@ describe('audit vocabulary', () => {
       'custom_rule.created',
       'custom_rule.updated',
       'custom_rule.deleted',
+      'evidence_bundle.exported',
+      'evidence_bundle.export_failed',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }
+  })
+
+  it('auditVocabulary: evidence bundle events read as labelled', () => {
+    expect(auditEventView('evidence_bundle.exported')).toMatchObject({ label: 'Evidence bundle downloaded', domain: 'invoices', tone: null })
+    expect(auditEventView('evidence_bundle.export_failed')).toMatchObject({ label: 'Evidence bundle download failed', domain: 'invoices', tone: 'red' })
+    expect(auditEventView('submission.failed').tone).toBe('red')
   })
 
   it('auditVocabulary_colourOnlyForOutcome', () => {

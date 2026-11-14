@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -17,6 +18,7 @@ import (
 type Store struct {
 	pool        *pgxpool.Pool
 	maxInvoices int
+	auditTx     func(ctx context.Context, tenantID string, write func(pgx.Tx) error) error // test seam; nil = recordBundleEvent
 }
 
 // NewStore wires the production cap (D-34) -- assemble treats a non-positive
@@ -35,15 +37,36 @@ func (s *Store) Assemble(ctx context.Context, r Request, w io.Writer, onStart fu
 	if !ok {
 		return db.ErrNoTenant
 	}
-	return db.WithinRequestTenantTxOpts(ctx, s.pool, bundleTxOptions, func(tx pgx.Tx) error {
-		return assemble(ctx, tx, r, w, assembleOpts{
-			tenantID:    id.TenantID,
-			subject:     id.Subject,
-			maxInvoices: s.maxInvoices,
-			now:         time.Now(),
-			onStart:     onStart,
+	read := func(fw io.Writer) (*bundleWriter, error) {
+		var bw *bundleWriter
+		err := db.WithinRequestTenantTxOpts(ctx, s.pool, bundleTxOptions, func(tx pgx.Tx) error {
+			var err error
+			bw, err = buildBundle(ctx, tx, r, fw, assembleOpts{
+				tenantID:    id.TenantID,
+				subject:     id.Subject,
+				maxInvoices: s.maxInvoices,
+				now:         time.Now(),
+				onStart:     onStart,
+			})
+			return err
 		})
-	})
+		return bw, err
+	}
+	return s.streamAudited(ctx, w, id.TenantID, id.Subject, r, read,
+		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
+			return memberBundleExported(ctx, tx, id.Subject, p)
+		},
+		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
+			return memberBundleFailed(ctx, tx, id.Subject, p)
+		})
+}
+
+func memberBundleExported(ctx context.Context, tx pgx.Tx, subject string, p bundleAudit) error {
+	return audit.Record(ctx, tx, subject, "evidence_bundle.exported", p)
+}
+
+func memberBundleFailed(ctx context.Context, tx pgx.Tx, subject string, p bundleAudit) error {
+	return audit.Record(ctx, tx, subject, "evidence_bundle.export_failed", p)
 }
 
 // Preview reports what Assemble would produce, without producing it. Unlike

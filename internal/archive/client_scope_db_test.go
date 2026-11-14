@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -116,5 +118,90 @@ func TestClientScope_BundlePreviewAndRegisterRefuseAnotherClient(t *testing.T) {
 		if w := serve(entA); w.Code != http.StatusOK {
 			t.Errorf("%s for client A control: %d, want 200", name, w.Code)
 		}
+	}
+}
+
+func TestClientScope_ABundleDownloadIsAuditedInTheCallersScope(t *testing.T) {
+	super := dbSuperPool(t)
+	app, _ := dbAppPoolTraced(t)
+
+	var entA, entB string
+	reviewer, admin := uuid.NewString(), uuid.NewString()
+	tenant := mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		tid := mustCreateTenant(t, tx, "archive-client-scope-audit")
+		entA = mustCreateEntity(t, tx, tid, "Client A", "")
+		entB = mustCreateEntity(t, tx, tid, "Client B", "")
+		mustCreateInvoice(t, tx, invoiceFixture{tenantID: tid, entityID: entA, invoiceNumber: "CSA-A-1"})
+		mustCreateInvoice(t, tx, invoiceFixture{tenantID: tid, entityID: entB, invoiceNumber: "CSA-B-1"})
+		for _, q := range []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'reviewer', 'active', false)`, []any{tid, reviewer}},
+			{`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1, $2, $3)`, []any{tid, reviewer, entA}},
+			{`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'admin', 'active', true)`, []any{tid, admin}},
+		} {
+			if _, err := tx.Exec(context.Background(), q.sql, q.args...); err != nil {
+				t.Fatalf("seed members: %v", err)
+			}
+		}
+		return tid
+	})
+	t.Cleanup(func() {
+		purgeAudit(t, super, `DELETE FROM audit_log WHERE tenant_id = $1`, tenant)
+		purgeAudit(t, super, `DELETE FROM memberships WHERE tenant_id = $1`, tenant)
+	})
+
+	s := NewStore(app)
+	as := func(subject string) context.Context {
+		return auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenant})
+	}
+	reviewerCtx, adminCtx := as(reviewer), as(admin)
+	now := time.Now().UTC()
+	req := func(entity string) Request {
+		return Request{EntityID: entity, From: now.Add(-time.Hour), To: now.Add(time.Hour)}
+	}
+	exportedRows := func() []bundleAuditRow { return auditRowsOf(t, super, tenant, evExported) }
+	listed := func(ctx context.Context) []string {
+		resp, err := audit.NewStore(app).List(ctx, audit.Filter{Limit: 50, Events: []string{evExported}})
+		if err != nil {
+			t.Fatalf("audit List: %v", err)
+		}
+		var entities []string
+		for _, e := range resp.Events {
+			if e.EntityID != nil {
+				entities = append(entities, *e.EntityID)
+			}
+		}
+		slices.Sort(entities)
+		return entities
+	}
+
+	if err := s.Assemble(reviewerCtx, req(entA), io.Discard, nil); err != nil {
+		t.Fatalf("Assemble(client A) as the reviewer: %v", err)
+	}
+	if rows := exportedRows(); len(rows) != 1 || rows[0].entity == nil || *rows[0].entity != entA || rows[0].actor != reviewer {
+		t.Errorf("exported rows after the reviewer's download of A = %+v, want one for A by the reviewer", rows)
+	}
+	if err := s.Assemble(reviewerCtx, req(entB), io.Discard, nil); !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("Assemble(client B) as the reviewer: error = %v, want ErrEntityNotFound", err)
+	}
+	if n := len(exportedRows()); n != 1 {
+		t.Errorf("exported rows after the refused download = %d, want 1", n)
+	}
+	if err := s.Assemble(adminCtx, req(entB), io.Discard, nil); err != nil {
+		t.Fatalf("Assemble(client B) as the admin: %v", err)
+	}
+	if rows := exportedRows(); len(rows) != 2 || rows[1].entity == nil || *rows[1].entity != entB {
+		t.Errorf("exported rows after the admin's download of B = %+v, want a second row for B", rows)
+	}
+
+	if got := listed(reviewerCtx); !slices.Equal(got, []string{entA}) {
+		t.Errorf("the reviewer's audit List returns entities %v, want only [%s]", got, entA)
+	}
+	want := []string{entA, entB}
+	slices.Sort(want)
+	if got := listed(adminCtx); !slices.Equal(got, want) {
+		t.Errorf("control: the admin's audit List returns entities %v, want %v", got, want)
 	}
 }

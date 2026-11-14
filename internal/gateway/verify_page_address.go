@@ -22,15 +22,19 @@ func PoolLinkAddress(pool *pgxpool.Pool) LinkAddress {
 		return nil
 	}
 	return func(ctx context.Context, token string) (string, bool, error) {
-		var masked *string
-		if err := pool.QueryRow(ctx, `SELECT auth.confirm_link_address($1)`, token).Scan(&masked); err != nil {
-			return "", false, err
-		}
-		if masked == nil {
-			return "", false, nil
-		}
-		return *masked, true, nil
+		return queryLinkAddress(ctx, pool, token)
 	}
+}
+
+func queryLinkAddress(ctx context.Context, pool *pgxpool.Pool, token string) (string, bool, error) {
+	var masked *string
+	if err := pool.QueryRow(ctx, `SELECT auth.confirm_link_address($1)`, token).Scan(&masked); err != nil {
+		return "", false, err
+	}
+	if masked == nil {
+		return "", false, nil
+	}
+	return *masked, true, nil
 }
 
 // lookupLinkAddress spends a link-redeem count, then reads the address; ok=false means answer the failed notice.

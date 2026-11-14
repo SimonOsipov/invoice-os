@@ -9,7 +9,7 @@ import (
 )
 
 // The RLS database has no auth.confirm_link_address: the real lookup must fail closed, not render an unnamed page.
-func TestPoolLinkAddress_AMissingFunctionIsTheFailedNotice(t *testing.T) {
+func TestRLS_GatewayPoolLinkAddress_AMissingFunctionIsTheFailedNotice(t *testing.T) {
 	d := requireHandoffDB(t)
 	log, buf := captureLog()
 	h := vpHandlerWith(t, PoolLinkAddress(d.a), vpLimit(5), true, log)

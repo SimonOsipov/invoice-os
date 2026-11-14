@@ -1,0 +1,17 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Revision",
+  "metadata": {
+    "name": "gateway-00383-biy"
+  },
+  "spec": {
+    "containers": [
+      {
+        "image": "africa-south1-docker.pkg.dev/ascomply-preview/images/gateway@sha256:7299e2ef3e04adb98148340fd26274086754c64433132284b6868fd6068d6179"
+      }
+    ]
+  },
+  "status": {
+    "imageDigest": "africa-south1-docker.pkg.dev/ascomply-preview/images/gateway@sha256:7299e2ef3e04adb98148340fd26274086754c64433132284b6868fd6068d6179"
+  }
+}

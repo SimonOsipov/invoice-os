@@ -3,6 +3,7 @@ paths:
   - ".github/workflows/deploy-prod.yml"
   - ".github/workflows/rollback-prod.yml"
   - "scripts/ci/gcp-traffic.sh"
+  - "scripts/ci/prod-image.sh"
   - "cmd/deploycheck/**"
 ---
 # Production deploys on Google Cloud
@@ -10,7 +11,10 @@ paths:
 - `deploy-prod.yml` deploys production on a `main` push and on `workflow_dispatch`. Both wait for green `CI` on the commit.
 - Deploy only a commit on `main`. Workload Identity admits `deploy-prod` only from a run on `refs/heads/main`.
 - Give no deploy job a GitHub `environment:`. It changes the OIDC subject, and Workload Identity refuses it.
-- Build each image once per commit, tagged with the full sha, in `africa-south1-docker.pkg.dev/ascomply-preview/images`.
+- From invoice-os-infra #43 on: only `deploy-prod` writes `images`, tags are immutable, and `images` keeps the 50 newest and deletes older untagged. Before #43: keep-recent 20, delete-old 30 d, tags mutable, `deploy-preview` still a writer.
+- Every `deploy-prod` run builds each image and pushes it untagged, by digest, to `africa-south1-docker.pkg.dev/ascomply-preview/images`. See `registry.tf`, `deployers.tf` in invoice-os-infra.
+- Deploy, migrate and deploy-check use the digest that the run's own push recorded (`prod-image.sh push`, `ref`), never a tag. A re-run or a dispatch rebuilds. Run `prod-image.sh` from the workflow's commit, never from the commit being deployed.
+- From #43 on, `images` keeps the 50 newest versions of each package and deletes older untagged ones. Before each push, `prod-image.sh pin` tags `keep-<digest>` on a serving, rollback or job image at rank 40 or more (ten below the 50). A failed read or tag annotates and the build goes on; a failed tag at rank 49 or more stops the deploy (the build matrix is fail-fast and deploy needs every leg; `TestProdImagePinStopsTheLegWhenTheLastPinFails`). Change `keep_count` and `KEEP_VERSIONS` together. The nightly reads auth's commit from the `commit` label each deploy sets.
 - Run the `migrate` job before any revision starts. Keep migrations expand-only: old and new revisions share the database.
 - Start every new revision with `--no-traffic` and the tag `c-<sha12>`.
 - Check the tagged revisions with the `deploy-check` job (`cmd/deploycheck`). Tag URLs answer only inside the production network.

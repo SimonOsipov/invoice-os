@@ -45,6 +45,7 @@ func GrantAccountStateRead(ctx context.Context, authAdminDSN string) (bool, erro
 END $$`,
 		purgeFunctionSQL,
 		`REVOKE EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) FROM PUBLIC`,
+		revokeStrayPurgeGrantsSQL,
 		`GRANT USAGE ON SCHEMA auth TO invoice_app`,
 		`GRANT EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) TO invoice_app`,
 	} {
@@ -57,6 +58,15 @@ END $$`,
 	}
 	return true, nil
 }
+
+// Leaves EXECUTE to the owner and invoice_app only, so a stray grant does not survive a boot.
+const revokeStrayPurgeGrantsSQL = `DO $$ DECLARE r oid; BEGIN
+  FOR r IN SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a
+   WHERE p.oid = 'auth.purge_unconfirmed_account(uuid)'::regprocedure AND a.grantee NOT IN (0, p.proowner, 'invoice_app'::regrole)
+  LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) FROM %I', pg_get_userbyid(r));
+  END LOOP;
+END $$`
 
 // The DELETE re-checks confirmation and age under the row lock, so a confirm that commits first wins.
 var purgeFunctionSQL = fmt.Sprintf(`CREATE OR REPLACE FUNCTION auth.purge_unconfirmed_account(p_user_id uuid) RETURNS boolean

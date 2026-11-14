@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 const purgeCall = `SELECT auth.purge_unconfirmed_account($1::uuid)`
@@ -130,6 +132,32 @@ func TestIdP_PurgeFunctionIsNarrow(t *testing.T) {
 	requirePurge(t, app, "confirmed account, 8 days old", confirmedID, false, true)
 
 	requirePurge(t, app, "unknown id", uuid.NewString(), false, false)
+}
+
+func TestIdP_PurgeGrantRevokesAStrayExecute(t *testing.T) {
+	grantAccountStateRead(t)
+	su := superConn(t)
+	const fn = `auth.purge_unconfirmed_account(uuid)`
+	exec(t, su, `GRANT EXECUTE ON FUNCTION `+fn+` TO invoice_gateway`)
+	var gw bool
+	if err := su.QueryRow(context.Background(), `SELECT has_function_privilege('invoice_gateway', '`+fn+`', 'EXECUTE')`).Scan(&gw); err != nil || !gw {
+		t.Fatalf("setup: invoice_gateway may execute = %v, %v; want true", gw, err)
+	}
+
+	granted, err := db.GrantAccountStateRead(context.Background(), mailEnv(t, "DATABASE_AUTH_ADMIN_URL"))
+	if err != nil || !granted {
+		t.Fatalf("GrantAccountStateRead = (%v, %v); want (true, nil)", granted, err)
+	}
+
+	for role, want := range map[string]bool{"invoice_gateway": false, "invoice_app": true} {
+		var got bool
+		if err := su.QueryRow(context.Background(), `SELECT has_function_privilege($1, '`+fn+`', 'EXECUTE')`, role).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s may execute = %v, want %v", role, got, want)
+		}
+	}
 }
 
 // The function alone decides: the age is the latest of created_at, confirmation_sent_at and recovery_sent_at.

@@ -64,8 +64,8 @@ func TestUnconfirmedPurge_AListFailureEndsTheRun(t *testing.T) {
 	}
 }
 
-// A pool that cannot connect makes the first purge call fail; the run stops there.
-func TestUnconfirmedPurge_AFailingPurgeStopsTheRun(t *testing.T) {
+// A pool that cannot connect makes every purge call fail; the run still returns one error.
+func TestUnconfirmedPurge_EveryPurgeFailingReturnsOneErrorWithoutAddresses(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://nobody@127.0.0.1:1/none?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
@@ -133,13 +133,13 @@ func TestUnconfirmedPurge_RemovesEveryStaleAccountAcrossPages(t *testing.T) {
 	}
 }
 
-func TestUnconfirmedPurge_AFirstPurgeErrorEndsTheRunAndKeepsTheCount(t *testing.T) {
+func TestUnconfirmedPurge_AFailingAccountDoesNotStopTheOthersAndOneErrorNamesTheCount(t *testing.T) {
 	users := staleUsers(5)
 	boom := errors.New("function missing")
 	var calls int
 	purge := func(_ context.Context, id string) (bool, error) {
 		calls++
-		if calls == 3 {
+		if calls == 2 || calls == 4 {
 			return false, boom
 		}
 		return true, nil
@@ -148,11 +148,19 @@ func TestUnconfirmedPurge_AFirstPurgeErrorEndsTheRunAndKeepsTheCount(t *testing.
 
 	err := (&UnconfirmedPurge{Account: &fakeAccounts{users: users}, Purge: purge, Logger: logger, Now: time.Now}).RunOnce(context.Background())
 
-	if !errors.Is(err, boom) || calls != 3 {
-		t.Fatalf("RunOnce = %v after %d calls, want the purge error after 3", err, calls)
+	if !errors.Is(err, boom) || calls != 5 {
+		t.Fatalf("RunOnce = %v after %d calls, want the purge error after all 5", err, calls)
 	}
-	if !strings.Contains(buf.String(), `"accounts":2`) {
-		t.Errorf("log %q lacks the 2 accounts removed before the error", buf)
+	if _, ok := err.(interface{ Unwrap() []error }); ok || !strings.Contains(err.Error(), "2 purges failed, removed 3") {
+		t.Errorf("RunOnce = %q, want one error naming 2 failures and 3 removed", err)
+	}
+	for _, u := range users {
+		if strings.Contains(err.Error(), u.ID) || strings.Contains(buf.String(), u.ID) {
+			t.Errorf("error or log holds user id %s", u.ID)
+		}
+	}
+	if !strings.Contains(buf.String(), `"accounts":3`) {
+		t.Errorf("log %q lacks the 3 accounts removed", buf)
 	}
 }
 

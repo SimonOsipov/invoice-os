@@ -58,7 +58,8 @@ func (p *UnconfirmedPurge) purge(ctx context.Context, id string) (bool, error) {
 
 // RunOnce lists every page first, since a delete shifts later rows, then asks
 // auth.purge_unconfirmed_account about each candidate; the function re-checks and decides.
-// A list failure still purges the candidates already read. The first purge error ends the run. It logs the count only.
+// A list failure still purges the candidates already read; a failing purge does not stop the others.
+// It returns one error, never one per account, and logs the count only.
 // ceiling: O(accounts/100) list calls per run, move to a cursor above ~5k accounts.
 func (p *UnconfirmedPurge) RunOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, unconfirmedPurgeTimeout)
@@ -86,17 +87,26 @@ func (p *UnconfirmedPurge) RunOnce(ctx context.Context) error {
 			break
 		}
 	}
+	var firstErr error
+	failed := 0
 	for _, id := range ids {
 		gone, err := p.purge(ctx, id)
 		if err != nil {
-			return fmt.Errorf("unconfirmed purge stopped after removing %d: %w", removed, err)
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		if gone {
 			removed++
 		}
 	}
 	if listErr != nil {
-		return fmt.Errorf("unconfirmed purge list failed after removing %d: %w", removed, listErr)
+		return fmt.Errorf("unconfirmed purge list failed after removing %d, %d purges failed: %w", removed, failed, listErr)
+	}
+	if firstErr != nil {
+		return fmt.Errorf("unconfirmed purge: %d purges failed, removed %d, first: %w", failed, removed, firstErr)
 	}
 	return nil
 }

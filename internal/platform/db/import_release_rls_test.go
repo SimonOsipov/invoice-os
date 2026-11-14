@@ -397,6 +397,24 @@ func TestRLS_DocumentLinkStateCountsOnlyLiveCitations(t *testing.T) {
 	if !inv || !link {
 		t.Errorf("with a live invoice: has_invoice %v, has_link %v, want true, true", inv, link)
 	}
+
+	for _, status := range []string{"pending", "processing", "completed"} {
+		held := bdDoc(t, f, "", "")
+		irNewBatch(t, f, bdWho{}, f.a, held, status)
+		err := bdApp(f.tenant, bdWho{scope: scope}, func(tx pgx.Tx) error {
+			var invoice, link bool
+			if err := tx.QueryRow(context.Background(), `SELECT has_invoice, has_link FROM public.document_link_state($1)`, held).Scan(&invoice, &link); err != nil {
+				return err
+			}
+			if invoice || !link {
+				t.Errorf("only a %s batch: has_invoice %v, has_link %v, want false, true", status, invoice, link)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("read document_link_state of a %s batch: %v", status, err)
+		}
+	}
 	if before != after || before == "" {
 		t.Errorf("app.entity_scope before %q and after %q the call, want the same non-empty value", before, after)
 	}
@@ -553,6 +571,14 @@ func TestRLS_ImportReleaseMigrationBackfillsAndRoundTrips(t *testing.T) {
 	cpLegacyExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, created_at) VALUES ($1, $2, $3, 'ir-c-live', $4, $5)`,
 		uuid.NewString(), tenant, c, failedThenC, t0.Add(time.Hour))
 	batch(live, "completed", t0)
+	// Two live citations for different clients: the earlier one wins, whichever kind it is.
+	earlierA, earlierC := doc(), doc()
+	batch(earlierA, "completed", t0)
+	cpLegacyExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, created_at) VALUES ($1, $2, $3, 'ir-c-later', $4, $5)`,
+		uuid.NewString(), tenant, c, earlierA, t0.Add(time.Hour))
+	cpLegacyExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, created_at) VALUES ($1, $2, $3, 'ir-c-earlier', $4, $5)`,
+		uuid.NewString(), tenant, c, earlierC, t0)
+	batch(earlierC, "completed", t0.Add(time.Hour))
 
 	reapply()
 
@@ -563,6 +589,8 @@ func TestRLS_ImportReleaseMigrationBackfillsAndRoundTrips(t *testing.T) {
 		"bound by a failed batch only":                   {failedOnly, irNullEntity},
 		"bound by a failed A batch and a live C invoice": {failedThenC, &c},
 		"bound by a live batch":                          {live, &a},
+		"live A batch earlier than a live C invoice":     {earlierA, &a},
+		"live C invoice earlier than a live A batch":     {earlierC, &c},
 		"bound with no citation":                         {uncited, irNullEntity},
 	} {
 		bdWantEntity(t, name, want.doc, want.entity)
@@ -584,6 +612,9 @@ func TestRLS_ImportReleaseMigrationDownRestoresTheBindingRules(t *testing.T) {
 	}
 	if def, _ := irFunctionDef(t, "documents_binding_guard"); strings.Contains(def, "document_link_state") {
 		t.Errorf("after the Down: documents_binding_guard still reads document_link_state:\n%s", def)
+	}
+	if def, _ := irFunctionDef(t, "document_readable"); strings.Contains(def, "discarded") || strings.Contains(def, "'undone'") {
+		t.Errorf("after the Down: document_readable still reads live citations only:\n%s", def)
 	}
 	checks := []struct {
 		table, name   string
@@ -610,6 +641,9 @@ func TestRLS_ImportReleaseMigrationDownRestoresTheBindingRules(t *testing.T) {
 	}
 	if def, _ := irFunctionDef(t, "document_link_state"); !strings.Contains(def, "discarded") {
 		t.Errorf("after the Up: document_link_state does not read discarded:\n%s", def)
+	}
+	if def, _ := irFunctionDef(t, "document_readable"); !strings.Contains(def, "discarded") {
+		t.Errorf("after the Up: document_readable does not read live citations only:\n%s", def)
 	}
 	for _, c := range checks {
 		if n := irCheckValues(t, c.table, c.name); n != c.upAgain {

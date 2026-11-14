@@ -113,6 +113,15 @@ describe('UndoImportControl (SECAUD-50-04)', () => {
     await act(async () => d.resolve(OK))
     expect(onSettled).not.toHaveBeenCalled()
     expect(errors).not.toHaveBeenCalled()
+
+    const failing = deferred<typeof OK>()
+    vi.spyOn(importApi, 'undoImport').mockReturnValue(failing.promise)
+    const second = arm()
+    fireEvent.click(screen.getByTestId('undo-import-confirm'))
+    second.unmount()
+    await act(async () => failing.reject(new ApiError('network', 'Network error')))
+    expect(second.onSettled).not.toHaveBeenCalled()
+    expect(errors).not.toHaveBeenCalled()
   })
 
   it('a success shows the done line and refetches', async () => {

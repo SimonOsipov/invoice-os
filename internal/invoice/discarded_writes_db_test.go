@@ -48,6 +48,10 @@ func TestDiscarded_EveryWriteIsRefusedAndWritesNothing(t *testing.T) {
 			if w.Code != http.StatusConflict {
 				t.Errorf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
 			}
+			// The handler refuses a non-draft target first; the store must refuse the edge too.
+			if _, err := store.Transition(r.ctx, id, StatusQueued); !errors.Is(err, ErrIllegalTransition) {
+				t.Errorf("Store.Transition(discarded -> queued) err = %v, want ErrIllegalTransition", err)
+			}
 		}},
 		{"BatchSubmit", func(t *testing.T) {
 			out, err := r.sub.BatchSubmit(r.ctx, BatchSubmitInput{InvoiceIDs: []string{id}, IdempotencyKey: "secaud-50-02-batch"})

@@ -347,6 +347,14 @@ func TestUndo_OnlyTheUploaderAnAdminOrAFullAccessMemberUndoes(t *testing.T) {
 	}
 }
 
+func TestUndo_AMemberWhoUploadedAnotherDocumentIsRefused(t *testing.T) {
+	w := newUDWorld(t, "UD other upload", "firm")
+	body := csvBody(t, []string{"Inv No"}, [][]string{{"OTHER-" + uuid.NewString()[:8]}})
+	storeDocumentBy(t, w.docSvc, w.tenant, w.limitedID.Subject, "other.csv", "text/csv", body)
+	batch, doc := w.batch(t, "completed", udInv{number: "OTHER-1"})
+	w.wantUndo(t, w.limitedID, batch, doc, 403, udForbidden)
+}
+
 func TestUndo_DiscardsAKeptAsIsDraft(t *testing.T) {
 	w := newUDWorld(t, "UD kept", "firm")
 	batch, doc := w.batch(t, "completed", udInv{number: "KEPT-1", kept: true})
@@ -389,6 +397,13 @@ func TestUndo_AnySentInvoiceRefusesTheUndoAndChangesNothing(t *testing.T) {
 		{"rejected", udInv{number: "S-R", status: "rejected", history: []string{"validated", "queued", "submitted", "rejected"}}},
 		{"failed", udInv{number: "S-F", status: "failed", history: []string{"validated", "queued", "failed"}}},
 		{"draft after queued, rejected", udInv{number: "S-D", status: "draft", history: []string{"validated", "queued", "rejected", "draft"}}},
+	}
+	// The status alone blocks, whatever the history holds.
+	for _, st := range []string{"queued", "submitted", "accepted", "rejected", "failed"} {
+		rows = append(rows, struct {
+			name string
+			sent udInv
+		}{st + " status only", udInv{number: "S-O-" + st, status: st}})
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -774,6 +789,21 @@ func TestUndo_AnUndoThatCommitsFirstRefusesTheApprovalDecision(t *testing.T) {
 func TestUndo_ConcurrentUndosDiscardOnce(t *testing.T) {
 	w := newUDWorld(t, "UD concurrent", "firm")
 	batch, _ := w.batch(t, "completed", udInv{number: "CC-1"}, udInv{number: "CC-2", status: "validated", history: []string{"validated"}, run: true})
+	empty, _ := w.batch(t, "completed")
+	for _, id := range []string{batch, empty} {
+		w.raceTwoUndos(t, id)
+	}
+	if n := udCount(t, w, `SELECT count(*) FROM invoice_status_history h JOIN invoices i ON i.id = h.invoice_id WHERE i.import_batch_id = $1 AND h.to_status = 'discarded'`, batch); n != 2 {
+		t.Errorf("-> discarded history rows = %d, want 2 (one per invoice)", n)
+	}
+	if n := w.undoneAudits(t); n != 2 {
+		t.Errorf("import.undone rows after two raced batches = %d, want 2 (one each)", n)
+	}
+}
+
+// raceTwoUndos fires two undos of one batch at once: one answers 200, the other 409.
+func (w *udWorld) raceTwoUndos(t *testing.T, batch string) {
+	t.Helper()
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
@@ -789,12 +819,6 @@ func TestUndo_ConcurrentUndosDiscardOnce(t *testing.T) {
 	wg.Wait()
 	slices.Sort(codes)
 	if !slices.Equal(codes, []int{200, 409}) {
-		t.Errorf("answers = %v, want one 200 and one 409", codes)
-	}
-	if n := udCount(t, w, `SELECT count(*) FROM invoice_status_history h JOIN invoices i ON i.id = h.invoice_id WHERE i.import_batch_id = $1 AND h.to_status = 'discarded'`, batch); n != 2 {
-		t.Errorf("-> discarded history rows = %d, want 2 (one per invoice)", n)
-	}
-	if n := w.undoneAudits(t); n != 1 {
-		t.Errorf("import.undone rows = %d, want 1", n)
+		t.Errorf("answers for batch %s = %v, want one 200 and one 409", batch, codes)
 	}
 }

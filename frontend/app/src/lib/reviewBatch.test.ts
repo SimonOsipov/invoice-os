@@ -2675,7 +2675,7 @@ describe('reviewShellStateAll reads undone (SECAUD-50-04)', () => {
   })
 
   it('filesStrip marks an undone batch', () => {
-    const rows = filesStrip([{ ...mkBatch('b1', 'a.csv'), status: 'undone' }, mkBatch('b2', 'b.csv')], null, 'spreadsheet')
+    const rows = filesStrip([{ ...mkBatch('b1', 'a.csv', { rows_valid: 0 }), status: 'undone' }, mkBatch('b2', 'b.csv')], null, 'spreadsheet')
     expect(rows[0]).toMatchObject({ undone: true, reason: null })
     expect(rows[1].undone).toBe(false)
   })

@@ -234,7 +234,7 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 	return found, nil
 }
 
-// DocumentHasInvoice reports whether any invoice of the tenant cites documentID, whatever
+// DocumentHasInvoice reports whether any non-discarded invoice of the tenant cites documentID, whatever
 // client it is filed under.
 func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool, error) {
 	var has bool

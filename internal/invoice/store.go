@@ -1734,7 +1734,7 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 // caller's transaction. Same gate, demotion and audit as Edit -- one owner, not a second
 // copy of the fix-loop rules.
 //
-// Two invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
+// Two non-discarded invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
 // picking a row: the corrected value landing on the wrong invoice is the silent-wrong
 // outcome this entry exists to prevent.
 func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentID string, in EditInput) (Invoice, error) {

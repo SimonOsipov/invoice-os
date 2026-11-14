@@ -131,8 +131,9 @@ describe('content', () => {
   it('content_undoImportWordsCoverOnlyWhatShips', () => {
     const f = byId('undo-import')
     const words = [f.title, f.short, f.desc, ...f.benefits].join(' ')
-    expect(words).toMatch(/discarded/)
-    expect(words).toMatch(/submitted/)
+    expect(f.desc).toMatch(/discarded/)
+    expect(f.desc).toMatch(/submitted/)
+    expect(f.benefits.join(' ')).toMatch(/submitted/)
     expect(words).not.toMatch(/credit note|move/i)
   })
 

@@ -53,6 +53,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"log/slog"
@@ -2855,6 +2856,10 @@ func TestTransitionHandler_DiscardedTargetIsAnIllegalTransition(t *testing.T) {
 
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	// The handler refuses a non-draft target first; the store must refuse the edge too.
+	if _, err := store.Transition(tenantCtx(tenantID), invID, StatusDiscarded); !errors.Is(err, ErrIllegalTransition) {
+		t.Errorf("Store.Transition(draft -> discarded) err = %v, want ErrIllegalTransition", err)
 	}
 	if got := statusOf(t, super, invID); got != StatusDraft {
 		t.Errorf("stored status = %q, want draft", got)

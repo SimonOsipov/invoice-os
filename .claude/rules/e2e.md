@@ -68,3 +68,5 @@ paths:
 - Expect every preview SPA image to carry all eight `VITE_*_URL` build args from `preview.sh urls` (`dev-env.yml` `Build and push`), and each backend's URLs from `preview.sh`'s env file. Change them there, not in a spec.
 - Expect a preview to accept registrations, send no mail and confirm at once. The `auth` case of `preview.sh`'s env file sets `GOTRUE_DISABLE_SIGNUP` false and `GOTRUE_MAILER_AUTOCONFIRM` true.
 - Expect a PR topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.
+- Cover the SPA script policy, its violations and the HttpOnly-only refresh token in `e2e/smoke/content-security-policy.spec.ts`.
+- Set `bypassCSP` only in `error-monitoring.spec.ts`.

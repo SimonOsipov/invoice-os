@@ -10,6 +10,9 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 // Assertions read the request sink only; the safety-net route just keeps a live SDK's
 // traffic from leaving the browser.
 
+// The control needle and the induced crash need no policy; the policy itself is covered by content-security-policy.spec.ts.
+test.use({ bypassCSP: true })
+
 const OBSERVE_MS = 5000
 const CONTROL_URL = 'https://o1.ingest.de.sentry.io/api/1/envelope/'
 

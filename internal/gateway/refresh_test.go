@@ -425,6 +425,14 @@ func TestRefresh_BodyModeIgnoresTheCookie(t *testing.T) {
 		t.Errorf("GoTrue saw %d calls from a cookie without the header, want 0", n)
 	}
 
+	// A parseable empty object gets past the body decode: still no header, so the cookie is not read.
+	rec = doSession(h, "/auth/refresh", `{}`, map[string]string{"Origin": scEvil}, cookie)
+	requireRefusal(t, rec, http.StatusBadRequest, msgRefreshRequired)
+	requireNoSetCookie(t, rec)
+	if n := fake.Hits() - before; n != 0 {
+		t.Errorf("GoTrue saw %d calls from a cookie and {} without the header, want 0", n)
+	}
+
 	// Positive pair: with the header, the same cookie is read.
 	if got := doCookieRefresh(h, scApp, ``, cookie); got.Code != http.StatusOK {
 		t.Errorf("cookie mode with the same cookie = %d, want 200: %s", got.Code, got.Body.String())

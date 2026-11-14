@@ -1273,3 +1273,18 @@ func TestVerifyPage_TheLookupAndThePostShareOneCount(t *testing.T) {
 		t.Errorf("3rd open = %d Location %q, want 303 %s: the GET and the POST count apart", rec.Code, rec.Header().Get("Location"), vpFailedLoc)
 	}
 }
+
+func TestVerifyPage_APreviewFoundLookupOverTheLimitRefundsNothing(t *testing.T) {
+	th := vpLimit(1)
+	miss := vpHandlerWith(t, vpMissing().fn(), th, false, nopLog())
+	found := vpHandlerWith(t, vpFound("a***@corp.example").fn(), th, false, nopLog())
+
+	vpDo(t, miss, http.MethodGet, vpQuery(vpToken))
+	if rec := vpDo(t, found, http.MethodGet, vpQuery(vpToken)); rec.Code != http.StatusOK {
+		t.Fatalf("over-limit found open = %d, want 200 (a preview admits)", rec.Code)
+	}
+
+	if !vpSpent(t, th) {
+		t.Error("the found open took no count yet gave one back: the stored count fell below the real misses")
+	}
+}

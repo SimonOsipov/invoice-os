@@ -13,14 +13,14 @@ const (
 	LinkRedeemMaxKeys  = 10_000
 )
 
-// admitLinkRedeem counts one redeem under gotrueAddress(r); false: redirect to failed, no GoTrue call.
-func admitLinkRedeem(r *http.Request, perIP *SignInThrottle, enforce bool, label string, log *slog.Logger) bool {
+// admitLinkRedeem counts one redeem under gotrueAddress(r); ok=false: redirect to failed, no GoTrue call; counted reports whether a count was taken.
+func admitLinkRedeem(r *http.Request, perIP *SignInThrottle, enforce bool, label string, log *slog.Logger) (ok, counted bool) {
 	held, err := perIP.Admit(gotrueAddress(r))
 	if held {
-		return true
+		return true, true
 	}
 	if err == nil { // a db error is logged by the throttle
 		log.WarnContext(r.Context(), label+": limit reached", slog.String("limit", "ip"), slog.Bool("enforced", enforce))
 	}
-	return !enforce
+	return !enforce, false
 }

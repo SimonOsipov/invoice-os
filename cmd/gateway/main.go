@@ -157,7 +157,7 @@ func main() {
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	store := handoffStore(gwPool, app.Logger)
 	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, gwPool)
-	verifyPage, err := gateway.VerifyPageHandler(siteURL, gateway.PoolLinkAddress(gwPool), h.LinkRedeemByIP, platform.Posture(platform.DeployEnv()) != platform.PosturePreview, app.Logger)
+	verifyPage, err := gateway.VerifyPageHandler(siteURL, h.LinkAddress, h.LinkRedeemByIP, h.LinkEnforce, app.Logger)
 	if err != nil {
 		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
 	}
@@ -382,6 +382,8 @@ type handoff struct {
 	SignIn, Exchange, Refresh, SignOut, InvitationPassword, ConsoleHandoff http.Handler
 	SignInThrottle                                                         *gateway.SignInThrottle
 	LinkRedeemByIP                                                         *gateway.SignInThrottle
+	LinkAddress                                                            gateway.LinkAddress
+	LinkEnforce                                                            bool
 	AccountEvents                                                          gateway.AccountEvents
 }
 
@@ -407,17 +409,20 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 	perIP := gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)
 	perIP.Shared(pool, log)
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
+	address := gateway.PoolLinkAddress(pool)
 	return handoff{
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink, events),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
 
-		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, perIP, enforce, gateway.PoolLinkAddress(pool)),
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, perIP, enforce, address),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,
 		LinkRedeemByIP: perIP,
+		LinkAddress:    address,
+		LinkEnforce:    enforce,
 		AccountEvents:  events,
 	}
 }

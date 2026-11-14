@@ -84,6 +84,7 @@ const revokeStrayLinkAddressGrantsSQL = `DO $$ DECLARE r oid; BEGIN
 END $$`
 
 // Mirrors GoTrue's FindOneTimeToken: expiry is not checked, so an expired unredeemed link still names its account.
+// ceiling: invoice_gateway can read the masked address of the account a confirm-token hash belongs to; revisit if another role is granted the function.
 const confirmLinkAddressSQL = `CREATE OR REPLACE FUNCTION auth.confirm_link_address(p_token_hash text) RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
 DECLARE v_email text;

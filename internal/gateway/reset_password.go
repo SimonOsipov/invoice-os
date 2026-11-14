@@ -47,11 +47,10 @@ func renderPasswordPage(page, token, state, alert string) string {
 
 // renderNamedPasswordPage names address in the intro; an empty address keeps the unnamed intro.
 func renderNamedPasswordPage(page, token, state, alert, address string) string {
-	intro := ""
+	var intro string
 	if address != "" {
 		intro = `Choose a password for the ASComply account of <span class="address">` + html.EscapeString(address) + `</span>. This also confirms the address. Continue only if this is your address.`
-	}
-	if intro == "" {
+	} else {
 		intro = "Choose a password for your ASComply account. This also confirms your email address."
 	}
 	if alert != "" {
@@ -173,7 +172,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			return
 		}
 
-		if !admitLinkRedeem(r, perIP, enforce, label, log) {
+		if ok, _ := admitLinkRedeem(r, perIP, enforce, label, log); !ok {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}

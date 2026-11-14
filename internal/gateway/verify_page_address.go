@@ -38,15 +38,16 @@ func queryLinkAddress(ctx context.Context, pool *pgxpool.Pool, token string) (st
 }
 
 // lookupLinkAddress spends a link-redeem count, then reads the address; ok=false means answer the failed notice.
-// A found link gets its count back. The log line carries the error class only, never the token or the address.
+// A found link gets its count back, when one was taken. The log line carries the error class only, never the token or the address.
 //
-// ceiling: [get-throttle] no Armor rule covers GET /auth/verify, so this count is its only limit.
-// ceiling: [nil-lookup] a nil address (no pool) renders the unnamed page and spends no count.
+// ceiling: [get-throttle] no Armor rule covers GET /auth/verify, so this count is its only limit; revisit when Armor gains a rule for it.
+// ceiling: [nil-lookup] a nil address (no pool) renders the unnamed page and spends no count; revisit if the page ships without a pool outside tests.
 func lookupLinkAddress(r *http.Request, address LinkAddress, perIP *SignInThrottle, enforce bool, label string, log *slog.Logger, token string) (masked string, ok bool) {
 	if address == nil {
 		return "", true
 	}
-	if !admitLinkRedeem(r, perIP, enforce, label, log) {
+	ok, counted := admitLinkRedeem(r, perIP, enforce, label, log)
+	if !ok {
 		return "", false
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), linkAddressTimeout)
@@ -61,7 +62,7 @@ func lookupLinkAddress(r *http.Request, address LinkAddress, perIP *SignInThrott
 		log.WarnContext(r.Context(), label+": link address lookup failed", slog.String("class", class), slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)))
 		return "", false
 	}
-	if found {
+	if found && counted {
 		perIP.Refund(gotrueAddress(r))
 	}
 	return masked, true

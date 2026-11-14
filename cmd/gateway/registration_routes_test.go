@@ -1091,34 +1091,50 @@ func TestGatewayRoutes_TheVerifyPageAndSetPasswordGetThePoolLookup(t *testing.T)
 	for _, a := range verifyArgs {
 		got = append(got, types.ExprString(a))
 	}
-	// handoffHandlers computes enforce the same way for the set-password POST that shares this count.
-	const enforce = "platform.Posture(platform.DeployEnv()) != platform.PosturePreview"
-	if len(got) != 5 || got[0] != "siteURL" || got[1] != "gateway.PoolLinkAddress(gwPool)" || got[2] != hand+".LinkRedeemByIP" || got[3] != enforce || got[4] != "app.Logger" {
-		t.Errorf("VerifyPageHandler args = %v, want siteURL, gateway.PoolLinkAddress(gwPool), %s.LinkRedeemByIP, %s, app.Logger", got, hand, enforce)
+	// The verify page takes the lookup and the enforce flag handoffHandlers built for the set-password POST that shares this count.
+	if len(got) != 5 || got[0] != "siteURL" || got[1] != hand+".LinkAddress" || got[2] != hand+".LinkRedeemByIP" || got[3] != hand+".LinkEnforce" || got[4] != "app.Logger" {
+		t.Errorf("VerifyPageHandler args = %v, want siteURL, %[2]s.LinkAddress, %[2]s.LinkRedeemByIP, %[2]s.LinkEnforce, app.Logger", got, hand)
 	}
 
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	const enforce = "platform.Posture(platform.DeployEnv()) != platform.PosturePreview"
 	var args []ast.Expr
+	vars, fields := map[string]string{}, map[string]string{}
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != "handoffHandlers" {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok && types.ExprString(c.Fun) == "gateway.InvitationPasswordHandler" {
-				args = c.Args
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				if types.ExprString(n.Fun) == "gateway.InvitationPasswordHandler" {
+					args = n.Args
+				}
+			case *ast.AssignStmt:
+				if len(n.Lhs) == 1 && len(n.Rhs) == 1 {
+					vars[types.ExprString(n.Lhs[0])] = types.ExprString(n.Rhs[0])
+				}
+			case *ast.KeyValueExpr:
+				fields[types.ExprString(n.Key)] = types.ExprString(n.Value)
 			}
 			return true
 		})
 	}
+	if vars["enforce"] != enforce || vars["address"] != "gateway.PoolLinkAddress(pool)" {
+		t.Errorf("handoffHandlers enforce = %q, address = %q, want the preview posture test and gateway.PoolLinkAddress(pool)", vars["enforce"], vars["address"])
+	}
+	if fields["LinkAddress"] != "address" || fields["LinkEnforce"] != "enforce" {
+		t.Errorf("handoff.LinkAddress = %q, LinkEnforce = %q, want address and enforce", fields["LinkAddress"], fields["LinkEnforce"])
+	}
 	if len(args) != 10 {
 		t.Fatalf("handoffHandlers calls InvitationPasswordHandler with %d arguments, want 10 (no store, no events, the lookup last)", len(args))
 	}
-	if last := types.ExprString(args[9]); last != "gateway.PoolLinkAddress(pool)" {
-		t.Errorf("InvitationPasswordHandler lookup = %s, want gateway.PoolLinkAddress(pool)", last)
+	if last, flag := types.ExprString(args[9]), types.ExprString(args[8]); last != "address" || flag != "enforce" {
+		t.Errorf("InvitationPasswordHandler enforce, lookup = %s, %s, want enforce, address", flag, last)
 	}
 	for _, a := range args {
 		if s := types.ExprString(a); s == "store" || s == "events" {

@@ -723,10 +723,47 @@ func TestCanEdit_AllStatuses(t *testing.T) {
 		StatusAccepted:  false,
 		StatusRejected:  true,
 		StatusFailed:    false,
+
+		discardedStatus: false,
 	}
 	for _, s := range allStatuses {
 		if got := canEdit(s); got != want[s] {
 			t.Errorf("canEdit(%s) = %v, want %v", s, got, want[s])
+		}
+	}
+}
+
+// TestStatus_DiscardedIsCanonicalAndHasNoEdge: discarded is a canonical status that no
+// edge enters or leaves ([discard-edge]); only the undo writes it, with its own UPDATE.
+func TestStatus_DiscardedIsCanonicalAndHasNoEdge(t *testing.T) {
+	if !discardedStatus.valid() {
+		t.Error("discarded.valid() = false, want true")
+	}
+	if Status("bogus").valid() {
+		t.Error("bogus.valid() = true, want false (control: valid() is not a catch-all)")
+	}
+	if len(allStatuses) != 8 {
+		t.Fatalf("allStatuses covers %d statuses, want 8", len(allStatuses))
+	}
+	for _, s := range allStatuses {
+		if canTransition(s, discardedStatus) {
+			t.Errorf("canTransition(%s, discarded) = true, want false", s)
+		}
+		if canTransition(discardedStatus, s) {
+			t.Errorf("canTransition(discarded, %s) = true, want false", s)
+		}
+	}
+	if canEdit(discardedStatus) {
+		t.Error("canEdit(discarded) = true, want false")
+	}
+	if _, ok := legalTransitions[discardedStatus]; ok {
+		t.Error("legalTransitions has a discarded key, want none")
+	}
+	for from, targets := range legalTransitions {
+		for _, target := range targets {
+			if target == discardedStatus {
+				t.Errorf("legalTransitions[%s] holds discarded, want no edge in", from)
+			}
 		}
 	}
 }
@@ -995,6 +1032,8 @@ func TestCanSubmit_AllStatuses(t *testing.T) {
 		StatusAccepted:  false,
 		StatusRejected:  false,
 		StatusFailed:    false,
+
+		discardedStatus: false,
 	}
 	for _, s := range allStatuses {
 		if got := canSubmit(s); got != want[s] {

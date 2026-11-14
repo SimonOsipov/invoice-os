@@ -272,12 +272,12 @@ func TestTransition_NonCanonicalIdForms(t *testing.T) {
 
 // --- all seven statuses, one oracle -----------------------------------------
 
-// TestTransition_AllSevenStatusesIntoQueued is the gated mirror of
-// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's queued column: every one of the 7
+// TestTransition_EveryStatusIntoQueued is the gated mirror of
+// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's queued column: every one of the 8
 // starting statuses, under an ACTIVE policy and an open run, with the exact sentinel each
 // must answer. validated is the ONE cell the gate moves; a guard that widened by even one
 // status flips a cell here.
-func TestTransition_AllSevenStatusesIntoQueued(t *testing.T) {
+func TestTransition_EveryStatusIntoQueued(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := NewStore(app)
 
@@ -289,6 +289,8 @@ func TestTransition_AllSevenStatusesIntoQueued(t *testing.T) {
 		StatusAccepted:  ErrIllegalTransition,
 		StatusRejected:  ErrIllegalTransition,
 		StatusFailed:    ErrIllegalTransition,
+
+		discardedStatus: ErrIllegalTransition,
 	}
 	if len(want) != len(allStatuses) {
 		t.Fatalf("the oracle covers %d statuses but the package has %d — a new status needs a cell here", len(want), len(allStatuses))

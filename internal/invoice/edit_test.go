@@ -1089,6 +1089,47 @@ func TestStoreEdit_NonFixableStatesRejectedTable(t *testing.T) {
 	}
 }
 
+// TestEdit_ADiscardedInvoiceIsNotEditable: a discarded invoice refuses Edit (ErrNotFixable) and
+// ApplyValidation (ErrNotDraft); the row, its history and its audit trail stay as they were.
+func TestEdit_ADiscardedInvoiceIsNotEditable(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenantID := seedTenant(t, super, "SECAUD-50-02 edit tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 edit entity")
+	invID := seedDiscarded(t, super, tenantID, entityID, "SECAUD-EDIT", "", `[]`)
+	c := tenantCtx(tenantID)
+
+	var before Invoice
+	if err := scanInvoice(super.QueryRow(context.Background(), `SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, invID), &before); err != nil {
+		t.Fatalf("snapshot before: %v", err)
+	}
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+	beforeAudit := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, tenantID)
+
+	newVAT := "9.99"
+	if _, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}}); !errors.Is(err, ErrNotFixable) {
+		t.Errorf("Edit(discarded) err = %v, want ErrNotFixable", err)
+	}
+	versionID := seedRuleSetVersionID(t, super)
+	if _, err := store.ApplyValidation(c, invID, []Violation{}, versionID, contentFingerprint(before, nil)); !errors.Is(err, ErrNotDraft) {
+		t.Errorf("ApplyValidation(discarded) err = %v, want ErrNotDraft", err)
+	}
+
+	var after Invoice
+	if err := scanInvoice(super.QueryRow(context.Background(), `SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, invID), &after); err != nil {
+		t.Fatalf("snapshot after: %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("invoices row changed: before %+v, after %+v", before, after)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+		t.Errorf("history rows = %d, want unchanged %d", n, beforeHistory)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, tenantID); n != beforeAudit {
+		t.Errorf("audit rows = %d, want unchanged %d", n, beforeAudit)
+	}
+}
+
 // EDIT-16 (M5-09-02/task-255: RENAMED from TestStoreEdit_ClearingIsAtomicWithTheDemotion
 // -- its original premise, that a rejection_reasons CLEAR rolls back
 // atomically with the demotion, no longer applies: M5-09-02 removes that

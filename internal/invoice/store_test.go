@@ -35,8 +35,10 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -227,6 +229,27 @@ func seedInvoiceWithViolations(t *testing.T, super *pgxpool.Pool, tenantID, enti
 		status, violationsJSON, id,
 	); err != nil {
 		t.Fatalf("force-seed invoice status/violations: %v", err)
+	}
+	return id
+}
+
+// seedDiscarded seeds an invoice as the undo leaves it: status discarded and one history row.
+// batchID "" leaves import_batch_id NULL.
+func seedDiscarded(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, batchID, violationsJSON string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenantID, entityID, number)
+	ctx := context.Background()
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET status = 'discarded', violations = $2::jsonb, import_batch_id = NULLIF($3, '')::uuid WHERE id = $1`,
+		id, violationsJSON, batchID,
+	); err != nil {
+		t.Fatalf("force-seed discarded invoice: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
+		 VALUES ($1, $2, 'draft', 'discarded', 'import-undo')`, tenantID, id,
+	); err != nil {
+		t.Fatalf("seed discarded history row: %v", err)
 	}
 	return id
 }
@@ -1340,5 +1363,116 @@ func TestStoreGet_EverSubmittedReadsTheHistory(t *testing.T) {
 	}
 	if !got2.EverSubmitted {
 		t.Errorf("EverSubmitted = false for a draft whose history shows queued, want true")
+	}
+}
+
+// discardedViolation is a blocking violation, so a reader that ignores status counts it.
+const discardedViolation = `[{"rule_key":"disc-r1","severity":"error","message":"bad"}]`
+
+func TestStoreList_LeavesDiscardedOut(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "SECAUD-50-02 list tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 list entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	live := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "SECAUD-LIST-LIVE", batchID, string(StatusDraft), `[]`)
+	seedDiscarded(t, super, tenantID, entityID, "SECAUD-LIST-GONE", batchID, `[]`)
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	cases := []struct {
+		name      string
+		filter    ListFilter
+		wantTotal int
+		wantIDs   []string
+	}{
+		{"by batch", ListFilter{ImportBatchIDs: []string{batchID}}, 1, []string{live}},
+		{"by status discarded", ListFilter{Status: discardedStatus}, 0, nil},
+		{"by entity", ListFilter{EntityID: entityID}, 1, []string{live}},
+		{"by a query matching both", ListFilter{Query: "SECAUD-LIST"}, 1, []string{live}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.filter.Limit = 50
+			items, total, err := store.List(c, tc.filter)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if total != tc.wantTotal {
+				t.Errorf("total = %d, want %d", total, tc.wantTotal)
+			}
+			var got []string
+			for _, inv := range items {
+				got = append(got, inv.ID)
+			}
+			if !reflect.DeepEqual(got, tc.wantIDs) {
+				t.Errorf("ids = %v, want %v", got, tc.wantIDs)
+			}
+		})
+	}
+
+	t.Run("GET /v1/invoices pagination.total", func(t *testing.T) {
+		w := csServe(ListHandler(store.List, store.RowFacts, nil), c, "GET", "/v1/invoices?import_batch_id="+batchID, "", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+		var resp listResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %q: %v", w.Body.String(), err)
+		}
+		if resp.Pagination.Total != 1 || len(resp.Invoices) != 1 || resp.Invoices[0].ID != live {
+			t.Errorf("total = %d, invoices = %d, want 1 and the live one", resp.Pagination.Total, len(resp.Invoices))
+		}
+	})
+}
+
+func TestStoreViolationSummary_LeavesDiscardedOut(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "SECAUD-50-02 summary tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 summary entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "SECAUD-SUM-LIVE", batchID, string(StatusDraft),
+		`[{"rule_key":"live-r1","severity":"error","message":"bad"}]`)
+	seedDiscarded(t, super, tenantID, entityID, "SECAUD-SUM-GONE-1", batchID, discardedViolation)
+	seedDiscarded(t, super, tenantID, entityID, "SECAUD-SUM-GONE-2", batchID, discardedViolation)
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.ViolationSummary(c, []string{batchID})
+	if err != nil {
+		t.Fatalf("ViolationSummary: %v", err)
+	}
+	if want := []RuleCount{{RuleKey: "live-r1", Invoices: 1}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ViolationSummary = %+v, want %+v (the discarded invoices' rule must not count)", got, want)
+	}
+}
+
+func TestStoreGet_ADiscardedInvoiceKeepsItsRowAndHistory(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "SECAUD-50-02 get tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 get entity")
+	id := seedDiscarded(t, super, tenantID, entityID, "SECAUD-GET-GONE", "", `[]`)
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Get(c, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != discardedStatus {
+		t.Errorf("Get status = %q, want discarded", got.Status)
+	}
+	hist, err := store.History(c, id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(hist) == 0 {
+		t.Fatal("History is empty, want the draft -> discarded row")
+	}
+	last := hist[len(hist)-1]
+	if last.FromStatus == nil || *last.FromStatus != StatusDraft || last.ToStatus != discardedStatus {
+		t.Errorf("last history row = %v -> %s, want draft -> discarded", last.FromStatus, last.ToStatus)
 	}
 }

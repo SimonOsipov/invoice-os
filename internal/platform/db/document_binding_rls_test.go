@@ -331,14 +331,23 @@ func TestRLS_CitationWithoutADocumentBindsNothing(t *testing.T) {
 // then ends tx1. blocked is false when tx2 never waited.
 func bdRace(t *testing.T, f *bdFix, doc, e1, e2 string, commit1 bool, who2 bdWho) (err1, err2 error, blocked bool) {
 	t.Helper()
+	return bdRaceFns(t, f, commit1, bdWho{},
+		func(tx pgx.Tx) error { return bdInsertInvoice(tx, f.tenant, e1, doc) },
+		who2,
+		func(tx pgx.Tx) error { return bdInsertInvoice(tx, f.tenant, e2, doc) })
+}
+
+// bdRaceFns is bdRace with the two statements given: fn1 runs in tx1 as who1 and stays open, fn2 runs in tx2 as who2.
+func bdRaceFns(t *testing.T, f *bdFix, commit1 bool, who1 bdWho, fn1 func(pgx.Tx) error, who2 bdWho, fn2 func(pgx.Tx) error) (err1, err2 error, blocked bool) {
+	t.Helper()
 	ctx := context.Background()
 	inserted, release := make(chan struct{}), make(chan bool, 1)
 	pid2 := make(chan int, 1)
 	done1, done2 := make(chan error, 1), make(chan error, 1)
 
 	go func() {
-		done1 <- bdApp(f.tenant, bdWho{}, func(tx pgx.Tx) error {
-			err := bdInsertInvoice(tx, f.tenant, e1, doc)
+		done1 <- bdApp(f.tenant, who1, func(tx pgx.Tx) error {
+			err := fn1(tx)
 			close(inserted)
 			if err != nil {
 				return err
@@ -361,7 +370,7 @@ func bdRace(t *testing.T, f *bdFix, doc, e1, e2 string, commit1 bool, who2 bdWho
 				return err
 			}
 			pid2 <- pid
-			return bdInsertInvoice(tx, f.tenant, e2, doc)
+			return fn2(tx)
 		})
 	}()
 	var pid int
@@ -565,6 +574,9 @@ func TestRLS_AppCannotRebindADocument(t *testing.T) {
 	f := bdSeed(t)
 	doc := bdDoc(t, f, "", uuid.NewString())
 	bdBind(t, f, f.a, doc)
+	// Inserted as failed it still binds A, but it is dead: a release is allowed, a rebind to B is not.
+	deadDoc := bdDoc(t, f, "", "")
+	irNewBatch(t, f, bdWho{}, f.a, deadDoc, "failed")
 	update := func(sql string, args ...any) error {
 		return bdApp(f.tenant, bdWho{}, func(tx pgx.Tx) error {
 			_, err := tx.Exec(context.Background(), sql, args...)
@@ -576,11 +588,12 @@ func TestRLS_AppCannotRebindADocument(t *testing.T) {
 		sql, code string
 		args      []any
 	}{
-		"entity_id to B":     {`UPDATE documents SET entity_id = $2 WHERE id = $1`, "23001", []any{doc, f.b}},
-		"entity_id to NULL":  {`UPDATE documents SET entity_id = NULL WHERE id = $1`, "23001", []any{doc}},
-		"filename":           {`UPDATE documents SET filename = 'x' WHERE id = $1`, "42501", []any{doc}},
-		"an uploader row":    {`UPDATE document_uploaders SET user_id = $2 WHERE document_id = $1`, "42501", []any{doc, uuid.NewString()}},
-		"an uploader delete": {`DELETE FROM document_uploaders WHERE document_id = $1`, "42501", []any{doc}},
+		"entity_id to B with a live citation":    {`UPDATE documents SET entity_id = $2 WHERE id = $1`, "23001", []any{doc, f.b}},
+		"entity_id to NULL with a live citation": {`UPDATE documents SET entity_id = NULL WHERE id = $1`, "23001", []any{doc}},
+		"entity_id to B with only a dead one":    {`UPDATE documents SET entity_id = $2 WHERE id = $1`, "23001", []any{deadDoc, f.b}},
+		"filename":                               {`UPDATE documents SET filename = 'x' WHERE id = $1`, "42501", []any{doc}},
+		"an uploader row":                        {`UPDATE document_uploaders SET user_id = $2 WHERE document_id = $1`, "42501", []any{doc, uuid.NewString()}},
+		"an uploader delete":                     {`DELETE FROM document_uploaders WHERE document_id = $1`, "42501", []any{doc}},
 	} {
 		err := update(c.sql, c.args...)
 		var pgErr *pgconn.PgError
@@ -589,6 +602,7 @@ func TestRLS_AppCannotRebindADocument(t *testing.T) {
 		}
 	}
 	bdWantEntity(t, "after the refused updates", doc, &f.a)
+	bdWantEntity(t, "after the refused rebind of the dead-cited document", deadDoc, &f.a)
 	if n := mustCount(t, h.super, `SELECT count(*) FROM document_uploaders WHERE document_id = $1`, doc); n != 1 {
 		t.Errorf("document_uploaders rows after the refused UPDATE and DELETE = %d, want 1", n)
 	}
@@ -601,7 +615,7 @@ type bdMatrix struct {
 	docs map[string]string
 }
 
-var bdDocNames = []string{"uncited", "boundA", "boundB", "boundBByUploader", "legacyBoundBCitedByA", "legacyBoundBCitedByABatch"}
+var bdDocNames = []string{"uncited", "boundA", "boundB", "boundBByUploader", "legacyBoundBCitedByA", "legacyBoundBCitedByABatch", "legacyBoundBDeadCitedByA"}
 
 func bdSeedMatrix(t *testing.T) *bdMatrix {
 	t.Helper()
@@ -617,6 +631,15 @@ func bdSeedMatrix(t *testing.T) *bdMatrix {
 	m.docs["legacyBoundBCitedByABatch"] = bdDoc(t, f, f.b, "")
 	cpLegacyExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id) VALUES ($1, $2, $3, $4)`,
 		uuid.NewString(), f.tenant, f.a, m.docs["legacyBoundBCitedByABatch"])
+	// Only dead citations by A: a failed batch, an undone batch and a discarded invoice.
+	dead := bdDoc(t, f, f.b, "")
+	m.docs["legacyBoundBDeadCitedByA"] = dead
+	cpLegacyExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id, status) VALUES ($1, $2, $3, $4, 'failed')`,
+		uuid.NewString(), f.tenant, f.a, dead)
+	irLegacyDead(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id, status) VALUES ($1, $2, $3, $4, 'undone')`,
+		uuid.NewString(), f.tenant, f.a, dead)
+	irLegacyDead(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id, status) VALUES ($1, $2, $3, 'bd-dead-a', $4, 'discarded')`,
+		uuid.NewString(), f.tenant, f.a, dead)
 	for _, name := range bdDocNames {
 		cpExtractionRows(t, f.tenant, m.docs[name])
 	}
@@ -664,6 +687,7 @@ func bdWantReadable(name, scopeKind, caller, uploader string) bool {
 	case "full":
 		return true
 	case "A":
+		// legacyBoundBDeadCitedByA stays unreadable: failed, undone and discarded citations are dead.
 		switch name {
 		case "uncited", "boundA", "legacyBoundBCitedByA", "legacyBoundBCitedByABatch":
 			return true
@@ -719,6 +743,9 @@ func TestRLS_DocumentRuleAgreesAcrossGoAndPolicies(t *testing.T) {
 				if c.goRule != c.job || c.goRule != c.page {
 					t.Errorf("%s, scope %s, caller %s: Go rule %v, extraction job %v, page image %v, want one answer",
 						name, sc.label, ulabel, c.goRule, c.job, c.page)
+				}
+				if want := bdWantReadable(name, sc.kind, bdCallerOf(m, ulabel), m.user); name == "legacyBoundBDeadCitedByA" && c.goRule != want {
+					t.Errorf("%s, scope %s, caller %s: readable %v, want %v (dead citations hold no read)", name, sc.label, ulabel, c.goRule, want)
 				}
 				if c.goRule {
 					readable++
@@ -937,7 +964,7 @@ func bdPolicyText(t *testing.T) map[string]string {
 func TestRLS_DocumentBindingMigrationDownRestoresChildScope(t *testing.T) {
 	requireHarness(t)
 	v := migrationVersion(t, bindingMigrationGlob)
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), irRollbackOrder(t, v)...)
 
 	if e, c, u := bdDocumentShape(t); e || c || u {
 		t.Errorf("after the Down: documents.entity_id %v, documents.uploaded_by %v, document_uploaders %v, want all absent", e, c, u)
@@ -974,7 +1001,7 @@ func TestRLS_DocumentBindingMigrationBackfillsAndRoundTrips(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	v := migrationVersion(t, bindingMigrationGlob)
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), irRollbackOrder(t, v)...)
 
 	tenant, a, b := caThrowawayTenant(t), uuid.NewString(), uuid.NewString()
 	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $3, 'bf-a'), ($2, $3, 'bf-b')`, a, b, tenant)
@@ -1080,7 +1107,7 @@ func TestRLS_BackfillRecordsAReuserOnlyBeforeTheFirstCitation(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	v := migrationVersion(t, bindingMigrationGlob)
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), irRollbackOrder(t, v)...)
 
 	tenant, b := caThrowawayTenant(t), uuid.NewString()
 	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, 'br-b')`, b, tenant)
@@ -1136,7 +1163,7 @@ func TestRLS_DocumentBindingBackfillBreaksTiesBatchFirst(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	v := migrationVersion(t, bindingMigrationGlob)
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), v)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), irRollbackOrder(t, v)...)
 
 	tenant, a, b := caThrowawayTenant(t), uuid.NewString(), uuid.NewString()
 	bdExec(t, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $3, 'bt-a'), ($2, $3, 'bt-b')`, a, b, tenant)

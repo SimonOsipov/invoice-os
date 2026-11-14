@@ -61,7 +61,7 @@ export interface PendingInvite {
 }
 
 // A tenant-less sign-in with invites waiting, or none (invites empty): a removed person, or `firstWorkspace` for an account with no answers, no membership (`live_membership` false). The Join screen resolves it (joinInvite, createOwnWorkspace).
-export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
+export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; renewable?: boolean; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
 
 export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
   const list = (body as { invitations?: unknown } | null | undefined)?.invitations

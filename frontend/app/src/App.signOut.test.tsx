@@ -10,6 +10,7 @@ import { captureDestination, readDestination } from './lib/deepLink'
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './lib/authedFetch'
 import type { ImportAuth } from './lib/importApi'
 import { SESSION_KEY } from './lib/session'
+import { ensureSignInState } from './lib/signInState'
 import type { PlatformCtx } from './types'
 
 const LANDING = 'https://landing.example'
@@ -18,6 +19,9 @@ const SIGN_OUT = `${GATEWAY}/auth/sign-out`
 // Answers 401 as the edge does to a revoked session (internal/gateway/session_check.go).
 const REVOKED = `${GATEWAY}/api/revoked`
 const HANDOFF_EXIT = [LANDING, expect.stringMatching(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}$`))]
+const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
+const PENDING_KEY = 'invoice-os.sign-out-pending'
+const COOKIE_MODE = { credentials: 'include', session: 'cookie' }
 const D8_WARNING = '[session] sign-out could not reach the server; other sessions stay signed in'
 
 const MIN = 60_000
@@ -120,11 +124,16 @@ interface Call {
   method: string
   auth: string | null
   body: unknown
+  // Set only on cookie-mode calls (SECAUD-17-11).
+  credentials?: string
+  session?: string
 }
 
 let calls: Call[] = []
 let signOutReply: () => Promise<unknown> = REVOKED_OK
 let meReply: Reply = answer(200, ME)
+let exchangeReply: Reply = answer(500, { error: 'no exchange expected' })
+let mineReply: Reply = answer(200, { invitations: [] })
 // Non-null: every tenant call answers this instead of an empty page.
 let apiOverride: Reply | null = null
 // Non-null: the entities list answers this.
@@ -147,14 +156,18 @@ function deferSignOut(): { release: (r: () => Promise<unknown>) => Promise<void>
 function routeFetch() {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
+    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string; credentials?: string }) => {
       calls.push({
         url,
         method: init?.method ?? 'GET',
         auth: init?.headers?.get('Authorization') ?? null,
         body: init?.body === undefined ? undefined : JSON.parse(init.body),
+        credentials: init?.credentials,
+        session: init?.headers?.get('X-Auth-Session') ?? undefined,
       })
       if (url === SIGN_OUT) return signOutReply()
+      if (url === `${GATEWAY}/auth/exchange`) return exchangeReply()
+      if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
       if (url === `${GATEWAY}/auth/login`) return answer(200, { access_token: jwt(OTHER_ME, null, 'P') })()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url.startsWith(REVOKED)) return answer(401, { error: 'unauthorized' })()
@@ -213,6 +226,13 @@ async function clickSignOut(button = screen.getByRole('button', { name: 'Sign ou
   })
 }
 
+// A hand-off boot whose exchange answers `renewable`: the seat holds a renewal, the record holds no refresh token.
+async function mountHandoff(renewable = true, token = A_SID1) {
+  exchangeReply = answer(200, { access_token: token, renewable })
+  ensureSignInState()
+  return mount(null, `/?handoff=${CODE}`)
+}
+
 // A tenant call the edge refuses; resolves to what the caller saw.
 async function hitRevoked(): Promise<unknown> {
   let out: unknown
@@ -239,6 +259,8 @@ beforeEach(() => {
   calls = []
   signOutReply = REVOKED_OK
   meReply = answer(200, ME)
+  exchangeReply = answer(500, { error: 'no exchange expected' })
+  mineReply = answer(200, { invitations: [] })
   apiOverride = null
   entitiesReply = null
   routeFetch()
@@ -254,22 +276,24 @@ afterEach(() => {
 })
 
 describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
-  it('sign-out revokes, then leaves', async () => {
+  it('signOut_handoffPostsInCookieMode', async () => {
     const warn = vi.spyOn(console, 'warn')
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mountHandoff()
+    expect(JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')?.received_at, 'control: the seat holds a renewal').toEqual(expect.any(Number))
     captureDestination('/settings')
     expect(readDestination(), 'control: a destination is stored').not.toBeNull()
 
     await clickSignOut()
     await settle()
 
-    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: { refresh_token: 'R1' } }])
+    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: undefined, ...COOKIE_MODE }])
     const fetchOrder = vi.mocked(fetch).mock.invocationCallOrder[calls.indexOf(signOutPosts()[0]!)]!
     const removeItem = vi.mocked(localStorage.removeItem)
     const clearOrder = removeItem.mock.invocationCallOrder[removeItem.mock.calls.findIndex(([k]) => k === SESSION_KEY)]
     expect(clearOrder, 'the session record is cleared').toBeDefined()
     expect(fetchOrder, 'the revoke goes out before the record is cleared').toBeLessThan(clearOrder!)
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(localStorage.getItem(PENDING_KEY), 'an answered sign-out leaves no marker').toBeNull()
     expect(readDestination()).toBeNull()
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
     expect(d8Warnings(warn), 'a revoked sign-out warns nothing').toEqual([])
@@ -277,19 +301,19 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
 
   it('the suspended notice signs out the same way', async () => {
     apiOverride = answer(403, { error: NOT_ACTIVE_MEMBER_MESSAGE })
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mountHandoff()
     await waitFor(() => expect(screen.queryByTestId('suspended-notice'), 'a suspended answer shows the notice').not.toBeNull())
 
     await clickSignOut(screen.getByTestId('suspended-notice').querySelector('button')!)
     await settle()
 
-    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: { refresh_token: 'R1' } }])
+    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: undefined, ...COOKIE_MODE }])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
-  // Regression guard: green at head.
-  it('a persona sign-out sends nothing', async () => {
+  // Row L8. The persona seat has no cookie of its own.
+  it('signOut_personaSendsNothing', async () => {
     const stored = JSON.stringify({ v: 1, personaId: 'firm', token: A_SID1, me: ME, verified: true })
     const { hrefWrites } = await mount(stored)
 
@@ -298,59 +322,99 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
 
     expect(signOutPosts()).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(localStorage.getItem(PENDING_KEY)).toBeNull()
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
-  it('a newer stored refresh token is used', async () => {
-    await mount(handoffRecord(A_SID1, 'R1'))
-    // Another tab renewed the same session.
-    localStorage.setItem(SESSION_KEY, handoffRecord(jwt(ME, 'sid1', 'A1'), 'R2'))
-
-    await clickSignOut()
-    await settle()
-
-    expect(signOutPosts().map((c) => c.body)).toEqual([{ refresh_token: 'R2' }])
-  })
-
-  const notThisAccount: [string, (() => void)][] = [
-    ['another account signed in', () => localStorage.setItem(SESSION_KEY, handoffRecord(jwt(OTHER_ME, 'sid9', 'O0'), 'R9', OTHER_ME))],
+  // The cookie carries the session: whatever another tab did to the record changes nothing.
+  const otherTabs: [string, (() => void)][] = [
+    ['another tab renewed', () => localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: jwt(ME, 'sid1', 'A1'), me: ME, verified: true, handoff: true, received_at: Date.now() }))],
+    ['another account signed in', () => localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: jwt(OTHER_ME, 'sid9', 'O0'), me: OTHER_ME, verified: true, handoff: true, received_at: Date.now() }))],
     ['no stored record', () => localStorage.removeItem(SESSION_KEY)],
   ]
 
-  it.each(notThisAccount)("the seat's own token is sent: %s", async (_name, rewrite) => {
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+  it.each(otherTabs)('the sign-out reads no stored record: %s', async (_name, rewrite) => {
+    const { hrefWrites } = await mountHandoff()
     rewrite()
 
     await clickSignOut()
     await settle()
 
-    expect(signOutPosts().map((c) => c.body)).toEqual([{ refresh_token: 'R1' }])
+    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: undefined, ...COOKIE_MODE }])
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 })
 
 describe('a failed revoke still signs out (AC-6)', () => {
-  // 502 body copied from internal/gateway/signout.go SignOutHandler.
-  const failures: [string, () => Promise<unknown>][] = [
-    ['502', answer(502, { error: 'sign-out is unavailable' })],
-    ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
-    ['an aborted request', () => Promise.reject(new DOMException('The operation was aborted.', 'AbortError'))],
+  // 502 body copied from internal/gateway/signout.go SignOutHandler; 403 from the origin check.
+  const failures: [string, () => Promise<unknown>, boolean][] = [
+    ['502', answer(502, { error: 'sign-out is unavailable' }), false],
+    ['401', answer(401, { error: 'invalid or expired refresh token' }), false],
+    ['a network error', () => Promise.reject(new TypeError('Failed to fetch')), true],
+    ['a timeout', () => Promise.reject(new DOMException('signal timed out', 'TimeoutError')), true],
+    ['403', answer(403, { error: 'origin not allowed' }), true],
   ]
 
-  it.each(failures)('a failed revoke still signs out: %s', async (_name, reply) => {
+  it.each(failures)('signOut_unreachedLeavesThePendingMarker: %s', async (_name, reply, marker) => {
     signOutReply = reply
     const timeout = vi.spyOn(AbortSignal, 'timeout')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mountHandoff()
 
     await clickSignOut()
     await settle()
 
-    expect(signOutPosts(), 'the revoke was attempted').toHaveLength(1)
+    expect(signOutPosts(), 'the revoke was attempted').toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: undefined, ...COOKIE_MODE }])
     expect(timeout).toHaveBeenCalledWith(5000)
     expect(d8Warnings(warn)).toEqual([[D8_WARNING]])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    // No answer (or a 403 with no Set-Cookie): the cookie may live, so the next load sends it again.
+    if (marker) expect(localStorage.getItem(PENDING_KEY)).not.toBeNull()
+    else expect(localStorage.getItem(PENDING_KEY)).toBeNull()
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
+  })
+})
+
+describe('the join screen signs out (AC-7)', () => {
+  async function joinScreen(renewable: boolean) {
+    exchangeReply = answer(200, { access_token: A_SID1, renewable })
+    meReply = answer(403, { error: 'forbidden' })
+    mineReply = answer(200, { invitations: [], removed: false, live_membership: false })
+    ensureSignInState()
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    vi.stubEnv('VITE_LANDING_URL', LANDING)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const nav = interceptHref()
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    await act(async () => {
+      render(<App />)
+    })
+    await screen.findByTestId('join-create')
+    return nav
+  }
+
+  it('joinSignOut_revokesOnlyWhenRenewable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const live = await joinScreen(true)
+    await clickSignOut()
+    await waitFor(() => expect(live.hrefWrites.length).toBeGreaterThan(0))
+    expect(signOutPosts(), 'a renewable offer revokes').toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: undefined, ...COOKIE_MODE }])
+    expect(live.hrefWrites[0]).toBe(LANDING)
+    expect(d8Warnings(warn)).toEqual([])
+
+    cleanup()
+    calls = []
+    localStorage.clear()
+    sessionStorage.clear()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
+
+    const dead = await joinScreen(false)
+    await clickSignOut()
+    await waitFor(() => expect(dead.hrefWrites.length).toBeGreaterThan(0))
+    expect(signOutPosts(), 'a bearer-only offer has no cookie to revoke').toEqual([])
+    expect(dead.hrefWrites[0]).toBe(LANDING)
   })
 })
 
@@ -552,9 +616,10 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 })
 
 describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
-  // Regression guard for the no-POST half.
-  it('a 401 ends the session without revoking', async () => {
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+  // Row L7: the session is already dead, so the cookie is not the app's to clear.
+  it('revokedSession_sendsNoSignOut', async () => {
+    const { hrefWrites } = await mountHandoff()
+    expect(JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')?.received_at, 'control: the seat holds a renewal').toEqual(expect.any(Number))
     captureDestination('/settings')
     expect(readDestination(), 'control: a destination is stored').not.toBeNull()
 

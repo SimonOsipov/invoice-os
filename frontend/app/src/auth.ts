@@ -97,9 +97,11 @@ export interface Me {
 }
 
 // The refresh token and the local epoch ms it arrived at.
+// STUB (SECAUD-17-11): refreshToken goes away; legacyRefreshToken is the one-time adoption token.
 export interface Renewal {
-  refreshToken: string
+  refreshToken?: string
   receivedAt: number
+  legacyRefreshToken?: string
 }
 
 export interface Session {

@@ -5,6 +5,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
 import { trackWorkspaceCreated } from '../chat'
+import { SIGN_OUT_PENDING_KEY } from './revoke'
 import { HANDOFF_PARAM, HANDOFF_TTL_MS, InviteRefusedError, createOwnWorkspace, handoffPersona, joinInvite, type JoinOffer, type ProvisionBody, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
 
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
@@ -1364,5 +1365,184 @@ describe('isLiveHandoffSession (D9, D18)', () => {
     for (const [name, session, want] of rows) {
       expect(isLiveHandoffSession(session, NOW), name).toBe(want)
     }
+  })
+})
+
+// SECAUD-17-11: the gateway cookie holds the refresh token; the exchange answers `renewable`, and every renewal is a cookie-mode refresh with no body.
+describe('cookie-mode hand-off (SECAUD-17-11)', () => {
+  const ANSWERS = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' }
+  const WITH_ANSWERS = tokenWith({ user_metadata: { registration: ANSWERS } })
+  const BARE = tokenWith({})
+  const RENEWED = tokenWith({ tenant_id: ME.tenant.id }, NOW / 1000 + 7200)
+  const COOKIE_INIT = { credentials: 'include', session: 'cookie' }
+  const FORBIDDEN = { status: 403, body: { error: 'forbidden' } }
+  const UNAUTH = { status: 401, body: { error: 'unauthorized' } }
+  type Reply = { status: number; body?: unknown }
+  type Call = { path: string; method: string; auth: string | null; body: unknown; credentials: string | undefined; session: string | null }
+
+  function stub(r: { exchange?: Reply; me?: Reply[]; mine?: Reply; workspaces?: Reply[]; accept?: Reply; refresh?: Reply } = {}): Call[] {
+    const calls: Call[] = []
+    const me = [...(r.me ?? [{ status: 200, body: ME }])]
+    const workspaces = [...(r.workspaces ?? [])]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; credentials?: string }) => {
+        const path = url.replace(GATEWAY, '')
+        calls.push({
+          path,
+          method: init.method ?? 'GET',
+          auth: init.headers.get('Authorization'),
+          body: init.body === undefined ? undefined : JSON.parse(init.body),
+          credentials: init.credentials,
+          session: init.headers.get('X-Auth-Session'),
+        })
+        const reply: Reply =
+          path === '/auth/exchange'
+            ? (r.exchange ?? { status: 200, body: { access_token: LIVE, renewable: true } })
+            : path === '/api/tenancy/v1/me'
+              ? (me.shift() ?? { status: 200, body: ME })
+              : path === '/api/tenancy/v1/invitations/mine'
+                ? (r.mine ?? { status: 200, body: { invitations: [] } })
+                : path === '/api/tenancy/v1/workspaces'
+                  ? (workspaces.shift() ?? { status: 201, body: {} })
+                  : path === '/auth/refresh'
+                    ? (r.refresh ?? { status: 200, body: { access_token: RENEWED } })
+                    : (r.accept ?? { status: 200, body: {} })
+        return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
+      }),
+    )
+    return calls
+  }
+  const refreshes = (calls: Call[]) => calls.filter((c) => c.path === '/auth/refresh')
+  const REFRESH_CALL = { path: '/auth/refresh', method: 'POST', auth: null, body: undefined, ...COOKIE_INIT }
+
+  function memoryStorage(initial: Record<string, string> = {}) {
+    const m = new Map(Object.entries(initial))
+    const storage = {
+      getItem: vi.fn((k: string) => m.get(k) ?? null),
+      setItem: vi.fn((k: string, v: string) => void m.set(k, String(v))),
+      removeItem: vi.fn((k: string) => void m.delete(k)),
+      clear: vi.fn(() => m.clear()),
+    }
+    vi.stubGlobal('localStorage', storage)
+    return storage
+  }
+
+  it('redeem_usesCookieModeAndReadsRenewable', async () => {
+    const calls = stub()
+
+    const s = (await redeemHandoff(GATEWAY, CODE, STATE, 5000)) as Session
+
+    expect(calls[0]).toEqual({ path: '/auth/exchange', method: 'POST', auth: null, body: { code: CODE, state: STATE }, ...COOKIE_INIT })
+    expect(s.renewal).toEqual({ receivedAt: 5000 - HANDOFF_TTL_MS })
+    expect(JSON.stringify(s)).not.toContain('refresh_token')
+
+    // Anything but boolean true sets no renewal; a refresh_token in the body is not a renewal.
+    const rows: [string, object][] = [
+      ['absent', { access_token: LIVE }],
+      ['false', { access_token: LIVE, renewable: false }],
+      ['string "true"', { access_token: LIVE, renewable: 'true' }],
+      ['1', { access_token: LIVE, renewable: 1 }],
+      ['refresh_token only', { access_token: LIVE, refresh_token: 'R0' }],
+    ]
+    for (const [name, body] of rows) {
+      const c = stub({ exchange: { status: 200, body } })
+      const out = (await redeemHandoff(GATEWAY, CODE, STATE, 5000)) as Session
+      expect(c[0]?.credentials, name).toBe('include')
+      expect(out.token, name).toBe(LIVE)
+      expect(out.handoff, name).toBe(true)
+      expect(out.renewal, name).toBeUndefined()
+    }
+  })
+
+  it('provision_renewsThroughTheCookie', async () => {
+    const calls = stub({
+      exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } },
+      me: [FORBIDDEN, { status: 200, body: IN_HOUSE_ME }],
+    })
+
+    const out = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /auth/exchange',
+      'GET /api/tenancy/v1/me',
+      'GET /api/tenancy/v1/invitations/mine',
+      'POST /api/tenancy/v1/workspaces',
+      'POST /auth/refresh',
+      'GET /api/tenancy/v1/me',
+    ])
+    expect(calls[4]).toEqual(REFRESH_CALL)
+    expect(calls[5]?.auth).toBe(`Bearer ${RENEWED}`)
+    const s = out as Session
+    expect(s).toMatchObject({ token: RENEWED, handoff: true, renewal: { receivedAt: 5000 } })
+    expect(JSON.stringify(s)).not.toContain('refresh_token')
+
+    // The Create screen of a first workspace: a 401 renews once through the cookie and retries.
+    const offer: JoinOffer = { kind: 'join', token: BARE, renewable: true, invites: [], answers: null, firstWorkspace: true, refreshToken: undefined }
+    const c2 = stub({ workspaces: [UNAUTH, { status: 201, body: {} }] })
+    const made = await createOwnWorkspace(GATEWAY, offer, { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze' }, 5000).catch((e: unknown) => e as Session)
+    expect(c2.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /api/tenancy/v1/workspaces',
+      'POST /auth/refresh',
+      'POST /api/tenancy/v1/workspaces',
+      'POST /auth/refresh',
+      'GET /api/tenancy/v1/me',
+    ])
+    expect(refreshes(c2)).toEqual([REFRESH_CALL, REFRESH_CALL])
+    expect(c2[2]?.auth).toBe(`Bearer ${RENEWED}`)
+    expect(made.renewal).toEqual({ receivedAt: 5000 })
+  })
+
+  it('create_withoutRenewalNeverRefreshes', async () => {
+    const body = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze' }
+    const make = (renewable: boolean): JoinOffer => ({ kind: 'join', token: BARE, renewable, invites: [], answers: null, firstWorkspace: true, refreshToken: undefined })
+    // Control: a renewable offer refreshes once on the 401.
+    const live = stub({ workspaces: [UNAUTH, { status: 201, body: {} }] })
+    await createOwnWorkspace(GATEWAY, make(true), body, 5000).catch(() => undefined)
+    expect(refreshes(live).length).toBeGreaterThan(0)
+    expect(refreshes(live)[0]).toEqual(REFRESH_CALL)
+
+    const dead = stub({ workspaces: [UNAUTH] })
+    await expect(createOwnWorkspace(GATEWAY, make(false), body, 5000)).rejects.toMatchObject({ status: 401 })
+    expect(dead.map((c) => c.path)).toEqual(['/api/tenancy/v1/workspaces'])
+
+    // The same for a join accept.
+    const joined = stub({ accept: UNAUTH })
+    const inv = { id: 'a', workspace: 'WS a', role: 'admin', inviter: 'Ada', expires_at: '2026-10-20T00:00:00Z' }
+    await expect(joinInvite(GATEWAY, { ...make(false), invites: [inv] }, 'a', 'Ada', 5000)).rejects.toMatchObject({ status: 401 })
+    expect(refreshes(joined)).toEqual([])
+  })
+
+  it('inviteAccept_renewsThroughTheCookie', async () => {
+    const calls = stub({ exchange: { status: 200, body: { access_token: BARE, renewable: true } } })
+
+    const s = (await redeemHandoff(GATEWAY, CODE, STATE, 5000, { token: 'invite-token', name: null }).catch((e: unknown) => e)) as Session
+
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /auth/exchange',
+      'POST /api/tenancy/v1/invitations/accept',
+      'POST /auth/refresh',
+      'GET /api/tenancy/v1/me',
+    ])
+    expect(calls[2]).toEqual(REFRESH_CALL)
+    expect(s).toMatchObject({ token: RENEWED, handoff: true, renewal: { receivedAt: 5000 } })
+
+    // Not renewable: nothing to renew through, so the accept cannot read /me.
+    const dead = stub({ exchange: { status: 200, body: { access_token: BARE, renewable: false } } })
+    await expect(redeemHandoff(GATEWAY, CODE, STATE, 5000, { token: 'invite-token', name: null })).rejects.toBeInstanceOf(Error)
+    expect(refreshes(dead)).toEqual([])
+  })
+
+  it('redeem_okClearsThePendingMarker', async () => {
+    const storage = memoryStorage({ [SIGN_OUT_PENDING_KEY]: '1' })
+    stub()
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(storage.getItem(SIGN_OUT_PENDING_KEY)).toBeNull()
+
+    // A refused exchange keeps it.
+    const kept = memoryStorage({ [SIGN_OUT_PENDING_KEY]: '1' })
+    stub({ exchange: { status: 400, body: { error: 'bad code' } } })
+    await expect(redeemHandoff(GATEWAY, CODE, STATE, 5000)).rejects.toMatchObject({ status: 400 })
+    expect(kept.getItem(SIGN_OUT_PENDING_KEY)).toBe('1')
   })
 })

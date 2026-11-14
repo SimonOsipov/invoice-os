@@ -58,10 +58,11 @@ interface Call {
 
 // `reply` answers at once; with no reply, each request waits for `settle`.
 function fakeFetch(reply: Reply | null) {
-  const net = { calls: [] as Call[], reply, waiting: [] as ((r: Reply) => void)[], settle: (r: Reply) => net.waiting.shift()?.(r) }
+  const net = { calls: [] as Call[], inits: [] as { credentials?: string; session: string | null }[], reply, waiting: [] as ((r: Reply) => void)[], settle: (r: Reply) => net.waiting.shift()?.(r) }
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init: { method?: string; headers: Headers; body?: string }) => {
+    vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; credentials?: string }) => {
+      net.inits.push({ credentials: init.credentials, session: init.headers.get('X-Auth-Session') })
       net.calls.push({
         url,
         method: init.method ?? 'GET',
@@ -610,5 +611,223 @@ describe('createRenewer', () => {
     expect((await outcome(late.renewer.fresh())).error).toBeInstanceOf(SessionEndedError)
     expect(late.onEnded).toHaveBeenCalledTimes(1)
     expect(late.onRenewed).not.toHaveBeenCalled()
+  })
+})
+
+// SECAUD-17-11: the gateway cookie holds the refresh token; the renewer sends a cookie-mode refresh with no body.
+describe('cookie-mode renewal (SECAUD-17-11)', () => {
+  const REFRESH = `${BASE}/auth/refresh`
+  const COOKIE_INIT = { credentials: 'include', session: 'cookie' }
+  const cookieOk = (access: unknown): Reply => ({ status: 200, body: { access_token: access } })
+
+  function csession(o: { token?: string; receivedAt?: number; legacy?: string; me?: Me } = {}): Session {
+    const { token = A0, receivedAt = RECEIVED, legacy, me = ME } = o
+    return {
+      persona: handoffPersona(me),
+      token,
+      me,
+      verified: true,
+      handoff: true,
+      renewal: { receivedAt, ...(legacy === undefined ? {} : { legacyRefreshToken: legacy }) },
+    }
+  }
+  const cookieCalls = (net: { calls: Call[]; inits: unknown[] }, from = 0) => ({ calls: net.calls.slice(from), inits: net.inits.slice(from) })
+
+  it('renewer_dueRenewalUsesTheCookie', async () => {
+    const h = setup({ now: RENEW_AT, tracked: csession(), reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+
+    expect(h.net.calls).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+    expect(h.net.inits).toEqual([COOKIE_INIT])
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    const next = h.onRenewed.mock.calls[0]![0]
+    expect(next).toEqual({ ...csession(), token: A1, renewal: { receivedAt: RENEW_AT } })
+    expect(Object.keys(next.renewal ?? {})).toEqual(['receivedAt'])
+    expect(h.onEnded).not.toHaveBeenCalled()
+    // Not due again: no second request.
+    expect(h.renewer.fresh()).toBe(A1)
+    expect(h.net.calls).toHaveLength(1)
+    // Control: a not-yet-due session sends nothing.
+    const early = setup({ now: RENEW_AT - 1, tracked: csession(), reply: cookieOk(A1) })
+    expect(early.renewer.fresh()).toBe(A0)
+    expect(early.net.calls).toEqual([])
+  })
+
+  it('renewer_adoptsAnotherTabsNewerToken', async () => {
+    // Same subject, a different access token, received just now: no request.
+    const stored = csession({ token: A9, receivedAt: RENEW_AT })
+    const h = setup({ now: RENEW_AT, tracked: csession(), stored, reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A9)
+
+    expect(h.net.calls).toEqual([])
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    expect(h.onRenewed).toHaveBeenCalledWith(stored)
+    expect(h.onEnded).not.toHaveBeenCalled()
+    // Adopted means tracked: the next call answers the stored token plainly.
+    expect(h.renewer.fresh()).toBe(A9)
+    expect(h.net.calls).toEqual([])
+
+    // Boundary: storage still holds this tab's own token, even stamped as fresh: it renews.
+    const same = setup({ now: RENEW_AT, tracked: csession(), stored: csession({ receivedAt: RENEW_AT }), reply: cookieOk(A1) })
+    await expect(Promise.resolve(same.renewer.fresh())).resolves.toBe(A1)
+    expect(same.net.calls).toHaveLength(1)
+    expect(same.net.inits).toEqual([COOKIE_INIT])
+
+    // Boundary: a different token that is itself due is not adopted; this tab renews.
+    const due = setup({ now: RENEW_AT, tracked: csession(), stored: csession({ token: A5, receivedAt: RECEIVED }), reply: cookieOk(A1) })
+    await expect(Promise.resolve(due.renewer.fresh())).resolves.toBe(A1)
+    expect(due.net.calls).toHaveLength(1)
+    expect(due.onRenewed).toHaveBeenCalledTimes(1)
+  })
+
+  // [legacy-adopt-order]: the stored record is not rewritten before the answer, so the renewer reads it as-is.
+  it('renewer_legacyTokenIsPostedOnce', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+
+    expect(h.net.calls).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+    expect(h.net.inits).toEqual([COOKIE_INIT])
+    const next = h.onRenewed.mock.calls[0]![0]
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    expect(next.renewal).toEqual({ receivedAt: RENEW_AT })
+    expect(Object.keys(next.renewal ?? {})).toEqual(['receivedAt'])
+
+    // The App saved `next`: the next due refresh rides the cookie alone.
+    h.store.session = next
+    h.clock.now = RENEW_AT + 2_880_000
+    h.net.reply = cookieOk(A5)
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A5)
+    expect(h.net.calls).toHaveLength(2)
+    expect(h.net.calls[1]).toEqual({ url: REFRESH, method: 'POST', auth: null, body: undefined })
+    expect(h.net.inits[1]).toEqual(COOKIE_INIT)
+  })
+
+  it('renewer_legacyTransientFailureKeepsTheRecordForTheNextLoad', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    const rows: [string, Reply][] = [
+      ['502', UNAVAILABLE_502],
+      ['503', { status: 503, body: { error: 'unavailable' } }],
+      ['network', new TypeError('Failed to fetch')],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, reply] of rows) {
+      const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      // No answer, no rewrite: the session ends with its record kept.
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: true })
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(h.store.session, name).toBe(legacy)
+
+      // A reload: a fresh renewer over the same record sends the token again.
+      const again = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: cookieOk(A1) })
+      await expect(Promise.resolve(again.renewer.fresh()), name).resolves.toBe(A1)
+      expect(again.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+    }
+  })
+
+  it('renewer_legacyRefusalEndsAndClears', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    for (const status of [401, 400]) {
+      const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: { status, body: { error: 'refused' } } })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls, String(status)).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+      expect(r.error, String(status)).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, String(status)).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, String(status)).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, String(status)).not.toHaveBeenCalled()
+    }
+  })
+
+  it('renewer_refusalEndsAndClears', async () => {
+    for (const status of [400, 401]) {
+      const h = setup({ now: RENEW_AT, tracked: csession(), reply: { status, body: { error: 'refused' } } })
+      const first = await outcome(h.renewer.fresh())
+      expect(h.net.calls, String(status)).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(h.net.inits, String(status)).toEqual([COOKIE_INIT])
+      expect(first.error, String(status)).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, String(status)).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, String(status)).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, String(status)).not.toHaveBeenCalled()
+    }
+  })
+
+  it('renewer_transientKeepsTheTokenUntilDeadline', async () => {
+    const rows: [string, Reply][] = [
+      ['network', new TypeError('Failed to fetch')],
+      ['503', { status: 503, body: { error: 'unavailable' } }],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, reply] of rows) {
+      const before = setup({ now: DEADLINE - 1, tracked: csession(), reply })
+      await expect(Promise.resolve(before.renewer.fresh()), name).resolves.toBe(A0)
+      expect(before.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(before.net.inits, name).toEqual([COOKIE_INIT])
+      expect(before.onEnded, name).not.toHaveBeenCalled()
+      expect(before.onRenewed, name).not.toHaveBeenCalled()
+
+      const at = setup({ now: DEADLINE, tracked: csession(), reply })
+      const r = await outcome(at.renewer.fresh())
+      expect(at.net.inits, name).toEqual([COOKIE_INIT])
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(at.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(at.onEnded, name).toHaveBeenCalledWith({ keepStorage: true })
+    }
+  })
+
+  // Row L6. A malformed 200 body stays transient, as today (see the report).
+  it('renewer_badAnswerEnds', async () => {
+    const { iat: _iat, ...noIat } = claims('A1')
+    const { exp: _exp, ...noExp } = claims('A1')
+    const rows: [string, string][] = [
+      ['another tenant', jwt({ ...claims('A1'), app_metadata: { tenant_id: OTHER_TENANT } })],
+      ['no iat', jwt(noIat)],
+      ['no exp', jwt(noExp)],
+      ['opaque', 'opaque-A1'],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, token] of rows) {
+      const h = setup({ now: RENEW_AT, tracked: csession(), reply: cookieOk(token) })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls.map((c) => c.url), name).toEqual([REFRESH])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(
+        h.net.calls.filter((c) => c.url.endsWith('/auth/sign-out')),
+        `${name}: ending a session sends no sign-out`,
+      ).toEqual([])
+    }
+  })
+
+  it('renewer_malformedAnswerIsTransient', async () => {
+    const rows: [string, unknown][] = [
+      ['empty object', {}],
+      ['empty access_token', { access_token: '' }],
+      ['numeric access_token', { access_token: 7 }],
+      ['null body', null],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, body] of rows) {
+      const h = setup({ now: DEADLINE - 1, tracked: csession(), reply: { status: 200, body } })
+      await expect(Promise.resolve(h.renewer.fresh()), name).resolves.toBe(A0)
+      expect(h.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(h.onEnded, name).not.toHaveBeenCalled()
+    }
+    // Control: a well-formed answer renews.
+    const good = setup({ now: DEADLINE - 1, tracked: csession(), reply: cookieOk(A1) })
+    await expect(Promise.resolve(good.renewer.fresh())).resolves.toBe(A1)
+    expect(cookieCalls(good.net).inits).toEqual([COOKIE_INIT])
   })
 })

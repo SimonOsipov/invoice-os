@@ -130,13 +130,16 @@ let workspacesReply: Reply = ok({ tenant: ME.tenant })
 let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
 let workspacesCalls: { auth: string | null; body: unknown }[] = []
 let refreshBodies: unknown[] = []
+// What the cookie-mode calls carried (SECAUD-17-11).
+let cookieInits: { url: string; credentials: string | undefined; session: string | null }[] = []
 let mineReply: Reply | null = null
 
 function routeFetch() {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
+    vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string; credentials?: string }) => {
       fetchUrls.push(url)
+      cookieInits.push({ url, credentials: init?.credentials, session: init?.headers?.get('X-Auth-Session') ?? null })
       if (url === `${GATEWAY}/auth/exchange`) {
         exchangeBodies.push(JSON.parse(init?.body ?? 'null'))
         exchangeAuth.push(init?.headers?.get('Authorization') ?? null)
@@ -237,6 +240,7 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
   workspacesCalls = []
   refreshBodies = []
+  cookieInits = []
   mineReply = ok({ invitations: [] })
   routeFetch()
 })
@@ -2092,5 +2096,99 @@ describe('a hung redemption times out', () => {
     expect(signals.me).toHaveLength(1)
     expect(signals.exchange[0], 'exchange signal').toBeInstanceOf(AbortSignal)
     expect(signals.me[0], '/me signal').toBeInstanceOf(AbortSignal)
+  })
+})
+
+// SECAUD-17-11: the exchange runs in cookie mode, and the stored record never holds a refresh token.
+describe('cookie-held refresh token (SECAUD-17-11)', () => {
+  const COOKIE = { credentials: 'include', session: 'cookie' }
+  const initsOf = (path: string) => cookieInits.filter((c) => c.url === `${GATEWAY}${path}`).map(({ url: _u, ...c }) => c)
+
+  it('handoff_storedRecordHoldsNoRefreshToken', async () => {
+    configure()
+    ensureSignInState()
+    // Readable iat/exp, so the renewable session is not due at once.
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    const live = `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, iat: nowSec(), exp: nowSec() + 3600 })}.sig`
+    exchangeReply = ok({ access_token: live, renewable: true })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    const before = Date.now()
+
+    await bootApp()
+    await waitForVerifiedWorkspace()
+
+    expect(initsOf('/auth/exchange'), 'the exchange runs in cookie mode').toEqual([COOKIE])
+    const raw = localStorage.getItem(SESSION_KEY) ?? ''
+    const rec = storedRecord()
+    expect(rec?.token).toBe(live)
+    expect(rec?.handoff).toBe(true)
+    // Backdated by the gateway's HandoffTTL (60 s): the code may have waited that long.
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rec?.received_at).toBeLessThanOrEqual(Date.now() - 60_000)
+    expect(rec).not.toHaveProperty('refresh_token')
+    expect(raw).not.toContain('refresh_token')
+    // A reload resumes from that record without redeeming again.
+    cleanup()
+    capturedCtx = undefined
+    exchangeBodies = []
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies).toHaveLength(0)
+  })
+
+  async function firstWorkspace(renewable: boolean) {
+    configure()
+    ensureSignInState()
+    exchangeReply = ok({ access_token: T, renewable })
+    meQueue = [fail(403, 'forbidden'), ok(ME)]
+    mineReply = ok({ invitations: [], removed: false, live_membership: false })
+    refreshReply = ok({ access_token: T2 })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const nav = interceptHref()
+    await bootApp()
+    await screen.findByTestId('join-create')
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByLabelText('For clients — an accounting or tax firm'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('join-create'))
+    })
+    return nav
+  }
+
+  it('create_withRenewalRenewsThroughTheCookie', async () => {
+    let creates = 0
+    workspacesReply = () => (++creates === 1 ? fail(401, 'unauthorized')() : ok({ tenant: ME.tenant })())
+
+    const { hrefWrites } = await firstWorkspace(true)
+    await waitForVerifiedWorkspace()
+
+    // The 401 renew, then the refresh that reads the new membership.
+    expect(initsOf('/auth/refresh')).toEqual([COOKIE, COOKIE])
+    expect(refreshBodies, 'no body').toEqual([null, null])
+    expect(creates).toBe(2)
+    expect(hrefWrites).toEqual([])
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
+  })
+
+  // A first-workspace Create on a session that cannot renew has nothing to retry with.
+  it('create_withoutRenewalFailsToSignIn', async () => {
+    workspacesReply = fail(401, 'unauthorized')
+
+    const { hrefWrites } = await firstWorkspace(false)
+
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(initsOf('/auth/exchange'), 'the offer came from a cookie-mode exchange').toEqual([COOKIE])
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
+    expect(workspacesCalls).toHaveLength(1)
+    expect(refreshBodies, 'no refresh is sent').toEqual([])
+    expect(fetchUrls.filter((u) => u.endsWith('/auth/refresh'))).toEqual([])
+    expect(screen.queryByRole('alert'), 'the caller leaves, the form shows no retry notice').toBeNull()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 })

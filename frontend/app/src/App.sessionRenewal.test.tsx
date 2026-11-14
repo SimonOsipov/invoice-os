@@ -120,6 +120,8 @@ interface Call {
   url: string
   auth: string | null
   body: unknown
+  credentials: string | undefined
+  session: string | null
   // A refresh was sent and not yet answered when this request went out.
   duringRefresh: boolean
 }
@@ -143,11 +145,13 @@ function deferRefresh(): { release: (r: Reply) => void } {
 function routeFetch() {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init?: { headers?: Headers; body?: string }) => {
+    vi.fn((url: string, init?: { headers?: Headers; body?: string; credentials?: string }) => {
       calls.push({
         url,
         auth: init?.headers?.get('Authorization') ?? null,
         body: init?.body === undefined ? undefined : JSON.parse(init.body),
+        credentials: init?.credentials,
+        session: init?.headers?.get('X-Auth-Session') ?? null,
         duringRefresh: refreshesOut > 0,
       })
       if (url === REFRESH) {
@@ -192,7 +196,7 @@ class FakeXhr {
     if (name === 'Authorization') this.auth = value
   }
   send() {
-    calls.push({ url: `xhr:${this.url}`, auth: this.auth, body: undefined, duringRefresh: refreshesOut > 0 })
+    calls.push({ url: `xhr:${this.url}`, auth: this.auth, body: undefined, credentials: undefined, session: null, duringRefresh: refreshesOut > 0 })
   }
 }
 
@@ -858,5 +862,169 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(localStorage.getItem(SESSION_KEY), "the other user's record is untouched").toBe(X_RAW)
     expect(refreshes(mark), 'nothing is renewed for the foreign record').toEqual([])
     expect(probes(mark)).toEqual([])
+  })
+})
+
+// SECAUD-17-11: the gateway cookie holds the refresh token; the stored record keeps the renewal clock only.
+describe('cookie-held refresh token (SECAUD-17-11)', () => {
+  const COOKIE_REFRESH = { url: REFRESH, auth: null, body: undefined, credentials: 'include', session: 'cookie' }
+  const asCookieCall = (c: Call) => ({ url: c.url, auth: c.auth, body: c.body, credentials: c.credentials, session: c.session })
+  const LEGACY_BODY = { ...COOKIE_REFRESH, body: { refresh_token: 'R-old' } }
+
+  function cookieRecord(token: string, receivedAt: number, me: Me = ME): string {
+    return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: receivedAt })
+  }
+  // A pair record written before this shipped.
+  const legacyPair = (token: string, receivedAt: number) => record(token, receivedAt, ME, 'R-old')
+  const cookieRenewed: Reply = () => answer(200, { access_token: renewedToken() })()
+  const holdsNoRefreshToken = () => {
+    const raw = localStorage.getItem(SESSION_KEY) ?? ''
+    expect(raw, 'control: a record is stored').not.toBe('')
+    expect(raw).not.toContain('refresh_token')
+    expect(raw).not.toContain('R-old')
+    expect(raw).not.toContain('R1')
+  }
+
+  async function mountCookie(raw: string, path = '/') {
+    const nav = await bootWith(raw, path)
+    await waitForVerifiedWorkspace()
+    await settle()
+    return nav
+  }
+
+  it('renewal_inTabStoresAccessOnly', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+    expect(refreshes(), 'a fresh boot renews nothing').toEqual([])
+    vi.setSystemTime(MID_RENEW_AT)
+    const mark = calls.length
+
+    await probe(capturedCtx)
+
+    expect(refreshes(mark).map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${renewedToken()}`])
+    expect(storedRecord()?.token).toBe(renewedToken())
+    expect(storedRecord()?.received_at).toBe(MID_RENEW_AT)
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
+    holdsNoRefreshToken()
+  })
+
+  it('reload_expiredRecordRenewsThroughTheCookie', async () => {
+    refreshReply = cookieRenewed
+    const { hrefWrites } = await mountCookie(cookieRecord(A0_OLD, OLD_AT))
+
+    expect(refreshes().map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    expect(calls[0]?.url, 'the renewal comes before any API request').toBe(REFRESH)
+    expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`), 'the expired token is never sent').toEqual([])
+    expect(storedRecord()?.token).toBe(renewedToken())
+    holdsNoRefreshToken()
+    expect(hrefWrites).toEqual([])
+  })
+
+  it('reload_liveRecordOpensWithoutARequest', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+
+    expect(refreshes()).toEqual([])
+    expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+
+    // A reload (or a second tab) on the same record: still no request.
+    const seen = calls.length
+    await reload('/')
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(refreshes(seen)).toEqual([])
+    expect(apiCalls(seen).filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+  })
+
+  it('renewal_adoptsAnotherTabsToken', async () => {
+    refreshReply = cookieRenewed
+    await mountCookie(cookieRecord(A0_FRESH, FRESH_AT))
+    // Another tab renewed: a different token, received just now.
+    vi.setSystemTime(MID_RENEW_AT)
+    const T2 = jwt(ME, nowSec(MID_RENEW_AT), 'A2')
+    localStorage.setItem(SESSION_KEY, cookieRecord(T2, MID_RENEW_AT))
+    const mark = calls.length
+
+    await probe(capturedCtx)
+
+    expect(refreshes(mark), 'adopting sends no refresh').toEqual([])
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${T2}`])
+    expect(storedRecord()?.token).toBe(T2)
+  })
+
+  it('legacyPair_adoptsThroughTheCookieThenRewritesTheRecord', async () => {
+    const refresh = deferRefresh()
+    const legacy = legacyPair(A0_DUE, DUE_AT)
+    await bootWith(legacy)
+
+    expect(refreshes().map(asCookieCall), 'the adoption refresh posts the stored token once').toEqual([LEGACY_BODY])
+    // [legacy-adopt-order]: the mount does not rewrite the record while the refresh is out.
+    expect(localStorage.getItem(SESSION_KEY)).toBe(legacy)
+
+    await act(async () => refresh.release(cookieRenewed))
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(storedRecord()?.token).toBe(renewedToken())
+    expect(storedRecord()?.received_at).toBe(NOW)
+    holdsNoRefreshToken()
+    expect(refreshes()).toHaveLength(1)
+
+    // Later renewals ride the cookie alone.
+    refreshReply = cookieRenewed
+    vi.setSystemTime(NOW + 0.8 * HOUR)
+    const mark = calls.length
+    await probe(capturedCtx)
+    expect(refreshes(mark).map(asCookieCall)).toEqual([COOKIE_REFRESH])
+    holdsNoRefreshToken()
+  })
+
+  it('legacyPair_transientFailureKeepsTheRecordAndTheNextLoadRetries', async () => {
+    const legacy = legacyPair(A0_DUE, DUE_AT)
+    const failures: [string, Reply][] = [
+      ['502', UNAVAILABLE],
+      ['network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ]
+    for (const [name, fail] of failures) {
+      calls = []
+      localStorage.clear()
+      refreshReply = fail
+      await bootWith(legacy)
+      await settle(60)
+
+      expect(refreshes().length, name).toBeGreaterThanOrEqual(1)
+      expect(refreshes().map(asCookieCall).filter((c) => c.body === undefined), `${name}: every attempt posts the legacy token`).toEqual([])
+      expect(refreshes().map(asCookieCall)[0], name).toEqual(LEGACY_BODY)
+      expect(localStorage.getItem(SESSION_KEY), `${name}: the legacy record is kept as it was`).toBe(legacy)
+
+      // The reload: the gateway is back, the same record is adopted.
+      refreshReply = cookieRenewed
+      const seen = calls.length
+      await reload('/')
+      await waitForVerifiedWorkspace()
+      await settle()
+      expect(refreshes(seen).map(asCookieCall)[0], name).toEqual(LEGACY_BODY)
+      expect(storedRecord()?.token, name).toBe(renewedToken())
+      holdsNoRefreshToken()
+      cleanup()
+      capturedCtx = undefined
+    }
+  })
+
+  it('legacyPair_refusedTokenRemovesTheRecordAndLeaves', async () => {
+    refreshReply = REFUSED
+    const { hrefWrites } = await bootWith(legacyPair(A0_DUE, DUE_AT))
+
+    await waitFor(() => expect(hrefWrites, 'a refused adoption navigates to landing').toHaveLength(1))
+    await settle()
+
+    expect(refreshes().map(asCookieCall)).toEqual([LEGACY_BODY])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
+    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
   })
 })

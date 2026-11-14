@@ -162,6 +162,16 @@ func sourceOf(t *testing.T, super *pgxpool.Pool, invoiceID string) (docID *strin
 	return docID, rows
 }
 
+func boundClientOf(t *testing.T, super *pgxpool.Pool, docID string) *string {
+	t.Helper()
+	var entity *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT entity_id::text FROM documents WHERE id = $1`, docID).Scan(&entity); err != nil {
+		t.Fatalf("read documents.entity_id of %s: %v", docID, err)
+	}
+	return entity
+}
+
 // One file per supplier entity, and each invoice's source_rows are the rows it
 // actually occupies in that file.
 func TestRLS_DemoDocsSeedsOneDocumentPerEntity(t *testing.T) {
@@ -197,6 +207,13 @@ func TestRLS_DemoDocsSeedsOneDocumentPerEntity(t *testing.T) {
 	}
 	if *docA == *docC {
 		t.Error("invoices of different entities share one document; the file should be per supplier")
+	}
+
+	if got := boundClientOf(t, super, *docA); got == nil || *got != entityA {
+		t.Errorf("entity A's document is bound to %v, want %s", got, entityA)
+	}
+	if got := boundClientOf(t, super, *docC); got == nil || *got != entityB {
+		t.Errorf("entity B's document is bound to %v, want %s", got, entityB)
 	}
 
 	// inv1 has 2 line items so it owns sheet rows 2-3, inv2 the next row.
@@ -331,7 +348,14 @@ func TestRLS_DemoDocsSecondRunIsANoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first seedTenant: %v", err)
 	}
-	_, rowsBefore := sourceOf(t, super, inv)
+	docID, rowsBefore := sourceOf(t, super, inv)
+	if docID == nil {
+		t.Fatal("the first run left the invoice without a source document")
+	}
+	boundBefore := boundClientOf(t, super, *docID)
+	if boundBefore == nil || *boundBefore != entity {
+		t.Fatalf("after the first run the document is bound to %v, want %s", boundBefore, entity)
+	}
 
 	second, err := seedTenant(ctx, app, store, tenantID)
 	if err != nil {
@@ -346,6 +370,9 @@ func TestRLS_DemoDocsSecondRunIsANoOp(t *testing.T) {
 	}
 	if _, rowsAfter := sourceOf(t, super, inv); len(rowsAfter) != len(rowsBefore) {
 		t.Errorf("source_rows changed across runs: %v -> %v", rowsBefore, rowsAfter)
+	}
+	if boundAfter := boundClientOf(t, super, *docID); boundAfter == nil || *boundAfter != *boundBefore {
+		t.Errorf("the binding changed across runs: %v -> %v", *boundBefore, boundAfter)
 	}
 }
 

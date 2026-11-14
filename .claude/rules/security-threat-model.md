@@ -24,7 +24,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Tenancy
 
 - Row-level security isolates tenants. Policies key on `app.current_tenant`; entity policies also read `app.entity_scope`.
-- `WithinRequestTenantTx` and `WithinRequestTenantTxOpts` in `internal/platform/db/tenant.go` set both settings in the transaction, before the membership SELECT.
+- `WithinRequestTenantTx` and `WithinRequestTenantTxOpts` in `internal/platform/db/tenant.go` set `app.current_tenant` in the transaction, in an earlier statement than the RLS-scoped membership SELECT.
 - Every database role is NOSUPERUSER and NOBYPASSRLS (`db/bootstrap.sql`). Its guard fails the bootstrap otherwise.
 - `restore_auditor` (`db/restore-auditor.sql`) is the one BYPASSRLS role. It is NOLOGIN, reads only the restore-check tables, and only `postgres` may SET ROLE to it.
 - Reach tenant data only through the seam in `.claude/rules/tenant-seam.md`. `scPoolAllowlist`, `scCoreAllowlist` and `scRouteVerdicts` in `internal/platform/db/seam_coverage_test.go` list every exception.

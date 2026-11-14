@@ -63,6 +63,18 @@ export function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// A committed CSV with a fresh token on each row's buyer (column 4), which no assertion reads: a document binds to its first client.
+export function saltedCsvFile(path: string): { name: string; mimeType: string; buffer: Buffer } {
+  const salt = crypto.randomUUID()
+  const [header, ...rows] = readFileSync(path, 'utf8').trimEnd().split('\n')
+  const salted = rows.map((row) => {
+    const cells = row.split(',')
+    cells[3] += ` ${salt}`
+    return cells.join(',')
+  })
+  return { name: basename(path), mimeType: 'text/csv', buffer: Buffer.from([header, ...salted].join('\n') + '\n', 'utf8') }
+}
+
 // The printed-receipt fixture (fxE2ECopies), fresh bytes per call for the same reason.
 const HONEST_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_receipt_invoice.pdf'))
 

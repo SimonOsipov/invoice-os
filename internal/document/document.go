@@ -107,6 +107,18 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 			return err
 		}
 
+		// The caller becomes an uploader only if they can read the document now, so a dedupe hit on
+		// a document outside their scope grants nothing.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO document_uploaders (tenant_id, document_id, user_id)
+			 SELECT $1, $2, u FROM (SELECT nullif(current_setting('app.current_user_id', true), '')::uuid AS u) s
+			  WHERE u IS NOT NULL AND public.document_readable($2)
+			 ON CONFLICT DO NOTHING`,
+			id.TenantID, out.ID,
+		); err != nil {
+			return err
+		}
+
 		event := "document.reused"
 		if created {
 			event = "document.created"
@@ -150,12 +162,9 @@ func (s *Store) Get(ctx context.Context, id string) (Document, error) {
 	return out, nil
 }
 
-// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule: a
-// limited caller reads a document nothing cites, or one cited by a visible invoice or batch.
-const ReadableByScope = `(coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
-	     OR EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id)
-	     OR EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id)
-	     OR NOT (SELECT has_link FROM public.document_link_state(d.id)))`
+// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule;
+// the rule lives in public.document_readable, which the extraction policies also call.
+const ReadableByScope = `public.document_readable(d.id)`
 
 // GetLinked is Get under ReadableByScope; a refused read writes no document.read row.
 func (s *Store) GetLinked(ctx context.Context, id string) (Document, error) {

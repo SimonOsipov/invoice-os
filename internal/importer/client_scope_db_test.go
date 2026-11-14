@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -326,7 +327,7 @@ func TestClientScope_NoteOriginalsHideAnotherClient(t *testing.T) {
 	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NO-A")
 	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	csLinkBatchLegacy(t, f.super, f.tenant, f.entB, doc)
 	if _, err := f.super.Exec(context.Background(),
 		`UPDATE import_batches SET created_at = now() - interval '1 hour' WHERE document_id = $1 AND entity_id = $2`, doc, f.entA); err != nil {
 		t.Fatalf("age A's batch: %v", err)
@@ -476,7 +477,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 
 func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testing.T) {
 	f := newCSFixture(t, "CS import route")
-	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
 	h := CreateHandler(f.svc.Import, f.docSvc.OpenLinked, f.store.SaveMapping, f.store.EntityVisible, nil)
 	post := func(entity, query string) *httptest.ResponseRecorder {
 		body, ct := buildImportForm(t, entity, `{"invoice_number":"Inv No"}`, doc.ID)
@@ -529,7 +530,7 @@ func TestClientScope_SheetRouteFollowsTheLink(t *testing.T) {
 	batch(linkedB, f.entB)
 	batch(linkedA, f.entA)
 	batch(linkedBoth, f.entA)
-	batch(linkedBoth, f.entB)
+	csLinkBatchLegacy(t, f.super, f.tenant, f.entB, linkedBoth)
 	if _, err := f.super.Exec(context.Background(),
 		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-SHEET-B', $3)`,
 		f.tenant, f.entB, invoiceB); err != nil {
@@ -585,6 +586,52 @@ func csLinkInvoice(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, numbe
 	}
 }
 
+// csLegacyTx runs fn in a superuser transaction that skips the bind trigger: a pre-migration citation.
+func csLegacyTx(t *testing.T, super *pgxpool.Pool, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy citation: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("seed legacy citation: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy citation: %v", err)
+	}
+}
+
+// csUnbindDocument clears a document's binding so an Import can cite it for a second client;
+// csRebindDocument then restores the first citation's client, the only state production reaches.
+func csUnbindDocument(t *testing.T, super *pgxpool.Pool, doc string) {
+	t.Helper()
+	csLegacyTx(t, super, `UPDATE documents SET entity_id = NULL WHERE id = $1`, doc)
+}
+
+func csRebindDocument(t *testing.T, super *pgxpool.Pool, doc, entity string) {
+	t.Helper()
+	csLegacyTx(t, super, `UPDATE documents SET entity_id = $2 WHERE id = $1`, doc, entity)
+}
+
+func csLinkInvoiceLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, number string) {
+	t.Helper()
+	csLegacyTx(t, super,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4)`,
+		tenant, entity, number, doc)
+}
+
+func csLinkBatchLegacy(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) {
+	t.Helper()
+	csLegacyTx(t, super,
+		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+		 VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, tenant, entity, doc)
+}
+
 func csLinkBatch(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) {
 	t.Helper()
 	if _, err := super.Exec(context.Background(),
@@ -599,7 +646,7 @@ func TestClientScope_ADocumentOfAHiddenClientIsRefusedOnTheImportRoutes(t *testi
 	header := []string{"Inv No"}
 	hidden := storeDocumentAs(t, f.docSvc, f.tenant, "b.csv", "text/csv", csvBody(t, header, [][]string{{"B-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entB, hidden)
-	own := storeDocumentAs(t, f.docSvc, f.tenant, "a.csv", "text/csv", csvBody(t, header, [][]string{{"A-1"}})).ID
+	own := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "a.csv", "text/csv", csvBody(t, header, [][]string{{"A-1"}})).ID
 	if err := f.store.SaveMapping(f.admin, f.entA, header, map[string]string{"invoice_number": "Inv No"}); err != nil {
 		t.Fatalf("SaveMapping(A): %v", err)
 	}
@@ -700,7 +747,7 @@ func TestClientScope_AnInvoiceUnderAHiddenClientStillCountsAsFiledForAVisibleBat
 	doc := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, doc, docNoNumberValues())
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FILED-B2")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FILED-B2")
 
 	if _, err := f.svc.SupplyInvoiceNumber(f.limited, f.entA, doc, "INV-3"); !errors.Is(err, ErrDocumentAlreadyFiled) {
 		t.Errorf("SupplyInvoiceNumber as a reviewer limited to A: err = %v, want ErrDocumentAlreadyFiled", err)
@@ -805,7 +852,7 @@ func TestClientScope_ADocumentCitedByBothClientsAndTheFullAccessRolesReadOnEvery
 	header := []string{"Inv No"}
 	both := storeDocumentAs(t, f.docSvc, f.tenant, "both.csv", "text/csv", csvBody(t, header, [][]string{{"BOTH-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entA, both)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, both, "CS-BOTH-B")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, both, "CS-BOTH-B")
 	hidden := storeDocumentAs(t, f.docSvc, f.tenant, "hidden.csv", "text/csv", csvBody(t, header, [][]string{{"HID-1"}})).ID
 	csLinkBatch(t, f.super, f.tenant, f.entB, hidden)
 
@@ -880,31 +927,40 @@ func TestClientScope_TheSettledExtractionRoutesFollowTheDocumentRule(t *testing.
 
 	bothClients := seed(docCleanValues("CS-SET-AB"), func(d string) {
 		csLinkBatch(t, f.super, f.tenant, f.entA, d)
-		csLinkBatch(t, f.super, f.tenant, f.entB, d)
+		csLinkBatchLegacy(t, f.super, f.tenant, f.entB, d)
 	})
 	if res, err := f.svc.ImportDocument(f.limited, f.entA, bothClients); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
 		t.Errorf("ImportDocument(document cited by A's and B's batch) as a reviewer limited to A = %+v, %v, want one invoice filed", res, err)
 	}
 
+	// Full access reads B's document and files it under B; filing it under A is refused once B holds it.
 	adminID, _ := auth.IdentityFromContext(f.admin)
+	adminCtx := auth.WithIdentity(context.Background(), adminID)
 	adminDoc := seed(docCleanValues("CS-SET-ADMIN"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), adminID), f.entA, adminDoc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as admin = %+v, %v, want one invoice filed", res, err)
+	batchesForA := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA)
+	if _, err := f.svc.ImportDocument(adminCtx, f.entA, adminDoc); err == nil {
+		t.Errorf("ImportDocument(document cited only by B's batch) for A as admin: err = nil, want a refusal")
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != batchesForA {
+		t.Errorf("import_batches for A = %d after the refused admin import, want %d", n, batchesForA)
+	}
+	if res, err := f.svc.ImportDocument(adminCtx, f.entB, adminDoc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as admin = %+v, %v, want one invoice filed", res, err)
 	}
 	allClients := csMember(t, f.super, f.tenant, "preparer")
 	if _, err := f.super.Exec(context.Background(), `UPDATE memberships SET all_clients = true WHERE user_id = $1`, allClients.Subject); err != nil {
 		t.Fatalf("set all_clients: %v", err)
 	}
 	doc := seed(docCleanValues("CS-SET-ALL"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), allClients), f.entA, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as an All clients member = %+v, %v, want one invoice filed", res, err)
+	if res, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), allClients), f.entB, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as an All clients member = %+v, %v, want one invoice filed", res, err)
 	}
 	if _, err := f.super.Exec(context.Background(), `UPDATE tenants SET kind = 'in_house' WHERE id = $1`, f.tenant); err != nil {
 		t.Fatalf("set in_house: %v", err)
 	}
 	doc = seed(docCleanValues("CS-SET-IH"), func(d string) { csLinkBatch(t, f.super, f.tenant, f.entB, d) })
-	if res, err := f.svc.ImportDocument(f.limited, f.entA, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
-		t.Errorf("ImportDocument(document cited only by B's batch) as an in-house member = %+v, %v, want one invoice filed", res, err)
+	if res, err := f.svc.ImportDocument(f.limited, f.entB, doc); err != nil || res.ReadyInvoices+res.QuarantinedInvoices != 1 {
+		t.Errorf("ImportDocument(document cited only by B's batch) for B as an in-house member = %+v, %v, want one invoice filed", res, err)
 	}
 }
 
@@ -957,7 +1013,7 @@ func TestClientScope_AFiledDocumentHidesAnInvisibleInvoiceID(t *testing.T) {
 	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-FH-1"))
 	dtSetVerdict(t, f.super, doc, "debit note")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
 
 	res, err := f.svc.ImportDocument(f.limited, f.entA, doc)
 	if err != nil || len(res.Errors) != 1 {
@@ -1007,7 +1063,7 @@ func TestClientScope_NoteOriginalsWhenOnlyAnInvoiceIsVisible(t *testing.T) {
 	dtSetVerdict(t, f.super, doc, "credit note")
 	dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B2")
 	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
-	seedInvoiceForDocument(t, f.super, f.tenant, f.entA, doc, "CS-FILED-A")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entA, doc, "CS-FILED-A")
 
 	// The reading passes the document rule through A's invoice, yet the only batch is B's.
 	if _, err := f.store.SettledExtraction(f.limited, doc); err != nil {
@@ -1058,7 +1114,12 @@ func TestClientScope_NoteOriginalsFiledInvoiceOfAHiddenClientReadsAsNull(t *test
 	dtSetVerdict(t, f.super, doc, "credit note")
 	dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-FH-A")
 	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
-	filedB := seedInvoiceForDocument(t, f.super, f.tenant, f.entB, doc, "CS-FH-NOTE-B")
+	csLinkInvoiceLegacy(t, f.super, f.tenant, f.entB, doc, "CS-FH-NOTE-B")
+	var filedB string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT id FROM invoices WHERE tenant_id = $1 AND invoice_number = 'CS-FH-NOTE-B'`, f.tenant).Scan(&filedB); err != nil {
+		t.Fatalf("read the legacy invoice: %v", err)
+	}
 
 	member, err := f.store.NoteOriginals(f.limited, doc)
 	admin, aerr := f.store.NoteOriginals(f.admin, doc)
@@ -1080,7 +1141,7 @@ func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *test
 	doc := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-CITE-DOC"))
 	header := []string{"Inv No"}
-	csv := storeDocumentAs(t, f.docSvc, f.tenant, "c.csv", "text/csv", csvBody(t, header, [][]string{{"CS-CITE-CSV"}})).ID
+	csv := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "c.csv", "text/csv", csvBody(t, header, [][]string{{"CS-CITE-CSV"}})).ID
 
 	byDoc, err := f.svc.ImportDocument(f.limited, f.entA, doc)
 	if err != nil {
@@ -1101,4 +1162,335 @@ func TestClientScope_ALimitedMembersImportFilesTheInvoiceWithItsDocument(t *test
 			t.Errorf("%s: invoices filed with the document = %d, want 1", name, n)
 		}
 	}
+}
+
+func TestClientScope_TheUploaderReadsTheSettledExtractionOfACitedDocument(t *testing.T) {
+	f := newCSFixture(t, "CS settled extraction uploader")
+	uploader := auth.WithIdentity(context.Background(), csMember(t, f.super, f.tenant, "reviewer", f.entA))
+
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	d, _, err := document.NewStore(f.app).Upsert(uploader, document.Document{
+		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11,
+	})
+	if err != nil {
+		t.Fatalf("Upsert as the uploader: %v", err)
+	}
+	docSeedExtraction(t, f.super, f.tenant, d.ID, docCleanValues("CS-SET-UP"))
+	csLinkInvoice(t, f.super, f.tenant, f.entB, d.ID, "CS-SET-UP-B")
+	var bound *string
+	if err := f.super.QueryRow(context.Background(), `SELECT entity_id::text FROM documents WHERE id = $1`, d.ID).Scan(&bound); err != nil || bound == nil || *bound != f.entB {
+		t.Fatalf("control: documents.entity_id = %v, %v after B's citation, want %s", bound, err, f.entB)
+	}
+
+	if ex, err := f.store.SettledExtraction(uploader, d.ID); err != nil || len(ex.Fields) == 0 {
+		t.Errorf("SettledExtraction as the uploader = %d field(s), %v, want the settled fields", len(ex.Fields), err)
+	}
+	// Negative half: a member limited to A who did not upload it stays refused.
+	other := auth.WithIdentity(context.Background(), csMember(t, f.super, f.tenant, "reviewer", f.entA))
+	if _, err := f.store.SettledExtraction(other, d.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SettledExtraction as another member limited to A: err = %v, want ErrNotFound", err)
+	}
+}
+
+const csNotFoundBody = `{"error":"not found"}`
+
+// csSameAsUnknown requires got to be byte-equal to the answer for a random document id, and that answer to be the 404.
+func csSameAsUnknown(t *testing.T, name string, got, unknown *httptest.ResponseRecorder) {
+	t.Helper()
+	if unknown.Code != http.StatusNotFound || strings.TrimSpace(unknown.Body.String()) != csNotFoundBody {
+		t.Fatalf("control: %s with a random document id: %d %s, want 404 %s", name, unknown.Code, unknown.Body.String(), csNotFoundBody)
+	}
+	if got.Code != unknown.Code || got.Body.String() != unknown.Body.String() {
+		t.Errorf("%s: %d %s, want %d %s (the random id's answer)", name, got.Code, got.Body.String(), unknown.Code, unknown.Body.String())
+	}
+}
+
+func csRequireBoundTo(t *testing.T, f csFixture, doc, entity string) {
+	t.Helper()
+	var bound *string
+	if err := f.super.QueryRow(context.Background(), `SELECT entity_id::text FROM documents WHERE id = $1`, doc).Scan(&bound); err != nil {
+		t.Fatalf("read documents.entity_id: %v", err)
+	}
+	if entity == "" && bound != nil || entity != "" && (bound == nil || *bound != entity) {
+		t.Fatalf("documents.entity_id = %v, want %q", bound, entity)
+	}
+}
+
+// csNothingWrittenForA requires that no batch, mapping or invoice exists for client A and that doc is still bound to B.
+func csNothingWrittenForA(t *testing.T, f csFixture, doc string) {
+	t.Helper()
+	for what, q := range map[string]string{
+		"import_batches":  `SELECT count(*) FROM import_batches WHERE entity_id = $1`,
+		"invoices":        `SELECT count(*) FROM invoices WHERE entity_id = $1`,
+		"import_mappings": `SELECT count(*) FROM import_mappings WHERE entity_id = $1`,
+	} {
+		if n := csCount(t, f.super, q, f.entA); n != 0 {
+			t.Errorf("%s for A = %d, want 0", what, n)
+		}
+	}
+	csRequireBoundTo(t, f, doc, f.entB)
+}
+
+// csCanOpen proves the caller reads doc, so a refusal below comes from the citation and not the read.
+func csCanOpen(t *testing.T, f csFixture, who auth.Identity, doc string) {
+	t.Helper()
+	_, obj, err := f.docSvc.OpenLinked(auth.WithIdentity(context.Background(), who), doc, "")
+	if err != nil {
+		t.Fatalf("control: %s cannot read the document: %v", who.Subject, err)
+	}
+	if obj.Body != nil {
+		_ = obj.Body.Close()
+	}
+}
+
+func csImportFor(t *testing.T, f csFixture, entity string) func(auth.Identity, string) *httptest.ResponseRecorder {
+	t.Helper()
+	return csImportRoutes(t, f, entity, &fakeSuggester{}, &mcStub{})["import"]
+}
+
+func TestClientScope_ImportingABoundDocumentForAnotherClientAnswersAsAnUnknownOne(t *testing.T) {
+	f := newCSFixture(t, "CS bound import")
+	header := []string{"Inv No"}
+	doc := storeDocumentAs(t, f.docSvc, f.tenant, "b.csv", "text/csv", csvBody(t, header, [][]string{{"BND-1"}})).ID
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	csRequireBoundTo(t, f, doc, f.entB)
+	adminID, _ := auth.IdentityFromContext(f.admin)
+
+	imp := csImportFor(t, f, f.entA)
+	csSameAsUnknown(t, "admin import of B's document for A", imp(adminID, doc), imp(adminID, uuid.NewString()))
+	csNothingWrittenForA(t, f, doc)
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE document_id = $1`, doc); n != 1 {
+		t.Errorf("batches citing the document = %d, want 1 (B's)", n)
+	}
+}
+
+func TestClientScope_DocumentImportOfABoundDocumentForAnotherClientAnswersAsAnUnknownOne(t *testing.T) {
+	f := newCSFixture(t, "CS bound document import")
+	orig := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-BD-ORIG")
+	adminID, _ := auth.IdentityFromContext(f.admin)
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
+	post := func(doc string, body map[string]string) *httptest.ResponseRecorder {
+		body["entity_id"], body["document_id"] = f.entA, doc
+		raw, _ := json.Marshal(body)
+		return csGet(create, adminID, "POST", "/v1/imports/document", string(raw))
+	}
+
+	var docs []string
+	for name, c := range map[string]struct {
+		values  map[string]*string
+		verdict string
+		body    map[string]string
+	}{
+		"bare":                 {docCleanValues("CS-BD-1"), "", map[string]string{}},
+		"commercial_invoice":   {docCleanValues("CS-BD-2"), "", map[string]string{"document_type": "commercial_invoice"}},
+		"credit_note (a note)": {dnReading(), "credit note", map[string]string{"document_type": "credit_note", "original_invoice_id": orig, "invoice_number": "CS-BD-CN"}},
+	} {
+		doc := docSeedDocument(t, f.super, f.tenant)
+		docSeedExtraction(t, f.super, f.tenant, doc, c.values)
+		if c.verdict != "" {
+			dtSetVerdict(t, f.super, doc, c.verdict)
+		}
+		csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+		csRequireBoundTo(t, f, doc, f.entB)
+		docs = append(docs, doc)
+		csSameAsUnknown(t, "POST /v1/imports/document "+name+" of B's document for A", post(doc, c.body), post(uuid.NewString(), c.body))
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != 0 {
+		t.Errorf("import_batches for A = %d, want 0", n)
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1 AND id <> $2`, f.entA, orig); n != 0 {
+		t.Errorf("invoices for A besides the original = %d, want 0", n)
+	}
+	for _, doc := range docs {
+		csRequireBoundTo(t, f, doc, f.entB)
+	}
+}
+
+func TestClientScope_TheUploaderCannotImportTheirDocumentForAnotherClient(t *testing.T) {
+	f := newCSFixture(t, "CS uploader bound import")
+	header := []string{"Inv No"}
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, f.limitedID.Subject, "u.csv", "text/csv", csvBody(t, header, [][]string{{"UPL-1"}})).ID
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	csRequireBoundTo(t, f, doc, f.entB)
+	csCanOpen(t, f, f.limitedID, doc)
+
+	imp := csImportFor(t, f, f.entA)
+	csSameAsUnknown(t, "the uploader's import of their document, bound to B, for A", imp(f.limitedID, doc), imp(f.limitedID, uuid.NewString()))
+	csNothingWrittenForA(t, f, doc)
+}
+
+func TestClientScope_ImportingABoundDocumentForItsClientSucceeds(t *testing.T) {
+	f := newCSFixture(t, "CS bound import ok")
+	header := []string{"Inv No"}
+	doc := storeDocumentAs(t, f.docSvc, f.tenant, "ok.csv", "text/csv", csvBody(t, header, [][]string{{"OK-1"}})).ID
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	adminID, _ := auth.IdentityFromContext(f.admin)
+
+	rec := csImportFor(t, f, f.entB)(adminID, doc)
+	var res struct {
+		ID string `json:"id"`
+	}
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &res) != nil || res.ID == "" {
+		t.Fatalf("import of B's document for B: %d %s, want 201 with a batch id", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE id = $1 AND entity_id = $2 AND document_id = $3`, res.ID, f.entB, doc); n != 1 {
+		t.Errorf("batch %s citing the document for B = %d, want 1", res.ID, n)
+	}
+	csRequireBoundTo(t, f, doc, f.entB)
+}
+
+func TestStoreCreateBatch_BoundElsewhereIsNotFoundAndABadEntityStaysValidation(t *testing.T) {
+	f := newCSFixture(t, "CS create batch")
+	bound := docSeedDocument(t, f.super, f.tenant)
+	csLinkBatch(t, f.super, f.tenant, f.entB, bound)
+	csRequireBoundTo(t, f, bound, f.entB)
+	free := docSeedDocument(t, f.super, f.tenant)
+
+	if _, err := f.store.CreateBatch(f.admin, f.entA, "x.csv", bound, 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("CreateBatch(A, document bound to B): err = %v, want ErrNotFound", err)
+	}
+	for name, c := range map[string]struct{ entity, doc string }{
+		"a random entity id":   {uuid.NewString(), free},
+		"a random document id": {f.entA, uuid.NewString()},
+	} {
+		_, err := f.store.CreateBatch(f.admin, c.entity, "x.csv", c.doc, 1)
+		if !errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) {
+			t.Errorf("CreateBatch with %s: err = %v, want ErrValidation and not ErrNotFound", name, err)
+		}
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != 0 {
+		t.Errorf("import_batches for A = %d, want 0", n)
+	}
+	csRequireBoundTo(t, f, bound, f.entB)
+	csRequireBoundTo(t, f, free, "")
+	if _, err := f.store.CreateBatch(f.admin, f.entB, "x.csv", bound, 1); err != nil {
+		t.Errorf("control: CreateBatch(B, document bound to B): %v", err)
+	}
+}
+
+func TestClientScope_SupplyingANumberForABoundDocumentAnswersAsAnUnknownOne(t *testing.T) {
+	f := newCSFixture(t, "CS bound supply")
+	h := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	d, _, err := document.NewStore(f.app).Upsert(f.limited, document.Document{
+		StorageKey: document.StorageKey(f.tenant, h), ContentHash: h, SizeBytes: 11,
+	})
+	if err != nil {
+		t.Fatalf("Upsert as the uploader: %v", err)
+	}
+	docSeedExtraction(t, f.super, f.tenant, d.ID, docNoNumberValues())
+	csLinkBatch(t, f.super, f.tenant, f.entB, d.ID)
+	csRequireBoundTo(t, f, d.ID, f.entB)
+	if ex, err := f.store.SettledExtraction(f.limited, d.ID); err != nil || len(ex.Fields) == 0 {
+		t.Fatalf("control: the uploader reads the settled extraction: %d field(s), %v", len(ex.Fields), err)
+	}
+
+	supply := SupplyNumberHandler(f.svc.SupplyInvoiceNumber, nil)
+	adminID, _ := auth.IdentityFromContext(f.admin)
+	for who, id := range map[string]auth.Identity{"admin": adminID, "limited-A uploader": f.limitedID} {
+		slug := strings.ReplaceAll(who, " ", "-")
+		unknown := csGet(supply, id, "POST", "/v1/imports/document/invoice", supplyJSONBody(f.entA, uuid.NewString(), "INV-U-"+slug))
+		got := csGet(supply, id, "POST", "/v1/imports/document/invoice", supplyJSONBody(f.entA, d.ID, "INV-B-"+slug))
+		csSameAsUnknown(t, who+" supplying a number for B's document for A", got, unknown)
+	}
+	if n := countInvoicesCitingDocument(t, f.super, d.ID); n != 0 {
+		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+	csRequireBoundTo(t, f, d.ID, f.entB)
+}
+
+func TestClientScope_AFailedImportStillBindsTheDocument(t *testing.T) {
+	f := newCSFixture(t, "CS failed import binds")
+	doc := storeDocumentAs(t, f.docSvc, f.tenant, "empty.csv", "text/csv", csvBody(t, []string{"Inv No"}, nil)).ID
+	adminID, _ := auth.IdentityFromContext(f.admin)
+
+	if rec := csImportFor(t, f, f.entA)(adminID, doc); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"failed"`) {
+		t.Fatalf("header-only import for A: %d %s, want 201 with status failed", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1 AND document_id = $2 AND status = 'failed'`, f.entA, doc); n != 1 {
+		t.Fatalf("failed batches of A citing the document = %d, want 1", n)
+	}
+	csRequireBoundTo(t, f, doc, f.entA)
+
+	imp := csImportFor(t, f, f.entB)
+	csSameAsUnknown(t, "import for B of a document a failed import bound to A", imp(adminID, doc), imp(adminID, uuid.NewString()))
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entB); n != 0 {
+		t.Errorf("import_batches for B = %d, want 0", n)
+	}
+	csRequireBoundTo(t, f, doc, f.entA)
+}
+
+func TestClientScope_ALimitedMemberCannotImportAnotherMembersUncitedUpload(t *testing.T) {
+	f := newCSFixture(t, "CS uncited import harm")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entB)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, u1.Subject, "u1.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"UH-1"}})).ID
+	if got := csUploaders(t, f, doc); !slices.Equal(got, []string{u1.Subject}) {
+		t.Fatalf("control: uploaders = %v, want [%s]", got, u1.Subject)
+	}
+	csRequireBoundTo(t, f, doc, "")
+	csCanOpen(t, f, u2, doc)
+
+	imp := csImportFor(t, f, f.entA)
+	csSameAsUnknown(t, "import for A of another member's uncited upload", imp(u2, doc), imp(u2, uuid.NewString()))
+	for what, q := range map[string]string{
+		"import_batches": `SELECT count(*) FROM import_batches WHERE entity_id = $1`,
+		"invoices":       `SELECT count(*) FROM invoices WHERE entity_id = $1`,
+	} {
+		if n := csCount(t, f.super, q, f.entA); n != 0 {
+			t.Errorf("%s for A = %d, want 0", what, n)
+		}
+	}
+	csRequireBoundTo(t, f, doc, "")
+}
+
+// csUploaders reads the document's uploader ids from document_uploaders, sorted.
+func csUploaders(t *testing.T, f csFixture, doc string) []string {
+	t.Helper()
+	rows, err := f.super.Query(context.Background(), `SELECT user_id::text FROM document_uploaders WHERE document_id = $1 ORDER BY 1`, doc)
+	if err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan an uploader: %v", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the uploaders of %s: %v", doc, err)
+	}
+	return out
+}
+
+func TestClientScope_ACoUploaderImportsTheirDedupedUpload(t *testing.T) {
+	f := newCSFixture(t, "CS co-uploader imports")
+	u1 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	body := csvBody(t, []string{"Inv No"}, [][]string{{"CO-1"}})
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, u1.Subject, "co.csv", "text/csv", body).ID
+	if again := storeDocumentBy(t, f.docSvc, f.tenant, u2.Subject, "co.csv", "text/csv", body).ID; again != doc {
+		t.Fatalf("control: the same bytes from a second member made document %s, want %s", again, doc)
+	}
+	csRequireBoundTo(t, f, doc, "")
+
+	rec := csImportFor(t, f, f.entA)(u2, doc)
+	if rec.Code/100 != 2 {
+		t.Errorf("import for A by the co-uploader: %d %s, want 2xx", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1 AND document_id = $2`, f.entA, doc); n != 1 {
+		t.Errorf("batches of A citing the document = %d, want 1", n)
+	}
+	csRequireBoundTo(t, f, doc, f.entA)
+	if got, want := csUploaders(t, f, doc), []string{u1.Subject, u2.Subject}; !slices.Equal(got, sortedCopy(want)) {
+		t.Errorf("uploaders = %v, want %v", got, sortedCopy(want))
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return out
 }

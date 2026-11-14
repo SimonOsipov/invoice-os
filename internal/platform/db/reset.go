@@ -324,7 +324,7 @@ const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, rollup_snapshots, import_batches,
 	import_mappings, customers, custom_rule_revisions, membership_clients, invitation_clients,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
-	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
+	document_uploaders, documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
 	extraction_rule_breaks, extraction_page_images, extraction_anchor_rules,
 	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification

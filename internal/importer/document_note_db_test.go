@@ -898,6 +898,27 @@ func TestNoteOriginals_NoteCountCountsEachOriginalsOwnNotesInEveryStatus(t *test
 	}
 }
 
+func TestNoteOriginals_CountLeavesADiscardedNoteOut(t *testing.T) {
+	f := dnNewFix(t, "NO-count-discarded", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	for _, st := range []string{"draft", "discarded"} {
+		n := dnSeedOriginal(t, f.super, f.tenant, f.entity, "CN-"+st)
+		if _, err := f.super.Exec(context.Background(),
+			`UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2, status = $3, irn = NULL WHERE id = $1`, n, f.orig, st); err != nil {
+			t.Fatalf("%s note: %v", st, err)
+		}
+	}
+
+	rows := f.originals(t).Originals
+
+	if len(rows) != 1 || rows[0].ID != f.orig {
+		t.Fatalf("originals = %v, want [%s]", noIDs(rows), f.orig)
+	}
+	if rows[0].NoteCount != 1 {
+		t.Errorf("note_count = %d, want 1 (the discarded note is not counted)", rows[0].NoteCount)
+	}
+}
+
 func TestNoteOriginals_TheReadNumberComesFromTheNewestSucceededJob(t *testing.T) {
 	values := dnReading()
 	values["original_invoice_number"] = sxPtr("INV-ORIG-1")

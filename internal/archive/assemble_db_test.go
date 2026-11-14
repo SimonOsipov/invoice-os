@@ -282,6 +282,58 @@ func TestAssemble_InvoicesWithoutSubmissionsProduceAMixedBundle(t *testing.T) {
 	}
 }
 
+func TestAssemble_LeavesDiscardedOut(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-assemble-discarded")
+	entity := mustCreateEntity(t, tx, tenant, "Discarded Co", "80000020-0001")
+	from := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	live := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-LIVE", status: "validated", createdAt: from})
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-GONE", status: "discarded", createdAt: from.Add(time.Minute)})
+
+	actingAs(t, tx, tenant)
+	req := Request{EntityID: entity, From: from, To: from.Add(time.Hour)}
+
+	var buf bytes.Buffer
+	if err := assemble(context.Background(), tx, req, &buf,
+		assembleOpts{tenantID: tenant, subject: "system", maxInvoices: 10, now: time.Now()}); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	rows := parseCSV(t, mustReadZipEntry(t, zr, "invoices.csv"))
+	if len(rows) != 2 || rows[1][0] != live {
+		t.Errorf("invoices.csv has %d rows, want the header and the live invoice %s", len(rows), live)
+	}
+	var doc struct {
+		Counts struct{ Invoices int } `json:"counts"`
+	}
+	if err := json.Unmarshal(mustReadZipEntry(t, zr, "manifest.json"), &doc); err != nil {
+		t.Fatalf("unmarshal manifest.json: %v", err)
+	}
+	if doc.Counts.Invoices != 1 {
+		t.Errorf("manifest invoices = %d, want 1", doc.Counts.Invoices)
+	}
+
+	if n, err := countInvoices(context.Background(), tx, req); err != nil || n != 1 {
+		t.Errorf("countInvoices = %d, %v, want 1", n, err)
+	}
+	// The cap reads the same scope, so the twin must not trip a cap of 1.
+	if err := assemble(context.Background(), tx, req, &bytes.Buffer{},
+		assembleOpts{tenantID: tenant, subject: "system", maxInvoices: 1, now: time.Now()}); err != nil {
+		t.Errorf("assemble(1 live + 1 discarded, cap 1): %v", err)
+	}
+	p, err := preview(context.Background(), tx, req, previewOpts{maxInvoices: 1})
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if p.Counts.Invoices != 1 || p.OverLimit {
+		t.Errorf("preview invoices = %d, over_limit = %v, want 1 and false", p.Counts.Invoices, p.OverLimit)
+	}
+}
+
 // invoices.csv keeps stored amounts and carries no register footer.
 func TestAssemble_InvoicesCSVHasNoFooter(t *testing.T) {
 	super := dbSuperPool(t)

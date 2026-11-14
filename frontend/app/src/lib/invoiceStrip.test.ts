@@ -272,6 +272,17 @@ describe('stripNodes: nodes 1/2/4/5 follow status', () => {
     expect(submittedCaption).toBe(queuedCaption)
   })
 
+  it('SECAUD-50-02: a discarded invoice sits on node 1 as failed, with every later node unreached', () => {
+    // `as unknown as`: InvoiceStatus has no 'discarded' member until the strip learns it.
+    const discarded = 'discarded' as unknown as InvoiceStatus
+    for (const history of [[], HISTORY_TO_QUEUED]) {
+      const n = strip(history, null, discarded)
+      expect(n.map((x) => x.state)).toEqual(['failed', 'unreached', 'unreached', 'unreached', 'unreached'])
+      expect(n[0].label).toBe('Draft')
+      expect(n[4].label).toBe('Accepted by FIRS')
+    }
+  })
+
   it('S-5 (invoiceStrip_terminalRelabels): node 5 relabels and reddens on failed and on rejected', () => {
     const history = [...HISTORY_TO_QUEUED, h('failed', T_TERMINAL, { from_status: 'queued' })]
     const failed = strip(history, null, 'failed')

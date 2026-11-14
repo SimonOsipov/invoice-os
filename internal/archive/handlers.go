@@ -56,10 +56,10 @@ func DownloadHandler(assemble assembleFn, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		if sink.wrote {
-			// The 200 is already on the wire and the archive has no central
-			// directory (D-15). Log only, append no JSON.
+			// The 200 is on the wire and the archive has no central directory: abort so the
+			// client sees a broken download, not a short ZIP.
 			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
-			return
+			panic(http.ErrAbortHandler)
 		}
 		status, body := statusForErr(err)
 		if status == http.StatusInternalServerError {
@@ -301,7 +301,7 @@ func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.Handl
 		}
 		if sink.wrote {
 			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
-			return
+			panic(http.ErrAbortHandler)
 		}
 		writeStaffErr(w, r, log, "archive: staff assemble", err)
 	}

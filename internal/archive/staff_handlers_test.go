@@ -239,7 +239,7 @@ func TestStaffEntitiesHandler_StatusMapping(t *testing.T) {
 	}
 }
 
-func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) {
+func TestStaffDownloadHandler_ErrorAfterTheFirstByteAbortsTheConnection(t *testing.T) {
 	h := StaffDownloadHandler(func(_ context.Context, _ string, _ Request, _ string, w io.Writer, onStart func(string)) error {
 		onStart("bundle.zip")
 		if _, err := w.Write([]byte("PK-partial")); err != nil {
@@ -247,16 +247,26 @@ func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) 
 		}
 		return errors.New("db went away mid-stream")
 	}, slog.Default())
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, staffDownloadRequest(t, validQuery(), validReasonBody))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (the 200 is on the wire at the first byte)", rec.Code)
-	}
-	if !strings.HasPrefix(rec.Body.String(), "PK-partial") {
-		t.Errorf("body = %q, want the streamed bytes first", rec.Body.String())
+	rec, aborted := serveWorkspace(h, staffDownloadRequest(t, validQuery(), validReasonBody))
+	if !aborted {
+		t.Fatalf("handler returned normally after a mid-stream failure; want panic(http.ErrAbortHandler) (status %d)", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `{"error"`) {
 		t.Errorf("body %q holds a JSON error after the first byte", rec.Body.String())
+	}
+}
+
+func TestStaffDownloadHandler_ErrorBeforeTheFirstByteDoesNotAbort(t *testing.T) {
+	h := StaffDownloadHandler(func(_ context.Context, _ string, _ Request, _ string, _ io.Writer, onStart func(string)) error {
+		onStart("bundle.zip")
+		return errors.New("db went away before any byte")
+	}, slog.Default())
+	rec, aborted := serveWorkspace(h, staffDownloadRequest(t, validQuery(), validReasonBody))
+	if aborted {
+		t.Fatal("handler aborted before the first byte; want a JSON error")
+	}
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"error"`) {
+		t.Errorf("answer = %d %q, want a 500 JSON error", rec.Code, rec.Body.String())
 	}
 }
 

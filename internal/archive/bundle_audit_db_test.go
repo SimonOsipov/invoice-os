@@ -753,7 +753,7 @@ func TestRLS_AClientDisconnectMidBundleStillAuditsTheFailure(t *testing.T) {
 			}
 			w := &cancelWriter{ResponseWriter: httptest.NewRecorder(), cancel: cancel}
 
-			h.ServeHTTP(w, req)
+			serveIgnoringAbort(h, w, req)
 
 			if w.n < 3 {
 				t.Fatalf("control: the client got %d write(s), want the failing 3rd", w.n)
@@ -766,6 +766,16 @@ func TestRLS_AClientDisconnectMidBundleStillAuditsTheFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// serveIgnoringAbort runs a handler that aborts the connection after a mid-stream failure.
+func serveIgnoringAbort(h http.Handler, w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if v := recover(); v != nil && v != http.ErrAbortHandler {
+			panic(v)
+		}
+	}()
+	h.ServeHTTP(w, r)
 }
 
 // staffReasonPost is the staff download through the handler: the range in the query, the reason in the body.
@@ -824,7 +834,7 @@ func TestRLS_TheStaffReasonStaysOutOfTheCustomersRow(t *testing.T) {
 		ctx, cancel := context.WithCancel(r.ctx)
 		defer cancel()
 		w := &cancelWriter{ResponseWriter: httptest.NewRecorder(), cancel: cancel}
-		h.ServeHTTP(w, staffReasonPost(ctx, fx, body(reason)))
+		serveIgnoringAbort(h, w, staffReasonPost(ctx, fx, body(reason)))
 		if w.n < 3 {
 			t.Fatalf("control: the client got %d write(s), want the failing 3rd", w.n)
 		}

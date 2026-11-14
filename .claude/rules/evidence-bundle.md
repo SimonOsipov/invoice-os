@@ -15,7 +15,7 @@ paths:
 - Build the register workbook whole and commit. Then write the first byte.
 - Count register invoices against `maxBundleInvoices` before the first byte. The register returns 400 over the cap.
 - Refuse a register cell over 32,767 UTF-16 units with 400 before the first byte.
-- After the first ZIP byte, return without calling `bw.Close()`. A missing central directory makes every ZIP reader refuse the file.
+- After the first ZIP byte, never call `bw.Close()` on a failure. Log, then `panic(http.ErrAbortHandler)` as the workspace export does. A clean 200 over a ZIP with no central directory looks like a finished download.
 - Read child rows with `= ANY($1::uuid[])` in chunks of 500. Never JOIN `invoices`.
 - Stream rows and bodies. Never call `CollectRows`.
 - Hold at most one row's bodies in memory.

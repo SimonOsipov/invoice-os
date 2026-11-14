@@ -17,11 +17,14 @@ paths:
 - Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
 - Staff read River job counts only through `public.staff_read_river_job_counts`. `staff_reader` holds `SELECT (kind, state)` on `river_job`, nothing else.
+- Give `invoice_app` SELECT and INSERT only on `document_uploaders`. `document.Store.Upsert` is its only writer.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
 - Give `invoice_app` UPDATE on `tenants.deletion_purge_started_at`. The trigger `tenants_purge_guard` refuses any change of `deletion_scheduled_at` or `deletion_purge_started_at` once the purge has started.
+- Give `invoice_app` UPDATE on `documents.entity_id` only. The trigger `documents_binding_guard` refuses a change of a bound value.
+- Grant `EXECUTE` on `public.document_readable` to `invoice_app` only. `document.ReadableByScope` and the `extraction_jobs` and `extraction_page_images` policies call it.
 - Staff read a tenant's deletion state only through `public.staff_read_tenant_deletions`.
 - Roll back `*_staff_read_tenant_deletions.sql`, then `*_deletion_purge_started.sql`, before a test rolls back `*_workspace_deletion.sql`, and re-apply them after.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
@@ -89,6 +92,7 @@ paths:
 - `db.Reset` accepts a `pr-<N>` name only. The shard seeds also accept the exact name `nightly`.
 - The migrate job runs the account-state grant on every run, as `supabase_auth_admin`. It logs `not_ready` until GoTrue has created `auth.users`. The next run restores the policy `invitee_account_state_read` after a GoTrue upgrade drops it.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
+- Create `auth.purge_unconfirmed_account` in `db.GrantAccountStateRead`, as `supabase_auth_admin`. Grant `EXECUTE` on it to `invoice_app` only. The grant revokes `EXECUTE` from every other role on each run.
 - Connect as `invoice_gateway` only from the gateway's hand-off store, registrant and account-event outboxes, session revocations, throttle counts and the sign-up unsubscribe token. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs` and `account_event_handoffs`, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, and `EXECUTE` on `mail_unsubscribe_token(text)` (no privilege on `mail_unsubscribes`), nothing else.
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.

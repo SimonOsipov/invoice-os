@@ -109,6 +109,7 @@ import {
   REASON_PILL,
   requestBody,
   sameRect,
+  saltedCsvFile,
   selectEntity,
   setExactMapping,
   settledRead,
@@ -1971,7 +1972,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
 
   // BULK-E2E-01a: several files really are selected -- both filenames listed after one
   // setInputFiles([lagos, abuja]) call.
-  await fileInput.setInputFiles([SHARED_LAYOUT_LAGOS, SHARED_LAYOUT_ABUJA])
+  await fileInput.setInputFiles([SHARED_LAYOUT_LAGOS, SHARED_LAYOUT_ABUJA].map(saltedCsvFile))
   await expect(fileRow('shared-layout-lagos.csv'), 'both filenames listed after one multi-file pick').toBeVisible()
   await expect(fileRow('shared-layout-abuja.csv')).toBeVisible()
 
@@ -1982,7 +1983,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   // dispatched files onto the EXISTING React state, which is exactly the "drop more
   // files to add them" path the dropzone's own copy names, so this is a real exercise
   // of that path, not a shortcut around it.
-  await fileInput.setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL, PARTIAL_FIRST, PARTIAL_DUPE])
+  await fileInput.setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL, PARTIAL_FIRST, PARTIAL_DUPE].map(saltedCsvFile))
   await expect(
     page.getByText('A run accepts at most 5 files — 1 file was not added.', { exact: true }),
     'the cap names itself and the one dropped file, never a silent truncation',
@@ -2080,7 +2081,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 
   await openNewInvoice(page)
 
-  await page.locator('input[type="file"]#pf-import-file').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL])
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL].map(saltedCsvFile))
 
   const previewResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -2157,7 +2158,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
 
   await openNewInvoice(page)
 
-  await page.locator('input[type="file"]#pf-import-file').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE])
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE].map(saltedCsvFile))
 
   const previewResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),

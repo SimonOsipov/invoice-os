@@ -349,6 +349,13 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed documents fixture: %v", err)
 	}
 
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`,
+		tenantID, documentID, uuid.NewString(),
+	); err != nil {
+		t.Fatalf("seed document_uploaders fixture: %v", err)
+	}
+
 	var extractionJobID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version)

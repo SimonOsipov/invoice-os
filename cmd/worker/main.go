@@ -211,6 +211,8 @@ func main() {
 		purger.Accounts = account
 		um := &notifications.UnsubscribeMetadata{Pool: pool, Account: account, Logger: app.Logger}
 		app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("unsubscribe-metadata", um.RunOnce)))
+		up := &notifications.UnconfirmedPurge{Pool: pool, Account: account, Logger: app.Logger, Now: time.Now}
+		app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("unconfirmed-purge", up.RunOnce)))
 	}
 	pjw.Purger = purger
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))

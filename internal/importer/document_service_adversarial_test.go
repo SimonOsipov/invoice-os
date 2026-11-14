@@ -190,10 +190,9 @@ func TestServiceImportDocument_SameDocumentSameEntityTwiceQuarantinesAsDuplicate
 	}
 }
 
-// PINNED: the (tenant, entity, invoice_number) unique guard is scoped PER ENTITY. The same
-// document imported under a DIFFERENT entity is not a duplicate at all -- both writes succeed,
-// each producing its own invoice, both citing the same source_document_id.
-func TestServiceImportDocument_SameDocumentDifferentEntitiesBothWriteIndependently(t *testing.T) {
+// PINNED: a document binds to the client of its first import; an import under another client
+// is refused and writes no invoice.
+func TestServiceImportDocument_ABoundDocumentIsRefusedForAnotherEntity(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
@@ -210,27 +209,22 @@ func TestServiceImportDocument_SameDocumentDifferentEntitiesBothWriteIndependent
 	if err != nil {
 		t.Fatalf("ImportDocument(entityA): %v", err)
 	}
-	resB, err := svc.ImportDocument(callCtx, entityB, documentID)
-	if err != nil {
-		t.Fatalf("ImportDocument(entityB): %v", err)
+	if resA.QuarantinedInvoices != 0 {
+		t.Fatalf("resA=%+v, want clean", resA)
 	}
-	if resA.QuarantinedInvoices != 0 || resB.QuarantinedInvoices != 0 {
-		t.Fatalf("resA=%+v resB=%+v, want both clean (no cross-entity dedup)", resA, resB)
+	if _, err := svc.ImportDocument(callCtx, entityB, documentID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ImportDocument(entityB) of a document bound to A: err = %v, want ErrNotFound", err)
 	}
 
 	if got := countInvoicesForEntity(t, super, entityA); got != 1 {
 		t.Errorf("invoices for entity A = %d, want 1", got)
 	}
-	if got := countInvoicesForEntity(t, super, entityB); got != 1 {
-		t.Errorf("invoices for entity B = %d, want 1", got)
+	if got := countInvoicesForEntity(t, super, entityB); got != 0 {
+		t.Errorf("invoices for entity B = %d, want 0", got)
 	}
 	invA := invoiceIDByNumber(t, super, entityA, "XENT-INV")
-	invB := invoiceIDByNumber(t, super, entityB, "XENT-INV")
 	if gotDoc, _ := docInvoiceLinks(t, super, invA); gotDoc != documentID {
 		t.Errorf("entity A invoice source_document_id = %q, want %q", gotDoc, documentID)
-	}
-	if gotDoc, _ := docInvoiceLinks(t, super, invB); gotDoc != documentID {
-		t.Errorf("entity B invoice source_document_id = %q, want %q", gotDoc, documentID)
 	}
 }
 

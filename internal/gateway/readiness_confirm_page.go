@@ -44,7 +44,7 @@ if (f) {
   addEventListener('pageshow', function () { delete f.dataset.sent; b.textContent = 'Get my results'; b.disabled = false })
 }`
 
-// Filled by strings.NewReplacer, not html/template (see verifyPageHTML).
+// Filled by strings.NewReplacer, not html/template (see invitationPageHTML).
 //
 //go:embed readiness_confirm_page.html
 var readinessConfirmPageHTML string

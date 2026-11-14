@@ -85,8 +85,14 @@ func uoRows(prefix string, n int) [][]string {
 // storeDocumentAs writes one document under tenantID and returns the row.
 func storeDocumentAs(t *testing.T, svc *document.Service, tenantID, filename, contentType string, content []byte) document.Document {
 	t.Helper()
+	return storeDocumentBy(t, svc, tenantID, memberSubject, filename, contentType, content)
+}
+
+// storeDocumentBy uploads as subject, who becomes the document's uploader.
+func storeDocumentBy(t *testing.T, svc *document.Service, tenantID, subject, filename, contentType string, content []byte) document.Document {
+	t.Helper()
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
+		Subject: subject, Role: "authenticated", TenantID: tenantID,
 	})
 	doc, _, err := svc.Store(ctx, filename, contentType, int64(len(content)), bytes.NewReader(content))
 	if err != nil {

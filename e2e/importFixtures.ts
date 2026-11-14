@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 // M4-08-07 (task-176): a THIRD, independent in-memory CSV generator for
 // e2e/topology/import-wizard.spec.ts's UI-driven wizard specs. NOT shared with
 // e2e/api/import.spec.ts's or e2e/api/perf.spec.ts's own buildPerfCsv() -- the
@@ -21,6 +23,11 @@
 // (all in import-wizard.spec.ts) were rewritten against the new
 // header/tile copy rather than re-pointed, because the facts moved sources too: the
 // invoice count is now a LIVE pagination.total, not the 201 body's frozen counter.
+
+// A document binds to its first client and uploads dedupe per tenant: each call needs bytes no other client has cited.
+function freshSalt(): string {
+  return crypto.randomUUID()
+}
 
 export const PERF_HEADER = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
 
@@ -66,13 +73,15 @@ export function buildOversizedCellCsv(): string {
 // "INV-UI-" prefix purely so a run's numbers are attributable to this file if ever
 // inspected in a report -- each test creates its own fresh entity, so no collision
 // with the API suite's fixture is possible either way.
+// The salt lands on the buyer name, which no assertion reads.
 export function buildPerfCsv(invoices = 500): string {
   const lines: string[] = [PERF_HEADER]
+  const buyer = `M4-08 UI Buyer Co ${freshSalt()}`
   for (let i = 1; i <= invoices; i++) {
     const invNo = `INV-UI-${String(i).padStart(5, '0')}`
     for (let line = 1; line <= 3; line++) {
       lines.push(
-        [invNo, '2026-01-15', '87654321-0002', 'M4-08 UI Buyer Co', 'NGN', '1000.00', '75.00', '1075.00', `Item ${line}`, '1', '100.00'].join(
+        [invNo, '2026-01-15', '87654321-0002', buyer, 'NGN', '1000.00', '75.00', '1075.00', `Item ${line}`, '1', '100.00'].join(
           ',',
         ),
       )
@@ -112,7 +121,7 @@ export function buildPerfCsv(invoices = 500): string {
 // destroying the clean/violating split this fixture exists to prove. Money values
 // avoid the F5 leading-zero trap (a bare "0.00" is fine; nothing else has a leading
 // zero), mirroring perf.spec.ts's own fixture hygiene note.
-// `salt` lands on the CLEAN row's buyer name, which no assertion reads: documents dedup by content hash per tenant.
+// `salt` plus a fresh token land on the CLEAN row's buyer name, which no assertion reads.
 export function buildMixedCsv(salt = ''): string {
   const lines: string[] = [PERF_HEADER]
   lines.push(
@@ -131,7 +140,7 @@ export function buildMixedCsv(salt = ''): string {
     ),
   )
   lines.push(
-    ['INV-UI-MIX-CLEAN', '2026-01-15', '87654321-0002', `M4-08 UI Mixed Co${salt}`, 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(
+    ['INV-UI-MIX-CLEAN', '2026-01-15', '87654321-0002', `M4-08 UI Mixed Co${salt} ${freshSalt()}`, 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(
       ',',
     ),
   )
@@ -139,10 +148,12 @@ export function buildMixedCsv(salt = ''): string {
 }
 
 // buildCleanCsv(): `invoices` validated invoices on INV-UI-MIX-CLEAN's row shape; numbers are `${prefix}-${i}`.
+// A fresh token lands on the buyer name, which no assertion reads.
 export function buildCleanCsv(prefix: string, invoices = 2): string {
   const lines: string[] = [PERF_HEADER]
+  const buyer = `M4-08 UI Mixed Co ${freshSalt()}`
   for (let i = 1; i <= invoices; i++) {
-    lines.push([`${prefix}-${i}`, '2026-01-15', '87654321-0002', 'M4-08 UI Mixed Co', 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(','))
+    lines.push([`${prefix}-${i}`, '2026-01-15', '87654321-0002', buyer, 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(','))
   }
   return lines.join('\n')
 }
@@ -181,9 +192,10 @@ export function buildSingleInvoiceCsv(invoiceNumber: string): string {
 // columns and zero rows, no error) -- the wizard's Map step still renders and
 // invoice_number is still placed by hand exactly like every other fixture in this file;
 // only the final Import response differs.
-// `blankLines` trailing newlines vary the bytes (documents dedup by content hash); encoding/csv skips empty lines.
-export function buildHeaderOnlyCsv(blankLines = 0): string {
-  return PERF_HEADER + '\n'.repeat(blankLines)
+// A header has no data field to salt: 128 random bits become trailing blank lines (\n = 0, \r\n = 1); encoding/csv skips both.
+export function buildHeaderOnlyCsv(): string {
+  const bits = [...randomBytes(16)].flatMap((b) => Array.from({ length: 8 }, (_, i) => (b >> i) & 1))
+  return PERF_HEADER + bits.map((bit) => (bit ? '\r\n' : '\n')).join('')
 }
 
 // steerMarker(): the fake AI's steering marker (internal/platform/ai/fake.go's

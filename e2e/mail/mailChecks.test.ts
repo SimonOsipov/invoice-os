@@ -348,7 +348,8 @@ describe('CheckSteps', () => {
       'sign-in with the new password',
       'signup mail arrives',
       'signup mail uses the brand layout',
-      'signup link confirms the address',
+      'signup link sets the password',
+      'signup link works once',
       'newsletter mail arrives',
       'newsletter mail uses the brand layout',
       'newsletter link confirms the subscription',
@@ -385,7 +386,7 @@ describe('CheckSteps', () => {
     }
     const status = (n: string) => cs.section().steps.find((x) => x.name === n)?.status
     expect(status('signup mail uses the brand layout')).toBe('skipped')
-    expect(status('signup link confirms the address')).toBe('skipped')
+    expect(status('signup link sets the password')).toBe('skipped')
     for (const n of ['newsletter link confirms the subscription', 'reset link sets the password', 'only these mails are real']) {
       expect(status(n)).toBe('passed')
     }

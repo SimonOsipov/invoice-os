@@ -46,7 +46,7 @@ import { freshTin } from './fixtures'
 import { nightlyTarget } from '../targets'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { getInvoice, listInvoices, rawFetch } from './client'
-import { IMPORT_KEYS, PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
+import { buildHeaderOnlyCsv, IMPORT_KEYS, PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
 import { strToU8, zipSync } from 'fflate'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
@@ -412,7 +412,7 @@ test.describe('saved mapping contract (API E2E, over the deployed gateway)', () 
 
   test('SM-API-05: an import that finalizes failed saves nothing', async () => {
     const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
-    const headerOnlyId = await uploadDocument(token, IMPORT_HEADER, 'header-only.csv')
+    const headerOnlyId = await uploadDocument(token, buildHeaderOnlyCsv(), 'header-only.csv')
     const failed = await importFetch(token, buildForm(entity.id, headerOnlyId))
     expect(failed.status, 'a zero-data-row real import still creates an auditable batch').toBe(201)
     expect((failed.body as Record<string, unknown>).status, 'zero data rows finalize failed').toBe('failed')

@@ -62,6 +62,7 @@ var purgeTables = []string{
 	"extraction_rule_breaks",
 	"extraction_jobs",
 	"extraction_page_images",
+	"document_uploaders",
 	"documents",
 	"idempotency_keys",
 	"submission_rate_limits",

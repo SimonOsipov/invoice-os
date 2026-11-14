@@ -19,7 +19,6 @@ export type RegisterKind = 'firm' | 'in_house'
 
 export type RegisterValues = {
   email: string
-  password: string
   displayName: string
   workspaceName: string
   kind: RegisterKind | ''
@@ -47,8 +46,6 @@ export function validateRegisterForm(v: RegisterValues): RegisterErrors {
   const email = v.email.trim()
   if (!email) errors.email = 'Enter your work email.'
   else if (!EMAIL_RE.test(email)) errors.email = 'Enter a valid work email address.'
-  // The password is never trimmed: surrounding spaces are part of it.
-  if (!v.password) errors.password = 'Choose a password.'
   const display = nameError(v.displayName, NAME_REQUIRED)
   if (display) errors.displayName = display
   const workspace = nameError(v.workspaceName, 'Enter your company or workspace name.')
@@ -64,7 +61,6 @@ export async function registerAccount(v: RegisterValues): Promise<void> {
     method: 'POST',
     body: {
       email: v.email.trim(),
-      password: v.password,
       display_name: v.displayName.trim(),
       workspace_name: v.workspaceName.trim(),
       kind: v.kind,

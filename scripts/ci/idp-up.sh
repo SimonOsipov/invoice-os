@@ -131,8 +131,8 @@ GOTRUE_MAILER_SUBJECTS_CONFIRMATION="Confirm your ASComply account"
 export GOTRUE_MAILER_SUBJECTS_CONFIRMATION
 GOTRUE_MAILER_SUBJECTS_RECOVERY="Reset your ASComply password"
 export GOTRUE_MAILER_SUBJECTS_RECOVERY
-# The default email-sent cap (30/h) would throttle the reset specs' mail volume.
-start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e GOTRUE_MAILER_SUBJECTS_RECOVERY -e GOTRUE_RATE_LIMIT_EMAIL_SENT=100 "${per_ip[@]}" \
+# The default email-sent cap (30/h) would throttle the suite's mail volume.
+start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e GOTRUE_MAILER_SUBJECTS_RECOVERY -e GOTRUE_RATE_LIMIT_EMAIL_SENT=1000 "${per_ip[@]}" \
   -e GOTRUE_MAILER_TEMPLATES_RECOVERY="http://$smtp_host:$verify/emails/recovery.html" -e GOTRUE_MAILER_URLPATHS_RECOVERY="http://localhost:$verify/auth/reset-password" \
   -e GOTRUE_MAILER_TEMPLATES_CONFIRMATION="http://$smtp_host:$verify/emails/confirmation.html" \
   -e GOTRUE_MAILER_AUTOCONFIRM=false \

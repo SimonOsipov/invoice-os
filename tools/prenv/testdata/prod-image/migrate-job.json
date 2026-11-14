@@ -1,0 +1,22 @@
+{
+  "apiVersion": "run.googleapis.com/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "migrate"
+  },
+  "spec": {
+    "template": {
+      "spec": {
+        "template": {
+          "spec": {
+            "containers": [
+              {
+                "image": "africa-south1-docker.pkg.dev/ascomply-preview/images/migrate:9ad5fad6fe39dd9859a095811ce529a875e3f7e0"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

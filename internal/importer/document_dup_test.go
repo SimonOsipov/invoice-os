@@ -27,8 +27,7 @@
 // truly overlaps -- this is the one assertion in the file that actually distinguishes "raced"
 // from "serialized-and-happened-to-match." Also added: TestServiceImportDocument_
 // EightConcurrentRacersYieldExactlyOneWinnerSevenLosers (wider N), TestServiceImportDocument_
-// MixedCollisionRaceIsolatesPerEntityOutcomes (same document/different entities interleaved with
-// a same-entity collision), TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFrom
+// MixedCollisionRaceIsolatesPerEntityOutcomes, TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFrom
 // DuplicateQuarantineUnderRace (two quarantine reasons in one race stay distinguishable).
 package importer
 
@@ -539,6 +538,9 @@ func TestServiceImportDocument_MixedCollisionRaceIsolatesPerEntityOutcomes(t *te
 
 	sharedDoc := docSeedDocument(t, super, tenantID)
 	docSeedExtraction(t, super, tenantID, sharedDoc, docCleanValues(sharedNumber))
+	// A document binds to one client, so entity B's racer gets its own document with the same number.
+	sharedDocB := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, sharedDocB, docCleanValues(sharedNumber))
 
 	collideDoc1 := docSeedDocument(t, super, tenantID)
 	docSeedExtraction(t, super, tenantID, collideDoc1, docCleanValues(collideNumber))
@@ -551,11 +553,11 @@ func TestServiceImportDocument_MixedCollisionRaceIsolatesPerEntityOutcomes(t *te
 	type mixRacer struct {
 		entityID, documentID string
 	}
-	// 0/1 share a document across two entities (no collision); 2/3 share an entity and number
+	// 0/1 share a number across two entities (no collision); 2/3 share an entity and number
 	// (collision). All four release from the same close(start) below.
 	racers := []mixRacer{
 		{entityA, sharedDoc},
-		{entityB, sharedDoc},
+		{entityB, sharedDocB},
 		{entityA, collideDoc1},
 		{entityA, collideDoc2},
 	}

@@ -259,16 +259,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatalf("opening the link reached GoTrue /verify %d times: %v", len(got), got)
 		}
 
-		// Through main's mux: a POST with the token only in the URL fails, and other methods get 405.
-		resp, err = client.Post(link, "application/x-www-form-urlencoded", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verify=failed" {
-			t.Fatalf("POST with the token in the URL answered %d Location %q, want 303 ?verify=failed", resp.StatusCode, resp.Header.Get("Location"))
-		}
-		for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodOptions} {
+		// Through main's mux: the link takes GET and HEAD only; no POST /auth/verify route is left.
+		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {
 			req, _ := http.NewRequest(method, link, nil)
 			resp, err := client.Do(req)
 			if err != nil {
@@ -284,6 +276,7 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 
 		action, values := pageForm(t, link, page)
+		values.Set("password", "new-password-1")
 		resp, err = client.PostForm(action, values)
 		if err != nil {
 			t.Fatal(err)

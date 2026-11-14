@@ -45,7 +45,7 @@ import { seedConsent } from '../smoke/landingConsent'
 import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
 import { isConfirmPage, STATE_43 } from './verifyLink'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
+import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, PHONE_WIDTHS, WIDE_WIDTHS } from './layout'
 
 const { SHARD, PERSONAS: API_PERSONAS } = shardPersonas('auth.spec.ts')
 
@@ -1569,7 +1569,7 @@ test('deployed app: a real sign-in names the account holder on the identity card
 })
 
 // frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
-const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
 async function openMailedLink(page: Page, invite = false): Promise<URL> {
@@ -1577,50 +1577,6 @@ async function openMailedLink(page: Page, invite = false): Promise<URL> {
   await page.waitForURL((u) => isConfirmPage(u, invite), { timeout: 30_000 })
   return new URL(page.url())
 }
-
-test('the emailed link reaches the confirm page through the app, and a bogus click lands on the failed notice', async ({ page }, testInfo) => {
-  const errors = collectErrors(page)
-  const posts = recordPosts(page, '/auth/verify')
-  const confirmUrl = await openMailedLink(page)
-  expect(confirmUrl.searchParams.get('state'), 'the confirm page state').toMatch(STATE_43)
-  const button = page.getByRole('button')
-
-  const readings: { width: number; fontSize: string; fontWeight: string }[] = []
-  for (const width of [...WIDE_WIDTHS, 375]) {
-    const height = 1080
-    await page.setViewportSize({ width, height })
-    await page.goto(confirmUrl.href)
-    await expect(button, `one button at ${width}px`).toHaveCount(1)
-    await expect(button).toHaveText('Confirm my email')
-    const card = page.locator('main')
-    const [cardBox, buttonBox] = await Promise.all([card.boundingBox(), button.boundingBox()])
-    if (!cardBox || !buttonBox) throw new Error(`card or button rendered no box at ${width}px`)
-
-    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
-    expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
-    // The gateway page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
-    await noSidewaysScroll(page, 'the confirm page', width)
-    // A dropped `font` shorthand computes the browser default (13.333px / 400).
-    const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
-    expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
-    readings.push({ width, ...reading })
-  }
-  expect(readings.map((r) => r.width), 'widths measured').toEqual([...WIDE_WIDTHS, 375])
-  await testInfo.attach('button-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
-
-  // Copied before the click: the landing navigation may log its own errors.
-  const beforeClick = [...errors]
-  expect(beforeClick, `console errors on the confirm page:\n${beforeClick.join('\n')}`).toEqual([])
-
-  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
-  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
-  await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
-  expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
-  for (const width of [...WIDE_WIDTHS, 375]) {
-    await page.setViewportSize({ width, height: 1080 })
-    await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')
-  }
-})
 
 // internal/gateway/unsubscribe_page.go unsubscribeDoneCopy.
 const UNSUBSCRIBE_DONE =
@@ -1781,42 +1737,53 @@ test('the confirmed notice sits clear of the sidebar at each wide width', async 
   }
 })
 
-test("the invitee's set-password link opens one bounded form, and a bogus token's double-submit lands on the failed notice", async ({ page }) => {
+test('the emailed link opens one bounded set-password form, invite or not, and a bogus double-submit lands on the failed notice', async ({ page }) => {
+  test.setTimeout(180_000)
   const errors = collectErrors(page)
   const posts = recordPosts(page, '/auth/invitation/password')
   const password = page.locator('input[name="password"]')
   const button = page.getByRole('button')
-  // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
-  const pageUrl = await openMailedLink(page, true)
-  const state = pageUrl.searchParams.get('state')
-  expect(state, 'the set-password page state').toMatch(STATE_43)
-  expect(pageUrl.searchParams.get('invite'), 'the invite flag').toBe('1')
-  await expect(page.locator('input[name="state"]'), 'the form holds the minted state').toHaveValue(state ?? '')
+  const widths = [...WIDE_WIDTHS, ...PHONE_WIDTHS]
+  for (const invite of [false, true]) {
+    const label = invite ? 'invite link' : 'plain link'
+    const errorsFrom = errors.length
+    const postsFrom = posts.length
+    // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
+    const pageUrl = await openMailedLink(page, invite)
+    const state = pageUrl.searchParams.get('state')
+    expect(state, `${label}: the set-password page state`).toMatch(STATE_43)
+    await expect(page.locator('input[name="state"]'), `${label}: the form holds the minted state`).toHaveValue(state ?? '')
 
-  for (const width of [...WIDE_WIDTHS, 375]) {
-    const height = 1080
-    await page.setViewportSize({ width, height })
+    for (const width of widths) {
+      const height = 1080
+      await page.setViewportSize({ width, height })
+      await page.goto(pageUrl.href)
+      await expect(page.locator('form'), `${label}: one form at ${width}px`).toHaveCount(1)
+      await expect(password, `${label}: one password input at ${width}px`).toHaveCount(1)
+      await expect(button, `${label}: one button at ${width}px`).toHaveCount(1)
+      const card = page.locator('main')
+      const [cardBox, formBox] = await Promise.all([card.boundingBox(), page.locator('form').boundingBox()])
+      if (!cardBox || !formBox) throw new Error(`card or form rendered no box at ${width}px`)
+      expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `${label}: the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
+      expect(enclosesRect(cardBox, formBox, 1), `${label}: the form leaves the card at ${width}px (${JSON.stringify({ cardBox, formBox })})`).toBe(true)
+      await noSidewaysScroll(page, 'the set-password page', width)
+    }
+
+    // Copied before the submit: the landing navigation may log its own errors.
+    const beforeSubmit = errors.slice(errorsFrom)
+    expect(beforeSubmit, `${label}: console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
+
     await page.goto(pageUrl.href)
-    await expect(page.locator('form'), `one form at ${width}px`).toHaveCount(1)
-    await expect(password, `one password input at ${width}px`).toHaveCount(1)
-    await expect(button, `one button at ${width}px`).toHaveCount(1)
-    const card = page.locator('main')
-    const [cardBox, formBox] = await Promise.all([card.boundingBox(), page.locator('form').boundingBox()])
-    if (!cardBox || !formBox) throw new Error(`card or form rendered no box at ${width}px`)
-    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
-    expect(enclosesRect(cardBox, formBox, 1), `the form leaves the card at ${width}px (${JSON.stringify({ cardBox, formBox })})`).toBe(true)
-    await noSidewaysScroll(page, 'the set-password page', width)
+    await password.fill(crypto.randomUUID().slice(0, 16))
+    await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+    await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
+    await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+    expect(posts.length - postsFrom, `${label}: POST /auth/invitation/password requests sent by the double-click`).toBe(1)
+    for (const width of [...WIDE_WIDTHS, 375]) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')
+    }
   }
-
-  const beforeSubmit = [...errors]
-  expect(beforeSubmit, `console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
-
-  await page.goto(pageUrl.href)
-  await password.fill(crypto.randomUUID().slice(0, 16))
-  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
-  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
-  await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
-  expect(posts.length, 'POST /auth/invitation/password requests sent by the double-click').toBe(1)
 })
 
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
@@ -2594,6 +2561,10 @@ const KIND_LABEL: Record<TenantKind, string> = {
   in_house: 'For our own company — in-house',
 }
 const CREATE = 'Create an account'
+// frontend/landing/src/components/RegisterModal.tsx: the success text after "{sentTo}".
+const REGISTER_SENT = 'a link to confirm the address and choose your password is on its way to'
+// frontend/landing/src/components/MarketingConsent.tsx MARKETING_CONSENT_TEXT.
+const MARKETING_CONSENT_TEXT = 'Allow marketing communications: ASComply Africa may email me product news and offers. I can unsubscribe at any time.'
 
 // Opens the registration window through the sign-in window (one "Sign in" click bounces for a state), fills it, submits, and ends on "Check your email".
 // A firstEmail is submitted first: the window must refuse it inline and keep every other field.
@@ -2608,7 +2579,7 @@ async function registerThroughLanding(page: Page, account: RealAccount, kind: Te
   const submit = dialog.getByRole('button', { name: 'Create account →' })
 
   await email.fill(firstEmail ?? account.email)
-  await dialog.getByLabel('Password', { exact: true }).fill(account.password)
+  await expect(dialog.getByLabel('Password'), 'the window asks for no password').toHaveCount(0)
   await dialog.getByLabel('Your name', { exact: true }).fill(account.displayName)
   await dialog.getByLabel('Workspace name', { exact: true }).fill(account.workspaceName)
   await dialog.getByRole('radio', { name: KIND_LABEL[kind] }).check()
@@ -2620,7 +2591,6 @@ async function registerThroughLanding(page: Page, account: RealAccount, kind: Te
     await expect(refusal).toHaveCount(1)
     await expect(refusal).toHaveText(FREE_MAIL_REFUSED)
     await expect(email).toHaveAttribute('aria-invalid', 'true')
-    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue(account.password)
     await expect(dialog.getByLabel('Your name', { exact: true })).toHaveValue(account.displayName)
     await expect(dialog.getByLabel('Workspace name', { exact: true })).toHaveValue(account.workspaceName)
     await expect(dialog.getByRole('radio', { name: KIND_LABEL[kind] })).toBeChecked()
@@ -2630,6 +2600,24 @@ async function registerThroughLanding(page: Page, account: RealAccount, kind: Te
   await submit.click()
   await expect(dialog.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(dialog).toContainText(account.email)
+  await expect(dialog).toContainText(REGISTER_SENT)
+}
+
+// The registration an API call makes with the answers the window sends and a password the test knows.
+// A fork mails no link, so a window registrant's random password is unknowable.
+async function registerTwin(account: RealAccount, kind: TenantKind, marketing: boolean): Promise<void> {
+  const res = await rawFetch('/auth/register', {
+    method: 'POST',
+    body: {
+      email: account.email,
+      password: account.password,
+      workspace_name: account.workspaceName,
+      display_name: account.displayName,
+      kind,
+      ...(marketing && { marketing_consent_text: MARKETING_CONSENT_TEXT }),
+    },
+  })
+  if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
 async function expectNoDialog(page: Page): Promise<void> {
@@ -2658,21 +2646,21 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     { kind: 'firm', account: firm, path: '/' },
     { kind: 'in_house', account: inHouse, path: '/clients' },
   ] as const) {
-    await test.step(`${kind}: registers through the landing window`, async () => {
+    await test.step(`${kind}: registers a fresh address through the landing window`, async () => {
       // The firm pass submits a free-mail address first; the in-house pass registers directly.
-      await registerThroughLanding(page, account, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined, kind === 'firm')
+      await registerThroughLanding(page, { ...account, email: `window-${account.email}` }, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined, kind === 'firm')
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
-      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token runs landing -> app -> the
-      // gateway confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
-      // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
-      // text and that no dialog opens, not that the gateway verified anything. The verified redirect
-      // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
+      // The failed half is real: a bogus token runs landing -> app -> the gateway set-password page,
+      // and its submit makes the gateway answer 303 to ?verify=failed.
+      // `?verified=1` below is COPY-ONLY: it proves the notice text, not that the gateway verified anything.
+      // The verified redirect is proven by the IdP suite and the nightly e2e/mail spec.
       await openMailedLink(page)
+      await page.locator('input[name="password"]').fill(account.password)
       await Promise.all([
         page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }),
-        page.getByRole('button', { name: 'Confirm my email' }).click(),
+        page.getByRole('button').click(),
       ])
       await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
       await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
@@ -2683,7 +2671,8 @@ test('deployed journey: a stranger registers through the landing and lands in a 
       await expectNoDialog(page)
     })
 
-    await test.step(`${kind}: signs in and lands in the workspace it registered`, async () => {
+    await test.step(`${kind}: signs in and lands in the workspace its registration answers name`, async () => {
+      await registerTwin(account, kind, kind === 'firm')
       const urls = recordUrls(page)
       await signInAtFrontDoor(page, account, path)
       expect(urls.length, 'recorded navigations').toBeGreaterThan(0)
@@ -2871,7 +2860,7 @@ async function resendFromSignIn(page: Page, dialog: Locator, email: string, post
 
 async function resendFromView(page: Page, dialog: Locator, email: string, posts: string[]): Promise<void> {
   const card = dialog.locator(':scope > div')
-  const sentTo = dialog.getByText('a confirmation link is on its way to')
+  const sentTo = dialog.getByText(REGISTER_SENT)
   const resend = dialog.getByRole('button', { name: RESEND, exact: true })
   const close = dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })
   const notice = dialog.getByRole('status')
@@ -2923,7 +2912,7 @@ test('deployed landing: the check-your-email view and the unverified sign-in err
       await registerThroughLanding(viewPage, { ...freshRegistration('firm'), email: address }, 'firm')
       await viewPage.setViewportSize({ width: 375, height: TALL })
       const dialog = viewPage.getByRole('dialog', { name: CREATE })
-      const sentTo = dialog.getByText('a confirmation link is on its way to')
+      const sentTo = dialog.getByText(REGISTER_SENT)
       await expect(sentTo).toContainText(address)
       await expectStack(
         viewPage,

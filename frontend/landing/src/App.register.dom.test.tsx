@@ -159,13 +159,12 @@ async function type(input: HTMLInputElement, value: string): Promise<void> {
   })
 }
 
-type Fill = { email?: string; password?: string; name?: string; workspace?: string; kind?: 'firm' | 'in_house' | null }
-const FULL: Required<Fill> = { email: 'ada@okafor.ng', password: 'pw-123456', name: 'Ada Okafor', workspace: 'Okafor & Partners', kind: 'firm' }
+type Fill = { email?: string; name?: string; workspace?: string; kind?: 'firm' | 'in_house' | null }
+const FULL: Required<Fill> = { email: 'ada@okafor.ng', name: 'Ada Okafor', workspace: 'Okafor & Partners', kind: 'firm' }
 
 async function fillForm(d: HTMLElement, over: Fill = {}): Promise<void> {
   const v = { ...FULL, ...over }
   await type(labelled(d, 'Work email'), v.email)
-  await type(labelled(d, 'Password'), v.password)
   await type(labelled(d, 'Your name'), v.name)
   await type(labelled(d, 'Workspace name'), v.workspace)
   if (v.kind) {
@@ -289,20 +288,19 @@ describe('the entries', () => {
 })
 
 describe('the window and its form', () => {
-  it('the window asks five things and preselects no kind', async () => {
+  it('the window has no password field, asks four things and preselects no kind', async () => {
     await mountApp()
     const d = await openRegistration()
     expect(d.getAttribute('aria-modal')).toBe('true')
 
     const email = labelled(d, 'Work email')
-    const password = labelled(d, 'Password')
     const name = labelled(d, 'Your name')
     const workspace = labelled(d, 'Workspace name')
     expect(email.type).toBe('email')
     expect(email.autocomplete).toBe('email')
-    expect(password.type).toBe('password')
-    expect(password.autocomplete).toBe('new-password')
-    const order = [email, password, name, workspace]
+    expect(Array.from(d.querySelectorAll('label')).some((l) => l.textContent?.trim() === 'Password'), 'no password field').toBe(false)
+    expect(d.querySelector('input[type="password"]')).toBeNull()
+    const order = [email, name, workspace]
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING, `field ${i} follows field ${i - 1}`).toBeTruthy()
     }
@@ -340,7 +338,7 @@ describe('the window and its form', () => {
     const d = await openRegistration()
 
     await submit(d)
-    expect(alerts(d).length, 'every missing field shows its message').toBe(5)
+    expect(alerts(d).length, 'every missing field shows its message').toBe(4)
     expect(document.activeElement, 'focus on the first invalid field').toBe(labelled(d, 'Work email'))
     expect(fetchMock).not.toHaveBeenCalled()
 
@@ -351,7 +349,7 @@ describe('the window and its form', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('a valid submit posts the five values once', async () => {
+  it('a valid submit posts the four values once', async () => {
     const fetchMock = stubFetch(() => json(202, { status: 'verification_pending' }))
     await mountApp()
     const d = await openRegistration()
@@ -365,7 +363,6 @@ describe('the window and its form', () => {
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({
       email: 'ada@okafor.ng',
-      password: FULL.password,
       display_name: FULL.name,
       workspace_name: FULL.workspace,
       kind: 'in_house',
@@ -388,7 +385,6 @@ describe('the outcomes', () => {
     expect(alert, 'expected the policy text').toBeDefined()
     expect(email.getAttribute('aria-describedby')).toBe(alert!.id)
     expect(alert!.id).not.toBe('')
-    expect(labelled(d, 'Password').value).toBe(FULL.password)
     expect(labelled(d, 'Your name').value).toBe(FULL.name)
     expect(labelled(d, 'Workspace name').value).toBe(FULL.workspace)
     expect(email.value).toBe('ada@gmail.com')
@@ -398,7 +394,7 @@ describe('the outcomes', () => {
     await type(email, 'ada@okafor.ng')
     expect(alerts(d).join('|')).not.toContain(FREE_MAIL_REFUSED)
     expect(email.hasAttribute('aria-describedby')).toBe(false)
-    expect(labelled(d, 'Password').value, 'editing the email keeps the rest').toBe(FULL.password)
+    expect(labelled(d, 'Your name').value, 'editing the email keeps the rest').toBe(FULL.name)
   })
 
   it('every 202 shows the same check-your-email view', async () => {
@@ -414,7 +410,7 @@ describe('the outcomes', () => {
       expect(d.querySelector('button[type="submit"]')).toBeNull()
       const heading = Array.from(d.querySelectorAll('h1, h2, h3')).find((h) => h.textContent?.trim() === 'Check your email')
       expect(heading, 'expected the Check your email heading').toBeDefined()
-      expect(d.textContent).toContain(`If this address can be registered, a confirmation link is on its way to ${address}. Open it, confirm your email, then sign in.`)
+      expect(d.textContent).toContain(`If this address can be registered, a link to confirm the address and choose your password is on its way to ${address}. Open it and choose your password.`)
       expect(byText(d, 'Close'), 'expected a Close button').toBeDefined()
       views.push([address, d.textContent ?? ''])
     }
@@ -442,7 +438,7 @@ describe('the outcomes', () => {
       ['429', () => json(429, { error: 'rate limited' }), 'Too many attempts. Try again in a minute.'],
       ['502', () => json(502, { error: 'bad gateway' }), 'Registration is unavailable right now. Try again shortly.'],
       ['network', () => Promise.reject(new TypeError('Failed to fetch')), 'Registration is unavailable right now. Try again shortly.'],
-      ['other 400', () => json(400, { error: 'Password should be at least 8 characters.' }), 'Password should be at least 8 characters.'],
+      ['other 400', () => json(400, { error: 'email is required' }), 'email is required'],
     ]
     for (const [name, make, copy] of cases) {
       stubFetch(make)
@@ -459,7 +455,7 @@ describe('the outcomes', () => {
       expect(btn!.disabled, `${name}: submit re-enabled`).toBe(false)
       expect(btn!.textContent?.trim()).toBe('Create account →')
       expect(labelled(d, 'Work email').disabled, `${name}: fields re-enabled`).toBe(false)
-      expect(labelled(d, 'Password').value, `${name}: values kept`).toBe(FULL.password)
+      expect(labelled(d, 'Your name').value, `${name}: values kept`).toBe(FULL.name)
     }
   })
 
@@ -720,7 +716,7 @@ describe('the product-email notice and the marketing box', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const body = sentBody(fetchMock)
     expect('marketing_consent_text' in body, 'no key at all').toBe(false)
-    expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+    expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'workspace_name'])
     expect(d.textContent).toContain('Check your email')
     expect(alerts(d)).toEqual([])
   })
@@ -852,7 +848,6 @@ describe('adversarial: validation through the window', () => {
     const cases: [string, Fill, string, string][] = [
       ['empty email', { email: '' }, 'Work email', 'Enter your work email.'],
       ['malformed email', { email: 'ada@' }, 'Work email', 'Enter a valid work email address.'],
-      ['empty password', { password: '' }, 'Password', 'Choose a password.'],
       ['empty name', { name: '' }, 'Your name', 'Enter your name.'],
       ['blank name', { name: '   ' }, 'Your name', 'Enter your name.'],
       ['empty workspace', { workspace: '' }, 'Workspace name', 'Enter your company or workspace name.'],
@@ -895,17 +890,16 @@ describe('adversarial: validation through the window', () => {
     await mountApp()
     const d = await openRegistration()
     await submit(d)
-    expect(alerts(d).length, 'control: five messages after an empty submit').toBe(5)
+    expect(alerts(d).length, 'control: four messages after an empty submit').toBe(4)
 
     await type(labelled(d, 'Work email'), 'ada@okafor.ng')
-    expect(alerts(d).length).toBe(4)
+    expect(alerts(d).length).toBe(3)
     expect(labelled(d, 'Work email').hasAttribute('aria-describedby')).toBe(false)
-    expect(labelled(d, 'Password').hasAttribute('aria-describedby'), 'the password message stays').toBe(true)
 
     await act(async () => {
       d.querySelector<HTMLInputElement>('input[type="radio"][value="firm"]')!.click()
     })
-    expect(alerts(d).length, 'picking a kind clears the kind message only').toBe(3)
+    expect(alerts(d).length, 'picking a kind clears the kind message only').toBe(2)
     expect(alerts(d)).not.toContain('Choose how this workspace files invoices.')
   })
 
@@ -923,8 +917,8 @@ describe('adversarial: validation through the window', () => {
 
     const form = d.querySelector('form')!
     const inputs = Array.from(d.querySelectorAll('input'))
-    expect(inputs.length, 'four text fields, two radios and the marketing checkbox').toBe(7)
-    expect(d.querySelectorAll('input:not([type=radio]):not([type=checkbox])').length, 'the smoke spec locator selects the four text fields').toBe(4)
+    expect(inputs.length, 'three text fields, two radios and the marketing checkbox').toBe(6)
+    expect(d.querySelectorAll('input:not([type=radio]):not([type=checkbox])').length, 'the smoke spec locator selects the three text fields').toBe(3)
     expect(inputs.every((i) => i.form === form), 'every field sits in the one form, so Enter in any of them submits it').toBe(true)
     expect(form.querySelectorAll('button[type="submit"]').length).toBe(1)
 
@@ -947,7 +941,6 @@ describe('adversarial: outcomes through the window', () => {
     const email = labelled(d, 'Work email')
     expect(email.getAttribute('aria-describedby'), 'control: the refusal shows').toBeTruthy()
 
-    await type(labelled(d, 'Password'), 'another-pw-1')
     await type(labelled(d, 'Your name'), 'Ada O.')
     await type(labelled(d, 'Workspace name'), 'Okafor Ltd')
     await act(async () => {

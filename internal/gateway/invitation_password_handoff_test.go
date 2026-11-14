@@ -23,12 +23,18 @@ type ihRig struct {
 	log   *bytes.Buffer
 }
 
-func newIHRig(t *testing.T, store *HandoffStore) *ihRig {
+func newIHRig(t *testing.T, store *HandoffStore) *ihRig { return newIHRigSink(t, store, nil) }
+
+// newIHRigSink is newIHRig for a registrant: /verify confirms the coMetaFull user and the sink hears the hand-off.
+func newIHRigSink(t *testing.T, store *HandoffStore, sink ContactSink) *ihRig {
 	t.Helper()
 	f := newResetGoTrue(t)
+	if sink != nil {
+		f.verify = answer(http.StatusOK, coSession(coUser(coMetaFull)))
+	}
 	log, buf := captureLog()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store, nil, lrThrottle(time.Now), true)
+	h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, store, nil, lrThrottle(time.Now), true)
 	return &ihRig{f: f, store: store, h: h, log: buf}
 }
 
@@ -478,5 +484,45 @@ func TestInvitationPassword_ParallelSubmitsNeverCrossCodesOrSessions(t *testing.
 	}
 	if len(seen) != n {
 		t.Fatalf("%d codes for %d submits", len(seen), n)
+	}
+}
+
+// The registrant contact goes out once the address is confirmed, whether or not a hand-off code is minted.
+func TestInvitationPassword_HandsOffTheRegistrantWhetherOrNotACodeIsMinted(t *testing.T) {
+	full := func() *HandoffStore {
+		store := testHandoffStore()
+		for range HandoffMaxLive {
+			store.Put("x", [32]byte{})
+		}
+		return store
+	}
+	rows := []struct {
+		name     string
+		store    func() *HandoffStore
+		state    string
+		token    http.HandlerFunc
+		wantCode bool
+	}{
+		{"valid state", testHandoffStore, vhState, nil, true},
+		{"no state", testHandoffStore, "", nil, false},
+		{"malformed state", testHandoffStore, "short", nil, false},
+		{"grant refused", testHandoffStore, vhState, answer(http.StatusBadRequest, gtInvalidCredentials), false},
+		{"store full", full, vhState, nil, false},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			sink := newRecSink(nil)
+			g := newIHRigSink(t, c.store(), sink)
+			if c.token != nil {
+				g.f.token = c.token
+			}
+
+			rec := g.submit(t, c.state)
+
+			if got := strings.Contains(rec.Header().Get("Location"), "&handoff="); got != c.wantCode {
+				t.Errorf("Location %q: hand-off code present = %v, want %v", rec.Header().Get("Location"), got, c.wantCode)
+			}
+			requireOneHandOff(t, sink, coWant)
+		})
 	}
 }

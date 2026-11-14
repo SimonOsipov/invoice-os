@@ -16,9 +16,10 @@ func exchange(t *testing.T, gw, code, state string) (int, map[string]any) {
 }
 
 func TestIdP_ConfirmClickSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
-	w := newPreRegisteredInviteWorld(t, "logfix04a-", "pw-"+uuid.NewString(), false)
+	pw := "pw-" + uuid.NewString()
+	w := newPreRegisteredInviteWorld(t, "logfix04a-", pw, false)
 
-	code, state := followSignedIn(t, confirmationLink(t, w.email))
+	code, state := followSignedIn(t, confirmationLink(t, w.email), pw)
 	status, session := exchange(t, w.gw, code, state)
 	access, _ := session["access_token"].(string)
 	if status != http.StatusOK || access == "" {
@@ -32,9 +33,10 @@ func TestIdP_ConfirmClickSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
 }
 
 func TestIdP_ConfirmClickSessionRefreshes(t *testing.T) {
-	w := newPreRegisteredInviteWorld(t, "logfix04b-", "pw-"+uuid.NewString(), false)
+	pw := "pw-" + uuid.NewString()
+	w := newPreRegisteredInviteWorld(t, "logfix04b-", pw, false)
 
-	code, state := followSignedIn(t, confirmationLink(t, w.email))
+	code, state := followSignedIn(t, confirmationLink(t, w.email), pw)
 	status, session := exchange(t, w.gw, code, state)
 	refresh, _ := session["refresh_token"].(string)
 	if status != http.StatusOK || refresh == "" {
@@ -52,14 +54,14 @@ func TestIdP_ConfirmTwiceSignsInOnceThenFails(t *testing.T) {
 	u := registrant(t, gw)
 	link := confirmationLink(t, u.email)
 
-	if code, _ := followSignedIn(t, link); code == "" {
+	if code, _ := followSignedIn(t, link, u.password); code == "" {
 		t.Fatal("first click returned no code")
 	}
-	if got := clickWithState(t, link, newState(t)); got != siteURL+"/?verify=failed" {
+	if got := clickWithState(t, link, newState(t), u.password); got != siteURL+"/?verify=failed" {
 		t.Errorf("second click = %q, want %s/?verify=failed", got, siteURL)
 	}
-	if !strings.Contains(logs.String(), `"error_code":"otp_expired"`) {
-		t.Errorf("gateway log lacks error_code otp_expired: %s", logs)
+	if !strings.Contains(logs.String(), `"msg":"invitation-password: gotrue refused the link","upstream_status":403`) {
+		t.Errorf("gateway log lacks the refused link with upstream_status 403: %s", logs)
 	}
 }
 
@@ -69,13 +71,13 @@ func TestIdP_ConfirmOnAnotherDeviceSignsInThere(t *testing.T) {
 	s1, s2 := newState(t), newState(t)
 
 	u1 := registrant(t, gw)
-	code := handoffCode(t, clickWithState(t, confirmationLink(t, u1.email), s2))
+	code := handoffCode(t, clickWithState(t, confirmationLink(t, u1.email), s2, u1.password))
 	if status, body := exchange(t, gw, code, s1); status != http.StatusBadRequest {
 		t.Fatalf("exchange with the other device's state: status %d, body %v; want 400", status, body)
 	}
 
 	u2 := registrant(t, gw)
-	code = handoffCode(t, clickWithState(t, confirmationLink(t, u2.email), s2))
+	code = handoffCode(t, clickWithState(t, confirmationLink(t, u2.email), s2, u2.password))
 	status, session := exchange(t, gw, code, s2)
 	if got, _ := session["access_token"].(string); status != http.StatusOK || got == "" {
 		t.Fatalf("exchange with the clicking device's state: status %d, body %v; want 200", status, session)
@@ -88,11 +90,11 @@ func TestIdP_ConfirmAfterSignInFails(t *testing.T) {
 	u := registrant(t, gw)
 	link := confirmationLink(t, u.email)
 
-	if got := follow(t, link); got != siteURL+"/?verified=1" {
+	if got := follow(t, link, u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("stateless confirm = %q, want %s/?verified=1", got, siteURL)
 	}
 	accessToken(t, base, u)
-	if got := clickWithState(t, link, newState(t)); got != siteURL+"/?verify=failed" {
+	if got := clickWithState(t, link, newState(t), u.password); got != siteURL+"/?verify=failed" {
 		t.Errorf("click after sign-in = %q, want %s/?verify=failed", got, siteURL)
 	}
 }

@@ -410,7 +410,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     const mint = (csv: string, filename: string) => createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
     const a = await mint(buildCleanCsv('INV-NCOV02-A'), 'run-a.csv')
     const b = await mint(buildCleanCsv('INV-NCOV02-B'), 'run-b.csv')
-    const c = await mint(buildHeaderOnlyCsv(1), 'run-empty.csv')
+    const c = await mint(buildHeaderOnlyCsv(), 'run-empty.csv')
     // Fixture check: the clean files mint two validated invoices each; a header-only file mints none.
     for (const batch of [a, b]) {
       expect(batch.ready_invoices, 'a clean file mints two invoices').toBe(2)
@@ -445,8 +445,8 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(empty).toContainText('0 of 0 rows produced an invoice')
 
     // Every batch rejected: the run page lists each file and its reason (ReviewBatch.tsx RejectedRun).
-    const d = await mint(buildHeaderOnlyCsv(2), 'run-empty-2.csv')
-    const e = await mint(buildHeaderOnlyCsv(3), 'run-empty-3.csv')
+    const d = await mint(buildHeaderOnlyCsv(), 'run-empty-2.csv')
+    const e = await mint(buildHeaderOnlyCsv(), 'run-empty-3.csv')
     expect(d.ready_invoices, 'a header-only file mints no invoice').toBe(0)
     expect(e.ready_invoices, 'a header-only file mints no invoice').toBe(0)
     await page.goto(`${APP_URL}/imports/${d.id},${e.id}/review`)

@@ -5,7 +5,7 @@ import { Button } from './ds/Button'
 
 const COPY = {
   verified: 'Your email address is verified. Please sign in.',
-  failed: 'This link is already used or expired. If you confirmed your email, sign in.',
+  failed: 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.',
   reset: RESET_DONE,
   'reset-failed': RESET_FAILED,
   ...INVITE_NOTICES,
@@ -39,9 +39,9 @@ export function VerifyNotice({ outcome, onDismiss, onRequestReset, onSignIn }: {
         }}
       >
         <span>{COPY[outcome]}</span>
-        {outcome === 'reset-failed' && onRequestReset && (
+        {(outcome === 'reset-failed' || outcome === 'failed') && onRequestReset && (
           <Button variant="text" onClick={onRequestReset} style={{ color: 'inherit', borderBottomColor: 'currentColor' }}>
-            Request a new link
+            {outcome === 'failed' ? 'Forgot password' : 'Request a new link'}
           </Button>
         )}
         {outcome === 'failed' && onSignIn && (

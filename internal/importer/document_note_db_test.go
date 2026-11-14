@@ -676,11 +676,9 @@ func noAge(t *testing.T, f *dnFix, id string, age time.Duration) {
 // noBatch files a batch of f.doc under entity, back-dated by age.
 func noBatch(t *testing.T, f *dnFix, entity string, age time.Duration) {
 	t.Helper()
-	if _, err := f.super.Exec(context.Background(),
+	csLegacyTx(t, f.super,
 		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors, created_at)
-		 VALUES ($1, $2, $3, 'completed', 0, 0, 0, '[]'::jsonb, $4)`, f.tenant, entity, f.doc, time.Now().UTC().Add(-age)); err != nil {
-		t.Fatalf("seed batch: %v", err)
-	}
+		 VALUES ($1, $2, $3, 'completed', 0, 0, 0, '[]'::jsonb, $4)`, f.tenant, entity, f.doc, time.Now().UTC().Add(-age))
 }
 
 func (f *dnFix) originals(t *testing.T) NoteOriginals {

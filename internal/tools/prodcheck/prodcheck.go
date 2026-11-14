@@ -185,7 +185,7 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	fs.SetOutput(stderr)
 	head := fs.String("head", "", "main's head commit")
 	expected := fs.String("expected", "", "newest first-parent commit of main that changes a file other than *.md")
-	authBuild := fs.String("auth-build", "", "commit in the auth image tag")
+	authBuild := fs.String("auth-build", "", "commit label of auth's serving revision")
 	out := fs.String("out", "", "prod_check section file to write (required)")
 	if err := fs.Parse(args); err != nil {
 		return 2

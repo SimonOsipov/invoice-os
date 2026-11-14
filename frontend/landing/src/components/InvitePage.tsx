@@ -165,7 +165,7 @@ export function InvitePage({ token }: { token: string | null }) {
     body = (
       <>
         <p className="t-body-sm" style={TEXT}>
-          A confirmation email was already sent to {invite.email}. Open it, then sign in with the password you chose first.
+          A confirmation email was already sent to {invite.email}. Open it.
         </p>
         <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
           {resending ? 'Sending…' : 'Send it again'}

@@ -59,6 +59,7 @@ func newGaGoTrue(t *testing.T) *gaGoTrue {
 		"POST /logout":  answer(http.StatusNoContent, ""),
 		"POST /token":   answer(http.StatusOK, session),
 		"POST /signup":  answer(http.StatusOK, gtNewUser),
+		"GET /settings": answer(http.StatusOK, `{"mailer_autoconfirm":false}`),
 		"POST /recover": answer(http.StatusOK, `{}`),
 		"POST /resend":  answer(http.StatusOK, `{}`),
 	}}
@@ -129,7 +130,6 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		target, ctype, in string
 		want              []string
 	}{
-		{"confirm", VerifyHandler(f.URL, site, testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true), "/auth/verify", rpFormType, verifyQuery, []string{"POST /verify"}},
 		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil, lrThrottle(time.Now), true), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout"}},
 		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true), ipPath, rpFormType, withState.Encode(),
@@ -137,7 +137,7 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		{"sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), throttle(), log, nil, nil), "/auth/sign-in", jsonType, signInBody(regEmail, regPassword, vhState), []string{"POST /token"}},
 		{"refresh", RefreshHandler(f.URL, testClient(), log), "/auth/refresh", jsonType, refreshBody(rpRefresh), []string{"POST /token"}},
 		{"sign-out", SignOutHandler(f.URL, testClient(), sessions, log, nil), "/auth/sign-out", jsonType, refreshBody(rpRefresh), []string{"POST /token", "POST /logout"}},
-		{"register", RegisterHandler(f.URL, testClient(), 0, log, noPending, nil), "/auth/register", jsonType, `{"email":"` + regEmail + `","password":"` + regPassword + `"}`, []string{"POST /signup"}},
+		{"register", RegisterHandler(f.URL, testClient(), 0, log, noPending, nil, false), "/auth/register", jsonType, `{"email":"` + regEmail + `","password":"` + regPassword + `"}`, []string{"POST /signup"}},
 		{"invitation register", InvitationRegisterHandler(f.URL, testClient(), 0, log, invitePreviewing("none").preview, claiming(inviteAddress, true, nil).registrations(), nil),
 			"/auth/invitation/register", jsonType, tokenBody(inviteToken), []string{"POST /signup"}},
 		{"resend verification", ResendVerificationHandler(f.URL, testClient(), 0, resendThrottle(time.Now), true, log), "/auth/resend-verification", jsonType, resendBody(regEmail), []string{"POST /resend"}},
@@ -170,19 +170,20 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 	})
 }
 
-// gaVerifyAddress posts the confirm form under env and returns the address GoTrue saw.
+// gaVerifyAddress posts the set-password form under env and returns the address of GoTrue's /verify call.
 func gaVerifyAddress(t *testing.T, env, xff, remote string) []string {
 	t.Helper()
 	t.Setenv("DEPLOY_ENV", env)
-	h, fake := vhVerifier(t, testHandoffStore(), http.StatusOK, gtSession)
-	req := gaRequest("/auth/verify", rpFormType, verifyQuery, xff)
+	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
+	h := confirmHandler(t, fake.URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	req := gaRequest(ipPath, rpFormType, verifyQuery, xff)
 	if remote != "" {
 		req.RemoteAddr = remote
 	}
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	calls := fake.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("GoTrue saw %d calls, want 1", len(calls))
+	if len(calls) == 0 || calls[0].Path != "/verify" {
+		t.Fatalf("GoTrue saw %v, want POST /verify first", calls)
 	}
 	return calls[0].Address
 }
@@ -266,9 +267,9 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 		route         http.HandlerFunc
 		warn          string
 	}{
-		{"confirm: link refused", "verify", answer(http.StatusForbidden, gtOTPExpired), "verify: gotrue refused the link"},
-		{"confirm: 502", "verify", answer(http.StatusBadGateway, gtInternal), "verify: gotrue refused the link"},
-		{"confirm: outage", "verify", dropped, "verify: gotrue unreachable"},
+		{"confirm: link refused", "verify", answer(http.StatusForbidden, gtOTPExpired), "invitation-password: gotrue refused the link"},
+		{"confirm: 502", "verify", answer(http.StatusBadGateway, gtInternal), "invitation-password: gotrue refused the link"},
+		{"confirm: outage", "verify", dropped, "invitation-password: gotrue unreachable"},
 		{"reset: link refused", "reset", answer(http.StatusForbidden, rpOTPExpired), rpMsgRefusedLink},
 		{"reset: 502", "reset", answer(http.StatusBadGateway, gtInternal), rpMsgRefusedLink},
 		{"reset: outage", "reset", dropped, rpMsgUnreachable},
@@ -281,8 +282,8 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 			var h http.Handler
 			var req *http.Request
 			if c.handler == "verify" {
-				h = VerifyHandler(f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
-				req = gaRequest("/auth/verify", rpFormType, verifyQuery, gaXFF)
+				h = confirmHandler(t, f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+				req = gaRequest(ipPath, rpFormType, verifyQuery, gaXFF)
 			} else {
 				th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 				h = ResetPasswordHandler(f.URL, siteURL(t), testClient(), NewSessionChecker(f.URL, testClient(), time.Now, log), th, log, nil, lrThrottle(time.Now), true)
@@ -299,5 +300,25 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 				t.Errorf("a log line holds the address: %s", buf.String())
 			}
 		})
+	}
+}
+
+func TestRegister_SettingsCallCarriesTheGatewayAddress(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	const forged = "192.0.2.99"
+	f := newGaGoTrue(t)
+	req := gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, gaXFF)
+	req.Header.Add(platform.HeaderUserIP, forged)
+
+	registerHandler(f.URL, testClient(), 0, nopLog(), true).ServeHTTP(httptest.NewRecorder(), req)
+
+	if got, want := gaNames(f.Calls()), []string{"GET /settings", "POST /signup"}; !slices.Equal(got, want) {
+		t.Fatalf("GoTrue calls = %v, want %v", got, want)
+	}
+	gaRequireAddress(t, f.Calls(), gaWant)
+	for _, call := range f.Calls() {
+		if slices.Contains(call.Address, forged) {
+			t.Errorf("%s forwarded the client's %s", call, platform.HeaderUserIP)
+		}
 	}
 }

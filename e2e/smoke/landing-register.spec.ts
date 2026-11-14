@@ -106,7 +106,6 @@ test('landing registration window: a long name and a long email stay inside the 
   const { errors, dialog, card } = await openRegister(page)
   // Unbroken text is the widest case an input can hold.
   await dialog.getByLabel('Work email').fill(`${'a'.repeat(120)}@${'b'.repeat(60)}.example.com`)
-  await dialog.getByLabel('Password').fill('p'.repeat(120))
   await dialog.getByLabel('Your name').fill('N'.repeat(160))
   await dialog.getByLabel('Workspace name').fill('W'.repeat(160))
 
@@ -118,7 +117,7 @@ test('landing registration window: a long name and a long email stay inside the 
     const cardBox = (await card.boundingBox())!
     const fields = dialog.locator('input:not([type=radio]):not([type=checkbox])')
     const count = await fields.count()
-    expect(count, `${at}: text fields in the window`).toBe(4)
+    expect(count, `${at}: text fields in the window`).toBe(3)
     const boxes: Rect[] = []
     for (let i = 0; i < count; i++) {
       const b = await fields.nth(i).boundingBox()

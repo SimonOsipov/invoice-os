@@ -66,7 +66,7 @@ func TestIdP_BrandedConfirmLinkVerifiesThenSignInSucceeds(t *testing.T) {
 		t.Fatalf("mail subject = %q, want the branded %q", msg.Subject, accountMailSubject)
 	}
 
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	accessToken(t, base, u)
@@ -87,7 +87,7 @@ func TestIdP_ConfirmationMailWithoutAnswersIsBranded(t *testing.T) {
 	if strings.Contains(msg.HTML, "Organisation") {
 		t.Error("mail HTML holds an Organisation label without answers")
 	}
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	if got := follow(t, confirmationLink(t, u.email), u.password); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 	accessToken(t, base, u)

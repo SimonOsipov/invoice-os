@@ -85,7 +85,7 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// One round trip: statement 2 gates the caller and writes the client scope.
+	// One round trip: statement 2 gates the caller and writes the client scope and user id.
 	// set_config is queued first because the membership select is RLS-scoped by
 	// the GUC it sets - TestRLS_RequestSeamIssuesOneRoundTripForTheGate.
 	b := &pgx.Batch{}
@@ -96,6 +96,7 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
               ELSE (SELECT coalesce(array_agg(c.entity_id ORDER BY c.entity_id), '{}')::text
                       FROM membership_clients c WHERE c.user_id = m.user_id)
          END, true),
+       set_config('app.current_user_id', m.user_id::text, true),
        t.deletion_due_at IS NOT NULL
   FROM memberships m
   JOIN tenants t ON t.id = m.tenant_id
@@ -109,7 +110,7 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		status string
 		locked bool
 	)
-	scanErr := br.QueryRow().Scan(&status, nil, &locked) // column 2 is set_config's echo, unused
+	scanErr := br.QueryRow().Scan(&status, nil, nil, &locked) // columns 2 and 3 are set_config echoes, unused
 	// Close returns the batch's stored error first, so scanErr must be classified
 	// before closeErr or the specific wrap below is unreachable.
 	closeErr := br.Close()

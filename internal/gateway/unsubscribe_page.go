@@ -51,7 +51,7 @@ if (f) {
   addEventListener('pageshow', function () { delete f.dataset.sent; b.textContent = 'Unsubscribe'; b.disabled = false })
 }`
 
-// Filled by strings.NewReplacer, not html/template (see verifyPageHTML).
+// Filled by strings.NewReplacer, not html/template (see invitationPageHTML).
 //
 //go:embed unsubscribe_page.html
 var unsubscribePageHTML string

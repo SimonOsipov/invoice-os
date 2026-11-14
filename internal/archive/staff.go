@@ -90,9 +90,15 @@ func (s *Store) StaffPreview(ctx context.Context, tenantID string, r Request) (P
 	return p, nil
 }
 
+// staffBundleAudit is the staff_audit_log payload; the reason never reaches the customer's row.
+type staffBundleAudit struct {
+	bundleAudit
+	Reason string `json:"reason"`
+}
+
 // StaffAssemble is Assemble for the path tenant, with generated_by "ASComply support". It audits
 // the download with one staff row and the tenant's support row.
-func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error {
+func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, reason string, w io.Writer, onStart func(filename string)) error {
 	staff, err := db.StaffActor(ctx)
 	if err != nil {
 		return err
@@ -120,9 +126,9 @@ func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, w
 	entity, _ := uuid.Parse(r.EntityID)
 	return s.streamAudited(ctx, w, id.String(), staff.String(), r, read,
 		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
-			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.exported", TenantID: id, SubjectID: entity, Payload: p})
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.exported", TenantID: id, SubjectID: entity, Payload: p, StaffPayload: staffBundleAudit{p, reason}})
 		},
 		func(ctx context.Context, tx pgx.Tx, p bundleAudit) error {
-			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.export_failed", TenantID: id, SubjectID: entity, Payload: p})
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "evidence_bundle.export_failed", TenantID: id, SubjectID: entity, Payload: p, StaffPayload: staffBundleAudit{p, reason}})
 		})
 }

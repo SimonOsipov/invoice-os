@@ -71,7 +71,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 		for name, c := range bad {
 			t.Run(name, func(t *testing.T) {
 				calls := 0
-				h := StaffDownloadHandler(func(context.Context, string, Request, io.Writer, func(string)) error {
+				h := StaffDownloadHandler(func(context.Context, string, Request, string, io.Writer, func(string)) error {
 					calls++
 					return nil
 				}, slog.Default())
@@ -89,7 +89,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 
 	for _, c := range staffStoreErrors {
 		t.Run(c.name, func(t *testing.T) {
-			h := StaffDownloadHandler(func(context.Context, string, Request, io.Writer, func(string)) error { return c.err }, slog.Default())
+			h := StaffDownloadHandler(func(context.Context, string, Request, string, io.Writer, func(string)) error { return c.err }, slog.Default())
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, staffDownloadRequest(t, validQuery(), validReasonBody))
 			if rec.Code != c.status || strings.TrimSpace(rec.Body.String()) != c.wantBody {
@@ -101,7 +101,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 	t.Run("success passes the path tenant and the parsed request, and streams a zip", func(t *testing.T) {
 		var gotTenant string
 		var gotReq Request
-		h := StaffDownloadHandler(func(_ context.Context, tenantID string, r Request, w io.Writer, onStart func(string)) error {
+		h := StaffDownloadHandler(func(_ context.Context, tenantID string, r Request, _ string, w io.Writer, onStart func(string)) error {
 			gotTenant, gotReq = tenantID, r
 			onStart("bundle.zip")
 			_, err := w.Write([]byte("PK"))
@@ -240,7 +240,7 @@ func TestStaffEntitiesHandler_StatusMapping(t *testing.T) {
 }
 
 func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) {
-	h := StaffDownloadHandler(func(_ context.Context, _ string, _ Request, w io.Writer, onStart func(string)) error {
+	h := StaffDownloadHandler(func(_ context.Context, _ string, _ Request, _ string, w io.Writer, onStart func(string)) error {
 		onStart("bundle.zip")
 		if _, err := w.Write([]byte("PK-partial")); err != nil {
 			return err
@@ -264,7 +264,7 @@ func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) 
 func TestStaffHandlers_MalformedQueryStringIsA400(t *testing.T) {
 	calls := 0
 	handlers := map[string]http.HandlerFunc{
-		"download": StaffDownloadHandler(func(context.Context, string, Request, io.Writer, func(string)) error { calls++; return nil }, slog.Default()),
+		"download": StaffDownloadHandler(func(context.Context, string, Request, string, io.Writer, func(string)) error { calls++; return nil }, slog.Default()),
 		"preview":  StaffPreviewHandler(func(context.Context, string, Request) (Preview, error) { calls++; return Preview{}, nil }, slog.Default()),
 	}
 	for name, h := range handlers {
@@ -285,7 +285,7 @@ func TestStaffHandlers_MalformedQueryStringIsA400(t *testing.T) {
 
 // countingStore is a download store that counts its calls.
 func countingStore(calls *int) staffAssembleFn {
-	return func(context.Context, string, Request, io.Writer, func(string)) error { *calls++; return nil }
+	return func(context.Context, string, Request, string, io.Writer, func(string)) error { *calls++; return nil }
 }
 
 func TestStaffDownloadHandler_RefusesABadReasonBeforeTheStore(t *testing.T) {

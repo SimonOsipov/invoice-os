@@ -160,7 +160,7 @@ func (r *staffRig) route(name string, fx bundleFx) bundleRoute {
 	if name == "staff" {
 		return bundleRoute{name: name, staff: true, ctx: r.ctx, actor: audit.SupportActor, caller: r.staff,
 			run: func(s *Store, ctx context.Context, req Request, w io.Writer, onStart func(string)) error {
-				return s.StaffAssemble(ctx, fx.tenant, req, w, onStart)
+				return s.StaffAssemble(ctx, fx.tenant, req, "r", w, onStart)
 			}}
 	}
 	return bundleRoute{name: name, ctx: auth.WithIdentity(context.Background(), auth.Identity{Subject: fx.admin, TenantID: fx.tenant}),
@@ -311,7 +311,7 @@ func TestRLS_StaffBundleWritesOneStaffRowAndOneSupportRow(t *testing.T) {
 	fx := r.plant(t, "aud-one", 2)
 
 	var buf bytes.Buffer
-	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, &buf, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", &buf, nil); err != nil {
 		t.Fatalf("StaffAssemble: %v", err)
 	}
 
@@ -324,16 +324,24 @@ func TestRLS_StaffBundleWritesOneStaffRowAndOneSupportRow(t *testing.T) {
 	if s.actor != r.staff || s.tenant != fx.tenant || s.subject != fx.entity {
 		t.Errorf("staff row actor/tenant/subject = %s/%s/%s, want %s/%s/%s", s.actor, s.tenant, s.subject, r.staff, fx.tenant, fx.entity)
 	}
-	requireExported(t, s.payload, fx, buf.Bytes())
+	var sp, ap map[string]any
+	if json.Unmarshal([]byte(s.payload), &sp) != nil || json.Unmarshal([]byte(a.payload), &ap) != nil {
+		t.Fatalf("payloads not JSON: staff %s, support %s", s.payload, a.payload)
+	}
+	if sp["reason"] != "r" {
+		t.Errorf("staff payload reason = %v, want r; payload %s", sp["reason"], s.payload)
+	}
+	delete(sp, "reason")
+	noReason, _ := json.Marshal(sp)
+	requireExported(t, string(noReason), fx, buf.Bytes())
 	if a.actor != audit.SupportActor {
 		t.Errorf("audit_log actor = %q, want %q", a.actor, audit.SupportActor)
 	}
 	if a.entity == nil || *a.entity != fx.entity {
 		t.Errorf("audit_log entity_id = %v, want %s", a.entity, fx.entity)
 	}
-	var sp, ap map[string]any
-	if json.Unmarshal([]byte(s.payload), &sp) != nil || json.Unmarshal([]byte(a.payload), &ap) != nil || !reflect.DeepEqual(sp, ap) {
-		t.Errorf("payloads differ: staff %s, support %s", s.payload, a.payload)
+	if !reflect.DeepEqual(sp, ap) {
+		t.Errorf("payloads differ beyond the reason: staff %s, support %s", s.payload, a.payload)
 	}
 	if !s.at.Equal(a.at) {
 		t.Errorf("created_at differs: staff %v, support %v", s.at, a.at)
@@ -357,7 +365,7 @@ func TestRLS_StaffBundleAuditLandsOnlyInThePathTenant(t *testing.T) {
 	}
 	bBefore, houseBefore := total(b.tenant), total(house)
 
-	if err := r.store.StaffAssemble(r.ctx, a.tenant, a.req, io.Discard, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, a.tenant, a.req, "r", io.Discard, nil); err != nil {
 		t.Fatalf("StaffAssemble: %v", err)
 	}
 
@@ -433,7 +441,7 @@ func TestRLS_ALockedWorkspaceStaffBundleIsAudited(t *testing.T) {
 		t.Fatalf("lock the workspace: %v", err)
 	}
 
-	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, io.Discard, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", io.Discard, nil); err != nil {
 		t.Fatalf("StaffAssemble in a locked workspace: %v", err)
 	}
 	requireCounts(t, r.counts(t, fx.tenant), r.route("staff", fx).expect(1, 0))
@@ -678,7 +686,7 @@ func TestRLS_StaffBundleAuditFollowsTheCaller(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			before := r.counts(t, fx.tenant)
 			for range c.calls {
-				err := r.store.StaffAssemble(c.ctx, fx.tenant, fx.req, io.Discard, nil)
+				err := r.store.StaffAssemble(c.ctx, fx.tenant, fx.req, "r", io.Discard, nil)
 				if !errors.Is(err, c.wantErr) || (c.wantErr == nil && err != nil) {
 					t.Errorf("StaffAssemble error = %v, want %v", err, c.wantErr)
 				}
@@ -695,7 +703,7 @@ func TestRLS_AnEmptyPeriodBundleCountsItsFiveCSVs(t *testing.T) {
 	r := newStaffRig(t)
 	fx := r.plant(t, "aud-empty", 0)
 	var staffZip bytes.Buffer
-	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, &staffZip, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", &staffZip, nil); err != nil {
 		t.Fatalf("StaffAssemble: %v", err)
 	}
 	memberZip := r.tenantBundle(t, fx)
@@ -752,7 +760,7 @@ func TestRLS_AClientDisconnectMidBundleStillAuditsTheFailure(t *testing.T) {
 			h := http.HandlerFunc(DownloadHandler(r.store.Assemble, nil))
 			if rt.staff {
 				h = StaffDownloadHandler(r.store.StaffAssemble, slog.Default())
-				req.SetPathValue("id", fx.tenant)
+				req = staffReasonPost(ctx, fx, `{"reason":"r"}`)
 			}
 			w := &cancelWriter{ResponseWriter: httptest.NewRecorder(), cancel: cancel}
 

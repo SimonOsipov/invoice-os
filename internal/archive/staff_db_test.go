@@ -127,7 +127,7 @@ func newStaffRig(t *testing.T) *staffRig {
 func (r *staffRig) assemble(t *testing.T, tenant string, req Request) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := r.store.StaffAssemble(r.ctx, tenant, req, &buf, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, tenant, req, "r", &buf, nil); err != nil {
 		t.Fatalf("StaffAssemble: %v", err)
 	}
 	return buf.Bytes()
@@ -334,7 +334,7 @@ func TestRLS_StaffAssembleRefusesAnotherTenantsEntity(t *testing.T) {
 	}
 
 	var w countingWriter
-	err := r.store.StaffAssemble(r.ctx, own.tenant, other.req, &w, nil)
+	err := r.store.StaffAssemble(r.ctx, own.tenant, other.req, "r", &w, nil)
 	if !errors.Is(err, ErrEntityNotFound) {
 		t.Errorf("StaffAssemble(own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
 	}
@@ -383,7 +383,7 @@ func TestRLS_StaffBundleUnknownTenantIsNotFound(t *testing.T) {
 			t.Errorf("StaffPreview(%q) error = %v, want ErrTenantNotFound", id, err)
 		}
 		var w countingWriter
-		if err := r.store.StaffAssemble(r.ctx, id, req, &w, nil); !errors.Is(err, ErrTenantNotFound) {
+		if err := r.store.StaffAssemble(r.ctx, id, req, "r", &w, nil); !errors.Is(err, ErrTenantNotFound) {
 			t.Errorf("StaffAssemble(%q) error = %v, want ErrTenantNotFound", id, err)
 		}
 		if w.n != 0 {
@@ -421,7 +421,7 @@ func TestRLS_StaffBundleNonHouseActorIsNotStaff(t *testing.T) {
 				t.Errorf("StaffPreview error = %v, want db.ErrNotStaff", err)
 			}
 			var w countingWriter
-			if err := r.store.StaffAssemble(ctx, fx.tenant, fx.req, &w, nil); !errors.Is(err, db.ErrNotStaff) {
+			if err := r.store.StaffAssemble(ctx, fx.tenant, fx.req, "r", &w, nil); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("StaffAssemble error = %v, want db.ErrNotStaff", err)
 			}
 			if w.n != 0 {
@@ -440,7 +440,7 @@ func TestRLS_StaffBundleOverTheCapRefusesBeforeTheFirstByte(t *testing.T) {
 	r.store.maxInvoices = 2
 
 	var w countingWriter
-	err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, &w, nil)
+	err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", &w, nil)
 	var tooMany *TooManyInvoicesError
 	if !errors.As(err, &tooMany) || tooMany.Count != 3 || tooMany.Limit != 2 {
 		t.Errorf("StaffAssemble error = %v, want *TooManyInvoicesError{3, 2}", err)
@@ -493,7 +493,7 @@ func TestRLS_StaffBundleReadsReadOnlyAndOnlyTheDownloadIsAudited(t *testing.T) {
 
 	t.Run("StaffAssemble", func(t *testing.T) {
 		r.rec.reset()
-		if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, io.Discard, nil); err != nil {
+		if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", io.Discard, nil); err != nil {
 			t.Fatalf("StaffAssemble: %v", err)
 		}
 		var stmts []string

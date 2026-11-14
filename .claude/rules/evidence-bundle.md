@@ -36,6 +36,7 @@ paths:
 - Expose `Content-Disposition` to browsers through the gateway CORS expose header.
 - Run `ANALYZE` as the owner or the superuser before you measure a plan. `invoice_app` cannot analyze.
 - Build a staff bundle, preview or company list only through `withinStaffTenant`. It checks the path tenant with `staff_read_tenants` in `WithinStaffTx`. Then it reads in that tenant's `WithinTenantTxOpts` with `bundleTxOptions`.
+- Serve the staff download as `POST /v1/staff/tenants/{id}/evidence-bundle` with a required JSON `reason`. Parse the query, then the body, before any database call. The preview stays `GET`.
 - Pass `audit.SupportActor` as the `subject` of a staff bundle. `resolveGeneratedBy` then writes `ASComply support` as `generated_by`.
 - Build the workspace export only through `AssembleWorkspace`: one `REPEATABLE READ` read-write transaction, the company stages through `writeEntityStages`, `workspace.exported` last, and `bw.Close()` after the commit.
 - Write `evidence_bundle.exported` after the read transaction commits and before `bw.Close()`, in its own short transaction through `recordBundleEvent`.

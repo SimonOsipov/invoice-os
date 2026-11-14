@@ -15,6 +15,7 @@ paths:
 - Write a staff change only through `audit.RecordStaff`, with one `audit.StaffEvent`.
 - Set `TenantID` on a staff change that touches one tenant. Call `RecordStaff` in that tenant's `WithinTenantTx`, from a method with an `scCoreAllowlist` entry. It also writes that tenant's `audit_log` row with the actor `audit.SupportActor`.
 - Put in the payload of a tenant staff change only what the customer may read. Never a staff name, an email or an internal note.
+- Put a staff `reason` that the customer must not read in `StaffPayload`. `RecordStaff` writes it to `staff_audit_log` only.
 - Leave `TenantID` zero on a global staff change. Call `RecordStaff` in `WithinStaffTx`. It writes no `audit_log` row.
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.

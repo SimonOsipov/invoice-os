@@ -172,8 +172,12 @@ func TestHealth_ServiceWithoutHideHealthDetailKeepsTheFullBody(t *testing.T) {
 func TestHideHealthDetail_PanicsOnAnEmptyToken(t *testing.T) {
 	app := newHealthApp(t, "gateway")
 	defer func() {
-		if recover() == nil {
-			t.Error("HideHealthDetail(\"\") did not panic, want a panic")
+		r := recover()
+		if r == nil {
+			t.Fatal("HideHealthDetail(\"\") did not panic, want a panic")
+		}
+		if msg, _ := r.(string); !strings.Contains(msg, "HideHealthDetail") || !strings.Contains(msg, "empty token") {
+			t.Errorf("panic = %v, want a message naming HideHealthDetail and the empty token", r)
 		}
 	}()
 	app.HideHealthDetail("")

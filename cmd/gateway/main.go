@@ -50,6 +50,7 @@ func main() {
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
 	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
 	gatewayToken := mustEnv("GATEWAY_TOKEN")
+	app.HideHealthDetail(gatewayToken)
 
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:     mustEnv("AUTH_ISSUER"),

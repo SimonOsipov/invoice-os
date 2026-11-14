@@ -4563,7 +4563,7 @@ func TestGetHandler_CanSubmitAllStatuses(t *testing.T) {
 		StatusRejected:  "false",
 		StatusFailed:    "false",
 
-		discardedStatus: "false",
+		StatusDiscarded: "false",
 	}
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, s := range allStatuses {
@@ -5049,7 +5049,7 @@ func TestGetHandler_SubmitBlockedReasonAllStatuses(t *testing.T) {
 		StatusRejected:  `"` + exactSubmitBlockedReasonRejected + `"`,
 		StatusFailed:    "null",
 
-		discardedStatus: "null",
+		StatusDiscarded: "null",
 	}
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, s := range allStatuses {

@@ -197,6 +197,7 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 			companies[i].Dir = dir
 			req := allTime
 			req.EntityID = companies[i].ID
+			req.keepDiscarded = true
 			if err := writeEntityStages(ctx, tx, bw, "companies/"+dir+"/", req); err != nil {
 				return err
 			}

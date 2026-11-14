@@ -30,6 +30,7 @@ const NODE_OF_STATUS: Record<InvoiceStatus, SpineNode> = {
   accepted: 5,
   rejected: 5,
   failed: 5,
+  discarded: 1,
 }
 
 // What each status says about the step it sits on. A step that finished and passed is done.
@@ -41,6 +42,7 @@ const STEP_OF_STATUS: Record<InvoiceStatus, 'open' | 'passed' | 'failed'> = {
   accepted: 'passed',
   rejected: 'failed',
   failed: 'failed',
+  discarded: 'failed',
 }
 
 const STATE_AT_CURSOR = { open: 'current', passed: 'done', failed: 'failed' } as const

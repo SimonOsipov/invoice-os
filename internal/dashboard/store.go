@@ -71,7 +71,8 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			`SELECT i.entity_id, v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
 			 FROM invoices i
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
-			 WHERE jsonb_typeof(i.violations) = 'array'
+			 WHERE i.status <> 'discarded'
+			   AND jsonb_typeof(i.violations) = 'array'
 			   AND v->>'severity' = 'error'
 			   AND nullif(v->>'rule_key', '') IS NOT NULL
 			 GROUP BY i.entity_id, 2
@@ -164,6 +165,7 @@ func queryClients(ctx context.Context, tx pgx.Tx) ([]Client, error) {
 		                 CASE WHEN jsonb_typeof(i.violations) = 'array' THEN i.violations ELSE '[]'::jsonb END) AS v
 		        WHERE v->>'severity' = 'error'
 		    ) cf ON true
+		    WHERE i.status <> 'discarded'
 		)
 		-- needs_attention below keeps its exact literal disjunction (i.-qualified,
 		-- no IN(...)), and its fourth arm reads the LATEST run only, through a

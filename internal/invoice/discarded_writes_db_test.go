@@ -57,14 +57,14 @@ func TestDiscarded_EveryWriteIsRefusedAndWritesNothing(t *testing.T) {
 			if len(out.Results) != 1 {
 				t.Fatalf("results = %+v, want one row", out.Results)
 			}
-			if got := out.Results[0]; got.Enqueued || got.Status != string(discardedStatus) || got.Reason != batchSubmitReasonNotValidated {
+			if got := out.Results[0]; got.Enqueued || got.Status != string(StatusDiscarded) || got.Reason != batchSubmitReasonNotValidated {
 				t.Errorf("result = %+v, want not enqueued, status discarded, reason %q", got, batchSubmitReasonNotValidated)
 			}
 		}},
 		{"SendAgain", func(t *testing.T) {
 			_, err := r.sub.SendAgain(r.ctx, id)
 			var se StatusError
-			if !errors.As(err, &se) || se.Have != discardedStatus {
+			if !errors.As(err, &se) || se.Have != StatusDiscarded {
 				t.Errorf("SendAgain err = %v, want StatusError{Have: discarded}", err)
 			}
 		}},
@@ -72,7 +72,7 @@ func TestDiscarded_EveryWriteIsRefusedAndWritesNothing(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			before := r.discardedState(t, id)
-			if before.sa.Status != string(discardedStatus) || before.history == 0 {
+			if before.sa.Status != string(StatusDiscarded) || before.history == 0 {
 				t.Fatalf("seed: status %q, history %d, want discarded with a history row", before.sa.Status, before.history)
 			}
 			row.run(t)

@@ -82,7 +82,7 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 		if err := tx.QueryRow(ctx,
 			`SELECT d.id::text, d.filename, d.declared_content_type, d.size_bytes,
 			        d.content_hash, d.created_at,
-			        (SELECT count(*) FROM invoices i WHERE i.source_document_id = d.id),
+			        (SELECT count(*) FROM invoices i WHERE i.source_document_id = d.id AND i.status <> 'discarded'),
 			        (SELECT a.actor FROM audit_log a
 			           WHERE a.event = 'document.created' AND a.payload->>'id' = d.id::text
 			           ORDER BY a.id ASC LIMIT 1)
@@ -99,6 +99,7 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 		rows, err := tx.Query(ctx,
 			`SELECT source_rows[1] FROM invoices
 			  WHERE source_document_id = $1 AND id <> $2 AND source_rows IS NOT NULL
+			    AND status <> 'discarded'
 			  ORDER BY source_rows[1]`, *documentID, id,
 		)
 		if err != nil {

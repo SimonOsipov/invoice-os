@@ -128,6 +128,7 @@ export type InvoiceStatus =
   | 'accepted'
   | 'rejected'
   | 'failed'
+  | 'discarded'
 
 // One line_items row (invoice.go:56-64, LineItem). Optional on InvoiceRecord: Store.List
 // leaves LineItems nil ([D7]/[D8]), so list items never carry this key, while Store.Get

@@ -2657,7 +2657,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 // :120-128 is a type union, erased at runtime). QA hoisted it to module scope, unchanged,
 // so Q11 below can guard it against the union it mirrors -- task-401 §I-2 flagged it as
 // silently lagging.
-const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed', 'discarded']
 
 // The header's action column carries no testid; `invoice-actions` is its last row.
 function actionColumn(): HTMLElement {
@@ -4950,7 +4950,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 // missing element, never an import/compile error. The gate is now `!editing` alone.
 describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC-2/AC-3)', () => {
   const ID = 'inv-stable-cluster-1'
-  const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected', 'queued', 'submitted', 'accepted', 'failed']
+  const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected', 'queued', 'submitted', 'accepted', 'failed', 'discarded']
   const EDITABLE_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected']
   // The closed set AC-2/AC-3 are about -- the story's "stable control set" table.
   const CONTROLS = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']

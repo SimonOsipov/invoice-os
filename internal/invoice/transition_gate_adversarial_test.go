@@ -290,7 +290,7 @@ func TestTransition_EveryStatusIntoQueued(t *testing.T) {
 		StatusRejected:  ErrIllegalTransition,
 		StatusFailed:    ErrIllegalTransition,
 
-		discardedStatus: ErrIllegalTransition,
+		StatusDiscarded: ErrIllegalTransition,
 	}
 	if len(want) != len(allStatuses) {
 		t.Fatalf("the oracle covers %d statuses but the package has %d — a new status needs a cell here", len(want), len(allStatuses))

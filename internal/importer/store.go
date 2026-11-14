@@ -241,7 +241,7 @@ func (s *Store) FiledInvoiceID(ctx context.Context, documentID string) (string, 
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 1`,
+			`SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded' ORDER BY created_at, id LIMIT 1`,
 			documentID).Scan(&id)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

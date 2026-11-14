@@ -26,14 +26,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// discardedStatus stands in for StatusDiscarded until the constant exists; swap it and delete this.
-const discardedStatus Status = "discarded"
-
 // allStatuses is the full 8-state universe for the exhaustive matrix below,
 // listed independently of legalTransitions' map keys in store.go.
 var allStatuses = []Status{
 	StatusDraft, StatusValidated, StatusQueued, StatusSubmitted,
-	StatusAccepted, StatusRejected, StatusFailed, discardedStatus,
+	StatusAccepted, StatusRejected, StatusFailed, StatusDiscarded,
 }
 
 // wantLegalEdge is a HARD-CODED, independent restatement of the story's

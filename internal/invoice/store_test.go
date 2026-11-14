@@ -1387,7 +1387,7 @@ func TestStoreList_LeavesDiscardedOut(t *testing.T) {
 		wantIDs   []string
 	}{
 		{"by batch", ListFilter{ImportBatchIDs: []string{batchID}}, 1, []string{live}},
-		{"by status discarded", ListFilter{Status: discardedStatus}, 0, nil},
+		{"by status discarded", ListFilter{Status: StatusDiscarded}, 0, nil},
 		{"by entity", ListFilter{EntityID: entityID}, 1, []string{live}},
 		{"by a query matching both", ListFilter{Query: "SECAUD-LIST"}, 1, []string{live}},
 	}
@@ -1461,7 +1461,7 @@ func TestStoreGet_ADiscardedInvoiceKeepsItsRowAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != discardedStatus {
+	if got.Status != StatusDiscarded {
 		t.Errorf("Get status = %q, want discarded", got.Status)
 	}
 	hist, err := store.History(c, id)
@@ -1472,7 +1472,7 @@ func TestStoreGet_ADiscardedInvoiceKeepsItsRowAndHistory(t *testing.T) {
 		t.Fatal("History is empty, want the draft -> discarded row")
 	}
 	last := hist[len(hist)-1]
-	if last.FromStatus == nil || *last.FromStatus != StatusDraft || last.ToStatus != discardedStatus {
+	if last.FromStatus == nil || *last.FromStatus != StatusDraft || last.ToStatus != StatusDiscarded {
 		t.Errorf("last history row = %v -> %s, want draft -> discarded", last.FromStatus, last.ToStatus)
 	}
 }

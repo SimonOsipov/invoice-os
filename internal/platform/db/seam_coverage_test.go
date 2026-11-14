@@ -229,6 +229,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/gateway/handoff_pg.go"},                                                  // sign-in hand-off codes: no tenant and no identity yet
 	{file: "internal/gateway/session_check_pg.go"},                                            // sign-out revocations: global gateway state keyed on the subject, no tenant
 	{file: "internal/gateway/signin_throttle_pg.go"},                                          // per-address limit counts: global gateway state keyed on a hash, no tenant
+	{file: "internal/gateway/verify_page_address.go", fn: "queryLinkAddress"},                 // masked address of a confirm-token hash: the token names the row, no tenant and no identity yet; func-scoped to the one read
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -1011,7 +1012,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /auth/reset-password":                               {verdict: scExempt, reason: "no database; renders the reset page"},
 	"GET /readiness-check/confirm":                           {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
-	"GET /auth/verify":                                       {verdict: scExempt, reason: "no database; renders the set-password page, or redirects a stateless open to landing"},
+	"GET /auth/verify":                                       {verdict: scExempt, reason: "reads one masked address by token hash as invoice_gateway, no tenant; renders the set-password page, or redirects a stateless open to landing"},
 	"GET /blog/categories":                                   {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/covers/{id}/{version}":                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/posts":                                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},

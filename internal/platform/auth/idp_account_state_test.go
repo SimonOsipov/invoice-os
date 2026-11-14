@@ -348,12 +348,13 @@ func TestIdP_AccountStateReadGrantWaitsForGoTrue(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 	var policies int
-	var hasAuth bool
-	if err := conn.QueryRow(ctx, `SELECT (SELECT count(*) FROM pg_policies), to_regnamespace('auth') IS NOT NULL`).Scan(&policies, &hasAuth); err != nil {
+	var hasAuth, hasLinkFn bool
+	if err := conn.QueryRow(ctx, `SELECT (SELECT count(*) FROM pg_policies), to_regnamespace('auth') IS NOT NULL,
+		to_regprocedure('auth.confirm_link_address(text)') IS NOT NULL`).Scan(&policies, &hasAuth, &hasLinkFn); err != nil {
 		t.Fatalf("read %s: %v", scratch, err)
 	}
-	if policies != 0 || hasAuth {
-		t.Errorf("after a refused grant %s holds %d policies, auth schema %v; want 0, false", scratch, policies, hasAuth)
+	if policies != 0 || hasAuth || hasLinkFn {
+		t.Errorf("after a refused grant %s holds %d policies, auth schema %v, confirm_link_address %v; want 0, false, false", scratch, policies, hasAuth, hasLinkFn)
 	}
 }
 

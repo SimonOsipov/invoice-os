@@ -29,7 +29,7 @@ func newInviteRig(t *testing.T, sink ContactSink) *resetRig {
 	t.Helper()
 	r := newResetRig(t)
 	log := slog.New(slog.NewJSONHandler(r.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log, lrThrottle(time.Now), true, nil)
 	return r
 }
 
@@ -39,7 +39,7 @@ func newInviteHandler(t *testing.T, f *resetGoTrue, log *slog.Logger, sink Conta
 		log = slog.New(slog.DiscardHandler)
 	}
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, lrThrottle(time.Now), true, nil)
 }
 
 func ipPost(t *testing.T, h http.Handler, v url.Values) *httptest.ResponseRecorder {
@@ -273,8 +273,8 @@ func TestInvitationPassword_NonPostIs405AndUnconfiguredIs503(t *testing.T) {
 	th := NewSignInThrottle("sign-in", 10, 10, SignInWindow, newTestClock().Now)
 	log := slog.New(slog.DiscardHandler)
 	for name, h := range map[string]http.Handler{
-		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true),
-		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true),
+		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log, lrThrottle(time.Now), true, nil),
+		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log, lrThrottle(time.Now), true, nil),
 	} {
 		rec := ipPost(t, h, rpValues(rpToken, "signup", rpPass))
 		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "registration is not configured") {
@@ -301,18 +301,13 @@ func TestInvitationPassword_NoSecretInLocationOrLogs(t *testing.T) {
 		return answer(200, `{"access_token":"`+at+`","refresh_token":"`+rt+`","user":{"id":"u1","email":"`+mail+`"}}`)
 	}
 	rows := []struct {
-		name                        string
-		verify, user, logout, grant http.HandlerFunc
-		fill                        bool
-		want                        string // ipOK, ipFailed or "code"
-		warn                        bool
+		name                 string
+		verify, user, logout http.HandlerFunc
+		want                 string // ipOK or ipFailed
+		warn                 bool
 	}{
-		{name: "success", want: "code"},
+		{name: "success", want: ipOK},
 		{name: "PUT 200, sign-out 500", logout: echo(500, "unexpected_failure"), want: ipOK, warn: true},
-		{name: "grant 400", grant: echo(400, "invalid_credentials"), want: ipOK, warn: true},
-		{name: "grant 200 with only an access token", grant: answer(200, `{"access_token":"`+grantAT+`"}`), want: ipOK, warn: true},
-		{name: "grant unreachable", grant: dropped, want: ipOK, warn: true},
-		{name: "store full", fill: true, want: ipOK, warn: true},
 		{name: "verify 403", verify: echo(403, "otp_expired"), want: ipFailed, warn: true},
 		{name: "verify unreachable", verify: dropped, want: ipFailed, warn: true},
 		{name: "verify incomplete", verify: answer(200, `{"access_token":"","user":{"id":"u1","email":"`+mail+`"}}`), want: ipFailed, warn: true},
@@ -324,26 +319,19 @@ func TestInvitationPassword_NoSecretInLocationOrLogs(t *testing.T) {
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
-			store := testHandoffStore()
-			if c.fill {
-				for range HandoffMaxLive {
-					store.Put("x", [32]byte{})
-				}
-			}
 			f := newResetGoTrue(t)
 			f.verify = session(verifyAT, verifyRT)
-			f.token = session(grantAT, grantRT)
 			for _, set := range []struct {
 				dst *http.HandlerFunc
 				src http.HandlerFunc
-			}{{&f.verify, c.verify}, {&f.user, c.user}, {&f.logout, c.logout}, {&f.token, c.grant}} {
+			}{{&f.verify, c.verify}, {&f.user, c.user}, {&f.logout, c.logout}} {
 				if set.src != nil {
 					*set.dst = set.src
 				}
 			}
 			log, buf := captureLog()
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-			h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store, nil, lrThrottle(time.Now), true)
+			h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, lrThrottle(time.Now), true, nil)
 			v := rpValues(token, "signup", pass)
 			v.Set("state", vhState)
 
@@ -351,16 +339,11 @@ func TestInvitationPassword_NoSecretInLocationOrLogs(t *testing.T) {
 
 			loc := rec.Header().Get("Location")
 			secrets := []string{token, pass, mail, vhState, verifyAT, verifyRT, grantAT, grantRT}
-			if c.want == "code" {
-				code := vhCode(t, rec)
-				for _, s := range secrets {
-					if strings.Contains(loc, s) {
-						t.Errorf("the Location holds %q: %s", s, loc)
-					}
+			rpRequireRedirect(t, rec, c.want)
+			for _, s := range secrets {
+				if strings.Contains(loc, s) {
+					t.Errorf("the Location holds %q: %s", s, loc)
 				}
-				secrets = append(secrets, code)
-			} else {
-				rpRequireRedirect(t, rec, c.want)
 			}
 			if c.warn && warnCount(t, buf) == 0 {
 				t.Fatalf("the outcome logged no WARN, so the log check proves nothing")
@@ -401,7 +384,7 @@ func ipOfflineHandler(t *testing.T, client *http.Client, sink ContactSink, log *
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	sessions := NewSessionChecker(offlineAuth, offlineClient(http.StatusOK, `{}`), time.Now, log)
-	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log, lrThrottle(time.Now), true, nil)
 }
 
 func TestInvitationPassword_OnlyAConfirmedPasswordedUserReachesTheContactSink(t *testing.T) {
@@ -544,5 +527,65 @@ func TestInvitationPassword_EveryMethodButPostIs405WithoutACall(t *testing.T) {
 				t.Errorf("GoTrue calls = %v, want none", got)
 			}
 		})
+	}
+}
+
+// ipRerenderHandler is the invitee handler with a lookup and a link-redeem throttle.
+func ipRerenderHandler(t *testing.T, f *resetGoTrue, address LinkAddress, perIP *SignInThrottle) http.Handler {
+	t.Helper()
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), perIP, true, address)
+}
+
+func TestInvitationPassword_ARerenderNamesTheAddressOfThePostedToken(t *testing.T) {
+	f := newResetGoTrue(t)
+	l := vpFound(vpMasked)
+
+	rec := ipPost(t, ipRerenderHandler(t, f, l.fn(), vpLimit(5)), rpValues(rpToken, "signup", "abcde"))
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `role="alert"`) {
+		t.Fatalf("answer = %d, want the 400 page with its alert", rec.Code)
+	}
+	spans := vpAddressSpans(t, rec.Body.String())
+	if len(spans) != 1 || vpText(spans[0]) != vpMasked {
+		t.Errorf("address spans = %d, want one holding %q", len(spans), vpMasked)
+	}
+	if got := l.calls(); !slices.Equal(got, []string{rpToken}) {
+		t.Errorf("lookup calls = %v, want [%s]", got, rpToken)
+	}
+}
+
+func TestInvitationPassword_ARerenderLookupFailureIsTheFailedNotice(t *testing.T) {
+	f := newResetGoTrue(t)
+	l := vpFails(errors.New("boom"))
+
+	rec := ipPost(t, ipRerenderHandler(t, f, l.fn(), vpLimit(5)), rpValues(rpToken, "signup", "abcde"))
+
+	if len(l.calls()) != 1 {
+		t.Fatalf("lookup calls = %d, want 1: the re-render looks the address up", len(l.calls()))
+	}
+	rpRequireRedirect(t, rec, ipFailed)
+	if got := f.names(); len(got) != 0 {
+		t.Errorf("GoTrue calls = %v, want none", got)
+	}
+}
+
+func TestInvitationPassword_ARerenderLookupSpendsTheCount(t *testing.T) {
+	f := newResetGoTrue(t)
+	l := vpMissing()
+	h := ipRerenderHandler(t, f, l.fn(), vpLimit(1))
+
+	first := ipPost(t, h, rpValues(rpToken, "signup", "abcde"))
+	second := ipPost(t, h, rpValues(rpToken, "signup", "abcde"))
+
+	if first.Code != http.StatusBadRequest {
+		t.Errorf("first re-render = %d, want 400", first.Code)
+	}
+	rpRequireRedirect(t, second, ipFailed)
+	if n := len(l.calls()); n != 1 {
+		t.Errorf("lookups = %d, want 1: the second was over the limit", n)
+	}
+	if got := f.names(); len(got) != 0 {
+		t.Errorf("GoTrue calls = %v, want none", got)
 	}
 }

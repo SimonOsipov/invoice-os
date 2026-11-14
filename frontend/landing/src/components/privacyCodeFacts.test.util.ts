@@ -603,7 +603,7 @@ export const ACCOUNT_RECORD_SENTENCES: readonly { id: string; text: string }[] =
   { id: 'P2', text: "Your workspace's admins see these records for every member. Every other member sees only their own. ASComply's support staff can also read them." },
   { id: 'P3', text: 'These records stay with the audit log, which keeps every record until the workspace is deleted.' },
   { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. The first pair is recorded without an email. When you later sign in with a pair that is not on the list, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
-  { id: 'P5', text: "When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it with the IP address and the browser and operating system of that request. The first session after someone confirms their email address or sets the password of an invitation is not recorded as a sign-in; its browser and operating system are added to the list above without an email. Every member who reads the workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP address and browser and operating system. ASComply's support staff can also read them." },
+  { id: 'P5', text: "When someone creates a workspace or accepts an invitation to one, the audit log of that workspace records it with the IP address and the browser and operating system of that request. Every member who reads the workspace-wide entries of the audit log sees the workspace and invitation records, but only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP address and browser and operating system. ASComply's support staff can also read them." },
 ]
 
 // The six account event names, sorted.
@@ -804,17 +804,6 @@ export function createdAcceptedDetailIsAdminOrSelf(
     !/\ba\.payload\b/i.test(page) &&
     /case f\.scope\.set:\s*ids := bind\(f\.scope\.ids\)\s*names := bind\(AccountEvents\)\s*conditions = append\(conditions, "\(a\.entity_id = ANY\("\+ids\+"::uuid\[\]\) OR \(a\.event = ANY\("\+names\+"\) AND a\.actor = "\+bind\(f\.scope\.self\)\+"\)\)"\)/.test(filter)
   )
-}
-
-// A first-session mint is marked, and the mover records its device and stops before the membership lookup.
-export function firstSessionIsNotASignInRow(
-  gw: string = gatewaySource(),
-  mover: string = readSource('internal/accountevents/mover.go'),
-): boolean {
-  const marked = gw.match(/AccountEvent\{Event: EventSignedIn,[^}]*FirstSession: true\}/g) ?? []
-  const fn = found(/func MoveHandoffs\b[\s\S]*$/.exec(mover)?.[0], 'MoveHandoffs')
-  const block = found(/if h\.firstSession \{([\s\S]*?)account_event_memberships\(/.exec(fn)?.[1], 'the first-session block')
-  return marked.length === 1 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
 }
 
 // Column names of the CREATE TABLE in migrations/*_readiness_checks.sql, in order.

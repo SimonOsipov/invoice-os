@@ -76,7 +76,7 @@ func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
 			if r.URL.Query().Get("grant_type") == "password" {
 				g.passwordGrants.Add(1)
 				if g.grantOK.Load() {
-					_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt"}`)
+					_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
 					return
 				}
 				w.WriteHeader(http.StatusBadRequest)

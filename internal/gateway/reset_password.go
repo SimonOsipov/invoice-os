@@ -42,10 +42,21 @@ func renderResetPage(token, alert string) string {
 }
 
 func renderPasswordPage(page, token, state, alert string) string {
+	return renderNamedPasswordPage(page, token, state, alert, "")
+}
+
+// renderNamedPasswordPage names address in the intro; an empty address keeps the unnamed intro.
+func renderNamedPasswordPage(page, token, state, alert, address string) string {
+	var intro string
+	if address != "" {
+		intro = `Choose a password for the ASComply account of <span class="address">` + html.EscapeString(address) + `</span>. This also confirms the address. Continue only if this is your address.`
+	} else {
+		intro = "Choose a password for your ASComply account. This also confirms your email address."
+	}
 	if alert != "" {
 		alert = `<p class="alert" role="alert">` + html.EscapeString(alert) + `</p>`
 	}
-	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
+	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Intro}}", intro, "{{.Script}}", resetScript).Replace(page)
 }
 
 // formState is the posted state when exactly one state field has the shape of one, else "".
@@ -123,8 +134,8 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
 	onConfirmed                           func(r *http.Request, user gotrueUser)
-	// handOff returns a hand-off code, or "" to fall back to done with no code.
-	handOff func(r *http.Request, user gotrueUser, password, state string) string
+	// address, when set, names the posted token's account on the 400 re-render.
+	address LinkAddress
 }
 
 // passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
@@ -151,12 +162,17 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			return
 		}
 		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
+			masked, ok := lookupLinkAddress(r, flow.address, perIP, enforce, label, log, token)
+			if !ok {
+				http.Redirect(w, r, failed, http.StatusSeeOther)
+				return
+			}
 			setResetPageHeaders(w.Header())
-			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, formState(r), resetPasswordHint))
+			writeResetPage(w, r.Method, http.StatusBadRequest, renderNamedPasswordPage(flow.page, token, formState(r), resetPasswordHint, masked))
 			return
 		}
 
-		if !admitLinkRedeem(r, perIP, enforce, label, log) {
+		if ok, _ := admitLinkRedeem(r, perIP, enforce, label, log); !ok {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -216,12 +232,6 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		if flow.onConfirmed != nil {
 			flow.onConfirmed(rr, confirmed.User)
 		}
-		location := done
-		if state := formState(r); flow.handOff != nil && loggedOut && state != "" {
-			if code := flow.handOff(rr, confirmed.User, password, state); code != "" {
-				location += "&handoff=" + code
-			}
-		}
-		http.Redirect(w, r, location, http.StatusSeeOther)
+		http.Redirect(w, r, done, http.StatusSeeOther)
 	})
 }

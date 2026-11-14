@@ -54,7 +54,7 @@ export function parseStoredConsoleSession(raw: string | null, key: string): Cons
   }
 }
 
-// ceiling: v2 records are read until every console has renewed once; the landing record keeps its refresh token
+// ceiling: v2 records are read until every console has renewed once; the landing record keeps its refresh token, remove 30 days after the production deploy
 // in storage until the adoption refresh answers 200 (the boot rewrites it then).
 function readLegacy(raw: string, key: string): ConsoleSession | null | undefined {
   const p = JSON.parse(raw) as { v?: unknown; token?: unknown; refresh_token?: unknown; from?: unknown } | null

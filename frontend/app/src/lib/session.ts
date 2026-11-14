@@ -94,7 +94,7 @@ export function parseStoredSession(raw: string | null): Session | null {
           me: parsed.me,
           verified: parsed.verified,
           handoff: true,
-          // ceiling: a legacy token is read as due at once (receivedAt 0); the record is rewritten after the adoption refresh answers 200.
+          // ceiling: a legacy token is read as due at once (receivedAt 0); the record is rewritten after the adoption refresh answers 200, remove 30 days after the production deploy
           ...(parsed.refresh_token !== undefined
             ? { renewal: { receivedAt: 0, legacyRefreshToken: parsed.refresh_token } }
             : parsed.received_at !== undefined

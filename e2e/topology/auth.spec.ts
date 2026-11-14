@@ -1569,6 +1569,8 @@ test('deployed app: a real sign-in names the account holder on the identity card
 })
 
 // frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
+// COPY.verified in VerifyNotice.tsx
+const VERIFIED_NOTICE = 'Your email address is verified. Please sign in.'
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
@@ -1660,6 +1662,38 @@ test('the failed verify notice\'s Sign in opens the sign-in window', async ({ pa
   await page.goto(`${LANDING_URL}/?verify=failed`)
   await page.getByRole('status').filter({ hasText: VERIFY_FAILED }).getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+})
+
+test("the verified notice's Sign in opens the sign-in window", async ({ page }) => {
+  test.setTimeout(120_000)
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/?verified=1`)
+  for (const width of PHONE_WIDTHS) {
+    await page.setViewportSize({ width, height: 800 })
+    await expectFailedNotice(page, width, VERIFIED_NOTICE, 'Sign in')
+  }
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.getByRole('status').filter({ hasText: VERIFIED_NOTICE }).getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+})
+
+// Fixture check: `?verified=1` stands in for the set-password POST's answer, because a fork mails no link.
+test('a live session survives the verified landing', async ({ page }) => {
+  test.setTimeout(180_000)
+  await ensureMember(SHARD.a.id, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  const exchanges: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/auth/exchange') exchanges.push(r.url())
+  })
+  await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => isConfirmPage(u), { timeout: 30_000 })
+  await page.goto(`${LANDING_URL}/?verified=1`)
+  await expect(page.getByRole('status').filter({ hasText: VERIFIED_NOTICE })).toBeVisible({ timeout: 30_000 })
+  await page.goto(`${APP_URL}/`)
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(exchanges, 'POST /auth/exchange requests over the live session').toEqual([])
 })
 
 test('landing forwards a verify code to the app', async ({ page }) => {

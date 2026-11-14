@@ -223,6 +223,7 @@ test-idp: ## Run the TestIdP suite against real supabase/auth containers on the 
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_AUTH_ADMIN_URL="$(DEV_DB_AUTH_ADMIN_URL)" \
+	DATABASE_GATEWAY_URL="$(DEV_DB_GATEWAY_URL)" \
 	go test -p 1 -count=1 -run TestIdP ./internal/platform/auth/...
 
 .PHONY: guard-migration-url

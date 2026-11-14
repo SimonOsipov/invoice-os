@@ -78,6 +78,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `ceiling:` in `migrations/20261027010037_erase_invitation_emails.sql`: any `invoice_app` service can erase the invitations of one address in every tenant.
 - `ceiling:` in `internal/platform/auth/gotrueadmin`: the worker holds GoTrue's signing key.
 - `ceiling:` in `internal/platform/db/account_state_read.go`: any `invoice_app` service can delete one account by id that is unconfirmed 7 days after its last mail.
+- `ceiling:` in `internal/platform/db/account_state_read.go`: `invoice_gateway` can read the masked address of the account a confirm-token hash belongs to (`auth.confirm_link_address`).
 - `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.
 - `ceiling:` in `internal/gateway/unsubscribe_page.go`: the unsubscribe token is a 122-bit random UUID in the query string with no throttle; it reaches load-balancer and Caddy logs.

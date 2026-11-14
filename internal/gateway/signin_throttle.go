@@ -18,7 +18,7 @@ const (
 const signInSweepEvery = time.Minute
 
 // SignInThrottle caps sign-in attempts per email address.
-// ceiling: 10 wrong attempts per window lock a victim out indefinitely, even with the right password; revisit with a per-client-IP limit.
+// ceiling: 10 wrong attempts per window lock a victim out indefinitely, even with the right password; many IPs evade a per-IP limit, so revisit if a lockout is reported.
 // ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them.
 type SignInThrottle struct {
 	name      string // names the instance in the full-map WARN

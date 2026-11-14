@@ -257,6 +257,9 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes, filename, declared_content_type)
 		 VALUES ($1,$2,'purge-witness/doc.csv',$3,64,'doc.csv','text/csv')`,
 		documentID, tenantID, contentHash)
+	plant("document_uploaders", "document_id", documentID,
+		`INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1,$2,$3)`,
+		tenantID, documentID, userID)
 	plant("extraction_jobs", "id", extractionJobID,
 		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version)
 		 VALUES ($1,$2,$3,'mock','v1')`,

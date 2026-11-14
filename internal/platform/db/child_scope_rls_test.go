@@ -100,6 +100,25 @@ func cpSeed(t *testing.T) *cpFix {
 	return f
 }
 
+func cpLegacyExec(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy seed: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("seed legacy: %v\n%s", err, sql)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy seed: %v", err)
+	}
+}
+
 func cpExtractionRows(t *testing.T, tenant, doc string) (job, image string) {
 	t.Helper()
 	job, image = uuid.NewString(), uuid.NewString()
@@ -244,7 +263,8 @@ func TestRLS_ChildScopeExtractionOfADocumentCitedByBothClients(t *testing.T) {
 	f.extJob["W"], f.extImage["W"] = cpExtractionRows(t, f.ten.id, w)
 	cpExec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4, $5)`,
 		uuid.NewString(), f.ten.id, a.entity, "cp-"+uuid.NewString()[:8], w)
-	cpExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id) VALUES ($1, $2, $3, $4)`,
+	// B's batch is a pre-migration row: the replica role skips the bind trigger.
+	cpLegacyExec(t, `INSERT INTO import_batches (id, tenant_id, entity_id, document_id) VALUES ($1, $2, $3, $4)`,
 		uuid.NewString(), f.ten.id, b.entity, w)
 
 	for _, table := range cpExtraction {
@@ -595,6 +615,18 @@ func TestRLS_ChildScopeKeepsTheTenantPredicate(t *testing.T) {
 	}
 }
 
+func cpExtractionTable(table string) bool {
+	return table == "extraction_jobs" || table == "extraction_page_images"
+}
+
+// cpScopedQual: the extraction policies scope through public.document_readable.
+func cpScopedQual(table, qual string) bool {
+	if cpExtractionTable(table) {
+		return strings.Contains(qual, "document_readable")
+	}
+	return strings.Contains(qual, "app.entity_scope")
+}
+
 func TestRLS_ChildScopePoliciesDeclared(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -642,7 +674,7 @@ func TestRLS_ChildScopePoliciesDeclared(t *testing.T) {
 			}
 			if p.qual == nil || !strings.Contains(*p.qual, "app.current_tenant") {
 				t.Errorf("%s tenant_isolation qual = %v, want the tenant predicate kept", table, p.qual)
-			} else if !strings.Contains(*p.qual, "app.entity_scope") {
+			} else if !cpScopedQual(table, *p.qual) {
 				t.Errorf("%s tenant_isolation qual lacks app.entity_scope: %s", table, *p.qual)
 			}
 		})
@@ -724,7 +756,7 @@ func TestRLS_ChildScopeMigrationIsReversible(t *testing.T) {
 	scoped := quals()
 	shapeBefore := shape()
 	for _, table := range cpFiveTables {
-		if !strings.Contains(scoped[table], "app.entity_scope") {
+		if !cpScopedQual(table, scoped[table]) {
 			t.Fatalf("before Down, %s qual lacks app.entity_scope (migration not applied?): %s", table, scoped[table])
 		}
 	}
@@ -760,6 +792,13 @@ func TestRLS_ChildScopeMigrationIsReversible(t *testing.T) {
 	}
 	up := quals()
 	for _, table := range cpFiveTables {
+		// The extraction policies now call document_readable; this Up restores the older text.
+		if cpExtractionTable(table) {
+			if !strings.Contains(up[table], "app.entity_scope") {
+				t.Errorf("after Up, %s qual lacks app.entity_scope: %s", table, up[table])
+			}
+			continue
+		}
 		if up[table] != scoped[table] {
 			t.Errorf("after Up, %s qual = %s\nwant the scoped text applied before Down: %s", table, up[table], scoped[table])
 		}

@@ -15,6 +15,7 @@ package invoice
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -508,6 +509,8 @@ var (
 	ErrOriginalOtherEntity = errors.New("invoice: original in another entity")
 	ErrOriginalNotIssued   = errors.New("invoice: original is not an issued invoice")
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
+	// ErrSourceDocumentBound: the cited document is bound to another client. Still an ErrValidation.
+	ErrSourceDocumentBound = fmt.Errorf("%w", ErrValidation)
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")
 
@@ -618,6 +621,15 @@ var (
 	// ErrVerdictStale: the invoice changed since its stored verdict, so Explain refuses.
 	ErrVerdictStale = errors.New("invoice: verdict stale")
 )
+
+// pgConstraint extracts the violated constraint name from err, or "".
+func pgConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a
 // *pgconn.PgError. Copied verbatim from internal/portfolio/portfolio.go's own

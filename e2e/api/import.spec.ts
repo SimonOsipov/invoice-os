@@ -38,14 +38,16 @@ import { freshTin } from './fixtures'
 // internal/importer/perf_test.go's in-process fixture shape byte-for-byte
 // (same header-field values, same buyer TIN) so both halves of this gate
 // exercise the identical known-clean dataset.
+// The buyer name carries a fresh token, which no assertion reads: a document binds to its first client.
 function buildPerfCsv(): string {
+  const buyer = `M4-03 Perf Buyer Co ${crypto.randomUUID()}`
   const header = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
   const lines: string[] = [header]
   for (let i = 1; i <= 500; i++) {
     const invNo = `INV-PERF-${String(i).padStart(5, '0')}`
     for (let line = 1; line <= 3; line++) {
       lines.push(
-        [invNo, '2026-01-15', '87654321-0002', 'M4-03 Perf Buyer Co', 'NGN', '1000.00', '75.00', '1075.00', `Item ${line}`, '1', '100.00'].join(
+        [invNo, '2026-01-15', '87654321-0002', buyer, 'NGN', '1000.00', '75.00', '1075.00', `Item ${line}`, '1', '100.00'].join(
           ',',
         ),
       )

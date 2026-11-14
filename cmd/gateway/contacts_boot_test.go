@@ -199,6 +199,37 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Deleting main's HideHealthDetail call turns the anonymous read red; only the booted binary sees main's wiring.
+	t.Run("health shows build detail only to the gateway token", func(t *testing.T) {
+		read := func(header string) (int, string, map[string]string) {
+			req, _ := http.NewRequest(http.MethodGet, base+"/health", nil)
+			if header != "" {
+				req.Header.Set("X-Gateway-Token", header)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			b, _ := io.ReadAll(resp.Body)
+			var m map[string]string
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatalf("decode %q: %v", b, err)
+			}
+			return resp.StatusCode, strings.TrimSpace(string(b)), m
+		}
+		code, raw, _ := read("")
+		if code != http.StatusOK || raw != `{"status":"ok"}` {
+			t.Errorf("anonymous /health = %d %s, want 200 {\"status\":\"ok\"}", code, raw)
+		}
+		code, raw, m := read(token)
+		if code != http.StatusOK {
+			t.Fatalf("/health with the token = %d %s, want 200", code, raw)
+		}
+		if m["build"] == "" || m["mock_issuer"] != "absent" || m["auth_issuers"] != "1" {
+			t.Errorf("/health with the token = %s, want build set, mock_issuer absent, auth_issuers 1", raw)
+		}
+	})
 	// Register runs first against an autoconfirming GoTrue: a hand-off it made would reach the intake before verify's.
 	t.Run("register hands off nothing", func(t *testing.T) {
 		body := `{"email":"r@corp.example","password":"pw-long-enough","marketing_consent_text":"I agree."}`

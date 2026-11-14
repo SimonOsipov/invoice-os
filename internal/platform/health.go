@@ -61,6 +61,9 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+// HideHealthDetail is a stub for the red tests (SECAUD-36-02); the real method sets healthToken.
+func (a *App) HideHealthDetail(token string) {}
+
 // readyzHandler runs every registered readiness check. All pass → 200; any
 // failure → 503 with the failing dependency names.
 func (rd *readiness) readyzHandler(w http.ResponseWriter, r *http.Request) {

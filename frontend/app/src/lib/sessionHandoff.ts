@@ -1,10 +1,11 @@
 // Landing → app hand-off code redemption.
-import { ApiError, apiFetch } from '@invoice-os/api-client'
+import { ApiError, apiFetch, sessionFetch } from '@invoice-os/api-client'
 
 import type { Me, Session } from '../auth'
 import { trackWorkspaceCreated } from '../chat'
 import { trimName } from './pendingInvite'
-import { refreshTokens } from './renewal'
+import { refreshAccess } from './renewal'
+import { clearSignOutPending } from './revoke'
 import { decodeJwtPayload, handoffPersona, isHandoffMe, isTokenExpired } from './session'
 import { BASE64URL_43 } from './signInState'
 
@@ -61,7 +62,7 @@ export interface PendingInvite {
 }
 
 // A tenant-less sign-in with invites waiting, or none (invites empty): a removed person, or `firstWorkspace` for an account with no answers, no membership (`live_membership` false). The Join screen resolves it (joinInvite, createOwnWorkspace).
-export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; renewable?: boolean; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
+export type JoinOffer = { kind: 'join'; token: string; renewable: boolean; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
 
 export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
   const list = (body as { invitations?: unknown } | null | undefined)?.invitations
@@ -134,13 +135,16 @@ async function readMeRetrying(base: string, token: string, signal: AbortSignal):
 
 export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: { token: string; name: string | null } | null = null): Promise<Session | JoinOffer> {
   const signal = AbortSignal.timeout(15000)
-  const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {
+  const { access_token: token, renewable: renewableRaw } = await sessionFetch<{ access_token: string; renewable?: unknown }>(`${base}/auth/exchange`, {
     method: 'POST',
     body: { code, state },
     signal,
   })
+  // The exchange set the cookie, so a sign-out owed from before is moot.
+  clearSignOutPending()
+  const renewable = renewableRaw === true
   if (invite !== null) {
-    return acceptInviteAndRead(base, token, refreshToken, invite, now, signal)
+    return acceptInviteAndRead(base, token, renewable, invite, now, signal)
   }
   let me: Me
   try {
@@ -155,28 +159,28 @@ export async function redeemHandoff(base: string, code: string, state: string, n
       throw new Error('invitation lookup failed', { cause: lookupErr })
     })
     if (isPendingInvites(invites)) {
-      return { kind: 'join', token, refreshToken, invites: invites.invitations, answers }
+      return { kind: 'join', token, renewable, invites: invites.invitations, answers }
     }
     if (!isEmptyInvites(invites)) {
       throw new Error('malformed invitation list')
     }
     if (isRemoved(invites)) {
-      return { kind: 'join', token, refreshToken, invites: [], answers }
+      return { kind: 'join', token, renewable, invites: [], answers }
     }
     if (answers === null) {
       if (hasNoLiveMembership(invites)) {
-        return { kind: 'join', token, refreshToken, invites: [], answers: null, firstWorkspace: true }
+        return { kind: 'join', token, renewable, invites: [], answers: null, firstWorkspace: true }
       }
       throw err
     }
-    return provisionAndRead(base, { token, refreshToken }, answers, now, signal)
+    return provisionAndRead(base, { token, renewable }, answers, now, signal)
   }
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
   }
-  // A missing or malformed refresh token gives a session without renewal. The token may have
-  // waited in the gateway's store for up to HandoffTTL, so receipt is backdated by it.
-  const renewal = typeof refreshToken === 'string' && refreshToken !== '' ? { refreshToken, receivedAt: now - HANDOFF_TTL_MS } : undefined
+  // Without `renewable` the session has no renewal. The code may have waited in the gateway's
+  // store for up to HandoffTTL, so receipt is backdated by it.
+  const renewal = renewable ? { receivedAt: now - HANDOFF_TTL_MS } : undefined
   return { persona: handoffPersona(me), token, me, verified: true, handoff: true, ...(renewal ? { renewal } : {}) }
 }
 
@@ -188,7 +192,7 @@ const INVITE_REFUSALS: Record<string, [number, InviteOutcome]> = {
 }
 
 // The invitee's first token has no tenant, so /me waits for the refresh that carries the new membership.
-async function acceptInviteAndRead(base: string, token: string, refreshToken: unknown, invite: { token: string; name: string | null }, now: number, signal: AbortSignal): Promise<Session> {
+async function acceptInviteAndRead(base: string, token: string, renewable: boolean, invite: { token: string; name: string | null }, now: number, signal: AbortSignal): Promise<Session> {
   try {
     await apiFetch(`${base}/api/tenancy/v1/invitations/accept`, { method: 'POST', token, body: invite.name === null ? { token: invite.token } : { token: invite.token, display_name: invite.name }, signal })
   } catch (err) {
@@ -199,7 +203,7 @@ async function acceptInviteAndRead(base: string, token: string, refreshToken: un
     }
     throw err
   }
-  return renewAndRead(base, { token, refreshToken }, now, signal, 'no refresh token after accepting the invite')
+  return renewAndRead(base, { token, renewable }, now, signal, 'no refresh token after accepting the invite')
 }
 
 export async function createOwnWorkspace(base: string, offer: JoinOffer, body: ProvisionBody, now: number = Date.now()): Promise<Session> {
@@ -207,7 +211,7 @@ export async function createOwnWorkspace(base: string, offer: JoinOffer, body: P
 }
 
 // A 404 or 409 re-reads /me first: another tab may have accepted already.
-// A renewal rotates the refresh token; the offer is updated in place so the next Join uses the live pair.
+// A renewal updates the offer's access token in place so the next Join uses the live one.
 export async function joinInvite(base: string, offer: JoinOffer, id: string, displayName: string, now: number = Date.now()): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
   try {
@@ -234,7 +238,7 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, dis
   return renewAndRead(base, offer, now, signal, 'no refresh token after joining the invite')
 }
 
-async function provisionAndRead(base: string, auth: { token: string; refreshToken: unknown }, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
+async function provisionAndRead(base: string, auth: { token: string; renewable: boolean }, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
   try {
     await callRenewing(base, auth, signal, (t) => apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token: t, body: answers, signal }))
     trackWorkspaceCreated()
@@ -247,33 +251,31 @@ async function provisionAndRead(base: string, auth: { token: string; refreshToke
   return renewAndRead(base, auth, now, signal, 'no refresh token after provisioning')
 }
 
-// The Join screen can outlive the access token: one 401 renews and retries once. Refresh tokens rotate, so auth keeps the latest.
-async function callRenewing(base: string, auth: { token: string; refreshToken: unknown }, signal: AbortSignal, call: (token: string) => Promise<unknown>): Promise<unknown> {
+// The Join screen can outlive the access token: one 401 renews and retries once. 
+async function callRenewing(base: string, auth: { token: string; renewable: boolean }, signal: AbortSignal, call: (token: string) => Promise<unknown>): Promise<unknown> {
   try {
     return await call(auth.token)
   } catch (err) {
-    if (!(err instanceof ApiError && err.status === 401) || typeof auth.refreshToken !== 'string' || auth.refreshToken === '') {
+    if (!(err instanceof ApiError && err.status === 401) || !auth.renewable) {
       throw err
     }
-    const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
+    const access = await refreshAccess(base, signal)
     auth.token = access
-    auth.refreshToken = refresh
     return call(access)
   }
 }
 
-async function renewAndRead(base: string, auth: { token: string; refreshToken: unknown }, now: number, signal: AbortSignal, missing: string): Promise<Session> {
-  if (typeof auth.refreshToken !== 'string' || auth.refreshToken === '') {
+async function renewAndRead(base: string, auth: { token: string; renewable: boolean }, now: number, signal: AbortSignal, missing: string): Promise<Session> {
+  if (!auth.renewable) {
     throw new Error(missing)
   }
-  const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
+  const access = await refreshAccess(base, signal)
   auth.token = access
-  auth.refreshToken = refresh
   const me = await readMeRetrying(base, access, signal)
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
   }
-  return { persona: handoffPersona(me), token: access, me, verified: true, handoff: true, renewal: { refreshToken: refresh, receivedAt: now } }
+  return { persona: handoffPersona(me), token: access, me, verified: true, handoff: true, renewal: { receivedAt: now } }
 }
 
 // A live hand-off session wins over every URL param.

@@ -284,10 +284,10 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
         'fetch',
         vi.fn((url: string) => {
           if (url.endsWith('/auth/exchange')) {
-            return reply(200, { access_token: first, refresh_token: 'R0' })
+            return reply(200, { access_token: first, renewable: true })
           }
           if (url.endsWith('/auth/refresh')) {
-            return reply(200, { access_token: LIVE, refresh_token: 'R1' })
+            return reply(200, { access_token: LIVE })
           }
           if (url.endsWith('/invitations/mine')) {
             return reply(200, { invitations: [] })
@@ -368,28 +368,29 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
 
   // The token may have sat in the gateway's store for up to HandoffTTL (60 s, internal/gateway/handoff.go).
   it('redeemHandoff keeps the refresh token with its receipt time', async () => {
-    stubExchange({ access_token: LIVE, refresh_token: 'R0' })
+    stubExchange({ access_token: LIVE, renewable: true })
 
     const s = (await redeemHandoff(GATEWAY, CODE, STATE, 5000)) as Session
 
-    expect(s.renewal).toEqual({ refreshToken: 'R0', receivedAt: 5000 - 60_000 })
+    expect(s.renewal).toEqual({ receivedAt: 5000 - 60_000 })
     expect(s).toEqual({
       persona: handoffPersona(ME),
       token: LIVE,
       me: ME,
       verified: true,
       handoff: true,
-      renewal: { refreshToken: 'R0', receivedAt: 5000 - 60_000 },
+      renewal: { receivedAt: 5000 - 60_000 },
     })
   })
 
-  // A missing, empty or non-string refresh token is a pre-renewal gateway's answer.
-  it('redeemHandoff without a refresh token sets no renewal', async () => {
+  // Anything but renewable: true is a session the cookie cannot renew.
+  it('redeemHandoff without renewable true sets no renewal', async () => {
     const rows: [string, object][] = [
       ['absent', { access_token: LIVE }],
-      ['empty', { access_token: LIVE, refresh_token: '' }],
-      ['numeric', { access_token: LIVE, refresh_token: 42 }],
-      ['null', { access_token: LIVE, refresh_token: null }],
+      ['false', { access_token: LIVE, renewable: false }],
+      ['string', { access_token: LIVE, renewable: 'true' }],
+      ['numeric', { access_token: LIVE, renewable: 1 }],
+      ['null', { access_token: LIVE, renewable: null }],
     ]
     for (const [name, answer] of rows) {
       stubExchange(answer)
@@ -426,14 +427,14 @@ describe('redeemHandoff provisions the registered workspace', () => {
         const path = url.replace(GATEWAY, '')
         const reply: Reply =
           path === '/auth/exchange'
-            ? (r.exchange ?? { status: 200, body: { access_token: TOKEN, refresh_token: 'R0' } })
+            ? (r.exchange ?? { status: 200, body: { access_token: TOKEN, renewable: true } })
             : path === '/api/tenancy/v1/me'
               ? (me.shift() ?? { status: 500 })
               : path === '/api/tenancy/v1/invitations/mine'
                 ? (r.mine ?? { status: 200, body: { invitations: [] } })
                 : path === '/api/tenancy/v1/workspaces'
                 ? (r.workspaces ?? { status: 201, body: { tenant: IN_HOUSE_ME.tenant } })
-                : (r.refresh ?? { status: 200, body: { access_token: TOKEN2, refresh_token: 'R1' } })
+                : (r.refresh ?? { status: 200, body: { access_token: TOKEN2 } })
         return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
       }),
     )
@@ -456,7 +457,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
     expect(trace(calls)).toEqual(CHAIN)
     expect(calls[3].body).toEqual(ANSWERS)
     expect(calls[3].auth).toBe(`Bearer ${TOKEN}`)
-    expect(calls[4].body).toEqual({ refresh_token: 'R0' })
+    expect(calls[4].body).toBeUndefined()
     expect(calls[4].auth).toBeNull()
     expect(calls[1].auth).toBe(`Bearer ${TOKEN}`)
     expect(calls[5].auth).toBe(`Bearer ${TOKEN2}`)
@@ -464,7 +465,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
 
     for (const text of ['Adaeze Ventures', ...NON_ASCII]) {
       const sent = { workspace_name: text, display_name: `${text} Admin`, kind: 'firm' }
-      const utf8 = stubChain({ exchange: { status: 200, body: { access_token: tokenWith({ user_metadata: { registration: sent } }), refresh_token: 'R0' } } })
+      const utf8 = stubChain({ exchange: { status: 200, body: { access_token: tokenWith({ user_metadata: { registration: sent } }), renewable: true } } })
       await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect.soft(utf8[3]?.body, text).toStrictEqual(sent)
     }
@@ -474,7 +475,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
     const calls = stubChain({})
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
     expect(trace(calls)).toEqual(CHAIN)
-    expect(s).toMatchObject({ persona: handoffPersona(IN_HOUSE_ME), token: TOKEN2, me: IN_HOUSE_ME, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+    expect(s).toMatchObject({ persona: handoffPersona(IN_HOUSE_ME), token: TOKEN2, me: IN_HOUSE_ME, renewal: { receivedAt: 5000 } })
     expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
   })
 
@@ -517,7 +518,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
   })
 
   it('join_sendsNoWorkspaceCreated: a redemption without answers', async () => {
-    stubChain({ exchange: { status: 200, body: { access_token: tokenWith({}), refresh_token: 'R0' } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
+    stubChain({ exchange: { status: 200, body: { access_token: tokenWith({}), renewable: true } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
     await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
     expect(trackWorkspaceCreated).not.toHaveBeenCalled()
   })
@@ -532,7 +533,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
       me: IN_HOUSE_ME,
       verified: true,
       handoff: true,
-      renewal: { refreshToken: 'R1', receivedAt: 5000 },
+      renewal: { receivedAt: 5000 },
     })
   })
 
@@ -551,7 +552,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
     const landed = stubChain({ workspaces: { status: 409, body: { error: 'already has a workspace' } } })
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
     expect(trace(landed)).toEqual(CHAIN)
-    expect(s).toMatchObject({ token: TOKEN2, handoff: true, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+    expect(s).toMatchObject({ token: TOKEN2, handoff: true, renewal: { receivedAt: 5000 } })
 
     const blocked = stubChain({ workspaces: { status: 409 }, me: [FORBIDDEN, FORBIDDEN] })
     const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
@@ -570,7 +571,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
       ['unknown kind', { user_metadata: { registration: { ...ANSWERS, kind: 'bogus' } } }],
     ]
     for (const [name, claims] of rows) {
-      const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), refresh_token: 'R0' } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
+      const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), renewable: true } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect(trace(calls), name).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me', MINE])
       expect(err, name).toMatchObject({ kind: 'join', invites: [], answers: null, firstWorkspace: true })
@@ -588,7 +589,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
       const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect(trace(calls), name).toEqual(want)
       if (name.includes('200')) {
-        expect(s, name).toMatchObject({ token: TOKEN, renewal: { refreshToken: 'R0', receivedAt: 5000 - HANDOFF_TTL_MS } })
+        expect(s, name).toMatchObject({ token: TOKEN, renewal: { receivedAt: 5000 - HANDOFF_TTL_MS } })
       } else {
         expect(s, name).toBeInstanceOf(ApiError)
       }
@@ -601,8 +602,8 @@ describe('redeemHandoff provisions the registered workspace', () => {
       ['workspaces 400', { workspaces: { status: 400, body: { error: 'bad' } } }, CHAIN.slice(0, 4)],
       ['workspaces 500', { workspaces: { status: 500 } }, CHAIN.slice(0, 4)],
       ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }, CHAIN.slice(0, 5)],
-      ['exchange without a refresh token', { exchange: NO_REFRESH }, CHAIN.slice(0, 4)],
-      ['exchange with an empty refresh token', { exchange: { status: 200, body: { access_token: TOKEN, refresh_token: '' } } }, CHAIN.slice(0, 4)],
+      ['exchange without renewable', { exchange: NO_REFRESH }, CHAIN.slice(0, 4)],
+      ['exchange with renewable false', { exchange: { status: 200, body: { access_token: TOKEN, renewable: false } } }, CHAIN.slice(0, 4)],
       ['refresh answering without tokens', { refresh: { status: 200, body: {} } }, CHAIN.slice(0, 5)],
       ['second /me 500', { me: [FORBIDDEN, { status: 500 }] }, CHAIN],
       ['second /me malformed', { me: [FORBIDDEN, { status: 200, body: {} }] }, CHAIN],
@@ -647,13 +648,13 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
         }
         const reply: Reply =
           path === '/auth/exchange'
-            ? (r.exchange ?? { status: 200, body: { access_token: FIRST, refresh_token: 'R0' } })
+            ? (r.exchange ?? { status: 200, body: { access_token: FIRST, renewable: true } })
             : path === '/api/tenancy/v1/invitations/accept'
               ? (r.accept ?? { status: 200, body: { tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } } })
               : path === '/api/tenancy/v1/me'
                 ? (r.me ?? (auth === `Bearer ${FIRST}` ? { status: 403, body: { error: 'forbidden' } } : { status: 200, body: ME }))
                 : path === '/auth/refresh'
-                  ? (r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
+                  ? (r.refresh ?? { status: 200, body: { access_token: RENEWED } })
                   : { status: 500 }
         return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
       }),
@@ -671,7 +672,7 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
     expect(trace(calls)).toEqual(CHAIN)
     expect(calls[1].body).toEqual({ token: INVITE })
     expect(calls[1].auth).toBe(`Bearer ${FIRST}`)
-    expect(calls[2].body).toEqual({ refresh_token: 'R0' })
+    expect(calls[2].body).toBeUndefined()
     expect(calls[2].auth).toBeNull()
     expect(calls[3].auth).toBe(`Bearer ${RENEWED}`)
     expect(timeout).toHaveBeenCalledTimes(1)
@@ -682,7 +683,7 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
       me: ME,
       verified: true,
       handoff: true,
-      renewal: { refreshToken: 'R1', receivedAt: 5000 },
+      renewal: { receivedAt: 5000 },
     })
   })
 
@@ -752,8 +753,8 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
   it('redeemHandoff_withInviteRejectsWhenRenewalFails', async () => {
     const rows: [string, Parameters<typeof stubInvite>[0], string[]][] = [
       ['accept network error', { acceptNetworkError: true }, CHAIN.slice(0, 2)],
-      ['exchange without a refresh token', { exchange: { status: 200, body: { access_token: FIRST } } }, CHAIN.slice(0, 2)],
-      ['exchange with an empty refresh token', { exchange: { status: 200, body: { access_token: FIRST, refresh_token: '' } } }, CHAIN.slice(0, 2)],
+      ['exchange without renewable', { exchange: { status: 200, body: { access_token: FIRST } } }, CHAIN.slice(0, 2)],
+      ['exchange with renewable false', { exchange: { status: 200, body: { access_token: FIRST, renewable: false } } }, CHAIN.slice(0, 2)],
       ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }, CHAIN.slice(0, 3)],
       ['refresh answering without tokens', { refresh: { status: 200, body: {} } }, CHAIN.slice(0, 3)],
       ['/me 500', { me: { status: 500 } }, CHAIN],
@@ -772,7 +773,7 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
   })
 
   it('redeemHandoff_withoutInviteNeverCallsAccept', async () => {
-    const calls = stubInvite({ exchange: { status: 200, body: { access_token: LIVE, refresh_token: 'R0' } }, me: { status: 200, body: ME } })
+    const calls = stubInvite({ exchange: { status: 200, body: { access_token: LIVE, renewable: true } }, me: { status: 200, body: ME } })
     await redeemHandoff(GATEWAY, CODE, STATE, 5000, null)
     expect(trace(calls)).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me'])
   })
@@ -804,7 +805,7 @@ describe('join offers', () => {
         calls.push({ url: path, method: init.method ?? 'GET', auth: init.headers.get('Authorization'), body: init.body === undefined ? undefined : JSON.parse(init.body), signal: init.signal })
         if (path.endsWith('/accept') && r.acceptNetworkError) return Promise.reject(new TypeError('Failed to fetch'))
         const reply: Reply = path === '/auth/exchange'
-          ? (r.exchange ?? { status: 200, body: { access_token: BARE, refresh_token: 'R0' } })
+          ? (r.exchange ?? { status: 200, body: { access_token: BARE, renewable: true } })
           : path === '/api/tenancy/v1/me'
             ? (me.shift() ?? { status: 200, body: ME })
             : path === '/api/tenancy/v1/invitations/mine'
@@ -812,7 +813,7 @@ describe('join offers', () => {
               : path === '/api/tenancy/v1/workspaces'
                 ? (workspacesSeq.shift() ?? r.workspaces ?? { status: 201, body: {} })
                 : path === '/auth/refresh'
-                  ? (refreshSeq.shift() ?? r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
+                  ? (refreshSeq.shift() ?? r.refresh ?? { status: 200, body: { access_token: RENEWED } })
                   : (acceptSeq.shift() ?? r.accept ?? { status: 200, body: {} })
         return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
       }),
@@ -820,12 +821,12 @@ describe('join offers', () => {
     return calls
   }
   const paths = (calls: Call[]) => calls.map((c) => c.url)
-  const offer = (over: Partial<JoinOffer> = {}): JoinOffer => ({ kind: 'join', token: BARE, refreshToken: 'R0', invites: THREE, answers: null, ...over })
+  const offer = (over: Partial<JoinOffer> = {}): JoinOffer => ({ kind: 'join', token: BARE, renewable: true, invites: THREE, answers: null, ...over })
 
   it('redeemHandoff_403WithInvitesResolvesAJoinOffer', async () => {
     const calls = stub()
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
-    expect(s).toEqual({ kind: 'join', token: BARE, refreshToken: 'R0', invites: THREE, answers: null })
+    expect(s).toEqual({ kind: 'join', token: BARE, renewable: true, invites: THREE, answers: null })
     expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
     expect(calls[2].auth).toBe(`Bearer ${BARE}`)
     expect(calls[2].signal).toBe(calls[0].signal)
@@ -838,7 +839,7 @@ describe('join offers', () => {
     ]) {
       const calls = stub({ mine: { status: 200, body } })
       const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
-      expect(s).toEqual({ kind: 'join', token: BARE, refreshToken: 'R0', invites: [], answers: null, firstWorkspace: true })
+      expect(s).toEqual({ kind: 'join', token: BARE, renewable: true, invites: [], answers: null, firstWorkspace: true })
       expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
     }
   })
@@ -869,7 +870,7 @@ describe('join offers', () => {
     stub({ mine: { status: 200, body: { invitations: THREE, removed: false, live_membership: true } } })
     expect(await redeemHandoff(GATEWAY, CODE, STATE, 5000)).toMatchObject({ kind: 'join', invites: THREE })
 
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine: { status: 200, body: { invitations: [], removed: false, live_membership: true } } })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, mine: { status: 200, body: { invitations: [], removed: false, live_membership: true } } })
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
     expect(paths(calls).filter((x) => x === '/api/tenancy/v1/workspaces')).toHaveLength(1)
     expect(s).toMatchObject({ handoff: true, token: RENEWED })
@@ -885,16 +886,16 @@ describe('join offers', () => {
   it('createOwnWorkspace: a retry after a failed read answers 409 and reaches the workspace', async () => {
     const calls = stub({
       workspacesSeq: [{ status: 201, body: {} }, { status: 409, body: { error: 'this account already has a workspace' } }],
-      refreshSeq: [{ status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } }, { status: 200, body: { access_token: RENEWED, refresh_token: 'R2' } }],
+      refreshSeq: [{ status: 200, body: { access_token: RENEWED } }, { status: 200, body: { access_token: RENEWED } }],
       me: [{ status: 500 }, { status: 200, body: ME }],
     })
-    const o = offer({ invites: [], firstWorkspace: true, refreshToken: 'R0' })
+    const o = offer({ invites: [], firstWorkspace: true, renewable: true })
     const body: ProvisionBody = { workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' }
     await expect(createOwnWorkspace(GATEWAY, o, body, 5000)).rejects.toBeInstanceOf(ApiError)
     const s = await createOwnWorkspace(GATEWAY, o, body, 5000)
-    expect(s).toMatchObject({ token: RENEWED, renewal: { refreshToken: 'R2' } })
+    expect(s).toMatchObject({ token: RENEWED, renewal: { receivedAt: 5000 } })
     const refreshes = calls.filter((c) => c.url === '/auth/refresh')
-    expect(refreshes.map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'R1' }])
+    expect(refreshes.map((c) => c.body)).toEqual([undefined, undefined])
     expect(calls.filter((c) => c.url === '/api/tenancy/v1/workspaces').map((c) => c.body)).toEqual([body, body])
   })
 
@@ -922,14 +923,14 @@ describe('join offers', () => {
   })
 
   it('redeemHandoff_answersAndInvitesOfferBoth', async () => {
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } } })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } } })
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
     expect(s).toMatchObject({ kind: 'join', answers: ANSWERS, invites: THREE })
     expect(paths(calls)).not.toContain('/api/tenancy/v1/workspaces')
   })
 
   it('redeemHandoff_answersWithAnEmptyListProvision', async () => {
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine: { status: 200, body: { invitations: [] } } })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, mine: { status: 200, body: { invitations: [] } } })
     const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
     expect(paths(calls)).toContain('/api/tenancy/v1/workspaces')
     expect(s).toMatchObject({ handoff: true, token: RENEWED })
@@ -937,7 +938,7 @@ describe('join offers', () => {
 
   it('redeemHandoff: a removed person with no invites gets the no-workspace offer', async () => {
     for (const exchange of [WITH_ANSWERS, BARE]) {
-      const calls = stub({ exchange: { status: 200, body: { access_token: exchange, refresh_token: 'R0' } }, mine: { status: 200, body: { invitations: [], removed: true } } })
+      const calls = stub({ exchange: { status: 200, body: { access_token: exchange, renewable: true } }, mine: { status: 200, body: { invitations: [], removed: true } } })
       const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
       expect(s).toMatchObject({ kind: 'join', invites: [], answers: exchange === WITH_ANSWERS ? ANSWERS : null })
       expect(paths(calls)).not.toContain('/api/tenancy/v1/workspaces')
@@ -946,7 +947,7 @@ describe('join offers', () => {
 
   it('redeemHandoff: a fresh registrant still provisions', async () => {
     for (const body of [{ invitations: [] }, { invitations: [], removed: false }]) {
-      const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine: { status: 200, body } })
+      const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, mine: { status: 200, body } })
       await redeemHandoff(GATEWAY, CODE, STATE, 5000)
       expect(paths(calls).filter((x) => x === '/api/tenancy/v1/workspaces')).toHaveLength(1)
     }
@@ -963,7 +964,7 @@ describe('join offers', () => {
       ['malformed', { status: 200, body: { invitations: 'x' } }],
     ]
     for (const [name, mine] of rows) {
-      const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine })
+      const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, mine })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect(err, name).toBeInstanceOf(Error)
       expect(err, name).not.toBeInstanceOf(ApiError)
@@ -979,11 +980,11 @@ describe('join offers', () => {
     expect(calls[0].body).toEqual(ANSWERS)
     expect(calls[0].auth).toBe(`Bearer ${WITH_ANSWERS}`)
     expect(timeout).toHaveBeenCalledWith(15000)
-    expect(s).toMatchObject({ token: RENEWED, handoff: true, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+    expect(s).toMatchObject({ token: RENEWED, handoff: true, renewal: { receivedAt: 5000 } })
   })
 
   it('redeemHandoff_heldInviteNeverAsksTheList', async () => {
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [{ status: 200, body: ME }] })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, me: [{ status: 200, body: ME }] })
     await redeemHandoff(GATEWAY, CODE, STATE, 5000, { token: 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE', name: null })
     expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/invitations/accept', '/auth/refresh', '/api/tenancy/v1/me'])
   })
@@ -995,10 +996,10 @@ describe('join offers', () => {
     expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a%20b/accept', '/auth/refresh', '/api/tenancy/v1/me'])
     expect(calls[0].method).toBe('POST')
     expect(calls[0].auth).toBe(`Bearer ${BARE}`)
-    expect(calls[1].body).toEqual({ refresh_token: 'R0' })
+    expect(calls[1].body).toBeUndefined()
     expect(calls[2].auth).toBe(`Bearer ${RENEWED}`)
     expect(timeout).toHaveBeenCalledWith(15000)
-    expect(s).toEqual({ persona: handoffPersona(ME), token: RENEWED, me: ME, verified: true, handoff: true, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+    expect(s).toEqual({ persona: handoffPersona(ME), token: RENEWED, me: ME, verified: true, handoff: true, renewal: { receivedAt: 5000 } })
   })
 
   it('joinInvite sends the trimmed name', async () => {
@@ -1024,7 +1025,7 @@ describe('join offers', () => {
     const rows: [string, Reply, Partial<JoinOffer>, string][] = [
       ['404', { status: 404, body: { error: MSG_INVALID } }, {}, 'invalid'],
       ['409', { status: 409, body: { error: MSG_ALREADY_MEMBER } }, {}, 'already-member'],
-      ['no refresh token', { status: 404, body: { error: MSG_INVALID } }, { refreshToken: undefined }, 'invalid'],
+      ['no refresh token', { status: 404, body: { error: MSG_INVALID } }, { renewable: false }, 'invalid'],
     ]
     for (const [name, accept, over, outcome] of rows) {
       stub({ accept, me: [FORBIDDEN] })
@@ -1058,27 +1059,27 @@ describe('join offers', () => {
     expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept', '/auth/refresh', '/api/tenancy/v1/invitations/a/accept', '/auth/refresh', '/api/tenancy/v1/me'])
     expect(calls[0].auth).toBe(`Bearer ${BARE}`)
     expect(calls[2].auth).toBe(`Bearer ${RENEWED}`)
-    expect(calls[3].body).toEqual({ refresh_token: 'R1' })
+    expect(calls[3].body).toBeUndefined()
     expect(s).toMatchObject({ token: RENEWED, handoff: true })
   })
 
-  it('joinInvite_theRotatedPairReachesTheOfferAfterARefusedRow', async () => {
+  it('joinInvite_theRenewedTokenReachesTheOfferAfterARefusedRow', async () => {
     const RENEWED2 = tokenWith({}, NOW / 1000 + 7300)
-    const renewed = (access_token: string, refresh_token: string): Reply => ({ status: 200, body: { access_token, refresh_token } })
+    const renewed = (access_token: string): Reply => ({ status: 200, body: { access_token } })
     const calls = stub({
       acceptSeq: [UNAUTH, { status: 404, body: { error: MSG_INVALID } }, { status: 200, body: {} }],
-      refreshSeq: [renewed(RENEWED, 'R1'), renewed(RENEWED2, 'R2'), renewed(RENEWED, 'R3')],
+      refreshSeq: [renewed(RENEWED), renewed(RENEWED2), renewed(RENEWED)],
       me: [FORBIDDEN, { status: 200, body: ME }],
     })
     const o = offer()
     const err = await joinInvite(GATEWAY, o, 'a', 'Ada', 5000).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(InviteRefusedError)
-    expect(o).toMatchObject({ token: RENEWED2, refreshToken: 'R2' })
+    expect(o).toMatchObject({ token: RENEWED2 })
 
     await joinInvite(GATEWAY, o, 'b', 'Ada', 5000)
     const accepts = calls.filter((c) => c.url.endsWith('/accept'))
     expect(accepts[2].auth).toBe(`Bearer ${RENEWED2}`)
-    expect(calls.filter((c) => c.url === '/auth/refresh').map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'R1' }, { refresh_token: 'R2' }])
+    expect(calls.filter((c) => c.url === '/auth/refresh').map((c) => c.body)).toEqual([undefined, undefined, undefined])
   })
 
   it('joinInvite_a401TwiceRethrowsAfterOneRenewal', async () => {
@@ -1090,9 +1091,9 @@ describe('join offers', () => {
   })
 
   it('joinInvite_a401WithoutARefreshTokenRethrows', async () => {
-    for (const refreshToken of [undefined, '']) {
+    for (const renewable of [false]) {
       const calls = stub({ accept: UNAUTH })
-      const err = await joinInvite(GATEWAY, offer({ refreshToken }), 'a', 'Ada', 5000).catch((e: unknown) => e)
+      const err = await joinInvite(GATEWAY, offer({ renewable }), 'a', 'Ada', 5000).catch((e: unknown) => e)
       expect(err).toMatchObject({ status: 401 })
       expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
     }
@@ -1176,7 +1177,7 @@ describe('join offers', () => {
 
   it('provision_a401RetrySendsOnce', async () => {
     stub({
-      exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } },
+      exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } },
       mine: { status: 200, body: { invitations: [] } },
       workspacesSeq: [UNAUTH, { status: 201, body: {} }],
       me: [FORBIDDEN, { status: 200, body: IN_HOUSE_ME }],
@@ -1188,7 +1189,7 @@ describe('join offers', () => {
   it('join_sendsNoWorkspaceCreated: joinInvite and a held invite', async () => {
     stub({ me: [{ status: 200, body: ME }] })
     await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000)
-    stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [{ status: 200, body: ME }] })
+    stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, me: [{ status: 200, body: ME }] })
     await redeemHandoff(GATEWAY, CODE, STATE, 5000, { token: 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE', name: null })
     expect(trackWorkspaceCreated).not.toHaveBeenCalled()
   })
@@ -1240,14 +1241,14 @@ describe('join offers', () => {
   })
 
   it('redeemHandoff_nonForbiddenMeNeverAsksTheList', async () => {
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [{ status: 500 }] })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, me: [{ status: 500 }] })
     const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
     expect(err).toMatchObject({ status: 500 })
     expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me'])
   })
 
   it('redeemHandoff_answersWithAnUnreachableListNeverProvision', async () => {
-    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [FORBIDDEN, { status: 200, body: ME }] })
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, renewable: true } }, me: [FORBIDDEN, { status: 200, body: ME }] })
     const inner = globalThis.fetch as unknown as (u: string, i: unknown) => Promise<unknown>
     vi.stubGlobal('fetch', (u: string, i: unknown) => (u.endsWith('/invitations/mine') ? Promise.reject(new TypeError('Failed to fetch')) : inner(u, i)))
     const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
@@ -1305,7 +1306,7 @@ describe('join offers', () => {
 
   it('joinInvite_successWithoutARefreshTokenRejects', async () => {
     const calls = stub()
-    await expect(joinInvite(GATEWAY, offer({ refreshToken: undefined }), 'a', 'Ada', 5000)).rejects.toThrow('no refresh token after joining the invite')
+    await expect(joinInvite(GATEWAY, offer({ renewable: false }), 'a', 'Ada', 5000)).rejects.toThrow('no refresh token after joining the invite')
     expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
   })
 })
@@ -1478,7 +1479,7 @@ describe('cookie-mode hand-off (SECAUD-17-11)', () => {
     expect(JSON.stringify(s)).not.toContain('refresh_token')
 
     // The Create screen of a first workspace: a 401 renews once through the cookie and retries.
-    const offer: JoinOffer = { kind: 'join', token: BARE, renewable: true, invites: [], answers: null, firstWorkspace: true, refreshToken: undefined }
+    const offer: JoinOffer = { kind: 'join', token: BARE, renewable: true, invites: [], answers: null, firstWorkspace: true }
     const c2 = stub({ workspaces: [UNAUTH, { status: 201, body: {} }] })
     const made = await createOwnWorkspace(GATEWAY, offer, { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze' }, 5000).catch((e: unknown) => e as Session)
     expect(c2.map((c) => `${c.method} ${c.path}`)).toEqual([
@@ -1495,7 +1496,7 @@ describe('cookie-mode hand-off (SECAUD-17-11)', () => {
 
   it('create_withoutRenewalNeverRefreshes', async () => {
     const body = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze' }
-    const make = (renewable: boolean): JoinOffer => ({ kind: 'join', token: BARE, renewable, invites: [], answers: null, firstWorkspace: true, refreshToken: undefined })
+    const make = (renewable: boolean): JoinOffer => ({ kind: 'join', token: BARE, renewable, invites: [], answers: null, firstWorkspace: true })
     // Control: a renewable offer refreshes once on the 401.
     const live = stub({ workspaces: [UNAUTH, { status: 201, body: {} }] })
     await createOwnWorkspace(GATEWAY, make(true), body, 5000).catch(() => undefined)

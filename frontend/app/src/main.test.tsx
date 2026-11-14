@@ -26,7 +26,9 @@ describe('main', () => {
   it('main_startsMonitoringBeforeRenderAndWrapsTheApp', async () => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
     vi.stubGlobal('document', { getElementById: () => ({}) })
+    vi.stubGlobal('window', { location: { search: '' } })
     await import('./main')
+    await vi.waitFor(() => expect(h.render).toHaveBeenCalledTimes(1))
     const { default: App } = await import('./App')
 
     expect(h.initMonitoring).toHaveBeenCalledTimes(1)
@@ -60,6 +62,7 @@ describe('main', () => {
       return (h.initMonitoring.mock.calls[0] as unknown as [string, { gateway: unknown }])[1].gateway
     }
     vi.stubGlobal('document', { getElementById: () => ({}) })
+    vi.stubGlobal('window', { location: { search: '' } })
 
     vi.stubEnv('VITE_GATEWAY_URL', ' https://gw.test/// ')
     expect(gatewayBase()).toBe('https://gw.test')

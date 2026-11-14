@@ -3,7 +3,7 @@ import { landingBase, signIn, supportBase, type Persona, type PersonaId, type Se
 import { SignIn, SignInLoading } from './components/SignIn'
 import { CREATING_OWN, JoinWorkspace } from './components/JoinWorkspace'
 import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity, isStaffToken } from './lib/session'
-import { revokeSessions } from './lib/revoke'
+import { markSignOutPending, revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingRegisterUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
@@ -2027,7 +2027,7 @@ export default function App() {
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
-  // token past its `exp` resolves to NO session unless it carries a refresh token; then the
+  // token past its `exp` resolves to NO session unless it can renew through the cookie; then the
   // boot renewal below runs before the workspace mounts.
   //
   // A `?handoff=` boot starts with NO session
@@ -2142,17 +2142,16 @@ export default function App() {
   const signOut = useCallback(async () => {
     if (signingOut.current) return
     signingOut.current = true
-    // Untracked, new requests reject before sending; the revoke reads its refresh token elsewhere.
+    // Untracked, new requests reject before sending; the revoke rides the gateway cookie.
     renewerRef.current?.track(null)
     const base = gatewayBase()
     if (seat?.handoff && seat.renewal && base) {
-      // Another tab may have rotated the seat's refresh token.
-      const stored = loadSession()
-      const refreshToken =
-        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
-      if ((await revokeSessions(base, refreshToken)) === 'failed') {
+      const outcome = await revokeSessions(base)
+      if (outcome !== 'revoked') {
         console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
       }
+      // No answer: the cookie may remain, so the next load sends the sign-out again.
+      if (outcome === 'unreached') markSignOutPending()
     }
     leaveToLanding()
   }, [seat, leaveToLanding])
@@ -2288,8 +2287,7 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] joining failed:', err)
-        const refresh = joinOffer?.refreshToken
-        const cannotRenew = (err instanceof ApiError && err.status === 401) || typeof refresh !== 'string' || refresh === ''
+        const cannotRenew = (err instanceof ApiError && err.status === 401) || joinOffer?.renewable !== true
         if (stayOnFailure && !cannotRenew) {
           setCreateFailed(true)
           joinStarted.current = false
@@ -2342,8 +2340,12 @@ export default function App() {
     const base = gatewayBase()
     if (signingOut.current || !joinOffer || !base) return
     signingOut.current = true
-    if (typeof joinOffer.refreshToken === 'string' && (await revokeSessions(base, joinOffer.refreshToken)) === 'failed') {
-      console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+    if (joinOffer.renewable) {
+      const outcome = await revokeSessions(base)
+      if (outcome !== 'revoked') {
+        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+      }
+      if (outcome === 'unreached') markSignOutPending()
     }
     leaveToLanding()
   }

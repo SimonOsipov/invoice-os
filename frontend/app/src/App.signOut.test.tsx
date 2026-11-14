@@ -45,8 +45,8 @@ function jwt(me: Me, sid: string | null, mark: string): string {
 }
 
 // Received a minute ago, so no renewal is due during a test.
-function handoffRecord(token: string, refresh: string, me: Me = ME): string {
-  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: Date.now() - MIN })
+function handoffRecord(token: string, me: Me = ME): string {
+  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: Date.now() - MIN })
 }
 function personaRecord(token: string | null): string {
   return JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true })
@@ -283,6 +283,8 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
     captureDestination('/settings')
     expect(readDestination(), 'control: a destination is stored').not.toBeNull()
 
+    // The ?handoff= boot cleared the empty slot once already; only the sign-out's clear is ordered.
+    vi.mocked(localStorage.removeItem).mockClear()
     await clickSignOut()
     await settle()
 
@@ -421,7 +423,7 @@ describe('the join screen signs out (AC-7)', () => {
 describe('one sign-out at a time (AC-7, AC-8)', () => {
   it('a double click revokes once', async () => {
     const pending = deferSignOut()
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mount(handoffRecord(A_SID1))
     const button = screen.getByRole('button', { name: 'Sign out' })
 
     await clickSignOut(button)
@@ -439,7 +441,7 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
   it('a request during sign-out sends nothing', async () => {
     const pending = deferSignOut()
-    const raw = handoffRecord(A_SID1, 'R1')
+    const raw = handoffRecord(A_SID1)
     const { hrefWrites } = await mount(raw)
     vi.mocked(localStorage.setItem).mockClear()
     vi.mocked(localStorage.removeItem).mockClear()
@@ -494,7 +496,7 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
       entitiesReply = () =>
         gate.then(answer(200, { entities: [entity], pagination: { limit: 200, offset: 0, total: 1 } }))
       const pending = deferSignOut()
-      const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+      const { hrefWrites } = await mount(handoffRecord(A_SID1))
 
       expect(screen.queryByText('COMPLIANCE OVERVIEW'), 'control: no dashboard before the entities land').toBeNull()
       await clickSignOut()
@@ -519,7 +521,7 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
   it('a 401 callback during sign-out is ignored', async () => {
     const pending = deferSignOut()
-    const raw = handoffRecord(A_SID1, 'R1')
+    const raw = handoffRecord(A_SID1)
     const { hrefWrites } = await mount(raw)
     vi.mocked(localStorage.setItem).mockClear()
     vi.mocked(localStorage.removeItem).mockClear()
@@ -542,7 +544,7 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
   it('a real 401 on a request sent before the click is ignored during the revoke', async () => {
     const pending = deferSignOut()
-    const raw = handoffRecord(A_SID1, 'R1')
+    const raw = handoffRecord(A_SID1)
     const { hrefWrites } = await mount(raw)
     let answerLate!: () => void
     const gate = new Promise<void>((r) => {
@@ -577,7 +579,7 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
   // The page is still unloading when a request sent before the click answers.
   it('a 401 or a sign-out after the sign-out changes nothing', async () => {
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mount(handoffRecord(A_SID1))
     let answerLate!: () => void
     const gate = new Promise<void>((r) => {
       answerLate = r
@@ -633,7 +635,7 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
   })
 
   it('a 401 on an upload ends the session without revoking', async () => {
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mount(handoffRecord(A_SID1))
     captureDestination('/settings')
     expect(readDestination(), 'control: a destination is stored').not.toBeNull()
     expect(capturedImportAuth?.onUnauthorized, 'control: App built the upload transport').toBeTypeOf('function')
@@ -651,7 +653,7 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
 
   // A second bare-landing navigation aborts the first (e2e/topology/auth.spec.ts).
   it('a burst of 401s leaves for landing once', async () => {
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    const { hrefWrites } = await mount(handoffRecord(A_SID1))
 
     let seen: unknown[] = []
     await act(async () => {
@@ -672,13 +674,13 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
   })
 
   const rows: { name: string; seat: string; stored: string; kept: boolean }[] = [
-    { name: 'another sign-in (sid2)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: true },
-    { name: 'the same session (sid1)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid1', 'A1'), 'R2'), kept: false },
-    { name: 'a stored mock JWT with no session_id', seat: handoffRecord(A_SID1, 'R1'), stored: personaRecord(jwt(ME, null, 'P')), kept: false },
-    { name: 'a stored null token', seat: handoffRecord(A_SID1, 'R1'), stored: personaRecord(null), kept: false },
-    { name: 'an ended mock JWT with no session_id', seat: personaRecord(jwt(ME, null, 'P')), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: false },
-    { name: 'an ended null token', seat: personaRecord(null), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: false },
-    { name: 'an unparseable stored record', seat: handoffRecord(A_SID1, 'R1'), stored: '{"v":1,', kept: false },
+    { name: 'another sign-in (sid2)', seat: handoffRecord(A_SID1), stored: handoffRecord(jwt(ME, 'sid2', 'B0')), kept: true },
+    { name: 'the same session (sid1)', seat: handoffRecord(A_SID1), stored: handoffRecord(jwt(ME, 'sid1', 'A1')), kept: false },
+    { name: 'a stored mock JWT with no session_id', seat: handoffRecord(A_SID1), stored: personaRecord(jwt(ME, null, 'P')), kept: false },
+    { name: 'a stored null token', seat: handoffRecord(A_SID1), stored: personaRecord(null), kept: false },
+    { name: 'an ended mock JWT with no session_id', seat: personaRecord(jwt(ME, null, 'P')), stored: handoffRecord(jwt(ME, 'sid2', 'B0')), kept: false },
+    { name: 'an ended null token', seat: personaRecord(null), stored: handoffRecord(jwt(ME, 'sid2', 'B0')), kept: false },
+    { name: 'an unparseable stored record', seat: handoffRecord(A_SID1), stored: '{"v":1,', kept: false },
   ]
 
   it.each(rows)('a 401 keeps only another sign-in\'s record: $name', async ({ seat, stored, kept }) => {

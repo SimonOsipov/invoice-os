@@ -32,6 +32,11 @@ paths:
   - "packages/api-client/src/client.ts"
   - "frontend/support-console/src/session.ts"
   - "frontend/app/src/App.tsx"
+  - "frontend/app/src/auth.ts"
+  - "frontend/app/src/lib/session.ts"
+  - "frontend/app/src/lib/renewal.ts"
+  - "frontend/app/src/lib/revoke.ts"
+  - "frontend/app/src/lib/sessionHandoff.ts"
   - "frontend/app/src/lib/signInState.ts"
   - "frontend/app/src/lib/consoleHandoff.ts"
   - "frontend/landing/src/App.tsx"
@@ -104,6 +109,7 @@ paths:
 - Grant `Access-Control-Allow-Credentials: true` only on those three routes and only to an origin in `AUTH_SESSION_ORIGINS`. Never answer `*`.
 - Expect the gateway to refuse boot on Cloud Run without `AUTH_SESSION_ORIGINS`.
 - Store only the access token in a console's storage: `{v:3, token}`, or `{v:3, token, from:'app'}` for an app-borrowed session.
+- Store only the access token and `received_at` in the app's session record; the gateway cookie holds the refresh token.
 - When a sign-out gets no answer, leave a pending marker; send the sign-out again at the next load before anything else, never when the load carries `?handoff=`.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address.
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
@@ -155,7 +161,7 @@ paths:
 - Show the first-workspace form to a caller with an empty list, `removed` false, `live_membership` false and no complete answers.
 - Provision for that caller only when they press Create a workspace.
 - Send that caller to `signin=failed` on a 401 after the refresh attempt.
-- Send that caller to `signin=failed` when a Create fails with no refresh token.
+- Send that caller to `signin=failed` when a Create fails on a session that cannot renew.
 - Send a caller whose `live_membership` is not false, with no answers, to `signin=no-workspace`.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.

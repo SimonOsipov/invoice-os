@@ -56,8 +56,8 @@ const A0_OLD = jwt(ME, nowSec(OLD_AT), 'A0')
 // The renewed token is minted when the refresh answers.
 const renewedToken = () => jwt(ME, nowSec(Date.now()), 'A1')
 
-function record(token: string, receivedAt: number, me: Me = ME, refresh = 'R0'): string {
-  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: receivedAt })
+function record(token: string, receivedAt: number, me: Me = ME): string {
+  return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: receivedAt })
 }
 
 // The /auth/login mint below answers this token.
@@ -112,7 +112,7 @@ function interceptHref() {
 type Reply = () => Promise<unknown>
 const answer = (status: number, body: unknown): Reply => () =>
   Promise.resolve({ ok: status >= 200 && status < 300, status, statusText: String(status), json: () => Promise.resolve(body) })
-const renewed = (refresh = 'R1'): Reply => () => answer(200, { access_token: renewedToken(), refresh_token: refresh })()
+const renewed = (): Reply => () => answer(200, { access_token: renewedToken() })()
 const REFUSED = answer(401, { error: 'invalid or expired refresh token' })
 const UNAVAILABLE = answer(502, { error: 'renewal is unavailable' })
 
@@ -272,7 +272,7 @@ async function reload(path: string) {
 
 // A hand-off boot whose code answers `token` with refresh token RH.
 async function bootHandoff(token: string) {
-  exchangeReply = answer(200, { access_token: token, refresh_token: 'RH' })
+  exchangeReply = answer(200, { access_token: token, renewable: true })
   ensureSignInState()
   const nav = await bootWith(null, `/?handoff=${'a'.repeat(43)}`)
   await waitForVerifiedWorkspace()
@@ -345,13 +345,14 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await settle()
 
     expect(calls[0]?.url).toBe(REFRESH)
-    expect(calls[0]?.body).toEqual({ refresh_token: 'R0' })
+    expect(calls[0]?.body).toBeUndefined()
     expect(calls[0]?.auth, 'the refresh carries no bearer').toBeNull()
     expect(refreshes()).toHaveLength(1)
     expect(apiCalls().length).toBeGreaterThan(0)
     expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
     expect(storedRecord()?.token).toBe(renewedToken())
-    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 
   it('a due in-house hand-off session renews and stays in-house', async () => {
@@ -392,7 +393,7 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
   // A code is a sign-in the user just made; only an unexpired stored session beats it.
   it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
     const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
-    exchangeReply = answer(200, { access_token: NEW_T, refresh_token: 'RN' })
+    exchangeReply = answer(200, { access_token: NEW_T, renewable: true })
     meReply = answer(200, OTHER_ME)
     ensureSignInState()
     const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), `/?handoff=${'a'.repeat(43)}`)
@@ -400,9 +401,10 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await settle()
 
     expect(calls.filter((c) => c.url === EXCHANGE), 'the code is redeemed').toHaveLength(1)
-    expect(refreshes(), 'the old refresh token is never sent').toEqual([])
+    expect(refreshes(), 'no refresh is sent for the old record').toEqual([])
     expect(storedRecord()?.token).toBe(NEW_T)
-    expect(storedRecord()?.refresh_token).toBe('RN')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
     expect(storedRecord()?.me).toEqual(OTHER_ME)
     expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
@@ -507,7 +509,8 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(JSON.parse(sessionStorage.getItem(DEEP_LINK_KEY) ?? 'null')?.path).toBe('/invoices')
     expect(storedRecord(), 'the stored record survives a transient end').not.toBeNull()
     expect(storedRecord()?.token).toBe(A0_FRESH)
-    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 })
 
@@ -547,7 +550,8 @@ describe('an ended renewal and the next boot', () => {
     expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
     expect(readDestination()?.path).toBe('/audit')
     expect(storedRecord()?.token).toBe(A0_OLD)
-    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
 
     refreshReply = renewed()
     const mark = calls.length
@@ -556,8 +560,9 @@ describe('an ended renewal and the next boot', () => {
     await settle()
 
     expect(calls[mark]?.url, 'the next boot renews the kept record first').toBe(REFRESH)
-    expect(calls[mark]?.body).toEqual({ refresh_token: 'R0' })
-    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(calls[mark]?.body).toBeUndefined()
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
     expect(second.hrefWrites).toEqual([])
   })
 })
@@ -727,7 +732,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     mark = calls.length
     expect(await probe(capturedCtx)).toBe('resolved')
     expect(calls[mark]?.url, 'due: the renewal comes first').toBe(REFRESH)
-    expect(calls[mark]?.body).toEqual({ refresh_token: 'RH' })
+    expect(calls[mark]?.body).toBeUndefined()
     expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${renewedToken()}`])
     expect(hrefWrites).toEqual([])
   })
@@ -748,7 +753,8 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     expect(refreshes(mark)).toHaveLength(1)
     expect(probes(mark), 'the expired token is never sent').toEqual([])
     expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
-    expect(storedRecord()?.refresh_token).toBe('RH')
+    expect(storedRecord()).toMatchObject({ received_at: expect.any(Number) })
+    expect(storedRecord()).not.toHaveProperty('refresh_token')
   })
 
   it('byte transports use the renewed token', async () => {
@@ -849,7 +855,7 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
   it("another user's record survives a foreign-subject end", async () => {
     const { hrefWrites } = await mountFresh()
     // Another tab signed in a different user.
-    const X_RAW = record(jwt(OTHER_ME, nowSec(NOW), 'X'), NOW, OTHER_ME, 'RX')
+    const X_RAW = record(jwt(OTHER_ME, nowSec(NOW), 'X'), NOW, OTHER_ME)
     localStorage.setItem(SESSION_KEY, X_RAW)
     vi.setSystemTime(MID_RENEW_AT)
     const mark = calls.length
@@ -875,7 +881,7 @@ describe('cookie-held refresh token (SECAUD-17-11)', () => {
     return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, received_at: receivedAt })
   }
   // A pair record written before this shipped.
-  const legacyPair = (token: string, receivedAt: number) => record(token, receivedAt, ME, 'R-old')
+  const legacyPair = (token: string, receivedAt: number) => JSON.stringify({ ...JSON.parse(record(token, receivedAt)), refresh_token: 'R-old' })
   const cookieRenewed: Reply = () => answer(200, { access_token: renewedToken() })()
   const holdsNoRefreshToken = () => {
     const raw = localStorage.getItem(SESSION_KEY) ?? ''

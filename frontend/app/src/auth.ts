@@ -96,10 +96,9 @@ export interface Me {
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
-// The refresh token and the local epoch ms it arrived at.
-// STUB (SECAUD-17-11): refreshToken goes away; legacyRefreshToken is the one-time adoption token.
+// The local epoch ms the access token arrived at; the refresh token lives in the gateway cookie.
+// legacyRefreshToken is a pre-cookie stored token, posted once to move it into the cookie.
 export interface Renewal {
-  refreshToken?: string
   receivedAt: number
   legacyRefreshToken?: string
 }

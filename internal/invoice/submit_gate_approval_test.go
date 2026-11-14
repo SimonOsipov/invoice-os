@@ -154,6 +154,8 @@ func TestSubmitBlockedReason_UnchangedByTheApprovalArm(t *testing.T) {
 		StatusAccepted:  "",
 		StatusRejected:  exactSubmitBlockedReasonRejected,
 		StatusFailed:    "",
+
+		StatusDiscarded: "",
 	}
 	if len(want) != len(allStatuses) {
 		t.Fatalf("oracle covers %d statuses, want all %d", len(want), len(allStatuses))

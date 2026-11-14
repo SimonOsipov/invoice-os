@@ -405,6 +405,51 @@ func TestStoreRollup_AllSevenStatesReported(t *testing.T) {
 	}
 }
 
+func TestStoreRollup_LeavesDiscardedOut(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SECAUD-50-02 tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 entity")
+	onlyDiscarded := seedEntity(t, super, tenantID, "SECAUD-50-02 only discarded")
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "SECAUD-LIVE", "draft",
+		`[{"rule_key":"dash-r1","severity":"error","message":"x"}]`)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "SECAUD-GONE", "discarded",
+		`[{"rule_key":"dash-r1","severity":"error","message":"x"},{"rule_key":"dash-gone","severity":"error","message":"x"}]`)
+	seedInvoiceAtStatus(t, super, tenantID, onlyDiscarded, "SECAUD-GONE-2", "discarded")
+
+	got, err := NewStore(app).Rollup(auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}))
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Errorf("Clients = %d rows, want 1 (a client holding only discarded invoices is absent)", len(got.Clients))
+	}
+	var row Client
+	for _, c := range got.Clients {
+		if c.EntityID == entityID {
+			row = c
+		}
+	}
+	if row.EntityID == "" {
+		t.Fatalf("no row for the client holding a live invoice: %+v", got.Clients)
+	}
+	if want := (Counts{Draft: 1}); row.Counts != want {
+		t.Errorf("Counts = %+v, want %+v", row.Counts, want)
+	}
+	// readiness reads den = total: a discarded row would make it 2, and 1/2 of it "ready".
+	if r := row.Metrics[MetricReadiness]; r.Num != 0 || r.Den != 1 {
+		t.Errorf("readiness = %+v, want 0/1 (the live draft is blocked by rules)", r)
+	}
+	if got.Totals.Metrics[MetricReadiness].Den != 1 {
+		t.Errorf("Totals readiness den = %d, want 1", got.Totals.Metrics[MetricReadiness].Den)
+	}
+	want := []RuleCount{{RuleKey: "dash-r1", Invoices: 1}}
+	if !reflect.DeepEqual(row.TopViolations, want) || !reflect.DeepEqual(got.TopViolations, want) || !reflect.DeepEqual(got.Totals.TopViolations, want) {
+		t.Errorf("top violations: client %+v, rollup %+v, totals %+v, want %+v each", row.TopViolations, got.TopViolations, got.Totals.TopViolations, want)
+	}
+}
+
 // DASH-02: a tenant with one entity holding exactly one draft must
 // marshal with "rejected":0 and "failed":0 present -- not omitted.
 func TestStoreRollup_ZerosAreReportedNotOmitted(t *testing.T) {

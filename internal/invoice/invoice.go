@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
-// Status is one of the seven canonical invoice lifecycle states, matching the
+// Status is one of the eight canonical invoice lifecycle states, matching the
 // invoices.status / invoice_status_history.to_status CHECK constraint
 // (migrations/20260714103137_invoices.sql) [D11].
 type Status string
@@ -37,14 +37,16 @@ const (
 	StatusAccepted  Status = "accepted"
 	StatusRejected  Status = "rejected"
 	StatusFailed    Status = "failed"
+	// StatusDiscarded is written only by the import undo; no legalTransitions edge touches it.
+	StatusDiscarded Status = "discarded"
 )
 
-// valid reports whether s is one of the seven canonical invoice lifecycle
+// valid reports whether s is one of the eight canonical invoice lifecycle
 // states. TransitionHandler ([D12], M4-02-03) uses this to reject an unknown
 // target string as 400 "unknown status" BEFORE ever calling Store.Transition.
 func (s Status) valid() bool {
 	switch s {
-	case StatusDraft, StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed:
+	case StatusDraft, StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed, StatusDiscarded:
 		return true
 	default:
 		return false

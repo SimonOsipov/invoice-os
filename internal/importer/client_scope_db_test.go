@@ -1398,25 +1398,58 @@ func TestClientScope_SupplyingANumberForABoundDocumentAnswersAsAnUnknownOne(t *t
 	csRequireBoundTo(t, f, d.ID, f.entB)
 }
 
-func TestClientScope_AFailedImportStillBindsTheDocument(t *testing.T) {
-	f := newCSFixture(t, "CS failed import binds")
-	doc := storeDocumentAs(t, f.docSvc, f.tenant, "empty.csv", "text/csv", csvBody(t, []string{"Inv No"}, nil)).ID
+// csFailedBatch creates a batch for entity on doc through the Store and finalizes it failed.
+func csFailedBatch(t *testing.T, f csFixture, entity, doc string) {
+	t.Helper()
+	id, err := f.store.CreateBatch(f.admin, entity, "failed.csv", doc, 1)
+	if err != nil {
+		t.Fatalf("create the batch for %s: %v", entity, err)
+	}
+	csRequireBoundTo(t, f, doc, entity)
+	if err := f.store.Finalize(f.admin, id, 0, 0, 0, nil, "failed"); err != nil {
+		t.Fatalf("finalize the batch failed: %v", err)
+	}
+}
+
+func TestClientScope_AFailedImportReleasesTheDocument(t *testing.T) {
+	f := newCSFixture(t, "CS failed import releases")
+	doc := storeDocumentAs(t, f.docSvc, f.tenant, "rel.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"REL-1"}})).ID
 	adminID, _ := auth.IdentityFromContext(f.admin)
+	csFailedBatch(t, f, f.entA, doc)
+	docs := csCount(t, f.super, `SELECT count(*) FROM documents WHERE tenant_id = $1`, f.tenant)
 
-	if rec := csImportFor(t, f, f.entA)(adminID, doc); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"failed"`) {
-		t.Fatalf("header-only import for A: %d %s, want 201 with status failed", rec.Code, rec.Body.String())
+	rec := csImportFor(t, f, f.entB)(adminID, doc)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"completed"`) {
+		t.Fatalf("import for B of a document whose A import failed: %d %s, want 201 completed", rec.Code, rec.Body.String())
 	}
-	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1 AND document_id = $2 AND status = 'failed'`, f.entA, doc); n != 1 {
-		t.Fatalf("failed batches of A citing the document = %d, want 1", n)
+	csRequireBoundTo(t, f, doc, f.entB)
+	if n := csCount(t, f.super, `SELECT count(*) FROM documents WHERE tenant_id = $1`, f.tenant); n != docs {
+		t.Errorf("documents rows = %d, want %d (no new upload)", n, docs)
 	}
-	csRequireBoundTo(t, f, doc, f.entA)
+}
 
-	imp := csImportFor(t, f, f.entB)
-	csSameAsUnknown(t, "import for B of a document a failed import bound to A", imp(adminID, doc), imp(adminID, uuid.NewString()))
-	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entB); n != 0 {
-		t.Errorf("import_batches for B = %d, want 0", n)
+func TestClientScope_AfterAFailedImportTheFailedClientsMemberLosesTheDocument(t *testing.T) {
+	f := newCSFixture(t, "CS failed import read")
+	uploader := csMember(t, f.super, f.tenant, "reviewer")
+	doc := storeDocumentBy(t, f.docSvc, f.tenant, uploader.Subject, "read.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"RD-1"}})).ID
+	adminID, _ := auth.IdentityFromContext(f.admin)
+	csFailedBatch(t, f, f.entA, doc)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(f.docSvc.OpenLinked, nil))
+	get := func(id auth.Identity, d string) *httptest.ResponseRecorder {
+		return csGet(mux, id, "GET", "/v1/documents/"+d, "")
 	}
-	csRequireBoundTo(t, f, doc, f.entA)
+
+	if rec := csImportFor(t, f, f.entB)(adminID, doc); rec.Code != http.StatusCreated {
+		t.Fatalf("import for B of a document whose A import failed: %d %s, want 201", rec.Code, rec.Body.String())
+	}
+	csRequireBoundTo(t, f, doc, f.entB)
+	csSameAsUnknown(t, "the A member's download of the document now bound to B", get(f.limitedID, doc), get(f.limitedID, uuid.NewString()))
+	for name, id := range map[string]auth.Identity{"the uploader": uploader, "admin": adminID} {
+		if rec := get(id, doc); rec.Code != http.StatusOK {
+			t.Errorf("%s: GET /v1/documents/{id} = %d, want 200", name, rec.Code)
+		}
+	}
 }
 
 func TestClientScope_ALimitedMemberCannotImportAnotherMembersUncitedUpload(t *testing.T) {

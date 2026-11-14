@@ -164,6 +164,45 @@ func TestRLS_EditBySourceDocumentTxResolvesExactlyOneInvoice(t *testing.T) {
 	}
 }
 
+// seedDiscardedOn files a discarded invoice from documentID.
+func (f *ebsFix) seedDiscardedOn(t *testing.T, documentID, number string) string {
+	t.Helper()
+	id := seedDiscarded(t, f.super, f.tenantID, f.entityID, number, "", `[]`)
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET source_document_id = $2, total = $3 WHERE id = $1`, id, documentID, ebsTotalBefore); err != nil {
+		t.Fatalf("cite document %s from the discarded invoice: %v", documentID, err)
+	}
+	return id
+}
+
+func TestEditBySourceDocument_ADiscardedInvoiceIsNotATarget(t *testing.T) {
+	f := ebsSeed(t, "SECAUD-EBS-1")
+	gone := f.seedDiscardedOn(t, f.documentID, "SECAUD-EBS-1-GONE")
+
+	got, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{Total: strPtr(ebsTotalAfter)}})
+	if err != nil {
+		t.Fatalf("a discarded and a live invoice on one document: err = %v, want the live one edited", err)
+	}
+	if got.ID != f.invoiceID {
+		t.Errorf("the edit landed on %s, want the live invoice %s", got.ID, f.invoiceID)
+	}
+	if stored := f.total(t, f.invoiceID); stored != ebsTotalAfter {
+		t.Errorf("live invoice total = %s, want %s", stored, ebsTotalAfter)
+	}
+	if stored := f.total(t, gone); stored != ebsTotalBefore {
+		t.Errorf("discarded invoice total = %s, want the unchanged %s", stored, ebsTotalBefore)
+	}
+
+	only := seedDocument(t, f.super, f.tenantID)
+	goneOnly := f.seedDiscardedOn(t, only, "SECAUD-EBS-1-ONLY")
+	if _, err := f.edit(t, only, EditInput{UpdateInput: UpdateInput{Total: strPtr("7.00")}}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a document cited only by a discarded invoice: err = %v, want ErrNotFound", err)
+	}
+	if stored := f.total(t, goneOnly); stored != ebsTotalBefore {
+		t.Errorf("discarded invoice total = %s after the refused edit, want the unchanged %s", stored, ebsTotalBefore)
+	}
+}
+
 // --- the caller owns the transaction ----------------------------------------------------------
 
 // The whole point of the tx-taking entry: a caller that rolls back takes the edit with it, so

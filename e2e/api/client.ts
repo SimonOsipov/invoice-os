@@ -771,7 +771,7 @@ export interface Invoice {
   entity_id: string
   import_batch_id: string | null
   invoice_number: string
-  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed'
+  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed' | 'discarded'
   issue_date: string | null
   supplier_tin: string | null
   supplier_name: string | null

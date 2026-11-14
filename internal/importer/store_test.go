@@ -715,3 +715,38 @@ func TestStore_CreateBatchRecordsTheHeaderRow(t *testing.T) {
 		t.Errorf("header_row = %d, want NULL for headerRow 0", *gotNull)
 	}
 }
+
+func TestFiledInvoiceID_SkipsADiscardedInvoice(t *testing.T) {
+	f := dnNewFix(t, "SECAUD-filed", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	ctx := f.ctx()
+	csLinkInvoice(t, f.super, f.tenant, f.entity, f.doc, "SECAUD-FILED-GONE")
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET status = 'discarded' WHERE source_document_id = $1`, f.doc); err != nil {
+		t.Fatalf("discard the citing invoice: %v", err)
+	}
+
+	if has, err := f.svc.batch.DocumentHasInvoice(ctx, f.doc); err != nil || has {
+		t.Errorf("DocumentHasInvoice(cited only by a discarded invoice) = %v, %v, want false", has, err)
+	}
+	if id, err := f.svc.batch.FiledInvoiceID(ctx, f.doc); err != nil || id != "" {
+		t.Errorf("FiledInvoiceID(cited only by a discarded invoice) = %q, %v, want \"\"", id, err)
+	}
+	if got := f.originals(t); got.FiledInvoiceID != nil {
+		t.Errorf("NoteOriginals.filed_invoice_id = %s, want null", *got.FiledInvoiceID)
+	}
+
+	csLinkInvoice(t, f.super, f.tenant, f.entity, f.doc, "SECAUD-FILED-LIVE")
+	var live string
+	if err := f.super.QueryRow(context.Background(), `SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded'`, f.doc).Scan(&live); err != nil {
+		t.Fatalf("read the live invoice: %v", err)
+	}
+	if has, err := f.svc.batch.DocumentHasInvoice(ctx, f.doc); err != nil || !has {
+		t.Errorf("DocumentHasInvoice(plus a live invoice) = %v, %v, want true", has, err)
+	}
+	if id, err := f.svc.batch.FiledInvoiceID(ctx, f.doc); err != nil || id != live {
+		t.Errorf("FiledInvoiceID(plus a live invoice) = %q, %v, want %s", id, err, live)
+	}
+	if got := f.originals(t); got.FiledInvoiceID == nil || *got.FiledInvoiceID != live {
+		t.Errorf("NoteOriginals.filed_invoice_id = %v, want %s", got.FiledInvoiceID, live)
+	}
+}

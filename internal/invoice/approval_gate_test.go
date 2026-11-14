@@ -87,8 +87,8 @@ func TestApprovalGate_EveryNonApproverRoleIsRefused(t *testing.T) {
 // decideTx's own `status != "validated"` -- not a legalTransitions lookup. Every
 // status but validated refuses, whatever the run says.
 func TestApprovalGate_NotValidated(t *testing.T) {
-	if len(allStatuses) != 7 {
-		t.Fatalf("allStatuses covers %d statuses, want 7 -- a new status needs a row here", len(allStatuses))
+	if len(allStatuses) != 8 {
+		t.Fatalf("allStatuses covers %d statuses, want 8 -- a new status needs a row here", len(allStatuses))
 	}
 	for _, s := range allStatuses {
 		if s == StatusValidated {

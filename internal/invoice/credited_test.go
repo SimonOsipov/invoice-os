@@ -64,6 +64,17 @@ func TestCreditedSoFar_SumsTheCountedStatuses(t *testing.T) {
 	csWant(t, csCredited(t, app, tenant, o1, ""), "123.50")
 }
 
+func TestCreditedSoFar_ADiscardedNoteCountsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS discarded")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoiceAtStatus(t, super, tenant, ent, "CS-O1", StatusAccepted)
+	csNote(t, super, tenant, ent, "CS-S", "credit_note", o1, "submitted", csAmount("100.00"))
+	csNote(t, super, tenant, ent, "CS-X", "credit_note", o1, "discarded", csAmount("300.00"))
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "100.00")
+}
+
 func TestCreditedSoFar_FiltersByTheOriginal(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "CS filter")

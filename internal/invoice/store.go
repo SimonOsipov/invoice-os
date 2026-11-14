@@ -844,7 +844,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 	items := []Invoice{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var conditions []string
+		// A discarded invoice is on no list and in no count.
+		conditions := []string{"status <> 'discarded'"}
 		var args []any
 
 		if f.EntityID != "" {
@@ -1040,6 +1041,7 @@ func (s *Store) ViolationSummary(ctx context.Context, importBatchIDs []string) (
 			 FROM invoices i
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
 			 WHERE i.import_batch_id = ANY($1)
+			   AND i.status <> 'discarded'
 			   AND jsonb_typeof(i.violations) = 'array'
 			   AND nullif(v->>'rule_key', '') IS NOT NULL
 			 GROUP BY 1
@@ -1745,7 +1747,7 @@ func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentI
 
 	// LIMIT 2 is all the resolution needs: none, one, or more than one.
 	rows, err := tx.Query(ctx,
-		`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 2`,
+		`SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded' ORDER BY created_at, id LIMIT 2`,
 		documentID)
 	if err != nil {
 		return Invoice{}, err

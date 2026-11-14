@@ -224,3 +224,14 @@ func TestDeployCheck_FatalsWithoutGatewayToken(t *testing.T) {
 		t.Errorf("output %q does not name GATEWAY_TOKEN", out)
 	}
 }
+
+func TestNewChecker_ReadsTheGatewayTokenFromTheEnv(t *testing.T) {
+	env := map[string]string{"GATEWAY_TOKEN": "env-tok", "RUN_HOST_SUFFIX": "1.africa-south1.run.app"}
+	c := newChecker([]string{"deploycheck", "abc", "c-abc"}, func(k string) string { return env[k] })
+	if c.gatewayToken != "env-tok" {
+		t.Errorf("gatewayToken = %q, want the GATEWAY_TOKEN value", c.gatewayToken)
+	}
+	if got, want := c.url("auth"), "https://c-abc---auth-1.africa-south1.run.app"; got != want || c.sha != "abc" {
+		t.Errorf("url = %q sha = %q, want %q and abc", got, c.sha, want)
+	}
+}

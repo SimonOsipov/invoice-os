@@ -65,7 +65,7 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 // caller sends token in X-Gateway-Token. Panics on an empty token.
 func (a *App) HideHealthDetail(token string) {
 	if token == "" {
-		panic("platform: HideHealthDetail needs a non-empty token (empty token)")
+		panic("platform: HideHealthDetail got an empty token")
 	}
 	a.healthToken = token
 }

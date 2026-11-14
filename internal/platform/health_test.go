@@ -181,8 +181,8 @@ func TestHideHealthDetail_PanicsOnAnEmptyToken(t *testing.T) {
 		if r == nil {
 			t.Fatal("HideHealthDetail(\"\") did not panic, want a panic")
 		}
-		if msg, _ := r.(string); !strings.Contains(msg, "HideHealthDetail") || !strings.Contains(msg, "empty token") {
-			t.Errorf("panic = %v, want a message naming HideHealthDetail and the empty token", r)
+		if msg, _ := r.(string); msg != "platform: HideHealthDetail got an empty token" {
+			t.Errorf("panic = %v, want the empty-token message", r)
 		}
 	}()
 	app.HideHealthDetail("")

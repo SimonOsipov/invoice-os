@@ -57,19 +57,23 @@ func deployCheck(log *slog.Logger) {
 }
 
 func check() []string {
-	c := checker{
-		sha:    os.Args[1],
-		client: &http.Client{Timeout: 30 * time.Second, Transport: platform.IDTokenTransport(nil)},
-		url: func(svc string) string {
-			return "https://" + os.Args[2] + "---" + svc + "-" + os.Getenv("RUN_HOST_SUFFIX")
-		},
-		interval:     interval,
-		parallel:     parallel,
-		gatewayToken: os.Getenv("GATEWAY_TOKEN"),
-	}
+	c := newChecker(os.Args, os.Getenv)
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	return c.run(ctx)
+}
+
+func newChecker(args []string, getenv func(string) string) checker {
+	return checker{
+		sha:    args[1],
+		client: &http.Client{Timeout: 30 * time.Second, Transport: platform.IDTokenTransport(nil)},
+		url: func(svc string) string {
+			return "https://" + args[2] + "---" + svc + "-" + getenv("RUN_HOST_SUFFIX")
+		},
+		interval:     interval,
+		parallel:     parallel,
+		gatewayToken: getenv("GATEWAY_TOKEN"),
+	}
 }
 
 type checker struct {

@@ -97,7 +97,12 @@ func TestSelectLineItems_FreeTextRoundTripsThroughTheBundle(t *testing.T) {
 	if len(lines[1]) != len(lineItemsCSVHeader) {
 		t.Fatalf("row has %d fields, want %d", len(lines[1]), len(lineItemsCSVHeader))
 	}
+	// Cells that start with a formula lead carry the one export-added quote.
+	prefixed := map[string]bool{"tax_category": true, "hsn_code": true, "isic_code": true, "product_category": true}
 	for col, v := range hostile {
+		if prefixed[col] {
+			v = "'" + v
+		}
 		if got := lines[1][lineItemsIndex(t, col)]; got != v {
 			t.Errorf("line %s = %q, want %q", col, got, v)
 		}
@@ -107,7 +112,7 @@ func TestSelectLineItems_FreeTextRoundTripsThroughTheBundle(t *testing.T) {
 	if len(invs) != 2 || len(invs[1]) != len(invoicesCSVHeader) {
 		t.Fatalf("invoices.csv records = %d (fields %d), want 2 x %d", len(invs), len(invs[len(invs)-1]), len(invoicesCSVHeader))
 	}
-	for col, v := range map[string]string{"supplier_street": "1 Main St,\n\"Annex\"", "buyer_city": "=HYPERLINK(\"x\")", "supplier_email": "a,b@x"} {
+	for col, v := range map[string]string{"supplier_street": "1 Main St,\n\"Annex\"", "buyer_city": "'=HYPERLINK(\"x\")", "supplier_email": "a,b@x"} {
 		if got := invs[1][headerIndex(t, col)]; got != v {
 			t.Errorf("invoice %s = %q, want %q", col, got, v)
 		}

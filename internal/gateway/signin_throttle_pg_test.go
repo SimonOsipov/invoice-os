@@ -100,12 +100,15 @@ func TestRLS_GatewayThrottle_AResetOnOneInstanceClearsTheOther(t *testing.T) {
 	requireSharedStateTables(t, d)
 	addr := ownAddress(t, d)
 	a, b := instance("sign-in", SignInMaxFailures, d.a), instance("sign-in", SignInMaxFailures, d.b)
-	reserveSplit(t, a, b, addr)
+	// Sign-in counts under the typed spelling, reset clears under GoTrue's; neither is pre-folded.
+	taken := "  " + strings.ToUpper(addr) + "\t"
+	cleared := " " + strings.ToUpper(addr[:1]) + addr[1:] + " "
+	reserveSplit(t, a, b, taken)
 	if n, _ := throttleRow(t, d, "sign-in", addr); n != SignInMaxFailures {
 		t.Fatalf("row n = %d before Reset, want %d", n, SignInMaxFailures)
 	}
 
-	a.Reset(addr)
+	a.Reset(cleared)
 
 	if !b.Reserve(addr) {
 		t.Error("Reserve on B after a Reset on A = false, want true")

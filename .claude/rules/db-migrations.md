@@ -23,7 +23,8 @@ paths:
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
 - Give `invoice_app` UPDATE on `tenants.deletion_purge_started_at`. The trigger `tenants_purge_guard` refuses any change of `deletion_scheduled_at` or `deletion_purge_started_at` once the purge has started.
-- Give `invoice_app` UPDATE on `documents.entity_id` only. The trigger `documents_binding_guard` refuses a change of a bound value.
+- Give `invoice_app` UPDATE on `documents.entity_id` only. The trigger `documents_binding_guard` refuses a change of a bound value, except a release to NULL when no live citation remains.
+- The trigger `import_batches_release_document` clears `documents.entity_id` when a batch moves to `failed` or `undone` and no live citation remains.
 - Grant `EXECUTE` on `public.document_readable` to `invoice_app` only. `document.ReadableByScope` and the `extraction_jobs` and `extraction_page_images` policies call it.
 - Staff read a tenant's deletion state only through `public.staff_read_tenant_deletions`.
 - Roll back `*_staff_read_tenant_deletions.sql`, then `*_deletion_purge_started.sql`, before a test rolls back `*_workspace_deletion.sql`, and re-apply them after.

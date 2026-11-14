@@ -40,7 +40,7 @@ describe('UndoImportControl (SECAUD-50-04)', () => {
     const d = deferred<typeof OK>()
     const spy = vi.spyOn(importApi, 'undoImport').mockReturnValue(d.promise)
     const { onSettled } = arm()
-    expect(screen.getByTestId('undo-import-prompt').textContent).toBe("Discard this import's invoices and release the file?")
+    expect(screen.getByTestId('undo-import-prompt').textContent).toBe("Discard this import's invoices?")
     fireEvent.click(screen.getByTestId('undo-import-cancel'))
     fireEvent.click(screen.getByTestId('undo-import'))
     fireEvent.click(screen.getByTestId('undo-import-confirm'))
@@ -129,7 +129,7 @@ describe('UndoImportControl (SECAUD-50-04)', () => {
     const { onSettled } = arm()
     fireEvent.click(screen.getByTestId('undo-import-confirm'))
     await waitFor(() =>
-      expect(screen.getByTestId('undo-import-done').textContent).toBe('Import undone. The file can now be imported for another client.'),
+      expect(screen.getByTestId('undo-import-done').textContent).toBe('Import undone.'),
     )
     expect(onSettled).toHaveBeenCalledTimes(1)
   })

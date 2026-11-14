@@ -566,7 +566,7 @@ function UndoneRun({ ctx }: { ctx: PlatformCtx }) {
     <div data-testid="review-undone" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
       <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--fg-1)', marginBottom: 8 }}>Import undone</div>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
-        Its invoices were discarded. They keep their history and no longer appear in the invoice list, the register or the evidence bundle. The file can now be imported for another client.
+        Its invoices were discarded. They keep their history and no longer appear in the invoice list, the register or the evidence bundle.
       </p>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>

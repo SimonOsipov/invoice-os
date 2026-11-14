@@ -12,11 +12,11 @@ type Phase = 'idle' | 'armed' | 'submitting' | 'done'
 
 export const UNDO_IMPORT_COPY = {
   button: 'Undo import',
-  prompt: "Discard this import's invoices and release the file?",
+  prompt: "Discard this import's invoices?",
   cancel: 'Cancel',
   confirm: 'Undo import',
   sending: 'Undoing…',
-  done: 'Import undone. The file can now be imported for another client.',
+  done: 'Import undone.',
 } as const
 
 const BUSY: CSSProperties = { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }

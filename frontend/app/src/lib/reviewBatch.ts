@@ -534,8 +534,9 @@ export function reviewShellState(batch: Pick<ImportBatch, 'status'>): ReviewShel
 // byte-identical to reviewShellState over exactly one batch, which it will eventually
 // replace once BULK-01-07 switches ReviewBatch.tsx's call site.
 export function reviewShellStateAll(batches: Pick<ImportBatch, 'status'>[]): ReviewShellState {
-  if (batches.length > 0 && batches.every((b) => b.status === 'undone')) return 'undone'
-  return batches.some((b) => b.status === 'completed') ? 'batch' : 'rejected'
+  if (batches.some((b) => b.status === 'completed')) return 'batch'
+  // A failed file beside an undone one is not a rejected run: the undo happened.
+  return batches.some((b) => b.status === 'undone') ? 'undone' : 'rejected'
 }
 
 // --- Header copy (AC-2, §7.1) ---

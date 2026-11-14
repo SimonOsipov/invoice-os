@@ -992,6 +992,16 @@ describe('SECAUD-50-04: the Undo import control on the review step', () => {
     expect(container.querySelector('div.money')).toBeNull()
   })
 
+  it('a failed plus undone run renders the undone panel, not the rejected one', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.csv', status: 'failed' }), batch({ id: 'b2', filename: 'b.csv', status: 'undone' })]
+    mockReviewFetchAll(batches, TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    const panel = await screen.findByTestId('review-undone')
+    expect(panel.textContent).toContain('Import undone')
+    expect(container.textContent).not.toContain('Nothing was imported')
+    expect(container.querySelector('[data-testid="review-rejected-run"]')).toBeNull()
+  })
+
   it('a mixed run labels the undone row Undone', async () => {
     const batches = [batch({ id: 'b1', filename: 'a.csv' }), batch({ id: 'b2', filename: 'b.csv', status: 'undone' })]
     mockReviewFetchAll(batches, TOTALS)

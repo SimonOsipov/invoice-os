@@ -2672,6 +2672,7 @@ describe('reviewShellStateAll reads undone (SECAUD-50-04)', () => {
     expect(reviewShellStateAll([undone, undone])).toBe('undone')
     expect(reviewShellStateAll([undone, { status: 'completed' }])).toBe('batch')
     expect(reviewShellStateAll([{ status: 'failed' }])).toBe('rejected')
+    expect(reviewShellStateAll([{ status: 'failed' }, undone])).toBe('undone')
   })
 
   it('filesStrip marks an undone batch', () => {

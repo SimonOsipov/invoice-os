@@ -560,7 +560,7 @@ function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch:
   )
 }
 
-// Every batch of the run was undone (a revisit, or the refetch after an undo).
+// No batch is completed and at least one was undone (a revisit, or the refetch after an undo).
 function UndoneRun({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div data-testid="review-undone" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>

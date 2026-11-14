@@ -82,7 +82,6 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		id, _ := auth.IdentityFromContext(ctx)
 
-		// uploaded_by comes from the column default fed by the seam's app.current_user_id.
 		err := scanDocument(tx.QueryRow(ctx,
 			`INSERT INTO documents
 			   (tenant_id, storage_key, content_hash, size_bytes, filename, declared_content_type)
@@ -105,6 +104,18 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 				return err
 			}
 		default:
+			return err
+		}
+
+		// The caller becomes an uploader only if they can read the document now, so a dedupe hit on
+		// a document outside their scope grants nothing.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO document_uploaders (tenant_id, document_id, user_id)
+			 SELECT $1, $2, u FROM (SELECT nullif(current_setting('app.current_user_id', true), '')::uuid AS u) s
+			  WHERE u IS NOT NULL AND public.document_readable($2)
+			 ON CONFLICT DO NOTHING`,
+			id.TenantID, out.ID,
+		); err != nil {
 			return err
 		}
 

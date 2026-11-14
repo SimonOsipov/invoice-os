@@ -3,9 +3,23 @@
 SET LOCAL lock_timeout = '15s';
 
 ALTER TABLE documents
-    ADD COLUMN entity_id   uuid,
-    ADD COLUMN uploaded_by uuid DEFAULT nullif(current_setting('app.current_user_id', true), '')::uuid;
+    ADD COLUMN entity_id uuid;
 CREATE INDEX documents_entity_id_idx ON documents (entity_id) WHERE entity_id IS NOT NULL;
+
+-- Every member who uploads the bytes while able to read the document; Store.Upsert is the only writer.
+CREATE TABLE document_uploaders (
+    tenant_id   uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    document_id uuid NOT NULL,
+    user_id     uuid NOT NULL,
+    PRIMARY KEY (tenant_id, document_id, user_id),
+    CONSTRAINT document_uploaders_tenant_document_fk
+        FOREIGN KEY (tenant_id, document_id) REFERENCES documents (tenant_id, id) ON DELETE CASCADE
+);
+ALTER TABLE document_uploaders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_uploaders FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON document_uploaders
+    USING (tenant_id = nullif(current_setting('app.current_tenant', true), '')::uuid);
+GRANT SELECT, INSERT ON document_uploaders TO invoice_app;
 
 -- Backfill per tenant, as 20260820150810_audit_log_entity_id_and_read_indexes.sql does.
 -- ceiling: holds ACCESS EXCLUSIVE on documents until commit; out-of-band backfill above 500000 rows.
@@ -20,7 +34,7 @@ BEGIN
         SELECT DISTINCT tenant_id FROM documents;
     SELECT count(*) INTO v_rows FROM documents;
     IF v_rows > 500000 THEN
-        RAISE EXCEPTION 'documents has % rows, above the 500000 in-migration ceiling; backfill entity_id and uploaded_by out of band, then redeploy', v_rows
+        RAISE EXCEPTION 'documents has % rows, above the 500000 in-migration ceiling; backfill entity_id and document_uploaders out of band, then redeploy', v_rows
             USING ERRCODE = 'program_limit_exceeded';
     END IF;
     ALTER TABLE documents FORCE ROW LEVEL SECURITY;
@@ -38,13 +52,15 @@ BEGIN
                  ORDER BY doc, created_at, kind, id) c
          WHERE d.id = c.doc;
 
-        UPDATE documents d SET uploaded_by = a.actor::uuid
-          FROM (SELECT DISTINCT ON (payload->>'id') payload->>'id' AS doc, actor
-                  FROM audit_log
-                 WHERE event = 'document.created'
-                   AND actor ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                 ORDER BY payload->>'id', created_at, id) a
-         WHERE a.doc = d.id::text;
+        INSERT INTO document_uploaders (tenant_id, document_id, user_id)
+        SELECT DISTINCT v_tenant, d.id, a.actor::uuid
+          FROM audit_log a
+          JOIN documents d ON d.id::text = a.payload->>'id'
+         WHERE a.event IN ('document.created', 'document.reused')
+           AND a.actor ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           AND (a.event = 'document.created'
+                OR (NOT EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id AND i.created_at < a.created_at)
+                    AND NOT EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id AND b.created_at < a.created_at)));
     END LOOP;
     PERFORM set_config('app.current_tenant', '', true);
 END
@@ -66,8 +82,9 @@ $fn$;
 CREATE TRIGGER documents_binding_guard BEFORE UPDATE ON documents
     FOR EACH ROW EXECUTE FUNCTION documents_binding_guard();
 
--- The UPDATE then the SELECT are two statements: a loser blocked on the winner's row
--- lock re-reads the winner's client in the second one. Needs READ COMMITTED.
+-- Lock first: a non-uploader's UPDATE would otherwise skip the row on its snapshot instead of
+-- waiting for a concurrent binder. The UPDATE then the SELECT are two statements, so the loser
+-- re-reads the winner's client in the second. Needs READ COMMITTED.
 -- +goose StatementBegin
 CREATE FUNCTION bind_document_client() RETURNS trigger LANGUAGE plpgsql AS $fn$
 DECLARE
@@ -77,11 +94,14 @@ BEGIN
     IF v_doc IS NULL THEN
         RETURN NEW;
     END IF;
+    PERFORM 1 FROM documents WHERE id = v_doc FOR NO KEY UPDATE;
     UPDATE documents SET entity_id = NEW.entity_id
      WHERE id = v_doc AND entity_id IS NULL
        AND (coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
-            OR uploaded_by IS NULL
-            OR uploaded_by = nullif(current_setting('app.current_user_id', true), '')::uuid);
+            OR NOT EXISTS (SELECT 1 FROM document_uploaders u WHERE u.document_id = v_doc)
+            OR EXISTS (SELECT 1 FROM document_uploaders u
+                        WHERE u.document_id = v_doc
+                          AND u.user_id = nullif(current_setting('app.current_user_id', true), '')::uuid));
     SELECT entity_id INTO v_bound FROM documents WHERE id = v_doc;
     IF NOT FOUND THEN
         RETURN NEW;
@@ -108,8 +128,10 @@ CREATE FUNCTION public.document_readable(doc uuid) RETURNS boolean
         OR EXISTS (SELECT 1 FROM public.documents d
                     WHERE d.id = doc
                       AND (d.entity_id IS NULL
-                           OR d.uploaded_by = nullif(current_setting('app.current_user_id', true), '')::uuid
                            OR d.entity_id = ANY (nullif(nullif(current_setting('app.entity_scope', true), ''), '*')::uuid[])))
+        OR EXISTS (SELECT 1 FROM public.document_uploaders u
+                    WHERE u.document_id = doc
+                      AND u.user_id = nullif(current_setting('app.current_user_id', true), '')::uuid)
         OR EXISTS (SELECT 1 FROM public.invoices i WHERE i.source_document_id = doc)
         OR EXISTS (SELECT 1 FROM public.import_batches b WHERE b.document_id = doc)
 $fn$;
@@ -147,5 +169,6 @@ DROP FUNCTION public.document_readable(uuid);
 DROP FUNCTION bind_document_client();
 DROP FUNCTION documents_binding_guard();
 REVOKE UPDATE (entity_id) ON documents FROM invoice_app;
+DROP TABLE document_uploaders;
 DROP INDEX documents_entity_id_idx;
-ALTER TABLE documents DROP COLUMN uploaded_by, DROP COLUMN entity_id;
+ALTER TABLE documents DROP COLUMN entity_id;

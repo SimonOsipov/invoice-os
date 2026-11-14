@@ -189,6 +189,9 @@ func TestClientScope_ABundleDownloadIsAuditedInTheCallersScope(t *testing.T) {
 	if n := len(exportedRows()); n != 1 {
 		t.Errorf("exported rows after the refused download = %d, want 1", n)
 	}
+	if n := len(auditRowsOf(t, super, tenant, evFailed)); n != 0 {
+		t.Errorf("export_failed rows after the refused download = %d, want 0", n)
+	}
 	if err := s.Assemble(adminCtx, req(entB), io.Discard, nil); err != nil {
 		t.Fatalf("Assemble(client B) as the admin: %v", err)
 	}

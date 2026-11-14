@@ -645,10 +645,11 @@ func TestRLS_AFailedBundleAuditWriteKeepsTheOriginalError(t *testing.T) {
 			if b, _ := rec["bytes"].(float64); b <= 0 || int(b) != sink.size() {
 				t.Errorf("log bytes = %v, want the %d accepted (> 0)", rec["bytes"], sink.size())
 			}
-			for _, k := range []string{"from", "to", "err"} {
-				if rec[k] == nil || rec[k] == "" {
-					t.Errorf("log lacks %q: %v", k, rec)
-				}
+			if rec["from"] != fx.req.From.UTC().Format(time.RFC3339) || rec["to"] != fx.req.To.UTC().Format(time.RFC3339) {
+				t.Errorf("log period = %v..%v, want %s..%s", rec["from"], rec["to"], fx.req.From.UTC().Format(time.RFC3339), fx.req.To.UTC().Format(time.RFC3339))
+			}
+			if rec["err"] == nil || rec["err"] == "" {
+				t.Errorf("log lacks err: %v", rec)
 			}
 			requireCounts(t, r.counts(t, fx.tenant), bundleCounts{})
 		})

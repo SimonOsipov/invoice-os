@@ -40,7 +40,7 @@ paths:
 - List the library origin and the check origin in the preview gateway's `CORS_ALLOWED_ORIGINS`. The library serves the landing not-found page, which calls the gateway.
 - Print the library, blog and check addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Bake `VITE_CHECK_URL` (the check address from `preview.sh urls`) into the landing, library and check images.
-- Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.
+- Send `X-Gateway-Token` to `/healthz/fleet` and to the gateway `/health` detail. `preview.sh token <N>` prints the PR's token.
 - Generate `nightly-mock-issuer-token` in `preview.sh secrets nightly`. The nightly gateway mounts it as `GATEWAY_MOCK_ISSUER_TOKEN`. `preview.sh mock-token nightly` prints it.
 - Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN` in the nightly `e2e`, `topology` and `nightly-ai` jobs.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.

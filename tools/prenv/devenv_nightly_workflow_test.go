@@ -1082,10 +1082,13 @@ func TestDevEnvNightly_HealthGateHasNoModeBranch(t *testing.T) {
 	t.Parallel()
 	hg := devEnvJob(t, "health-gate")
 	s, _ := nlStep(hg, "Wait for gateway /health 200 on the commit under test")
-	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`} {
+	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`, `-H "X-Gateway-Token: $GATEWAY_TOKEN"`} {
 		if !strings.Contains(s.keys["run"], w) {
 			t.Errorf("health gate lacks %q", w)
 		}
+	}
+	if _, ok := nlStep(hg, "Read the PR's gateway token"); !ok {
+		t.Error("health-gate has no step that reads the PR's gateway token")
 	}
 	if strings.Contains(strings.Join(hg.lines, "\n"), "nightly") {
 		t.Error("health-gate names the nightly mode")

@@ -5,7 +5,8 @@
 //	deploycheck <sha> <tag>
 //
 // RUN_HOST_SUFFIX is the part of a run.app host after the service name, such as
-// <project-number>.africa-south1.run.app. platform.Fatal names each target that failed.
+// <project-number>.africa-south1.run.app. GATEWAY_TOKEN is the gateway's shared token; the gateway
+// shows its build only to it. platform.Fatal names each target that failed.
 package main
 
 import (
@@ -25,7 +26,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
-// backends answer /health with their build (a run.app host reserves /healthz); auth (GoTrue) has no build and answers its JWKS.
+// backends answer /health with their build (a run.app host reserves /healthz); the gateway shows
+// it only to X-Gateway-Token. auth (GoTrue) has no build and answers its JWKS.
 var backends = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 
 // sites serve /build.txt and their page at /.
@@ -45,8 +47,8 @@ func main() {
 }
 
 func deployCheck(log *slog.Logger) {
-	if len(os.Args) != 3 || os.Getenv("RUN_HOST_SUFFIX") == "" {
-		platform.Fatal(log, "usage: RUN_HOST_SUFFIX=<number>.<region>.run.app deploycheck <sha> <tag>")
+	if len(os.Args) != 3 || os.Getenv("RUN_HOST_SUFFIX") == "" || os.Getenv("GATEWAY_TOKEN") == "" {
+		platform.Fatal(log, "usage: RUN_HOST_SUFFIX=<number>.<region>.run.app GATEWAY_TOKEN=<token> deploycheck <sha> <tag>")
 	}
 	if failed := check(); len(failed) > 0 {
 		platform.Fatal(log, "deploy check failed:\n%s", strings.Join(failed, "\n"))
@@ -61,8 +63,9 @@ func check() []string {
 		url: func(svc string) string {
 			return "https://" + os.Args[2] + "---" + svc + "-" + os.Getenv("RUN_HOST_SUFFIX")
 		},
-		interval: interval,
-		parallel: parallel,
+		interval:     interval,
+		parallel:     parallel,
+		gatewayToken: os.Getenv("GATEWAY_TOKEN"),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
@@ -75,6 +78,8 @@ type checker struct {
 	url      func(svc string) string
 	interval time.Duration
 	parallel int
+	// gatewayToken goes to the gateway's two reads and to no other target.
+	gatewayToken string
 }
 
 // run checks every target in rounds until each passes or ctx ends: one attempt per pending target
@@ -137,7 +142,11 @@ func (c checker) run(ctx context.Context) []string {
 }
 
 func (c checker) backend(ctx context.Context, svc string) error {
-	body, err := c.get(ctx, c.url(svc)+"/health")
+	token := ""
+	if svc == "gateway" {
+		token = c.gatewayToken
+	}
+	body, err := c.get(ctx, c.url(svc)+"/health", token)
 	if err != nil {
 		return err
 	}
@@ -156,7 +165,7 @@ func (c checker) backend(ctx context.Context, svc string) error {
 // gatewayPosture runs once the gateway serves the commit: production trusts one issuer and serves
 // no mint route.
 func (c checker) gatewayPosture(ctx context.Context) error {
-	body, err := c.get(ctx, c.url("gateway")+"/health")
+	body, err := c.get(ctx, c.url("gateway")+"/health", c.gatewayToken)
 	if err != nil {
 		return err
 	}
@@ -177,14 +186,14 @@ func (c checker) gatewayPosture(ctx context.Context) error {
 }
 
 func (c checker) site(ctx context.Context, site string) error {
-	body, err := c.get(ctx, c.url(site)+"/build.txt")
+	body, err := c.get(ctx, c.url(site)+"/build.txt", "")
 	if err != nil {
 		return err
 	}
 	if got := strings.TrimSpace(string(body)); got != c.sha {
 		return fmt.Errorf("/build.txt %q, want %s", got, c.sha)
 	}
-	page, err := c.get(ctx, c.url(site)+"/")
+	page, err := c.get(ctx, c.url(site)+"/", "")
 	if err != nil {
 		return err
 	}
@@ -194,10 +203,13 @@ func (c checker) site(ctx context.Context, site string) error {
 	return nil
 }
 
-func (c checker) get(ctx context.Context, url string) ([]byte, error) {
+func (c checker) get(ctx context.Context, url, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if token != "" {
+		req.Header.Set(platform.HeaderGatewayToken, token)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

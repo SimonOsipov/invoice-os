@@ -24,10 +24,10 @@ export function apiBase(): string {
   return resolveTarget('GATEWAY_URL')
 }
 
-// fleetHeaders(): /healthz/fleet answers only with the gateway token (GKE-08); CI reads the PR's token.
+// fleetHeaders(): /healthz/fleet and the gateway /health detail need the gateway token; CI reads the PR's token.
 export function fleetHeaders(): Record<string, string> {
   const token = process.env.GATEWAY_TOKEN
-  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet needs X-Gateway-Token')
+  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet and the gateway /health detail need X-Gateway-Token')
   return { 'X-Gateway-Token': token }
 }
 

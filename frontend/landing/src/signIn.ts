@@ -8,7 +8,7 @@ const STATE_RE = /^[A-Za-z0-9_-]{43}$/
 
 const INCORRECT = 'Email or password is incorrect.'
 const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
-const THROTTLED = 'Too many attempts. Try again in a minute.'
+const THROTTLED = 'Too many attempts. Try again later.'
 export const SIGN_IN_UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 
 export type ConsoleTarget = 'ops' | 'support'

@@ -74,6 +74,7 @@ paths:
 - Answer `/auth/invitation/resend` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_missing` when it reads `none`. Send both before the GoTrue call.
 - Spend the resend per-address budget on `/auth/invitation/resend` and refund a GoTrue 4xx.
 - Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Expect it to give the retired `/auth/verify` path (now 405), `/auth/reset-password` and `/auth/invitation/password` one budget of 30 an hour per IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Expect Cloud Armor to limit `POST /auth/sign-in`, `/auth/refresh` and `/auth/exchange` per IP per 10 minutes, each in its own budget. Expect it to ban an IP over a budget from that route. The numbers are in `security-threat-model.md`, Network.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.

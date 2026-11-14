@@ -361,10 +361,9 @@ function Console() {
     setEvidence({ tenant: auditFilters.tenant ?? '', entity: '', reason: '', ...defaultBundlePeriod() })
     setDrawer({ type: 'evidence' })
   }
-  const closeEvidence = () => {
-    setEvidence((v) => ({ ...v, reason: '' }))
-    setDrawer(null)
-  }
+  // A reason belongs to one tenant+company selection; openEvidence resets it on every open.
+  const patchEvidence = (patch: Partial<EvidenceInputs>) =>
+    setEvidence((v) => ({ ...v, ...('tenant' in patch || 'entity' in patch ? { reason: '' } : {}), ...patch }))
   const doDownload = async () => {
     if (!shownPreview || bundleInFlight.current) return
     bundleInFlight.current = true
@@ -836,7 +835,7 @@ function Console() {
       {onEvidence && (
         <EvidenceDrawer
           inputs={evidence}
-          onInputs={(patch) => setEvidence((v) => ({ ...v, ...patch }))}
+          onInputs={patchEvidence}
           tenants={auditTenantsRead.data ?? []}
           tenantsError={auditTenantsRead.status === 'error' && auditTenantsRead.error?.status !== 401 ? { text: auditTenantsRead.error?.message ?? 'Unavailable', onRetry: auditTenantsRead.run } : undefined}
           entities={evidence.tenant && entitiesRead.status === 'ready' ? entitiesRead.data : null}
@@ -846,7 +845,7 @@ function Console() {
           previewError={previewRead.status === 'error' && previewRead.error?.status !== 401 ? { text: previewRead.error?.message ?? 'Unavailable', onRetry: previewRead.run } : undefined}
           busy={bundleBusy}
           onDownload={() => void doDownload()}
-          onClose={closeEvidence}
+          onClose={() => setDrawer(null)}
         />
       )}
 

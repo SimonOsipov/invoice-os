@@ -612,6 +612,24 @@ describe('Console audit wiring', () => {
       expect(download.mock.calls[0][2]).toBe('why')
     })
 
+    it('evidence drawer: switching the tenant clears the reason', async () => {
+      const d = await open()
+      await choose(d)
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+      pick(d, 'Tenant', 'T2')
+      expect((d.getByLabelText('Reason') as HTMLInputElement).value).toBe('')
+      expect(download_(d).disabled).toBe(true)
+    })
+
+    it('evidence drawer: switching the company clears the reason', async () => {
+      const d = await open()
+      await choose(d)
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+      pick(d, 'Company', 'E2')
+      expect((d.getByLabelText('Reason') as HTMLInputElement).value).toBe('')
+      expect(download_(d).disabled).toBe(true)
+    })
+
     it('Download stays blocked until the preview of the current inputs lands', async () => {
       const d = await open()
       await choose(d)

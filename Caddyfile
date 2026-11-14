@@ -8,14 +8,25 @@
 :{$PORT:8080} {
 	encode gzip
 
-	# No site may frame the apps, and every response carries these headers, /health and the .map 404 included.
+	# Every response carries these headers, /health and the .map 404 included. The CSP is set below.
 	header {
-		Content-Security-Policy "frame-ancestors 'none'"
 		X-Frame-Options "DENY"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 	}
+
+	# The app and consoles send their build's script policy; the other sites send framing only.
+	@sitePolicy file {
+		root /etc/caddy
+		try_files /csp.txt
+	}
+	header @sitePolicy Content-Security-Policy "{file./etc/caddy/csp.txt}"
+	@noSitePolicy not file {
+		root /etc/caddy
+		try_files /csp.txt
+	}
+	header @noSitePolicy Content-Security-Policy "frame-ancestors 'none'"
 
 	# A page revalidates on every load; /assets/ keeps its cache. status 2xx leaves the 404's no-store.
 	header {

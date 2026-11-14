@@ -128,7 +128,7 @@ func main() {
 	workspaceStore := archive.NewWorkspaceStore(pool, openObject)
 	app.Mux.HandleFunc("GET /v1/workspace/export", archive.WorkspaceExportHandler(workspaceStore.AssembleWorkspace, app.Logger))
 	app.Mux.HandleFunc("GET /v1/workspace/export/preflight", archive.WorkspaceExportPreflightHandler(workspaceStore.PreflightWorkspace, app.Logger))
-	// GET /v1/staff/tenants/{id}/...: staff reads of one tenant's companies and evidence bundle.
+	// /v1/staff/tenants/{id}/...: staff routes for one tenant's companies and evidence bundle.
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/entities", archive.StaffEntitiesHandler(bundleStore.StaffEntities, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/evidence-bundle", archive.StaffDownloadHandler(bundleStore.StaffAssemble, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle/preview", archive.StaffPreviewHandler(bundleStore.StaffPreview, app.Logger))

@@ -326,8 +326,8 @@ func TestRLS_StaffEntitiesEmptyTenantIsAnEmptyList(t *testing.T) {
 
 func TestRLS_StaffAssembleRefusesAnotherTenantsEntity(t *testing.T) {
 	r := newStaffRig(t)
-	own := plantBundleTenant(t, r.super, "refuse-own", "INV-STAFF-RF", 1)
-	other := plantBundleTenant(t, r.super, "refuse-other", "INV-STAFF-RF", 1)
+	own := r.plant(t, "refuse-own", 1)
+	other := r.plant(t, "refuse-other", 1)
 
 	if _, err := r.store.StaffPreview(r.ctx, other.tenant, other.req); err != nil {
 		t.Fatalf("control: StaffPreview of the entity under its own tenant: %v", err)
@@ -344,6 +344,21 @@ func TestRLS_StaffAssembleRefusesAnotherTenantsEntity(t *testing.T) {
 	if _, err := r.store.StaffPreview(r.ctx, own.tenant, other.req); !errors.Is(err, ErrEntityNotFound) {
 		t.Errorf("StaffPreview(own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
 	}
+
+	// A member of one tenant asking for the other's entity is refused the same way. No refusal audits either tenant.
+	member := r.route("member", own)
+	if err := member.run(r.store, member.ctx, other.req, io.Discard, nil); !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("Assemble(member of own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
+	}
+	requireCounts(t, r.counts(t, own.tenant), bundleCounts{})
+	requireCounts(t, r.counts(t, other.tenant), bundleCounts{})
+
+	// Control: the same staff member downloading under the entity's own tenant audits that tenant and no other.
+	if err := r.store.StaffAssemble(r.ctx, other.tenant, other.req, "r", io.Discard, nil); err != nil {
+		t.Fatalf("control: StaffAssemble of the entity under its own tenant: %v", err)
+	}
+	requireCounts(t, r.counts(t, other.tenant), r.route("staff", other).expect(1, 0))
+	requireCounts(t, r.counts(t, own.tenant), bundleCounts{})
 }
 
 func TestRLS_StaffBundleHoldsOnlyThePathTenant(t *testing.T) {

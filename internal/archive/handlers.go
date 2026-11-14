@@ -56,8 +56,8 @@ func DownloadHandler(assemble assembleFn, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		if sink.wrote {
-			// The 200 is already on the wire; assemble skipped bw.Close(), so the
-			// archive has no central directory (D-15). Log only, append no JSON.
+			// The 200 is already on the wire and the archive has no central
+			// directory (D-15). Log only, append no JSON.
 			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
 			return
 		}

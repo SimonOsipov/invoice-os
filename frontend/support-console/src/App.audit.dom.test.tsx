@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
-import { bundleReason } from './components/EvidenceDrawer'
+import { BUNDLE_REASON_NOTICE, bundleReason } from './components/EvidenceDrawer'
 import { downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, type BundlePreview, type StaffAuditPage, type StaffAuditRow, type StaffChange, type StaffEntity } from './auditApi'
 import { expireSession } from './auth'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
@@ -600,6 +600,7 @@ describe('Console audit wiring', () => {
       await choose(d)
       fireEvent.change(d.getByLabelText('Reason'), { target: { value: '' } })
       await d.findByText('Type a reason for this download.')
+      expect(d.getByText(BUNDLE_REASON_NOTICE)).toBeTruthy()
       expect(download_(d).disabled).toBe(true)
       const reads = previewRead.mock.calls.length
       fireEvent.change(d.getByLabelText('Reason'), { target: { value: 'why' } })

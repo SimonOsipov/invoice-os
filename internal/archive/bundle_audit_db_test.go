@@ -18,7 +18,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -281,17 +280,6 @@ func logRecords(t *testing.T, text, msg string) []map[string]any {
 		}
 	}
 	return out
-}
-
-// withAuditTx sets Store.auditTx by reflection so the package compiles before the field exists.
-func withAuditTx(t *testing.T, s *Store, fn func(ctx context.Context, tenantID string, write func(pgx.Tx) error) error) {
-	t.Helper()
-	f := reflect.ValueOf(s).Elem().FieldByName("auditTx")
-	if !f.IsValid() {
-		t.Errorf("Store has no auditTx field (the audit write seam)")
-		return
-	}
-	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(fn))
 }
 
 func (r *staffRig) storeCopy() *Store { return &Store{pool: r.app, maxInvoices: maxBundleInvoices} }
@@ -597,13 +585,13 @@ func TestRLS_AFailedExportedWriteLeavesNoCentralDirectory(t *testing.T) {
 			rt := r.route(name, fx)
 			s := r.storeCopy()
 			calls := 0
-			withAuditTx(t, s, func(ctx context.Context, tenantID string, write func(pgx.Tx) error) error {
+			s.auditTx = func(ctx context.Context, tenantID string, write func(pgx.Tx) error) error {
 				calls++
 				if calls == 1 {
 					return errors.New("audit down")
 				}
 				return db.WithinTenantTxOpts(ctx, s.pool, tenantID, pgx.TxOptions{}, write)
-			})
+			}
 			sink := &wsSink{}
 
 			if err := rt.run(s, rt.ctx, fx.req, sink, nil); err == nil {
@@ -629,7 +617,7 @@ func TestRLS_AFailedBundleAuditWriteKeepsTheOriginalError(t *testing.T) {
 			rt := r.route(name, fx)
 			logs := captureLogs(t)
 			s := r.storeCopy()
-			withAuditTx(t, s, func(context.Context, string, func(pgx.Tx) error) error { return errors.New("audit down") })
+			s.auditTx = func(context.Context, string, func(pgx.Tx) error) error { return errors.New("audit down") }
 			errSink := errors.New("client went away")
 			sink := &wsSink{hook: func(i int, _ []byte) error {
 				if i == 3 {

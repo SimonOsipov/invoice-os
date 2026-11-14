@@ -509,17 +509,6 @@ func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 	})
 }
 
-// withStaffPayload sets StaffEvent.StaffPayload by reflection so the package compiles before the field exists.
-func withStaffPayload(t *testing.T, ev audit.StaffEvent, v any) audit.StaffEvent {
-	t.Helper()
-	f := reflect.ValueOf(&ev).Elem().FieldByName("StaffPayload")
-	if !f.IsValid() {
-		t.Fatal("audit.StaffEvent has no StaffPayload field")
-	}
-	f.Set(reflect.ValueOf(v))
-	return ev
-}
-
 func TestStaffAudit_StaffPayloadStaysInStaffAuditLog(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -538,7 +527,7 @@ func TestStaffAudit_StaffPayloadStaysInStaffAuditLog(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			staff, event := uuid.New(), uuid.NewString()
-			ev := withStaffPayload(t, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant), Payload: c.payload}, c.staffPayload)
+			ev := audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant), Payload: c.payload, StaffPayload: c.staffPayload}
 			if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error { return audit.RecordStaff(ctx, tx, ev) }); err != nil {
 				t.Fatalf("RecordStaff: %v", err)
 			}

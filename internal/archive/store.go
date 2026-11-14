@@ -21,7 +21,7 @@ type Store struct {
 	auditTx     func(ctx context.Context, tenantID string, write func(pgx.Tx) error) error // test seam; nil = recordBundleEvent
 }
 
-// NewStore wires the production cap (D-34) -- assemble treats a non-positive
+// NewStore wires the production cap (D-34) -- buildBundle treats a non-positive
 // cap as a programming error, not a default, so a forgotten wiring cannot
 // silently pass.
 func NewStore(pool *pgxpool.Pool) *Store {

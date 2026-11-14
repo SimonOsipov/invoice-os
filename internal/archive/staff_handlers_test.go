@@ -322,13 +322,28 @@ func TestStaffDownloadHandler_RefusesABadReasonBeforeTheStore(t *testing.T) {
 		})
 	}
 
-	// Control: the same request with a valid reason reaches the store, so the refusals above are the reason's doing.
-	for _, body := range []string{`{"reason":"r"}`, `{"reason":"  r  "}`, `{"reason":"` + strings.Repeat("é", 500) + `"}`} {
-		calls := 0
+	// Control: the same request with a valid reason reaches the store with the trimmed reason, so the refusals above
+	// are the reason's doing. The padded 500-rune case pins trim before the length check.
+	longest := strings.Repeat("é", 500)
+	for body, want := range map[string]string{
+		`{"reason":"r"}`:                     "r",
+		`{"reason":"  r  "}`:                 "r",
+		`{"reason":"` + longest + `"}`:       longest,
+		`{"reason":"  ` + longest + `  \n"}`: longest,
+	} {
+		calls, got := 0, ""
+		store := func(_ context.Context, _ string, _ Request, reason string, _ io.Writer, _ func(string)) error {
+			calls++
+			got = reason
+			return nil
+		}
 		rec := httptest.NewRecorder()
-		StaffDownloadHandler(countingStore(&calls), slog.Default()).ServeHTTP(rec, staffDownloadRequest(t, validQuery(), body))
+		StaffDownloadHandler(store, slog.Default()).ServeHTTP(rec, staffDownloadRequest(t, validQuery(), body))
 		if calls != 1 || rec.Code == http.StatusBadRequest || rec.Code == http.StatusRequestEntityTooLarge {
 			t.Errorf("valid reason %.20q: status %d, store calls %d, want the store called once", body, rec.Code, calls)
+		}
+		if got != want {
+			t.Errorf("valid reason %.20q: the store got %.20q (%d bytes), want the trimmed reason (%d bytes)", body, got, len(got), len(want))
 		}
 	}
 }

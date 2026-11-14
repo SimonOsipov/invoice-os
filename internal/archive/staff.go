@@ -1,4 +1,4 @@
-// staff.go: the staff reads of one tenant's evidence bundle, preview and company list.
+// staff.go: one tenant's evidence bundle download, preview and company list for staff.
 package archive
 
 import (

@@ -144,6 +144,18 @@ describe('StaffGate (AC-11)', () => {
     expect(hrefWrites).toEqual([])
   })
 
+  it('StaffGate_handoffLeavesNoRefreshTokenInStorage', async () => {
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    store.session.setItem(STATE_KEY, stateRaw(STATE_A, Date.now() - 1000))
+    const access = staffToken('exchanged')
+    installFetch(() => reply(200, { access_token: access, renewable: true }))
+    render(gate())
+    expect(await screen.findByText('console')).toBeTruthy()
+    const values = [store.local, store.session].flatMap((m) => [...Array(m.length).keys()].map((i) => m.getItem(m.key(i) ?? '') ?? ''))
+    expect(values.some((v) => v.includes(access))).toBe(true)
+    expect(values.filter((v) => v.includes('refresh_token'))).toEqual([])
+  })
+
   it('StaffGate_authStart_replacesTheEntry', async () => {
     window.history.replaceState(null, '', '/?auth=start')
     const net = installFetch(() => new Error('unexpected request'))

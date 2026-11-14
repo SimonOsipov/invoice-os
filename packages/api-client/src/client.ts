@@ -31,6 +31,14 @@ export interface ApiFetchOptions {
   // 'text' resolves the raw body (the UBL route serves XML). Errors stay JSON on
   // every path, so this is read only after the !res.ok check below.
   responseType?: 'json' | 'text'
+  credentials?: RequestCredentials
+}
+
+export const SESSION_HEADER = 'X-Auth-Session'
+
+// STUB (SECAUD-17-10): the executor sets credentials:'include' and the header.
+export function sessionFetch<T>(url: string, opts?: Omit<ApiFetchOptions, 'credentials' | 'token'>): Promise<T> {
+  return apiFetch<T>(url, opts)
 }
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.

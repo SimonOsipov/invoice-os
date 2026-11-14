@@ -1,7 +1,10 @@
 export interface ConsoleSession {
   token: string
   // null: the access token is borrowed from the app and cannot be renewed here.
-  refreshToken: string | null
+  refreshToken?: string | null
+  // STUB (SECAUD-17-10): the v3 shape; the executor drops refreshToken.
+  borrowed?: boolean
+  legacyRefreshToken?: string
 }
 
 export const CONSOLE_SESSION_SCHEMA_VERSION = 2

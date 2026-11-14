@@ -109,7 +109,7 @@ export async function resolveConsoleBoot(o: {
     return { kind: 'leave', url: appStartUrl(app, ensureSignInState(now), target), replace: true }
   }
   try {
-    const s = await renewConsoleSession(gateway, { token: stored.token, refreshToken: stored.refreshToken })
+    const s = await renewConsoleSession(gateway, { token: stored.token, refreshToken: stored.refreshToken as string }) // STUB (SECAUD-17-10): the executor rewrites this branch
     if (isStaffToken(s.token)) return open(s)
     clearConsoleSession(storageKey)
     return leave('not-staff')

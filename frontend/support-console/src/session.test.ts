@@ -190,3 +190,55 @@ describe('expireOnce', () => {
     expect(expireConsole).toHaveBeenCalledTimes(1)
   })
 })
+
+// The real renew and save run over a stubbed fetch and storage; the mocks above delegate to them here.
+describe('withSession over the gateway cookie (SECAUD-17-10)', () => {
+  const T = STAFF
+  const T2 = jwt({ sub: 's1', n: 2, app_metadata: { staff: true } })
+  let local: Map<string, string>
+  let fetchCalls: { url: string; init: RequestInit }[]
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('@invoice-os/console-session')>('@invoice-os/console-session')
+    renew.mockImplementation(actual.renewConsoleSession)
+    vi.mocked(saveConsoleSession).mockImplementation(actual.saveConsoleSession)
+    local = new Map()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => local.get(k) ?? null,
+      setItem: (k: string, v: string) => void local.set(k, v),
+      removeItem: (k: string) => void local.delete(k),
+    })
+    fetchCalls = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      fetchCalls.push({ url, init })
+      return new Response(JSON.stringify({ access_token: T2 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+  })
+
+  it('withSession_renewsThroughTheCookie', async () => {
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    const call = flaky(1)
+    await expect(withSession(call)).resolves.toBe('ok')
+    expect(call).toHaveBeenCalledTimes(2)
+    expect(fetchCalls.map((c) => c.url)).toEqual([`${GW}/auth/refresh`])
+    expect(fetchCalls[0]?.init.body).toBeUndefined()
+    expect(fetchCalls[0]?.init.credentials).toBe('include')
+    expect(new Headers(fetchCalls[0]?.init.headers).get('X-Auth-Session')).toBe('cookie')
+    expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toEqual({ v: 3, token: T2 })
+  })
+
+  it('withSession_borrowedRethrowsThe401', async () => {
+    // Control first: the landing record does reach the gateway.
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    await withSession(flaky(1))
+    expect(fetchCalls).toHaveLength(1)
+
+    fetchCalls.length = 0
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T, from: 'app' }))
+    const call = flaky(1)
+    await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(fetchCalls).toHaveLength(0)
+    expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
+  })
+})

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { clearConsoleSession, isStaffToken, loadConsoleSession, parseStoredConsoleSession, saveConsoleSession } from './session'
-import { b64url, installStorage, jwt, OPS_KEY, SUPPORT_KEY, throwingStorage } from './testkit'
+import { b64url, borrowedRaw, installStorage, jwt, OPS_KEY, recordRaw, SUPPORT_KEY, throwingStorage, v3BorrowedRaw, v3Raw } from './testkit'
 
 let warn: ReturnType<typeof vi.spyOn>
 let error: ReturnType<typeof vi.spyOn>
@@ -160,5 +160,59 @@ describe('borrowed record (SUPP-11-02)', () => {
     const { local } = installStorage()
     saveConsoleSession(OPS_KEY, { token: 'T', refreshToken: null })
     expect(local.getItem(OPS_KEY)).toBe('{"v":2,"token":"T","from":"app"}')
+  })
+})
+
+describe('v3 records (SECAUD-17-10)', () => {
+  const T = 'T-access'
+  const R = 'R-secret'
+
+  it('save_writesOnlyTheAccessToken', () => {
+    const { local } = installStorage()
+    saveConsoleSession(OPS_KEY, { token: T, borrowed: false, legacyRefreshToken: R })
+    expect(JSON.parse(local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T })
+    expect(local.getItem(OPS_KEY)).not.toContain(R)
+    saveConsoleSession(OPS_KEY, { token: T, borrowed: true })
+    expect(JSON.parse(local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
+  })
+
+  it('legacyLanding_isRewrittenBeforeTheReadReturns', () => {
+    const { local } = installStorage({ local: { [OPS_KEY]: recordRaw(T, R) } })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false, legacyRefreshToken: R })
+    expect(local.getItem(OPS_KEY)).toBe(v3Raw(T))
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('legacyBorrowed_isRewrittenAsV3', () => {
+    const { local } = installStorage({ local: { [OPS_KEY]: borrowedRaw(T) } })
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: true })
+    expect(local.getItem(OPS_KEY)).toBe(v3BorrowedRaw(T))
+  })
+
+  it('v3WithARefreshToken_isRemoved', () => {
+    for (const rec of [
+      { v: 3, token: T, refresh_token: R },
+      { v: 3, token: T, from: 'app', refresh_token: R },
+      { v: 3, token: T, refresh_token: null },
+    ]) {
+      warn.mockClear()
+      const { local } = installStorage({ local: { [OPS_KEY]: JSON.stringify(rec) } })
+      expect(loadConsoleSession(OPS_KEY), JSON.stringify(rec)).toBeNull()
+      expect(warn, JSON.stringify(rec)).toHaveBeenCalledTimes(1)
+      expect(local.getItem(OPS_KEY), JSON.stringify(rec)).toBeNull()
+    }
+  })
+
+  it('parse_refusesOtherShapes', () => {
+    // The two good shapes first: a refusal means nothing if nothing is accepted.
+    expect(parseStoredConsoleSession(v3Raw(T), OPS_KEY)).toEqual({ token: T, borrowed: false })
+    expect(parseStoredConsoleSession(v3BorrowedRaw(T), OPS_KEY)).toEqual({ token: T, borrowed: true })
+    expect(warn).not.toHaveBeenCalled()
+    for (const rec of [{ v: 3 }, { v: 3, token: '' }, { v: 3, token: T, from: 'x' }, { v: 4, token: T }]) {
+      warn.mockClear()
+      expect(parseStoredConsoleSession(JSON.stringify(rec), OPS_KEY), JSON.stringify(rec)).toBeNull()
+      expect(warn, JSON.stringify(rec)).toHaveBeenCalledTimes(1)
+    }
   })
 })

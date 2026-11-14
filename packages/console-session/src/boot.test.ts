@@ -27,9 +27,13 @@ import {
   SUPPORT_KEY,
   throwingStorage,
   timeoutError,
+  v3BorrowedRaw,
+  v3Raw,
 } from './testkit'
 
 const TIMEOUT_MS = 15000 // AbortSignal.timeout in redeemHandoff and RENEW_TIMEOUT_MS (frontend/app/src/lib)
+const SIGN_OUT = `${GW}/auth/sign-out`
+const PENDING = `${OPS_KEY}:sign-out-pending`
 const EXCHANGE = `${GW}/auth/exchange`
 const REFRESH = `${GW}/auth/refresh`
 const FRONT_DOOR = new RegExp(`^${LANDING}/\\?state=([A-Za-z0-9_-]{43})&console=ops$`)
@@ -61,11 +65,12 @@ interface Setup {
   gateway?: string | null
   landing?: string | null
   app?: string | null
+  pending?: boolean
 }
 
 async function run(o: Setup = {}) {
   store = installStorage({
-    local: o.local === undefined ? {} : { [OPS_KEY]: o.local },
+    local: { ...(o.local === undefined ? {} : { [OPS_KEY]: o.local }), ...(o.pending ? { [PENDING]: '1' } : {}) },
     session: o.state === undefined ? {} : { [STATE_KEY]: o.state },
   })
   const net = installFetch((c) => (o.answer ?? (() => new Error('unexpected request')))(c))
@@ -745,5 +750,139 @@ describe('app-borrowed session (SUPP-11-02)', () => {
     expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
     expect(calls).toHaveLength(1)
     expect(store.local.getItem(OPS_KEY)).toBeNull()
+  })
+})
+
+describe('cookie-held refresh token (SECAUD-17-10)', () => {
+  const T = staffToken('v3')
+  const T2 = staffToken('v3-renewed')
+  const cookieMode = { credentials: 'include', headers: { 'x-auth-session': 'cookie' } }
+  const held = { search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000) }
+  const sessionKeysHold = (needle: string) => [store.local, store.session].some((m) => [...Array(m.length).keys()].some((i) => (m.getItem(m.key(i) ?? '') ?? '').includes(needle)))
+
+  it('handoff_landingRedeemsInCookieMode', async () => {
+    const { boot, calls } = await run({ ...held, answer: () => reply(200, { access_token: T, renewable: true }) })
+    expect(boot).toEqual({ kind: 'open', session: { token: T, borrowed: false } })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ url: EXCHANGE, method: 'POST', ...cookieMode })
+    expect(calls[0]?.body).toEqual({ code: CODE, state: STATE_A })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T })
+    expect(sessionKeysHold('refresh_token')).toBe(false)
+  })
+
+  it('handoff_landingWithoutRenewableLeavesFailed', async () => {
+    const control = await run({ ...held, answer: () => reply(200, { access_token: T, renewable: true }) })
+    expect(control.boot.kind).toBe('open')
+    const rows: [string, 'ops' | 'support', unknown][] = [
+      ['absent, ops', 'ops', { access_token: T }],
+      ['false, ops', 'ops', { access_token: T, renewable: false }],
+      ['"true", ops', 'ops', { access_token: T, renewable: 'true' }],
+      ['absent, support with no app', 'support', { access_token: T }],
+      ['false, support with no app', 'support', { access_token: T, renewable: false }],
+    ]
+    for (const [name, target, body] of rows) {
+      const { boot, calls } = await run({ ...held, target, answer: () => reply(200, body) })
+      expect(calls, name).toHaveLength(1)
+      expect(leaveUrl(boot), name).toMatch(new RegExp(`&console=${target}&signin=failed$`))
+      expect(store.local.getItem(OPS_KEY), name).toBeNull()
+    }
+  })
+
+  it('handoff_borrowedSupportOpensBorrowed', async () => {
+    const { boot, calls } = await run({ ...held, target: 'support', app: APP, answer: () => reply(200, { access_token: T, renewable: false }) })
+    expect(boot).toEqual({ kind: 'open', session: { token: T, borrowed: true } })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ url: EXCHANGE, ...cookieMode })
+    expect(store.local.getItem(OPS_KEY)).toBe(v3BorrowedRaw(T))
+  })
+
+  it('reload_landingRecordRenewsThroughTheCookie', async () => {
+    for (const target of ['ops', 'support'] as const) {
+      const { boot, calls } = await run({ local: v3Raw(OLD_TOKEN), target, answer: () => reply(200, { access_token: T2 }) })
+      expect(boot, target).toEqual({ kind: 'open', session: { token: T2, borrowed: false } })
+      expect(calls, target).toHaveLength(1)
+      expect(calls[0], target).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
+      expect(calls[0]?.body, target).toBeUndefined()
+      expect(store.local.getItem(OPS_KEY), target).toBe(v3Raw(T2))
+    }
+  })
+
+  it('reload_refusedCookieClearsAndLeaves', async () => {
+    for (const refuse of [() => reply(401, { error: 'invalid or expired refresh token' }), () => reply(400, { error: 'bad request' })]) {
+      const { boot, calls } = await run({ local: v3Raw(OLD_TOKEN), answer: refuse })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ url: REFRESH, ...cookieMode })
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+      const url = leaveUrl(boot)
+      expect(FRONT_DOOR.test(url), url).toBe(true)
+      expect(heldState()).toBe(FRONT_DOOR.exec(url)?.[1])
+    }
+  })
+
+  it('reload_unavailableKeepsTheRecord', async () => {
+    const answers: [string, Response | Error][] = [
+      ['502', reply(502, { error: 'renewal is unavailable' })],
+      ['network error', new TypeError('Failed to fetch')],
+      ['200 without an access token', reply(200, {})],
+    ]
+    for (const [name, answer] of answers) {
+      const { boot, calls } = await run({ local: v3Raw(OLD_TOKEN), answer: () => answer })
+      expect(calls, name).toHaveLength(1)
+      expect(withOutcome('failed').test(leaveUrl(boot)), name).toBe(true)
+      expect(store.local.getItem(OPS_KEY), name).toBe(v3Raw(OLD_TOKEN))
+    }
+  })
+
+  it('legacyRecord_adoptsIntoTheCookieOnce', async () => {
+    const { boot, calls } = await run({ local: recordRaw(OLD_TOKEN, 'R-old'), answer: () => reply(200, { access_token: T2 }) })
+    expect(boot).toEqual({ kind: 'open', session: { token: T2, borrowed: false } })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
+    expect(calls[0]?.body).toEqual({ refresh_token: 'R-old' })
+    expect(store.local.getItem(OPS_KEY)).toBe(v3Raw(T2))
+    expect(sessionKeysHold('R-old')).toBe(false)
+  })
+
+  it('boot_pendingSignOutIsSentFirst', async () => {
+    const rows: [string, Response | Error, boolean][] = [
+      ['204', reply(204), true],
+      ['401', reply(401, { error: 'x' }), true],
+      ['502', reply(502, { error: 'sign-out is unavailable' }), true],
+      ['403', reply(403, { error: 'origin not allowed' }), false],
+      ['network error', new TypeError('Failed to fetch'), false],
+      ['timeout', timeoutError(), false],
+    ]
+    for (const [name, answer, removed] of rows) {
+      const { boot, calls } = await run({ pending: true, answer: () => answer })
+      expect(calls, name).toHaveLength(1)
+      expect(calls[0], name).toMatchObject({ url: SIGN_OUT, method: 'POST', ...cookieMode })
+      expect(calls[0]?.body, name).toBeUndefined()
+      expect(FRONT_DOOR.test(leaveUrl(boot)), name).toBe(true)
+      expect(store.local.getItem(PENDING), name).toBe(removed ? null : '1')
+    }
+  })
+
+  it('boot_pendingSignOutWithAHandoffSendsNothing', async () => {
+    const ok = await run({ ...held, pending: true, answer: () => reply(200, { access_token: T, renewable: true }) })
+    expect(ok.boot.kind).toBe('open')
+    expect(ok.calls.map((c) => c.url)).toEqual([EXCHANGE])
+    expect(store.local.getItem(PENDING)).toBeNull()
+
+    const refused = await run({ ...held, pending: true, answer: () => reply(400, { error: 'invalid or expired code' }) })
+    expect(refused.calls.map((c) => c.url)).toEqual([EXCHANGE])
+    expect(withOutcome('failed').test(leaveUrl(refused.boot))).toBe(true)
+    expect(store.local.getItem(PENDING)).toBe('1')
+  })
+
+  it('boot_usedHandoffCodeWithAStoredV3RecordLeavesFailed', async () => {
+    const { boot, calls } = await run({ ...held, local: v3Raw(T), answer: () => reply(400, { error: 'invalid or expired code' }) })
+    expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
+    expect(calls.map((c) => c.url)).toEqual([EXCHANGE])
+    expect(store.local.getItem(OPS_KEY)).toBe(v3Raw(T))
+    // Kept means usable: the next plain load renews it through the cookie.
+    const again = installFetch(() => reply(200, { access_token: T2 }))
+    const next = await resolveConsoleBoot({ search: '', storageKey: OPS_KEY, target: 'ops', gateway: GW, landing: LANDING, now: NOW })
+    expect(next).toEqual({ kind: 'open', session: { token: T2, borrowed: false } })
+    expect(again.calls.map((c) => c.url)).toEqual([REFRESH])
   })
 })

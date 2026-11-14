@@ -19,11 +19,15 @@ import {
   SUPPORT_KEY,
   throwingStorage,
   timeoutError,
+  v3BorrowedRaw,
+  v3Raw,
 } from './testkit'
 
 const TIMEOUT_MS = 5000 // REVOKE_TIMEOUT_MS (frontend/app/src/lib/revoke.ts)
 const SIGN_OUT = `${GW}/auth/sign-out`
 const RECORD = recordRaw(staffToken('stored'), 'R-stored')
+const LANDING_V3 = v3Raw(staffToken('stored'))
+const PENDING = `${OPS_KEY}:sign-out-pending`
 
 let warn: ReturnType<typeof vi.spyOn>
 let timeouts: ReturnType<typeof spyTimeouts>
@@ -86,12 +90,62 @@ describe('signOutConsole (AC-12)', () => {
     ]
     for (const [name, answer] of failures) {
       warn.mockClear()
-      const t = setup(RECORD, () => answer)
+      const t = setup(LANDING_V3, () => answer)
       await expect(signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING }), name).resolves.toBeUndefined()
       expect(t.net.calls, name).toHaveLength(1)
       expect(warn, name).toHaveBeenCalledTimes(1)
       expect(t.store.local.getItem(OPS_KEY), name).toBeNull()
       expect(t.win.hrefWrites, name).toEqual([LANDING])
+    }
+  })
+
+  it('signOut_landingPostsInCookieModeAndClears', async () => {
+    const t = setup(LANDING_V3, () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(t.net.calls).toHaveLength(1)
+    expect(t.net.calls[0]).toMatchObject({ url: SIGN_OUT, method: 'POST', credentials: 'include', headers: { 'x-auth-session': 'cookie' } })
+    expect(t.net.calls[0]?.body).toBeUndefined()
+    expect(t.log).toEqual(['fetch', 'remove', 'href'])
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.win.hrefWrites).toEqual([LANDING])
+  })
+
+  it('signOut_borrowedSendsNothing', async () => {
+    // The landing control first: "sends nothing" means little if a landing record sends nothing either.
+    const landing = setup(LANDING_V3, () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(landing.net.calls).toHaveLength(1)
+
+    const t = setup(v3BorrowedRaw(staffToken('borrowed')), () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(t.net.calls).toHaveLength(0)
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.store.local.getItem(PENDING)).toBeNull()
+    expect(t.win.hrefWrites).toEqual([LANDING])
+  })
+
+  it('signOut_unreachedLeavesThePendingMarker', async () => {
+    const rows: [string, Response | Error, boolean][] = [
+      ['network error', new TypeError('Failed to fetch'), true],
+      ['timeout', timeoutError(), true],
+      ['403', reply(403, { error: 'origin not allowed' }), true],
+      ['204', reply(204), false],
+      ['401', reply(401, { error: 'invalid or expired refresh token' }), false],
+      ['502', reply(502, { error: 'sign-out is unavailable' }), false],
+    ]
+    expect(rows.filter(([, , marked]) => marked).length).toBeGreaterThan(0)
+    for (const [name, answer, marked] of rows) {
+      const t = setup(LANDING_V3, () => answer)
+      await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+      expect(t.net.calls, name).toHaveLength(1)
+      expect(t.store.local.getItem(PENDING), name).toBe(marked ? '1' : null)
+      expect(t.store.local.getItem(OPS_KEY), name).toBeNull()
+      expect(t.win.hrefWrites, name).toEqual([LANDING])
+      if (marked) {
+        // The marker lands before the record is cleared and the page leaves.
+        const set = t.store.local.setItem.mock.invocationCallOrder[0] ?? Infinity
+        expect(set, name).toBeLessThan(t.store.local.removeItem.mock.invocationCallOrder[0] ?? 0)
+      }
     }
   })
 

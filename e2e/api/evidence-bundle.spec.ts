@@ -114,6 +114,7 @@ interface BundleManifest {
   entity: BundleEntity
   period: BundlePeriod
   counts: BundleCounts
+  notes: string[]
 }
 interface PreviewBody {
   entity: BundleEntity
@@ -153,6 +154,11 @@ async function fetchBundle(
 // this runner and the deployed gateway at no cost in precision. parseRequest enforces no
 // max-window or future-`to` bound, so a 15-year span is not rejected.
 const period = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
+
+// The manifest's reader rule: a text cell starting with ' had that one character added on export.
+function storedText(cell: string): string {
+  return cell.startsWith("'") ? cell.slice(1) : cell
+}
 
 // Honours quoted fields and doubled quotes: the header columns carry JSON.
 function parseCsv(text: string): Record<string, string>[] {
@@ -280,6 +286,9 @@ function submitWire(zip: Record<string, Uint8Array>, invoiceId: string): SubmitW
   return JSON.parse(new TextDecoder().decode(body)) as SubmitWire
 }
 
+// A free-text value the API stores verbatim; the export must prefix it with ' (formula lead).
+const FORMULA_CITY = '=HYPERLINK("https://example.test","x")'
+
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
   let entityId: string
@@ -295,6 +304,7 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
       entity_id: entityId,
       invoice_number: invoiceNumber,
       buyer_state: 'NG-LA',
+      buyer_city: FORMULA_CITY,
       line_items: [{ description: 'Widget', quantity: '1', unit_price: '100', line_total: '100', tax_category: 'STANDARD_VAT', price_unit: 'KGM' }],
     })
     invoiceId = created.id
@@ -327,6 +337,8 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(row, 'invoices.csv carries the invoice this spec created').toBeDefined()
     expect(row!.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
     expect(row!.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+    expect(row!.buyer_city, 'a formula-led buyer_city is exported with a leading quote').toBe(`'${FORMULA_CITY}`)
+    expect(storedText(row!.buyer_city), 'the reader rule restores the seeded buyer_city').toBe(FORMULA_CITY)
 
     expect(row!.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
     expect((await getInvoice(token, invoiceId)).qr_payload, 'GET qr_payload of a never-submitted invoice').toBeNull()
@@ -355,6 +367,10 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(manifest.counts.invoices, 'manifest invoices count').toBe(1)
     expect(manifest.counts.submissions, 'manifest submissions count').toBe(0)
     expect(manifest.counts.exchange_attempts, 'manifest exchange_attempts count').toBe(0)
+    // Copied from manifestNotes (internal/archive/manifest.go), the last entry.
+    expect(manifest.notes, 'manifest notes carry the formula-cell disclosure').toContain(
+      "A text cell that starts with ' had that one character added on export, so that a spreadsheet shows a value beginning with =, +, -, @, a tab, a carriage return or ' as text. Remove that first ' to read the stored value. Number columns are written as stored.",
+    )
 
     expect(filename, 'download filename').toMatch(/^ASComply_evidence_Zz-AUDIT-05-[A-Za-z0-9-]+_\d{8}_\d{8}\.zip$/)
   })
@@ -441,9 +457,9 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     const invoiceRow = parseCsv(decoder.decode(zip['invoices.csv'])).find((r) => r.invoice_id === created.id)
     expect(invoiceRow, 'invoices.csv must carry the submitted invoice').toBeDefined()
     expect(invoiceRow!.status, 'invoices.csv status').toBe(invoice.status)
-    expect(invoiceRow!.irn, "invoices.csv irn must equal the GET's").toBe(invoice.irn)
-    expect(invoiceRow!.csid, "invoices.csv csid must equal the GET's").toBe(invoice.csid)
-    expect(invoiceRow!.qr_payload, "invoices.csv qr_payload must equal the GET's").toBe(invoice.qr_payload)
+    expect(storedText(invoiceRow!.irn), "invoices.csv irn must equal the GET's").toBe(invoice.irn)
+    expect(storedText(invoiceRow!.csid), "invoices.csv csid must equal the GET's").toBe(invoice.csid)
+    expect(storedText(invoiceRow!.qr_payload), "invoices.csv qr_payload must equal the GET's").toBe(invoice.qr_payload)
 
     const submissions = parseCsv(decoder.decode(zip['submissions.csv']))
     expect(submissions, 'submissions.csv must hold exactly one job row').toHaveLength(1)

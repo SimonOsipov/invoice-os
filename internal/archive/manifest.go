@@ -67,6 +67,7 @@ var manifestNotes = []string{
 	"Body files are the bytes recorded at transmission time, verbatim. A row whose truncated or encoding_coerced flag is true carries a body that is not the complete wire bytes.",
 	"Request and response headers are limited to a twelve-name allowlist applied when the evidence was written; credential headers were never stored.",
 	"This manifest lists a SHA-256 checksum for each entry, for self-verification. It is not a cryptographic signature.",
+	"A text cell that starts with ' had that one character added on export, so that a spreadsheet shows a value beginning with =, +, -, @, a tab, a carriage return or ' as text. Remove that first ' to read the stored value. Number columns are written as stored.",
 }
 
 // ManifestParams is everything writeManifest needs beyond bw's own recorded entries.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strings"
 )
 
 // bundleWriter assembles the evidence ZIP over a plain io.Writer (never an
@@ -32,6 +33,24 @@ type csvRecords struct {
 	cw          *csv.Writer
 	rows        int
 	wroteHeader bool
+	numeric     []bool // per column: written from a SQL number, left raw
+}
+
+// numericCSVColumns are written from SQL numbers; a leading "-" there is a sign.
+var numericCSVColumns = map[string]bool{
+	"subtotal": true, "vat": true, "total": true,
+	"line_no": true, "quantity": true, "unit_price": true, "line_total": true, "line_tax": true,
+	"tax_percent": true, "base_quantity": true,
+	"seq": true, "attempts": true, "attempt": true, "http_status": true, "latency_ms": true,
+	"id": true,
+}
+
+// neutraliseCell makes a spreadsheet read s as text. ' is in the set so the rule reverses.
+func neutraliseCell(s string) string {
+	if s != "" && strings.IndexByte("=+-@\t\r'", s[0]) >= 0 {
+		return "'" + s
+	}
+	return s
 }
 
 // csvEntry buffers one CSV's records and hashes them as they're written, so the
@@ -51,7 +70,23 @@ func (bw *bundleWriter) newCSVEntry(name string) *csvEntry {
 // Write satisfies csvWriter. The first call is the header record and is not
 // counted in rows.
 func (e *csvRecords) Write(record []string) error {
-	if err := e.cw.Write(record); err != nil {
+	out := record
+	if !e.wroteHeader {
+		e.numeric = make([]bool, len(record))
+		for i, name := range record {
+			e.numeric[i] = numericCSVColumns[name]
+		}
+	} else {
+		out = make([]string, len(record))
+		for i, c := range record {
+			if i < len(e.numeric) && e.numeric[i] {
+				out[i] = c
+			} else {
+				out[i] = neutraliseCell(c)
+			}
+		}
+	}
+	if err := e.cw.Write(out); err != nil {
 		return fmt.Errorf("archive: write %s record: %w", e.name, err)
 	}
 	if !e.wroteHeader {

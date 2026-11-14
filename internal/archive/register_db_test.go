@@ -289,7 +289,7 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 	full := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: g.entity, invoiceNumber: "INV-FULL", status: "accepted", issueDate: "2026-09-10", createdAt: time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)})
 	if _, err := g.tx.Exec(context.Background(), `
 		UPDATE invoices SET currency='NGN', subtotal=100.50, vat=7.54, total=108.04,
-		  supplier_tin='S-TIN', supplier_name='Sup, "Ltd"', buyer_tin='B-TIN', buyer_name='Buyer',
+		  supplier_tin='S-TIN', supplier_name='Sup, "Ltd"', buyer_tin='B-TIN', buyer_name='=Buyer',
 		  irn='IRN-1', csid='CSID-1', qr_payload='QR==',
 		  rejection_reasons='[{"code": "E1", "message": "m"}]',
 		  invoice_kind='B2B', tax_currency_code='NGN', payment_status='PENDING',
@@ -331,6 +331,11 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 	for _, r := range dataRows(regRows) {
 		if want := byID[r[0]]; !reflect.DeepEqual(r, want) {
 			t.Errorf("register row %v != csv row %v", r, want)
+		}
+	}
+	for _, r := range dataRows(regRows) {
+		if r[0] == full && r[headerIndex(t, "buyer_name")] != "=Buyer" {
+			t.Errorf("register buyer_name = %q, want the stored =Buyer", r[headerIndex(t, "buyer_name")])
 		}
 	}
 	if r := byID[credit]; r[headerIndex(t, "document_type")] != "credit_note" || r[headerIndex(t, "original_invoice_number")] != "INV-FULL" {

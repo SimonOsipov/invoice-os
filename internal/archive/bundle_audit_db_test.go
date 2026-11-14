@@ -213,24 +213,27 @@ func requirePayload(t *testing.T, raw string, fx bundleFx) (files, sent int64) {
 }
 
 // requireExported asserts an exported row's files and bytes against the ZIP the caller received:
-// files = manifest entries, bytes = every byte before the central directory.
+// files = manifest entries, bytes = the sum of their sizes (the workspace export's rule).
 func requireExported(t *testing.T, raw string, fx bundleFx, zipRaw []byte) {
 	t.Helper()
-	cd := bytes.Index(zipRaw, pkCentral)
-	if cd <= 0 || cd >= len(zipRaw) {
-		t.Fatalf("control: central directory offset = %d in a %d byte ZIP, want 0 < offset < length", cd, len(zipRaw))
-	}
 	_, body := zipEntries(t, zipRaw)
 	var doc manifestDoc
 	if err := json.Unmarshal(body["manifest.json"], &doc); err != nil {
 		t.Fatalf("unmarshal manifest: %v", err)
 	}
+	var sum int64
+	for _, e := range doc.Entries {
+		sum += e.Bytes
+	}
+	if sum <= 0 {
+		t.Fatalf("control: the manifest entries sum to %d bytes, want > 0", sum)
+	}
 	files, sent := requirePayload(t, raw, fx)
 	if files != int64(len(doc.Entries)) {
 		t.Errorf("payload files = %d, want the manifest's %d entries; payload %s", files, len(doc.Entries), raw)
 	}
-	if sent != int64(cd) {
-		t.Errorf("payload bytes = %d, want %d (every byte before the central directory); payload %s", sent, cd, raw)
+	if sent != sum {
+		t.Errorf("payload bytes = %d, want %d (the sum of the manifest entries' bytes); payload %s", sent, sum, raw)
 	}
 }
 

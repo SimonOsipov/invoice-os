@@ -58,7 +58,18 @@ func New(cfg Config) (http.Handler, error) {
 		gateway: cfg.Gateway.String(),
 		src:     NewSource(cfg.Gateway, cfg.Client, cfg.Now, cfg.Log),
 	}
-	return gzhttp.GzipHandler(s), nil
+	return gzhttp.GzipHandler(securityHeaders(s)), nil
+}
+
+// securityHeaders sets the security headers on every response.
+func securityHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr := w.Header()
+		hdr.Set("X-Content-Type-Options", "nosniff")
+		hdr.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		hdr.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +158,6 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, status int, ctype
 	h := w.Header()
 	h.Set("Content-Type", ctype)
 	h.Set("Cache-Control", "no-cache")
-	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(body)

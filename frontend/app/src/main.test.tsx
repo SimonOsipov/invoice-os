@@ -69,4 +69,38 @@ describe('main', () => {
     expect(await gatewayArg(' https://gw.test/// ')).toBe('https://gw.test')
     expect(await gatewayArg('')).toBeNull()
   })
+  it('main_rendersOnlyAfterAPendingSignOutIsSent', async () => {
+    const store = new Map([['invoice-os.sign-out-pending', '1']])
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, removeItem: (k: string) => void store.delete(k), setItem: vi.fn() })
+    let answer: (r: Response) => void = () => {}
+    const fetchMock = vi.fn((_url: string, _init: unknown) => new Promise<Response>((resolve) => (answer = resolve)))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    vi.stubGlobal('document', { getElementById: () => ({}) })
+    vi.stubGlobal('window', { location: { search: '' } })
+    vi.resetModules()
+    h.render.mockClear()
+
+    await import('./main')
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://gw.test/auth/sign-out')
+    // The sign-out is out and unanswered: the app has not rendered.
+    expect(h.render).not.toHaveBeenCalled()
+    answer(new Response(null, { status: 204 }))
+    await vi.waitFor(() => expect(h.render).toHaveBeenCalledTimes(1))
+    expect(store.has('invoice-os.sign-out-pending')).toBe(false)
+
+    // A hand-off load sends nothing and keeps the marker; the app still renders.
+    store.set('invoice-os.sign-out-pending', '1')
+    fetchMock.mockClear()
+    h.render.mockClear()
+    vi.stubGlobal('window', { location: { search: '?handoff=abc' } })
+    vi.resetModules()
+    await import('./main')
+    await vi.waitFor(() => expect(h.render).toHaveBeenCalledTimes(1))
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(store.has('invoice-os.sign-out-pending')).toBe(true)
+    vi.unstubAllGlobals()
+  })
 })

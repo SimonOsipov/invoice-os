@@ -985,3 +985,70 @@ func TestSignOut_CookieModeSurvivesClientCancel(t *testing.T) {
 	}
 	requireClearCookie(t, rec, "__Host-rt-app")
 }
+
+func TestSignOut_CookieModeReadsOnlyItsOwnAudienceCookie(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	// Each other audience's cookie, presented from the app origin, signs nobody out.
+	for _, aud := range []string{"ops", "support"} {
+		rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie(aud, signOutR0))
+		requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+		requireClearCookie(t, rec, "__Host-rt-app")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+
+	// Positive pair: the ops origin reads its own cookie and clears its own name.
+	rec := doCookieSignOut(rg.handler, scOps, ``, rtCookie("ops", signOutR0))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("ops origin with the ops cookie = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	requireClearCookie(t, rec, "__Host-rt-ops")
+}
+
+// A replayed sign-out (a second tab, or a copied cookie) revokes nothing twice and still clears.
+func TestSignOut_CookieModeRepeatedSignOutRevokesOnce(t *testing.T) {
+	access := signOutAccess(t, subjectS1)
+	var grants int
+	var mu sync.Mutex
+	token := func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		grants++
+		first := grants == 1
+		mu.Unlock()
+		if first {
+			answer(http.StatusOK, signOutGranted(access))(w, r)
+			return
+		}
+		answer(http.StatusBadRequest, gtRefreshAlreadyUsed)(w, r)
+	}
+	fake := newSignOutFake(t, token, answer(http.StatusNoContent, ""))
+	events := &recEvents{}
+	rg := newCookieSignOutRig(t, fake, nil, nil, events)
+
+	first := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first sign-out = %d, want 204: %s", first.Code, first.Body.String())
+	}
+	requireClearCookie(t, first, "__Host-rt-app")
+
+	// The same cookie again, then no cookie at all.
+	for _, cookies := range [][]*http.Cookie{{rtCookie("app", signOutR0)}, nil} {
+		rec := doCookieSignOut(rg.handler, scApp, ``, cookies...)
+		requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+		requireClearCookie(t, rec, "__Host-rt-app")
+	}
+
+	logouts := 0
+	for _, c := range fake.Calls() {
+		if c.Path == "/logout" {
+			logouts++
+		}
+	}
+	if logouts != 1 {
+		t.Errorf("GoTrue saw %d logouts, want exactly 1", logouts)
+	}
+	events.requireNames(t, EventSignedOut)
+}

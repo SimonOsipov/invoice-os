@@ -507,3 +507,47 @@ func TestRefresh_CookieModeMapping(t *testing.T) {
 		})
 	}
 }
+
+// A body token in cookie mode is legacy adoption: only a 200 touches the cookie, whatever else answers.
+func TestRefresh_CookieModeLegacyAdoptionOutcomes(t *testing.T) {
+	const live = "refresh-other-tab-live-7d2p"
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantStatus int
+		wantMsg    string
+	}{
+		{"401", http.StatusUnauthorized, gtRefreshNotFound, http.StatusUnauthorized, msgRefreshRefused},
+		{"400", http.StatusBadRequest, gtRefreshAlreadyUsed, http.StatusUnauthorized, msgRefreshRefused},
+		{"403", http.StatusForbidden, gtRefreshUserBanned, http.StatusUnauthorized, msgRefreshRefused},
+		{"429", http.StatusTooManyRequests, `{}`, http.StatusTooManyRequests, "too many requests"},
+		{"500", http.StatusInternalServerError, `{}`, http.StatusBadGateway, msgRefreshUnavailable},
+		{"503", http.StatusServiceUnavailable, `{}`, http.StatusBadGateway, msgRefreshUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newTokenFake(t, c.status, c.body)
+			rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+			requireRefusal(t, rec, c.wantStatus, c.wantMsg)
+			requireNoSetCookie(t, rec)
+			if got := sentTokens(t, fake.Calls()); len(got) != 1 || got[0] != refreshR0 {
+				t.Errorf("GoTrue saw %q, want only the body's %q", got, refreshR0)
+			}
+		})
+	}
+
+	t.Run("unreachable", func(t *testing.T) {
+		rec := doCookieRefresh(newCookieRefresh(t, closedURL(t), nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+		requireRefusal(t, rec, http.StatusBadGateway, msgRefreshUnavailable)
+		requireNoSetCookie(t, rec)
+	})
+
+	// Positive pair: a 200 replaces the other tab's cookie with the adopted rotation.
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	rec := doCookieRefresh(newCookieRefresh(t, fake.URL, nil), scApp, refreshBody(refreshR0), rtCookie("app", live))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("adoption = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	requireSetCookie(t, rec, "__Host-rt-app", refreshR1)
+}

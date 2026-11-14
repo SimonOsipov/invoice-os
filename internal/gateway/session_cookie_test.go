@@ -307,3 +307,45 @@ func TestSessionCookie_NeverLogsTheToken(t *testing.T) {
 		}
 	}
 }
+
+// Any header value but "cookie" is a refusal on every route, never body mode: no body, cookie or code is read.
+func TestSessionRoutes_AnyOtherHeaderValueIs403BeforeAnyWork(t *testing.T) {
+	gotrue := newTokenFake(t, http.StatusOK, gtRefreshed)
+	refresh := newCookieRefresh(t, gotrue.URL, nil)
+	outFake, _ := okSignOutFake(t)
+	out := newCookieSignOutRig(t, outFake, nil, nil, nil)
+	ex := cookieExchangeRig(t)
+	s := randomState(t)
+	code := ex.put(t, exchangeAnswerRT, s)
+
+	values := []string{"yes", "Cookie", "COOKIE", "true", "1", "cookie x", "cookie,cookie"}
+	for _, v := range values {
+		for _, origin := range []string{scApp, scEvil, "null"} {
+			hdr := map[string]string{SessionHeader: v, "Origin": origin}
+			for name, rec := range map[string]*httptest.ResponseRecorder{
+				"refresh":  doSession(refresh, "/auth/refresh", refreshBody(refreshR0), hdr, rtCookie("app", refreshR0)),
+				"sign-out": doSession(out.handler, "/auth/sign-out", refreshBody(signOutR0), hdr, rtCookie("app", signOutR0)),
+				"exchange": doSession(ex.exchange, "/auth/exchange", exchangeBody(code, s), hdr),
+			} {
+				requireRefusal(t, rec, http.StatusForbidden, msgOriginNotAllowed)
+				if len(rec.Header().Values("Set-Cookie")) != 0 {
+					t.Errorf("%s with %s=%q from %s set a cookie %q", name, SessionHeader, v, origin, rec.Header().Values("Set-Cookie"))
+				}
+			}
+		}
+	}
+	if gotrue.Hits() != 0 || len(outFake.Calls()) != 0 {
+		t.Errorf("GoTrue saw %d refresh and %d sign-out calls, want 0 and 0", gotrue.Hits(), len(outFake.Calls()))
+	}
+
+	// Positive pair: the exact value works on every route, and the refused code was not spent.
+	if rec := doCookieRefresh(refresh, scApp, ``, rtCookie("app", refreshR0)); rec.Code != http.StatusOK {
+		t.Errorf("refresh with the exact header = %d, want 200", rec.Code)
+	}
+	if rec := doCookieSignOut(out.handler, scApp, ``, rtCookie("app", signOutR0)); rec.Code != http.StatusNoContent {
+		t.Errorf("sign-out with the exact header = %d, want 204", rec.Code)
+	}
+	if rec := ex.doCookieExchange(scApp, exchangeBody(code, s)); rec.Code != http.StatusOK {
+		t.Errorf("exchange with the exact header = %d, want 200: the refusals spent the code", rec.Code)
+	}
+}

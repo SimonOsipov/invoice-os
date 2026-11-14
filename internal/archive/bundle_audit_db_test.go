@@ -771,6 +771,82 @@ func TestRLS_AClientDisconnectMidBundleStillAuditsTheFailure(t *testing.T) {
 	}
 }
 
+// staffReasonPost is the staff download through the handler: the range in the query, the reason in the body.
+func staffReasonPost(ctx context.Context, fx bundleFx, body string) *http.Request {
+	q := url.Values{"entity_id": {fx.entity}, "from": {fx.req.From.Format(time.RFC3339)}, "to": {fx.req.To.Format(time.RFC3339)}}
+	req := httptest.NewRequest(http.MethodPost, "/?"+q.Encode(), strings.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", fx.tenant)
+	return req
+}
+
+func TestRLS_TheStaffReasonStaysOutOfTheCustomersRow(t *testing.T) {
+	r := newStaffRig(t)
+	h := StaffDownloadHandler(r.store.StaffAssemble, slog.Default())
+	body := func(reason string) string { return `{"reason":"` + reason + `"}` }
+
+	// requireReasonOnlyInStaffRow asserts the one staff row of event holds the reason and the one tenant row holds the five keys and no byte of it.
+	requireReasonOnlyInStaffRow := func(t *testing.T, fx bundleFx, event, reason string) {
+		t.Helper()
+		srows, arows := staffRowsOf(t, r.super, fx.tenant, event), auditRowsOf(t, r.super, fx.tenant, event)
+		if len(srows) != 1 || len(arows) != 1 {
+			t.Fatalf("%s rows: staff %d, audit_log %d, want 1 and 1", event, len(srows), len(arows))
+		}
+		var sp map[string]any
+		if err := json.Unmarshal([]byte(srows[0].payload), &sp); err != nil {
+			t.Fatalf("staff payload %q: %v", srows[0].payload, err)
+		}
+		if sp["reason"] != reason {
+			t.Errorf("staff_audit_log payload reason = %v, want %q; payload %s", sp["reason"], reason, srows[0].payload)
+		}
+		requirePayload(t, arows[0].payload, fx)
+		var leaks int
+		if err := r.super.QueryRow(context.Background(),
+			`SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND audit_log::text LIKE '%' || $2 || '%'`, fx.tenant, reason).Scan(&leaks); err != nil {
+			t.Fatalf("scan audit_log for the reason: %v", err)
+		}
+		if leaks != 0 {
+			t.Errorf("audit_log rows of the tenant holding the reason = %d, want 0", leaks)
+		}
+	}
+
+	t.Run("exported", func(t *testing.T) {
+		fx := r.plant(t, "aud-reason-ok", 2)
+		reason := "r-" + uuid.NewString()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, staffReasonPost(r.ctx, fx, body(reason)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+		}
+		requireReasonOnlyInStaffRow(t, fx, evExported, reason)
+	})
+
+	t.Run("export_failed part way", func(t *testing.T) {
+		fx := r.plant(t, "aud-reason-fail", 2)
+		reason := "r-" + uuid.NewString()
+		ctx, cancel := context.WithCancel(r.ctx)
+		defer cancel()
+		w := &cancelWriter{ResponseWriter: httptest.NewRecorder(), cancel: cancel}
+		h.ServeHTTP(w, staffReasonPost(ctx, fx, body(reason)))
+		if w.n < 3 {
+			t.Fatalf("control: the client got %d write(s), want the failing 3rd", w.n)
+		}
+		requireReasonOnlyInStaffRow(t, fx, evFailed, reason)
+	})
+
+	t.Run("a refused reason writes no row and no byte", func(t *testing.T) {
+		fx := r.plant(t, "aud-reason-bad", 1)
+		for _, b := range []string{"", `{}`, `{"reason":"  "}`, `{"reason":"x","y":1}`} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, staffReasonPost(r.ctx, fx, b))
+			if rec.Code != http.StatusBadRequest || strings.HasPrefix(rec.Body.String(), "PK") {
+				t.Errorf("body %q: answer = %d %.40q, want a 400 JSON error", b, rec.Code, rec.Body.String())
+			}
+		}
+		requireCounts(t, r.counts(t, fx.tenant), bundleCounts{})
+	})
+}
+
 func TestRLS_ABundleLogsItsFactsBeforeTheFirstByte(t *testing.T) {
 	r := newStaffRig(t)
 	for _, name := range routeKeys {

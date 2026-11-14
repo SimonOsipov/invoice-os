@@ -509,6 +509,52 @@ func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 	})
 }
 
+// withStaffPayload sets StaffEvent.StaffPayload by reflection so the package compiles before the field exists.
+func withStaffPayload(t *testing.T, ev audit.StaffEvent, v any) audit.StaffEvent {
+	t.Helper()
+	f := reflect.ValueOf(&ev).Elem().FieldByName("StaffPayload")
+	if !f.IsValid() {
+		t.Fatal("audit.StaffEvent has no StaffPayload field")
+	}
+	f.Set(reflect.ValueOf(v))
+	return ev
+}
+
+func TestStaffAudit_StaffPayloadStaysInStaffAuditLog(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	ctx := context.Background()
+	tenant := uuid.NewString()
+
+	for _, c := range []struct {
+		name         string
+		payload      any
+		staffPayload any
+		wantStaff    string
+		wantTenant   string
+	}{
+		{"both set", map[string]any{"a": 1}, map[string]any{"a": 1, "reason": "r"}, `{"a":1,"reason":"r"}`, `{"a":1}`},
+		{"payload nil", nil, map[string]any{"reason": "r"}, `{"reason":"r"}`, `{}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			staff, event := uuid.New(), uuid.NewString()
+			ev := withStaffPayload(t, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant), Payload: c.payload}, c.staffPayload)
+			if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error { return audit.RecordStaff(ctx, tx, ev) }); err != nil {
+				t.Fatalf("RecordStaff: %v", err)
+			}
+			srows, arows := staffRows(t, f, staff), auditRowsFor(t, f, tenant, event)
+			if len(srows) != 1 || len(arows) != 1 {
+				t.Fatalf("rows: staff %d audit %d, want 1 and 1", len(srows), len(arows))
+			}
+			jsonEq(t, srows[0].Payload, c.wantStaff)
+			jsonEq(t, arows[0].Payload, c.wantTenant)
+			if strings.Contains(arows[0].Payload, "reason") {
+				t.Errorf("audit_log payload %s holds the staff-only reason", arows[0].Payload)
+			}
+		})
+	}
+}
+
 // The control commit proves the tenant can take both rows, so the zero counts are the rollback.
 func TestStaffAudit_TenantChangeRollsBackWhenTheStaffWriteFails(t *testing.T) {
 	f := requireFixture(t)

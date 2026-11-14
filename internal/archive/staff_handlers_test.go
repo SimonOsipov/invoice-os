@@ -34,6 +34,17 @@ func staffRequest(t *testing.T, query url.Values) *http.Request {
 	return r
 }
 
+const validReasonBody = `{"reason":"r"}`
+
+// staffDownloadRequest is the staff download: the query holds the range, the JSON body holds the reason.
+func staffDownloadRequest(t *testing.T, query url.Values, body string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/v1/staff/tenants/"+staffPathTenant+"/evidence-bundle?"+query.Encode(), strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", staffPathTenant)
+	return r
+}
+
 // staffStoreErrors is the shared error table of the download and the preview.
 var staffStoreErrors = []struct {
 	name     string
@@ -65,7 +76,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 					return nil
 				}, slog.Default())
 				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, staffRequest(t, c.query))
+				h.ServeHTTP(rec, staffDownloadRequest(t, c.query, validReasonBody))
 				if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"error":"`+c.want+`"}` {
 					t.Errorf("answer = %d %q, want 400 %q", rec.Code, rec.Body.String(), c.want)
 				}
@@ -80,7 +91,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := StaffDownloadHandler(func(context.Context, string, Request, io.Writer, func(string)) error { return c.err }, slog.Default())
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, staffRequest(t, validQuery()))
+			h.ServeHTTP(rec, staffDownloadRequest(t, validQuery(), validReasonBody))
 			if rec.Code != c.status || strings.TrimSpace(rec.Body.String()) != c.wantBody {
 				t.Errorf("answer = %d %q, want %d %s", rec.Code, rec.Body.String(), c.status, c.wantBody)
 			}
@@ -97,7 +108,7 @@ func TestStaffDownloadHandler_ParametersThenStore(t *testing.T) {
 			return err
 		}, slog.Default())
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, staffRequest(t, validQuery()))
+		h.ServeHTTP(rec, staffDownloadRequest(t, validQuery(), validReasonBody))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 		}
@@ -237,7 +248,7 @@ func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) 
 		return errors.New("db went away mid-stream")
 	}, slog.Default())
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, staffRequest(t, validQuery()))
+	h.ServeHTTP(rec, staffDownloadRequest(t, validQuery(), validReasonBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (the 200 is on the wire at the first byte)", rec.Code)
 	}
@@ -266,6 +277,69 @@ func TestStaffHandlers_MalformedQueryStringIsA400(t *testing.T) {
 				t.Errorf("answer = %d %q, want 400 invalid query string", rec.Code, rec.Body.String())
 			}
 		})
+	}
+	if calls != 0 {
+		t.Errorf("store called %d time(s), want 0", calls)
+	}
+}
+
+// countingStore is a download store that counts its calls.
+func countingStore(calls *int) staffAssembleFn {
+	return func(context.Context, string, Request, io.Writer, func(string)) error { *calls++; return nil }
+}
+
+func TestStaffDownloadHandler_RefusesABadReasonBeforeTheStore(t *testing.T) {
+	const badReason = `{"error":"reason must be 1 to 500 characters"}`
+	const badBody = `{"error":"invalid request body"}`
+	cases := []struct {
+		name   string
+		body   string
+		status int
+		want   string
+	}{
+		{"no body", "", http.StatusBadRequest, badBody},
+		{"empty object", `{}`, http.StatusBadRequest, badReason},
+		{"blank reason", `{"reason":"  "}`, http.StatusBadRequest, badReason},
+		{"501 runes", `{"reason":"` + strings.Repeat("é", 501) + `"}`, http.StatusBadRequest, badReason},
+		{"NUL", `{"reason":"\u0000"}`, http.StatusBadRequest, badReason},
+		{"unknown field", `{"reason":"x","y":1}`, http.StatusBadRequest, badBody},
+		{"second value", `{"reason":"x"}{}`, http.StatusBadRequest, badBody},
+		{"trailing data", `{"reason":"x"} junk`, http.StatusBadRequest, badBody},
+		{"malformed JSON", `{"reason":`, http.StatusBadRequest, badBody},
+		{"over 8 KiB", `{"reason":"` + strings.Repeat("x", 9<<10) + `"}`, http.StatusRequestEntityTooLarge, `{"error":"request body too large"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := 0
+			rec := httptest.NewRecorder()
+			StaffDownloadHandler(countingStore(&calls), slog.Default()).ServeHTTP(rec, staffDownloadRequest(t, validQuery(), c.body))
+			if rec.Code != c.status || strings.TrimSpace(rec.Body.String()) != c.want {
+				t.Errorf("answer = %d %q, want %d %s", rec.Code, rec.Body.String(), c.status, c.want)
+			}
+			if calls != 0 {
+				t.Errorf("store called %d time(s), want 0", calls)
+			}
+		})
+	}
+
+	// Control: the same request with a valid reason reaches the store, so the refusals above are the reason's doing.
+	for _, body := range []string{`{"reason":"r"}`, `{"reason":"  r  "}`, `{"reason":"` + strings.Repeat("é", 500) + `"}`} {
+		calls := 0
+		rec := httptest.NewRecorder()
+		StaffDownloadHandler(countingStore(&calls), slog.Default()).ServeHTTP(rec, staffDownloadRequest(t, validQuery(), body))
+		if calls != 1 || rec.Code == http.StatusBadRequest || rec.Code == http.StatusRequestEntityTooLarge {
+			t.Errorf("valid reason %.20q: status %d, store calls %d, want the store called once", body, rec.Code, calls)
+		}
+	}
+}
+
+func TestStaffDownloadHandler_ParsesTheQueryBeforeTheBody(t *testing.T) {
+	calls := 0
+	rec := httptest.NewRecorder()
+	bad := url.Values{"from": {validFrom}, "to": {validTo}}
+	StaffDownloadHandler(countingStore(&calls), slog.Default()).ServeHTTP(rec, staffDownloadRequest(t, bad, `{"reason":""}`))
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"error":"entity_id is required"}` {
+		t.Errorf("answer = %d %q, want 400 with the query message", rec.Code, rec.Body.String())
 	}
 	if calls != 0 {
 		t.Errorf("store called %d time(s), want 0", calls)

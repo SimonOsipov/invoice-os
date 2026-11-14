@@ -1,5 +1,6 @@
 // The staff audit and evidence contract over the wire: the staff search matches a tenant's own log, the staff bundle
-// is the tenant admin's bundle, a staff read writes no audit row, and a customer token is refused on all five paths.
+// is the tenant admin's bundle, a staff read writes no audit row, a staff download writes a staff row and a support row,
+// and a customer token is refused on all five paths.
 // Acts only on rows the spec creates: a fresh entity and two invoices in PERSONAS.A's tenant, a fresh entity in PERSONAS.B's.
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
@@ -14,6 +15,8 @@ const tenantPath = (id: string): string => `/api/invoice/v1/staff/tenants/${id}`
 
 // audit.SupportActor, internal/audit/audit.go.
 const SUPPORT_ACTOR = 'ASComply support'
+// Event name, internal/archive/store.go and staff.go.
+const BUNDLE_EXPORTED = 'evidence_bundle.exported'
 // staffManifestActor, internal/archive/staff.go.
 const STAFF_MANIFEST_ACTOR = { name: 'ASComply support', kind: 'raw' }
 // parseStaffFilter, internal/audit/staff_read.go.
@@ -32,6 +35,7 @@ const START = new Date(Date.now() - 5_000).toISOString()
 // A wide period: the entity id already scopes the bundle to this spec's rows.
 const PERIOD = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
 
+type StaffChangeRow = { actor: string; event: string; tenant_id: string | null; payload: { entity_id?: string } }
 type StaffRow = { id: string; tenant_id: string; created_at: string; event: string; actor: string }
 type StaffPage = { events: StaffRow[]; page: { limit: number; has_more: boolean; next_cursor: string | null } }
 type Preview = { entity: { id: string; name: string; tin: string | null }; period: unknown; filename: string; counts: Record<string, number>; over_limit: boolean }
@@ -166,29 +170,52 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
     await other(`${tenantPath(randomUUID())}/entities`, TENANT_NOT_FOUND)
   })
 
-  test('staff reads write no audit row', async () => {
-    await staffSearch({ tenant: PERSONAS.A.tenantId, from: START })
-    await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/entities`)
-    expect((await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle/preview?${bundleQuery(entityA.id)}`)).status).toBe(200)
-    await download(`${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle?${bundleQuery(entityA.id)}`, staff)
-
+  async function auditCounts(): Promise<{ support: number; mine: number }> {
     const changes = await staffGet(STAFF_CHANGES)
     expect(changes.status, 'staff changes').toBe(200)
-    const mine = (changes.body as { changes: { actor: string }[] }).changes.filter((c) => c.actor === account.userId)
-    expect(mine, 'no staff_audit_log row names this staff account').toEqual([])
-
-    const since = await getAuditLog(customer, { from: START })
-    expect(since.events.length, 'the tenant log read returns the spec writes, so an empty support read means something').toBeGreaterThan(0)
+    const mine = (changes.body as { changes: StaffChangeRow[] }).changes.filter((c) => c.actor === account.userId)
     const support = await getAuditLog(customer, { actor: [SUPPORT_ACTOR], from: START })
-    expect(support.events, "no support row in the tenant's log since the spec start").toEqual([])
+    return { support: support.total, mine: mine.length }
+  }
+
+  test('staff reads write no audit row', async () => {
+    const before = await auditCounts()
+    await staffSearch({ tenant: PERSONAS.A.tenantId, from: START })
+    expect((await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/entities`)).status, 'staff entities').toBe(200)
+    expect((await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle/preview?${bundleQuery(entityA.id)}`)).status, 'staff preview').toBe(200)
+    expect(await auditCounts(), 'the search, entities read and preview add no row').toEqual(before)
+  })
+
+  test('a staff download writes one staff row and one support row', async () => {
+    const before = await auditCounts()
+    const query = { event: [BUNDLE_EXPORTED], actor: [SUPPORT_ACTOR], company: entityA.id }
+    const companyBefore = (await getAuditLog(customer, query)).total
+    const zip = await download(`${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle?${bundleQuery(entityA.id)}`, staff)
+
+    const changes = await staffGet(STAFF_CHANGES)
+    const mine = (changes.body as { changes: StaffChangeRow[] }).changes.filter((c) => c.actor === account.userId)
+    expect(mine.length, 'one staff change').toBe(before.mine + 1)
+    expect(mine[0], 'the newest staff change is the export').toMatchObject({ event: BUNDLE_EXPORTED, tenant_id: PERSONAS.A.tenantId, payload: { entity_id: entityA.id } })
+
+    const support = await getAuditLog(customer, query)
+    expect(support.total, 'one support row for the company').toBe(companyBefore + 1)
+    expect((await auditCounts()).support, 'one support row in the tenant log').toBe(before.support + 1)
+    const row = support.events[0]
+    expect(row.entity_id, 'the row names the company').toBe(entityA.id)
+    expect((row.payload as { files: number }).files, 'files is the zip entries minus the manifest').toBe(Object.keys(zip).length - 1)
+    for (const e of (await getAuditLog(customer, { from: START })).events) {
+      expect(JSON.stringify(e.payload), 'no tenant payload holds the staff user id').not.toContain(account.userId)
+    }
   })
 
   test('a customer token is refused on every staff audit path', async () => {
     const paths = [STAFF_AUDIT, STAFF_CHANGES, `${tenantPath(PERSONAS.A.tenantId)}/entities`, `${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle/preview?${bundleQuery(entityA.id)}`, `${tenantPath(PERSONAS.A.tenantId)}/evidence-bundle?${bundleQuery(entityA.id)}`]
+    const before = (await getAuditLog(customer, { event: [BUNDLE_EXPORTED] })).total
     for (const path of paths) {
       const res = await rawFetch(path, { headers: bearer(customer) })
       assertErrorEnvelope(res, 403, `customer ${path}`)
       expect(res.body, `customer ${path}`).toEqual({ error: 'forbidden' })
     }
+    expect((await getAuditLog(customer, { event: [BUNDLE_EXPORTED] })).total, 'a refused download writes no bundle row').toBe(before)
   })
 })

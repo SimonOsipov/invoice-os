@@ -1,4 +1,4 @@
-# Production on Google Cloud (GKE-09): build each image once, migrate, start new revisions at 0 %,
+# Production on Google Cloud (GKE-09): each run builds every image and deploys the digest it pushed, migrate, start new revisions at 0 %,
 # check them from inside the production network, then move traffic. A failed step leaves traffic on
 # the previous revisions. Workload Identity admits only a run on main (invoice-os-infra deployers.tf).
 # Rollback: rollback-prod.yml.
@@ -75,7 +75,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: bash scripts/ci/await-ci.sh "${{ steps.sha.outputs.sha }}"
 
-  # One image per service and commit. A re-run or a dispatch of a built commit reuses the image.
+  # Every run builds each image and pushes it untagged; later jobs deploy the digest that push recorded.
   build:
     name: Build ${{ matrix.image }}
     needs: [await-ci]
@@ -110,28 +110,28 @@ jobs:
           - { image: support-console, dockerfile: frontend/support-console/Dockerfile, spa: true }
     env:
       SHA: ${{ needs.await-ci.outputs.sha }}
-      IMAGE: africa-south1-docker.pkg.dev/ascomply-preview/images/${{ matrix.image }}:${{ needs.await-ci.outputs.sha }}
+      IMAGE_NAME: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.await-ci.outputs.sha }}
+      # A dispatch of an older commit still gets the script; the build context stays that commit.
+      - name: Take prod-image.sh from this workflow's commit
+        run: |
+          git fetch --no-tags --depth 1 origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:scripts/ci/prod-image.sh" >"$RUNNER_TEMP/prod-image.sh"
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
+      # buildx sends the client's credential helper to the builder.
       - run: gcloud auth configure-docker africa-south1-docker.pkg.dev --quiet
-      - id: exists
-        run: |
-          if gcloud artifacts docker images describe "$IMAGE" --quiet >/dev/null 2>&1; then
-            echo "built=true" >>"$GITHUB_OUTPUT"
-            echo "$IMAGE exists; not rebuilt."
-          fi
+      - name: Keep the serving and rollback images within the cleanup limit
+        run: bash "$RUNNER_TEMP/prod-image.sh" pin "$IMAGE_NAME"
       - name: Stamp the build sha into the image
-        if: steps.exists.outputs.built != 'true'
         run: sh scripts/ci/stamp-build-sha.sh "$SHA"
       # Vite bakes VITE_* in at build time; these are production's public values.
       - name: Build and push
-        if: steps.exists.outputs.built != 'true'
         env:
           SERVICE: ${{ matrix.service }}
           SPA: ${{ matrix.spa }}
@@ -160,8 +160,14 @@ jobs:
               --build-arg VITE_SENTRY_DSN=https://ec0e762d84725a6c2f7d6a167373607e@o4512131304980480.ingest.de.sentry.io/4512190354554960
             )
           fi
-          docker build -f "$DOCKERFILE" "${args[@]}" -t "$IMAGE" .
-          docker push "$IMAGE"
+          bash "$RUNNER_TEMP/prod-image.sh" push digests "$IMAGE_NAME" -f "$DOCKERFILE" "${args[@]}" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image }}
+          path: digests/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   # Migrations are expand-only, so the old revisions keep working on the migrated schema.
   migrate:
@@ -175,16 +181,27 @@ jobs:
     env:
       SHA: ${{ needs.await-ci.outputs.sha }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
       - name: Point the jobs at this commit
         run: |
+          # Both references resolve before the first gcloud call.
+          migrate=$(bash scripts/ci/prod-image.sh ref digests migrate)
+          check=$(bash scripts/ci/prod-image.sh ref digests deploycheck)
           for job in migrate migrate-bootstrap; do
-            gcloud run jobs update "$job" --image "$REGISTRY/migrate:$SHA" --project "$PROJECT" --region "$REGION" --quiet
+            echo "gcloud run jobs update $job --image $migrate"
+            gcloud run jobs update "$job" --image "$migrate" --project "$PROJECT" --region "$REGION" --quiet
           done
-          gcloud run jobs update deploy-check --image "$REGISTRY/deploycheck:$SHA" --project "$PROJECT" --region "$REGION" --quiet
+          echo "gcloud run jobs update deploy-check --image $check"
+          gcloud run jobs update deploy-check --image "$check" --project "$PROJECT" --region "$REGION" --quiet
       - name: Run the migrate job
         run: gcloud run jobs execute migrate --wait --project "$PROJECT" --region "$REGION" --quiet
 
@@ -201,6 +218,11 @@ jobs:
       TAG: ${{ needs.await-ci.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -216,15 +238,34 @@ jobs:
         # instance starts with a CPU boost. Seventeen at once exceeded it.
         run: |
           failed=0
-          # shellcheck disable=SC2016 # the child sh expands the job's env
-          printf '%s\n' gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
+          # Every digest resolves before the first deploy.
+          if ! printf '%s\n' gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
             app landing library blog check ops-console support-console |
-            xargs -P 4 -I{} sh -c 'gcloud run deploy {} --image "$REGISTRY/{}:$SHA" --no-traffic --tag "$TAG" \
-              --project "$PROJECT" --region "$REGION" --quiet >"deploy-{}.log" 2>&1' || failed=1
+            xargs bash scripts/ci/prod-image.sh refs digests >refs.txt; then
+            echo "::error::a service has no valid digest from this run; no revision started."
+            exit 1
+          fi
+          while read -r svc ref; do echo "gcloud run deploy $svc --image $ref"; done < refs.txt
+          # shellcheck disable=SC2016 # the child sh expands the job's env
+          xargs -P 4 -n 2 sh -c 'gcloud run deploy "$0" --image "$1" --update-labels "commit=$SHA" --no-traffic --tag "$TAG" \
+            --project "$PROJECT" --region "$REGION" --quiet >"deploy-$0.log" 2>&1' < refs.txt || failed=1
           for log in deploy-*.log; do echo "--- $log"; cat "$log"; done
           if [ "$failed" != 0 ]; then
             echo "::error::a revision did not deploy; traffic stays on the previous revisions."
             exit 1
+          fi
+      - name: Check the commit label the nightly reads
+        # Advisory: a missing label only blanks the nightly's auth build.
+        run: |
+          retry() { for n in 1 2 3; do "$@" && return 0; if [ "$n" -lt 3 ]; then sleep 20; fi; done; return 1; }
+          label=
+          if svc=$(retry gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format json); then
+            label=$(jq -r '.spec.template.metadata.labels.commit // ""' <<<"$svc") || label=
+          fi
+          if [ "$label" != "$SHA" ]; then
+            echo "::error::auth's template carries commit label '$label', not $SHA; the nightly will report auth=none." >&2
+          else
+            echo "auth's template carries commit label $SHA"
           fi
 
   # The new revisions are reachable only inside the production network, through their tag.

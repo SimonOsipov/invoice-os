@@ -1,5 +1,5 @@
 // staff_db_test.go: the staff evidence bundle against a real Postgres. Fixtures are committed (the stores open
-// their own transactions) and purged by mustCommitFixture; the tests write no audit_log row.
+// their own transactions) and purged by mustCommitFixture; a download writes audit rows, which rig.plant purges.
 package archive
 
 import (
@@ -457,20 +457,15 @@ func TestRLS_StaffBundleOverTheCapRefusesBeforeTheFirstByte(t *testing.T) {
 	}
 }
 
-func TestRLS_StaffBundleRunsReadOnlyAndWritesNoAuditRow(t *testing.T) {
+func TestRLS_StaffBundleReadsReadOnlyAndOnlyTheDownloadIsAudited(t *testing.T) {
 	r := newStaffRig(t)
-	fx := plantBundleTenant(t, r.super, "readonly", "INV-STAFF-RO", 2)
-	var start time.Time
-	if err := r.super.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&start); err != nil {
-		t.Fatalf("read the clock: %v", err)
-	}
+	fx := r.plant(t, "readonly", 2)
 
-	calls := map[string]func() error{
+	reads := map[string]func() error{
 		"StaffEntities": func() error { _, err := r.store.StaffEntities(r.ctx, fx.tenant); return err },
 		"StaffPreview":  func() error { _, err := r.store.StaffPreview(r.ctx, fx.tenant, fx.req); return err },
-		"StaffAssemble": func() error { return r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, io.Discard, nil) },
 	}
-	for name, call := range calls {
+	for name, call := range reads {
 		t.Run(name, func(t *testing.T) {
 			r.rec.reset()
 			if err := call(); err != nil {
@@ -494,18 +489,46 @@ func TestRLS_StaffBundleRunsReadOnlyAndWritesNoAuditRow(t *testing.T) {
 			}
 		})
 	}
+	requireCounts(t, r.counts(t, fx.tenant), bundleCounts{})
 
-	ctx := context.Background()
-	var staffRows, tenantRows int
-	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM staff_audit_log WHERE actor::text = $1`, r.staff).Scan(&staffRows); err != nil {
-		t.Fatalf("count staff_audit_log: %v", err)
-	}
-	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND created_at >= $2`, fx.tenant, start).Scan(&tenantRows); err != nil {
-		t.Fatalf("count audit_log: %v", err)
-	}
-	if staffRows != 0 || tenantRows != 0 {
-		t.Errorf("reads wrote %d staff_audit_log row(s) and %d audit_log row(s), want none", staffRows, tenantRows)
-	}
+	t.Run("StaffAssemble", func(t *testing.T) {
+		r.rec.reset()
+		if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, io.Discard, nil); err != nil {
+			t.Fatalf("StaffAssemble: %v", err)
+		}
+		var stmts []string
+		for _, s := range r.rec.statements() {
+			stmts = append(stmts, strings.ToLower(s))
+		}
+		readOnly := slices.Index(stmts, "begin isolation level repeatable read read only")
+		if readOnly < 0 {
+			t.Fatalf("no READ ONLY begin: %q", stmts)
+		}
+		audited := slices.Index(stmts[readOnly+1:], "begin")
+		if audited < 0 {
+			t.Fatalf("no plain begin after the READ ONLY transaction: %q", stmts)
+		}
+		audited += readOnly + 1
+		var inserts []string
+		for i, s := range stmts {
+			if !strings.HasPrefix(s, "insert into") {
+				continue
+			}
+			if i < audited {
+				t.Errorf("INSERT before the audit transaction began: %q", s)
+			} else if slices.Contains(stmts[audited+1:i], "begin") {
+				t.Errorf("INSERT %q is not in the one audit transaction", s)
+			}
+			inserts = append(inserts, s)
+		}
+		if len(inserts) != 2 || !strings.Contains(inserts[0], "staff_audit_log") || !strings.Contains(inserts[1], "audit_log") || strings.Contains(inserts[1], "staff_audit_log") {
+			t.Errorf("INSERTs = %q, want the staff_audit_log row, then the audit_log row", inserts)
+		}
+		if !r.rec.setConfigAfterReadOnlyBegin() {
+			t.Errorf("StaffAssemble set the tenant before beginning the READ ONLY transaction (or never): %q", stmts)
+		}
+		requireCounts(t, r.counts(t, fx.tenant), r.route("staff", fx).expect(1, 0))
+	})
 }
 
 // statements is a copy of the recorded SQL in order.

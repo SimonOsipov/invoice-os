@@ -1,0 +1,17 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Revision",
+  "metadata": {
+    "name": "gateway-00380-mac"
+  },
+  "spec": {
+    "containers": [
+      {
+        "image": "africa-south1-docker.pkg.dev/ascomply-preview/images/gateway@sha256:badb4dd2b82735e97c055975259c271988394829a8e71f2facac0ea843239f0c"
+      }
+    ]
+  },
+  "status": {
+    "imageDigest": "africa-south1-docker.pkg.dev/ascomply-preview/images/gateway@sha256:badb4dd2b82735e97c055975259c271988394829a8e71f2facac0ea843239f0c"
+  }
+}

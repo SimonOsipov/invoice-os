@@ -27,14 +27,16 @@
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
 #   preview.sh cap <pr|nightly>           print open=<other PR previews> and full=true|false (a new PR is full at 2, the nightly at 3)
-#   preview.sh invariants                 fail when preview holds a production secret or reaches prod
+#   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
 
 PROJECT=ascomply-preview
 PROJECT_NUMBER=944095690109
 REGION=africa-south1
-REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/images/pr
+REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/previews
+# The repository deploy-prod.yml deploys from; preview must not write to it.
+PROD_IMAGES=images
 RUNTIME=run-preview@ascomply-preview.iam.gserviceaccount.com
 LABEL=preview-pr
 gc=(--project "$PROJECT" --region "$REGION" --quiet)
@@ -588,7 +590,7 @@ cmd_budget() {
 
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 names envs held token code
+  local bad=0 names envs held token code perms
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
     echo "::error::ascomply-preview holds an OpenRouter or Sentry secret (listed above); only nightly-openrouter-api-key is allowed."
@@ -619,6 +621,20 @@ cmd_invariants() {
     echo "::error::the preview deployer holds $held in ascomply-prod."
     bad=1
   fi
+  # Same check on the production image repository: no write permission.
+  perms='"artifactregistry.repositories.uploadArtifacts","artifactregistry.tags.create","artifactregistry.tags.update","artifactregistry.tags.delete","artifactregistry.versions.delete","artifactregistry.repositories.deleteArtifacts"'
+  code=$(curl -sS -o "$RUNNER_TEMP/images-held.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    -d "{\"permissions\":[$perms]}" \
+    "https://artifactregistry.googleapis.com/v1/projects/$PROJECT/locations/$REGION/repositories/$PROD_IMAGES:testIamPermissions")
+  case "$code" in
+    200) held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/images-held.json") ;;
+    *) die "testIamPermissions on $PROD_IMAGES answered HTTP $code" ;;
+  esac
+  if [ -n "$held" ]; then
+    echo "::error::the preview deployer can write production images: $held on $PROD_IMAGES."
+    bad=1
+  fi
   # A deploy trigger outside GitHub Actions needs Cloud Build or Cloud Deploy.
   if gcloud services list --project "$PROJECT" --enabled --format 'value(config.name)' |
     grep -Ex 'cloudbuild.googleapis.com|clouddeploy.googleapis.com'; then
@@ -626,7 +642,7 @@ cmd_invariants() {
     bad=1
   fi
   [ "$bad" = 0 ] || exit 1
-  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no deploy trigger outside GitHub Actions."
+  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no deploy trigger outside GitHub Actions."
 }
 
 case "${1:-}" in

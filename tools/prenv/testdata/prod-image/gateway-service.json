@@ -1,0 +1,54 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "gateway",
+    "labels": {
+      "cloud.googleapis.com/location": "africa-south1",
+      "goog-terraform-provisioned": "true",
+      "run.googleapis.com/satisfiesPzs": "true"
+    }
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "labels": {
+          "run.googleapis.com/startupProbeType": "Default"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "image": "africa-south1-docker.pkg.dev/ascomply-preview/images/gateway:9ad5fad6fe39dd9859a095811ce529a875e3f7e0"
+          }
+        ]
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      },
+      {
+        "revisionName": "gateway-00380-mac",
+        "tag": "rollback"
+      }
+    ]
+  },
+  "status": {
+    "latestCreatedRevisionName": "gateway-00383-biy",
+    "latestReadyRevisionName": "gateway-00383-biy",
+    "traffic": [
+      {
+        "revisionName": "gateway-00380-mac",
+        "tag": "rollback",
+        "url": "https://rollback---gateway-yorh2qs5vq-bq.a.run.app"
+      },
+      {
+        "latestRevision": true,
+        "percent": 100,
+        "revisionName": "gateway-00383-biy"
+      }
+    ]
+  }
+}

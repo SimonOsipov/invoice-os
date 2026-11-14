@@ -58,6 +58,8 @@ var (
 		"custom_rule.updated",
 		"custom_rule.deleted",
 		"invoice_register.exported",
+		"evidence_bundle.exported",
+		"evidence_bundle.export_failed",
 	}
 )
 

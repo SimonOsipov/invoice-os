@@ -61,9 +61,12 @@ func TestReadyzFailing(t *testing.T) {
 func newHealthApp(t *testing.T, service string) *App {
 	t.Helper()
 	t.Setenv("SENTRY_DSN", "")
-	prevLog, prevMock, prevIssuers := slog.Default(), MockIssuer, AuthIssuers
-	t.Cleanup(func() { slog.SetDefault(prevLog); MockIssuer, AuthIssuers = prevMock, prevIssuers })
-	MockIssuer, AuthIssuers = "absent", "1"
+	prevLog, prevMock, prevIssuers, prevContacts := slog.Default(), MockIssuer, AuthIssuers, Contacts
+	t.Cleanup(func() {
+		slog.SetDefault(prevLog)
+		MockIssuer, AuthIssuers, Contacts = prevMock, prevIssuers, prevContacts
+	})
+	MockIssuer, AuthIssuers, Contacts = "absent", "1", "fake"
 	app, err := New(service)
 	if err != nil {
 		t.Fatal(err)
@@ -107,14 +110,11 @@ func requireFullDetail(t *testing.T, what string, code int, body map[string]stri
 	if BuildSHA == "" {
 		t.Fatal("BuildSHA is empty; the build assertion would be vacuous")
 	}
-	want := map[string]string{"status": "ok", "build": BuildSHA, "mock_issuer": "absent", "auth_issuers": "1"}
+	want := map[string]string{"status": "ok", "build": BuildSHA, "mock_issuer": "absent", "auth_issuers": "1", "contacts": "fake", "sentry": SentryState()}
 	for k, v := range want {
 		if body[k] != v {
 			t.Errorf("%s: %s = %q, want %q", what, k, body[k], v)
 		}
-	}
-	if body["sentry"] == "" {
-		t.Errorf("%s: sentry is empty, want on or off", what)
 	}
 }
 
@@ -127,6 +127,11 @@ func TestHideHealthDetail_AnonymousCallerReadsStatusOnly(t *testing.T) {
 		if len(body) != 1 || body["status"] != "ok" {
 			t.Errorf("anonymous GET %s: keys = %v, want only status=ok", path, body)
 		}
+		for _, k := range []string{"build", "mock_issuer", "auth_issuers", "sentry", "contacts"} {
+			if _, present := body[k]; present {
+				t.Errorf("anonymous GET %s: key %q is present, want it absent", path, k)
+			}
+		}
 	}
 }
 
@@ -134,7 +139,7 @@ func TestHideHealthDetail_AnonymousCallerReadsStatusOnly(t *testing.T) {
 func TestHideHealthDetail_WrongTokenReadsStatusOnly(t *testing.T) {
 	app := newHealthApp(t, "gateway")
 	app.HideHealthDetail("tok")
-	wrong := []string{"tokx", "to", "TOK", ""}
+	wrong := []string{"tokx", "xtok", "to", "TOK", "tak", ""}
 	if len(wrong) == 0 {
 		t.Fatal("no wrong tokens to try")
 	}

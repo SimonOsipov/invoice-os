@@ -1087,8 +1087,21 @@ func TestDevEnvNightly_HealthGateHasNoModeBranch(t *testing.T) {
 			t.Errorf("health gate lacks %q", w)
 		}
 	}
-	if _, ok := nlStep(hg, "Read the PR's gateway token"); !ok {
-		t.Error("health-gate has no step that reads the PR's gateway token")
+	tok, ok := nlStep(hg, "Read the PR's gateway token")
+	if !ok {
+		t.Fatal("health-gate has no step that reads the PR's gateway token")
+	}
+	if tok.index >= s.index {
+		t.Error("health-gate reads the token after the wait step")
+	}
+	for _, w := range []string{`preview.sh token "$PR"`, `GATEWAY_TOKEN=`, `>>"$GITHUB_ENV"`} {
+		if !strings.Contains(tok.keys["run"], w) {
+			t.Errorf("health-gate token step lacks %q", w)
+		}
+	}
+	// The token read needs a Google login and the OIDC permission; only a deployed run observes their loss.
+	if joined := strings.Join(hg.lines, "\n"); !strings.Contains(joined, "id-token: write") || !strings.Contains(joined, "uses: google-github-actions/auth@") {
+		t.Error("health-gate lacks id-token: write or the Google auth step")
 	}
 	if strings.Contains(strings.Join(hg.lines, "\n"), "nightly") {
 		t.Error("health-gate names the nightly mode")

@@ -147,7 +147,9 @@ func TestRun_GatewayWithoutTheTokenFails(t *testing.T) {
 	t.Parallel()
 	c := fleet(t, "abc", nil)
 	c.gatewayToken = "wrong"
-	failed := runFor(c, 200*time.Millisecond)
+	// A long interval keeps the deadline out of an in-flight request, whose error would replace the build message.
+	c.interval = 100 * time.Millisecond
+	failed := runFor(c, 250*time.Millisecond)
 	if len(failed) != 1 || !strings.HasPrefix(failed[0], "gateway:") || !strings.Contains(failed[0], `build ""`) {
 		t.Fatalf("failed = %v, want only the gateway, naming build \"\"", failed)
 	}
@@ -208,7 +210,9 @@ func TestDeployCheck_FatalsWithoutGatewayToken(t *testing.T) {
 		deployCheck(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 		os.Exit(0)
 	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDeployCheck_FatalsWithoutGatewayToken$", "-test.count=1")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDeployCheck_FatalsWithoutGatewayToken$", "-test.count=1")
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "GATEWAY_TOKEN=") }),
 		fatalChildEnv+"=1", "RUN_HOST_SUFFIX=1.africa-south1.run.app")
 	out, err := cmd.CombinedOutput()

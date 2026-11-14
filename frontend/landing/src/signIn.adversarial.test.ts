@@ -14,7 +14,7 @@ afterEach(() => {
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 const INCORRECT = 'Email or password is incorrect.'
 const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
-const THROTTLED = 'Too many attempts. Try again in a minute.'
+const THROTTLED = 'Too many attempts. Try again later.'
 const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 
 const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })

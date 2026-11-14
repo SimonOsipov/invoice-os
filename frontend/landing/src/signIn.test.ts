@@ -192,7 +192,7 @@ describe('signInErrorMessage', () => {
     // Copy, verbatim.
     const INCORRECT = 'Email or password is incorrect.' // 401
     const UNVERIFIED = 'Verify your email address first. The link is in your inbox.' // 403
-    const THROTTLED = 'Too many attempts. Try again in a minute.' // 429
+    const THROTTLED = 'Too many attempts. Try again later.' // 429
     const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.' // anything else
 
     const cases: [string, unknown, string][] = [

@@ -12,7 +12,7 @@ import { argosOn, shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { brandMarkProblems, readBrandMark, ringProblems, ringWidth } from './brandMark'
-import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { scopeStrays } from './metricsScope'
 import { nightlyTarget } from '../targets'
 
@@ -3107,7 +3107,10 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
   for (const [label, key] of PREVIEW_CELLS) await expect(metaValue(drawer, label), `${label} cell`).toHaveText(String(live.counts[key]))
 
   const download = drawer.getByRole('button', { name: 'Download bundle' })
-  await expect(download).toBeEnabled()
+  const reasonBox = drawer.getByRole('textbox', { name: 'Reason' })
+  await expect(download, 'Download waits for a reason').toBeDisabled()
+  await reasonBox.fill('SUP-09 e2e evidence download')
+  await expect(download, 'a reason enables Download').toBeEnabled()
   await atWidths(page, 'SUP-09 evidence drawer layout', async () => {
     const body = kid(drawer, 2)
     const r = await boxes(page, {
@@ -3117,6 +3120,7 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
       from: drawer.getByLabel('From', { exact: true }),
       to: drawer.getByLabel('To', { exact: true }),
       meta: kid(body, 4),
+      reason: reasonBox,
       footer: kid(drawer, 3),
       download,
     })
@@ -3129,6 +3133,9 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
         ...fields.flatMap((f, i) => within(r.drawer, f, `evidence field ${i} in the drawer`)),
         ...pairwiseApart(cells, 'meta cell'),
         ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...within(r.drawer, r.reason, 'Reason field in the drawer'),
+        ...apart(r.meta, r.reason, 'preview grid / Reason'),
+        ...fields.flatMap((f, i) => apart(f, r.reason, `evidence field ${i} / Reason`)),
         ...within(r.drawer, r.footer, 'footer in the drawer'),
         ...within(r.footer, r.download, 'Download bundle in the footer'),
       ],
@@ -3136,6 +3143,17 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
     }
   })
   await attachShot(page, testInfo, 'evidence-drawer')
+  // Phone widths scroll the body: the Reason field is held sideways only, and apart from its siblings.
+  await atWidths(
+    page,
+    'SUP-09 evidence drawer Reason at phone widths',
+    async () => {
+      const r = await boxes(page, { drawer, meta: kid(kid(drawer, 2), 4), reason: reasonBox })
+      return { problems: [...withinX(r.drawer, r.reason, 'Reason field in the drawer'), ...apart(r.meta, r.reason, 'preview grid / Reason')], rects: r }
+    },
+    10_000,
+    PHONE_WIDTHS,
+  )
 
   const [file] = await Promise.all([page.waitForEvent('download'), download.click()])
   expect(file.suggestedFilename(), 'download filename').toMatch(/^ASComply_evidence_.+\.zip$/)

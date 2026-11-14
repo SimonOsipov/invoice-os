@@ -96,15 +96,14 @@ for (const t of TARGETS) {
     })
 
     await openWithHandoff(page, t.target, staffAccount)
+    // Control needle, fired on the target document (the landing has no connect-src): a blocked connect-src must reach the listener, or an empty list proves nothing.
+    await page.evaluate((host) => fetch(`https://${host}/`).catch(() => {}), CONTROL_HOST)
+    await expect.poll(() => reports.some((r) => r.effectiveDirective.startsWith('connect-src') && r.blockedURI.includes(CONTROL_HOST))).toBe(true)
     if (t.name === 'app') {
       // Runs the hashed inline hop in index.html, which lands on the landing with signin=ready.
       await page.goto(`${origin}/?auth=start`)
       await page.waitForURL((u) => u.toString().startsWith(resolveTarget('LANDING_URL')) && u.searchParams.get('signin') === 'ready')
     }
-
-    // Control needle: a blocked connect-src must reach the listener, or an empty list proves nothing.
-    await page.evaluate((host) => fetch(`https://${host}/`).catch(() => {}), CONTROL_HOST)
-    await expect.poll(() => reports.some((r) => r.effectiveDirective.startsWith('connect-src') && r.blockedURI.includes(CONTROL_HOST))).toBe(true)
 
     const isControl = (r: Report) => r.blockedURI.includes(CONTROL_HOST)
     expect(reports.filter((r) => !isControl(r))).toEqual([])

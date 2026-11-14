@@ -100,7 +100,7 @@ func TestRLS_GatewayThrottle_AResetOnOneInstanceClearsTheOther(t *testing.T) {
 	requireSharedStateTables(t, d)
 	addr := ownAddress(t, d)
 	a, b := instance("sign-in", SignInMaxFailures, d.a), instance("sign-in", SignInMaxFailures, d.b)
-	// Sign-in counts under the typed spelling, reset clears under GoTrue's; neither is pre-folded.
+	// Count and Reset under two unfolded spellings: the shared key must fold both.
 	taken := "  " + strings.ToUpper(addr) + "\t"
 	cleared := " " + strings.ToUpper(addr[:1]) + addr[1:] + " "
 	reserveSplit(t, a, b, taken)

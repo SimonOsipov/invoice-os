@@ -1006,7 +1006,7 @@ func TestRLS_DocumentBindingMigrationBackfillsAndRoundTrips(t *testing.T) {
 			tenant, actor, event, docID, at)
 	}
 	audit("document.created", both, "system", t0.Add(-time.Hour))
-	audit("document.created", both, u1, t0)
+	audit("document.created", both, u1, t1.Add(time.Hour)) // after both citations: only the created arm counts it
 	audit("document.reused", both, u2, t1) // after B's batch at t0: not an uploader
 	audit("document.created", aOnly, "system", t0)
 

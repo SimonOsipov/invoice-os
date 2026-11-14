@@ -513,8 +513,8 @@ func TestRLS_WorkspaceManifestChecksEveryEntry(t *testing.T) {
 	if rows := parseCSV(t, body["audit_log.csv"]); len(rows)-1 != auditBefore {
 		t.Errorf("audit_log.csv holds %d data rows, want %d", len(rows)-1, auditBefore)
 	}
-	if len(m.Notes) == 0 {
-		t.Error("manifest has no notes")
+	if !slices.Contains(m.Notes, bundleCellNote) {
+		t.Errorf("manifest notes %v lack the leading-quote note", m.Notes)
 	}
 }
 

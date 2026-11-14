@@ -3468,3 +3468,21 @@ describe('isUnvalidatedDraft (ENGI-14-05): an entry with an invoice id and no ru
     expect(unvalidatedDraftNotice(2)).toBe('2 invoices were created as drafts but not checked, because the rules changed during the import. Validate them again.')
   })
 })
+
+describe('review CSVs neutralise formula cells', () => {
+  it('unreadableCsvAll_neutralisesAFormulaFileName', () => {
+    const r = { file: '=HYPERLINK("https://example.test","x")', row: 3, column: 'c', message: 'm', documentId: null }
+    const line = unreadableCsvAll([r], 'spreadsheet').split('\n')[1]
+    expect(line.startsWith(`"'=HYPERLINK(""https://example.test"",""x"")",3,`)).toBe(true)
+  })
+
+  it('unreadableCsv_neutralisesAFormulaMessage', () => {
+    const line = unreadableCsv([{ row: 3, column: 'c', message: '-1+1' }], 'document').split('\n')[1]
+    expect(line.endsWith(",'-1+1")).toBe(true)
+  })
+
+  it('alreadyImportedCsvAll_neutralisesAFormulaFileName', () => {
+    const line = alreadyImportedCsvAll([{ file: '@x', row: null, invoiceId: null }], 'document').split('\n')[1]
+    expect(line).toBe("'@x,")
+  })
+})

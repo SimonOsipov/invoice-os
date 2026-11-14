@@ -98,7 +98,7 @@ func main() {
 	}
 	app.Mux.Handle("GET /emails/recovery.html", recoveryMail)
 	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
-	verifyPage, err := gateway.VerifyPageHandler(siteURL)
+	verifyPage, err := gateway.VerifyPageHandler(siteURL, nil, nil, false, app.Logger)
 	if err != nil {
 		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
 	}
@@ -413,7 +413,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
 
-		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events, perIP, enforce),
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, perIP, enforce, nil),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,

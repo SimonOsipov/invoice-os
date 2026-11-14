@@ -806,17 +806,6 @@ export function createdAcceptedDetailIsAdminOrSelf(
   )
 }
 
-// A first-session mint is marked, and the mover records its device and stops before the membership lookup.
-export function firstSessionIsNotASignInRow(
-  gw: string = gatewaySource(),
-  mover: string = readSource('internal/accountevents/mover.go'),
-): boolean {
-  const marked = gw.match(/AccountEvent\{Event: EventSignedIn,[^}]*FirstSession: true\}/g) ?? []
-  const fn = found(/func MoveHandoffs\b[\s\S]*$/.exec(mover)?.[0], 'MoveHandoffs')
-  const block = found(/if h\.firstSession \{([\s\S]*?)account_event_memberships\(/.exec(fn)?.[1], 'the first-session block')
-  return marked.length === 1 && /INSERT INTO account_known_devices[\s\S]*\bcontinue\b/.test(block)
-}
-
 // Column names of the CREATE TABLE in migrations/*_readiness_checks.sql, in order.
 export function readinessCheckColumns(): string[] {
   const dir = join(REPO, 'migrations')

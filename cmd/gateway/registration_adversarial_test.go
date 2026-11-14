@@ -242,7 +242,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 // verifyMux mounts main's GET /auth/verify over the real handler; POST /auth/verify is no route.
 func verifyMux(t *testing.T, site *url.URL) *http.ServeMux {
 	t.Helper()
-	page, err := gateway.VerifyPageHandler(site)
+	page, err := gateway.VerifyPageHandler(site, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("VerifyPageHandler: %v", err)
 	}

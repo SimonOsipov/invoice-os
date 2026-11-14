@@ -220,9 +220,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		if !ok || types.ExprString(call.Fun) != "gateway.VerifyPageHandler" {
 			continue
 		}
-		if len(call.Args) != 1 || types.ExprString(call.Args[0]) != "siteURL" {
-			t.Errorf("gateway.VerifyPageHandler args = %v, want siteURL", call.Args)
-		}
+		// Its arguments are pinned by TestGatewayRoutes_TheVerifyPageAndSetPasswordGetThePoolLookup.
 		page = types.ExprString(as.Lhs[0])
 		if i+1 < len(stmts) {
 			if is, ok := stmts[i+1].(*ast.IfStmt); ok && types.ExprString(is.Cond) == "err != nil" {
@@ -236,7 +234,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		}
 	}
 	if page != "verifyPage" {
-		t.Fatalf("main has no top-level `verifyPage, err := gateway.VerifyPageHandler(siteURL)` (found %q)", page)
+		t.Fatalf("main has no top-level `verifyPage, err := gateway.VerifyPageHandler(...)` (found %q)", page)
 	}
 	if !fatalOnErr {
 		t.Error("a VerifyPageHandler error does not reach platform.Fatal in the statement after it")
@@ -304,7 +302,7 @@ func TestGatewayRoutes_PostVerifyIsNoRoute(t *testing.T) {
 
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	page, err := gateway.VerifyPageHandler(site)
+	page, err := gateway.VerifyPageHandler(site, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("VerifyPageHandler: %v", err)
 	}
@@ -1050,5 +1048,79 @@ func TestRegistrationHandlers_ForwardOnlyOnAnEphemeralPosture(t *testing.T) {
 				t.Errorf("GET /settings calls = %d, want %d", settingsCalls, want)
 			}
 		})
+	}
+}
+
+// main cannot run in a test, so the lookup wiring is read from source.
+func TestGatewayRoutes_TheVerifyPageAndSetPasswordGetThePoolLookup(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, stmts := mainRoutes(t, src)
+	// Control needle: the route this test is about is registered.
+	if got := sitesFor(sites, "GET /auth/verify"); len(got) != 1 {
+		t.Fatalf("control: GET /auth/verify is registered %d times, want once", len(got))
+	}
+
+	hand, handAt, verifyAt := "", -1, -1
+	var verifyArgs []ast.Expr
+	for i, s := range stmts {
+		as, ok := s.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		switch types.ExprString(call.Fun) {
+		case "handoffHandlers":
+			hand, handAt = types.ExprString(as.Lhs[0]), i
+		case "gateway.VerifyPageHandler":
+			verifyAt, verifyArgs = i, call.Args
+		}
+	}
+	if hand == "" || verifyAt < 0 {
+		t.Fatalf("main lacks a top-level handoffHandlers (%q) or gateway.VerifyPageHandler (at %d) assignment", hand, verifyAt)
+	}
+	if verifyAt < handAt {
+		t.Errorf("VerifyPageHandler is built before handoffHandlers: it has no h.LinkRedeemByIP to share")
+	}
+	var got []string
+	for _, a := range verifyArgs {
+		got = append(got, types.ExprString(a))
+	}
+	if len(got) != 5 || got[0] != "siteURL" || got[1] != "gateway.PoolLinkAddress(gwPool)" || got[2] != hand+".LinkRedeemByIP" || got[4] != "app.Logger" {
+		t.Errorf("VerifyPageHandler args = %v, want siteURL, gateway.PoolLinkAddress(gwPool), %s.LinkRedeemByIP, <enforce>, app.Logger", got, hand)
+	}
+
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var args []ast.Expr
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "handoffHandlers" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok && types.ExprString(c.Fun) == "gateway.InvitationPasswordHandler" {
+				args = c.Args
+			}
+			return true
+		})
+	}
+	if len(args) != 10 {
+		t.Fatalf("handoffHandlers calls InvitationPasswordHandler with %d arguments, want 10 (no store, no events, the lookup last)", len(args))
+	}
+	if last := types.ExprString(args[9]); last != "gateway.PoolLinkAddress(pool)" {
+		t.Errorf("InvitationPasswordHandler lookup = %s, want gateway.PoolLinkAddress(pool)", last)
+	}
+	for _, a := range args {
+		if s := types.ExprString(a); s == "store" || s == "events" {
+			t.Errorf("InvitationPasswordHandler still takes %s", s)
+		}
 	}
 }

@@ -132,7 +132,7 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 	}{
 		{"reset", ResetPasswordHandler(f.URL, site, testClient(), sessions, throttle(), log, nil, lrThrottle(time.Now), true), rpPath, rpFormType, rpValues(rpToken, "recovery", rpPass).Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout"}},
-		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, testHandoffStore(), nil, lrThrottle(time.Now), true), ipPath, rpFormType, withState.Encode(),
+		{"invitee set-password and hand-off", InvitationPasswordHandler(f.URL, site, testClient(), sessions, throttle(), nil, log, lrThrottle(time.Now), true, nil), ipPath, rpFormType, withState.Encode(),
 			[]string{"POST /verify", "PUT /user", "POST /logout", "POST /token"}},
 		{"sign-in", SignInHandler(f.URL, testClient(), testHandoffStore(), throttle(), log, nil, nil), "/auth/sign-in", jsonType, signInBody(regEmail, regPassword, vhState), []string{"POST /token"}},
 		{"refresh", RefreshHandler(f.URL, testClient(), log), "/auth/refresh", jsonType, refreshBody(rpRefresh), []string{"POST /token"}},
@@ -175,7 +175,7 @@ func gaVerifyAddress(t *testing.T, env, xff, remote string) []string {
 	t.Helper()
 	t.Setenv("DEPLOY_ENV", env)
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
-	h := confirmHandler(t, fake.URL, siteURL(t), testClient(), nopLog(), nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+	h := confirmHandler(t, fake.URL, siteURL(t), testClient(), nopLog(), nil, lrThrottle(time.Now), true)
 	req := gaRequest(ipPath, rpFormType, verifyQuery, xff)
 	if remote != "" {
 		req.RemoteAddr = remote
@@ -282,7 +282,7 @@ func TestGoTrueAddress_NoLogHoldsTheAddress(t *testing.T) {
 			var h http.Handler
 			var req *http.Request
 			if c.handler == "verify" {
-				h = confirmHandler(t, f.URL, siteURL(t), testClient(), log, nil, testHandoffStore(), nil, lrThrottle(time.Now), true)
+				h = confirmHandler(t, f.URL, siteURL(t), testClient(), log, nil, lrThrottle(time.Now), true)
 				req = gaRequest(ipPath, rpFormType, verifyQuery, gaXFF)
 			} else {
 				th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)

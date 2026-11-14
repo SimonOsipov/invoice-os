@@ -1,17 +1,24 @@
 package gateway
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/net/html"
 )
 
@@ -26,7 +33,7 @@ const (
 
 func vpHandler(t *testing.T) http.Handler {
 	t.Helper()
-	h, err := VerifyPageHandler(siteURL(t))
+	h, err := VerifyPageHandler(siteURL(t), nil, lrThrottle(time.Now), true, nopLog())
 	if err != nil {
 		t.Fatalf("VerifyPageHandler: %v", err)
 	}
@@ -472,7 +479,7 @@ func TestVerifyPage_RedirectUsesTheSiteWithoutDoubleSlash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := VerifyPageHandler(site)
+	h, err := VerifyPageHandler(site, nil, lrThrottle(time.Now), true, nopLog())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,9 +500,9 @@ func TestVerifyPage_RepeatedTypeFirstValueWins(t *testing.T) {
 }
 
 func TestVerifyPage_NotConfigured503(t *testing.T) {
-	h, err := VerifyPageHandler(nil)
+	h, err := VerifyPageHandler(nil, nil, nil, true, nil)
 	if err != nil || h == nil {
-		t.Fatalf("VerifyPageHandler(nil) = %v, %v; want a handler and nil", h, err)
+		t.Fatalf("VerifyPageHandler(nil, nil, nil, true, nil) = %v, %v; want a handler and nil", h, err)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := vpDo(t, h, method, vpQuery(vpToken))
@@ -897,5 +904,365 @@ func TestVerifyPage_HeadServesNoBody(t *testing.T) {
 	}
 	if got, want := rec.Header().Get("Content-Length"), strconv.Itoa(len(vpSetPasswordPage())); got != want {
 		t.Errorf("Content-Length = %q, want %q (the set-password page's length)", got, want)
+	}
+}
+
+// vpLookup is a LinkAddress fake that records the tokens it is asked about.
+type vpLookup struct {
+	mu     sync.Mutex
+	tokens []string
+	answer func(ctx context.Context, token string) (string, bool, error)
+}
+
+func vpFound(masked string) *vpLookup {
+	return &vpLookup{answer: func(context.Context, string) (string, bool, error) { return masked, true, nil }}
+}
+
+func vpMissing() *vpLookup {
+	return &vpLookup{answer: func(context.Context, string) (string, bool, error) { return "", false, nil }}
+}
+
+func vpFails(err error) *vpLookup {
+	return &vpLookup{answer: func(context.Context, string) (string, bool, error) { return "", false, err }}
+}
+
+func (l *vpLookup) fn() LinkAddress {
+	return func(ctx context.Context, token string) (string, bool, error) {
+		l.mu.Lock()
+		l.tokens = append(l.tokens, token)
+		l.mu.Unlock()
+		return l.answer(ctx, token)
+	}
+}
+
+func (l *vpLookup) calls() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.tokens)
+}
+
+func vpHandlerWith(t *testing.T, address LinkAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+	t.Helper()
+	h, err := VerifyPageHandler(siteURL(t), address, perIP, enforce, log)
+	if err != nil {
+		t.Fatalf("VerifyPageHandler: %v", err)
+	}
+	return h
+}
+
+// vpLimit is the link-redeem throttle with a small limit, in-process.
+func vpLimit(max int) *SignInThrottle {
+	return NewSignInThrottle("link-redeem-ip", max, LinkRedeemMaxKeys, LinkRedeemIPWindow, time.Now)
+}
+
+// vpSpent reports whether the test client's count is used up (a throttle of limit 1 refuses the next Admit).
+func vpSpent(t *testing.T, th *SignInThrottle) bool {
+	t.Helper()
+	held, err := th.Admit(gotrueAddress(httptest.NewRequest(http.MethodGet, vpPath, nil)))
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	return !held
+}
+
+const (
+	vpMasked     = "o***@acme.co.za"
+	vpTodayIntro = "Choose a password for your ASComply account. This also confirms your email address."
+	vpFailedLoc  = siteURLValue + "/?verify=failed"
+)
+
+// vpAddressSpans returns the page's <span class="address"> elements.
+func vpAddressSpans(t *testing.T, body string) []*html.Node {
+	t.Helper()
+	return vpFind(vpParse(t, body), func(n *html.Node) bool {
+		c, _ := vpAttr(n, "class")
+		return n.Data == "span" && c == "address"
+	})
+}
+
+func vpRequireNamed(t *testing.T, rec *httptest.ResponseRecorder, masked string) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d Location %q, want 200", rec.Code, rec.Header().Get("Location"))
+	}
+	spans := vpAddressSpans(t, rec.Body.String())
+	if len(spans) != 1 || vpText(spans[0]) != masked {
+		t.Fatalf("address spans = %d, want one holding %q", len(spans), masked)
+	}
+	intro := vpText(spans[0].Parent)
+	if want := "Choose a password for the ASComply account of " + masked + ". This also confirms the address. Continue only if this is your address."; intro != want {
+		t.Errorf("intro = %q, want %q", intro, want)
+	}
+	body := rec.Body.String()
+	if i, j := strings.Index(body, `<span class="address">`), strings.Index(body, "<form"); i < 0 || j < 0 || i > j {
+		t.Errorf("address span at %d, form at %d; want the span before the form", i, j)
+	}
+}
+
+func TestVerifyPage_AFoundLinkNamesTheMaskedAddressBeforeTheForm(t *testing.T) {
+	l := vpFound(vpMasked)
+
+	rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpQuery(vpToken))
+
+	vpRequireNamed(t, rec, vpMasked)
+	if got := l.calls(); !slices.Equal(got, []string{vpToken}) {
+		t.Errorf("lookup calls = %v, want [%s]", got, vpToken)
+	}
+}
+
+func TestVerifyPage_AFoundInviteLinkNamesTheMaskedAddress(t *testing.T) {
+	l := vpFound(vpMasked)
+
+	rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpInviteQuery(vpToken))
+
+	vpRequireNamed(t, rec, vpMasked)
+}
+
+func TestVerifyPage_HeadWithAFoundLinkAnswersLikeGet(t *testing.T) {
+	h := vpHandlerWith(t, vpFound(vpMasked).fn(), vpLimit(5), true, nopLog())
+
+	get := vpDo(t, h, http.MethodGet, vpQuery(vpToken))
+	head := vpDo(t, h, http.MethodHead, vpQuery(vpToken))
+
+	vpRequireNamed(t, get, vpMasked)
+	if head.Code != get.Code || !headersEqual(head.Header(), get.Header()) {
+		t.Errorf("HEAD = %d %v, GET = %d %v; want the same status and headers", head.Code, head.Header(), get.Code, get.Header())
+	}
+	if head.Body.Len() != 0 {
+		t.Errorf("HEAD body = %q, want empty", head.Body.String())
+	}
+}
+
+func TestVerifyPage_TheLookupGetsTheFirstTokenOnly(t *testing.T) {
+	l := vpFound(vpMasked)
+
+	vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, "token=first&token=second&type=signup&state="+vpState)
+
+	if got := l.calls(); !slices.Equal(got, []string{"first"}) {
+		t.Errorf("lookup calls = %v, want [first]", got)
+	}
+}
+
+func TestVerifyPage_TheAddressIsEscaped(t *testing.T) {
+	const masked = `<b id="x">o</b>***@a.co`
+	l := vpFound(masked)
+
+	rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpQuery(vpToken))
+
+	spans := vpAddressSpans(t, rec.Body.String())
+	if len(spans) != 1 || vpText(spans[0]) != masked {
+		t.Fatalf("address spans = %d, want one whose text is the literal %q", len(spans), masked)
+	}
+	if b := vpFind(vpParse(t, rec.Body.String()), func(n *html.Node) bool { id, _ := vpAttr(n, "id"); return n.Data == "b" || id == "x" }); len(b) != 0 {
+		t.Errorf("the address injected %d elements", len(b))
+	}
+	if !strings.Contains(rec.Body.String(), html.EscapeString(masked)) {
+		t.Errorf("the escaped address is not in the body")
+	}
+}
+
+func TestVerifyPage_AnUnknownLinkRendersWithoutAnAddress(t *testing.T) {
+	l := vpMissing()
+
+	rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpQuery(vpToken))
+
+	if got := l.calls(); !slices.Equal(got, []string{vpToken}) {
+		t.Fatalf("lookup calls = %v, want [%s]: an unknown link is a lookup that found nothing", got, vpToken)
+	}
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, vpTodayIntro) || strings.Contains(body, "***@") || strings.Contains(body, `class="address"`) {
+		t.Errorf("answer = %d; want 200 with today's intro and no address", rec.Code)
+	}
+}
+
+func TestVerifyPage_NoLookupRendersWithoutAnAddress(t *testing.T) {
+	th := vpLimit(1)
+	h := vpHandlerWith(t, nil, th, true, nopLog())
+
+	rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken))
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, vpTodayIntro) || strings.Contains(body, `class="address"`) {
+		t.Errorf("answer = %d; want 200 with today's intro and no address", rec.Code)
+	}
+	if vpSpent(t, th) {
+		t.Error("a nil lookup spent a link-redeem count")
+	}
+}
+
+func TestPoolLinkAddress_NilPoolIsNoLookup(t *testing.T) {
+	if PoolLinkAddress(nil) != nil {
+		t.Error("PoolLinkAddress(nil) is not nil; the gateway without a pool would call through it")
+	}
+}
+
+func TestVerifyPage_ALookupFailureIsTheFailedNotice(t *testing.T) {
+	l := vpFails(errors.New("boom"))
+
+	rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpQuery(vpToken))
+
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != vpFailedLoc {
+		t.Errorf("answer = %d Location %q, want 303 %s", rec.Code, rec.Header().Get("Location"), vpFailedLoc)
+	}
+	if strings.Contains(rec.Body.String(), "<form") {
+		t.Errorf("the failed notice still renders the form: %q", rec.Body.String())
+	}
+}
+
+func TestVerifyPage_ALookupTimeoutIsTheFailedNotice(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var bounded bool
+		l := &vpLookup{answer: func(ctx context.Context, _ string) (string, bool, error) {
+			d, ok := ctx.Deadline()
+			bounded = ok && time.Until(d) <= 5*time.Second
+			<-ctx.Done()
+			return "", false, ctx.Err()
+		}}
+
+		rec := vpDo(t, vpHandlerWith(t, l.fn(), vpLimit(5), true, nopLog()), http.MethodGet, vpQuery(vpToken))
+
+		if len(l.calls()) != 1 || !bounded {
+			t.Fatalf("lookup calls = %d, deadline of 5 s or less = %v; want one call under a deadline", len(l.calls()), bounded)
+		}
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != vpFailedLoc {
+			t.Errorf("answer = %d Location %q, want 303 %s", rec.Code, rec.Header().Get("Location"), vpFailedLoc)
+		}
+	})
+}
+
+func TestVerifyPage_ALookupFailureLogsNoTokenOrAddress(t *testing.T) {
+	// The error text carries the token and an address: neither may reach the log.
+	err := &pgconn.PgError{Code: "42883", Message: "function auth.confirm_link_address(text) " + vpToken + " o***@acme.co.za"}
+	log, buf := captureLog()
+
+	vpDo(t, vpHandlerWith(t, vpFails(err).fn(), vpLimit(5), true, log), http.MethodGet, vpQuery(vpToken))
+
+	lines := recordsNamed(t, buf, "verify-page: link address lookup failed")
+	if len(lines) != 1 || warnCount(t, buf) != 1 {
+		t.Fatalf("%d lookup-failed lines and %d WARNs, want 1 and 1: %s", len(lines), warnCount(t, buf), buf.String())
+	}
+	if lines[0]["class"] != "42883" || lines[0]["timeout"] != false {
+		t.Errorf("record = %v, want class 42883 and timeout false", lines[0])
+	}
+	if out := buf.String(); strings.Contains(out, vpToken) || strings.Contains(out, "@") {
+		t.Errorf("the log holds the token or an address: %s", out)
+	}
+}
+
+func TestVerifyPage_StatelessAndMalformedOpensMakeNoLookup(t *testing.T) {
+	l := vpFound(vpMasked)
+	th := vpLimit(1)
+	h := vpHandlerWith(t, l.fn(), th, true, nopLog())
+	bounce := siteURLValue + "/?confirm=1#token="
+	rows := []struct{ name, query, want string }{
+		{"stateless", vpQueryBare(vpToken), bounce + vpToken},
+		{"malformed state", vpQueryBare(vpToken) + "&state=short", bounce + vpToken},
+		{"bad type", "token=" + vpToken + "&type=recovery&state=" + vpState, vpFailedLoc},
+		{"empty token", "token=&type=signup&state=" + vpState, vpFailedLoc},
+		{"over-long token", vpQuery(strings.Repeat("a", vpMaxLen+1)), vpFailedLoc},
+	}
+	for _, c := range rows {
+		rec := vpDo(t, h, http.MethodGet, c.query)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != c.want {
+			t.Errorf("%s: answer = %d Location %q, want 303 %q", c.name, rec.Code, rec.Header().Get("Location"), c.want)
+		}
+	}
+	if n := len(l.calls()); n != 0 {
+		t.Errorf("lookups = %d, want 0", n)
+	}
+
+	// Control: a stated open of a good token looks up. The limit is 1, so a 200 shows the opens above spent nothing.
+	if rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken)); rec.Code != http.StatusOK || len(l.calls()) != 1 {
+		t.Errorf("control: answer = %d, lookups = %d; want 200 and 1", rec.Code, len(l.calls()))
+	}
+}
+
+func TestVerifyPage_AMissedLookupSpendsTheLinkRedeemCount(t *testing.T) {
+	l := vpMissing()
+	h := vpHandlerWith(t, l.fn(), vpLimit(2), true, nopLog())
+
+	var got []string
+	for range 3 {
+		rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken))
+		got = append(got, strconv.Itoa(rec.Code)+" "+rec.Header().Get("Location"))
+	}
+
+	if want := []string{"200 ", "200 ", "303 " + vpFailedLoc}; !slices.Equal(got, want) {
+		t.Errorf("answers = %q, want %q", got, want)
+	}
+	if n := len(l.calls()); n != 2 {
+		t.Errorf("lookups = %d, want 2", n)
+	}
+}
+
+func TestVerifyPage_AFoundLookupGivesTheCountBack(t *testing.T) {
+	h := vpHandlerWith(t, vpFound(vpMasked).fn(), vpLimit(2), true, nopLog())
+
+	for i := range 5 {
+		vpRequireNamed(t, vpDo(t, h, http.MethodGet, vpQuery(vpToken)), vpMasked)
+		if t.Failed() {
+			t.Fatalf("GET #%d", i+1)
+		}
+	}
+}
+
+func TestVerifyPage_OverTheLimitMakesNoLookup(t *testing.T) {
+	l := &vpLookup{answer: func(_ context.Context, token string) (string, bool, error) { return vpMasked, token == "good", nil }}
+	log, buf := captureLog()
+	h := vpHandlerWith(t, l.fn(), vpLimit(1), true, log)
+
+	if rec := vpDo(t, h, http.MethodGet, vpQuery("miss")); rec.Code != http.StatusOK {
+		t.Fatalf("first open = %d, want 200", rec.Code)
+	}
+	rec := vpDo(t, h, http.MethodGet, vpQuery("good"))
+
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != vpFailedLoc {
+		t.Errorf("over the limit: answer = %d Location %q, want 303 %s", rec.Code, rec.Header().Get("Location"), vpFailedLoc)
+	}
+	if got := l.calls(); !slices.Equal(got, []string{"miss"}) {
+		t.Errorf("lookups = %v, want only [miss]", got)
+	}
+	requireLimitLine(t, buf, "verify-page: limit reached", "ip", true)
+	if out := buf.String(); strings.Contains(out, "good") || strings.Contains(out, "miss") || strings.Contains(out, "@") {
+		t.Errorf("the log holds a token or an address: %s", out)
+	}
+}
+
+func TestVerifyPage_APreviewOverTheLimitStillLooksUp(t *testing.T) {
+	l := vpMissing()
+	log, buf := captureLog()
+	h := vpHandlerWith(t, l.fn(), vpLimit(1), false, log)
+
+	for i := range 2 {
+		if rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken)); rec.Code != http.StatusOK {
+			t.Errorf("open #%d = %d, want 200", i+1, rec.Code)
+		}
+	}
+
+	if n := len(l.calls()); n != 2 {
+		t.Errorf("lookups = %d, want 2", n)
+	}
+	requireLimitLine(t, buf, "verify-page: limit reached", "ip", false)
+}
+
+func TestVerifyPage_TheLookupAndThePostShareOneCount(t *testing.T) {
+	th := vpLimit(2)
+	l := vpMissing()
+	page := vpHandlerWith(t, l.fn(), th, true, nopLog())
+	signIn := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+	post := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), signIn, nil, nopLog(), th, true, nil)
+
+	if rec := vpDo(t, page, http.MethodGet, vpQuery(vpToken)); rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d, want 200", rec.Code)
+	}
+	v := rpValues(rpToken, "signup", rpPass)
+	v.Set("state", vpState)
+	if rec := ipPost(t, post, v); rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), ipOK) {
+		t.Fatalf("POST = %d Location %q, want a 303 to %s", rec.Code, rec.Header().Get("Location"), ipOK)
+	}
+	rec := vpDo(t, page, http.MethodGet, vpQuery(vpToken))
+
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != vpFailedLoc {
+		t.Errorf("3rd open = %d Location %q, want 303 %s: the GET and the POST count apart", rec.Code, rec.Header().Get("Location"), vpFailedLoc)
 	}
 }

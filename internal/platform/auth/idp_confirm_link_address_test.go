@@ -3,14 +3,21 @@ package auth_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
+	mrand "math/rand/v2"
+	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -262,5 +269,150 @@ func TestIdP_ConfirmLinkAddressGrantIsIdempotentAndSweepsStrays(t *testing.T) {
 	}
 	if want := []string{"invoice_gateway:EXECUTE", "supabase_auth_admin:EXECUTE"}; !slices.Equal(grants, want) {
 		t.Errorf("ACL after the stray grant and two reruns = %v, want exactly %v", grants, want)
+	}
+}
+
+// addressSpan is what the set-password page prints for a found link (SECAUD-26-02 page-copy).
+func addressSpan(masked string) string { return `<span class="address">` + masked + `</span>` }
+
+// statelessBounce opens the link as a mail scanner does: no state, no cookie jar, no redirect followed.
+func statelessBounce(t *testing.T, link string) string {
+	t.Helper()
+	resp, err := noRedirect.Get(link)
+	if err != nil {
+		t.Fatalf("GET %s: %v", link, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("stateless GET of the mailed link: status %d, want 303", resp.StatusCode)
+	}
+	return resp.Header.Get("Location")
+}
+
+// requireNamedThenConfirmed is the press: the stated page names masked (and never email), the POST answers ?verified=1 and mints no session.
+func requireNamedThenConfirmed(t *testing.T, link, email, masked, password string) {
+	t.Helper()
+	page := open(t, withState(link, newState(t)), http.MethodGet)
+	if !strings.Contains(page, addressSpan(masked)) {
+		t.Errorf("the stated page lacks %s", addressSpan(masked))
+	}
+	if strings.Contains(page, email) {
+		t.Errorf("the stated page holds the full address %q", email)
+	}
+	if got := clickWithState(t, link, newState(t), password); got != siteURL+"/?verified=1" {
+		t.Fatalf("set-password POST answered %q, want %s/?verified=1 exactly", got, siteURL)
+	}
+	if n := sessionRows(t, email); n != 0 {
+		t.Errorf("auth.sessions holds %d rows for the account, want 0: a confirm mints no session", n)
+	}
+}
+
+func TestIdP_AStatelessConfirmLinkNamesAccountAAndMintsNoSession(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	a := registrant(t, gw)
+	link := confirmationLink(t, a.email)
+
+	if got, want := statelessBounce(t, link), siteURL+"/?confirm=1#token="+linkHash(t, link); got != want {
+		t.Fatalf("stateless open Location = %q, want %q", got, want)
+	}
+	requireNamedThenConfirmed(t, link, a.email, "i***@example.test", a.password)
+	requireSignIn(t, base, a, a.password, http.StatusOK, "")
+}
+
+func TestIdP_AStatelessInviteLinkNamesTheInviteeAndMintsNoSession(t *testing.T) {
+	w := newInviteWorld(t, "logfix11a-")
+	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
+	w.register(t)
+	link := confirmationLink(t, w.email)
+
+	if got, want := statelessBounce(t, link), siteURL+"/?confirm=invite#token="+linkHash(t, link); got != want {
+		t.Fatalf("stateless invite open Location = %q, want %q", got, want)
+	}
+	requireNamedThenConfirmed(t, link, w.email, "l***@gmail.com", u.password)
+	access := accessToken(t, w.base, u)
+	newJoinEdge(t, w.base).requireJoinRoutes(t, access)
+}
+
+// A POST may answer ?verified=1 only for a link whose page named the address first.
+func TestIdP_EveryRedeemableLinkWasNamed(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	const named = `class="address"`
+	press := func(link, password string) (page, location string) {
+		page = open(t, withState(link, newState(t)), http.MethodGet)
+		return page, clickWithState(t, link, newState(t), password)
+	}
+
+	live := registrant(t, gw)
+	page, loc := press(confirmationLink(t, live.email), live.password)
+	if !strings.Contains(page, named) || loc != siteURL+"/?verified=1" {
+		t.Errorf("live link: named=%t, answer %q; want named and %s/?verified=1", strings.Contains(page, named), loc, siteURL)
+	}
+
+	spent := registrant(t, gw)
+	spentLink := confirmationLink(t, spent.email)
+	if got := clickWithState(t, spentLink, newState(t), spent.password); got != siteURL+"/?verified=1" {
+		t.Fatalf("control: the first press answered %q", got)
+	}
+	page, loc = press(spentLink, spent.password)
+	if strings.Contains(page, named) || loc != siteURL+"/?verify=failed" {
+		t.Errorf("spent link: named=%t, answer %q; want unnamed and %s/?verify=failed", strings.Contains(page, named), loc, siteURL)
+	}
+
+	replaced := registrant(t, gw)
+	first := confirmationLink(t, replaced.email)
+	backdateCooldown(t, replaced.email)
+	if status, body, err := register(gw, replaced.email, replaced.password); err != nil || status != http.StatusAccepted {
+		t.Fatalf("repeat registration: status %d, body %s, err %v; want 202", status, body, err)
+	}
+	var second string
+	for _, l := range confirmationLinks(t, replaced.email, 2) {
+		if l != first {
+			second = l
+		}
+	}
+	if second == "" {
+		t.Fatal("the repeat registration mailed no new link")
+	}
+	page, loc = press(first, replaced.password)
+	if strings.Contains(page, named) || loc != siteURL+"/?verify=failed" {
+		t.Errorf("replaced link: named=%t, answer %q; want unnamed and %s/?verify=failed", strings.Contains(page, named), loc, siteURL)
+	}
+	page, loc = press(second, replaced.password)
+	if !strings.Contains(page, named) || loc != siteURL+"/?verified=1" {
+		t.Errorf("newest link: named=%t, answer %q; want named and %s/?verified=1", strings.Contains(page, named), loc, siteURL)
+	}
+}
+
+// Guessed tokens spend the link-redeem count, so a run of them shuts out the lookup before the real token is answered.
+func TestIdP_GuessedConfirmTokensAreCountedBeforeTheRealOneIsAnswered(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	a := registrant(t, gw)
+	link := confirmationLink(t, a.email)
+	stated := func(token string) (int, string, string) {
+		q := url.Values{"token": {token}, "type": {"signup"}, "state": {newState(t)}}
+		resp, err := noRedirect.Get(gw + "/auth/verify?" + q.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Location"), string(b)
+	}
+
+	for i := range gateway.LinkRedeemPerIP {
+		otp := fmt.Sprintf("%010d", mrand.IntN(10_000_000_000))
+		sum := sha256.Sum224([]byte(a.email + otp))
+		status, _, body := stated(hex.EncodeToString(sum[:]))
+		if status != http.StatusOK || strings.Contains(body, "***@") {
+			t.Fatalf("guess %d: status %d, body names an address=%t; want 200 and unnamed", i+1, status, strings.Contains(body, "***@"))
+		}
+	}
+
+	status, loc, body := stated(linkHash(t, link))
+	if status != http.StatusSeeOther || loc != siteURL+"/?verify=failed" || strings.Contains(body, "***@") {
+		t.Errorf("real token after %d guesses: status %d, Location %q; want 303 %s/?verify=failed with no address", gateway.LinkRedeemPerIP, status, loc, siteURL)
 	}
 }

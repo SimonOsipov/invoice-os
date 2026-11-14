@@ -33,7 +33,6 @@ import {
   accountRowsAreSelfOnly,
   createdAcceptedDetailIsAdminOrSelf,
   createdAcceptedDetailKeys,
-  firstSessionIsNotASignInRow,
   auditLogDeletes,
   eraseDeletesKnownDevices,
   newDeviceMailFacts,
@@ -1260,18 +1259,11 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, 'be.name, ` + payload +', 'be.name, A.Payload`+'), account)).toBe(false)
   })
 
-  it('firstSessionIsNotRecordedAsASignIn', () => {
-    expect(firstSessionIsNotASignInRow()).toBe(true)
-    expect(sentence('P5')).toContain('is not recorded as a sign-in')
-    expect(sentence('P5')).toContain('without an email')
-    const gw = gatewaySource()
-    const mover = readSource('internal/accountevents/mover.go')
-    const planted = gw.replace('Email: user.Email, FirstSession: true}', 'Email: user.Email}')
-    expect(planted).not.toBe(gw)
-    expect(firstSessionIsNotASignInRow(planted, mover)).toBe(false)
-    const noContinue = mover.replace(/(INSERT INTO account_known_devices[\s\S]*?\n\s*)continue\n/, '$1')
-    expect(noContinue).not.toBe(mover)
-    expect(firstSessionIsNotASignInRow(gw, noContinue)).toBe(false)
+  it('P5 states no first session', () => {
+    const p5 = sentence('P5')
+    expect(p5).toContain('with the IP address and the browser and operating system of that request')
+    expect(p5).not.toContain('first session')
+    expect(p5).not.toContain('is not recorded as a sign-in')
   })
 
   it('accountEventsSelfOnlyForNonAdmins', () => {

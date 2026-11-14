@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Filled by strings.NewReplacer, not html/template: its reflection keeps every exported method
@@ -34,7 +35,12 @@ func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, 
 }
 
 // InvitationPasswordHandler answers the set-password page's form POST: confirm the address, set the password, end every session.
-func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
+func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, perIP *SignInThrottle, enforce bool, address LinkAddress) http.Handler {
+	// STUB for the red tests: the new signature over the old hand-off, until SECAUD-26-02 removes it.
+	return invitationPasswordStub(authURL, siteURL, client, sessions, signIn, sink, log, NewHandoffStore(HandoffTTL, time.Now), nil, perIP, enforce)
+}
+
+func invitationPasswordStub(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}

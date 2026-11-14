@@ -60,8 +60,8 @@ func vhLogRecords(t *testing.T, raw string) []map[string]any {
 }
 
 // confirmHandler is the registrant's set-password POST against a canned GoTrue; every GoTrue call it makes gets the one answer.
-func confirmHandler(t *testing.T, authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
+func confirmHandler(t *testing.T, authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, perIP *SignInThrottle, enforce bool) http.Handler {
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(authURL, siteURL, client, NewSessionChecker(authURL, client, time.Now, log), th, sink, log, store, events, perIP, enforce)
+	return InvitationPasswordHandler(authURL, siteURL, client, NewSessionChecker(authURL, client, time.Now, log), th, sink, log, perIP, enforce, nil)
 }

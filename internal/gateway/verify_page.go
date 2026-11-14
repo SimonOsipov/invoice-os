@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,7 +11,7 @@ import (
 const maxVerifyTokenBytes = 256
 
 // VerifyPageHandler serves the set-password page for every signup link; it holds no GoTrue client, so opening the link spends nothing.
-func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
+func VerifyPageHandler(siteURL *url.URL, address LinkAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) (http.Handler, error) {
 	if siteURL == nil {
 		return RegistrationNotConfigured(), nil
 	}

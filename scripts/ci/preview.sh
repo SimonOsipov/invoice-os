@@ -225,6 +225,7 @@ env_file() {
         echo "AUTH_ADDITIONAL_ISSUERS: '$issuers'"
         echo "AUTH_SITE_URL: $(url landing "$pr")"
         echo "CORS_ALLOWED_ORIGINS: $(url app "$pr"),$(url landing "$pr"),$(url ops-console "$pr"),$(url support-console "$pr"),$(url blog "$pr"),$(url library "$pr"),$(url check "$pr")"
+        echo "AUTH_SESSION_ORIGINS: app=$(url app "$pr"),ops=$(url ops-console "$pr"),support=$(url support-console "$pr")"
         for callee in tenancy portfolio invoice validation submission dashboard notifications docling auth worker; do
           echo "$(tr 'a-z-' 'A-Z_' <<<"$callee")_URL: $(url "$callee" "$pr")"
         done

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -74,7 +75,17 @@ func main() {
 	// separate origins, so a browser preflight (OPTIONS, no bearer) must be answered
 	// before the verifier would 401 it. Allowed origins come from CORS_ALLOWED_ORIGINS
 	// (comma-separated); empty grants no browser origin (the production default).
-	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
+	corsOrigins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
+	withCORS := gateway.CORS(corsOrigins)
+	cookies, err := sessionCookies(os.Getenv, corsOrigins, os.Getenv("K_SERVICE") != "")
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: session cookies: %v", err)
+	}
+	if cookies == nil {
+		app.Logger.Warn("gateway: AUTH_SESSION_ORIGINS is unset; cookie-mode session requests answer 403")
+	}
+	// The three session routes alone grant credentials, and only to the session origins.
+	withSessionCORS := gateway.SessionCORS(corsOrigins, cookies)
 
 	gwPool := gatewayPool(app.Logger)
 	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(nil)}, time.Now, app.Logger)
@@ -161,12 +172,12 @@ func main() {
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	store := handoffStore(gwPool, app.Logger)
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, nil, gwPool)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, cookies, gwPool)
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
-	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
-	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
+	app.Mux.Handle("POST /auth/exchange", withSessionCORS(h.Exchange))
+	app.Mux.Handle("OPTIONS /auth/exchange", withSessionCORS(h.Exchange))
 	app.Mux.Handle("POST /auth/console-handoff", withCORS(h.ConsoleHandoff))
 	app.Mux.Handle("OPTIONS /auth/console-handoff", withCORS(h.ConsoleHandoff))
 	exportCode := verifier.Middleware(sessions.Middleware(gateway.ExportCodeHandler(store, app.Logger)))
@@ -174,10 +185,10 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/export-code", withCORS(exportCode))
 	// A form navigation: no CORS, no bearer; the redeemed code supplies the token.
 	app.Mux.Handle("POST /auth/export-download", gateway.ExportDownloadHandler(store, apiHandler, app.Logger))
-	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
-	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
-	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
-	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
+	app.Mux.Handle("POST /auth/refresh", withSessionCORS(h.Refresh))
+	app.Mux.Handle("OPTIONS /auth/refresh", withSessionCORS(h.Refresh))
+	app.Mux.Handle("POST /auth/sign-out", withSessionCORS(h.SignOut))
+	app.Mux.Handle("OPTIONS /auth/sign-out", withSessionCORS(h.SignOut))
 	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger, h.AccountEvents, h.LinkRedeemByIP))
 	app.Mux.Handle("POST /auth/invitation/password", h.InvitationPassword)
 
@@ -503,8 +514,27 @@ func mustEnv(key string) string {
 	return v
 }
 
-// sessionCookies reads AUTH_SESSION_ORIGINS (rows B1-B4).
-// STUB (SECAUD-17-09 test-spec): the executor replaces this body and wires it in main.
+// sessionCookies reads AUTH_SESSION_ORIGINS (rows B1-B4): unset is fatal on Cloud Run, nil locally.
 func sessionCookies(getenv func(string) string, corsOrigins []string, onCloudRun bool) (*gateway.SessionCookies, error) {
-	return nil, nil
+	v := strings.TrimSpace(getenv("AUTH_SESSION_ORIGINS"))
+	if v == "" {
+		if onCloudRun {
+			return nil, errors.New("AUTH_SESSION_ORIGINS is required on Cloud Run")
+		}
+		return nil, nil
+	}
+	c, err := gateway.ParseSessionOrigins(v)
+	if err != nil {
+		return nil, err
+	}
+	allowed := map[string]bool{}
+	for _, o := range corsOrigins {
+		allowed[strings.TrimSpace(o)] = true
+	}
+	for _, o := range c.Origins() {
+		if !allowed[o] {
+			return nil, fmt.Errorf("AUTH_SESSION_ORIGINS: %s is not in CORS_ALLOWED_ORIGINS", o)
+		}
+	}
+	return c, nil
 }

@@ -59,8 +59,7 @@ export async function rawFetch(
   } catch {
     body = undefined
   }
-  // STUB (SECAUD-17-09 test-spec): the executor returns res.headers.getSetCookie().
-  return { status: res.status, body, location: res.headers.get('Location'), setCookie: [] }
+  return { status: res.status, body, location: res.headers.get('Location'), setCookie: res.headers.getSetCookie() }
 }
 
 export interface Persona {

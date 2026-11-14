@@ -116,6 +116,12 @@ func ExchangeHandler(store Handoffs, cookies *SessionCookies) http.Handler {
 		if !postOnly(w, r) {
 			return
 		}
+		aud, cookieMode, err := cookies.mode(r)
+		// An Origin without the header is a page script: it never gets a refresh token in a body.
+		if err != nil || (!cookieMode && r.Header.Get("Origin") != "") {
+			writeError(w, http.StatusForbidden, errOriginNotAllowed.Error())
+			return
+		}
 		var in struct {
 			Code  string `json:"code"`
 			State string `json:"state"`
@@ -130,7 +136,26 @@ func ExchangeHandler(store Handoffs, cookies *SessionCookies) http.Handler {
 			writeError(w, http.StatusBadRequest, "invalid or expired code")
 			return
 		}
-		writeJSON(w, http.StatusOK, json.RawMessage(answer))
+		if !cookieMode {
+			writeJSON(w, http.StatusOK, json.RawMessage(answer))
+			return
+		}
+		var got struct {
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+		}
+		if json.Unmarshal([]byte(answer), &got) != nil || got.AccessToken == "" {
+			writeError(w, http.StatusBadGateway, "sign-in is unavailable")
+			return
+		}
+		// A borrowed code holds no refresh token; clearing keeps a stale landing cookie from outliving it.
+		renewable := got.RefreshToken != ""
+		if renewable {
+			cookies.set(w, r, aud, got.RefreshToken)
+		} else {
+			cookies.clear(w, r, aud)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": got.AccessToken, "renewable": renewable})
 	})
 }
 

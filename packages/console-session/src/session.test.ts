@@ -176,11 +176,12 @@ describe('v3 records (SECAUD-17-10)', () => {
     expect(JSON.parse(local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
   })
 
-  it('legacyLanding_isRewrittenBeforeTheReadReturns', () => {
+  it('legacyLanding_loadLeavesTheRecordUntouched', () => {
     const { local } = installStorage({ local: { [OPS_KEY]: recordRaw(T, R) } })
     expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false, legacyRefreshToken: R })
-    expect(local.getItem(OPS_KEY)).toBe(v3Raw(T))
-    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false })
+    // [legacy-adopt-order]: the boot rewrites it after the adoption answers 200.
+    expect(local.getItem(OPS_KEY)).toBe(recordRaw(T, R))
+    expect(loadConsoleSession(OPS_KEY)).toEqual({ token: T, borrowed: false, legacyRefreshToken: R })
     expect(warn).not.toHaveBeenCalled()
   })
 

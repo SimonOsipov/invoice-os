@@ -834,13 +834,60 @@ describe('cookie-held refresh token (SECAUD-17-10)', () => {
   })
 
   it('legacyRecord_adoptsIntoTheCookieOnce', async () => {
-    const { boot, calls } = await run({ local: recordRaw(OLD_TOKEN, 'R-old'), answer: () => reply(200, { access_token: T2 }) })
+    let midFlight: string | null = null
+    const { boot, calls } = await run({
+      local: recordRaw(OLD_TOKEN, 'R-old'),
+      answer: () => {
+        midFlight = store.local.getItem(OPS_KEY)
+        return reply(200, { access_token: T2 })
+      },
+    })
     expect(boot).toEqual({ kind: 'open', session: { token: T2, borrowed: false } })
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
     expect(calls[0]?.body).toEqual({ refresh_token: 'R-old' })
+    // [legacy-adopt-order]: the legacy record stays until the adoption answers 200.
+    expect(midFlight).toBe(recordRaw(OLD_TOKEN, 'R-old'))
     expect(store.local.getItem(OPS_KEY)).toBe(v3Raw(T2))
     expect(sessionKeysHold('R-old')).toBe(false)
+  })
+
+  it('legacyAdoption_transientFailureKeepsTheRecordAndTheNextBootRetries', async () => {
+    const legacy = recordRaw(OLD_TOKEN, 'R-old')
+    const answers: [string, () => Response | Error][] = [
+      ['502', () => reply(502, { error: 'renewal is unavailable' })],
+      ['network error', () => new TypeError('Failed to fetch')],
+    ]
+    for (const [name, fail] of answers) {
+      const first = await run({ local: legacy, answer: fail })
+      expect(first.calls, name).toHaveLength(1)
+      expect(first.calls[0], name).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
+      expect(first.calls[0]?.body, name).toEqual({ refresh_token: 'R-old' })
+      expect(withOutcome('failed').test(leaveUrl(first.boot)), name).toBe(true)
+      const kept = store.local.getItem(OPS_KEY)
+      expect(kept, name).toBe(legacy)
+
+      // A reload: the same storage, the gateway back.
+      const second = await run({ local: kept ?? undefined, answer: () => reply(200, { access_token: T2 }) })
+      expect(second.calls, name).toHaveLength(1)
+      expect(second.calls[0], name).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
+      expect(second.calls[0]?.body, name).toEqual({ refresh_token: 'R-old' })
+      expect(second.boot, name).toEqual({ kind: 'open', session: { token: T2, borrowed: false } })
+      expect(store.local.getItem(OPS_KEY), name).toBe(v3Raw(T2))
+    }
+  })
+
+  it('legacyAdoption_refusedTokenRemovesTheRecordAndLeaves', async () => {
+    const refusals = [() => reply(401, { error: 'invalid or expired refresh token' }), () => reply(400, { error: 'bad request' })]
+    for (const refuse of refusals) {
+      const { boot, calls } = await run({ local: recordRaw(OLD_TOKEN, 'R-old'), answer: refuse })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ url: REFRESH, method: 'POST', ...cookieMode })
+      expect(calls[0]?.body).toEqual({ refresh_token: 'R-old' })
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+      const url = leaveUrl(boot)
+      expect(FRONT_DOOR.test(url), url).toBe(true)
+    }
   })
 
   it('boot_pendingSignOutIsSentFirst', async () => {

@@ -41,11 +41,10 @@ func (e *TooManyInvoicesError) Error() string {
 	return fmt.Sprintf("archive: %d invoices exceeds the bundle limit of %d", e.Count, e.Limit)
 }
 
-// buildBundle drives subtasks 03-06 in entry order over one already-open tx (D-37).
-// Nothing touches w until the entity resolves and the invoice count clears the
-// cap (AC-2, AC-3): w is not referenced before newBundleWriter. It returns the
-// writer even on error (nil before newBundleWriter) and never calls bw.Close:
-// every early return leaves the archive with no central directory (AC-7).
+// buildBundle writes the entries in order over one already-open tx. Nothing touches w
+// until the entity resolves and the invoice count clears the cap. It returns the writer
+// even on error (nil before newBundleWriter) and never calls bw.Close, so an early
+// return leaves no central directory (TestRLS_AFailedExportedWriteLeavesNoCentralDirectory).
 func buildBundle(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assembleOpts) (*bundleWriter, error) {
 	if o.maxInvoices <= 0 {
 		return nil, fmt.Errorf("archive: maxInvoices must be positive, got %d", o.maxInvoices)

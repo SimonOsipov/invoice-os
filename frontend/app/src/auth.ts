@@ -112,7 +112,7 @@ export interface Session {
   verified: boolean
   // Set only for a session redeemed from a landing hand-off code.
   handoff?: true
-  // Set only on a hand-off session whose exchange or refresh answered a refresh token.
+  // Set only on a renewable hand-off session.
   renewal?: Renewal
 }
 

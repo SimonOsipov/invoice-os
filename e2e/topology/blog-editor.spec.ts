@@ -5,7 +5,8 @@ import { test, expect, type Locator, type Page, type Route, type TestInfo } from
 import { apiBase, provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { shoot } from '../argos'
 import { collectErrors } from '../personaSession'
-import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession } from '../staffSession'
+import { refreshCookie } from '../sessionCookie'
+import { consoleUrl, openWithHandoff, seedStaffSession } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -792,15 +793,17 @@ test.describe('SUP-BLOG-06 blog writes', () => {
       refused = true
       return fulfillStatus(route, 401, { error: 'unauthorized' })
     })
-    // The whole record: the refresh token rotates on every renewal, while an access token minted in the same second can repeat.
-    const stored = () => page.evaluate((key) => localStorage.getItem(key), CONSOLE_SESSION_KEY.support)
-    const before = await stored()
-    expect(before, 'no stored session before the save').not.toBeNull()
+    // The cookie value rotates on every renewal, while an access token minted in the same second can repeat.
+    const cookieValue = async () => (await refreshCookie(page.context(), 'support'))?.value
+    const before = await cookieValue()
+    expect(before, 'no refresh cookie before the save').toBeTruthy()
+    const renewal = page.waitForResponse((r) => AUTH_REFRESH.test(r.url()) && r.request().method() === 'POST' && r.status() === 200)
     await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await renewal
     await expect(toastOf(page, 'Draft saved')).toBeVisible()
     expect(refused, 'the first save was never refused').toBe(true)
     expect(new URL(page.url()).origin, 'the console left the support origin').toBe(new URL(consoleUrl('support')).origin)
-    expect(await stored(), 'the stored session was not renewed').not.toBe(before)
+    expect(await cookieValue(), 'the refresh cookie was not rotated').not.toBe(before)
     expect(await page.evaluate((key) => localStorage.getItem(key), KEPT_KEY), 'a kept copy was stored').toBeNull()
     expect(errors, errorsOf(errors)).toEqual([])
   })
@@ -831,16 +834,7 @@ test.describe('SUP-BLOG-06 blog writes', () => {
     expect(kept, 'no kept copy at the support origin').toBeDefined()
     expect((JSON.parse(kept!.value) as { draft: { title: string } }).draft.title, 'kept title').toBe(title)
 
-    const pair = await signInSession(account.email, account.password)
-    await page.context().addInitScript(
-      ({ origin, key, value }) => {
-        if (location.origin !== origin || sessionStorage.getItem('e2e.staff-reseeded')) return
-        sessionStorage.setItem('e2e.staff-reseeded', '1')
-        localStorage.setItem(key, value)
-      },
-      { origin: supportOrigin, key: CONSOLE_SESSION_KEY.support, value: JSON.stringify({ v: 2, token: pair.access_token, refresh_token: pair.refresh_token }) },
-    )
-    await page.goto(consoleUrl('support'))
+    await openWithHandoff(page, 'support', account, { ready: false })
     await expect(titleInput(page), 'the kept draft did not reopen on Blog').toHaveValue(title, { timeout: 30_000 })
     await expect(summaryInput(page)).toHaveValue(summary)
     await expect(bar(page).getByText('UNSAVED CHANGES', { exact: true })).toBeVisible()

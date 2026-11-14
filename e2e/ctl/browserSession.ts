@@ -57,12 +57,8 @@ export async function signInFresh(key: AccountKey, account: Account, _urls: Urls
       await save(context, statePath)
       return { role }
     }
-    const { seedStaffStorage, consoleUrl } = await import('../staffSession')
-    await seedStaffStorage(page, dest, account as Required<Pick<Account, 'email' | 'password' | 'userId'>>)
-    const url = consoleUrl(dest)
-    const res = await page.goto(url)
-    if (!res?.ok()) throw new CtlError(`${url} answered ${res ? `HTTP ${res.status()}` : 'nothing'}`, 'The console is not serving; check its deploy.', 1)
-    await DESTINATION_READY[dest](page, READY_TIMEOUT)
+    const { openWithHandoff } = await import('../staffSession')
+    await openWithHandoff(page, dest, account as Required<Pick<Account, 'email' | 'password'>>)
     await save(context, statePath)
     return {}
   })
@@ -70,11 +66,16 @@ export async function signInFresh(key: AccountKey, account: Account, _urls: Urls
 
 const APP_SESSION_KEY = 'invoice-os.session'
 const MIN_LIFE_S = 60
+const RENEW_DUE = 0.2 // the app renews past 80% of the token's life
+
+interface SavedState {
+  cookies?: { name: string; domain: string }[]
+  origins?: { origin: string; localStorage: { name: string; value: string }[] }[]
+}
 
 // The access token a saved state holds for one origin, or undefined for any unreadable shape.
-function savedToken(statePath: string, origin: string, key: string): string | undefined {
+function savedToken(state: SavedState, origin: string, key: string): string | undefined {
   try {
-    const state = JSON.parse(readFileSync(statePath, 'utf8')) as { origins?: { origin: string; localStorage: { name: string; value: string }[] }[] }
     const raw = state.origins?.find((o) => o.origin === origin)?.localStorage.find((i) => i.name === key)?.value
     const token = raw === undefined ? undefined : (JSON.parse(raw) as { token?: unknown }).token
     return typeof token === 'string' ? token : undefined
@@ -83,17 +84,21 @@ function savedToken(statePath: string, origin: string, key: string): string | un
   }
 }
 
-// A saved state is reused only on a live access token. Booting the page would present the saved refresh token to GoTrue
-// (a console always renews at boot), and a token the agent's live session already rotated revokes that session.
+// A saved state is reused only when it holds the audience cookie and loading it sends no refresh:
+// a console renews at boot and an app renews when due, and a cookie that the live session rotated revokes the session when presented.
 // Any failure reads as stale: the caller signs in again, which mints a new session.
 export async function checkSavedState(key: AccountKey, account: Account, urls: Urls, statePath: string): Promise<{ ok: boolean; role?: string }> {
   const dest = destinationOf(key)
-  const storageKey = dest === 'app' ? APP_SESSION_KEY : (await import('../staffSession')).CONSOLE_SESSION_KEY[dest]
-  const token = savedToken(statePath, new URL(rootUrl(dest, urls)).origin, storageKey)
-  const claims = token === undefined ? undefined : claimsOf(token)
-  if (!claims || typeof claims.exp !== 'number' || claims.exp - Date.now() / 1000 < MIN_LIFE_S) return { ok: false }
-  if (dest !== 'app') return (claims.app_metadata as { staff?: unknown } | undefined)?.staff === true ? { ok: true } : { ok: false }
+  if (dest !== 'app') return { ok: false }
   try {
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as SavedState
+    const gateway = new URL(urls.GATEWAY_URL as string).hostname
+    if (!state.cookies?.some((c) => c.name === `__Host-rt-${dest}` && c.domain === gateway)) return { ok: false }
+    const token = savedToken(state, new URL(rootUrl(dest, urls)).origin, APP_SESSION_KEY)
+    const claims = token === undefined ? undefined : claimsOf(token)
+    if (!claims || typeof claims.exp !== 'number' || typeof claims.iat !== 'number') return { ok: false }
+    const left = claims.exp - Date.now() / 1000
+    if (left < MIN_LIFE_S + RENEW_DUE * (claims.exp - claims.iat)) return { ok: false }
     const { me } = await import('../api/client')
     const read = await me(token as string)
     return read.tenant.id === account.tenantId ? { ok: true, role: read.user.role } : { ok: false }

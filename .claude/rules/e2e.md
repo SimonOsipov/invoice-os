@@ -27,6 +27,8 @@ paths:
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Call a mock route only through the `e2e/api/client.ts` helpers. Never call it through the Playwright `request` fixture or a `page`, because a trace records request headers.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
+- Read a session's refresh token only from the browser context's gateway cookie (`e2e/sessionCookie.ts`), never from storage.
+- Seed a console session through a real hand-off (`openWithHandoff`).
 - Serve `/auth/mock/member`, `/auth/mock/invitation-token`, `/auth/mock/deletion-link-token` and `/auth/mock/readiness-confirm-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.

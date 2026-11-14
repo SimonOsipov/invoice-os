@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test'
 import { browserToken, signInAs } from '../personaSession'
-import { CONSOLE_SESSION_KEY, seedStaffStorage, test, type ConsoleTarget } from '../staffSession'
+import { CONSOLE_SESSION_KEY, openWithHandoff, test, type ConsoleTarget } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { APPS } from './apps'
 import { enclosesRect, gaps, WIDE_WIDTHS } from '../topology/layout'
@@ -59,7 +59,7 @@ for (const target of TARGETS) {
     )
 
     await target.signIn?.(page)
-    if (target.console) await seedStaffStorage(page, target.console, staffAccount)
+    if (target.console) await openWithHandoff(page, target.console, staffAccount)
     await page.goto(url)
     await target.mainView(page)
     // A fixed window, not networkidle: an SDK flushes on a timer, and a signed-in SPA may never go idle.
@@ -109,8 +109,8 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'l
     })
     // The crash init script comes after sign-in, so the sign-in itself is not crashed.
     await target.signIn?.(page)
-    // Added after the seed, so the seed's own setItem is the original.
-    if (target.console) await seedStaffStorage(page, target.console, staffAccount)
+    // Added after the seed; the page.goto reload boots through the cookie and its setItem re-arms the crash.
+    if (target.console) await openWithHandoff(page, target.console, staffAccount)
     await page.addInitScript(
       ({ message, key, method }) => {
         if (key === null) {

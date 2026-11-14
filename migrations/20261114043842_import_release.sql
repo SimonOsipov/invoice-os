@@ -124,7 +124,7 @@ $backfill$;
 -- +goose StatementEnd
 
 -- +goose Down
--- ceiling: fails 23514 once a discarded invoice or an undone batch exists; does not undo the backfill.
+-- ceiling: fails 23514 once a discarded invoice or an undone batch exists; does not undo the backfill; revisit if a rollback is ever needed after go-live.
 DROP TRIGGER import_batches_release_document ON import_batches;
 DROP FUNCTION release_document_binding();
 

@@ -347,7 +347,7 @@ type UndoResult struct {
 // UndoBatch discards a completed batch's invoices and marks the batch undone, which releases
 // its document (import_batches_release_document). Locks batch then invoices before the refusal
 // read, so a concurrent submit or decision either lands first (the refusal sees it) or waits.
-// ceiling: needs READ COMMITTED, so the refusal statement sees the lock holder's commit.
+// ceiling: needs READ COMMITTED, so the refusal statement sees the lock holder's commit; revisit if the pool default isolation changes.
 func (s *Store) UndoBatch(ctx context.Context, id string) (UndoResult, error) {
 	res := UndoResult{ID: id}
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

@@ -1,9 +1,7 @@
 package gateway
 
 import (
-	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,8 +14,9 @@ import (
 //go:embed invitation_password.html
 var invitationPageHTML string
 
-// serveSetPasswordPage answers GET /auth/verify with the set-password page, or bounces a stateless open to landing as ?confirm=<confirm>; it makes no GoTrue call.
-func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, confirm string) {
+// serveSetPasswordPage answers GET /auth/verify with the set-password page naming the account's masked address, or bounces a stateless open to landing as ?confirm=<confirm>.
+// It makes no GoTrue call; a stated open reads the database.
+func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, confirm string, address LinkAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) {
 	q := r.URL.Query()
 	token := q.Get("token")
 	if token == "" || len(token) > maxVerifyTokenBytes || q.Get("type") != "signup" {
@@ -29,50 +28,26 @@ func serveSetPasswordPage(w http.ResponseWriter, r *http.Request, site, failed, 
 		http.Redirect(w, r, site+"/?confirm="+confirm+"#token="+url.QueryEscape(token), http.StatusSeeOther)
 		return
 	}
+	masked, ok := lookupLinkAddress(r, address, perIP, enforce, "verify-page", log, token)
+	if !ok {
+		http.Redirect(w, r, failed, http.StatusSeeOther)
+		return
+	}
 	setResetPageHeaders(w.Header())
-	writeResetPage(w, r.Method, http.StatusOK, renderPasswordPage(invitationPageHTML, token, state, ""))
+	writeResetPage(w, r.Method, http.StatusOK, renderNamedPasswordPage(invitationPageHTML, token, state, "", masked))
 }
 
-// InvitationPasswordHandler answers the set-password page's form POST: confirm the address, set the password, end every session.
-func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs, events AccountEvents, perIP *SignInThrottle, enforce bool) http.Handler {
+// InvitationPasswordHandler answers the set-password page's form POST: confirm the address, set the password, end every session; mints no session.
+func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, perIP *SignInThrottle, enforce bool, address LinkAddress) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}
 	site := strings.TrimSuffix(siteURL.String(), "/")
-	token := authURL.JoinPath("token")
-	token.RawQuery = "grant_type=password"
-	tokenURL := token.String()
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, perIP, enforce, passwordLinkFlow{
 		verifyType: "signup", label: "invitation-password", page: invitationPageHTML,
-		done: site + "/?verified=1", failed: verifyFailedURL(siteURL),
+		done: site + "/?verified=1", failed: verifyFailedURL(siteURL), address: address,
 		onConfirmed: func(r *http.Request, user gotrueUser) {
 			handOffRegistrant(r.Context(), log, "invitation-password", sink, user.contact())
-		},
-		handOff: func(r *http.Request, user gotrueUser, password, state string) string {
-			ctx := r.Context()
-			var grant struct {
-				AccessToken  string `json:"access_token"`
-				RefreshToken string `json:"refresh_token"`
-			}
-			// No throttle reservation: the password was set one call ago behind a mailbox token.
-			status, gt, err := postGoTrue(r, client, tokenURL, map[string]string{"email": user.Email, "password": password}, &grant)
-			if err != nil || status != http.StatusOK || grant.AccessToken == "" || grant.RefreshToken == "" {
-				attrs := []any{slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode)}
-				if err != nil {
-					attrs = []any{slog.String("error", err.Error())}
-				}
-				log.WarnContext(ctx, "invitation-password: sign-in after set failed", attrs...)
-				return ""
-			}
-			answer, _ := json.Marshal(map[string]string{"access_token": grant.AccessToken, "refresh_token": grant.RefreshToken}) // cannot fail
-			code, ok := store.Put(string(answer), sha256.Sum256([]byte(state)))
-			if !ok {
-				log.WarnContext(ctx, "invitation-password: hand-off store full")
-			}
-			if code != "" {
-				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: user.ID, Email: user.Email, FirstSession: true})
-			}
-			return code
 		},
 	})
 }

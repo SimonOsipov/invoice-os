@@ -310,21 +310,6 @@ func TestAccountEvents_FailedResetAndInvitePasswordRecordNothing(t *testing.T) {
 		rpRequireRedirect(t, resp, rpFailed)
 		rec.requireNames(t)
 	})
-	t.Run("invitation set-password", func(t *testing.T) {
-		rec := &recEvents{}
-		h := aeInviteHandler(t, newResetGoTrue(t), rec)
-
-		resp := ipPost(t, h, aeInviteValues())
-
-		if !strings.Contains(resp.Header().Get("Location"), "&handoff=") {
-			t.Fatalf("Location = %q, want a hand-off", resp.Header().Get("Location"))
-		}
-		for _, e := range rec.events() {
-			if e.Event == EventPasswordResetCompleted {
-				t.Errorf("invitation flow recorded %s", e.Event)
-			}
-		}
-	})
 }
 
 func TestAccountEvents_SpentResetTokenRecordsOnce(t *testing.T) {
@@ -354,41 +339,22 @@ func aeInviteValues() url.Values {
 	return v
 }
 
-func aeInviteHandler(t *testing.T, f *resetGoTrue, rec AccountEvents) http.Handler {
+func aeInviteHandler(t *testing.T, f *resetGoTrue) http.Handler {
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), testHandoffStore(), rec, lrThrottle(time.Now), true)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), lrThrottle(time.Now), true, nil)
 }
 
-func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
+// InvitationPasswordHandler takes no AccountEvents, so the Location and the GoTrue calls are what a test can see of "no session minted".
+func TestAccountEvents_InvitationPasswordRecordsNoEvent(t *testing.T) {
 	f := newResetGoTrue(t)
-	rec := &recEvents{}
 
-	resp := ipPost(t, aeInviteHandler(t, f, rec), aeInviteValues())
+	resp := ipPost(t, aeInviteHandler(t, f), aeInviteValues())
 
-	if !strings.Contains(resp.Header().Get("Location"), "&handoff=") {
-		t.Fatalf("Location = %q, want a hand-off", resp.Header().Get("Location"))
+	rpRequireRedirect(t, resp, ipOK)
+	if n := f.count(http.MethodPost, "/token"); n != 0 {
+		t.Errorf("POST /token calls = %d, want 0: a confirm mints no session", n)
 	}
-	rec.requireNames(t, EventSignedIn)
-	if e := rec.events()[0]; e.UserID != subjectS1 || e.Email != rpEmail || !e.FirstSession {
-		t.Errorf("event = %+v, want user %s, email %s and FirstSession", e, subjectS1, rpEmail)
-	}
-
-	f2 := newResetGoTrue(t)
-	f2.token = answer(400, gtInvalidCredentials)
-	rec2 := &recEvents{}
-	ipPost(t, aeInviteHandler(t, f2, rec2), aeInviteValues())
-	rec2.requireNames(t)
-
-	full := testHandoffStore()
-	fillStore(t, full, HandoffMaxLive)
-	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	rec3 := &recEvents{}
-	h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), full, rec3, lrThrottle(time.Now), true)
-	if loc := ipPost(t, h, aeInviteValues()).Header().Get("Location"); strings.Contains(loc, "handoff=") {
-		t.Fatalf("a full store minted a code: %q", loc)
-	}
-	rec3.requireNames(t)
 }
 
 func TestAccountEvents_UserAgentIsCleanedAndCut(t *testing.T) {
@@ -477,11 +443,6 @@ func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
 			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
 			h := ResetPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, log, rec, lrThrottle(time.Now), true)
 			return aeResetPost(t, h)
-		}},
-		{"invitation set-password", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
-			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-			h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), rec, lrThrottle(time.Now), true)
-			return ipPost(t, h, aeInviteValues())
 		}},
 	}
 	for _, c := range routes {

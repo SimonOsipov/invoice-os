@@ -13,7 +13,8 @@ import (
 const UnconfirmedPurgeDays = 7
 
 // GrantAccountStateRead gives auth_hook_reader the three-column read of auth.users that
-// public.invitee_account_state needs, and invoice_app the guarded auth.purge_unconfirmed_account. It runs as supabase_auth_admin and reports false, with
+// public.invitee_account_state needs, invoice_app the guarded auth.purge_unconfirmed_account, and
+// invoice_gateway auth.confirm_link_address. It runs as supabase_auth_admin and reports false, with
 // no write, while GoTrue has not yet created auth.users.
 // ceiling: any invoice_app service can delete one account by id that is unconfirmed past the age
 // ceiling: one connection per call; it runs once at boot, so pool it if a hot caller appears
@@ -48,6 +49,11 @@ END $$`,
 		revokeStrayPurgeGrantsSQL,
 		`GRANT USAGE ON SCHEMA auth TO invoice_app`,
 		`GRANT EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) TO invoice_app`,
+		confirmLinkAddressSQL,
+		`REVOKE EXECUTE ON FUNCTION auth.confirm_link_address(text) FROM PUBLIC`,
+		revokeStrayLinkAddressGrantsSQL,
+		`GRANT USAGE ON SCHEMA auth TO invoice_gateway`,
+		`GRANT EXECUTE ON FUNCTION auth.confirm_link_address(text) TO invoice_gateway`,
 	} {
 		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return false, fmt.Errorf("db: grant account state read: %w", err)
@@ -67,6 +73,28 @@ const revokeStrayPurgeGrantsSQL = `DO $$ DECLARE r oid; BEGIN
     EXECUTE format('REVOKE EXECUTE ON FUNCTION auth.purge_unconfirmed_account(uuid) FROM %I', pg_get_userbyid(r));
   END LOOP;
 END $$`
+
+// Leaves EXECUTE to the owner and invoice_gateway only, so a stray grant does not survive a boot.
+const revokeStrayLinkAddressGrantsSQL = `DO $$ DECLARE r oid; BEGIN
+  FOR r IN SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a
+   WHERE p.oid = 'auth.confirm_link_address(text)'::regprocedure AND a.grantee NOT IN (0, p.proowner, 'invoice_gateway'::regrole)
+  LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION auth.confirm_link_address(text) FROM %I', pg_get_userbyid(r));
+  END LOOP;
+END $$`
+
+// Mirrors GoTrue's FindOneTimeToken: expiry is not checked, so an expired unredeemed link still names its account.
+const confirmLinkAddressSQL = `CREATE OR REPLACE FUNCTION auth.confirm_link_address(p_token_hash text) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE v_email text;
+BEGIN
+  SELECT u.email INTO v_email
+    FROM auth.one_time_tokens t JOIN auth.users u ON u.id = t.user_id
+   WHERE t.token_type = 'confirmation_token' AND t.token_hash = p_token_hash
+   LIMIT 1;
+  IF v_email IS NULL THEN RETURN NULL; END IF;
+  RETURN pg_catalog.left(v_email, 1) || '***@' || pg_catalog.substr(v_email, pg_catalog.strpos(v_email, '@') + 1);
+END $fn$`
 
 // The DELETE re-checks confirmation and age under the row lock, so a confirm that commits first wins.
 var purgeFunctionSQL = fmt.Sprintf(`CREATE OR REPLACE FUNCTION auth.purge_unconfirmed_account(p_user_id uuid) RETURNS boolean

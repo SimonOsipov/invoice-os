@@ -182,7 +182,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		"gateway.ExchangeHandler":           store,
 		"gateway.RefreshHandler":            "authURL, client, log",
 		"gateway.SignOutHandler":            "authURL, client, " + sessions + ", log, events",
-		"gateway.InvitationPasswordHandler": "authURL, siteURL, client, " + sessions + ", " + throttle + ", sink, log, " + store + ", events, " + perIP + ", enforce",
+		"gateway.InvitationPasswordHandler": "authURL, siteURL, client, " + sessions + ", " + throttle + ", sink, log, " + perIP + ", enforce, gateway.PoolLinkAddress(pool)",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {

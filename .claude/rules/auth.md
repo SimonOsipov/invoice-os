@@ -78,15 +78,16 @@ paths:
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
 - Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a sign-in session mint (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
-- Count a session mint as `POST /auth/sign-in`, a set-password hand-off that minted a code. Mark the hand-off `FirstSession`: the worker records its device and writes no audit row.
+- Count a session mint as `POST /auth/sign-in` only. The gateway writes no `FirstSession` row. The worker still records the device of a queued one and writes no audit row for it.
 - Keep the answer and its timing as they are when a recorder write fails. Log the event name only, then call `platform.CaptureError`.
 - Read the client IP only through `clientIP`. Hosted takes the `X-Forwarded-For` entry second from the right, preview the rightmost, local the `RemoteAddr` host. A hosted or preview entry that is not a public unicast address gives no IP.
 - Read the confirm token and the `state` from the `POST /auth/invitation/password` form body only. The GET page makes no GoTrue call.
+- Name the account's masked address on the set-password page before the press, from `auth.confirm_link_address`. Render the page without it only for a token the function does not find. Answer 303 to the failed notice when the read fails.
 - Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` for a confirm link, when the request carries no valid `state`.
 - Answer it with 303 to `<AUTH_SITE_URL>/?confirm=invite#token=<token>` for `invite=1`, when the request carries no valid `state`.
 - Render the set-password page for every signup link with a valid `state`. Answer a POST to `/auth/verify` with 405.
 - Render a page only for a 43-character base64url `state`.
-- Hand a session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
+- Mint no session and no hand-off code on `POST /auth/invitation/password`. Answer a confirmed set-password, plain or invite, with 303 to `<AUTH_SITE_URL>/?verified=1`. The visitor signs in from the landing's verified notice.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Share hand-off codes between gateway instances through `gateway_handoff_codes`, as `invoice_gateway` (`DATABASE_GATEWAY_URL`). Store `sha256(code)`, never the code.
@@ -95,7 +96,7 @@ paths:
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address.
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
-- Count `/auth/reset-password` and `/auth/invitation/password` together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call; over the limit, redirect to the route's failed notice. A preview logs and admits.
+- Count `/auth/reset-password`, `/auth/invitation/password` and every confirm-link address lookup (stated `GET`/`HEAD /auth/verify` and the set-password 400 re-render) together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call or the lookup. Refund a lookup that finds the link. Over the limit, redirect to the route's failed notice. A preview logs and admits.
 - Send `X-User-Address` from `checkIPKey(clientIP)` on every GoTrue call except the session check's `GET /user` and the fleet probe. Never copy it from the client.
 - Keep `GOTRUE_MAILER_OTP_LENGTH=10` and `GOTRUE_MAILER_OTP_EXP=3600` in `sidecar/auth/Dockerfile`; the mail copy follows `GOTRUE_MAILER_OTP_EXP` (`TestLinkExpiryCopyMatchesTheIdPLifetime`).
 - In `idp-up.sh`, `idp-mail`, `idp-es256` and `idp-short` raise GoTrue's per-IP rates: gateway-backed IdP tests there share one local key. `idp-hs256` keeps the defaults; it carries the limiter proof.

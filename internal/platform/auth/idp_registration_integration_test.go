@@ -94,19 +94,25 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	grantAccountStateRead(t)
+	gwPool, err := db.NewPool(context.Background(), mailEnv(t, "DATABASE_GATEWAY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(gwPool.Close)
+	lookup := gateway.PoolLinkAddress(gwPool)
+	linkRedeem := gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail, accountmail.PoolTokens(pool), false))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
 	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log, nil))
-	verifyPage, err := gateway.VerifyPageHandler(site)
+	verifyPage, err := gateway.VerifyPageHandler(site, lookup, linkRedeem, true, log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux.Handle("GET /auth/verify", verifyPage)
-	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
-	mux.Handle("POST /auth/exchange", gateway.ExchangeHandler(store))
 	inviteeSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
-	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, store, nil, gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now), true))
+	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, linkRedeem, true, lookup))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)
@@ -492,18 +498,6 @@ func clickWithState(t *testing.T, link, state, password string) string {
 	return location
 }
 
-// followSignedIn posts password on the link's page with a fresh state, requires the hand-off redirect, and returns its code and the state.
-func followSignedIn(t *testing.T, link, password string) (code, state string) {
-	t.Helper()
-	state = newState(t)
-	loc := clickWithState(t, link, state, password)
-	u, err := url.Parse(loc)
-	if err != nil || !strings.HasPrefix(loc, siteURL+"/?verified=1&handoff=") {
-		t.Fatalf("confirm redirect = %q (%v), want %s/?verified=1&handoff=<code>", loc, err, siteURL)
-	}
-	return u.Query().Get("handoff"), state
-}
-
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0, nil)
@@ -630,7 +624,7 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 }
 
 // Two clicks race for one token: GoTrue spends it once, and the gateway hands off once per verified answer.
-// With a state, each verified click also yields one code that exchanges for a session.
+// With a state, a click mints no session: the answer is ?verified=1 or ?verify=failed either way.
 func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 	for _, stateful := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stateful=%t", stateful), func(t *testing.T) {
@@ -640,7 +634,6 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
 			action, values := confirmForm(t, confirmationLink(t, u.email))
 			values.Set("password", u.password)
-			state := values.Get("state")
 			if !stateful {
 				values.Del("state")
 			}
@@ -662,7 +655,6 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			close(start)
 
 			verified := 0
-			var codes []string
 			for range 2 {
 				a := <-answers
 				if a.err != nil || a.status != http.StatusSeeOther {
@@ -670,13 +662,7 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 				}
 				switch {
 				case a.location == siteURL+"/?verify=failed":
-				case !stateful && a.location == siteURL+"/?verified=1":
-					verified++
-				case stateful && strings.HasPrefix(a.location, siteURL+"/?verified=1&handoff="):
-					verified++
-					codes = append(codes, strings.TrimPrefix(a.location, siteURL+"/?verified=1&handoff="))
-				// Two verified clicks revoke each other's session at the password change, so neither mints a code.
-				case stateful && a.location == siteURL+"/?verified=1":
+				case a.location == siteURL+"/?verified=1":
 					verified++
 				default:
 					t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer under %s", a.location, siteURL)
@@ -685,17 +671,13 @@ func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
 			if verified < 1 {
 				t.Fatal("no click landed on ?verified=1")
 			}
-			if stateful {
-				for _, code := range codes {
-					if status, session := exchange(t, gw, code, state); status != http.StatusOK || session["access_token"] == "" {
-						t.Errorf("exchange of a delivered code: status %d, body %v; want 200", status, session)
-					}
-				}
+			if n := sessionRows(t, u.email); n != 0 {
+				t.Errorf("%d session rows after the clicks, want 0: a confirm mints no session", n)
 			}
 			if !emailConfirmed(t, u.email) {
 				t.Error("the account is not confirmed after the clicks")
 			}
-			// A click that mints no code must still leave the chosen password working.
+			// The chosen password signs in after the clicks.
 			accessToken(t, base, u)
 			for range verified {
 				sink.next(t)

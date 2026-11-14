@@ -223,16 +223,11 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 
 func doVerify(t *testing.T, authURL, site *url.URL, log *slog.Logger, query string) *httptest.ResponseRecorder {
 	t.Helper()
-	return doVerifyStore(t, testHandoffStore(), authURL, site, log, query)
-}
-
-func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, log *slog.Logger, query string) *httptest.ResponseRecorder {
-	t.Helper()
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	confirmHandler(t, authURL, site, testClient(), log, nil, store, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	confirmHandler(t, authURL, site, testClient(), log, nil, lrThrottle(time.Now), true).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -504,9 +499,8 @@ func TestVerify_Failure303(t *testing.T) {
 				if withState {
 					query += "&state=" + vhState
 				}
-				store := testHandoffStore()
 
-				rec := doVerifyStore(t, store, authURL, siteURL(t), nil, query)
+				rec := doVerify(t, authURL, siteURL(t), nil, query)
 
 				if rec.Code != http.StatusSeeOther {
 					t.Fatalf("status = %d, want 303: %s", rec.Code, rec.Body.String())
@@ -517,18 +511,13 @@ func TestVerify_Failure303(t *testing.T) {
 				if fake != nil && len(fake.Calls()) != c.wantCalls {
 					t.Errorf("GoTrue saw %d calls, want %d", len(fake.Calls()), c.wantCalls)
 				}
-				if n := storeMapEntries(store); n != 0 {
-					t.Errorf("store holds %d codes after a failure, want 0", n)
-				}
 			})
 		}
 	}
-	// Control: a good click on a store mints a code, so "the store stays empty" above is not vacuous.
-	store := testHandoffStore()
-	rec := doVerifyStore(t, store, newFakeGoTrue(t, http.StatusOK, gtSession).URL, siteURL(t), nil, good+"&state="+vhState)
-	vhCode(t, rec)
-	if n := storeMapEntries(store); n != 1 {
-		t.Errorf("control: store holds %d codes, want 1", n)
+	// Control: a good click confirms, so the failed Location above is not what every click answers.
+	rec := doVerify(t, newFakeGoTrue(t, http.StatusOK, gtSession).URL, siteURL(t), nil, good+"&state="+vhState)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || loc != siteURLValue+"/?verified=1" {
+		t.Errorf("control: a good click = %d Location %q, want 303 %s/?verified=1", rec.Code, loc, siteURLValue)
 	}
 }
 
@@ -565,13 +554,13 @@ func TestVerify_IgnoresRedirectTo(t *testing.T) {
 func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 	secrets := []string{verifyToken, sessionAT, sessionRT, vhState}
 	for _, c := range []struct {
-		name, body, want string // want "" = a Location carrying a code
+		name, body, want string
 		status           int
 		state            string
 		wantLog          int // a failure logs the upstream status
 	}{
 		{"verified with a session body", gtSession, siteURLValue + "/?verified=1", http.StatusOK, "", 0},
-		{"verified with a state", gtSession, "", http.StatusOK, vhState, 0},
+		{"verified with a state", gtSession, siteURLValue + "/?verified=1", http.StatusOK, vhState, 0},
 		{"failed", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, "", http.StatusForbidden},
 		{"failed with a state", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, vhState, http.StatusForbidden},
 	} {
@@ -590,10 +579,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 			}
 			loc := rec.Header().Get("Location")
 			all := secrets
-			if c.want == "" {
-				code := vhCode(t, rec)
-				all = append(slices.Clone(secrets), code)
-			} else if loc != c.want {
+			if loc != c.want {
 				t.Errorf("Location = %q, want %q", loc, c.want)
 			}
 			if c.wantLog != 0 && !logHasValue(buf, c.wantLog) {
@@ -607,7 +593,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 					t.Errorf("response body carries %q", s)
 				}
 			}
-			// The success Location carries the code and nothing else secret.
+			// The success Location carries nothing secret.
 			for _, s := range secrets {
 				if strings.Contains(loc, s) {
 					t.Errorf("Location carries %q", s)

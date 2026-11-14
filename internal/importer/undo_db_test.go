@@ -337,9 +337,10 @@ func TestUndo_OnlyTheUploaderAnAdminOrAFullAccessMemberUndoes(t *testing.T) {
 			case 403:
 				tc.world.wantUndo(t, tc.who, batch, doc, 403, udForbidden)
 			case 404:
+				before := tc.world.undoneAudits(t) // the firm world already holds rows from the 200 cases
 				csSameAsUnknown(t, "undo of a batch outside the client set", tc.world.undo(tc.who, batch), tc.world.undo(tc.who, uuid.NewString()))
-				if n := tc.world.undoneAudits(t); n != 0 {
-					t.Errorf("import.undone rows after a refusal = %d, want 0", n)
+				if n := tc.world.undoneAudits(t) - before; n != 0 {
+					t.Errorf("import.undone rows written by a refusal = %d, want 0", n)
 				}
 			}
 		})

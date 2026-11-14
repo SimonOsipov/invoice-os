@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot } from './boot'
 import { StaffGate } from './StaffGate'
-import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, recordRaw, reply, spyTimeouts, SUPPORT_KEY, staffToken, STATE_A, STATE_KEY, stateRaw } from './testkit'
+import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, reply, spyTimeouts, SUPPORT_KEY, staffToken, STATE_A, STATE_KEY, stateRaw, v3Raw } from './testkit'
 
 vi.mock('./boot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./boot')>()
@@ -102,8 +102,8 @@ describe('StaffGate (AC-11)', () => {
 
   it('StaffGate_strictModePostsOnce', async () => {
     const renewed = staffToken('renewed')
-    store.local.setItem(OPS_KEY, recordRaw(staffToken('old'), 'R-old'))
-    const net = installFetch(() => reply(200, { access_token: renewed, refresh_token: 'R-renewed' }))
+    store.local.setItem(OPS_KEY, v3Raw(staffToken('old')))
+    const net = installFetch(() => reply(200, { access_token: renewed }))
     render(<StrictMode>{gate()}</StrictMode>)
     expect(await screen.findByText('console')).toBeTruthy()
     expect(net.calls.map((c) => c.url)).toEqual([`${GW}/auth/refresh`])
@@ -112,7 +112,7 @@ describe('StaffGate (AC-11)', () => {
 
   it('StaffGate_standaloneRendersWithNoRequest', async () => {
     const net = installFetch(() => new Error('unexpected request'))
-    store.local.setItem(OPS_KEY, recordRaw(staffToken('old'), 'R-old'))
+    store.local.setItem(OPS_KEY, v3Raw(staffToken('old')))
     render(gate({ landing: null }))
     expect(await screen.findByText('console')).toBeTruthy()
     expect(net.calls).toHaveLength(0)
@@ -134,12 +134,12 @@ describe('StaffGate (AC-11)', () => {
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     store.session.setItem(STATE_KEY, stateRaw(STATE_A, Date.now() - 1000))
     const access = staffToken('exchanged')
-    const net = installFetch(() => reply(200, { access_token: access, refresh_token: 'R-exchanged' }))
+    const net = installFetch(() => reply(200, { access_token: access, renewable: true }))
     render(<StrictMode>{gate()}</StrictMode>)
     expect(await screen.findByText('console')).toBeTruthy()
     expect(net.calls.map((c) => c.url)).toEqual([`${GW}/auth/exchange`])
     expect(net.calls[0]?.body).toEqual({ code: CODE, state: STATE_A })
-    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: access, refresh_token: 'R-exchanged' })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: access })
     expect(realLocation.search).toBe('')
     expect(hrefWrites).toEqual([])
   })

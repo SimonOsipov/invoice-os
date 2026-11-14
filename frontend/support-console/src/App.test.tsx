@@ -126,7 +126,7 @@ describe('App', () => {
 
 describe('boot screen', () => {
   const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
-  const landing = (sub: string) => JSON.stringify({ v: 2, token: jwt({ sub }), refresh_token: 'R' })
+  const landing = (sub: string) => JSON.stringify({ v: 3, token: jwt({ sub }) })
   const store = (session: string | null, owner: string | null) => {
     const map = new Map<string, string>()
     if (session !== null) map.set(SUPPORT_SESSION_KEY, session)

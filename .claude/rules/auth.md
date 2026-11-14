@@ -29,6 +29,8 @@ paths:
   - "internal/gateway/mock*.go"
   - "cmd/gateway/mockissuer.go"
   - "packages/console-session/**"
+  - "packages/api-client/src/client.ts"
+  - "frontend/support-console/src/session.ts"
   - "frontend/app/src/App.tsx"
   - "frontend/app/src/lib/signInState.ts"
   - "frontend/app/src/lib/consoleHandoff.ts"
@@ -101,6 +103,8 @@ paths:
 - Clear the cookie with `Max-Age=0` and the same attributes on every cookie-mode sign-out answer, on a cookie-mode refresh answered 401 for the cookie's own token (never for a refused body token), and on a cookie-mode exchange whose answer holds no refresh token.
 - Grant `Access-Control-Allow-Credentials: true` only on those three routes and only to an origin in `AUTH_SESSION_ORIGINS`. Never answer `*`.
 - Expect the gateway to refuse boot on Cloud Run without `AUTH_SESSION_ORIGINS`.
+- Store only the access token in a console's storage: `{v:3, token}`, or `{v:3, token, from:'app'}` for an app-borrowed session.
+- When a sign-out gets no answer, leave a pending marker; send the sign-out again at the next load before anything else, never when the load carries `?handoff=`.
 - Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address.
 - Count the readiness-check per-IP limit in `gateway_throttle_counts` as `readiness-check-ip`, 10 per 24 h; an IPv6 address counts per /64. A preview logs and admits.
 - Count `/auth/reset-password` and `/auth/invitation/password` together in `gateway_throttle_counts` as `link-redeem-ip`, 30 per 1 h per `checkIPKey(clientIP)`, before the GoTrue `/verify` call; over the limit, redirect to the route's failed notice. A preview logs and admits.

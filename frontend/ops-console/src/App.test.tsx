@@ -104,7 +104,7 @@ describe('App', () => {
     const kept = { v: 1, owner: 'S', draft: { id: '', status: 'draft', title: '', summary: '', featured: false, serverHasCover: false, cover: { kind: 'none' }, body: [] } }
     vi.stubGlobal('localStorage', {
       getItem: (k: string) =>
-        JSON.stringify(k === OPS_SESSION_KEY ? { v: 2, token: jwt({ sub: 'S' }), refresh_token: 'R' } : kept),
+        JSON.stringify(k === OPS_SESSION_KEY ? { v: 3, token: jwt({ sub: 'S' }) } : kept),
     })
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
     expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)

@@ -36,9 +36,9 @@ export interface ApiFetchOptions {
 
 export const SESSION_HEADER = 'X-Auth-Session'
 
-// STUB (SECAUD-17-10): the executor sets credentials:'include' and the header.
+// Cookie-mode call to /auth/exchange, /auth/refresh or /auth/sign-out; the gateway holds the refresh token.
 export function sessionFetch<T>(url: string, opts?: Omit<ApiFetchOptions, 'credentials' | 'token'>): Promise<T> {
-  return apiFetch<T>(url, opts)
+  return apiFetch<T>(url, { ...opts, credentials: 'include', headers: { ...opts?.headers, [SESSION_HEADER]: 'cookie' } })
 }
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.
@@ -75,6 +75,7 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
       headers,
       body,
       signal: opts?.signal,
+      credentials: opts?.credentials,
     })
   } catch (e) {
     // undici reports every socket error as "fetch failed"; the cause names it (ECONNRESET).

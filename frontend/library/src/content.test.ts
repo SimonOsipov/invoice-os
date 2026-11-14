@@ -132,7 +132,7 @@ describe('content', () => {
     const f = byId('undo-import')
     const words = [f.title, f.short, f.desc, ...f.benefits].join(' ')
     expect(words).toMatch(/discarded/)
-    expect(words).toMatch(/sent/)
+    expect(words).toMatch(/submitted/)
     expect(words).not.toMatch(/credit note|move/i)
   })
 

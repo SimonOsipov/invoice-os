@@ -79,6 +79,7 @@ func TestIdP_ConfirmLinkAddressMasksTheLinksAccount(t *testing.T) {
 }
 
 func TestIdP_ConfirmLinkAddressMasksAnInviteLink(t *testing.T) {
+	idpMailURL(t)
 	grantAccountStateRead(t)
 	gwDB := gatewayConn(t)
 	w := newInviteWorldFor(t, "iris-"+uuid.NewString()+"@example.com", nil)

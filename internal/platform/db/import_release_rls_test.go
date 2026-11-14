@@ -545,6 +545,7 @@ func irTriggerCount(t *testing.T) int {
 func TestRLS_ImportReleaseMigrationBackfillsAndRoundTrips(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
+	irRelabelDeadRows(t)
 	reapply := rollBackMigrations(t, staffMigrationProvider(t), migrationVersion(t, importReleaseMigrationGlob))
 
 	tenant, a, c := caThrowawayTenant(t), uuid.NewString(), uuid.NewString()
@@ -599,6 +600,7 @@ func TestRLS_ImportReleaseMigrationBackfillsAndRoundTrips(t *testing.T) {
 
 func TestRLS_ImportReleaseMigrationDownRestoresTheBindingRules(t *testing.T) {
 	requireHarness(t)
+	irRelabelDeadRows(t)
 	reapply := rollBackMigrations(t, staffMigrationProvider(t), migrationVersion(t, importReleaseMigrationGlob))
 
 	if _, present := irFunctionDef(t, "release_document_binding"); present {

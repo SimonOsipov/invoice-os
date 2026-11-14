@@ -80,3 +80,9 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// SessionCORS is CORS plus credentials for the session origins of c.
+// STUB (SECAUD-17-09 test-spec): the executor replaces this body.
+func SessionCORS(allowed []string, c *SessionCookies) func(http.Handler) http.Handler {
+	return CORS(allowed)
+}

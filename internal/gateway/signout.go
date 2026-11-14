@@ -12,7 +12,7 @@ import (
 
 // SignOutHandler answers POST /auth/sign-out by revoking every session of the account through GoTrue.
 // GoTrue's /logout needs a live access token, so a refresh grant mints one first.
-func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger, events AccountEvents) http.Handler {
+func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger, events AccountEvents, cookies *SessionCookies) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=refresh_token"
 	token := tokenURL.String()

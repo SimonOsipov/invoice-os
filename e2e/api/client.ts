@@ -45,7 +45,7 @@ export function fleetHeaders(): Record<string, string> {
 export async function rawFetch(
   path: string,
   init?: { method?: string; headers?: Record<string, string>; body?: unknown; redirect?: RequestRedirect },
-): Promise<{ status: number; body: unknown; location: string | null }> {
+): Promise<{ status: number; body: unknown; location: string | null; setCookie: string[] }> {
   const hasBody = init?.body !== undefined
   const res = await fetch(`${apiBase()}${path}`, {
     method: init?.method,
@@ -59,7 +59,8 @@ export async function rawFetch(
   } catch {
     body = undefined
   }
-  return { status: res.status, body, location: res.headers.get('Location') }
+  // STUB (SECAUD-17-09 test-spec): the executor returns res.headers.getSetCookie().
+  return { status: res.status, body, location: res.headers.get('Location'), setCookie: [] }
 }
 
 export interface Persona {

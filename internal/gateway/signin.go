@@ -111,7 +111,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 }
 
 // ExchangeHandler answers POST /auth/exchange by redeeming a code for its stored answer.
-func ExchangeHandler(store Handoffs) http.Handler {
+func ExchangeHandler(store Handoffs, cookies *SessionCookies) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
 			return

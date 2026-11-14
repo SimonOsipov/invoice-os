@@ -161,7 +161,7 @@ func main() {
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	store := handoffStore(gwPool, app.Logger)
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, gwPool)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, nil, gwPool)
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -391,7 +391,7 @@ type handoff struct {
 // Every minter and exchange share one code store: a sign-in code is redeemable only through exchange; an export code only through export-download.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
 // A nil store means the in-process one; a nil pool keeps the sign-in throttle in-process.
-func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs, pool *pgxpool.Pool) handoff {
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs, cookies *gateway.SessionCookies, pool *pgxpool.Pool) handoff {
 	if store == nil {
 		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}
@@ -410,9 +410,9 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return handoff{
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink, events),
-		Exchange: gateway.ExchangeHandler(store),
-		Refresh:  gateway.RefreshHandler(authURL, client, log),
-		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
+		Exchange: gateway.ExchangeHandler(store, cookies),
+		Refresh:  gateway.RefreshHandler(authURL, client, log, cookies),
+		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events, cookies),
 		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store, events, perIP, enforce),
 
 		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events, perIP, enforce),
@@ -501,4 +501,10 @@ func mustEnv(key string) string {
 		platform.Fatal(slog.Default(), "gateway: %s is required", key)
 	}
 	return v
+}
+
+// sessionCookies reads AUTH_SESSION_ORIGINS (rows B1-B4).
+// STUB (SECAUD-17-09 test-spec): the executor replaces this body and wires it in main.
+func sessionCookies(getenv func(string) string, corsOrigins []string, onCloudRun bool) (*gateway.SessionCookies, error) {
+	return nil, nil
 }

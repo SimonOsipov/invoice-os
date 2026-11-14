@@ -958,7 +958,7 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 			if unset == "AUTH_SITE_URL" {
 				answers["Verify"] = serveForm(handoffVerify(authURL, nil, nil), "/auth/verify", "token=T&type=signup")
 				log := slog.New(slog.DiscardHandler)
-				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil).InvitationPassword
+				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil, nil).InvitationPassword
 				answers["InvitationPassword"] = serveForm(invitee, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd")
 			}
 			for name, rec := range answers {
@@ -1616,7 +1616,7 @@ func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", c.env)
 			authURL, calls := fakeAuth(t)
 			sessions := gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log)
-			h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil)
+			h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil, nil)
 			if h.LinkRedeemByIP == nil {
 				t.Fatal("handoffHandlers built no LinkRedeemByIP")
 			}

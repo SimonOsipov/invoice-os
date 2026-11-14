@@ -54,7 +54,7 @@ func newConsoleRig(t *testing.T, log *slog.Logger) *consoleRig {
 	sessions := NewSessionChecker(user.URL, testClient(), time.Now, log)
 	return &consoleRig{
 		handler:  verifier.Middleware(sessions.Middleware(auth.RequireStaff(ConsoleHandoffHandler(store, log)))),
-		exchange: ExchangeHandler(store),
+		exchange: ExchangeHandler(store, nil),
 		store:    store,
 		clock:    clk,
 		signer:   signer,

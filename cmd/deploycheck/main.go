@@ -155,13 +155,20 @@ func (c checker) backend(ctx context.Context, svc string) error {
 		return err
 	}
 	var h struct {
-		Build string `json:"build"`
+		Build *string `json:"build"`
 	}
 	if err := json.Unmarshal(body, &h); err != nil {
 		return fmt.Errorf("/health is not JSON: %w", err)
 	}
-	if h.Build != c.sha {
-		return fmt.Errorf("/health build %q, want %s", h.Build, c.sha)
+	if h.Build == nil && svc == "gateway" {
+		return fmt.Errorf("gateway /health has no build detail: %s missing or rejected", platform.HeaderGatewayToken)
+	}
+	build := ""
+	if h.Build != nil {
+		build = *h.Build
+	}
+	if build != c.sha {
+		return fmt.Errorf("/health build %q, want %s", build, c.sha)
 	}
 	return nil
 }

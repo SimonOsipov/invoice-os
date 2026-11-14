@@ -135,14 +135,11 @@ func TestHideHealthDetail_AnonymousCallerReadsStatusOnly(t *testing.T) {
 	}
 }
 
-// The token row in TestHideHealthDetail_TokenHolderReadsBuildDetail differs only in the header value, so tokenMatches is the only clause that rejects here.
+// Rows differ from the token-holder row only in the header value.
 func TestHideHealthDetail_WrongTokenReadsStatusOnly(t *testing.T) {
 	app := newHealthApp(t, "gateway")
 	app.HideHealthDetail("tok")
 	wrong := []string{"tokx", "xtok", "to", "TOK", "tak", ""}
-	if len(wrong) == 0 {
-		t.Fatal("no wrong tokens to try")
-	}
 	for _, supplied := range wrong {
 		for _, path := range []string{"/health", "/healthz"} {
 			code, _, raw := getHealth(t, app, path, &supplied)

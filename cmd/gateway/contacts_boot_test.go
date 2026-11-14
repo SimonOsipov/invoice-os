@@ -199,7 +199,7 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	// Deleting main's HideHealthDetail call turns the anonymous read red; only the booted binary sees main's wiring.
+	// Guards main's HideHealthDetail wiring, which only the booted binary exercises.
 	t.Run("health shows build detail only to the gateway token", func(t *testing.T) {
 		read := func(header string) (int, string, map[string]string) {
 			req, _ := http.NewRequest(http.MethodGet, base+"/health", nil)

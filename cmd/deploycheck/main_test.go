@@ -147,11 +147,21 @@ func TestRun_GatewayWithoutTheTokenFails(t *testing.T) {
 	t.Parallel()
 	c := fleet(t, "abc", nil)
 	c.gatewayToken = "wrong"
-	// A long interval keeps the deadline out of an in-flight request, whose error would replace the build message.
-	c.interval = 100 * time.Millisecond
-	failed := runFor(c, 250*time.Millisecond)
-	if len(failed) != 1 || !strings.HasPrefix(failed[0], "gateway:") || !strings.Contains(failed[0], `build ""`) {
-		t.Fatalf("failed = %v, want only the gateway, naming build \"\"", failed)
+	err := c.backend(context.Background(), "gateway")
+	if err == nil || !strings.Contains(err.Error(), platform.HeaderGatewayToken) || strings.Contains(err.Error(), "want abc") {
+		t.Fatalf("err = %v, want one naming %s, not a stale build", err, platform.HeaderGatewayToken)
+	}
+}
+
+func TestBackend_ABuildThatDiffersIsStale(t *testing.T) {
+	t.Parallel()
+	c := fleet(t, "abc", func(svc, path string, w http.ResponseWriter) bool {
+		fmt.Fprint(w, `{"build":"old"}`)
+		return true
+	})
+	err := c.backend(context.Background(), "gateway")
+	if err == nil || !strings.Contains(err.Error(), `build "old", want abc`) {
+		t.Fatalf("err = %v, want the stale build error", err)
 	}
 }
 

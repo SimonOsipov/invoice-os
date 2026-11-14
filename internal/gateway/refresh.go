@@ -8,7 +8,6 @@ import (
 )
 
 // RefreshHandler answers POST /auth/refresh by renewing a session through GoTrue.
-// ceiling: no rate limit; revisit when a per-client-IP limit lands.
 func RefreshHandler(authURL *url.URL, client *http.Client, log *slog.Logger) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	// GoTrue reads grant_type through FormValue, so it rides the query beside a JSON body.

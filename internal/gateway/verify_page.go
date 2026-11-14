@@ -10,7 +10,7 @@ import (
 // maxVerifyTokenBytes caps the token on the page and on the verifying POST.
 const maxVerifyTokenBytes = 256
 
-// VerifyPageHandler serves the set-password page for every signup link; it holds no GoTrue client, so opening the link spends nothing.
+// VerifyPageHandler serves the set-password page for every signup link; it holds no GoTrue client.
 func VerifyPageHandler(siteURL *url.URL, address LinkAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) (http.Handler, error) {
 	if siteURL == nil {
 		return RegistrationNotConfigured(), nil

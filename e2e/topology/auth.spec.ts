@@ -1568,9 +1568,9 @@ test('deployed app: a real sign-in names the account holder on the identity card
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
-// frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
 // COPY.verified in VerifyNotice.tsx
 const VERIFIED_NOTICE = 'Your email address is verified. Please sign in.'
+// frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.

@@ -1091,8 +1091,10 @@ func TestGatewayRoutes_TheVerifyPageAndSetPasswordGetThePoolLookup(t *testing.T)
 	for _, a := range verifyArgs {
 		got = append(got, types.ExprString(a))
 	}
-	if len(got) != 5 || got[0] != "siteURL" || got[1] != "gateway.PoolLinkAddress(gwPool)" || got[2] != hand+".LinkRedeemByIP" || got[4] != "app.Logger" {
-		t.Errorf("VerifyPageHandler args = %v, want siteURL, gateway.PoolLinkAddress(gwPool), %s.LinkRedeemByIP, <enforce>, app.Logger", got, hand)
+	// handoffHandlers computes enforce the same way for the set-password POST that shares this count.
+	const enforce = "platform.Posture(platform.DeployEnv()) != platform.PosturePreview"
+	if len(got) != 5 || got[0] != "siteURL" || got[1] != "gateway.PoolLinkAddress(gwPool)" || got[2] != hand+".LinkRedeemByIP" || got[3] != enforce || got[4] != "app.Logger" {
+		t.Errorf("VerifyPageHandler args = %v, want siteURL, gateway.PoolLinkAddress(gwPool), %s.LinkRedeemByIP, %s, app.Logger", got, hand, enforce)
 	}
 
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", src, 0)

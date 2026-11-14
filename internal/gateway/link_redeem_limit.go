@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// One per-IP count of link redeems, shared by the confirm, reset and invitee set-password POSTs.
+// One per-IP count of link redeems, shared by the confirm, reset and invitee set-password POSTs and the confirm-link lookups (TestVerifyPage_TheLookupAndThePostShareOneCount).
 const (
 	LinkRedeemPerIP    = 30
 	LinkRedeemIPWindow = time.Hour

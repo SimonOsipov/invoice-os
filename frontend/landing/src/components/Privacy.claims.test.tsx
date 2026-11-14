@@ -1260,10 +1260,11 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
   })
 
   it('P5 states no first session', () => {
-    const p5 = sentence('P5')
-    expect(p5).toContain('with the IP address and the browser and operating system of that request')
-    expect(p5).not.toContain('first session')
-    expect(p5).not.toContain('is not recorded as a sign-in')
+    // The page, not the constant: a confirm mints no session, so no first-session record exists.
+    const page = html.replace(/<[^>]*>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ')
+    expect(page, 'control: the P5 paragraph is on the page').toContain('records it with the IP address and the browser and operating system of that request')
+    expect(page).not.toMatch(/first session/i)
+    expect(page).not.toContain('is not recorded as a sign-in')
   })
 
   it('accountEventsSelfOnlyForNonAdmins', () => {

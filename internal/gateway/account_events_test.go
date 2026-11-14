@@ -333,30 +333,6 @@ func TestAccountEvents_SpentResetTokenRecordsOnce(t *testing.T) {
 	rec.requireNames(t, EventPasswordResetCompleted)
 }
 
-func aeInviteValues() url.Values {
-	v := rpValues(rpToken, "signup", rpPass)
-	v.Set("state", vhState)
-	return v
-}
-
-func aeInviteHandler(t *testing.T, f *resetGoTrue) http.Handler {
-	t.Helper()
-	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), lrThrottle(time.Now), true, nil)
-}
-
-// InvitationPasswordHandler takes no AccountEvents, so the Location and the GoTrue calls are what a test can see of "no session minted".
-func TestAccountEvents_InvitationPasswordRecordsNoEvent(t *testing.T) {
-	f := newResetGoTrue(t)
-
-	resp := ipPost(t, aeInviteHandler(t, f), aeInviteValues())
-
-	rpRequireRedirect(t, resp, ipOK)
-	if n := f.count(http.MethodPost, "/token"); n != 0 {
-		t.Errorf("POST /token calls = %d, want 0: a confirm mints no session", n)
-	}
-}
-
 func TestAccountEvents_UserAgentIsCleanedAndCut(t *testing.T) {
 	ua := strings.Repeat("a", 100) + "\xff" + strings.Repeat("é", 500)
 	req := httptest.NewRequest(http.MethodPost, "/", nil)

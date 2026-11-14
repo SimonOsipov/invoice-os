@@ -403,7 +403,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Transport:     platform.IDTokenTransport(nil),
 	}
 	events := gateway.NewAccountEvents(pool, log)
-	// One count for the reset and set-password routes; a preview logs and admits.
+	// One count for every link route; a preview logs and admits.
 	perIP := gateway.NewSignInThrottle("link-redeem-ip", gateway.LinkRedeemPerIP, gateway.LinkRedeemMaxKeys, gateway.LinkRedeemIPWindow, time.Now)
 	perIP.Shared(pool, log)
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview

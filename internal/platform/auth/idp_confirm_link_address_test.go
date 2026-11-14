@@ -95,30 +95,62 @@ func TestIdP_ConfirmLinkAddressMasksAnInviteLink(t *testing.T) {
 	requireMasked(t, gwDB, "live invite link", linkHash(t, confirmationLink(t, w.email)), "i***@example.com")
 }
 
-// The first character is a rune, not a byte. GoTrue refuses a non-ASCII local part at sign-up, so the address is renamed in the row.
-func TestIdP_ConfirmLinkAddressKeepsAMultibyteFirstCharacter(t *testing.T) {
+// The mask is the first rune of the local part, ***@, then everything after the first @ (the unsubscribe page's maskEmail).
+// GoTrue refuses some of these at sign-up and lowercases the rest, so the address is renamed in the row.
+func TestIdP_ConfirmLinkAddressMasksEdgeAddressesLikeTheUnsubscribePage(t *testing.T) {
 	base := idpMailURL(t)
 	grantAccountStateRead(t)
 	gwDB := gatewayConn(t)
-	u := signUpMailed(t, base, "olaf-", "example.test")
-	link := confirmationLink(t, u.email)
-	renamed := "ö" + u.email
 	su := superConn(t)
-	exec(t, su, `UPDATE auth.users SET email = $2 WHERE email = $1`, u.email, renamed)
-	t.Cleanup(func() { _, _ = su.Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, renamed) })
+	rows := []struct{ name, local, domain, want string }{
+		{"multibyte local part", "ö-%s", "example.test", "ö***@example.test"},
+		{"one-character local part", "a", "x%s.example", "a***@x%s.example"},
+		{"uppercase kept as stored", "OLAF-%s", "Example.TEST", "O***@Example.TEST"},
+		{"plus tag never shown", "olaf+tag-%s", "example.test", "o***@example.test"},
+		{"second @ stays in the domain", `"a@b-%s"`, "example.test", `"***@b-%s"@example.test`},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			u := signUpMailed(t, base, "olaf-", "example.test")
+			link := confirmationLink(t, u.email)
+			tag := strings.NewReplacer("@", "-", ".", "-").Replace(u.email)
+			local, domain, want := strings.ReplaceAll(c.local, "%s", tag), strings.ReplaceAll(c.domain, "%s", tag), strings.ReplaceAll(c.want, "%s", tag)
+			renamed := local + "@" + domain
+			exec(t, su, `UPDATE auth.users SET email = $2 WHERE email = $1`, u.email, renamed)
+			t.Cleanup(func() { _, _ = su.Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, renamed) })
 
-	requireMasked(t, gwDB, "multibyte local part", linkHash(t, link), "ö***@example.test")
+			requireMasked(t, gwDB, c.name, linkHash(t, link), want)
+			if got := linkAddress(t, gwDB, linkHash(t, link)); got != nil && strings.Contains(*got, renamed) {
+				t.Errorf("the mask %q holds the full address", *got)
+			}
+		})
+	}
 }
 
 func TestIdP_ConfirmLinkAddressIsNullForAnUnknownHash(t *testing.T) {
-	idpMailURL(t)
+	base := idpMailURL(t)
 	grantAccountStateRead(t)
+	gwDB := gatewayConn(t)
 	raw := make([]byte, 28)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
 	}
+	u := signUpMailed(t, base, "olaf-", "example.test")
+	live := linkHash(t, confirmationLink(t, u.email))
 
-	requireNoAddress(t, gatewayConn(t), "random 56-hex hash", hex.EncodeToString(raw))
+	requireMasked(t, gwDB, "control: the live hash", live, "o***@example.test")
+	requireNoAddress(t, gwDB, "random 56-hex hash", hex.EncodeToString(raw))
+	// One exact key: no prefix, suffix, wildcard or case folding of a live hash matches.
+	for name, near := range map[string]string{
+		"empty":      "",
+		"truncated":  live[:len(live)-1],
+		"extended":   live + "0",
+		"uppercased": strings.ToUpper(live),
+		"wildcard":   "%",
+		"prefix":     live[:8] + "%",
+	} {
+		requireNoAddress(t, gwDB, name, near)
+	}
 }
 
 func TestIdP_ConfirmLinkAddressIsNullOnceTheLinkIsRedeemed(t *testing.T) {
@@ -200,8 +232,19 @@ func TestIdP_ConfirmLinkAddressOnlyTheGatewayMayCall(t *testing.T) {
 	if sqlState(err) != "42501" {
 		t.Errorf("invoice_app call: err %v, SQLSTATE %q; want 42501", err, sqlState(err))
 	}
-	// auth_hook_reader holds USAGE on auth, so only a PUBLIC grant could let it in.
 	su := superConn(t)
+	// SECURITY DEFINER with an empty search_path, owned by the auth admin: the body cannot be shadowed.
+	var definer bool
+	var owner string
+	var config []string
+	if err := su.QueryRow(ctx, `SELECT p.prosecdef, pg_get_userbyid(p.proowner), COALESCE(p.proconfig, '{}') FROM pg_proc p WHERE p.oid = 'auth.confirm_link_address(text)'::regprocedure`).Scan(&definer, &owner, &config); err != nil {
+		t.Fatal(err)
+	}
+	if !definer || owner != "supabase_auth_admin" || !slices.Equal(config, []string{`search_path=""`}) {
+		t.Errorf("auth.confirm_link_address: security definer %v, owner %q, config %v; want true, supabase_auth_admin, [search_path=\"\"]", definer, owner, config)
+	}
+
+	// auth_hook_reader holds USAGE on auth, so only a PUBLIC grant could let it in.
 	tx, err := su.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)

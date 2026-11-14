@@ -258,14 +258,18 @@ func TestVerifyPage_TokenAndScriptFillOnlyTheirPlaceholders(t *testing.T) {
 		"plain":                 "MARKERtoken123",
 		"names the script slot": "MARKER{{.Script}}",
 		"names the token slot":  "MARKER{{.Token}}",
+		"names the intro slot":  "MARKER{{.Intro}}",
+		"names the alert slot":  "MARKER{{.Alert}}",
+		"names the state slot":  "MARKER{{.State}}",
 		"escapable":             `MARKER"'<>&`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec, doc := vpPage(t, token)
 			body := rec.Body.String()
-			if strings.Contains(body, "{{.Script}}") != strings.Contains(token, "{{.Script}}") ||
-				strings.Contains(body, "{{.Token}}") != strings.Contains(token, "{{.Token}}") {
-				t.Errorf("a placeholder is left unfilled in the page or leaked from the token")
+			for _, slot := range []string{"{{.Script}}", "{{.Token}}", "{{.Intro}}", "{{.Alert}}", "{{.State}}"} {
+				if strings.Contains(body, slot) != strings.Contains(token, slot) {
+					t.Errorf("%s is left unfilled in the page or leaked from the token", slot)
+				}
 			}
 			if n := strings.Count(body, resetScript); n != 1 {
 				t.Errorf("the submit-once script occurs %d times in the page, want 1", n)
@@ -1162,9 +1166,11 @@ func TestVerifyPage_StatelessAndMalformedOpensMakeNoLookup(t *testing.T) {
 		{"over-long token", vpQuery(strings.Repeat("a", vpMaxLen+1)), vpFailedLoc},
 	}
 	for _, c := range rows {
-		rec := vpDo(t, h, http.MethodGet, c.query)
-		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != c.want {
-			t.Errorf("%s: answer = %d Location %q, want 303 %q", c.name, rec.Code, rec.Header().Get("Location"), c.want)
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			rec := vpDo(t, h, method, c.query)
+			if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != c.want {
+				t.Errorf("%s %s: answer = %d Location %q, want 303 %q", method, c.name, rec.Code, rec.Header().Get("Location"), c.want)
+			}
 		}
 	}
 	if n := len(l.calls()); n != 0 {
@@ -1181,9 +1187,10 @@ func TestVerifyPage_AMissedLookupSpendsTheLinkRedeemCount(t *testing.T) {
 	l := vpMissing()
 	h := vpHandlerWith(t, l.fn(), vpLimit(2), true, nopLog())
 
+	// A HEAD lookup spends the same count as a GET.
 	var got []string
-	for range 3 {
-		rec := vpDo(t, h, http.MethodGet, vpQuery(vpToken))
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodGet} {
+		rec := vpDo(t, h, method, vpQuery(vpToken))
 		got = append(got, strconv.Itoa(rec.Code)+" "+rec.Header().Get("Location"))
 	}
 

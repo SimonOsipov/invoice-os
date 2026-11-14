@@ -21,10 +21,37 @@ import (
 
 const importReleaseMigrationGlob = "*_import_release.sql"
 
+// irRelabelDeadRows relabels undone batches and discarded invoices that other suites leave behind,
+// since the import_release Down refuses them (23514). Triggers are off so the guards do not object.
+func irRelabelDeadRows(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin relabel: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, q := range []string{
+		`SET LOCAL session_replication_role = replica`,
+		`UPDATE import_batches SET status = 'failed' WHERE status = 'undone'`,
+		`UPDATE invoices SET status = 'draft' WHERE status = 'discarded'`,
+		`UPDATE invoice_status_history SET to_status = 'draft' WHERE to_status = 'discarded'`,
+		`UPDATE invoice_status_history SET from_status = 'draft' WHERE from_status = 'discarded'`,
+	} {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			t.Fatalf("relabel dead rows (%s): %v", q, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit relabel: %v", err)
+	}
+}
+
 // irRollbackOrder puts the import_release Down before v's when that migration exists, so a Down of an
 // earlier migration never leaves its triggers and functions behind.
 func irRollbackOrder(t *testing.T, v int64) []int64 {
 	t.Helper()
+	irRelabelDeadRows(t)
 	matches, err := fs.Glob(migrations.FS, importReleaseMigrationGlob)
 	if err != nil {
 		t.Fatalf("glob %s: %v", importReleaseMigrationGlob, err)

@@ -417,6 +417,19 @@ describe('the join screen signs out (AC-7)', () => {
     await waitFor(() => expect(dead.hrefWrites.length).toBeGreaterThan(0))
     expect(signOutPosts(), 'a bearer-only offer has no cookie to revoke').toEqual([])
     expect(dead.hrefWrites[0]).toBe(LANDING)
+    expect(localStorage.getItem(PENDING_KEY), 'no revoke, no marker').toBeNull()
+  })
+
+  it('joinSignOut_unreachedLeavesThePendingMarker', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // A renewable offer whose sign-out gets no answer leaves the marker and warns once, as a hand-off seat does.
+    signOutReply = () => Promise.reject(new TypeError('Failed to fetch'))
+    const lost = await joinScreen(true)
+    await clickSignOut()
+    await waitFor(() => expect(lost.hrefWrites.length).toBeGreaterThan(0))
+    expect(signOutPosts(), 'the revoke was attempted').toHaveLength(1)
+    expect(localStorage.getItem(PENDING_KEY), 'an unanswered join sign-out leaves the marker').not.toBeNull()
+    expect(d8Warnings(warn)).toEqual([[D8_WARNING]])
   })
 })
 

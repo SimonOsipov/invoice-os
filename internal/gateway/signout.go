@@ -12,7 +12,7 @@ import (
 
 // SignOutHandler answers POST /auth/sign-out by revoking every session of the account through GoTrue.
 // GoTrue's /logout needs a live access token, so a refresh grant mints one first.
-func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger, events AccountEvents) http.Handler {
+func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger, events AccountEvents, cookies *SessionCookies) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=refresh_token"
 	token := tokenURL.String()
@@ -24,16 +24,32 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 		if !postOnly(w, r) {
 			return
 		}
+		aud, cookieMode, err := cookies.mode(r)
+		if err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		var in struct {
 			RefreshToken string `json:"refresh_token"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxExchangeBodyBytes)).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-		if in.RefreshToken == "" {
-			writeError(w, http.StatusBadRequest, "refresh_token is required")
-			return
+		if cookieMode {
+			// Cookie mode reads only the cookie and clears it on every answer.
+			in.RefreshToken = cookies.read(r, aud)
+			cookies.clear(w, r, aud)
+			if in.RefreshToken == "" {
+				writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+				return
+			}
+		} else {
+			// ceiling: body mode for a browser Origin serves pre-deploy tabs, remove 30 days after the production deploy
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxExchangeBodyBytes)).Decode(&in); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid request body")
+				return
+			}
+			if in.RefreshToken == "" {
+				writeError(w, http.StatusBadRequest, "refresh_token is required")
+				return
+			}
 		}
 
 		// The grant rotates the refresh token, so a client that gives up must cancel neither step.

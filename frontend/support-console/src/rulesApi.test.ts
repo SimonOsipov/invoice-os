@@ -42,7 +42,7 @@ const wire = { key: 'k', type: 'cel', target: 'invoice.total', params: { min: 0 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const store = (token: string | null) =>
   vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (k === SESSION_KEY && token ? JSON.stringify({ v: 2, token, refresh_token: 'R' }) : null),
+    getItem: (k: string) => (k === SESSION_KEY && token ? JSON.stringify({ v: 3, token }) : null),
   })
 
 let fetchMock: ReturnType<typeof vi.fn>

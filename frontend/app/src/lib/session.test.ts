@@ -393,7 +393,8 @@ describe('isTokenExpired / resolveBootSession', () => {
     storage.setItem(SESSION_KEY, JSON.stringify(record))
     expect(resolveBootSession(2000_000)).toBeNull()
 
-    storage.setItem(SESSION_KEY, JSON.stringify({ ...record, refresh_token: 'R0', received_at: 1000 }))
+    // The cookie holds the refresh token: received_at alone marks a renewable record.
+    storage.setItem(SESSION_KEY, JSON.stringify({ ...record, received_at: 1000 }))
 
     expect(resolveBootSession(2000_000)).toEqual({
       persona: handoffPersona(me),
@@ -401,8 +402,12 @@ describe('isTokenExpired / resolveBootSession', () => {
       me,
       verified: true,
       handoff: true,
-      renewal: { refreshToken: 'R0', receivedAt: 1000 },
+      renewal: { receivedAt: 1000 },
     })
+
+    // A legacy pair record is renewable too, through its one-time token.
+    storage.setItem(SESSION_KEY, JSON.stringify({ ...record, refresh_token: 'R0', received_at: 1000 }))
+    expect(resolveBootSession(2000_000)?.renewal).toEqual({ receivedAt: 0, legacyRefreshToken: 'R0' })
   })
 
   it('S30: resolveBootSession passes a live session through unchanged', () => {
@@ -567,10 +572,10 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a stored hand-off record with no tenant kind is dropped, renewal pair and all', () => {
     const noKindMe = { tenant: { id: ME.tenant.id, name: ME.tenant.name }, user: ME.user }
-    const noKind = { v: 1, personaId: 'firm', token: 'jwt', me: noKindMe, verified: true, handoff: true, refresh_token: 'R0', received_at: 1000 }
+    const noKind = { v: 1, personaId: 'firm', token: 'jwt', me: noKindMe, verified: true, handoff: true, received_at: 1000 }
     // Control: the same record with a kind parses and keeps its renewal.
     const kept = parseStoredSession(JSON.stringify({ ...noKind, me: ME }))
-    expect(kept?.renewal).toEqual({ refreshToken: 'R0', receivedAt: 1000 })
+    expect(kept?.renewal).toEqual({ receivedAt: 1000 })
     const { warn, error } = spyOnConsole()
     expect(parseStoredSession(JSON.stringify(noKind))).toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
@@ -582,7 +587,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
       '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated","display_name":"Adaeze Nwankwo","email":"adaeze.nwankwo@example.com"}},"verified":true}'
     expect(serializeSession(firmSession())).toBe(persona)
     // A persona session never writes the pair, even if it carries a renewal.
-    expect(serializeSession({ ...firmSession(), renewal: { refreshToken: 'R0', receivedAt: 1000 } })).toBe(persona)
+    expect(serializeSession({ ...firmSession(), renewal: { receivedAt: 1000 } })).toBe(persona)
   })
 
   it('a handoff record without a usable me is rejected', () => {
@@ -627,22 +632,19 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
   }
   const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }
 
-  it('a renewable hand-off session round-trips', () => {
-    const session: Session = {
-      persona: handoffPersona(ME),
-      token: 'jwt',
-      me: ME,
-      verified: true,
-      handoff: true,
-      renewal: { refreshToken: 'R0', receivedAt: 1000 },
-    }
+  // SECAUD-17-11 AC 1: the cookie holds the refresh token; the record keeps the renewal clock only.
+  it('serialize_handoffWritesReceivedAtOnly', () => {
+    const session: Session = { persona: handoffPersona(ME), token: 'jwt', me: ME, verified: true, handoff: true, renewal: { receivedAt: 5 } }
 
     const raw = serializeSession(session)
 
-    expect(JSON.parse(raw)).toEqual({ ...HANDOFF, refresh_token: 'R0', received_at: 1000 })
+    expect(JSON.parse(raw)).toEqual({ ...HANDOFF, received_at: 5 })
+    expect(raw).not.toContain('refresh_token')
+    expect(raw).not.toContain('legacyRefreshToken')
+    // A record with received_at alone parses back to the same renewal.
     expect(parseStoredSession(raw)).toEqual(session)
     // Boundary: epoch 0 is a finite receipt time, not an absent one.
-    const zero: Session = { ...session, renewal: { refreshToken: 'R0', receivedAt: 0 } }
+    const zero: Session = { ...session, renewal: { receivedAt: 0 } }
     expect(parseStoredSession(serializeSession(zero))).toEqual(zero)
   })
 
@@ -662,7 +664,10 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
       ['pair on a persona record', JSON.stringify({ ...PERSONA, refresh_token: 'R0', received_at: 1000 })],
       ['pair on a handoff:"true" record', JSON.stringify({ ...PERSONA, handoff: 'true', refresh_token: 'R0', received_at: 1000 })],
       ['refresh_token only', JSON.stringify({ ...HANDOFF, refresh_token: 'R0' })],
-      ['received_at only', JSON.stringify({ ...HANDOFF, received_at: 1000 })],
+      ['received_at only on a persona record', JSON.stringify({ ...PERSONA, received_at: 1000 })],
+      ["received_at 'x' alone", JSON.stringify({ ...HANDOFF, received_at: 'x' })],
+      ['null received_at alone', JSON.stringify({ ...HANDOFF, received_at: null })],
+      ['non-finite received_at alone', JSON.stringify({ ...HANDOFF }).replace(/\}$/, ',"received_at":1e400}')],
       ["refresh_token ''", JSON.stringify({ ...HANDOFF, refresh_token: '', received_at: 1000 })],
       ['numeric refresh_token', JSON.stringify({ ...HANDOFF, refresh_token: 123, received_at: 1000 })],
       ['null refresh_token', JSON.stringify({ ...HANDOFF, refresh_token: null, received_at: 1000 })],
@@ -674,6 +679,8 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
     ]
     // Control: the well-formed pair on a hand-off record parses.
     expect(parseStoredSession(JSON.stringify({ ...HANDOFF, refresh_token: 'R0', received_at: 1000 }))).not.toBeNull()
+    // Control: received_at alone on a hand-off record is the current shape.
+    expect(parseStoredSession(JSON.stringify({ ...HANDOFF, received_at: 1000 }))?.renewal).toEqual({ receivedAt: 1000 })
     for (const [name, raw] of rows) {
       const { warn, error } = spyOnConsole()
       expect(parseStoredSession(raw), name).toBeNull()
@@ -814,5 +821,54 @@ describe('isStaffToken', () => {
     }
     expect(isStaffToken('a.b')).toBe(false)
     expect(isStaffToken(null)).toBe(false)
+  })
+})
+
+// [legacy-adopt-order]: a pre-deploy pair record keeps its token until the adoption refresh answers 200.
+describe('legacy pair record (SECAUD-17-11)', () => {
+  const ME: Me = {
+    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
+  }
+  const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }
+
+  it('loadSession_legacyPairIsLeftForTheAdoptionRefresh', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const legacy = JSON.stringify({ ...HANDOFF, refresh_token: 'R-old', received_at: 9 })
+    storage.setItem(SESSION_KEY, legacy)
+    storage.setItem.mockClear()
+
+    const first = loadSession()
+
+    expect(first?.renewal).toEqual({ receivedAt: 0, legacyRefreshToken: 'R-old' })
+    // Storage is untouched: the token stays until the adoption answers 200.
+    expect(storage.getItem(SESSION_KEY)).toBe(legacy)
+    expect(storage.setItem).not.toHaveBeenCalled()
+    // A reload before the answer finds the token again.
+    expect(loadSession()?.renewal).toEqual({ receivedAt: 0, legacyRefreshToken: 'R-old' })
+    expect(storage.getItem(SESSION_KEY)).toBe(legacy)
+    // Saving the not-yet-adopted session keeps the pair too.
+    saveSession(first!)
+    expect(storage.getItem(SESSION_KEY)).toBe(legacy)
+
+    // Control: the current shape carries no legacy token.
+    storage.setItem(SESSION_KEY, JSON.stringify({ ...HANDOFF, received_at: 9 }))
+    expect(loadSession()?.renewal).toEqual({ receivedAt: 9 })
+  })
+
+  it('loadSession_savingTheAdoptedSessionDropsTheToken', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    storage.setItem(SESSION_KEY, JSON.stringify({ ...HANDOFF, refresh_token: 'R-old', received_at: 9 }))
+    const loaded = loadSession()
+    expect(loaded?.renewal?.legacyRefreshToken, 'control: the legacy token was read').toBe('R-old')
+
+    // The renewer saves this after the 200: a new clock and no legacy token.
+    saveSession({ ...loaded!, renewal: { receivedAt: 1234 } })
+
+    expect(JSON.parse(storage.getItem(SESSION_KEY) ?? 'null')).toEqual({ ...HANDOFF, received_at: 1234 })
+    expect(storage.getItem(SESSION_KEY)).not.toContain('R-old')
+    expect(loadSession()?.renewal).toEqual({ receivedAt: 1234 })
   })
 })

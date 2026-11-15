@@ -32,7 +32,7 @@ function jwt(): string {
   return `${b64url('{"alg":"RS256"}')}.${b64url(JSON.stringify(claims))}.sig`
 }
 const handoffRecord = () =>
-  JSON.stringify({ v: 1, personaId: 'firm', token: jwt(), me: ME, verified: true, handoff: true, refresh_token: 'R1', received_at: Date.now() - MIN })
+  JSON.stringify({ v: 1, personaId: 'firm', token: jwt(), me: ME, verified: true, handoff: true, received_at: Date.now() - MIN })
 
 const hsq = () => (w._hsq ?? []) as unknown[][]
 const answer = (status: number, body: unknown) =>
@@ -206,7 +206,7 @@ describe('sign-out ends the chat (CHAT-03-05)', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
-        if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, refresh_token: 'R0' })
+        if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, renewable: true })
         if (url === `${GATEWAY}/api/tenancy/v1/me`) return answer(403, { error: 'forbidden' })
         if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) {
           return ok({ invitations: [{ id: 'inv-1', workspace: 'Obi Partners', role: 'reviewer', inviter: 'Ada Obi', expires_at: '2026-10-20T00:00:00Z' }] })

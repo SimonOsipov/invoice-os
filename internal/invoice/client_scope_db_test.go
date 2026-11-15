@@ -589,6 +589,8 @@ func TestClientScope_AnInvoiceRefreshesAndLinksABuyerTheMemberReaches(t *testing
 	}
 
 	csFileFor(t, f, f.limited, f.entA, "CS-REF-1", strPtr(" "+shared+" "), strPtr("Typed Name"), strPtr("new@x.ng"))
+	// The fill of one TIN leaves another record the member reaches unlinked.
+	csWantDirLinks(t, f.super, f.tenant, own)
 	csFileFor(t, f, f.limited, f.entA, "CS-REF-2", strPtr(own), nil, nil)
 
 	var name, email string

@@ -292,6 +292,7 @@ func TestRegistrationHandlers_DemoRequestWorksWithoutAuthConfig(t *testing.T) {
 		t.Fatal("an unconfigured registration has no DemoRequest handler")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(`{"email":"ada@corp.example","name":"Ada","company":"Acme"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	reg.DemoRequest.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {

@@ -48,6 +48,9 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		if pending == nil {
 			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
 			return

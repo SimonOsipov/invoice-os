@@ -763,6 +763,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			log, _ := captureLog()
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+			regReq.Header.Set("Content-Type", "application/json")
 			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
@@ -1037,6 +1038,7 @@ func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
 			log, buf := captureLog()
 			h := InvitationRegisterHandler(authURL, testClient(), 0, log, previewing(liveInvite, nil).preview, claiming("e@x.test", true, nil).registrations(), nil)
 			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(inviteeBody(inviteToken, password, nil)))
+			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 
 			h.ServeHTTP(rec, req)
@@ -1171,7 +1173,9 @@ func TestInvitationRegister_ReleasesTheClaimWhenNoAccountWasCreated(t *testing.T
 			log, _ := captureLog()
 			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations(), nil)
 
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken))))
+			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
+			req.Header.Set("Content-Type", "application/json")
+			h.ServeHTTP(rec, req)
 
 			if rec.Code != c.want {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, c.want, rec.Body.String())
@@ -1363,6 +1367,7 @@ func TestInvitationRegister_ReleaseOutlivesTheRequestContext(t *testing.T) {
 		return nil
 	}
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
+	req.Header.Set("Content-Type", "application/json")
 
 	inviteeHandler(authURL, 0, previewing(liveInvite, nil), r).ServeHTTP(httptest.NewRecorder(), req)
 

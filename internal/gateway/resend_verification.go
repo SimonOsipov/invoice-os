@@ -35,6 +35,9 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		start := time.Now()
 		var in struct {
 			Email string `json:"email"`

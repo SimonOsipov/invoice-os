@@ -247,6 +247,9 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		if registrations.Claim == nil || registrations.Release == nil {
 			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
 			return
@@ -319,6 +322,9 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 	endpoint := authURL.JoinPath("resend").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		var in struct {

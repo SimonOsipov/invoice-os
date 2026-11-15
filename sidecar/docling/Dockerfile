@@ -11,17 +11,12 @@ FROM mirror.gcr.io/library/python:3.12-slim AS deps
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /build
-COPY sidecar/docling/requirements.txt .
-# rapidocr==3.9.2 hard-requires opencv_python (the GUI build) with no marker to swap
-# it for -headless, so `pip install -r requirements.txt` alone always pulls it in.
-# -headless serves the identical cv2 API rapidocr/docling_ibm_models call here
-# (imgproc/imgcodecs only, no highgui) with no X11/GL libs. The uninstall must sit
-# strictly between the two installs: resolving both in one command lets pip's
-# internal install order silently decide whose cv2/ files land on disk last, and the
-# losing order reproduces this story's ImportError (confirmed empirically).
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y opencv-python \
-    && pip install --no-cache-dir --no-deps opencv-python-headless==5.0.0.93
+COPY sidecar/docling/torch.lock sidecar/docling/requirements.lock sidecar/docling/pip_check_guard.py ./
+# One index per step. --no-deps: the locks are the full closure, with opencv-python-headless
+# in place of rapidocr's opencv-python; the guard fails on any other missing dependency.
+RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://download.pytorch.org/whl/cpu -r torch.lock \
+    && pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements.lock \
+    && python3 pip_check_guard.py
 
 # Layout + TableFormer (torch) only here -- skips code/formula (~640 MB) and the
 # picture classifier (~16 MB), neither of which an invoice pipeline touches. Baked
@@ -44,21 +39,12 @@ RUN python3 fetch_rapidocr_models.py
 # (see tests/conftest.py) for the repo-scanning specs; the run stage's own build context
 # needs nothing mounted, only this stage.
 FROM deps AS test
-COPY sidecar/docling/requirements-dev.txt .
-# requirements-dev.txt re-includes `-r requirements.txt` (so a local `pip install -r
-# requirements-dev.txt` is self-sufficient) -- that re-resolve sees rapidocr's declared
-# "opencv-python" as unsatisfied (this stage only has -headless, a different distribution
-# name) and reinstalls the GUI build, undoing deps' swap above. Redo the swap after.
-# --force-reinstall is required here: -headless' dist-info already exists from the deps
-# stage (unaffected by the uninstall above, which only removes opencv-python's files), so
-# a plain `pip install` sees it as "already satisfied" and skips writing cv2/ back --
-# leaving the package uninstalled in all but name. Confirmed empirically (T-03-cv2 guard).
-RUN pip install --no-cache-dir -r requirements-dev.txt \
-    && pip uninstall -y opencv-python \
-    && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==5.0.0.93
+COPY sidecar/docling/requirements-dev.lock .
+RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements-dev.lock \
+    && python3 pip_check_guard.py
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
-COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pyproject.toml ./
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pip_check_guard.py sidecar/docling/pyproject.toml ./
 COPY sidecar/docling/tests ./tests
 # Same non-root user the run stage uses below, not just for parity: running as root
 # makes chmod 000 a no-op (root bypasses the DAC check), which was silently defeating

@@ -54,6 +54,8 @@ updates:
       - dependency-name: onnxruntime
       - dependency-name: pypdfium2
       - dependency-name: torch
+      - dependency-name: torchvision
+      - dependency-name: opencv-python-headless
 
   - package-ecosystem: docker
     directories:

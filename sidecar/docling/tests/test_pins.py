@@ -1,6 +1,7 @@
 """T-02-5, T-02-6: requirements.txt is exact-pinned; Dockerfile carries neither
-egress trap. T-03-11: no surya/olmocr/CUDA torch ever sneaks in. Pure file scans --
-no docling import, runs in the bare local venv.
+egress trap. T-03-11: no surya/olmocr/CUDA torch ever sneaks in. The Dockerfile installs only from
+the hashed locks, one index per step. Pure file scans -- no docling import, runs in the
+bare local venv.
 """
 
 import re
@@ -14,6 +15,9 @@ from conftest import repo_root
 REPO_ROOT = repo_root()
 SIDECAR_DIR = REPO_ROOT / "sidecar" / "docling"
 REQUIREMENTS = SIDECAR_DIR / "requirements.txt"
+TORCH_LOCK = SIDECAR_DIR / "torch.lock"
+REQUIREMENTS_LOCK = SIDECAR_DIR / "requirements.lock"
+DEV_LOCK = SIDECAR_DIR / "requirements-dev.lock"
 DOCKERFILE = SIDECAR_DIR / "Dockerfile"
 
 # BuildKit's parser-directive regex (moby/buildkit tokenizeDirective) tolerates
@@ -24,9 +28,9 @@ DOCKERFILE = SIDECAR_DIR / "Dockerfile"
 _SYNTAX_DIRECTIVE_RE = re.compile(r"^\s*#\s*syntax\s*=", re.IGNORECASE | re.MULTILINE)
 
 # fastapi, uvicorn (already pinned) + the four §4 pins table entries
-# (docling[rapidocr], rapidocr, onnxruntime, torch) subtask 02's Dockerfile
-# needs to run the model-prefetch step. Below this, the per-line check below
-# would pass over too few lines to mean anything.
+# (docling[rapidocr], rapidocr, onnxruntime, torch) the Dockerfile needs to run the
+# model-prefetch step. Below this, the per-line check below would pass over too few
+# lines to mean anything.
 MIN_DIRECT_REQUIREMENTS = 6
 
 
@@ -127,3 +131,85 @@ def test_max_pages_matches_the_go_page_cap():
     m = re.search(r"const MaxPages = (\d+)", src)
     assert m, "const MaxPages not found in internal/extraction/pdfium.go"
     assert convert.MAX_PAGES == int(m.group(1))
+
+
+_PYPI = "https://pypi.org/simple"
+_TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
+
+
+def _install_segments(text: str) -> list[str]:
+    """Each `pip install` segment of a RUN: joins `\\`-continued lines, splits on `&&` and `;`."""
+    segments = []
+    for line in text.replace("\\\n", " ").splitlines():
+        if line.lstrip().upper().startswith("RUN "):
+            segments += [s.strip() for s in re.split(r"&&|;", line) if "pip install" in s]
+    return segments
+
+
+def _pip_install_problems(text: str) -> list[str]:
+    """Every install segment that is not hashed, --no-deps and single-index."""
+    problems = []
+    for seg in _install_segments(text):
+        if "--require-hashes" not in seg:
+            problems.append(f"no --require-hashes: {seg}")
+        if "--no-deps" not in seg:
+            problems.append(f"no --no-deps: {seg}")
+        if len(re.findall(r"--(?:extra-)?index-url", seg)) != 1 or "--extra-index-url" in seg:
+            problems.append(f"want exactly one --index-url: {seg}")
+    return problems
+
+
+def test_no_extra_index_url_in_requirements_or_dockerfile():
+    reqs = REQUIREMENTS.read_text()
+    docker = DOCKERFILE.read_text()
+    assert "==" in reqs, f"{REQUIREMENTS}: no == line -- the scan reached nothing"
+    assert "FROM" in docker, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"
+    assert "--extra-index-url" not in reqs, f"{REQUIREMENTS} carries --extra-index-url"
+    assert "--extra-index-url" not in docker, f"{DOCKERFILE} carries --extra-index-url"
+
+
+def test_every_dockerfile_pip_install_is_hashed_no_deps_and_single_index():
+    text = DOCKERFILE.read_text()
+    assert _pip_install_problems(text) == []
+    segments = _install_segments(text)
+    for lock in ("torch.lock", "requirements.lock", "requirements-dev.lock"):
+        assert any(f"-r {lock}" in s for s in segments), (
+            f"no install segment names -r {lock} -- the scan did not reach it"
+        )
+    for s in segments:
+        want = _TORCH_INDEX if "-r torch.lock" in s else _PYPI
+        assert f"--index-url {want} " in s + " ", f"wrong index for: {s.strip()}"
+
+
+def test_dockerfile_never_uninstalls_a_package():
+    text = DOCKERFILE.read_text()
+    assert "FROM" in text, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"
+    assert "pip uninstall" not in text, f"{DOCKERFILE} runs pip uninstall"
+
+
+def _lock_blocks(path) -> list[tuple[str, list[str]]]:
+    """(name==version, [# from index ...]) per package block of a uv lock."""
+    blocks: list[tuple[str, list[str]]] = []
+    for line in path.read_text().splitlines():
+        if re.match(r"[a-z0-9]", line):
+            blocks.append((line.split(" ")[0], []))
+        elif line.strip().startswith("# from "):
+            blocks[-1][1].append(line.strip()[len("# from "):])
+    return blocks
+
+
+def test_lock_index_annotations_split_one_index_per_name():
+    locks = {REQUIREMENTS_LOCK: _PYPI, DEV_LOCK: _PYPI, TORCH_LOCK: _TORCH_INDEX}
+    names = {}
+    for path, index in locks.items():
+        blocks = _lock_blocks(path)
+        assert blocks, f"{path} has no package line -- the scan reached nothing"
+        for pin, froms in blocks:
+            assert froms == [index], f"{path}: {pin} is annotated {froms}, want [{index!r}]"
+        names[path] = {pin.split("==")[0] for pin, _ in blocks}
+    torch_pins = {
+        line.split("==")[0] for line in _requirement_lines() if re.match(r"torch(vision)?==", line)
+    }
+    assert names[TORCH_LOCK] == torch_pins
+    for path in (REQUIREMENTS_LOCK, DEV_LOCK):
+        assert not names[path] & {"torch", "torchvision"}, f"{path} names torch or torchvision"

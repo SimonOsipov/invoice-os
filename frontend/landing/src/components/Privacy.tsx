@@ -435,7 +435,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your
-            account then goes when the workspace is deleted, {DELETION_GRACE_DAYS} days later, not at once.
+            account then goes when the workspace is deleted, not at once.
           </p>
 
           <h2 style={H2}>If you upload invoice documents</h2>

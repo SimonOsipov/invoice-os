@@ -18,12 +18,10 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://do
     && pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements.lock \
     && python3 pip_check_guard.py
 
-# Layout + TableFormer (torch) only here -- skips code/formula (~640 MB) and the
-# picture classifier (~16 MB), neither of which an invoice pipeline touches. Baked
-# here, not fetched at boot: with DOCLING_ARTIFACTS_PATH set below, Docling refuses
-# to fetch anything at runtime, so a mismatched selector here fails loudly on the
-# first scan instead of quietly re-downloading.
-RUN python3 -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/opt/docling-models'), with_code_formula=False, with_picture_classifier=False, with_rapidocr=False)"
+# Layout + TableFormer only (no code/formula, no picture classifier). Baked at build:
+# with DOCLING_ARTIFACTS_PATH set, Docling refuses to fetch at runtime.
+COPY sidecar/docling/fetch_docling_models.py .
+RUN python3 fetch_docling_models.py
 
 # RapidOCR English (onnxruntime backend) fetched separately -- see the script's own
 # docstring: official host first (short timeout, one retry), pinned HF mirror on
@@ -44,7 +42,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://py
     && python3 pip_check_guard.py
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
-COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pip_check_guard.py sidecar/docling/pyproject.toml ./
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pip_check_guard.py sidecar/docling/fetch_docling_models.py sidecar/docling/pyproject.toml ./
 COPY sidecar/docling/tests ./tests
 # Same non-root user the run stage uses below, not just for parity: running as root
 # makes chmod 000 a no-op (root bypasses the DAC check), which was silently defeating

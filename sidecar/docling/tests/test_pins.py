@@ -181,6 +181,14 @@ def test_every_dockerfile_pip_install_is_hashed_no_deps_and_single_index():
         assert f"--index-url {want} " in s + " ", f"wrong index for: {s.strip()}"
 
 
+def test_dockerfile_never_calls_download_models():
+    text = DOCKERFILE.read_text()
+    assert "fetch_docling_models.py" in text, f"{DOCKERFILE}: control needle missing"
+    assert "download_models" not in text, (
+        f"{DOCKERFILE} calls download_models, which takes no revision; use fetch_docling_models.py"
+    )
+
+
 def test_dockerfile_never_uninstalls_a_package():
     text = DOCKERFILE.read_text()
     assert "FROM" in text, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"

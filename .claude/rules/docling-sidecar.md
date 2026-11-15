@@ -13,7 +13,7 @@ paths:
 - Bump a pinned docling dependency deliberately and regenerate every golden. Never let a release do it.
 - Install the CPU torch wheel from the PyTorch CPU index. Torch is unavoidable and the CPU wheel drops the CUDA payload.
 - Bake every model into the image at build time. The image runs with `--network none`.
-- Fetch the RapidOCR checkpoints with `fetch_rapidocr_models.py`, not Docling's own prefetch. It verifies SHA-256.
+- Fetch the layout and TableFormer models with `fetch_docling_models.py` (pinned commits, SHA-256 manifest) and the RapidOCR checkpoints with `fetch_rapidocr_models.py`, never Docling's `download_models`.
 - Render PDF page images through pypdfium2 (`PdfiumImageBackend` in `convert.py`). docling-parse paints a `/RunLengthDecode` image blank, and OCR then reads nothing.
 - Keep `pypdfium2` pinned in `requirements.txt`. It renders every image that OCR and the layout model read.
 - Keep `pillow` pinned in `requirements.txt` at 13.0.0 or later.

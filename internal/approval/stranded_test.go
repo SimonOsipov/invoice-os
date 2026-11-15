@@ -303,6 +303,23 @@ func TestStranded_ListsACreatorOnlyRun(t *testing.T) {
 	}
 }
 
+// Discriminates a creator-only author set: editor B would count as a signer.
+func TestStranded_ListsAnAuthorsOnlyRun(t *testing.T) {
+	f := newRunFixture(t, "SECAUD-18 authors only")
+	roleID := seedWorkflowRole(t, f.super, f.tenantID, "a-role", "A Role")
+	a := memberIn(t, f, roleID, memberSpec{role: "reviewer"})
+	b := memberIn(t, f, roleID, memberSpec{role: "reviewer"})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // a non-author approver without the role
+	inv, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID, pendingOn("a-role"))
+	seedHistory(t, f.super, f.tenantID, inv, nil, a)
+	seedInvoiceEvent(t, f.super, f.tenantID, "invoice.updated", inv, b)
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedCreatorOnly || rows[0].Blocks != BlocksNow {
+		t.Fatalf("rows = %+v, want one creator only row blocking now", rows)
+	}
+}
+
 func TestStranded_ListsAnOutOfReachRun(t *testing.T) {
 	f := newRunFixture(t, "Stranded out of reach")
 	entB := seedBusinessEntity(t, f.super, f.tenantID, "Stranded out of reach B")

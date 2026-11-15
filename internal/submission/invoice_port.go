@@ -37,6 +37,10 @@ type InvoicePort interface {
 	// already on the Canonical tx1 fetched).
 	Number(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error)
 
+	// ContentCleared reports whether invoiceID's content is what was validated and
+	// approved. It locks the invoice row until tx ends. An absent id is an error.
+	ContentCleared(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error)
+
 	// MarkSubmitted transitions invoiceID -> submitted as SystemActor(tenantID).
 	// Idempotent: a redundant call on an already-submitted invoice returns nil.
 	MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error

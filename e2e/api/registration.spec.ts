@@ -162,6 +162,25 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     }
   })
 
+  test('a body not declared as JSON is refused with 415 at once', async () => {
+    const email = `ct-${crypto.randomUUID()}@example.com`
+    const rows: [string, string][] = [
+      ['/auth/register', JSON.stringify({ email, password: crypto.randomUUID().slice(0, 12) })],
+      ['/auth/resend-verification', JSON.stringify({ email })],
+      ['/auth/request-password-reset', JSON.stringify({ email })],
+    ]
+    for (const [path, body] of rows) {
+      const t0 = performance.now()
+      const res = await fetch(`${apiBase()}${path}`, { method: 'POST', body, headers: { 'Content-Type': 'text/plain' } })
+      const ms = performance.now() - t0
+      const out = { status: res.status, body: await res.json() }
+      assertErrorEnvelope(out, 415, path)
+      // msgJSONOnly in internal/gateway/json_body.go
+      expect((out.body as { error: string }).error, path).toBe('Content-Type must be application/json')
+      expect(ms, `${path} does not wait out the minimum`).toBeLessThan(REGISTER_MIN_MS)
+    }
+  })
+
   test('opening a bogus verification link bounces to landing for a state', async () => {
     const token = `bogus-${crypto.randomUUID()}`
     const res = await fetch(`${apiBase()}/auth/verify?token=${token}&type=signup`, { redirect: 'manual' })

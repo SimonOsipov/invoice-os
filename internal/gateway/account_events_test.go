@@ -78,6 +78,7 @@ func aeSignIn(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/sign-in", strings.NewReader(signInBody(aeEmail, "pw", randomState(t))))
+	req.Header.Set("Content-Type", "application/json")
 	previewClient(t, req)
 	h.ServeHTTP(rec, req)
 	return rec

@@ -187,6 +187,9 @@ func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		var in struct {
 			Email   string  `json:"email"`
 			Name    string  `json:"name"`

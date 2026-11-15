@@ -264,6 +264,7 @@ func TestRequestPasswordReset_ClientGoneWritesNothing(t *testing.T) {
 	defer cancel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 
 	done := make(chan struct{})
 	go func() {
@@ -425,6 +426,7 @@ func TestRequestPasswordReset_NonPostIs405AtOnce(t *testing.T) {
 			defer cancel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/request-password-reset", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
 
 			start := time.Now()
 			h.ServeHTTP(rec, req)

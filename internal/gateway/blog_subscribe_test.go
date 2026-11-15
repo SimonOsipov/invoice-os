@@ -101,6 +101,7 @@ func subBody(email string) string {
 
 func subPost(h http.Handler, remote, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -234,6 +235,7 @@ func TestBlogSubscribe_ForwardsBodyWithGatewayToken(t *testing.T) {
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
 	body := `{"email":" Ada@Corp.CO ","category_ids":["tax-policy","e-invoicing","tax-policy"],"frequency":"monthly"}`
 	req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.60:1"
 	req.Header.Set("X-User-ID", "u-1")
 	rt.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
@@ -297,6 +299,7 @@ func TestBlogConfirm_MalformedTokenIs410WithoutCall(t *testing.T) {
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
 	for _, tok := range []string{"", strings.Repeat("a", 42), strings.Repeat("a", 44), strings.Repeat("a", 42) + "+"} {
 		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(confirmBody(tok)))
+		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		rt.Confirm.ServeHTTP(rec, req)
 		if rec.Code != http.StatusGone {
@@ -310,6 +313,7 @@ func TestBlogConfirm_MalformedTokenIs410WithoutCall(t *testing.T) {
 
 func confirmPost(h http.Handler, remote, token string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(confirmBody(token)))
+	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -463,6 +467,7 @@ func TestBlogConfirm_BodyShapes(t *testing.T) {
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
 	post := func(body string) int {
 		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "203.0.113.120:1"
 		rec := httptest.NewRecorder()
 		rt.Confirm.ServeHTTP(rec, req)
@@ -499,6 +504,7 @@ func TestBlogSubscribeRoutes_OnlyPostIsServed(t *testing.T) {
 		for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			n++
 			req := httptest.NewRequest(m, "/blog/subscriptions/confirm?token="+subGoodToken, strings.NewReader(confirmBody(subGoodToken)))
+			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost || rec.Header().Get("Cache-Control") != "no-store" {

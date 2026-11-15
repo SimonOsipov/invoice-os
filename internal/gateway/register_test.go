@@ -205,6 +205,7 @@ func registerWith(t *testing.T, authURL *url.URL, p *pendingProbe, body string) 
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false).ServeHTTP(rec, req)
 	return rec
 }
@@ -1152,6 +1153,7 @@ func TestRegister_NilPendingLookupIsNotConfigured(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+	req.Header.Set("Content-Type", "application/json")
 
 	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil, false).ServeHTTP(rec, req)
 
@@ -1182,6 +1184,7 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 			p := probing(c.answer)
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+			req.Header.Set("Content-Type", "application/json")
 
 			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil, false).ServeHTTP(rec, req)
 

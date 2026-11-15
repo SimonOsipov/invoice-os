@@ -56,6 +56,7 @@ func TestSessionCookies_UnsetLocallyRefusesCookieMode(t *testing.T) {
 	for path, handler := range map[string]http.Handler{"/auth/exchange": h.Exchange, "/auth/refresh": h.Refresh, "/auth/sign-out": h.SignOut} {
 		for _, origin := range []string{"https://a.x", "https://evil.example", ""} {
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"code":"c","state":"s"}`))
+			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Auth-Session", "cookie")
 			if origin != "" {
 				req.Header.Set("Origin", origin)

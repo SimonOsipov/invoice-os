@@ -95,8 +95,10 @@ func TestHandoffHandlers_SignInHandsOffToTheSink(t *testing.T) {
 	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
-	h.SignIn.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/sign-in",
-		strings.NewReader(`{"email":"`+cwEmail+`","password":"pw","state":"`+handoffState+`"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/auth/sign-in",
+		strings.NewReader(`{"email":"`+cwEmail+`","password":"pw","state":"`+handoffState+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.SignIn.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("sign-in answered %d: %s", rec.Code, rec.Body.String())
@@ -292,6 +294,7 @@ func TestRegistrationHandlers_DemoRequestWorksWithoutAuthConfig(t *testing.T) {
 		t.Fatal("an unconfigured registration has no DemoRequest handler")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(`{"email":"ada@corp.example","name":"Ada","company":"Acme"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	reg.DemoRequest.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {

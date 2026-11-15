@@ -92,6 +92,8 @@ export interface ExtractionDetail {
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
+  // The newest completed import batch of the document the caller can see, or null.
+  import_batch_id: string | null
 }
 
 // internal/extraction/aireading.go, aiUnavailableField -- mirrored, not imported (Go/TS have no

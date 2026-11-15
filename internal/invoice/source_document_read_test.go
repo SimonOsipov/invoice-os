@@ -340,6 +340,41 @@ func TestStoreSourceDocument_OtherInvoiceRowsExcludesSelfAndIsSorted(t *testing.
 	}
 }
 
+func TestSourceDocument_CountsAndRowsLeaveDiscardedOut(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "SECAUD-50-02 source tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 source entity")
+	documentID := seedDocument(t, super, tenantID)
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	for i, row := range []int{2, 3} {
+		id := seedDiscarded(t, super, tenantID, entityID, fmt.Sprintf("SECAUD-SRC-A%d", i), "", `[]`)
+		if _, err := super.Exec(ctx, `UPDATE invoices SET source_document_id = $2, source_rows = ARRAY[$3::int] WHERE id = $1`, id, documentID, row); err != nil {
+			t.Fatalf("cite the document from discarded row %d: %v", row, err)
+		}
+	}
+	live, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "SECAUD-SRC-B", SourceDocumentID: &documentID, SourceRows: []int{5}})
+	if err != nil {
+		t.Fatalf("Create the live row: %v", err)
+	}
+
+	got, err := store.SourceDocument(c, live.ID)
+	if err != nil {
+		t.Fatalf("SourceDocument: %v", err)
+	}
+	if got.Document == nil {
+		t.Fatal("Document = nil, want a populated record")
+	}
+	if got.Document.InvoicesCreated != 1 {
+		t.Errorf("InvoicesCreated = %d, want 1 (the live row alone)", got.Document.InvoicesCreated)
+	}
+	if len(got.Document.OtherInvoiceRows) != 0 {
+		t.Errorf("OtherInvoiceRows = %v, want [] (the discarded rows are not markers)", got.Document.OtherInvoiceRows)
+	}
+}
+
 // T10 (AC-4): the store-side nil -> []int{} coercion, isolated from the
 // handler/JSON layer (T11 covers the wire encoding).
 func TestStoreSourceDocument_OtherInvoiceRowsIsEmptySliceNotNil(t *testing.T) {

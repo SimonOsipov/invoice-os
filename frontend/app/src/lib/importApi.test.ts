@@ -75,6 +75,7 @@ import {
   rowErrorRows,
   suggestMapping,
   supplyInvoiceNumber,
+  undoImport,
   uploadPercent,
   type CarriedReading,
   type CheckMapping,
@@ -1018,6 +1019,34 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(500)
+  })
+})
+
+describe('undoImport (SECAUD-50-04)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('undoImport posts to the undo route', async () => {
+    const body = { id: 'batch-1', status: 'undone', discarded_invoices: 2 }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(body) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    expect(await undoImport(af, base, 'batch-1')).toEqual(body)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/imports/batch-1/undo')
+    expect(init.method).toBe('POST')
+  })
+
+  it('a 409 rejects with ApiError', async () => {
+    mockFetchOnce({ ok: false, status: 409, json: () => Promise.resolve({ error: 'only a completed import can be undone' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => undoImport(af, base, 'batch-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(409)
+    expect((err as ApiError).message).toBe('only a completed import can be undone')
   })
 })
 

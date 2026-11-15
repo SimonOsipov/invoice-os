@@ -43,7 +43,7 @@ type reply struct {
 type fakeDocker struct {
 	calls                []call
 	version, build, run  func(n int, c call) reply
-	rm, inspect          func(c call) reply
+	rm, inspect, rmLive  func(c call) reply
 	onRun                func(c call)
 	builds, runs, probes int
 }
@@ -78,6 +78,10 @@ func (f *fakeDocker) exec(dir, name string, args ...string) (string, int, error)
 		r = reply{out: "0\n"}
 		if f.inspect != nil {
 			r = f.inspect(c)
+		}
+	case "rm":
+		if f.rmLive != nil {
+			r = f.rmLive(c)
 		}
 	case "image rm":
 		if f.rm != nil {
@@ -667,6 +671,32 @@ func TestDocker_KeepsATaggedRebuildImage(t *testing.T) {
 		}
 		if f.count("image inspect") != 1 || f.count("image rm") != 0 {
 			t.Errorf("%s: inspect=%d rm=%d, want 1 and 0", name, f.count("image inspect"), f.count("image rm"))
+		}
+	}
+}
+
+func TestDocker_RemoveLiveWarnsOnlyOnARealFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rm   reply
+		want string
+	}{
+		"already in progress": {reply{out: "Error response from daemon: removal of container x is already in progress", code: 1}, ""},
+		"no such container":   {reply{out: "Error response from daemon: No such container: x", code: 1}, ""},
+		"daemon error":        {reply{out: "Error response from daemon: boom", code: 1}, "WARNING rm -f mutationreplay-"},
+		"exec error":          {reply{err: errors.New("fork/exec docker: gone")}, "gone"},
+	} {
+		f := &fakeDocker{rmLive: func(call) reply { return tc.rm }}
+		d := newDocker(t.TempDir(), f)
+		d.live = "mutationreplay-1-1"
+		r, w, _ := os.Pipe()
+		old := os.Stderr
+		os.Stderr = w
+		d.RemoveLive()
+		os.Stderr = old
+		w.Close()
+		got, _ := io.ReadAll(r)
+		if tc.want == "" && len(got) != 0 || !strings.Contains(string(got), tc.want) || strings.Contains(string(got), "<nil>") {
+			t.Errorf("%s: stderr = %q, want %q", name, got, tc.want)
 		}
 	}
 }

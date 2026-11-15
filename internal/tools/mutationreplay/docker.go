@@ -197,8 +197,16 @@ func (d *Docker) RemoveLive() {
 	if name == "" {
 		return
 	}
-	if out, code, err := d.docker("rm", "-f", name); err != nil || code != 0 {
-		fmt.Fprintf(os.Stderr, "mutationreplay: WARNING rm -f %s: %v %s\n", name, err, lastLines(out, 3))
+	out, code, err := d.docker("rm", "-f", name)
+	if err == nil && code != 0 && (strings.Contains(out, "already in progress") || strings.Contains(out, "No such container")) {
+		return // --rm got there first
+	}
+	if err != nil || code != 0 {
+		detail := lastLines(out, 3)
+		if err != nil {
+			detail = err.Error()
+		}
+		fmt.Fprintf(os.Stderr, "mutationreplay: WARNING rm -f %s: %s\n", name, detail)
 	}
 }
 

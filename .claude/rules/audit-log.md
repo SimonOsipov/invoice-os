@@ -23,7 +23,7 @@ paths:
 - Write `evidence_bundle.exported` and `evidence_bundle.export_failed` only from `internal/archive`, with payload `entity_id`, `from`, `to`, `files` and `bytes`.
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
-- Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled` or `workspace.purge_started` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload.
+- Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled`, `workspace.purge_started` or `workspace.purge_refused` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload. A refusal row also carries `refusal`, one of `name_mismatch`, `underway`, `not_scheduled`, `house`, `same_approver`, `waiting_period`. A not-found tenant, a non-staff caller and a handler 400 write no row.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.

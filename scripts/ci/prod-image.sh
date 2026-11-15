@@ -22,7 +22,7 @@ check_image() { [[ "$1" =~ ^[a-z][a-z-]*$ ]] || die "image name '$1' is not lowe
 create_builder() {
   if [ "${tried:-0}" -gt 0 ]; then docker buildx rm prod-image >/dev/null 2>&1 || true; fi
   tried=$((${tried:-0} + 1))
-  # Dependabot does not read this script: move the digest by hand with `docker buildx imagetools inspect`.
+  # ceiling: Dependabot does not read this script; refresh the digest with `docker buildx imagetools inspect` on each BuildKit release.
   docker buildx create --name prod-image --driver docker-container \
     --driver-opt image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe --bootstrap >&2
 }

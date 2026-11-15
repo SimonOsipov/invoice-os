@@ -42,5 +42,5 @@ paths:
 - The blog serves `.map` as 404 from `internal/blogweb`, typed `text/plain`. Cloud Run labels a typeless response `text/html`.
 - Give a Python sidecar its own `sidecar/<svc>/Dockerfile`. Declare no `ARG SERVICE`.
 - Pin every external image by digest on its `FROM` line, with its full version tag. `internal/tools/dockerguard` fails an unpinned `FROM`. Add no `# syntax=` line: it pulls a BuildKit frontend from Docker Hub.
-- End every served image's final stage with a non-root `USER`. A Caddy serve stage runs `RUN setcap -r /usr/bin/caddy`, then `USER nobody:nobody`. `scripts/ci/caddy-headers.sh` runs the app's serve stage that way.
+- End a served image's final stage with a non-root `USER`. Add no `USER` when the upstream base already runs non-root. `sidecar/auth/Dockerfile` keeps the upstream `supabase` user, and `TestAuthImage_FinalStageKeepsGoTrueUser` fails on a `USER` line. A Caddy serve stage runs `RUN setcap -r /usr/bin/caddy`, then `USER nobody:nobody`. `scripts/ci/caddy-headers.sh` runs the app's serve stage that way.
 - Prove a new service with a green `dev-env.yml` preview run, then a green `deploy-prod.yml` run.

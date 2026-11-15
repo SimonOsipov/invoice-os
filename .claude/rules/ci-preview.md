@@ -13,7 +13,11 @@ paths:
 - `changes` fails a PR whose head does not contain `origin/main`, or `origin/<base>` for another base. No preview job runs.
 - `preview.sh` retries a `preview-db` or `grant` execution up to 3 times only when its log shows SQLSTATE 53300 (`TestPreviewJobRetriesOnlyOnTooManyConnections`).
 - Push preview images only to `africa-south1-docker.pkg.dev/ascomply-preview/previews` (`preview.sh image`). From invoice-os-infra #43 on, `deploy-preview` holds no write on `images` (before it, still a writer); `Preview invariants` fails when it does.
-- Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
+- Authenticate a `pull_request` run as `deploy-preview` and a dispatched (nightly) run as `deploy-nightly` (`DEPLOYER` in `dev-env.yml`). Workload Identity admits `deploy-preview` from `pull_request` and `main`, and `deploy-nightly` from `main` only. Neither holds a role in `ascomply-prod`. `Preview invariants` always authenticates as `deploy-preview`.
+- PR services, `migrate-pr-<N>` and `preview-db` run as `run-preview`. `<svc>-nightly` and `migrate-nightly` run as `run-nightly` (`preview.sh runtime`).
+- Only `run-nightly` and `deploy-nightly` read a `nightly-*` secret. `run-preview` and `deploy-preview` hold their Secret Manager role under the condition `not-nightly`. Name every nightly-only secret `nightly-*`.
+- `preview.sh secrets nightly` gives `run-nightly` access to each secret it makes. Add a new nightly vendor secret to `nightly_vendor_secrets` in invoice-os-infra `preview.tf`.
+- `Preview invariants` fails when `deploy-preview` can act as `run-nightly` or `deploy-nightly`. It fails when `deploy-preview` can read a `nightly-*` secret and the Actions variable `NIGHTLY_KEYS_CLOSED` is `true`; otherwise that read is a warning. Keep `NIGHTLY_KEYS_CLOSED` set to `true`.
 - A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
 - A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.
 - When `commit-authors` fails, re-run the whole workflow.

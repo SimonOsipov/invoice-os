@@ -260,3 +260,27 @@ func TestGatewayTrace_OutboundQueryDoesNotLeak(t *testing.T) {
 	oneGatewayTx(t, rec)
 	sentrytest.AssertNoLeak(t, rec.Transactions())
 }
+
+func TestGatewayProxy_DropsRefreshTokenCookies(t *testing.T) {
+	app, _, _ := sentrytest.Boot(t, "gateway")
+	up, upURL := stubURL(t)
+	h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": upURL})
+
+	code := proxyHeader(h, tok, "/api/tenancy/v1/me", http.Header{
+		"Cookie": {"__Host-rt-app=secret; other=1", "__Host-rt-ops-console=secret2"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	var got []string
+	for _, v := range up.Only(t, 1).Header.Values("Cookie") {
+		got = append(got, v)
+	}
+	joined := strings.Join(got, "; ")
+	if strings.Contains(joined, "__Host-rt-") || strings.Contains(joined, "secret") {
+		t.Errorf("upstream Cookie %q carries a refresh-token cookie", joined)
+	}
+	if joined != "other=1" {
+		t.Errorf("upstream Cookie = %q, want %q", joined, "other=1")
+	}
+}

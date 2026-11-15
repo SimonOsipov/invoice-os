@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { expireConsole, signOutConsole } from './signOut'
 import {
   APP,
-  borrowedRaw,
   BASE64URL_43_RE,
   GW,
   installFetch,
@@ -11,7 +10,6 @@ import {
   installWindow,
   LANDING,
   OPS_KEY,
-  recordRaw,
   reply,
   spyTimeouts,
   staffToken,
@@ -19,11 +17,15 @@ import {
   SUPPORT_KEY,
   throwingStorage,
   timeoutError,
+  v3BorrowedRaw,
+  v3Raw,
 } from './testkit'
 
 const TIMEOUT_MS = 5000 // REVOKE_TIMEOUT_MS (frontend/app/src/lib/revoke.ts)
 const SIGN_OUT = `${GW}/auth/sign-out`
-const RECORD = recordRaw(staffToken('stored'), 'R-stored')
+const RECORD = v3Raw(staffToken('stored'))
+const LANDING_V3 = RECORD
+const PENDING = `${OPS_KEY}:sign-out-pending`
 
 let warn: ReturnType<typeof vi.spyOn>
 let timeouts: ReturnType<typeof spyTimeouts>
@@ -63,7 +65,7 @@ describe('signOutConsole (AC-12)', () => {
     await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
     expect(t.net.calls).toHaveLength(1)
     expect(t.net.calls[0]).toMatchObject({ url: SIGN_OUT, method: 'POST' })
-    expect(t.net.calls[0]?.body).toEqual({ refresh_token: 'R-stored' })
+    expect(t.net.calls[0]?.body).toBeUndefined()
     expect(t.seenAtFetch).toEqual([RECORD])
     expect(t.log).toEqual(['fetch', 'remove', 'href'])
     expect(t.store.local.getItem(OPS_KEY)).toBeNull()
@@ -86,12 +88,62 @@ describe('signOutConsole (AC-12)', () => {
     ]
     for (const [name, answer] of failures) {
       warn.mockClear()
-      const t = setup(RECORD, () => answer)
+      const t = setup(LANDING_V3, () => answer)
       await expect(signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING }), name).resolves.toBeUndefined()
       expect(t.net.calls, name).toHaveLength(1)
       expect(warn, name).toHaveBeenCalledTimes(1)
       expect(t.store.local.getItem(OPS_KEY), name).toBeNull()
       expect(t.win.hrefWrites, name).toEqual([LANDING])
+    }
+  })
+
+  it('signOut_landingPostsInCookieModeAndClears', async () => {
+    const t = setup(LANDING_V3, () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(t.net.calls).toHaveLength(1)
+    expect(t.net.calls[0]).toMatchObject({ url: SIGN_OUT, method: 'POST', credentials: 'include', headers: { 'x-auth-session': 'cookie' } })
+    expect(t.net.calls[0]?.body).toBeUndefined()
+    expect(t.log).toEqual(['fetch', 'remove', 'href'])
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.win.hrefWrites).toEqual([LANDING])
+  })
+
+  it('signOut_borrowedSendsNothing', async () => {
+    // The landing control first: "sends nothing" means little if a landing record sends nothing either.
+    const landing = setup(LANDING_V3, () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(landing.net.calls).toHaveLength(1)
+
+    const t = setup(v3BorrowedRaw(staffToken('borrowed')), () => reply(204))
+    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    expect(t.net.calls).toHaveLength(0)
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.store.local.getItem(PENDING)).toBeNull()
+    expect(t.win.hrefWrites).toEqual([LANDING])
+  })
+
+  it('signOut_unreachedLeavesThePendingMarker', async () => {
+    const rows: [string, Response | Error, boolean][] = [
+      ['network error', new TypeError('Failed to fetch'), true],
+      ['timeout', timeoutError(), true],
+      ['403', reply(403, { error: 'origin not allowed' }), true],
+      ['204', reply(204), false],
+      ['401', reply(401, { error: 'invalid or expired refresh token' }), false],
+      ['502', reply(502, { error: 'sign-out is unavailable' }), false],
+    ]
+    expect(rows.filter(([, , marked]) => marked).length).toBeGreaterThan(0)
+    for (const [name, answer, marked] of rows) {
+      const t = setup(LANDING_V3, () => answer)
+      await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+      expect(t.net.calls, name).toHaveLength(1)
+      expect(t.store.local.getItem(PENDING), name).toBe(marked ? '1' : null)
+      expect(t.store.local.getItem(OPS_KEY), name).toBeNull()
+      expect(t.win.hrefWrites, name).toEqual([LANDING])
+      if (marked) {
+        // The marker lands before the record is cleared and the page leaves.
+        const set = t.store.local.setItem.mock.invocationCallOrder[0] ?? Infinity
+        expect(set, name).toBeLessThan(t.store.local.removeItem.mock.invocationCallOrder[0] ?? 0)
+      }
     }
   })
 
@@ -126,16 +178,16 @@ describe('signOutConsole edges (AC-12)', () => {
     const t = setup(RECORD, () => reply(204))
     await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: null })
     expect(t.net.calls).toHaveLength(1)
-    expect(t.net.calls[0]?.body).toEqual({ refresh_token: 'R-stored' })
+    expect(t.net.calls[0]?.body).toBeUndefined()
     expect(t.log).toEqual(['fetch', 'remove', 'reload'])
     expect(t.win.hrefWrites).toEqual([])
   })
 
   it('signOut_supportConsoleRevokesAndClearsItsOwnRecord', async () => {
     const t = setup(RECORD, () => reply(204))
-    t.store.local.setItem(SUPPORT_KEY, recordRaw(staffToken('support'), 'R-support'))
+    t.store.local.setItem(SUPPORT_KEY, v3Raw(staffToken('support')))
     await signOutConsole({ storageKey: SUPPORT_KEY, gateway: GW, landing: LANDING })
-    expect(t.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R-support' }])
+    expect(t.net.calls.map((c) => c.body)).toEqual([undefined])
     expect(t.store.local.getItem(SUPPORT_KEY)).toBeNull()
     expect(t.store.local.getItem(OPS_KEY)).toBe(RECORD)
   })
@@ -163,7 +215,7 @@ describe('signOutConsole edges (AC-12)', () => {
 })
 
 describe('borrowed session (SUPP-11-02)', () => {
-  const BORROWED = borrowedRaw(staffToken('borrowed'))
+  const BORROWED = v3BorrowedRaw(staffToken('borrowed'))
   const o = { storageKey: OPS_KEY, gateway: GW, landing: LANDING }
 
   it('signOut_borrowedSessionSendsNoRevoke', async () => {
@@ -189,7 +241,7 @@ describe('borrowed session (SUPP-11-02)', () => {
   it('expire_landingSessionSignsOutAsToday', async () => {
     const landing = setup(RECORD, () => reply(204))
     await expireConsole({ ...o, app: APP, target: 'support' })
-    expect(landing.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R-stored' }])
+    expect(landing.net.calls.map((c) => c.body)).toEqual([undefined])
     expect(landing.store.local.getItem(OPS_KEY)).toBeNull()
     expect(landing.win.hrefWrites).toEqual([LANDING])
     expect(landing.win.replaceWrites).toEqual([])

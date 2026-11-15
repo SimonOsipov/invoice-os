@@ -1,5 +1,6 @@
-import { ApiError, apiFetch } from '@invoice-os/api-client/client'
+import { ApiError, sessionFetch } from '@invoice-os/api-client/client'
 
+import { postSignOut } from './signOut'
 import { clearConsoleSession, decodeJwtPayload, isStaffToken, loadConsoleSession, nonEmpty, saveConsoleSession, type ConsoleSession } from './session'
 import {
   appStartUrl,
@@ -18,35 +19,40 @@ export type ConsoleBoot = { kind: 'open'; session: ConsoleSession | null } | { k
 const TIMEOUT_MS = 15000
 
 // Wire shape of /auth/exchange and /auth/refresh answers: internal/gateway/signin.go, refresh.go.
-async function answerFrom(url: string, body: unknown): Promise<{ access_token?: unknown; refresh_token?: unknown } | null> {
-  return apiFetch<{ access_token?: unknown; refresh_token?: unknown } | null>(url, {
+// The refresh token lives in the gateway cookie; `renewable` says whether it was set.
+async function answerFrom(url: string, body: unknown): Promise<{ access_token?: unknown; renewable?: unknown } | null> {
+  return sessionFetch<{ access_token?: unknown; renewable?: unknown } | null>(url, {
     method: 'POST',
     body,
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
 }
 
-// Both tokens is a landing session; access_token alone is borrowed from the app (console-handoff), where `borrowed` allows it.
+// A landing session needs `renewable: true`; a support session borrowed from the app (console-handoff) accepts false; any other value fails.
 export async function redeemHandoffCode(gateway: string, code: string, state: string, borrowed = false): Promise<ConsoleSession> {
   const a = await answerFrom(`${gateway}/auth/exchange`, { code, state })
   const token = a?.access_token
-  const refreshToken = a?.refresh_token
-  if (borrowed) {
-    if (!nonEmpty(token) || (refreshToken !== undefined && !nonEmpty(refreshToken))) {
-      throw new ApiError('malformed', 'answer without an access token', 200)
-    }
-    return { token, refreshToken: refreshToken ?? null }
+  const renewable = a?.renewable
+  if (!nonEmpty(token) || typeof renewable !== 'boolean' || (!borrowed && !renewable)) {
+    throw new ApiError('malformed', 'answer without a renewable session', 200)
   }
-  if (!nonEmpty(token) || !nonEmpty(refreshToken)) throw new ApiError('malformed', 'answer without both tokens', 200)
-  return { token, refreshToken }
+  return { token, borrowed: !renewable }
 }
 
-export async function renewConsoleSession(gateway: string, s: { token: string; refreshToken: string }): Promise<ConsoleSession> {
-  const a = await answerFrom(`${gateway}/auth/refresh`, { refresh_token: s.refreshToken })
+// Renews through the cookie; `legacyRefreshToken` adopts a pre-v3 stored token into it.
+export async function renewConsoleSession(gateway: string, legacyRefreshToken?: string): Promise<ConsoleSession> {
+  const a = await answerFrom(`${gateway}/auth/refresh`, legacyRefreshToken === undefined ? undefined : { refresh_token: legacyRefreshToken })
   const token = a?.access_token
-  const refreshToken = a?.refresh_token
-  if (!nonEmpty(token) || !nonEmpty(refreshToken)) throw new ApiError('malformed', 'answer without both tokens', 200)
-  return { token, refreshToken }
+  if (!nonEmpty(token)) throw new ApiError('malformed', 'answer without an access token', 200)
+  return { token, borrowed: false }
+}
+
+const hasPending = (key: string): boolean => {
+  try {
+    return localStorage.getItem(key) !== null
+  } catch {
+    return false
+  }
 }
 
 export async function resolveConsoleBoot(o: {
@@ -61,6 +67,19 @@ export async function resolveConsoleBoot(o: {
   const { landing, gateway, storageKey, target } = o
   const now = o.now ?? Date.now()
   if (landing === null) return { kind: 'open', session: null }
+  const pendingKey = `${storageKey}:sign-out-pending`
+  const clearPending = () => {
+    try {
+      localStorage.removeItem(pendingKey)
+    } catch {
+      // storage denied: nothing to settle
+    }
+  }
+  const code = readHandoffCode(o.search)
+  // A sign-out that got no answer is sent again before anything else, never on a hand-off load.
+  if (code === null && gateway !== null && hasPending(pendingKey)) {
+    if ((await postSignOut(gateway)) !== 'unreached') clearPending()
+  }
   const leave = (outcome?: ConsoleOutcome): ConsoleBoot => ({
     kind: 'leave',
     url: landingSignInUrl(landing, ensureSignInState(now), target, outcome),
@@ -73,7 +92,7 @@ export async function resolveConsoleBoot(o: {
   const app = o.app ?? null
   const auth = new URLSearchParams(o.search).get('auth')
   // A usable landing session on the support console stays: StaffGate strips the param and the stored record renews.
-  const keepsLanding = auth === 'app' && target === 'support' && loadConsoleSession(storageKey)?.refreshToken != null
+  const keepsLanding = auth === 'app' && target === 'support' && loadConsoleSession(storageKey)?.borrowed === false
   if (!keepsLanding && auth === 'app' && app !== null) {
     return { kind: 'leave', url: appStartUrl(app, mintSignInState(now), target), replace: true }
   }
@@ -82,12 +101,12 @@ export async function resolveConsoleBoot(o: {
     return { kind: 'leave', url: landingSignInUrl(landing, mintSignInState(now), target, 'ready'), replace: true }
   }
 
-  const code = readHandoffCode(o.search)
   const state = code === null ? null : consumeSignInState(now)
   if (code !== null && state !== null) {
     if (gateway === null) return leave('failed')
     try {
       const s = await redeemHandoffCode(gateway, code, state, target === 'support' && app !== null)
+      clearPending()
       return isStaffToken(s.token) ? open(s) : leave('not-staff')
     } catch {
       return leave('failed')
@@ -96,7 +115,7 @@ export async function resolveConsoleBoot(o: {
 
   const stored = loadConsoleSession(storageKey)
   if (stored === null || gateway === null) return leave()
-  if (stored.refreshToken === null) {
+  if (stored.borrowed) {
     // Kept for a second tab, but never a loop: an expired record, or one whose bounce already ran, is cleared.
     const exp = decodeJwtPayload(stored.token)?.exp
     const expired = typeof exp !== 'number' || exp * 1000 <= now
@@ -109,7 +128,7 @@ export async function resolveConsoleBoot(o: {
     return { kind: 'leave', url: appStartUrl(app, ensureSignInState(now), target), replace: true }
   }
   try {
-    const s = await renewConsoleSession(gateway, { token: stored.token, refreshToken: stored.refreshToken })
+    const s = await renewConsoleSession(gateway, stored.legacyRefreshToken)
     if (isStaffToken(s.token)) return open(s)
     clearConsoleSession(storageKey)
     return leave('not-staff')

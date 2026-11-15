@@ -35,7 +35,7 @@ func newHandoff(t *testing.T, base string) handoff {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return handoff{
 		signIn:   gateway.SignInHandler(authURL, idpHTTP, store, throttle, log, nil, nil),
-		exchange: gateway.ExchangeHandler(store),
+		exchange: gateway.ExchangeHandler(store, nil),
 	}
 }
 

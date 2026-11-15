@@ -140,7 +140,7 @@ export async function routeProductionHosts(
 const APP_ORIGIN = 'https://app.ascomply.com'
 
 /** Answers a JSON preflight itself, echoing the requested headers; adds the grant to every other reply. */
-async function grantOrigin(context: BrowserContext, pattern: string, origin: string): Promise<void> {
+async function grantOrigin(context: BrowserContext, pattern: string, origin: string, session?: { asOrigin: string }): Promise<void> {
   await context.route(pattern, async (route) => {
     const request = route.request()
     if (request.method() === 'OPTIONS') {
@@ -148,14 +148,19 @@ async function grantOrigin(context: BrowserContext, pattern: string, origin: str
         status: 204,
         headers: {
           'access-control-allow-origin': origin,
+          ...(session ? { 'access-control-allow-credentials': 'true' } : {}),
           'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
           'access-control-allow-headers': (await request.headerValue('access-control-request-headers')) ?? '',
         },
       })
       return
     }
-    const res = await route.fetch()
-    await route.fulfill({ response: res, headers: { ...res.headers(), 'access-control-allow-origin': origin } })
+    // Cookie mode: the gateway admits only a session origin, so the fetch carries the fork app's Origin.
+    const res = await route.fetch(session ? { headers: { ...request.headers(), origin: session.asOrigin } } : undefined)
+    await route.fulfill({
+      response: res,
+      headers: { ...res.headers(), 'access-control-allow-origin': origin, ...(session ? { 'access-control-allow-credentials': 'true' } : {}) },
+    })
   })
 }
 
@@ -169,7 +174,7 @@ export async function routeAppHost(context: BrowserContext, targets: { app: stri
     await route.fulfill({ response: await route.fetch({ url: new URL(targets.app).origin + pathname + search }) })
   })
   // `*` does not cover Authorization, hence the echo in grantOrigin.
-  await grantOrigin(context, `${new URL(targets.gateway).origin}/**`, APP_ORIGIN)
+  await grantOrigin(context, `${new URL(targets.gateway).origin}/**`, APP_ORIGIN, { asOrigin: new URL(targets.app).origin })
   await stubTelemetryHosts(context)
 }
 

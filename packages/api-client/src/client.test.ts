@@ -9,7 +9,7 @@
 //   (and currently fail because the mock was never called — the right RED reason).
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, apiFetch, gatewayBase } from './client'
+import { ApiError, apiFetch, gatewayBase, SESSION_HEADER, sessionFetch } from './client'
 
 interface MockResponse {
   ok: boolean
@@ -204,6 +204,26 @@ describe('apiFetch auth header + body injection', () => {
     expect(init?.body).toBe('{"a":1}')
     const headers = new Headers(init?.headers)
     expect(headers.get('Content-Type')).toBe('application/json')
+  })
+
+  it('apiFetch_passesCredentials', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    await apiFetch('/x', { credentials: 'include' })
+    await apiFetch('/x')
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).credentials).toBe('include')
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).credentials).toBeUndefined()
+  })
+
+  it('sessionFetch_setsTheHeaderAndCredentials', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: 1 }) })
+    await expect(sessionFetch('/x', { method: 'POST', headers: { A: '1' } })).resolves.toEqual({ ok: 1 })
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const headers = new Headers(init.headers)
+    expect(SESSION_HEADER).toBe('X-Auth-Session')
+    expect(init.credentials).toBe('include')
+    expect(init.method).toBe('POST')
+    expect(headers.get('X-Auth-Session')).toBe('cookie')
+    expect(headers.get('A')).toBe('1')
   })
 })
 

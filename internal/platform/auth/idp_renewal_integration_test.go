@@ -35,7 +35,7 @@ func newRenewal(t *testing.T, base string) renewal {
 	}
 	return renewal{
 		handoff: newHandoff(t, base),
-		refresh: gateway.RefreshHandler(authURL, idpHTTP, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		refresh: gateway.RefreshHandler(authURL, idpHTTP, slog.New(slog.NewTextHandler(io.Discard, nil)), nil),
 	}
 }
 

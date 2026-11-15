@@ -37,7 +37,7 @@ func TestHandoffHandlers_ConsoleHandoffIsStaffOnlyAndRedeemsThroughExchange(t *t
 		t.Fatal(err)
 	}
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, `{}`), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, verifier, nil, nil)
+	h := handoffHandlers(goTrueAnswering(t, `{}`), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, verifier, nil, nil, nil)
 	staff, _ := mock.Mint(auth.MintOptions{Subject: "11111111-1111-1111-1111-111111111111", Staff: true})
 	customer, _ := mock.Mint(auth.MintOptions{Subject: "11111111-1111-1111-1111-111111111111", TenantID: "tenant-a"})
 
@@ -67,7 +67,7 @@ func TestHandoffHandlers_ConsoleHandoffIsStaffOnlyAndRedeemsThroughExchange(t *t
 		t.Fatalf("mint body = %s, want {\"code\":...}", rec.Body.String())
 	}
 	body, _ := json.Marshal(map[string]string{"code": minted["code"], "state": handoffState})
-	rec = postJSON(h.Exchange, "/auth/exchange", handoffAllowedOrigin, string(body))
+	rec = postNoOrigin(h.Exchange, "/auth/exchange", string(body))
 	var got map[string]string
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || len(got) != 1 || got["access_token"] != staff {
 		t.Errorf("exchange = %d %s, want exactly {\"access_token\": <the staff bearer>}", rec.Code, rec.Body.String())
@@ -110,7 +110,7 @@ func TestHandoffHandlers_ConsoleHandoffRefusesARevokedSession(t *testing.T) {
 		defer gotrue.Close()
 		authURL, _ := url.Parse(gotrue.URL)
 		log := slog.New(slog.DiscardHandler)
-		h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, verifier, nil, nil)
+		h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, verifier, nil, nil, nil)
 		req := httptest.NewRequest(http.MethodPost, "/auth/console-handoff", strings.NewReader(`{"state":"`+handoffState+`"}`))
 		req.Header.Set("Authorization", "Bearer "+staff)
 		rec := httptest.NewRecorder()

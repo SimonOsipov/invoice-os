@@ -32,20 +32,20 @@ const A7 = jwt(claims('A7'))
 const A9 = jwt(claims('A9'))
 const B0 = jwt({ ...claims('B0'), sub: OTHER_SUB, app_metadata: { tenant_id: OTHER_TENANT } })
 
-function hsession(o: { token?: string; refresh?: string | null; receivedAt?: number; me?: Me } = {}): Session {
-  const { token = A0, refresh = 'R0', receivedAt = RECEIVED, me = ME } = o
+function hsession(o: { token?: string; renewable?: boolean; receivedAt?: number; me?: Me } = {}): Session {
+  const { token = A0, renewable = true, receivedAt = RECEIVED, me = ME } = o
   return {
     persona: handoffPersona(me),
     token,
     me,
     verified: true,
     handoff: true,
-    ...(refresh === null ? {} : { renewal: { refreshToken: refresh, receivedAt } }),
+    ...(renewable ? { renewal: { receivedAt } } : {}),
   }
 }
 
 type Reply = { status: number; body?: unknown } | Error
-const ok = (access: unknown, refresh: unknown): Reply => ({ status: 200, body: { access_token: access, refresh_token: refresh } })
+const ok = (access: unknown): Reply => ({ status: 200, body: { access_token: access } })
 const REFUSED_401: Reply = { status: 401, body: { error: 'invalid or expired refresh token' } }
 const UNAVAILABLE_502: Reply = { status: 502, body: { error: 'renewal is unavailable' } }
 
@@ -58,10 +58,11 @@ interface Call {
 
 // `reply` answers at once; with no reply, each request waits for `settle`.
 function fakeFetch(reply: Reply | null) {
-  const net = { calls: [] as Call[], reply, waiting: [] as ((r: Reply) => void)[], settle: (r: Reply) => net.waiting.shift()?.(r) }
+  const net = { calls: [] as Call[], inits: [] as { credentials?: string; session: string | null }[], reply, waiting: [] as ((r: Reply) => void)[], settle: (r: Reply) => net.waiting.shift()?.(r) }
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string, init: { method?: string; headers: Headers; body?: string }) => {
+    vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; credentials?: string }) => {
+      net.inits.push({ credentials: init.credentials, session: init.headers.get('X-Auth-Session') })
       net.calls.push({
         url,
         method: init.method ?? 'GET',
@@ -130,7 +131,7 @@ describe('renewAt / deadline / isRenewalDue (AC-1)', () => {
     expect(renewAt(hsession())).toBe(RENEW_AT)
     expect(deadline(hsession())).toBe(DEADLINE)
 
-    const none = hsession({ refresh: null })
+    const none = hsession({ renewable: false })
     expect(renewAt(none)).toBeNull()
     expect(deadline(none)).toBeNull()
     const opaque = hsession({ token: 'opaque-token' })
@@ -157,7 +158,7 @@ describe('renewAt / deadline / isRenewalDue (AC-1)', () => {
 
 describe('createRenewer', () => {
   it('not yet due: no request', async () => {
-    const h = setup({ now: RENEW_AT - 1, reply: ok(A1, 'R1') })
+    const h = setup({ now: RENEW_AT - 1, reply: ok(A1) })
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A0)
     expect(h.net.calls).toHaveLength(0)
     expect(h.load).not.toHaveBeenCalled()
@@ -166,14 +167,14 @@ describe('createRenewer', () => {
 
   it('due: one refresh, then the new token', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout')
-    const h = setup({ now: RENEW_AT, reply: ok(A1, 'R1') })
+    const h = setup({ now: RENEW_AT, reply: ok(A1) })
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
-    expect(h.net.calls).toEqual([{ url: `${BASE}/auth/refresh`, method: 'POST', auth: null, body: { refresh_token: 'R0' } }])
+    expect(h.net.calls).toEqual([{ url: `${BASE}/auth/refresh`, method: 'POST', auth: null, body: undefined }])
     // A hung gateway is a transient failure after 15 s, not a request that never ends.
     expect(timeout).toHaveBeenCalledWith(15_000)
     expect(vi.mocked(fetch).mock.calls[0]?.[1]?.signal).toBe(timeout.mock.results[0]?.value)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
-    expect(h.onRenewed).toHaveBeenCalledWith({ ...hsession(), token: A1, renewal: { refreshToken: 'R1', receivedAt: RENEW_AT } })
+    expect(h.onRenewed).toHaveBeenCalledWith({ ...hsession(), token: A1, renewal: { receivedAt: RENEW_AT } })
     expect(h.onEnded).not.toHaveBeenCalled()
     // The renewed session is tracked and not due.
     expect(h.renewer.fresh()).toBe(A1)
@@ -182,7 +183,7 @@ describe('createRenewer', () => {
 
   it('a renewal keeps the tenant kind and the mode it names', async () => {
     const inHouse: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
-    const h = setup({ now: RENEW_AT, tracked: hsession({ me: inHouse }), reply: ok(A1, 'R1') })
+    const h = setup({ now: RENEW_AT, tracked: hsession({ me: inHouse }), reply: ok(A1) })
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
     const next = h.onRenewed.mock.calls[0]?.[0]
@@ -195,7 +196,7 @@ describe('createRenewer', () => {
     const answers = Array.from({ length: 5 }, () => outcome(h.renewer.fresh()))
     await flush()
     expect(h.net.calls).toHaveLength(1)
-    h.net.settle(ok(A1, 'R1'))
+    h.net.settle(ok(A1))
     expect((await Promise.all(answers)).map((a) => a.value)).toEqual([A1, A1, A1, A1, A1])
     expect(h.net.calls).toHaveLength(1)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
@@ -212,7 +213,7 @@ describe('createRenewer', () => {
     const retried = Array.from({ length: 3 }, () => outcome(h.renewer.fresh()))
     await flush()
     expect(h.net.calls).toHaveLength(2)
-    h.net.settle(ok(A1, 'R1'))
+    h.net.settle(ok(A1))
     expect((await Promise.all(retried)).map((a) => a.value)).toEqual([A1, A1, A1])
     expect(h.net.calls).toHaveLength(2)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
@@ -259,7 +260,7 @@ describe('createRenewer', () => {
     const second = outcome(h.renewer.fresh())
     await flush()
     expect(h.net.calls).toHaveLength(1)
-    h.net.settle(ok(A1, 'R1'))
+    h.net.settle(ok(A1))
     expect((await first).value).toBe(A1)
     expect((await second).value).toBe(A1)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
@@ -336,7 +337,7 @@ describe('createRenewer', () => {
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, token] of rows) {
-      const h = setup({ now: RENEW_AT, reply: ok(token, 'R1') })
+      const h = setup({ now: RENEW_AT, reply: ok(token) })
       const r = await outcome(h.renewer.fresh())
       expect(r.error, name).toBeInstanceOf(SessionEndedError)
       expect(h.onEnded, name).toHaveBeenCalledTimes(1)
@@ -344,19 +345,19 @@ describe('createRenewer', () => {
       expect(h.onRenewed, name).not.toHaveBeenCalled()
     }
     // Control: the session's own tenant renews.
-    const good = setup({ now: RENEW_AT, reply: ok(A1, 'R1') })
+    const good = setup({ now: RENEW_AT, reply: ok(A1) })
     await expect(Promise.resolve(good.renewer.fresh())).resolves.toBe(A1)
   })
 
   it('storage absent or another subject ends it without a request', async () => {
     const rows: [string, Session | null][] = [
       ['absent', null],
-      ['another subject', hsession({ me: OTHER_ME, token: B0, refresh: 'RB' })],
-      ['another user, same tenant', hsession({ me: { tenant: ME.tenant, user: { id: OTHER_SUB, role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } }, refresh: 'RC' })],
+      ['another subject', hsession({ me: OTHER_ME, token: B0 })],
+      ['another user, same tenant', hsession({ me: { tenant: ME.tenant, user: { id: OTHER_SUB, role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } } })],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, stored] of rows) {
-      const h = setup({ now: RENEW_AT, stored, reply: ok(A1, 'R1') })
+      const h = setup({ now: RENEW_AT, stored, reply: ok(A1) })
       const r = await outcome(h.renewer.fresh())
       expect(r.error, name).toBeInstanceOf(SessionEndedError)
       expect(h.load, name).toHaveBeenCalled()
@@ -374,8 +375,8 @@ describe('createRenewer', () => {
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, receivedAt] of rows) {
-      const stored = hsession({ token: A9, refresh: 'R9', receivedAt })
-      const h = setup({ now: RENEW_AT, stored, reply: ok(A1, 'R1') })
+      const stored = hsession({ token: A9, receivedAt })
+      const h = setup({ now: RENEW_AT, stored, reply: ok(A1) })
       await expect(Promise.resolve(h.renewer.fresh()), name).resolves.toBe(A9)
       expect(h.net.calls, name).toHaveLength(0)
       expect(h.onRenewed, name).toHaveBeenCalledTimes(1)
@@ -386,32 +387,32 @@ describe('createRenewer', () => {
     }
   })
 
-  it('a stored copy with the same refresh token renews, even when it reads not due', async () => {
+  it('a stored copy with the same access token renews, even when it reads not due', async () => {
     const stored = hsession({ receivedAt: RENEW_AT })
-    const h = setup({ now: RENEW_AT, stored, reply: ok(A1, 'R1') })
+    const h = setup({ now: RENEW_AT, stored, reply: ok(A1) })
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
-    expect(h.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R0' }])
+    expect(h.net.calls.map((c) => c.body)).toEqual([undefined])
   })
 
-  it('a due stored session renews with its own refresh token', async () => {
-    const stored = hsession({ token: A5, refresh: 'R5', receivedAt: RECEIVED })
-    const h = setup({ now: RENEW_AT, stored, reply: ok(A1, 'R1') })
+  it('a due stored session renews through the cookie', async () => {
+    const stored = hsession({ token: A5, receivedAt: RECEIVED })
+    const h = setup({ now: RENEW_AT, stored, reply: ok(A1) })
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
-    expect(h.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R5' }])
-    expect(h.onRenewed).toHaveBeenCalledWith({ ...stored, token: A1, renewal: { refreshToken: 'R1', receivedAt: RENEW_AT } })
+    expect(h.net.calls.map((c) => c.body)).toEqual([undefined])
+    expect(h.onRenewed).toHaveBeenCalledWith({ ...stored, token: A1, renewal: { receivedAt: RENEW_AT } })
   })
 
   it('a session without renewal never renews', () => {
     const expired = jwt({ ...claims('P0'), exp: 1 })
     const rows: [string, Session][] = [
       ['persona', { persona: APP_PERSONAS.firm, token: expired, me: ME, verified: true }],
-      ['hand-off without renewal', hsession({ token: expired, refresh: null })],
+      ['hand-off without renewal', hsession({ token: expired, renewable: false })],
       ['persona, opaque token', { persona: APP_PERSONAS.firm, token: 'opaque-token', me: ME, verified: true }],
       ['persona, null token', { persona: APP_PERSONAS.firm, token: null, me: null, verified: false }],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, tracked] of rows) {
-      const h = setup({ now: DEADLINE + 10 * HOUR, tracked, reply: ok(A1, 'R1') })
+      const h = setup({ now: DEADLINE + 10 * HOUR, tracked, reply: ok(A1) })
       expect(h.renewer.fresh(), name).toBe(tracked.token)
       expect(h.load, name).not.toHaveBeenCalled()
       expect(h.net.calls, name).toHaveLength(0)
@@ -419,10 +420,10 @@ describe('createRenewer', () => {
   })
 
   it('nothing tracked resolves null', () => {
-    const h = setup({ now: RENEW_AT, tracked: null, reply: ok(A1, 'R1') })
+    const h = setup({ now: RENEW_AT, tracked: null, reply: ok(A1) })
     expect(h.renewer.fresh()).toBeNull()
     // A due session, then sign-out.
-    const out = setup({ now: RENEW_AT, reply: ok(A1, 'R1') })
+    const out = setup({ now: RENEW_AT, reply: ok(A1) })
     out.renewer.track(null)
     expect(out.renewer.fresh()).toBeNull()
     expect(out.net.calls).toHaveLength(0)
@@ -433,11 +434,11 @@ describe('createRenewer', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(DEADLINE + 10 * HOUR)
     const wall = vi.spyOn(Date, 'now')
-    const early = setup({ now: RENEW_AT - 1, reply: ok(A1, 'R1') })
+    const early = setup({ now: RENEW_AT - 1, reply: ok(A1) })
     expect(early.renewer.fresh()).toBe(A0)
     expect(early.net.calls).toHaveLength(0)
     expect(isRenewalDue(hsession(), RENEW_AT - 1)).toBe(false)
-    const adopt = setup({ now: RENEW_AT, stored: hsession({ token: A9, refresh: 'R9', receivedAt: RENEW_AT }), reply: ok(A1, 'R1') })
+    const adopt = setup({ now: RENEW_AT, stored: hsession({ token: A9, receivedAt: RENEW_AT }), reply: ok(A1) })
     await expect(Promise.resolve(adopt.renewer.fresh())).resolves.toBe(A9)
     expect(adopt.net.calls).toHaveLength(0)
     const beforeDeadline = setup({ now: DEADLINE - 1, reply: UNAVAILABLE_502 })
@@ -446,9 +447,9 @@ describe('createRenewer', () => {
 
     vi.setSystemTime(RECEIVED - 10 * HOUR)
     expect(isRenewalDue(hsession(), RENEW_AT)).toBe(true)
-    const due = setup({ now: RENEW_AT, reply: ok(A1, 'R1') })
+    const due = setup({ now: RENEW_AT, reply: ok(A1) })
     await expect(Promise.resolve(due.renewer.fresh())).resolves.toBe(A1)
-    expect(due.onRenewed).toHaveBeenCalledWith({ ...hsession(), token: A1, renewal: { refreshToken: 'R1', receivedAt: RENEW_AT } })
+    expect(due.onRenewed).toHaveBeenCalledWith({ ...hsession(), token: A1, renewal: { receivedAt: RENEW_AT } })
     const atDeadline = setup({ now: DEADLINE, reply: UNAVAILABLE_502 })
     expect((await outcome(atDeadline.renewer.fresh())).error).toBeInstanceOf(SessionEndedError)
     expect(wall).not.toHaveBeenCalled()
@@ -460,11 +461,11 @@ describe('createRenewer', () => {
   it('nothing due returns a plain value', () => {
     const rows: [string, Session, string][] = [
       ['not yet due', hsession(), A0],
-      ['no renewal', hsession({ refresh: null }), A0],
+      ['no renewal', hsession({ renewable: false }), A0],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, tracked, want] of rows) {
-      const h = setup({ now: RENEW_AT - 1, tracked, reply: ok(A1, 'R1') })
+      const h = setup({ now: RENEW_AT - 1, tracked, reply: ok(A1) })
       const v = h.renewer.fresh()
       expect(v, name).toBe(want)
       expect(typeof (v as { then?: unknown } | null)?.then, name).toBe('undefined')
@@ -473,7 +474,7 @@ describe('createRenewer', () => {
 
   it('sign-out during a renewal discards the answer', async () => {
     const rows: [string, Reply][] = [
-      ['200', ok(A1, 'R1')],
+      ['200', ok(A1)],
       ['401', REFUSED_401],
       ['502', UNAVAILABLE_502],
     ]
@@ -494,9 +495,9 @@ describe('createRenewer', () => {
   })
 
   it('a new session during a renewal discards the old answer', async () => {
-    const other = hsession({ me: OTHER_ME, token: B0, refresh: 'RB', receivedAt: RENEW_AT })
+    const other = hsession({ me: OTHER_ME, token: B0, receivedAt: RENEW_AT })
     const rows: [string, Reply][] = [
-      ['200', ok(A1, 'R1')],
+      ['200', ok(A1)],
       ['401', REFUSED_401],
     ]
     expect(rows.length).toBeGreaterThan(0)
@@ -515,7 +516,7 @@ describe('createRenewer', () => {
       expect(h.net.calls, name).toHaveLength(1)
     }
     // A due new session does not join the discarded flight: it sends its own request.
-    const dueOther = hsession({ me: OTHER_ME, token: B0, refresh: 'RB' })
+    const dueOther = hsession({ me: OTHER_ME, token: B0 })
     const B1 = jwt({ ...claims('B1'), sub: OTHER_SUB, app_metadata: { tenant_id: OTHER_TENANT } })
     const h = setup({ now: RENEW_AT })
     const pending = outcome(h.renewer.fresh())
@@ -524,13 +525,13 @@ describe('createRenewer', () => {
     h.store.session = dueOther
     const own = outcome(h.renewer.fresh())
     await flush()
-    expect(h.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'RB' }])
-    h.net.settle(ok(A1, 'R1'))
-    h.net.settle(ok(B1, 'RB1'))
+    expect(h.net.calls.map((c) => c.body)).toEqual([undefined, undefined])
+    h.net.settle(ok(A1))
+    h.net.settle(ok(B1))
     expect((await pending).error).toBeInstanceOf(SessionEndedError)
     expect((await own).value).toBe(B1)
     expect(h.onRenewed).toHaveBeenCalledTimes(1)
-    expect(h.onRenewed).toHaveBeenCalledWith({ ...dueOther, token: B1, renewal: { refreshToken: 'RB1', receivedAt: RENEW_AT } })
+    expect(h.onRenewed).toHaveBeenCalledWith({ ...dueOther, token: B1, renewal: { receivedAt: RENEW_AT } })
   })
 
   it('a new session after an end renews normally', async () => {
@@ -544,13 +545,13 @@ describe('createRenewer', () => {
     h.renewer.track(endedSession)
     expect((await outcome(h.renewer.fresh())).error).toBeInstanceOf(SessionEndedError)
     expect(h.net.calls).toHaveLength(1)
-    const next = hsession({ token: A7, refresh: 'R7', receivedAt: RECEIVED })
+    const next = hsession({ token: A7, receivedAt: RECEIVED })
     h.renewer.track(next)
     h.store.session = next
-    h.net.reply = ok(A1, 'R1')
+    h.net.reply = ok(A1)
     await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
-    expect(h.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'R7' }])
-    expect(h.onRenewed).toHaveBeenCalledWith({ ...next, token: A1, renewal: { refreshToken: 'R1', receivedAt: RENEW_AT } })
+    expect(h.net.calls.map((c) => c.body)).toEqual([undefined, undefined])
+    expect(h.onRenewed).toHaveBeenCalledWith({ ...next, token: A1, renewal: { receivedAt: RENEW_AT } })
     expect(ended.error).toBeInstanceOf(SessionEndedError)
     expect(h.onEnded).toHaveBeenCalledTimes(1)
     // A different session in between cleared the latch, so the old one may try again.
@@ -560,15 +561,15 @@ describe('createRenewer', () => {
   })
 
   it('storage cleared mid-flight writes nothing', async () => {
-    const other = hsession({ me: OTHER_ME, token: B0, refresh: 'RB' })
+    const other = hsession({ me: OTHER_ME, token: B0 })
     const foreign = jwt({ ...claims('A1'), app_metadata: { tenant_id: OTHER_TENANT } })
     // Whatever the answer, storage switched under it is left alone.
     const rows: [string, Session | null, Reply, number][] = [
-      ['cleared, 200', null, ok(A1, 'R1'), RENEW_AT],
-      ['another subject, 200', other, ok(A1, 'R1'), RENEW_AT],
+      ['cleared, 200', null, ok(A1), RENEW_AT],
+      ['another subject, 200', other, ok(A1), RENEW_AT],
       ['another subject, 401', other, REFUSED_401, RENEW_AT],
       ['cleared, 400', null, { status: 400, body: { error: 'refresh_token is required' } }, RENEW_AT],
-      ['another subject, other tenant', other, ok(foreign, 'R1'), RENEW_AT],
+      ['another subject, other tenant', other, ok(foreign), RENEW_AT],
       ['cleared, 502 at the deadline', null, UNAVAILABLE_502, DEADLINE],
       ['another subject, 502 before the deadline', other, UNAVAILABLE_502, DEADLINE - 1],
     ]
@@ -589,12 +590,9 @@ describe('createRenewer', () => {
 
   it('a malformed 200 is transient', async () => {
     const rows: [string, unknown][] = [
-      ['no refresh_token', { access_token: A1 }],
-      ['numeric refresh_token', { access_token: A1, refresh_token: 7 }],
-      ['empty refresh_token', { access_token: A1, refresh_token: '' }],
-      ['no access_token', { refresh_token: 'R1' }],
-      ['empty access_token', { access_token: '', refresh_token: 'R1' }],
-      ['numeric access_token', { access_token: 7, refresh_token: 'R1' }],
+      ['no access_token', {}],
+      ['empty access_token', { access_token: '' }],
+      ['numeric access_token', { access_token: 7 }],
       ['null body', null],
     ]
     expect(rows.length).toBeGreaterThan(0)
@@ -606,9 +604,227 @@ describe('createRenewer', () => {
       expect(h.onEnded, name).not.toHaveBeenCalled()
     }
     // Transient, not ignored: at the deadline it ends the session.
-    const late = setup({ now: DEADLINE, reply: { status: 200, body: { access_token: A1 } } })
+    const late = setup({ now: DEADLINE, reply: { status: 200, body: {} } })
     expect((await outcome(late.renewer.fresh())).error).toBeInstanceOf(SessionEndedError)
     expect(late.onEnded).toHaveBeenCalledTimes(1)
     expect(late.onRenewed).not.toHaveBeenCalled()
+  })
+})
+
+// SECAUD-17-11: the gateway cookie holds the refresh token; the renewer sends a cookie-mode refresh with no body.
+describe('cookie-mode renewal (SECAUD-17-11)', () => {
+  const REFRESH = `${BASE}/auth/refresh`
+  const COOKIE_INIT = { credentials: 'include', session: 'cookie' }
+  const cookieOk = (access: unknown): Reply => ({ status: 200, body: { access_token: access } })
+
+  function csession(o: { token?: string; receivedAt?: number; legacy?: string; me?: Me } = {}): Session {
+    const { token = A0, receivedAt = RECEIVED, legacy, me = ME } = o
+    return {
+      persona: handoffPersona(me),
+      token,
+      me,
+      verified: true,
+      handoff: true,
+      renewal: { receivedAt, ...(legacy === undefined ? {} : { legacyRefreshToken: legacy }) },
+    }
+  }
+  const cookieCalls = (net: { calls: Call[]; inits: unknown[] }, from = 0) => ({ calls: net.calls.slice(from), inits: net.inits.slice(from) })
+
+  it('renewer_dueRenewalUsesTheCookie', async () => {
+    const h = setup({ now: RENEW_AT, tracked: csession(), reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+
+    expect(h.net.calls).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+    expect(h.net.inits).toEqual([COOKIE_INIT])
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    const next = h.onRenewed.mock.calls[0]![0]
+    expect(next).toEqual({ ...csession(), token: A1, renewal: { receivedAt: RENEW_AT } })
+    expect(Object.keys(next.renewal ?? {})).toEqual(['receivedAt'])
+    expect(h.onEnded).not.toHaveBeenCalled()
+    // Not due again: no second request.
+    expect(h.renewer.fresh()).toBe(A1)
+    expect(h.net.calls).toHaveLength(1)
+    // Control: a not-yet-due session sends nothing.
+    const early = setup({ now: RENEW_AT - 1, tracked: csession(), reply: cookieOk(A1) })
+    expect(early.renewer.fresh()).toBe(A0)
+    expect(early.net.calls).toEqual([])
+  })
+
+  it('renewer_adoptsAnotherTabsNewerToken', async () => {
+    // Same subject, a different access token, received just now: no request.
+    const stored = csession({ token: A9, receivedAt: RENEW_AT })
+    const h = setup({ now: RENEW_AT, tracked: csession(), stored, reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A9)
+
+    expect(h.net.calls).toEqual([])
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    expect(h.onRenewed).toHaveBeenCalledWith(stored)
+    expect(h.onEnded).not.toHaveBeenCalled()
+    // Adopted means tracked: the next call answers the stored token plainly.
+    expect(h.renewer.fresh()).toBe(A9)
+    expect(h.net.calls).toEqual([])
+
+    // Boundary: storage still holds this tab's own token, even stamped as fresh: it renews.
+    const same = setup({ now: RENEW_AT, tracked: csession(), stored: csession({ receivedAt: RENEW_AT }), reply: cookieOk(A1) })
+    await expect(Promise.resolve(same.renewer.fresh())).resolves.toBe(A1)
+    expect(same.net.calls).toHaveLength(1)
+    expect(same.net.inits).toEqual([COOKIE_INIT])
+
+    // Boundary: a different token that is itself due is not adopted; this tab renews.
+    const due = setup({ now: RENEW_AT, tracked: csession(), stored: csession({ token: A5, receivedAt: RECEIVED }), reply: cookieOk(A1) })
+    await expect(Promise.resolve(due.renewer.fresh())).resolves.toBe(A1)
+    expect(due.net.calls).toHaveLength(1)
+    expect(due.onRenewed).toHaveBeenCalledTimes(1)
+  })
+
+  // [legacy-adopt-order]: the stored record is not rewritten before the answer, so the renewer reads it as-is.
+  it('renewer_legacyTokenIsPostedOnce', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: cookieOk(A1) })
+
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+
+    expect(h.net.calls).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+    expect(h.net.inits).toEqual([COOKIE_INIT])
+    const next = h.onRenewed.mock.calls[0]![0]
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    expect(next.renewal).toEqual({ receivedAt: RENEW_AT })
+    expect(Object.keys(next.renewal ?? {})).toEqual(['receivedAt'])
+
+    // The App saved `next`: the next due refresh rides the cookie alone.
+    h.store.session = next
+    h.clock.now = RENEW_AT + 2_880_000
+    h.net.reply = cookieOk(A5)
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A5)
+    expect(h.net.calls).toHaveLength(2)
+    expect(h.net.calls[1]).toEqual({ url: REFRESH, method: 'POST', auth: null, body: undefined })
+    expect(h.net.inits[1]).toEqual(COOKIE_INIT)
+  })
+
+  it('renewer_legacyTransientFailureKeepsTheRecordForTheNextLoad', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    const rows: [string, Reply][] = [
+      ['502', UNAVAILABLE_502],
+      ['503', { status: 503, body: { error: 'unavailable' } }],
+      ['network', new TypeError('Failed to fetch')],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, reply] of rows) {
+      const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      // No answer, no rewrite: the session ends with its record kept.
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: true })
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(h.store.session, name).toBe(legacy)
+
+      // A reload: a fresh renewer over the same record sends the token again.
+      const again = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: cookieOk(A1) })
+      await expect(Promise.resolve(again.renewer.fresh()), name).resolves.toBe(A1)
+      expect(again.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+    }
+  })
+
+  it('renewer_legacyRefusalEndsAndClears', async () => {
+    const legacy = csession({ receivedAt: 0, legacy: 'R-old' })
+    for (const status of [401, 400]) {
+      const h = setup({ now: RENEW_AT, tracked: legacy, stored: legacy, reply: { status, body: { error: 'refused' } } })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls, String(status)).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: { refresh_token: 'R-old' } }])
+      expect(r.error, String(status)).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, String(status)).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, String(status)).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, String(status)).not.toHaveBeenCalled()
+    }
+  })
+
+  it('renewer_refusalEndsAndClears', async () => {
+    for (const status of [400, 401]) {
+      const h = setup({ now: RENEW_AT, tracked: csession(), reply: { status, body: { error: 'refused' } } })
+      const first = await outcome(h.renewer.fresh())
+      expect(h.net.calls, String(status)).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(h.net.inits, String(status)).toEqual([COOKIE_INIT])
+      expect(first.error, String(status)).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, String(status)).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, String(status)).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, String(status)).not.toHaveBeenCalled()
+    }
+  })
+
+  it('renewer_transientKeepsTheTokenUntilDeadline', async () => {
+    const rows: [string, Reply][] = [
+      ['network', new TypeError('Failed to fetch')],
+      ['503', { status: 503, body: { error: 'unavailable' } }],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, reply] of rows) {
+      const before = setup({ now: DEADLINE - 1, tracked: csession(), reply })
+      await expect(Promise.resolve(before.renewer.fresh()), name).resolves.toBe(A0)
+      expect(before.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(before.net.inits, name).toEqual([COOKIE_INIT])
+      expect(before.onEnded, name).not.toHaveBeenCalled()
+      expect(before.onRenewed, name).not.toHaveBeenCalled()
+
+      const at = setup({ now: DEADLINE, tracked: csession(), reply })
+      const r = await outcome(at.renewer.fresh())
+      expect(at.net.inits, name).toEqual([COOKIE_INIT])
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(at.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(at.onEnded, name).toHaveBeenCalledWith({ keepStorage: true })
+    }
+  })
+
+  // Row L6. A malformed 200 body stays transient, as today (see the report).
+  it('renewer_badAnswerEnds', async () => {
+    const { iat: _iat, ...noIat } = claims('A1')
+    const { exp: _exp, ...noExp } = claims('A1')
+    const rows: [string, string][] = [
+      ['another tenant', jwt({ ...claims('A1'), app_metadata: { tenant_id: OTHER_TENANT } })],
+      ['no iat', jwt(noIat)],
+      ['no exp', jwt(noExp)],
+      ['opaque', 'opaque-A1'],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, token] of rows) {
+      const h = setup({ now: RENEW_AT, tracked: csession(), reply: cookieOk(token) })
+      const r = await outcome(h.renewer.fresh())
+      expect(h.net.calls.map((c) => c.url), name).toEqual([REFRESH])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      expect(r.error, name).toBeInstanceOf(SessionEndedError)
+      expect(h.onEnded, name).toHaveBeenCalledTimes(1)
+      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(
+        h.net.calls.filter((c) => c.url.endsWith('/auth/sign-out')),
+        `${name}: ending a session sends no sign-out`,
+      ).toEqual([])
+    }
+  })
+
+  it('renewer_malformedAnswerIsTransient', async () => {
+    const rows: [string, unknown][] = [
+      ['empty object', {}],
+      ['empty access_token', { access_token: '' }],
+      ['numeric access_token', { access_token: 7 }],
+      ['null body', null],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, body] of rows) {
+      const h = setup({ now: DEADLINE - 1, tracked: csession(), reply: { status: 200, body } })
+      await expect(Promise.resolve(h.renewer.fresh()), name).resolves.toBe(A0)
+      expect(h.net.calls, name).toEqual([{ url: REFRESH, method: 'POST', auth: null, body: undefined }])
+      expect(h.net.inits, name).toEqual([COOKIE_INIT])
+      expect(h.onRenewed, name).not.toHaveBeenCalled()
+      expect(h.onEnded, name).not.toHaveBeenCalled()
+    }
+    // Control: a well-formed answer renews.
+    const good = setup({ now: DEADLINE - 1, tracked: csession(), reply: cookieOk(A1) })
+    await expect(Promise.resolve(good.renewer.fresh())).resolves.toBe(A1)
+    expect(cookieCalls(good.net).inits).toEqual([COOKIE_INIT])
   })
 })

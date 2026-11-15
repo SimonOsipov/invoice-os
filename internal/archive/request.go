@@ -13,6 +13,8 @@ import (
 type Request struct {
 	EntityID string // validated uuid, raw caller string — NOT uuid.UUID
 	From, To time.Time
+	// keepDiscarded: the workspace export writes every row, discarded included.
+	keepDiscarded bool
 }
 
 // maxSlugBytes bounds bundleFilename's slug (AC-4).

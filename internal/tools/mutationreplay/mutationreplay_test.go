@@ -59,6 +59,8 @@ func TestDetectKind(t *testing.T) {
 		"frontend/app/src/lib/route.test.ts":     KindVitest,
 		"frontend/app/src/components/X.test.tsx": KindVitest,
 		"e2e/topology/layout.test.ts":            KindVitest,
+		"sidecar/docling/tests/test_pins.py":     KindPytest,
+		"sidecar/docling/tests/sub/test_x.py":    KindPytest,
 	}
 	for path, want := range ok {
 		if got, err := DetectKind(path); err != nil || got != want {
@@ -72,10 +74,44 @@ func TestDetectKind(t *testing.T) {
 			t.Errorf("DetectKind(%s) err = %v, want the Playwright reason", path, err)
 		}
 	}
-	for _, path := range []string{"frontend/app/src/lib/route.ts", "tools/x.py", "frontend/app/src/x.spec.ts"} {
+	for _, path := range []string{"frontend/app/src/lib/route.ts", "tools/x.py", "frontend/app/src/x.spec.ts",
+		"sidecar/docling/test_x.py", "sidecar/docling/tests/data.json", "scripts/tests/test_y.py"} {
 		_, err := DetectKind(path)
 		if err == nil || !strings.Contains(err.Error(), "unsupported") {
 			t.Errorf("DetectKind(%s) err = %v, want unsupported", path, err)
+		}
+	}
+}
+
+func TestPytestOutcome(t *testing.T) {
+	cases := []struct {
+		name, test, output string
+		want               Outcome
+	}{
+		{"pass", "test_a", "tests/t.py::test_a PASSED [100%]\n", Passed},
+		{"fail", "test_a", "tests/t.py::test_a FAILED [100%]\n", Failed},
+		{"error", "test_a", "tests/t.py::test_a ERROR [100%]\n", Failed},
+		{"prefix is not the test", "test_a", "tests/t.py::test_ab FAILED [50%]\ntests/t.py::test_a PASSED [100%]\n", Passed},
+		{"params", "test_a", "tests/t.py::test_a[0-] PASSED [50%]\ntests/t.py::test_a[1-] PASSED [100%]\n", Passed},
+		{"summary line only", "test_a", "FAILED tests/t.py::test_a - AssertionError\n", Failed},
+		{"not found", "test_a", "ERROR: not found: /app/tests/t.py::test_a\n", NotRun},
+		{"empty", "test_a", "", NotRun},
+		{"collect error with node id", "test_t02_5_every_direct_requirement_is_exact_pinned", "collecting ... ERROR: found no collectors for /app/tests/test_pins.py::test_t02_5_every_direct_requirement_is_exact_pinned\n\ncollected 0 items / 1 error\n_____ ERROR collecting tests/test_pins.py _____\nE   RuntimeError: no go.mod found\nERROR tests/test_pins.py - RuntimeError: no go.mod found above /app/tests/con...\n=== 1 error in 0.03s ===\n", BuildFailed},
+		{"conftest import error", "test_a", "ImportError while loading conftest '/app/tests/conftest.py'.\ntests/conftest.py:1: in <module>\nE   ModuleNotFoundError: No module named 'no_such_module_x'\n", BuildFailed},
+		{"pass and skip", "test_pass_skip", "tests/test_mixed.py::test_pass_skip[0] PASSED                            [ 50%]\ntests/test_mixed.py::test_pass_skip[1] SKIPPED (case 1 skipped)          [100%]\n", Passed},
+		{"pass and xfail", "test_pass_xfail", "tests/test_mixed.py::test_pass_xfail[0] PASSED                           [ 50%]\ntests/test_mixed.py::test_pass_xfail[1] XFAIL (case 1 xfail)             [100%]\n", Passed},
+		{"xpass", "test_xpass", "tests/test_mixed.py::test_xpass XPASS (x)                                [100%]\n", Passed},
+		{"pass and fail", "test_pass_fail", "tests/test_mixed.py::test_pass_fail[0] PASSED                            [ 50%]\ntests/test_mixed.py::test_pass_fail[1] FAILED                            [100%]\nFAILED tests/test_mixed.py::test_pass_fail[1] - assert 1 == 0\n", Failed},
+		{"skip alone", "test_pass_skip", "tests/test_mixed.py::test_pass_skip[1] SKIPPED (case 1 skipped)          [100%]\n", NotRun},
+		{"xfail alone", "test_pass_xfail", "tests/test_mixed.py::test_pass_xfail[1] XFAIL (case 1 xfail)             [100%]\n", NotRun},
+		{"summary prefix is not the test", "test_a", "FAILED tests/t.py::test_ab - boom\ntests/t.py::test_a PASSED [100%]\n", Passed},
+		{"teardown error after pass", "test_a", "tests/t.py::test_a PASSED [ 50%]\ntests/t.py::test_a ERROR [100%]\n", Failed},
+		{"result line beats collection text", "test_a", "tests/t.py::test_a PASSED [100%]\nERROR collecting tests/other.py\n", Passed},
+		{"cut by timeout", "test_slow", "collected 1 item\n\ntests/test_mixed.py::test_slow ", NotRun},
+	}
+	for _, c := range cases {
+		if got := PytestOutcome(c.output, c.test); got != c.want {
+			t.Errorf("%s: PytestOutcome = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

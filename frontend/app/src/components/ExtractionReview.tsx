@@ -30,6 +30,8 @@ import type { PlatformCtx } from '../types'
 import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
 import { NoteImportPanel, SAVE_DISABLED } from './NoteImportPanel'
+import { UndoImportControl } from './UndoImportControl'
+import { useUndoableBatch } from '../lib/useUndoableBatch'
 
 const STILL_READING = 'This document is still being read.'
 const SAVE = 'Save what you settled'
@@ -61,6 +63,7 @@ const FOOTER: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'flex-end',
+  flexWrap: 'wrap',
   gap: 14,
   padding: '12px 20px',
   borderTop: '1px solid var(--line-1)',
@@ -149,6 +152,21 @@ export function ExtractionReview({
   const arming = armed && armed.jobId === jobId ? armed.name : null
 
   const data = merged && merged.jobId === jobId ? merged.detail : detail.data
+
+  // The import behind this document. After an undo the re-read detail drops the id, so the
+  // control is held by `undone` to keep its done line.
+  const undoBatch = useUndoableBatch(ctx, data?.import_batch_id ?? null)
+  const [undone, setUndone] = useState<{ jobId: string; batchId: string } | null>(null)
+  if (undone && undone.jobId !== jobId) setUndone(null)
+  const undoBatchId = undone && undone.jobId === jobId ? undone.batchId : undoBatch.undoable ? (data?.import_batch_id ?? null) : null
+  const settleUndo = () => {
+    undoBatch.refetch()
+    if (!base) return
+    void getExtractionDetail(ctx.authedFetch, base, jobId).then(
+      (fresh) => setMerged({ jobId, detail: fresh }),
+      () => {},
+    )
+  }
 
   // The panel's read, only on a note verdict (the `notes` pattern in InvoiceDetail). A re-run
   // blanks `data` but not the panes, which hang off `detail`.
@@ -389,6 +407,14 @@ export function ExtractionReview({
             <span data-testid="extraction-write-error" style={WRITE_ERROR}>
               {writeError}
             </span>
+          )}
+          {undoBatchId !== null && (
+            <UndoImportControl
+              ctx={ctx}
+              batchId={undoBatchId}
+              onSettled={settleUndo}
+              onUndone={() => setUndone({ jobId, batchId: undoBatchId })}
+            />
           )}
           {/* Navigation, not a write: nothing to guard against re-entry, so it stays live while Save writes. */}
           {openFiled === null ? null : (

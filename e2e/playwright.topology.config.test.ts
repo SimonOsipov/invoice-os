@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const savedCI = process.env.CI
+const savedArgos = process.env.ARGOS_SHOTS
 
 async function loadConfig(ci: string | undefined, target?: string) {
   if (ci === undefined) delete process.env.CI
@@ -15,6 +16,8 @@ afterEach(() => {
   if (savedCI === undefined) delete process.env.CI
   else process.env.CI = savedCI
   delete process.env.E2E_TARGET
+  if (savedArgos === undefined) delete process.env.ARGOS_SHOTS
+  else process.env.ARGOS_SHOTS = savedArgos
 })
 
 describe('topology config', () => {
@@ -65,5 +68,20 @@ describe('topology config', () => {
   it('adds the json reporter on the nightly only', async () => {
     expect((await loadConfig('true', 'nightly')).reporter).toContainEqual(['json'])
     expect((await loadConfig('true')).reporter).not.toContainEqual(['json'])
+  })
+
+  it('bypasses the CSP while Argos takes screenshots', async () => {
+    process.env.ARGOS_SHOTS = '1'
+    expect((await loadConfig(undefined)).use?.bypassCSP).toBe(true)
+  })
+
+  it('enforces the CSP when ARGOS_SHOTS is unset', async () => {
+    delete process.env.ARGOS_SHOTS
+    expect((await loadConfig(undefined)).use?.bypassCSP).toBeFalsy()
+  })
+
+  it('enforces the CSP when ARGOS_SHOTS is empty', async () => {
+    process.env.ARGOS_SHOTS = ''
+    expect((await loadConfig(undefined)).use?.bypassCSP).toBeFalsy()
   })
 })

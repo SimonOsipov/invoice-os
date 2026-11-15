@@ -229,6 +229,8 @@ func TestStaffPurgeHandler_MapsEveryOutcome(t *testing.T) {
 		{"house workspace", ErrHouseWorkspace, 409, "the ASComply staff workspace cannot be deleted"},
 		{"deletion underway", ErrDeletionUnderway, 409, "this workspace is already being deleted"},
 		{"deletion not scheduled", ErrDeletionNotScheduled, 409, "this workspace has no scheduled deletion; use Delete workspace first"},
+		{"purge by the scheduler", ErrPurgeSameStaff, 409, "the staff member who scheduled this deletion cannot start its purge"},
+		{"purge inside the waiting period", ErrPurgeWaitingPeriod, 409, "the waiting period has not ended; the purge opens 48 hours after the deletion was scheduled"},
 		{"an unknown failure", errors.New("boom"), 500, "internal server error"},
 	}
 	for _, tc := range outcomes {

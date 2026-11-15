@@ -781,3 +781,17 @@ func TestMaterialise_ReviewLaneNullOperatorTakesElse(t *testing.T) {
 		t.Error("auto = true, want false")
 	}
 }
+
+func TestMaterialise_NilTotalTakesTheReviewLaneAtEveryCondition(t *testing.T) {
+	tree := []Step{
+		stepCond(">", "500000.00", []Step{stepApproval("cfo", 24)}, []Step{stepAutoapprove()}),
+		stepCond("<", "1000.00", []Step{stepAutoapprove()}, []Step{stepApproval("fin_mgr", 24)}),
+	}
+	steps, auto := materialise(tree, nil)
+	if want := ordered(wantApproval("cfo", 24), wantApproval("fin_mgr", 24)); !reflect.DeepEqual(steps, want) {
+		t.Errorf("steps = %s, want %s (both conditions take the lane with no autoapprove)", show(steps), show(want))
+	}
+	if auto {
+		t.Error("auto = true, want false")
+	}
+}

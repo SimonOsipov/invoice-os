@@ -268,6 +268,21 @@ var signAuthorRows = []signRow{
 		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
 		w.add(memberSpec{role: "reviewer", status: "suspended"})
 	}},
+	{"member in role edited another invoice only, a non-author reviewer outside the role", "", func(w *signWorld) {
+		w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+		b := w.inRole(memberSpec{role: "reviewer"})
+		other := secondValidatedInvoice(w.t, w.super, w.app, w.f, "sign-other-invoice")
+		seedInvoiceEvent(w.t, w.super, w.f.tenantID, "invoice.updated", other, b)
+		w.add(memberSpec{role: "reviewer"})
+	}},
+	{"member in role has only non-content events on the invoice, a non-author reviewer outside the role", "", func(w *signWorld) {
+		w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+		b := w.inRole(memberSpec{role: "reviewer"})
+		for _, ev := range []string{"invoice.validated", "invoice.kept_as_is", "invoice.transitioned"} {
+			seedInvoiceEvent(w.t, w.super, w.f.tenantID, ev, w.f.invoiceID, b)
+		}
+		w.add(memberSpec{role: "reviewer"})
+	}},
 	{"editor is the named delegate, a non-author reviewer reaches A", "creator only", func(w *signWorld) {
 		d := w.add(memberSpec{role: "reviewer"})
 		w.editedBy(d)

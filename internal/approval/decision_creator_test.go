@@ -346,10 +346,10 @@ func TestDecide_CreatorRejects_WithoutTheRoleIsRoleRefused(t *testing.T) {
 	assertNothingWritten(t, super, f)
 }
 
-func TestDecide_CreatorRung_AColleagueWhoEditedStillApproves(t *testing.T) {
+func TestDecide_CreatorRung_AColleagueWhoOnlyTransitionedStillApproves(t *testing.T) {
 	super, app, f, creator, colleague := creatorWorld(t, "APPR-17 editor")
 	seedHistory(t, super, f.tenantID, f.invoiceID, nil, creator)
-	seedHistory(t, super, f.tenantID, f.invoiceID, ptr("draft"), colleague) // the colleague's later edit
+	seedHistory(t, super, f.tenantID, f.invoiceID, ptr("draft"), colleague) // a later transition row, not an invoice.updated edit
 
 	if _, err := approve(t, app, f.tenantID, colleague, f.invoiceID, nil); err != nil {
 		t.Fatalf("colleague who edited approves: %v", err)
@@ -710,6 +710,23 @@ func TestDecide_AuthorRung_NonContentEventsDoNotMakeAnAuthor(t *testing.T) {
 		t.Fatalf("approve after non-content events only = %q, %v, want approved", run.State, err)
 	}
 	wantApprovedAs(t, super, f.tenantID, "approver")
+}
+
+// C edited invoice X only. On invoice Y C is still another approver, so A stays refused; an author read
+// that ignores the invoice would drop C from the others and let A self-approve.
+func TestDecide_AuthorRung_AnotherInvoicesEditorStillCountsAsAnotherApprover(t *testing.T) {
+	super, app, f, a, _, c := authorWorld(t, "SECAUD-18 other-invoice editor")
+	x := secondValidatedInvoice(t, super, app, f, "author-other-editor-x")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", x, c)
+	// B must not count either: take B out of the approvers.
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id <> $2 AND user_id <> $3`, f.tenantID, a, c); err != nil {
+		t.Fatalf("suspend the other members: %v", err)
+	}
+
+	_, err := approve(t, app, f.tenantID, a, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+	assertNothingWritten(t, super, f)
 }
 
 func TestDecide_AuthorRung_EditorMayReject(t *testing.T) {

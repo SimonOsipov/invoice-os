@@ -103,9 +103,7 @@ func hasAutoapprove(lane []Step) bool {
 }
 
 // evalCondition ports the amount arm of the SPA's evalCondition
-// (frontend/app/src/lib/workflows.ts). Each side folds to zero when absent or
-// unparseable, mirroring its `Number(x) || 0` — a NULL invoices.total and a NULL
-// cond_amount both read as 0.
+// (frontend/app/src/lib/workflows.ts).
 func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
 	v := decimal.Zero
 	if condAmount != nil {
@@ -166,7 +164,7 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 
 	// total::text into a *string, never a bare decimal.Decimal: numeric(14,2) accepts NaN
 	// and decimal's Scan errors on it, which would roll back the caller's promotion. An
-	// unparseable total reads as absent, which evalCondition folds to zero.
+	// unparseable total reads as absent.
 	var totalText *string
 	var invoiceNumber string
 	doc := matchDoc{}

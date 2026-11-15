@@ -151,6 +151,40 @@ func TestContentCleared_RunFingerprintMismatchIsNotCleared(t *testing.T) {
 	f.want(t, false, "the run comparison alone rejects")
 }
 
+// Unchanged content with equal records: only the status rung can refuse a draft or a validated invoice.
+func TestContentCleared_EditableStatusWithMatchingRecordsIsNotCleared(t *testing.T) {
+	for _, status := range []Status{StatusDraft, StatusValidated} {
+		t.Run(string(status), func(t *testing.T) {
+			f := newClearedFixture(t, true)
+			f.queued(t)
+			f.want(t, true, "precondition: queued with matching records")
+			f.setStatus(t, status)
+			f.want(t, false, "an editable status is never cleared")
+		})
+	}
+}
+
+// With no policy there is no run, so the verdict comparison alone refuses a changed queued invoice.
+func TestContentCleared_QueuedChangeWithoutARunIsNotCleared(t *testing.T) {
+	t.Run("header", func(t *testing.T) {
+		f := newClearedFixture(t, false)
+		f.queued(t)
+		if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET total = 999 WHERE id = $1`, f.inv.ID); err != nil {
+			t.Fatalf("change total: %v", err)
+		}
+		f.want(t, false, "header changed, no run: the verdict comparison alone")
+	})
+	t.Run("line", func(t *testing.T) {
+		f := newClearedFixture(t, false)
+		f.queued(t)
+		if _, err := f.super.Exec(context.Background(),
+			`UPDATE line_items SET line_total = 1 WHERE invoice_id = $1 AND line_no = 1`, f.inv.ID); err != nil {
+			t.Fatalf("change line: %v", err)
+		}
+		f.want(t, false, "line changed, no run: the verdict comparison alone")
+	})
+}
+
 func TestContentCleared_UnchangedQueuedInvoiceIsCleared(t *testing.T) {
 	f := newClearedFixture(t, true)
 	f.queued(t)

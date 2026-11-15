@@ -42,9 +42,7 @@ const LINK_NOT_VALID = 'this cancel link is no longer valid'
 // internal/tenancy workspace_deletion.go and staff_deletion.go audit event names.
 const EVENT_SCHEDULED = 'workspace.deletion_scheduled'
 const EVENT_CANCELLED = 'workspace.deletion_cancelled'
-const EVENT_PURGE_STARTED = 'workspace.purge_started'
-// internal/workspacepurge purgeRows staff event.
-const EVENT_PURGED = 'workspace.purged'
+const EVENT_PURGE_REFUSED = 'workspace.purge_refused'
 
 const PDF_BYTES = new Uint8Array(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')))
 const DAY_MS = 86_400_000
@@ -324,13 +322,16 @@ test.describe.serial('cancel link (API E2E, over the deployed gateway)', () => {
 
 // internal/tenancy/staff_deletion.go readStaffReason with maxStaffReasonRunes = 500.
 const REASON_LENGTH = 'reason must be 1 to 500 characters'
-// internal/tenancy/tenancy.go statusForErr: the purge-marked 409.
-const BEING_DELETED = 'this workspace is already being deleted'
 // internal/tenancy/staff_deletion.go staffDeletionStatus: purge now on an unscheduled workspace.
 const NOT_SCHEDULED = 'this workspace has no scheduled deletion; use Delete workspace first'
+// internal/tenancy/staff_deletion.go staffDeletionStatus: ErrPurgeSameStaff and ErrPurgeWaitingPeriod (purgeWaitingMessage).
+const SAME_STAFF = 'the staff member who scheduled this deletion cannot start its purge'
+const WAITING = 'the waiting period has not ended; the purge opens 48 hours after the deletion was scheduled'
+// internal/tenancy/staff_deletion.go StaffPurgeWait.
+const STAFF_PURGE_WAIT_MS = 48 * 3_600_000
 const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
 // StaffChange, internal/audit/staff_read.go.
-type StaffChange = { actor: string; event: string; tenant_id: string | null; payload: { reason?: string; due_at?: string; members?: number; objects?: number } | null }
+type StaffChange = { actor: string; event: string; tenant_id: string | null; payload: { reason?: string; due_at?: string; members?: number; objects?: number; refusal?: string } | null }
 
 test.describe('staff workspace deletion (API E2E, over the deployed gateway)', () => {
   let staff: string
@@ -388,6 +389,7 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
       expect(errorOf(res), label).toBe(REASON_LENGTH)
     }
     expect((await me(ws.adminToken)).tenant.deletion_due_at, 'nothing was scheduled').toBeNull()
+    expect(await staffChangesOf(ws.tenantId), 'a 403 and a 400 write no staff row').toEqual([])
   })
 
   test('staff start and cancel lock and unlock a fresh workspace', async () => {
@@ -417,47 +419,61 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     expect(Math.abs(Date.parse(scheduled.payload?.due_at ?? '') - Date.parse(due))).toBeLessThanOrEqual(1_000)
   })
 
-  test('staff purge now needs a scheduled deletion, then erases a fresh workspace', async () => {
-    test.setTimeout(180_000)
+  test('staff purge needs a scheduled deletion, a second staff member and 48 hours; every refusal is logged', async () => {
     const ws = await fresh('staff-deletion-purge')
+    const purgeBody = { workspace_name: ws.workspaceName, reason: 'e2e purge' }
 
-    const wrong = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: `${ws.workspaceName} x`, reason: 'e2e purge' })
+    const wrong = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { ...purgeBody, workspace_name: `${ws.workspaceName} x` })
     assertErrorEnvelope(wrong, 400, 'purge with a wrong name')
     expect(errorOf(wrong)).toBe(NAME_MISMATCH)
     expect((await staffRead(ws.tenantId)).status, 'the wrong name purged nothing').toBe(200)
 
-    const unscheduled = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
+    const unscheduled = await staffPost(staff, `${ws.tenantId}/deletion/purge`, purgeBody)
     assertErrorEnvelope(unscheduled, 409, 'purge of an unscheduled workspace')
     expect(errorOf(unscheduled)).toBe(NOT_SCHEDULED)
+    type StaffTenant = { tenant: { deletion_purge_started_at: string | null; deletion_due_at: string | null; deletion_purge_opens_at: string | null } }
     const read = await staffRead(ws.tenantId)
     expect(read.status, 'the refused purge left the workspace').toBe(200)
-    expect((read.body as { tenant: { deletion_purge_started_at: string | null } }).tenant.deletion_purge_started_at, 'no purge marker').toBeNull()
+    expect((read.body as StaffTenant).tenant.deletion_purge_started_at, 'no purge marker').toBeNull()
     expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the refusal scheduled nothing').toBeNull()
 
     const start = await staffPost(staff, `${ws.tenantId}/deletion`, { reason: 'e2e start' })
     expect(start.status, JSON.stringify(start.body)).toBe(200)
+    const scheduledRead = (await staffRead(ws.tenantId)).body as StaffTenant
+    const gap = Date.parse(scheduledRead.tenant.deletion_purge_opens_at ?? '') - Date.parse(scheduledRead.tenant.deletion_due_at ?? '')
+    expect(Math.abs(gap - (STAFF_PURGE_WAIT_MS - 30 * DAY_MS)), 'the purge opens 48 hours after scheduling').toBeLessThanOrEqual(1_000)
 
-    const purge = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
-    expect(purge.status, JSON.stringify(purge.body)).toBe(202)
+    const same = await staffPost(staff, `${ws.tenantId}/deletion/purge`, purgeBody)
+    assertErrorEnvelope(same, 409, 'the scheduler purges')
+    expect(errorOf(same)).toBe(SAME_STAFF)
 
-    // The purge job races this call: 409 while the marker stands, a refusal once the tenant and its sessions are gone.
-    const cancel = await cancelDeletion(ws.adminToken)
-    expect([401, 403, 404, 409], `an admin cancel after a purge answered ${cancel.status}`).toContain(cancel.status)
-    if (cancel.status === 409) expect(errorOf(cancel)).toBe(BEING_DELETED)
+    // A deployed env cannot backdate 48 hours, so the second staff member meets the waiting period.
+    const second = await provisionStaffAccount('staff-deletion-second')
+    const secondToken = (await signInSession(second.email, second.password)).access_token
+    const waiting = await staffPost(secondToken, `${ws.tenantId}/deletion/purge`, purgeBody)
+    assertErrorEnvelope(waiting, 409, 'a second staff member inside the wait')
+    expect(errorOf(waiting)).toBe(WAITING)
 
-    // The first live run of purge now on the preview: files and GoTrue included.
-    await expect.poll(async () => (await staffRead(ws.tenantId)).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)
+    const after = await staffRead(ws.tenantId)
+    expect(after.status, 'the refused purges left the workspace').toBe(200)
+    expect((after.body as StaffTenant).tenant.deletion_purge_started_at, 'no purge marker').toBeNull()
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin still reads the due date').toBe(dueOf(start))
 
-    // Read after the 404: the log outlives the tenant, and the worker's purged row commits with purge_tenant.
     const rows = await staffChangesOf(ws.tenantId)
-    expect(rows.map((r) => r.event), 'the refused purges wrote no row').toEqual([EVENT_PURGED, EVENT_PURGE_STARTED, EVENT_SCHEDULED])
-    const [purged, started, scheduled] = rows
-    expect(purged.actor, 'the purge worker writes the purged row').not.toBe(staffId)
-    expect([started.actor, scheduled.actor]).toEqual([staffId, staffId])
-    expect(started.payload?.reason).toBe('e2e purge')
-    expect(scheduled.payload?.reason).toBe('e2e start')
-    expect(Math.abs(Date.parse(purged.payload?.due_at ?? '') - Date.parse(dueOf(start)))).toBeLessThanOrEqual(1_000)
-    expect(Number.isInteger(purged.payload?.members) && (purged.payload?.members ?? -1) >= 0, 'members').toBe(true)
-    expect(Number.isInteger(purged.payload?.objects) && (purged.payload?.objects ?? -1) >= 0, 'objects').toBe(true)
+    expect(rows.map((r) => r.event), 'every refused purge wrote a row').toEqual([
+      EVENT_PURGE_REFUSED,
+      EVENT_PURGE_REFUSED,
+      EVENT_SCHEDULED,
+      EVENT_PURGE_REFUSED,
+      EVENT_PURGE_REFUSED,
+    ])
+    expect(rows.map((r) => r.actor)).toEqual([second.userId, staffId, staffId, staffId, staffId])
+    // internal/tenancy/staff_deletion.go refuse codes.
+    expect(rows.map((r) => r.payload?.refusal)).toEqual(['waiting_period', 'same_approver', undefined, 'not_scheduled', 'name_mismatch'])
+    expect(rows.map((r) => r.payload?.reason)).toEqual(['e2e purge', 'e2e purge', 'e2e start', 'e2e purge', 'e2e purge'])
+
+    const cancel = await cancelDeletion(ws.adminToken)
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200)
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin cancel stays open').toBeNull()
   })
 })

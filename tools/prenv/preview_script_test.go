@@ -2274,7 +2274,7 @@ func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) 
 func TestPreviewInvariantsNameTheAccountWhenCurlFails(t *testing.T) {
 	t.Parallel()
 	r := runInvariantsWith(t, []string{"pr-7-gateway-token"}, nlGoodSvcs(), map[string]string{
-		"curl-exit-" + nightlyIdentityEP(runNightlySA): "7",
+		"curl-exit-" + nightlyIdentityEP(runNightlySA):    "7",
 		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
 	})
 	if r.code != 1 {

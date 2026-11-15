@@ -16,6 +16,7 @@ package submission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -87,7 +88,13 @@ const (
 	tx1AlreadyCleared
 	tx1RateLimited
 	tx1Locked
+	tx1ContentChanged
 )
+
+// ContentChangedReason is the job's last_error when the worker refuses uncleared content.
+const ContentChangedReason = "the invoice changed after it was validated and approved; it was not sent"
+
+var errContentChanged = errors.New(ContentChangedReason)
 
 const lockedSnooze = 15 * time.Minute
 
@@ -165,6 +172,18 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 			return nil
 		}
 
+		cleared, err := w.InvoicePort.ContentCleared(ctx, tx, args.InvoiceID)
+		if err != nil {
+			return err
+		}
+		if !cleared {
+			if err := markJobContentChanged(ctx, tx, jobID); err != nil {
+				return err
+			}
+			outcome = tx1ContentChanged
+			return nil
+		}
+
 		// Rate-limit gate (T05-10). A denial does not consume the retry budget.
 		limit, err := RateLimitFor(ctx, tx, w.RateLimit)
 		if err != nil {
@@ -207,6 +226,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 		return river.JobSnooze(retryAfter)
 	case tx1Locked:
 		return river.JobSnooze(lockedSnooze)
+	case tx1ContentChanged:
+		// ceiling: a refused queued invoice exits only by staff cancel to failed; add a member exit if a member door to change queued content opens.
+		if w.Logger != nil {
+			w.Logger.Warn("submission: invoice content changed after approval; not sent",
+				"job_id", jobID, "invoice_id", args.InvoiceID)
+		}
+		return river.JobCancel(errContentChanged)
 	}
 
 	// No transaction held from here through adapter.Submit's return

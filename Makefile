@@ -168,6 +168,11 @@ test-approvals: ## Run the workflow-roles + staffing suite against the local dev
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/approval/...
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
+	go test -p 1 -count=1 -run TestApprovalBypass ./internal/invoice/... ./internal/submission/...
 
 test-actor: ## Run the AUDIT-02 actor-resolution suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \

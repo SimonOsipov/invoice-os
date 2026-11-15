@@ -7,6 +7,8 @@ paths:
   - "internal/tenancy/staff_account_deletion.go"
   - "internal/demopolicy/**"
   - "internal/invoice/batch_submit.go"
+  - "internal/invoice/submission_port.go"
+  - "internal/submission/worker.go"
   - "migrations/*approval*"
   - "frontend/app/src/lib/policies.ts"
   - "frontend/app/src/lib/workflows.ts"
@@ -34,6 +36,7 @@ paths:
 - Record `policy_id`, `position` and `matched_scopes` in `invoice.approval_armed`. Record scope names, never scope values (`TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes`).
 - Write the run closed `approved` with `closed_by = 'system'` when no approval step is pending. Write no decision row.
 - Enforce the `TransmitClear` gate in `Store.Transition` and `Submitter.BatchSubmit` only.
+- Send an invoice from the submit worker only when `Store.ContentCleared` holds: the status is not editable, and the content fingerprint equals `verdict_fingerprint` and the live approved run's `content_fingerprint` where each is set. Otherwise end the job `failed` with `ContentChangedReason` and send nothing (`TestApprovalBypass_Worker*`).
 - Treat an unreadable approval standing as not clear. Both transmit doors fail closed.
 - Filter overdue and SLA queries on `state = 'pending'`. A settled step keeps its `due_at`.
 - Never change a sealed version. Write a change as a new version.

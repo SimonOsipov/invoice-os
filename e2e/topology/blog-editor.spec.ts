@@ -544,7 +544,8 @@ const fulfillStatus = (route: Route, status: number, body: unknown) =>
   route.fulfill({
     status,
     contentType: 'application/json',
-    headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*' },
+    // The cookie-mode refresh sends credentials: the browser needs the exact origin and ACAC.
+    headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*', 'access-control-allow-credentials': 'true' },
     body: JSON.stringify(body),
   })
 

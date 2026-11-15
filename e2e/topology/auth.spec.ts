@@ -4122,7 +4122,8 @@ async function fakePostStatus(page: Page, url: string, status: number): Promise<
     return route.fulfill({
       status,
       contentType: 'application/json',
-      headers: { 'access-control-allow-origin': new URL(APP_URL).origin },
+      // ACAC: the cookie-mode refresh sends credentials, and a CORS failure would read as a network error, not a 401.
+      headers: { 'access-control-allow-origin': new URL(APP_URL).origin, 'access-control-allow-credentials': 'true' },
       body: JSON.stringify({ error: 'fixture' }),
     })
   })

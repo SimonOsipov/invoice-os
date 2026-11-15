@@ -1585,7 +1585,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/ci/caddy-headers.sh
 
-  # Core AC 5: the deps stage of docling-test and the run image of docling-canary are
+  # The deps stage of docling-test and the run image of docling-canary are
   # two independent builds of this commit; their pip freeze output must be identical.
   docling-freeze:
     name: Docling image (two builds, one pip freeze)

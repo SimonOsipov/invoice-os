@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// SECAUD-43: two docling builds must list one pip freeze, and a red comparison must fail ci.
+// Two docling builds must list one pip freeze, and a red comparison must fail ci.
 func TestCI_DoclingFreezeGatesTheRollUp(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "ci.yml")

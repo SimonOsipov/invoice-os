@@ -69,7 +69,8 @@ def verify(local_dir: Path, want: dict[str, str]) -> None:
     for rel in sorted(found.keys() - want.keys()):
         raise SystemExit(f"{found[rel]}: not in the recorded manifest")
     for rel, expected in sorted(want.items()):
-        got = hashlib.sha256(found[rel].read_bytes()).hexdigest()
+        with found[rel].open("rb") as f:
+            got = hashlib.file_digest(f, "sha256").hexdigest()
         if got != expected:
             raise SystemExit(f"{found[rel]}: sha256 {got} != expected {expected}")
 

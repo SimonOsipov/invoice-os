@@ -172,7 +172,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, err
 	}
 
-	// Creator rung: approve only, before AXIS 2 so the creator message wins.
+	// Person rung (author, earlier approver): approve only, before AXIS 2 so its message wins.
 	var approvedAs string
 	if decision == "approved" {
 		standing, err := CreatorStandingTx(ctx, tx, caller.Subject, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: roleKey, AllowDelegation: allowDelegation, DelegateUserID: delegateUserID}})

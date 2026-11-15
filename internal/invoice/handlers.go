@@ -269,7 +269,7 @@ type listItem struct {
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
 	Demotion             *Demotion          `json:"demotion"`
-	// ApproveBlockedByCreator is the creator rung's own answer, last so no key moves.
+	// ApproveBlockedByCreator is the person rung's own answer (author or earlier approver), last so no key moves.
 	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
 }
 
@@ -441,7 +441,7 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
 // follow the same two rules, appended last of all. The approve pair comes from
 // approveGate and the reject pair from approvalGate; they differ only at the
-// creator rung (TestApproveGate_CreatorRefused).
+// person rung (TestApproveGate_CreatorRefused, TestEarlierApproverRefusal_DetailListAndDecideAgree).
 //
 // CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
 // appended last of all, from canCorrectNumber (store.go). The reason is non-null
@@ -616,9 +616,9 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 	return true, nil
 }
 
-// approveGate is approvalGate plus decideTx's creator rung, which sits after the run
+// approveGate is approvalGate plus decideTx's person rung, which sits after the run
 // rungs and before the role-holder rung. The third result is true only when the
-// creator rung refused. A CreatorErr skips the rung, so can_approve reads as the
+// person rung refused. A CreatorErr skips the rung, so can_approve reads as the
 // other rungs answer.
 func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
 	probe := f

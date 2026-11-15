@@ -867,3 +867,49 @@ func TestCanSign_AnotherTenantsDecisionNeverCounts(t *testing.T) {
 	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{control.probe()}), "")
 	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{pinned.probe()}), "")
 }
+
+// Only an approved decision on the invoice's open run makes an earlier approver; the first row is the control.
+func TestCanSign_OnlyAnApprovedDecisionOnTheOpenRunMakesAnEarlierApprover(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, c := range []struct {
+		name string
+		seed func(w *signWorld, a string)
+		want string
+	}{
+		{"an approved decision on the open run", func(w *signWorld, a string) { w.earlierApprovedBy(a) }, "earlier approver only"},
+		{"a rejected row on the open run", func(w *signWorld, a string) {
+			seedApprovalDecision(w.t, w.super, w.f.tenantID, w.f.runID, w.f.stepID, "rejected", a, nil)
+		}, ""},
+		{"an approved decision on a closed run of the same invoice", func(w *signWorld, a string) {
+			var closedRun, closedStep string
+			if err := w.super.QueryRow(context.Background(),
+				`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint, state, opened_at, closed_at, closed_by)
+				 SELECT tenant_id, invoice_id, policy_version_id, 'fp-closed', 'approved', now() - interval '2 days', now() - interval '1 day', 'system'
+				   FROM approval_runs WHERE id = $1 RETURNING id`, w.f.runID).Scan(&closedRun); err != nil {
+				w.t.Fatalf("seed closed run: %v", err)
+			}
+			if err := w.super.QueryRow(context.Background(),
+				`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, state, workflow_role_key)
+				 VALUES ($1, $2, 0, 'approval', 'satisfied', $3) RETURNING id`, w.f.tenantID, closedRun, w.key).Scan(&closedStep); err != nil {
+				w.t.Fatalf("seed closed step: %v", err)
+			}
+			seedApprovalDecision(w.t, w.super, w.f.tenantID, closedRun, closedStep, "approved", a, nil)
+		}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newSignWorld(t, super, app, "SECAUD-40 approved only "+c.name)
+			a := w.inRole(memberSpec{role: "reviewer"})
+			w.add(memberSpec{role: "reviewer"}) // a new reviewer outside the role reaches A
+			c.seed(w, a)
+
+			wantReasons(t, readReasons(t, app, w.f.tenantID, []SignerProbe{w.probe()}), c.want)
+			got := w.approvers()
+			if c.want == "" && (len(got) != 1 || got[0] != a) {
+				t.Errorf("approvers through decideTx = %v, want [%s]", got, a)
+			}
+			if c.want != "" && len(got) != 0 {
+				t.Errorf("approvers through decideTx = %v, want none", got)
+			}
+		})
+	}
+}

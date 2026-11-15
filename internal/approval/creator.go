@@ -89,8 +89,8 @@ func (s CreatorStanding) ApprovedAs() string {
 // SelfApproved reports an author approving with no other approver on the client.
 func (s CreatorStanding) SelfApproved() bool { return (s.IsCreator || s.IsEditor) && !s.OtherApprover }
 
-// CreatorStandingTx reads subject's author standing for each probe. A non-author
-// stops after one statement and may be absent from the map. RLS is the tenant scope.
+// CreatorStandingTx reads subject's author and earlier-approver standing for each probe. A subject
+// who is neither stops after one statement and may be absent from the map. RLS is the tenant scope.
 func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []CreatorProbe) (map[string]CreatorStanding, error) {
 	out := make(map[string]CreatorStanding, len(probes))
 	if len(probes) == 0 {

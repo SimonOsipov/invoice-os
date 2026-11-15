@@ -571,6 +571,36 @@ func TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign(t *testing.T) {
 		}
 	})
 
+	t.Run("earlier approver", func(t *testing.T) {
+		f := newRunFixture(t, "SECAUD-40 signed earlier approver")
+		k0 := seedWorkflowRole(t, f.super, f.tenantID, "k0", "K0")
+		y := seedWorkflowRole(t, f.super, f.tenantID, "y", "Y")
+		a := memberIn(t, f, k0, memberSpec{role: "reviewer"})
+		staffWorkflowRole(t, f.super, f.tenantID, y, a, 0)
+		d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // names Y's step, holds no role
+		inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Y", f.versionID,
+			runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("k0")},
+			runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("y")})
+		seedApprovalDecision(t, f.super, f.tenantID, run, oneApprovalStep(t, f.super, run, 0), "approved", a, nil)
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 1), true, &d)
+
+		signed := f.signedSteps(t, d, nil)
+		if len(signed) != 1 {
+			t.Fatalf("SignedWaitingStepsTx returned %d steps, want Y's step", len(signed))
+		}
+		if err := f.refuseSigned(nil, signed); err != nil {
+			t.Fatalf("RefuseUnsignedWaitingRolesTx with D active: %v, want nil", err)
+		}
+
+		// Only A, who approved step 0, is left in the role, and the admin reaches the client.
+		setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+		inUse := f.wantRefusedSigned(t, nil, signed)
+		want := InvoiceRef{ID: inv, Number: "INV-Y", RoleKey: "y", RoleTitle: "Y"}
+		if len(inUse.invoices) != 1 || inUse.invoices[0] != want {
+			t.Errorf("invoices = %+v, want [%+v]", inUse.invoices, want)
+		}
+	})
+
 	t.Run("out of reach", func(t *testing.T) {
 		f := newRunFixture(t, "APSC-14-07 signed out of reach")
 		f.suspendAdmins(t)

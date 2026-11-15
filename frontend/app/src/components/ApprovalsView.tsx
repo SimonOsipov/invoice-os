@@ -174,7 +174,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     // the ErrorState retry path (G-04-H, InvoicesList.tsx:283's precedent).
     if (base == null) return
     // `bar.toSend` (selected rows loaded can_approve:true) is the ONLY thing that goes on
-    // the wire, never `selected`; creator-refused rows are reported locally.
+    // the wire, never `selected`; rows refused by approve_blocked_by_creator are reported locally.
     const ids = bar.toSend
     const localRefused = bar.localRefused
     if (ids.length === 0) return

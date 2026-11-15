@@ -376,3 +376,69 @@ func TestDecide_Distinct_TwoEarlierDecidersShareTheFallback(t *testing.T) {
 		})
 	}
 }
+
+// A rejected row cannot sit on an open run through the API; seeded, it must still make no earlier approver.
+func TestDecide_Distinct_OnlyAnApprovedDecisionMakesAnEarlierApprover(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 only-approved", "k0", "k1")
+	a := w.reviewer(t, 0, 1)
+	w.reviewer(t, 0, 1) // B reaches and holds both roles
+	seedApprovalDecision(t, super, w.tenantID, w.runID, oneApprovalStep(t, super, w.runID, 0), "rejected", a, nil)
+	probe := CreatorProbe{InvoiceID: w.invoiceID, RoleKey: ptr("k0")}
+
+	if got := readStanding(t, app, w.tenantID, a, probe)[w.invoiceID]; got.EarlierApprover {
+		t.Errorf("standing after a rejected row = %+v, want EarlierApprover false", got)
+	}
+	w.mustApprove(t, a)
+	if got := readStanding(t, app, w.tenantID, a, probe)[w.invoiceID]; !got.EarlierApprover {
+		t.Errorf("standing after A's approval = %+v, want EarlierApprover true", got)
+	}
+}
+
+// B decided on a closed run of this invoice and on another invoice's open run: neither makes B a decider here.
+func TestDecide_Distinct_DecidersOfAClosedRunOrAnotherInvoiceStayFresh(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 stale-deciders", "k0", "k1")
+	a := w.reviewer(t, 0, 1)
+	b := w.reviewer(t, 0, 1)
+	i2 := seedInvoice(t, super, w.tenantID, w.entityID, "distinct-stale-i2")
+	setInvoiceStatus(t, super, i2, "validated")
+	if _, err := arm(t, app, w.tenantID, i2, "fp-stale-i2", "fixture-arm"); err != nil {
+		t.Fatalf("arm I2: %v", err)
+	}
+	if _, err := approve(t, app, w.tenantID, b, i2, nil); err != nil {
+		t.Fatalf("B approves step 0 of I2: %v", err)
+	}
+
+	w.mustApprove(t, b)
+	if run, err := reject(t, app, w.tenantID, a, w.invoiceID, ptr("wrong buyer")); err != nil || run.State != "rejected" {
+		t.Fatalf("A rejects step 1 = %q, %v, want rejected", run.State, err)
+	}
+	if _, err := arm(t, app, w.tenantID, w.invoiceID, "fp-stale-2", "fixture-arm"); err != nil {
+		t.Fatalf("arm the new run: %v", err)
+	}
+	if run := w.mustApprove(t, a); run.State != "open" {
+		t.Fatalf("run after A approves step 0 of the new run = %q, want open", run.State)
+	}
+	_, err := approve(t, app, w.tenantID, a, w.invoiceID, nil)
+	wantRefused(t, err, earlierSentence)
+}
+
+// A delegate of step 0 who decided nothing is no holder of step 1.
+func TestDecide_Distinct_AStepZeroDelegateWhoDecidedNothingIsNoHolderOfStepOne(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 delegate-not-forward", "k0", "k1")
+	b := w.reviewer(t, 0)
+	c := w.reviewer(t, 1)
+	d := w.reviewer(t)
+	setStepDelegation(t, super, oneApprovalStep(t, super, w.runID, 0), true, &d)
+
+	w.mustApprove(t, b)
+	_, err := approve(t, app, w.tenantID, d, w.invoiceID, nil)
+	if !errors.Is(err, ErrNotRoleHolder) {
+		t.Fatalf("D on step 1 err = %v, want ErrNotRoleHolder", err)
+	}
+	if run := w.mustApprove(t, c); run.State != "approved" {
+		t.Fatalf("run after C = %q, want approved", run.State)
+	}
+}

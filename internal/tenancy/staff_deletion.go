@@ -26,6 +26,9 @@ const (
 	maxStaffReasonRunes = 500
 )
 
+// StaffPurgeWait is the only home of the staff purge waiting period (D14).
+const StaffPurgeWait = 48 * time.Hour
+
 // withinStaffTenant proves the path tenant through staff_read_tenants in WithinStaffTx, then runs fn in that tenant's transaction.
 // A malformed id answers ErrTenantNotFound before any statement.
 func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, opts pgx.TxOptions, fn func(tx pgx.Tx, tenant, actor uuid.UUID) error) error {

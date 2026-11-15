@@ -405,6 +405,12 @@ describe('Console tenants wiring', () => {
     cleanup()
     await openX({ ...SCHEDULED, deletion_purge_opens_at: new Date(Date.now() - 1000).toISOString() })
     expect(headerButtons()).toEqual(['View jobs', 'Cancel deletion', 'Purge now'])
+    // A missing or unreadable opening time fails closed: the button stays hidden.
+    for (const opens of [null, 'not a date']) {
+      cleanup()
+      await openX({ ...SCHEDULED, deletion_purge_opens_at: opens })
+      expect(headerButtons(), String(opens)).toEqual(['View jobs', 'Cancel deletion'])
+    }
   })
 
   it('tenant detail: an unscheduled tenant says to delete the workspace first', async () => {

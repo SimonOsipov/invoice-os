@@ -28,6 +28,10 @@ type StaffTenant struct {
 	DeletionPurgeOpensAt   *time.Time `json:"deletion_purge_opens_at"`
 }
 
+// deletionGraceDays is the 30 days tenants_deletion_guard adds to deletion_scheduled_at; staff_reader reads only the due date,
+// so deletion_purge_opens_at subtracts it again. TestStaffTenant_PurgeOpensAtIsTheSchedulePlusTheWait fails if the trigger moves.
+const deletionGraceDays = 30
+
 // StaffTenants lists every tenant with its counts through the staff_read_ functions, which refuse a non-house actor.
 // ceiling: unpaged list; page it above ~1k tenants
 func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
@@ -40,11 +44,11 @@ func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 		rows, err := tx.Query(ctx, `SELECT t.id::text, t.name, t.kind, t.created_at, t.id::text = ANY($2::text[]),
 			coalesce(a.active_members, 0), coalesce(a.invoice_count, 0), a.last_activity_at,
 			d.deletion_due_at, d.deletion_purge_started_at,
-			d.deletion_due_at - interval '30 days' + make_interval(secs => $3)
+			d.deletion_due_at - make_interval(days => $4) + make_interval(secs => $3)
 			FROM public.staff_read_tenants($1) t
 			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
 			LEFT JOIN public.staff_read_tenant_deletions($1) d ON d.tenant_id = t.id
-			ORDER BY a.last_activity_at DESC NULLS LAST, t.created_at DESC, t.id`, actor, db.DemoTenants, StaffPurgeWait.Seconds())
+			ORDER BY a.last_activity_at DESC NULLS LAST, t.created_at DESC, t.id`, actor, db.DemoTenants, StaffPurgeWait.Seconds(), deletionGraceDays)
 		if err != nil {
 			return db.StaffReadError("tenancy: staff list tenants", err)
 		}
@@ -104,11 +108,11 @@ func (s *Store) StaffTenant(ctx context.Context, id string) (StaffTenantDetail, 
 		rows, err := tx.Query(ctx, `SELECT t.id::text, t.name, t.kind, t.created_at, t.id::text = ANY($2::text[]),
 			coalesce(a.active_members, 0), coalesce(a.invoice_count, 0), a.last_activity_at,
 			d.deletion_due_at, d.deletion_purge_started_at,
-			d.deletion_due_at - interval '30 days' + make_interval(secs => $4)
+			d.deletion_due_at - make_interval(days => $5) + make_interval(secs => $4)
 			FROM public.staff_read_tenants($1) t
 			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
 			LEFT JOIN public.staff_read_tenant_deletions($1) d ON d.tenant_id = t.id
-			WHERE t.id = $3`, actor, db.DemoTenants, tenant, StaffPurgeWait.Seconds())
+			WHERE t.id = $3`, actor, db.DemoTenants, tenant, StaffPurgeWait.Seconds(), deletionGraceDays)
 		if err != nil {
 			return db.StaffReadError("tenancy: staff read tenant", err)
 		}

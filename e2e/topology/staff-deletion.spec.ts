@@ -1,4 +1,4 @@
-// Support Console Tenants: staff start, cancel and purge a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width; the header wraps at 390px.
+// Support Console Tenants: staff start and cancel a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width; the header wraps at 390px.
 // Every workspace is registered here; the seeded tenants are never acted on.
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { acceptById, inviteWithToken, listMine, me, provisionStaffAccount, registerFormAccount, registerFresh, signInSession, type PendingInvite, type StaffAccount } from '../api/client'

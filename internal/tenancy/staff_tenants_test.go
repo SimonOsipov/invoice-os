@@ -1412,7 +1412,15 @@ func TestStaffTenant_PurgeOpensAtIsTheSchedulePlusTheWait(t *testing.T) {
 		t.Fatal("setup: no deletion_scheduled_at")
 	}
 	opens := scheduledAt.Add(StaffPurgeWait)
-	want := map[string]*time.Time{w.tenant: &opens, plain: nil}
+	// A schedule written ten hours ago: the opening is the schedule plus the wait, not now plus the wait.
+	aged := seedKindedTenant(t, w.super, "purge opens aged", "firm")
+	scheduleAgo(t, w.super, aged, w.admin, 10*3600)
+	agedAt := deletionOf(t, w.super, aged).ScheduledAt
+	if agedAt == nil {
+		t.Fatal("setup: no deletion_scheduled_at on the aged tenant")
+	}
+	agedOpens := agedAt.Add(StaffPurgeWait)
+	want := map[string]*time.Time{w.tenant: &opens, plain: nil, aged: &agedOpens}
 
 	check := func(what string, v StaffTenant) {
 		t.Helper()

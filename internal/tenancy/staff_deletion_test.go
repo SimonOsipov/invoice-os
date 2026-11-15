@@ -1430,6 +1430,14 @@ func TestStaffPurge_OpensExactlyAtTheWaitEnd(t *testing.T) {
 	w := newStaffPurgeWorld(t, "Ada Obi")
 	wait := StaffPurgeWait.Seconds()
 
+	// The AC names 48 hours: a literal 47 h pins the value itself, which the constant-derived steps below cannot.
+	scheduleAgo(t, w.super, w.tenant, w.admin, 47*3600)
+	before47 := deletionOf(t, w.super, w.tenant)
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); !errors.Is(err, ErrPurgeWaitingPeriod) {
+		t.Fatalf("47 hours after scheduling: err = %v, want ErrPurgeWaitingPeriod", err)
+	}
+	requireRefused(t, w, w.tenant, before47, "waiting_period")
+
 	scheduleAgo(t, w.super, w.tenant, w.admin, wait-60)
 	before := deletionOf(t, w.super, w.tenant)
 	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); !errors.Is(err, ErrPurgeWaitingPeriod) {

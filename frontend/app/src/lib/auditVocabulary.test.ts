@@ -294,6 +294,7 @@ describe('audit vocabulary', () => {
       ['workspace.deletion_scheduled', 'Workspace deletion scheduled'],
       ['workspace.deletion_cancelled', 'Workspace deletion cancelled'],
       ['workspace.purge_started', 'Workspace purge started'],
+      ['workspace.purge_refused', 'Workspace purge refused'],
       ['workspace.exported', 'Workspace exported'],
       ['membership.account_deleted', 'Account deleted'],
       ['membership.admin_handed_on', 'Admin handed on'],

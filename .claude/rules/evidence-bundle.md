@@ -15,7 +15,7 @@ paths:
 - Build the register workbook whole and commit. Then write the first byte.
 - Count register invoices against `maxBundleInvoices` before the first byte. The register returns 400 over the cap.
 - Refuse a register cell over 32,767 UTF-16 units with 400 before the first byte.
-- After the first ZIP byte, return without calling `bw.Close()`. A missing central directory makes every ZIP reader refuse the file.
+- After the first ZIP byte, never call `bw.Close()` on a failure. Log, then `panic(http.ErrAbortHandler)` as the workspace export does. A clean 200 over a ZIP with no central directory looks like a finished download.
 - Read child rows with `= ANY($1::uuid[])` in chunks of 500. Never JOIN `invoices`.
 - Stream rows and bodies. Never call `CollectRows`.
 - Hold at most one row's bodies in memory.
@@ -36,8 +36,12 @@ paths:
 - Expose `Content-Disposition` to browsers through the gateway CORS expose header.
 - Run `ANALYZE` as the owner or the superuser before you measure a plan. `invoice_app` cannot analyze.
 - Build a staff bundle, preview or company list only through `withinStaffTenant`. It checks the path tenant with `staff_read_tenants` in `WithinStaffTx`. Then it reads in that tenant's `WithinTenantTxOpts` with `bundleTxOptions`.
+- Serve the staff download as `POST /v1/staff/tenants/{id}/evidence-bundle` with a required JSON `reason`. Parse the query, then the body, before any database call. The preview stays `GET`.
 - Pass `audit.SupportActor` as the `subject` of a staff bundle. `resolveGeneratedBy` then writes `ASComply support` as `generated_by`.
 - Build the workspace export only through `AssembleWorkspace`: one `REPEATABLE READ` read-write transaction, the company stages through `writeEntityStages`, `workspace.exported` last, and `bw.Close()` after the commit.
+- Write `evidence_bundle.exported` after the read transaction commits and before `bw.Close()`, in its own short transaction through `recordBundleEvent`.
+- After the first byte, audit a failed download as `evidence_bundle.export_failed` in its own short transaction. A failure before it writes no row.
+- Write the staff download's rows only with `audit.RecordStaff`.
 - After the first write to the client, audit a failed export as `workspace.export_failed` in its own short transaction. A failure before it answers a plain error and writes no row. Keep the original error when that write fails.
 - Stream documents and `audit_log.csv`. Buffer a company CSV as the bundle does.
 - Net the register footer by `document_type`. Keep stored amounts in every data row and every CSV.

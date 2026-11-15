@@ -79,6 +79,7 @@ type StaffEvent struct {
 	TenantID         uuid.UUID // must equal the transaction's tenant; zero when it has none
 	SubjectID        uuid.UUID // the tenant-side row the change touched
 	Payload          any
+	StaffPayload     any // staff_audit_log only; nil writes Payload there
 }
 
 // RecordStaff appends one staff action to staff_audit_log on tx. A global change (zero TenantID)
@@ -93,6 +94,14 @@ func RecordStaff(ctx context.Context, tx pgx.Tx, ev StaffEvent) error {
 		}
 		body = b
 	}
+	staffBody := body
+	if ev.StaffPayload != nil {
+		b, err := json.Marshal(ev.StaffPayload)
+		if err != nil {
+			return fmt.Errorf("audit: marshal staff payload: %w", err)
+		}
+		staffBody = b
+	}
 	nullable := func(id uuid.UUID) any {
 		if id == uuid.Nil {
 			return nil
@@ -103,7 +112,7 @@ func RecordStaff(ctx context.Context, tx pgx.Tx, ev StaffEvent) error {
 		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id, tenant_id, subject_id, payload)
 SELECT $1::uuid, $2::text, $3::uuid, $4::uuid, $5::uuid, $6::jsonb
  WHERE nullif(current_setting('app.current_tenant', true), '')::uuid IS NOT DISTINCT FROM $4::uuid`,
-		ev.Actor, ev.Event, nullable(ev.RuleSetVersionID), nullable(ev.TenantID), nullable(ev.SubjectID), string(body))
+		ev.Actor, ev.Event, nullable(ev.RuleSetVersionID), nullable(ev.TenantID), nullable(ev.SubjectID), string(staffBody))
 	if err != nil {
 		return fmt.Errorf("audit: record staff event %q: %w", ev.Event, err)
 	}

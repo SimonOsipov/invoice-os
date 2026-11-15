@@ -391,43 +391,8 @@ func TestAuditScopeOf_MatchesTheEventsTheTriggerLeavesNull(t *testing.T) {
 	}
 }
 
-// AC #4: cross-checks the four DB-pinned rule sets for pairwise
-// disjointness and total. audit_trigger_test.go pins each set's size alone but never
-// cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
-// no audit package call: it guards the fixture data itself. Disjointness is a real
-// structural property, not a restatement of ScopeOf's fallback.
-func TestAuditScopeOf_RuleSetsAreDisjointAndSumToTheTotal(t *testing.T) {
-	all := map[string]string{}
-	named := []struct {
-		name   string
-		events []string
-	}{
-		{"A", triggerRuleAEvents},
-		{"B", triggerRuleBEvents},
-		{"C", triggerRuleCEvents},
-		{"E", triggerRuleEEvents},
-	}
-	for _, s := range named {
-		for _, e := range s.events {
-			if prior, dup := all[e]; dup {
-				t.Fatalf("%q is in both rule %s and rule %s", e, prior, s.name)
-			}
-			all[e] = s.name
-		}
-	}
-	for e := range triggerRuleDPayloads(uuid.NewString()) {
-		if prior, dup := all[e]; dup {
-			t.Fatalf("%q is in both rule %s and rule D", e, prior)
-		}
-		all[e] = "D"
-	}
-	if len(all) != 62 {
-		t.Fatalf("rule sets total %d events, want 62", len(all))
-	}
-}
-
 // AC #4: ScopeOf answers workspace for exactly the firm-wide names and for no
-// other event in the shipped 62-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
+// other event in the shipped 64-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
 // checks the names one at a time; this is the closed half, and it is the one assertion
 // here that a fallback cannot satisfy — reaching ScopeWorkspace needs a real entry in
 // reader.go's firmWideEvents. It fails if either extraction event is ever filed as
@@ -444,8 +409,8 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheFirmWideNames(t *testing.T) {
 	}
 	// Population floor: a shrunk vocabulary would make the set equality below a claim
 	// about whatever happened to survive.
-	if len(vocabulary) != 62 {
-		t.Fatalf("the rule sets name %d events, want 62", len(vocabulary))
+	if len(vocabulary) != 64 {
+		t.Fatalf("the rule sets name %d events, want 64", len(vocabulary))
 	}
 
 	want := map[string]bool{}

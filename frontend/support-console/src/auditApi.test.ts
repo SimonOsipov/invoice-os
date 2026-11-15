@@ -137,32 +137,40 @@ describe('auditApi', () => {
 
     it('reads the filename and lifts the server message', async () => {
       fetchMock.mockResolvedValueOnce(zip('attachment; filename=ASComply_evidence_x_20260901_20260930.zip'))
-      const got = await downloadBundle('T', REQ, 'fallback.zip')
+      const got = await downloadBundle('T', REQ, 'why', 'fallback.zip')
       expect(got.filename).toBe('ASComply_evidence_x_20260901_20260930.zip')
       expect(await got.blob.text()).toBe('PK')
-      const [url, init] = fetchMock.mock.calls.at(-1)!
-      expect(url).toBe(`${GW}/api/invoice/v1/staff/tenants/T/evidence-bundle?entity_id=${REQ.entityId}&from=2026-09-01T00%3A00%3A00.000Z&to=2026-09-30T23%3A59%3A59.999Z`)
-      expect(init.headers).toEqual({ Authorization: 'Bearer T' })
+      expect(fetchMock.mock.calls.at(-1)![0]).toContain('/evidence-bundle?entity_id=')
 
       fetchMock.mockResolvedValueOnce(zip('attachment; filename="quoted.zip"'))
-      expect((await downloadBundle('T', REQ, 'fallback.zip')).filename).toBe('fallback.zip')
+      expect((await downloadBundle('T', REQ, 'why', 'fallback.zip')).filename).toBe('fallback.zip')
       fetchMock.mockResolvedValueOnce(zip(null))
-      expect((await downloadBundle('T', REQ, 'fallback.zip')).filename).toBe('fallback.zip')
+      expect((await downloadBundle('T', REQ, 'why', 'fallback.zip')).filename).toBe('fallback.zip')
 
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: '3 invoices exceeds the bundle limit of 2' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
-      const err = await downloadBundle('T', REQ, 'f.zip').catch((e) => e)
+      const err = await downloadBundle('T', REQ, 'why', 'f.zip').catch((e) => e)
       expect(err).toBeInstanceOf(ApiError)
       expect(err.status).toBe(400)
       expect(err.message).toBe('3 invoices exceeds the bundle limit of 2')
 
       fetchMock.mockResolvedValueOnce(new Response('<html>', { status: 502, statusText: 'Bad Gateway' }))
-      expect(await downloadBundle('T', REQ, 'f.zip').catch((e) => e.message)).toBe('Bad Gateway')
+      expect(await downloadBundle('T', REQ, 'why', 'f.zip').catch((e) => e.message)).toBe('Bad Gateway')
+    })
+
+    it('downloadBundle posts the trimmed reason', async () => {
+      fetchMock.mockResolvedValueOnce(zip(null))
+      await downloadBundle('T', REQ, '  why  ', 'f.zip')
+      const [url, init] = fetchMock.mock.calls.at(-1)!
+      expect(url).toBe(`${GW}/api/invoice/v1/staff/tenants/T/evidence-bundle?entity_id=${REQ.entityId}&from=2026-09-01T00%3A00%3A00.000Z&to=2026-09-30T23%3A59%3A59.999Z`)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toEqual({ Authorization: 'Bearer T', 'Content-Type': 'application/json' })
+      expect(init.body).toBe('{"reason":"why"}')
     })
 
     it('rejects 401 with no session token and sends no request', async () => {
       vi.stubGlobal('localStorage', { getItem: () => null })
       const calls = fetchMock.mock.calls.length
-      const err = await downloadBundle('T', REQ, 'f.zip').catch((e) => e)
+      const err = await downloadBundle('T', REQ, 'why', 'f.zip').catch((e) => e)
       expect(err.status).toBe(401)
       expect(fetchMock.mock.calls.length).toBe(calls)
     })

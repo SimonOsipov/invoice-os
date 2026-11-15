@@ -26,7 +26,7 @@ const (
 	maxStaffReasonRunes = 500
 )
 
-// StaffPurgeWait is the only home of the staff purge waiting period (D14).
+// StaffPurgeWait is the only home of the staff purge waiting period.
 const StaffPurgeWait = 48 * time.Hour
 
 var purgeWaitingMessage = fmt.Sprintf("the waiting period has not ended; the purge opens %d hours after the deletion was scheduled", int(StaffPurgeWait.Hours()))

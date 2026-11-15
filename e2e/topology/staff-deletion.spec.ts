@@ -94,7 +94,7 @@ test('support console: start and cancel a workspace deletion; purge now waits 48
   await expect(scheduled).toBeHidden()
   expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the customer reads no due date').toBeNull()
   await expect(actions.getByRole('button', { name: 'Purge now', exact: true }), 'Purge now waits for a scheduled deletion').toHaveCount(0)
-  await expect(main(page).getByText('Not scheduled. Use Delete workspace first')).toBeVisible()
+  await expect(main(page).getByText('Not scheduled. Purge now opens 48 hours after Delete workspace')).toBeVisible()
 
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await confirmModal(page, 'Start deletion', 'e2e start again')
@@ -274,7 +274,7 @@ test('support console: the tenant header wraps and shows the whole state line at
   }
 
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
-  await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
+  await check('unscheduled', main(page).getByText('Not scheduled. Purge now opens 48 hours after Delete workspace, for a different staff member than the one who scheduled it.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await page.route((url) => isListGet(url), async (route) => {
     if (route.request().method() !== 'GET' || listHeld) return route.fallback()

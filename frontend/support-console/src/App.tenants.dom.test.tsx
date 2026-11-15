@@ -8,7 +8,7 @@ import App from './App'
 import { expireSession } from './auth'
 import { fetchJobs } from './jobsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
-import { cancelTenantDeletion, deleteMemberAccount, fetchStaffTenant, fetchStaffTenants, previewMemberDeletion, purgeTenant, startTenantDeletion, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
+import { cancelTenantDeletion, deleteMemberAccount, fetchStaffTenant, fetchStaffTenants, previewMemberDeletion, purgeTenant, STAFF_PURGE_WAIT_HOURS, startTenantDeletion, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
@@ -414,7 +414,7 @@ describe('Console tenants wiring', () => {
   })
 
   it('tenant detail: an unscheduled tenant says to delete the workspace first', async () => {
-    const line = 'Not scheduled. Use Delete workspace first; Purge now follows.'
+    const line = `Not scheduled. Purge now opens ${STAFF_PURGE_WAIT_HOURS} hours after Delete workspace, for a different staff member than the one who scheduled it.`
     await openX(X)
     expect(screen.getByText(line)).toBeTruthy()
     cleanup()
@@ -423,6 +423,17 @@ describe('Console tenants wiring', () => {
     cleanup()
     await openX(PURGING)
     expect(screen.queryByText(line)).toBeNull()
+  })
+
+  it('tenant detail: a waiting tenant says when Purge now opens and who must start it', async () => {
+    const line = `Purge now opens ${WAITING.deletion_purge_opens_at!.slice(0, 10)} ${WAITING.deletion_purge_opens_at!.slice(11, 16)} UTC, and a different staff member must start it.`
+    await openX(WAITING)
+    expect(screen.getByText(line)).toBeTruthy()
+    for (const t of [SCHEDULED, PURGING]) {
+      cleanup()
+      await openX(t)
+      expect(screen.queryByText(/Purge now opens/)).toBeNull()
+    }
   })
 
   it('purge now: the confirm waits for the exact name and a reason', async () => {

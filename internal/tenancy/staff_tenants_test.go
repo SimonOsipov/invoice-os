@@ -1399,7 +1399,7 @@ func TestStoreStaffTenants_CarriesTheDeletionState(t *testing.T) {
 	}
 }
 
-// D15: deletion_purge_opens_at is deletion_scheduled_at + StaffPurgeWait on both reads, null when unscheduled.
+// deletion_purge_opens_at is deletion_scheduled_at + StaffPurgeWait on both reads, null when unscheduled.
 // It reads the wire form, so the spec fails on the missing key, not the build.
 func TestStaffTenant_PurgeOpensAtIsTheSchedulePlusTheWait(t *testing.T) {
 	w := newStaffDelWorld(t)

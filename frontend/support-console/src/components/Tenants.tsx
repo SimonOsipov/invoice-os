@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { SEARCH_ICON } from '../icons'
 import { syncDate, syncStamp } from '../rulesApi'
-import { filterTenants, initials, kindLabel, memberName, type DetailStatus, type StaffMember, type StaffTenant, type StaffTenantDetail } from '../tenantsApi'
+import { filterTenants, STAFF_PURGE_WAIT_HOURS, initials, kindLabel, memberName, type DetailStatus, type StaffMember, type StaffTenant, type StaffTenantDetail } from '../tenantsApi'
 import { Badge } from './StatusBadge'
 
 export type TenantsStatus = 'loading' | 'ready' | 'empty' | 'forbidden' | 'error'
@@ -154,9 +154,14 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
           {started ? (
             <div className="mono" style={{ fontSize: 11, color: RED.text, overflowWrap: 'anywhere' }}>{`Purge in progress since ${syncStamp(t.deletion_purge_started_at!)}`}</div>
           ) : scheduled ? (
-            <div className="mono" style={{ fontSize: 11, color: AMBER.text, overflowWrap: 'anywhere' }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
+            <>
+              <div className="mono" style={{ fontSize: 11, color: AMBER.text, overflowWrap: 'anywhere' }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
+              {!purgeOpen && t.deletion_purge_opens_at !== null && (
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>{`Purge now opens ${syncStamp(t.deletion_purge_opens_at)}, and a different staff member must start it.`}</div>
+              )}
+            </>
           ) : (
-            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>Not scheduled. Use Delete workspace first; Purge now follows.</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>{`Not scheduled. Purge now opens ${STAFF_PURGE_WAIT_HOURS} hours after Delete workspace, for a different staff member than the one who scheduled it.`}</div>
           )}
         </div>
         <button type="button" onClick={() => onViewJobs(t.id)} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }}>

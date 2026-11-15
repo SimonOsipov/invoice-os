@@ -1455,7 +1455,7 @@ func TestStaffPurge_OpensExactlyAtTheWaitEnd(t *testing.T) {
 	}
 }
 
-// Q2: the wait counts from deletion_scheduled_at; deletion_due_at is 30 days out and must not matter.
+// The wait counts from deletion_scheduled_at; deletion_due_at is 30 days out and must not matter.
 func TestStaffPurge_TheWaitCountsFromSchedulingNotTheDueDate(t *testing.T) {
 	w := newStaffPurgeWorld(t, "Ada Obi")
 	bCtx, b := secondStaff(t, w)
@@ -1494,7 +1494,7 @@ func TestStaffPurge_ACustomerScheduledDeletionWaitsTheSame(t *testing.T) {
 	}
 }
 
-// D2: the name check comes first, so the scheduler's typo is a name refusal, not a same-approver one.
+// The name check comes first, so the scheduler's typo is a name refusal, not a same-approver one.
 func TestStaffPurge_ANameMismatchByTheSchedulerIsANameRefusal(t *testing.T) {
 	w := newStaffPurgeWorld(t, "Ada Obi")
 	scheduleOpenBy(t, w.super, w.tenant, w.staff)

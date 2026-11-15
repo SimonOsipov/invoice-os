@@ -2,6 +2,9 @@ import { request } from './api'
 
 const TENANTS_PATH = '/api/tenancy/v1/staff/tenants'
 
+// Hours Purge now stays closed after Delete workspace; pinned to StaffPurgeWait in internal/tenancy/staff_deletion.go.
+export const STAFF_PURGE_WAIT_HOURS = 48
+
 // Wire shapes: internal/tenancy/staff_tenants.go.
 // StaffTenant
 export interface StaffTenant {

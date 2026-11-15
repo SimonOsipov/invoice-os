@@ -482,7 +482,8 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             queued within seconds — so labelling it "submitted" would read `0 submitted`
             for a fully-sent batch on a revisit, the exact false zero this story's counter
             discipline exists to prevent. QUEUED is D2's own real name for the state. */}
-        <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
+        {/* Yields width so the armed undo row stays on Finish's line at 1280. */}
+        <span style={{ fontSize: 12.5, color: 'var(--fg-3)', flex: '1 1 200px', minWidth: 0 }}>
           {reviewFooterSummary({ allTotal, cleanTotal, queuedTotal, failingTotal, keptTotal })}
         </span>
         {/* NAVIGATION ONLY. The invoices were persisted at import time (§10.10), so a

@@ -948,10 +948,10 @@ async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, 
   await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await metricsMatch(page, first, 'range 1h')
   // Cloud SQL series fill every step, so this holds even before the PR's own series land (4-minute lag).
-  expect(await mn.locator('[data-panel] [data-no-data]').count(), 'some metric panel draws: all No data means run-preview lacks roles/monitoring.viewer on ascomply-preview, or the metrics path broke').toBeLessThan(PANEL_KEYS.length)
+  expect(await mn.locator('[data-panel] [data-no-data]').count(), 'some metric panel draws: all No data means the preview runtime lacks roles/monitoring.viewer on ascomply-preview, or the metrics path broke').toBeLessThan(PANEL_KEYS.length)
   scopeMatch(first, 'range 1h')
   // A wrong PreviewSuffix empties every PR-scoped read; the unscoped Cloud SQL panels would still pass above.
-  expect(first.limits.available, 'Core AC 2: limits are available; unavailable means run-preview lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
+  expect(first.limits.available, 'Core AC 2: limits are available; unavailable means the preview runtime lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
   expect(first.limits.services.map((s) => s.name).sort(), 'Core AC 2: limits list the PR\'s own services (scripts/ci/preview.sh BACKENDS + SITES = systemhealth.MetricServices); missing names mean the PR suffix matched nothing').toEqual([...METRIC_SERVICES].sort())
   await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`, { exact: true }), 'connections tile shows the budget').toHaveCount(1)
 
@@ -974,7 +974,7 @@ async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, 
   await metricsMatch(page, sixBody, 'range 6h')
 
   const drawn = METRIC_SERVICES.find((n) => panelSeries(first, 'req_per_min').some((s) => s.name === n))
-  expect(drawn, 'Core AC 2 and 3: req_per_min draws a series for one of the PR\'s services; none means run-preview lacks roles/monitoring.viewer on ascomply-preview or the PR suffix matched nothing').toBeDefined()
+  expect(drawn, 'Core AC 2 and 3: req_per_min draws a series for one of the PR\'s services; none means the preview runtime lacks roles/monitoring.viewer on ascomply-preview or the PR suffix matched nothing').toBeDefined()
   const name = drawn as string
   const select = mn.locator('select[aria-label="Service"]')
   const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))

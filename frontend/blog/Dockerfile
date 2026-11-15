@@ -1,8 +1,7 @@
-# syntax=docker/dockerfile:1
 # Build context MUST be the repo root: the pnpm workspace shares one root lockfile.
 
 # ---- Build: install the whole workspace, build just this app ----
-FROM node:22-alpine AS build
+FROM mirror.gcr.io/library/node:22.23.5-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS build
 WORKDIR /repo
 RUN corepack enable
 COPY . .
@@ -28,7 +27,7 @@ ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/blog build
 
 # ---- Server: the blog binary, built from the root go.mod ----
-FROM mirror.gcr.io/library/golang:1.26.11-alpine AS server
+FROM mirror.gcr.io/library/golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS server
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/blog cmd/blog
@@ -37,7 +36,7 @@ COPY internal/platform internal/platform
 RUN CGO_ENABLED=0 go build -o /out/blog ./cmd/blog
 
 # ---- Serve: the blog binary over the built SPA ----
-FROM gcr.io/distroless/static-debian12:nonroot AS serve
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS serve
 COPY --from=server /out/blog /blog
 COPY --from=build /repo/frontend/blog/dist /srv
 # The commit under test, served at /build.txt for the deploy gate.

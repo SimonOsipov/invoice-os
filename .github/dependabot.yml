@@ -81,8 +81,9 @@ updates:
         update-types: [minor, patch]
     ignore:
       # An image may be named with or without its registry, so match both.
-      # golang moves with go.mod (TestGoPins_RepoAgree); supabase/auth with idppin.
+      # The golang tag moves with go.mod (TestGoPins_RepoAgree); Dependabot refreshes only the digest. supabase/auth moves with idppin.
       - dependency-name: "*golang"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "*supabase/auth"
       - dependency-name: "*node"
         update-types: ["version-update:semver-major"]

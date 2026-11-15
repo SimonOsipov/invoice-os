@@ -125,7 +125,7 @@ describe('stripNodes: shape and totality', () => {
         }
       }
     }
-    expect(cases).toBe(105) // 3 histories x 5 runs x 7 statuses -- the sweep is not empty
+    expect(cases).toBe(120) // 3 histories x 5 runs x 8 statuses -- the sweep is not empty
   })
 })
 
@@ -152,12 +152,13 @@ const STATUS_TABLE: Record<InvoiceStatus, StatusRow> = {
   accepted: { cursor: 5, n1: 'done', n2: 'done', n4: 'done', n5: 'done', n5label: 'Accepted by FIRS' },
   rejected: { cursor: 5, n1: 'done', n2: 'done', n4: 'done', n5: 'failed', n5label: 'Rejected by FIRS' },
   failed: { cursor: 5, n1: 'done', n2: 'done', n4: 'done', n5: 'failed', n5label: 'Transmission failed' },
+  discarded: { cursor: 1, n1: 'failed', n2: 'unreached', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
 }
 
 describe('stripNodes: nodes 1/2/4/5 follow status', () => {
-  it('S-2: each of the seven statuses lands its cursor, and state/label are identical with and without history', () => {
+  it('S-2: each of the eight statuses lands its cursor, and state/label are identical with and without history', () => {
     const rows = Object.entries(STATUS_TABLE) as Array<[InvoiceStatus, StatusRow]>
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     expect(rows.length).toBeGreaterThan(0)
 
     for (const [status, row] of rows) {
@@ -224,6 +225,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status', () => {
       accepted: 'done',
       rejected: 'failed',
       failed: 'failed',
+      discarded: 'failed',
     }
     const INDEX_OF_NODE = { 1: 0, 2: 1, 4: 3, 5: 4 } as const
     const histories: Array<[string, StatusChange[]]> = [
@@ -251,7 +253,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status', () => {
       }
     }
     expect(cases).toBe(histories.length * ALL_RUNS.length * ALL_STATUSES.length)
-    expect(cases).toBe(231) // 3 x 11 x 7
+    expect(cases).toBe(264) // 3 x 11 x 8
     // Anti-vacuity: both outcomes at the cursor are reached.
     expect(currentAtCursor).toBeGreaterThan(0)
     expect(doneAtCursor).toBeGreaterThan(0)
@@ -270,6 +272,16 @@ describe('stripNodes: nodes 1/2/4/5 follow status', () => {
     const queuedCaption = strip(HISTORY_TO_QUEUED, null, 'queued')[3].caption
     expect(queuedCaption).toBe('11:30 · Ada')
     expect(submittedCaption).toBe(queuedCaption)
+  })
+
+  it('SECAUD-50-02: a discarded invoice sits on node 1 as failed, with every later node unreached', () => {
+    const discarded: InvoiceStatus = 'discarded'
+    for (const history of [[], HISTORY_TO_QUEUED]) {
+      const n = strip(history, null, discarded)
+      expect(n.map((x) => x.state)).toEqual(['failed', 'unreached', 'unreached', 'unreached', 'unreached'])
+      expect(n[0].label).toBe('Draft')
+      expect(n[4].label).toBe('Accepted by FIRS')
+    }
   })
 
   it('S-5 (invoiceStrip_terminalRelabels): node 5 relabels and reddens on failed and on rejected', () => {
@@ -699,7 +711,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
     // Anti-vacuity: 'Not reached' above proves nothing if every node captions it. Node 1
     // sits at or behind every cursor, so it is reached on every run x status shape.
     expect(ALL_RUNS).toHaveLength(11)
-    expect(ALL_STATUSES).toHaveLength(7)
+    expect(ALL_STATUSES).toHaveLength(8)
     let swept = 0
     for (const [rName, run] of ALL_RUNS) {
       for (const status of ALL_STATUSES) {
@@ -710,7 +722,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
       }
     }
     expect(swept).toBe(ALL_RUNS.length * ALL_STATUSES.length)
-    expect(swept).toBe(77)
+    expect(swept).toBe(88)
   })
 
   it('S-39: the two em-dash routes stay distinguishable on a current node', () => {
@@ -788,7 +800,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
       }
     }
     expect(checked).toBe(histories.length * ALL_RUNS.length * ALL_STATUSES.length * 4)
-    expect(checked).toBe(1232)
+    expect(checked).toBe(1408)
     // Anti-vacuity: both arms of the biconditional are actually reached.
     expect(bothSet).toBeGreaterThan(0)
     expect(bothNull).toBeGreaterThan(0)
@@ -827,7 +839,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
         }
       }
     }
-    expect(cases).toBe(231)
+    expect(cases).toBe(264)
     // Anti-vacuity: a passed step under the cursor is swept both with and without its row.
     expect(passedAtCursorNoRow).toBeGreaterThan(0)
     expect(passedAtCursorWithRow).toBeGreaterThan(0)
@@ -949,7 +961,7 @@ describe('stripNodes: the invariants subtask 02 relies on', () => {
         }
       }
     }
-    expect(checked).toBe(1155) // 3 x 11 x 7 x 5 -- the sweep is not empty
+    expect(checked).toBe(1320) // 3 x 11 x 8 x 5 -- the sweep is not empty
     // Anti-vacuity: the implication is trivially true on a node with no actor at all, so the
     // sweep must reach both arms.
     expect(withActor).toBeGreaterThan(0)
@@ -1040,7 +1052,7 @@ describe('stripNodes: totality over malformed input', () => {
         cases += 1
       }
     }
-    expect(cases).toBe(MALFORMED.length * 7)
+    expect(cases).toBe(MALFORMED.length * 8)
   })
 
   it('S-31: an unparseable changed_at degrades to the em-dash rather than a bogus clock', () => {

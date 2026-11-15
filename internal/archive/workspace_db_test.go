@@ -466,6 +466,33 @@ func TestRLS_WorkspaceCompanyDirEqualsTheAllTimeBundle(t *testing.T) {
 	}
 }
 
+// The workspace export is every row of the workspace ([discarded-readers]): a discarded invoice stays in it.
+func TestRLS_WorkspaceExportKeepsADiscardedInvoice(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "discarded", shapeFull)
+	gone := "INV-GONE-" + fx.label
+	if _, err := rig.super.Exec(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, $3, 'discarded')`,
+		fx.tenant, fx.alpha, gone); err != nil {
+		t.Fatalf("insert the discarded invoice: %v", err)
+	}
+
+	_, body := zipEntries(t, rig.exportOK(t, fx))
+
+	csv, ok := body["companies/alpha-co/invoices.csv"]
+	if !ok {
+		t.Fatal("export has no companies/alpha-co/invoices.csv")
+	}
+	if !strings.Contains(string(csv), gone) {
+		t.Errorf("companies/alpha-co/invoices.csv does not hold the discarded invoice %s", gone)
+	}
+	for _, live := range fx.invoiceNumbers {
+		if !strings.Contains(string(csv), live) {
+			t.Errorf("companies/alpha-co/invoices.csv does not hold the live invoice %s (control)", live)
+		}
+	}
+}
+
 func TestRLS_WorkspaceManifestChecksEveryEntry(t *testing.T) {
 	rig := newWsRig(t)
 	fx := rig.plant(t, "manifest", shapeFull)

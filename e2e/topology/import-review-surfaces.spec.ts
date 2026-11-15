@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, createImportBatch, getInvoice, listInvoices, type ExtractionDetail, type ExplainResult, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, getImportBatch, getInvoice, listInvoices, type ExtractionDetail, type ExplainResult, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { shoot as argosShoot } from '../argos'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertControlFits, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { openNewInvoice, signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
@@ -317,7 +317,7 @@ async function assertGridAligned(page: Page, headerLabel: string, label: string)
 }
 
 // Copy of importWizardShared.ts's extractOneDocument: the document journey to the invoice detail, then the review screen.
-async function extractOneDocument(
+async function uploadToExtractionReview(
   page: Page,
   label: string,
   file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
@@ -340,6 +340,14 @@ async function extractOneDocument(
   await expect
     .poll(() => new URL(page.url()).pathname, { message: 'the landing must be addressed at its own job path' })
     .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+}
+
+async function extractOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
+): Promise<void> {
+  await uploadToExtractionReview(page, label, file)
   await expect(page.getByTestId('extraction-open-invoice'), 'the review must offer its exit').toBeVisible({ timeout: 60_000 })
   await page.getByTestId('extraction-open-invoice').click()
   await expect(page.getByTestId('invoice-detail'), 'the exit must reach the real invoice detail').toBeVisible({ timeout: 60_000 })
@@ -1331,6 +1339,87 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
       for (const i of [0, 1].filter((i) => i !== fix.line! - 1)) {
         expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
       }
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('UN undo import layout', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('UN-01 review footer: the undo button, its arm step and the done state fit beside Finish', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `UN-01 ${Date.now()}`, tin: freshTin() })
+    const batchId = await createImportBatch(token, entity.id, `INV-UN01-${Date.now()}`)
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
+    const finish = page.getByRole('button', { name: 'Finish · go to invoices' })
+    await expect(finish).toBeVisible({ timeout: 60_000 })
+    const footer = finish.locator('xpath=..')
+
+    await assertControlFits(page, page.getByTestId('undo-import'), footer, [finish], finish, 'undo-import')
+    await page.getByTestId('undo-import').click()
+    for (const id of ['undo-import-cancel', 'undo-import-confirm']) {
+      await assertControlFits(page, page.getByTestId(id), footer, [finish], finish, id)
+    }
+
+    await page.getByTestId('undo-import-confirm').click()
+    await expect(page.getByTestId('review-undone')).toBeVisible()
+    const batch = await getImportBatch(token, batchId)
+    expect(batch.body).toMatchObject({ status: 'undone', undoable: false })
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('UN-04 extraction footer: the undo button and its arm step stay inside the footer at every width', async ({ page }) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+
+    await uploadToExtractionReview(page, 'UN-04')
+    const open = page.getByTestId('extraction-open-invoice')
+    await expect(open).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('undo-import'), 'the import behind this document is undoable').toBeVisible({ timeout: 60_000 })
+    // Enclosure is checked against the footer's own rect: the page never scrolls sideways here.
+    const footer = open.locator('xpath=..')
+    const save = page.getByTestId('extraction-save')
+
+    await assertControlFits(page, page.getByTestId('undo-import'), footer, [open, save], null, 'undo-import')
+    await page.getByTestId('undo-import').click()
+    for (const id of ['undo-import-cancel', 'undo-import-confirm']) {
+      await assertControlFits(page, page.getByTestId(id), footer, [open, save], null, id)
+    }
+    await page.getByTestId('undo-import-cancel').click()
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('UN-02 files strip: each row keeps its undo button clear of the filename and the status', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `UN-02 ${Date.now()}`, tin: freshTin() })
+    const first = await createImportBatch(token, entity.id, `INV-UN02A-${Date.now()}`)
+    const second = await createImportBatch(token, entity.id, `INV-UN02B-${Date.now()}`)
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${first},${second}/review` })
+    const rows = page.getByTestId('review-files-strip-row')
+    await expect(rows).toHaveCount(2, { timeout: 60_000 })
+
+    for (const i of [0, 1]) {
+      const row = rows.nth(i)
+      await assertControlFits(
+        page,
+        row.getByTestId('undo-import'),
+        row,
+        [row.getByText('import.csv', { exact: true }), row.getByText('Imported', { exact: true })],
+        null,
+        `row ${i} undo-import`,
+      )
     }
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

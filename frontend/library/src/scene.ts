@@ -79,7 +79,7 @@ export function sceneState(sc: Scene, idx: number): SceneState {
 export const THUMB_STEP: Readonly<Record<string, number>> = {
   'import-files': 3, 'invoice-status': 1, 'read-documents': 1, 'review-fields': 1, 'rule-library': 1, validate: 0,
   'approval-queue': 1, 'workflow-builder': 1, 'fiscal-outcomes': 2, overview: 1, portfolio: 1, contacts: 1,
-  roles: 1, channels: 1, 'erp-connectors': 1,
+  roles: 1, channels: 1, 'erp-connectors': 1, 'undo-import': 0,
 }
 
 export function thumbStep(f: Feature): number {

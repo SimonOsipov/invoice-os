@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -34,6 +35,13 @@ var (
 	ErrDocumentAlreadyFiled = errors.New("importer: document already filed")
 	// ErrNoteTypeNotRead: the document's verdict is not the note type the caller named.
 	ErrNoteTypeNotRead = errors.New("importer: document not read as that type of note")
+
+	// ErrUndoForbidden: the caller sees the batch but is neither full-access nor an uploader of its document.
+	ErrUndoForbidden = errors.New("importer: undo forbidden")
+	// ErrNotUndoable: the batch is not completed.
+	ErrNotUndoable = errors.New("importer: batch not undoable")
+	// ErrImportSent: an invoice of the batch has been to the tax authority.
+	ErrImportSent = errors.New("importer: import sent")
 )
 
 // RowError is one entry in an import_batches.errors jsonb array — either a
@@ -226,7 +234,7 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 	return found, nil
 }
 
-// DocumentHasInvoice reports whether any invoice of the tenant cites documentID, whatever
+// DocumentHasInvoice reports whether any non-discarded invoice of the tenant cites documentID, whatever
 // client it is filed under.
 func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool, error) {
 	var has bool
@@ -241,7 +249,7 @@ func (s *Store) FiledInvoiceID(ctx context.Context, documentID string) (string, 
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 1`,
+			`SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded' ORDER BY created_at, id LIMIT 1`,
 			documentID).Scan(&id)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -309,6 +317,87 @@ type Batch struct {
 
 	RuleSetVersion *int
 	CreatedAt      time.Time
+	Undoable       bool
+}
+
+// undoRefusalSQL is read by GetBatch (undoable) and UndoBatch (the refusal), so the button and
+// the action agree. Over alias b; NULL = the undo would succeed. Precedence: forbidden, not
+// completed, sent. Sent reads history too: a rejected-then-draft invoice has been sent.
+const undoRefusalSQL = `CASE
+	WHEN NOT (coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
+	          OR EXISTS (SELECT 1 FROM document_uploaders u
+	                      WHERE u.document_id = b.document_id
+	                        AND u.user_id = nullif(current_setting('app.current_user_id', true), '')::uuid))
+	     THEN 'forbidden'
+	WHEN b.status <> 'completed' THEN 'not_completed'
+	WHEN EXISTS (SELECT 1 FROM invoices i
+	              WHERE i.import_batch_id = b.id
+	                AND (i.status NOT IN ('draft', 'validated', 'discarded')
+	                     OR EXISTS (SELECT 1 FROM invoice_status_history h
+	                                 WHERE h.invoice_id = i.id AND h.to_status NOT IN ('draft', 'validated', 'discarded'))))
+	     THEN 'sent'
+END`
+
+// UndoResult is what a successful undo answers.
+type UndoResult struct {
+	ID                string
+	DiscardedInvoices int
+}
+
+// UndoBatch discards a completed batch's invoices and marks the batch undone, which releases
+// its document (import_batches_release_document). Locks batch then invoices before the refusal
+// read, so a concurrent submit or decision either lands first (the refusal sees it) or waits.
+// ceiling: needs READ COMMITTED, so the refusal statement sees the lock holder's commit; revisit if the pool default isolation changes.
+func (s *Store) UndoBatch(ctx context.Context, id string) (UndoResult, error) {
+	res := UndoResult{ID: id}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM import_batches WHERE id = $1 FOR UPDATE`, id).Scan(&status); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id FROM invoices WHERE import_batch_id = $1 ORDER BY id FOR UPDATE`, id)
+		if err != nil {
+			return err
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		var refusal *string
+		if err := tx.QueryRow(ctx, `SELECT `+undoRefusalSQL+` FROM import_batches b WHERE b.id = $1`, id).Scan(&refusal); err != nil {
+			return err
+		}
+		if refusal != nil {
+			switch *refusal {
+			case "forbidden":
+				return ErrUndoForbidden
+			case "not_completed":
+				return ErrNotUndoable
+			default:
+				return ErrImportSent
+			}
+		}
+		caller, _ := auth.IdentityFromContext(ctx)
+		n, err := invoice.DiscardBatchTx(ctx, tx, id, invoice.Actor{TenantID: caller.TenantID, Subject: caller.Subject})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE import_batches SET status = 'undone' WHERE id = $1`, id); err != nil {
+			return err
+		}
+		res.DiscardedInvoices = n
+		return audit.Record(ctx, tx, caller.Subject, "import.undone", map[string]any{"batch_id": id, "invoices": n})
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return UndoResult{}, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return UndoResult{}, ErrValidation
+		}
+		return UndoResult{}, err
+	}
+	return res, nil
 }
 
 // GetBatch returns one import_batches row plus its DERIVED rule_set_version:
@@ -348,13 +437,14 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 			        (SELECT min(rsv.version)
 			           FROM rule_set_versions rsv
 			           JOIN invoices i ON i.rule_set_version_id = rsv.id
-			          WHERE i.import_batch_id = b.id)
+			          WHERE i.import_batch_id = b.id),
+			        (`+undoRefusalSQL+`) IS NULL
 			   FROM import_batches b
 			  WHERE b.id = $1`, id,
 		).Scan(
 			&b.ID, &b.EntityID, &b.Filename, &b.DocumentID, &b.Status,
 			&b.RowsTotal, &b.RowsValid, &b.RowsInvalid,
-			&rawErrors, &b.CreatedAt, &b.RuleSetVersion,
+			&rawErrors, &b.CreatedAt, &b.RuleSetVersion, &b.Undoable,
 		)
 	})
 	if txErr != nil {

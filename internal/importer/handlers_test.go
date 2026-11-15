@@ -724,6 +724,10 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrTooManyRows": true,
 		// Cell-budget refusal, a 400; not a membership error.
 		"ErrTooManyCells": true,
+		// Undo refusals: a 403 and two 409s; not membership errors.
+		"ErrUndoForbidden": true,
+		"ErrNotUndoable":   true,
+		"ErrImportSent":    true,
 	}
 
 	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}
@@ -1129,6 +1133,60 @@ func TestSavedMappingHandler_BodyChecksPrecedeTheEntityCheck(t *testing.T) {
 			}
 			if called != 0 {
 				t.Errorf("entityVisible calls = %d, want 0", called)
+			}
+		})
+	}
+}
+
+func TestUndoHandler_RefusesBeforeTheStore(t *testing.T) {
+	id := testIdentity()
+	batch := uuid.NewString()
+	cases := []struct {
+		name     string
+		identity *auth.Identity
+		target   string
+		err      error
+		want     int
+		wantMsg  string
+		store    int // expected store calls
+	}{
+		{"no identity", nil, batch, nil, 401, "unauthorized", 0},
+		{"malformed id", &id, "not-a-uuid", nil, 400, "id must be a well-formed uuid", 0},
+		{"unknown batch", &id, batch, ErrNotFound, 404, "not found", 1},
+		{"not the uploader", &id, batch, ErrUndoForbidden, 403, "only the uploader, an admin or a full-access member can undo an import", 1},
+		{"wrapped forbidden", &id, batch, fmt.Errorf("undo: %w", ErrUndoForbidden), 403, "only the uploader, an admin or a full-access member can undo an import", 1},
+		{"not completed", &id, batch, ErrNotUndoable, 409, "only a completed import can be undone", 1},
+		{"sent", &id, batch, ErrImportSent, 409, "an invoice of this import was sent to the tax authority", 1},
+		{"suspended member", &id, batch, db.ErrNotActiveMember, 403, db.NotActiveMemberMessage, 1},
+		{"locked workspace", &id, batch, db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			undo := func(ctx context.Context, got string) (UndoResult, error) {
+				calls++
+				if got != batch {
+					t.Errorf("store got id %q, want %q", got, batch)
+				}
+				return UndoResult{}, tc.err
+			}
+			r := httptest.NewRequest("POST", "/v1/imports/"+tc.target+"/undo", nil)
+			r.SetPathValue("id", tc.target)
+			if tc.identity != nil {
+				r = r.WithContext(auth.WithIdentity(r.Context(), *tc.identity))
+			}
+			rec := httptest.NewRecorder()
+			UndoHandler(undo, nil).ServeHTTP(rec, r)
+
+			var body struct {
+				Error string `json:"error"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != tc.want || body.Error != tc.wantMsg {
+				t.Errorf("answer = %d %q, want %d %q", rec.Code, body.Error, tc.want, tc.wantMsg)
+			}
+			if calls != tc.store {
+				t.Errorf("store calls = %d, want %d", calls, tc.store)
 			}
 		})
 	}

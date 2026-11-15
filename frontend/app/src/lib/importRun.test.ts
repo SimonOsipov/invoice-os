@@ -1024,7 +1024,7 @@ describe("filesStrip still reports a run-only failure after markRunRouted (BULK-
     // alone, never from a batches array this spec would otherwise have to fabricate.
     const rows = filesStrip([], routed, 'spreadsheet')
 
-    expect(rows).toEqual([{ id: 'f1', filename: 'rejected-before-batch.csv', reason: 'the gateway refused this upload' }])
+    expect(rows).toEqual([{ id: 'f1', filename: 'rejected-before-batch.csv', reason: 'the gateway refused this upload', undone: false }])
   })
 })
 

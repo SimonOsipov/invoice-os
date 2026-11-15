@@ -771,7 +771,7 @@ export interface Invoice {
   entity_id: string
   import_batch_id: string | null
   invoice_number: string
-  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed'
+  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed' | 'discarded'
   issue_date: string | null
   supplier_tin: string | null
   supplier_name: string | null
@@ -862,6 +862,7 @@ export interface ListInvoicesQuery {
   q?: string
   entity_id?: string
   awaiting_approval?: boolean
+  import_batch_id?: string
 }
 
 export interface ListInvoicesResponse {
@@ -880,6 +881,7 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
   if (query?.awaiting_approval !== undefined) params.set('awaiting_approval', String(query.awaiting_approval))
+  if (query?.import_batch_id !== undefined) params.set('import_batch_id', query.import_batch_id)
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }
@@ -1424,6 +1426,30 @@ export async function importFetch(token: string, form: FormData): Promise<{ stat
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// GET /v1/imports/{id}; raw status and body, never throws on a status.
+export async function getImportBatch(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// POST /v1/imports/{id}/undo; raw status and body, never throws on a status.
+export async function undoImport(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}/undo`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
   let body: unknown
   try {
     body = await res.json()
@@ -2282,6 +2308,7 @@ export interface ExtractionDetail {
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
+  import_batch_id: string | null
 }
 
 export function getExtractionDetail(token: string, jobId: string): Promise<ExtractionDetail> {

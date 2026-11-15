@@ -15,6 +15,7 @@ func CreditedSoFarTx(ctx context.Context, tx pgx.Tx, originalID, excludeID strin
 		   FROM invoices
 		  WHERE original_invoice_id = $1
 		    AND document_type = 'credit_note'
+		    AND status <> 'discarded'
 		    AND (status NOT IN ('draft', 'rejected', 'failed')
 			         OR (status = 'failed' AND kept_as_is_at IS NOT NULL))
 		    AND ($2 = '' OR id <> NULLIF($2, '')::uuid)`,

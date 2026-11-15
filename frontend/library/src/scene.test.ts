@@ -127,7 +127,7 @@ describe('scene', () => {
         kinds.add(s.kind)
       }
     }
-    expect(FEATURES).toHaveLength(32)
+    expect(FEATURES).toHaveLength(33)
     expect(kinds.size).toBe(6)
   })
 
@@ -149,9 +149,9 @@ describe('scene', () => {
     expect(THUMB_STEP).toEqual({
       'import-files': 3, 'invoice-status': 1, 'read-documents': 1, 'review-fields': 1, 'rule-library': 1, validate: 0,
       'approval-queue': 1, 'workflow-builder': 1, 'fiscal-outcomes': 2, overview: 1, portfolio: 1, contacts: 1,
-      roles: 1, channels: 1, 'erp-connectors': 1,
+      roles: 1, channels: 1, 'erp-connectors': 1, 'undo-import': 0,
     })
-    expect(Object.keys(THUMB_STEP)).toHaveLength(15)
+    expect(Object.keys(THUMB_STEP)).toHaveLength(16)
     expect(thumbStep(feat('validate'))).toBe(0)
     expect(thumbStep(feat('import-files'))).toBe(3)
     expect(thumbStep(feat('fiscal-outcomes'))).toBe(2)

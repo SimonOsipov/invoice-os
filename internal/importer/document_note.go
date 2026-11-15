@@ -177,7 +177,7 @@ func (s *Store) NoteOriginals(ctx context.Context, documentID string) (NoteOrigi
 		}
 		var filed string
 		switch err := tx.QueryRow(ctx,
-			`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 1`,
+			`SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded' ORDER BY created_at, id LIMIT 1`,
 			documentID).Scan(&filed); {
 		case err == nil:
 			out.FiledInvoiceID = &filed
@@ -186,7 +186,7 @@ func (s *Store) NoteOriginals(ctx context.Context, documentID string) (NoteOrigi
 		}
 		rows, err := tx.Query(ctx,
 			`SELECT i.id, i.invoice_number, i.issue_date, i.currency, i.total::text, i.buyer_name,
-			        (SELECT count(*) FROM invoices n WHERE n.original_invoice_id = i.id)
+			        (SELECT count(*) FROM invoices n WHERE n.original_invoice_id = i.id AND n.status <> 'discarded')
 			   FROM invoices i
 			  WHERE i.entity_id = $1 AND i.status = 'accepted' AND i.irn IS NOT NULL
 			    AND i.document_type = 'commercial_invoice'

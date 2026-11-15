@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response, type Route } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { setExactMapping, shardPersonas } from './importWizardShared'
 import { shoot } from '../argos'
@@ -1678,6 +1678,50 @@ test("the verified notice's Sign in opens the sign-in window", async ({ page }) 
   await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
 })
 
+// The Manrope swap lands right after the 375px text read; a font wait in expectFailedNotice moves it earlier.
+test("the verified notice's boxes do not race the Manrope swap", async ({ page }) => {
+  test.setTimeout(120_000)
+  let held: Route | undefined
+  let arrive!: () => void
+  const arrived = new Promise<void>((resolve) => (arrive = resolve))
+  const release = async () => {
+    const route = held
+    held = undefined
+    await route?.continue()
+  }
+  // The timer frees a font that a helper waits on before it reads any box.
+  await page.route(/fonts\.gstatic\.com\/s\/manrope\//, (route) => {
+    held = route
+    arrive()
+    setTimeout(() => void release().catch(() => {}), 4_000)
+  })
+  const proto = Object.getPrototypeOf(page.locator('body')) as { boundingBox: Locator['boundingBox'] }
+  const readBox = proto.boundingBox
+  let reads = 0
+  proto.boundingBox = async function (this: Locator, ...args: Parameters<Locator['boundingBox']>) {
+    const box = await readBox.apply(this, args)
+    if (page.viewportSize()?.width === 375 && ++reads === 2) {
+      await Promise.race([arrived, page.waitForTimeout(10_000)])
+      await release()
+      await page.evaluate(() => document.fonts.load('14px Manrope'))
+    }
+    return box
+  }
+  try {
+    await seedConsent(page, false)
+    await page.goto(`${LANDING_URL}/?verified=1`)
+    // A wide fallback behind Manrope, as on the Linux runner, so the pre-swap text wraps on any host.
+    await page.addStyleTag({ content: '* { font-family: Manrope, Verdana, "DejaVu Sans", sans-serif !important }' })
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 800 })
+      await expectFailedNotice(page, width, VERIFIED_NOTICE, 'Sign in')
+    }
+  } finally {
+    proto.boundingBox = readBox
+  }
+  expect(reads, 'boxes read at 375px').toBeGreaterThan(0)
+})
+
 // Fixture check: `?verified=1` stands in for the set-password POST's answer, because a fork mails no link.
 test('a live session survives the verified landing', async ({ page }) => {
   test.setTimeout(180_000)
@@ -3294,6 +3338,11 @@ async function expectFailedNotice(page: Page, width: number, text: string, actio
     [action, notice.getByRole('button', { name: action, exact: true })],
     ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
   ]
+  // fonts.ready can resolve before the woff2 request starts; load the faces the notice uses before any box read.
+  await notice.evaluate(async (el) => {
+    const faces = [el, ...el.querySelectorAll('*')].map((n) => getComputedStyle(n).font)
+    await Promise.all(faces.map((f) => document.fonts.load(f)))
+  })
   const noticeBox = await boxOf('the notice', notice, width)
   const boxes: [string, Awaited<ReturnType<typeof boxOf>>][] = []
   for (const [name, el] of parts) boxes.push([name, await boxOf(name, el, width)])

@@ -122,6 +122,13 @@ describe('auditCsv', () => {
     expect(line).not.toContain('self_approved')
   })
 
+  it('auditCsv_repeatApprovedLabel: the label column reads Repeat approval, not the payload value', () => {
+    const csv = auditCsv([makeEvent({ event: 'invoice.approval_approved', payload: { approved_as: 'repeat_approved' } })])
+    const line = csv.split('\n')[1]!
+    expect(line).toContain('Repeat approval,invoice.approval_approved,')
+    expect(line).not.toContain('repeat_approved')
+  })
+
   it('auditCsv_delegateLabel', () => {
     const payload = { as_delegate: true, acted_for_role_title: 'Finance Manager' }
     const line = auditCsv([makeEvent({ event: 'invoice.approval_approved', payload })]).split('\n')[1]!

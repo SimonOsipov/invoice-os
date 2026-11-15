@@ -92,7 +92,7 @@ const (
 )
 
 // ContentChangedReason is the job's last_error when the worker refuses uncleared content.
-const ContentChangedReason = "it was not sent"
+const ContentChangedReason = "Not sent: the invoice's current content is not the content that passed validation and approval."
 
 var errContentChanged = errors.New(ContentChangedReason)
 

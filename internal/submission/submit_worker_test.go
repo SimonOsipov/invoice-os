@@ -2136,7 +2136,8 @@ func TestPollWorker_ALockedWorkspaceStillPolls(t *testing.T) {
 
 // --- SECAUD-18-03: the worker sends only cleared content --------------------------------
 
-const contentChangedSentence = "it was not sent"
+// Copy of submission.ContentChangedReason, pinned on purpose.
+const contentChangedSentence = "Not sent: the invoice's current content is not the content that passed validation and approval."
 
 func seedSecondInvoice(t *testing.T, f *effectsFixture, tenantID string) string {
 	t.Helper()

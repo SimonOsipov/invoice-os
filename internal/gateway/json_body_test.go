@@ -193,3 +193,19 @@ func TestPublicJSONRoutes_AJSONBodyWithACharsetPassesTheCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicJSONRoutes_AWrongMethodIs405NotTheJSON415(t *testing.T) {
+	r := newJSONRig(t, 0)
+	if len(r.routes) != 8 {
+		t.Fatalf("%d routes, want 8", len(r.routes))
+	}
+	for _, rt := range r.routes {
+		for _, m := range []string{http.MethodGet, http.MethodOptions, http.MethodPut} {
+			rec := httptest.NewRecorder()
+			rt.h.ServeHTTP(rec, httptest.NewRequest(m, rt.path, nil))
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s: %d, want 405", m, rt.name, rec.Code)
+			}
+		}
+	}
+}

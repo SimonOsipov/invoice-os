@@ -22,6 +22,7 @@ paths:
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
 - Match the scopes in `firstMatch` only. A document type, a client or a creator role matches when the document's value is in the list. An amount band matches when the currency is equal and the total is within both bounds. An unset scope matches every document (`TestFirstMatch_*`).
+- A condition's `cond_amount` is in the matched policy's band currency, or in `NGN` when the policy has no band. Compare it with the total only when the invoice's currency equals that currency and its total parses. Otherwise take the review lane: the lane with no `autoapprove` step; when both or neither hold one, the lane a total above the threshold takes (`TestApprovalBypass_*Lane*`).
 - The creator is the actor of the `from_status IS NULL` history row of `invoice_status_history`. The creator-role scope reads that row. The authors of an invoice are its creator and the actor of each of its `invoice.updated` audit rows. `CreatorStandingTx` and `unsignableReasonsTx` read the authors.
 - A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.

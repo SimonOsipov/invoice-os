@@ -695,7 +695,7 @@ func TestArm_AutoApproveSettlesEveryStepAndClosesTheRun(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-06 arm-autoapprove-settles-run")
 	entityID := seedBusinessEntity(t, super, tenantID, "Autoapprove Settles Corp")
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "autoapprove-settles-invoice-1")
-	setInvoiceTotal(t, super, invoiceID, "750000000.00")
+	setInvoiceMoney(t, super, invoiceID, ptr("NGN"), ptr("750000000.00"))
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "polH1 shape")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -820,7 +820,7 @@ func TestArm_ClosureIsOneRuleNotTwoBranches(t *testing.T) {
 		tenantID := policyTenant(t, super, "APPR-06 closure-leg-a-autoapprove")
 		entityID := seedBusinessEntity(t, super, tenantID, "Closure Leg A Corp")
 		invoiceID := seedInvoice(t, super, tenantID, entityID, "closure-leg-a-invoice")
-		setInvoiceTotal(t, super, invoiceID, "750000000.00")
+		setInvoiceMoney(t, super, invoiceID, ptr("NGN"), ptr("750000000.00"))
 
 		policyID := seedApprovalPolicy(t, super, tenantID, "Leg A policy")
 		versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)

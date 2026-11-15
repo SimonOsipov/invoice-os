@@ -50,12 +50,14 @@ type Kind int
 const (
 	KindGo Kind = iota + 1
 	KindVitest
+	KindPytest
 )
 
 const playwrightReason = "Playwright specs cannot replay locally; cite the deploy-gate run instead"
 
 // DetectKind picks the runner from the test file name. Under e2e/, *.spec.ts
 // is Playwright and vitest only includes *.test.ts (e2e/vitest.config.ts).
+// A .py file counts only under the docling sidecar's tests/.
 func DetectKind(testFile string) (Kind, error) {
 	p := filepath.ToSlash(testFile)
 	switch {
@@ -63,6 +65,8 @@ func DetectKind(testFile string) (Kind, error) {
 		return KindGo, nil
 	case strings.HasSuffix(p, ".test.ts"), strings.HasSuffix(p, ".test.tsx"):
 		return KindVitest, nil
+	case strings.HasPrefix(p, sidecarTests) && strings.HasSuffix(p, ".py"):
+		return KindPytest, nil
 	case strings.HasPrefix(p, "e2e/") && (strings.HasSuffix(p, ".spec.ts") || strings.HasSuffix(p, ".spec.tsx")):
 		return 0, fmt.Errorf("%s", playwrightReason)
 	}
@@ -136,6 +140,63 @@ func GoOutcome(output, test string) Outcome {
 		return BuildFailed
 	}
 	return res
+}
+
+// PytestOutcome reads `pytest -v` output for the named test's own result
+// lines, parameter cases included. Any FAILED/ERROR is Failed, else any
+// PASSED/XPASS is Passed; SKIPPED/XFAIL beside them change nothing.
+func PytestOutcome(output, test string) Outcome {
+	node := "::" + test
+	passed := false
+	for _, line := range strings.Split(output, "\n") {
+		switch pytestStatus(strings.TrimSpace(line), node) {
+		case "FAILED", "ERROR":
+			return Failed
+		case "PASSED", "XPASS":
+			passed = true
+		}
+	}
+	if passed {
+		return Passed
+	}
+	if strings.Contains(output, "ERROR collecting ") || strings.Contains(output, "ImportError while loading conftest") {
+		return BuildFailed
+	}
+	return NotRun
+}
+
+// pytestStatus returns the status word of a result line for node, or "". A
+// result line has node, an optional [params] and a space, then the status
+// (`t.py::test_a[1] PASSED`); a short-summary line starts with FAILED or ERROR.
+func pytestStatus(line, node string) string {
+	summary := strings.HasPrefix(line, "FAILED ") || strings.HasPrefix(line, "ERROR ")
+	for from := 0; ; {
+		i := strings.Index(line[from:], node)
+		if i < 0 {
+			return ""
+		}
+		rest := line[from+i+len(node):]
+		from += i + len(node)
+		if strings.HasPrefix(rest, "[") {
+			j := strings.Index(rest, "] ")
+			if j < 0 {
+				continue
+			}
+			rest = rest[j+1:]
+		}
+		if !strings.HasPrefix(rest, " ") {
+			continue
+		}
+		if summary {
+			return strings.Fields(line)[0]
+		}
+		if f := strings.Fields(rest); len(f) > 0 {
+			switch w, _, _ := strings.Cut(f[0], "("); w {
+			case "PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS":
+				return w
+			}
+		}
+	}
 }
 
 type vitestReport struct {

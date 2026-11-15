@@ -54,7 +54,9 @@ func serveJSON(t *testing.T, h http.Handler, path string, body any) (int, string
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw))))
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
 }
 

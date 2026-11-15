@@ -149,6 +149,7 @@ func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
 		for range n {
 			req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions",
 				strings.NewReader(`{"email":"p@x.co","category_ids":["a"],"frequency":"weekly"}`))
+			req.Header.Set("Content-Type", "application/json")
 			sub.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
 		}
 		return calls.Load()

@@ -1202,7 +1202,7 @@ func TestSeed_ActivePolicyCarriesTheNotifyStepQ10Decided(t *testing.T) {
 
 // AC-11's named tripwire, re-founded on the shape the import actually produces:
 // the wizard maps only Invoice No, so total lands NULL and a NULL total takes the
-// review lane (open, never autoapproved). The live consumer is e2e/topology/persona-surfaces.spec.ts:305-310,
+// review lane (open, never autoapproved). The live consumer is the e2e test "in-house sweep: every sidebar surface renders real content for the in-house persona",
 // which validates two in-house invoices at total 1075 on every gate run.
 func TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane(t *testing.T) {
 	super, app := dbTestPools(t)

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
+import { BUNDLE_REASON_NOTICE, bundleReason } from './components/EvidenceDrawer'
 import { downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, type BundlePreview, type StaffAuditPage, type StaffAuditRow, type StaffChange, type StaffEntity } from './auditApi'
 import { expireSession } from './auth'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
@@ -474,6 +475,7 @@ describe('Console audit wiring', () => {
       await waitFor(() => expect(d.getByRole('option', { name: 'Okafor Foods Ltd' })).toBeTruthy())
       pick(d, 'Company', 'E1')
       await d.findByText('12345678-0001')
+      fireEvent.change(d.getByLabelText('Reason'), { target: { value: 'why' } })
     }
 
     it('the header opens the evidence drawer with the filtered tenant', async () => {
@@ -517,6 +519,8 @@ describe('Console audit wiring', () => {
       expect(['Company', 'TIN', 'Period', 'Invoices', 'Line items', 'Status changes', 'Submissions', 'Exchange attempts', 'Body files'].map(cell)).toEqual([
         'Okafor Foods Ltd', '12345678-0001', '2026-09-14 – 2026-10-14', '7', '21', '14', '6', '9', '3',
       ])
+      expect(download_(d).disabled).toBe(true)
+      fireEvent.change(d.getByLabelText('Reason'), { target: { value: 'why' } })
       expect(download_(d).disabled).toBe(false)
 
       pick(d, 'Company', 'E2')
@@ -535,6 +539,7 @@ describe('Console audit wiring', () => {
       await waitFor(() => expect(previewRead).toHaveBeenCalledTimes(2))
       expect(previewRead).toHaveBeenLastCalledWith('T1', { entityId: 'E2', from: '2026-10-14', to: '2026-10-14' })
       expect(d.queryByText('End date must be on or after the start date.')).toBeNull()
+      fireEvent.change(d.getByLabelText('Reason'), { target: { value: 'why' } })
       await waitFor(() => expect(download_(d).disabled).toBe(false))
     })
 
@@ -579,6 +584,52 @@ describe('Console audit wiring', () => {
       await waitFor(() => expect(download_(d).disabled).toBe(false))
     })
 
+    it('bundleReason asks for a reason after the preview checks', () => {
+      const base = { tenant: 'T1', entity: 'E1', from: '2026-09-14', to: '2026-10-14', reason: '' }
+      const p = preview()
+      const ask = 'Type a reason for this download.'
+      expect(bundleReason(base, p)).toBe(ask)
+      expect(bundleReason({ ...base, reason: '   ' }, p)).toBe(ask)
+      expect(bundleReason({ ...base, reason: 'x'.repeat(501) }, p)).toBe(ask)
+      expect(bundleReason({ ...base, reason: 'x' }, p)).toBeNull()
+      expect(bundleReason({ ...base, entity: '' }, p)).toBe('Pick one company to export.')
+    })
+
+    it('evidence drawer: Download waits for a reason', async () => {
+      const d = await open()
+      await choose(d)
+      fireEvent.change(d.getByLabelText('Reason'), { target: { value: '' } })
+      await d.findByText('Type a reason for this download.')
+      expect(d.getByText(BUNDLE_REASON_NOTICE)).toBeTruthy()
+      expect(download_(d).disabled).toBe(true)
+      const reads = previewRead.mock.calls.length
+      fireEvent.change(d.getByLabelText('Reason'), { target: { value: 'why' } })
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+      expect(previewRead.mock.calls.length).toBe(reads)
+      download.mockResolvedValueOnce({ blob: new Blob(['PK']), filename: 'f.zip' })
+      fireEvent.click(download_(d))
+      await screen.findByText('Bundle downloaded')
+      expect(download.mock.calls[0][2]).toBe('why')
+    })
+
+    it('evidence drawer: switching the tenant clears the reason', async () => {
+      const d = await open()
+      await choose(d)
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+      pick(d, 'Tenant', 'T2')
+      expect((d.getByLabelText('Reason') as HTMLInputElement).value).toBe('')
+      expect(download_(d).disabled).toBe(true)
+    })
+
+    it('evidence drawer: switching the company clears the reason', async () => {
+      const d = await open()
+      await choose(d)
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+      pick(d, 'Company', 'E2')
+      expect((d.getByLabelText('Reason') as HTMLInputElement).value).toBe('')
+      expect(download_(d).disabled).toBe(true)
+    })
+
     it('Download stays blocked until the preview of the current inputs lands', async () => {
       const d = await open()
       await choose(d)
@@ -612,7 +663,7 @@ describe('Console audit wiring', () => {
       download.mockResolvedValueOnce({ blob, filename: 'server_name.zip' })
       fireEvent.click(download_(d))
       await screen.findByText('Bundle downloaded')
-      expect(download).toHaveBeenCalledWith('T1', { entityId: 'E1', from: '2026-09-14', to: '2026-10-14' }, 'ASComply_evidence_okafor_20260914_20261014.zip')
+      expect(download).toHaveBeenCalledWith('T1', { entityId: 'E1', from: '2026-09-14', to: '2026-10-14' }, 'why', 'ASComply_evidence_okafor_20260914_20261014.zip')
       expect(created).toEqual([blob])
       expect(clicks.map((a) => [a.download, a.href])).toEqual([['server_name.zip', 'blob:bundle']])
       expect(revoked).toEqual(['blob:bundle'])

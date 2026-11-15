@@ -1,11 +1,12 @@
 import type { CSSProperties } from 'react'
 import { EXPORT_ICON } from '../icons'
+import { reasonValid } from '../rulesApi'
 import { BUNDLE_INVOICE_LIMIT, RANGE_REASON, utcDay, type BundlePeriod, type BundlePreview, type StaffEntity } from '../auditApi'
 import type { StaffTenant } from '../tenantsApi'
 import { Drawer, MetaGrid } from './Drawer'
 import { Note } from './Tenants'
 
-export type EvidenceInputs = { tenant: string; entity: string; from: string; to: string }
+export type EvidenceInputs = { tenant: string; entity: string; from: string; to: string; reason: string }
 type Retryable = { text: string; onRetry: () => void }
 
 type Props = {
@@ -29,6 +30,8 @@ const FIELD_INPUT: CSSProperties = { border: 0, outline: 'none', background: 'tr
 const FIELD: CSSProperties = { marginBottom: 16 }
 const LOCKED = { opacity: 0.45, filter: 'none', cursor: 'not-allowed' } as const
 
+export const BUNDLE_REASON_NOTICE = 'The reason stays in the staff audit log. The customer sees the download, not the reason. Leave out names, emails and internal notes.'
+
 const periodLabel = (p: BundlePeriod): string => `${utcDay(p.from)} – ${utcDay(p.to)}`
 
 // The app's block order (frontend/app/src/lib/evidenceBundleView.ts bundleBlockFor).
@@ -39,6 +42,7 @@ export function bundleReason(i: EvidenceInputs, p: BundlePreview | null): string
   if (!p) return null
   if (p.counts.invoices === 0) return `No invoices were added to ${p.entity.name} in ${periodLabel(p.period)}, so there is nothing to export.`
   if (p.over_limit) return `${p.counts.invoices.toLocaleString('en-NG')} invoices is more than one bundle can hold. The limit is ${BUNDLE_INVOICE_LIMIT.toLocaleString('en-NG')}. Narrow the period and try again.`
+  if (!reasonValid(i.reason)) return 'Type a reason for this download.'
   return null
 }
 
@@ -129,6 +133,15 @@ export function EvidenceDrawer({ inputs, onInputs, tenants, tenantsError, entiti
           ]}
         />
       )}
+      <div style={{ marginTop: 16 }}>
+        <div className="label" style={{ marginBottom: 6 }}>
+          Reason
+        </div>
+        <div className="ops-input ops-field" style={{ display: 'flex', alignItems: 'center' }}>
+          <input aria-label="Reason" placeholder="Why is this download needed?" value={inputs.reason} onChange={(e) => onInputs({ reason: e.target.value })} style={FIELD_INPUT} />
+        </div>
+        <p style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', margin: '8px 0 0' }}>{BUNDLE_REASON_NOTICE}</p>
+      </div>
       {!preview && !reason && previewError && <Note text={previewError.text} onRetry={previewError.onRetry} />}
       {!preview && !reason && !previewError && previewLoading && <Note text="Reading the bundle preview…" />}
     </Drawer>

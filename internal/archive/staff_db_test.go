@@ -1,5 +1,5 @@
 // staff_db_test.go: the staff evidence bundle against a real Postgres. Fixtures are committed (the stores open
-// their own transactions) and purged by mustCommitFixture; the tests write no audit_log row.
+// their own transactions) and purged by mustCommitFixture; a download writes audit rows, which rig.plant purges.
 package archive
 
 import (
@@ -127,7 +127,7 @@ func newStaffRig(t *testing.T) *staffRig {
 func (r *staffRig) assemble(t *testing.T, tenant string, req Request) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := r.store.StaffAssemble(r.ctx, tenant, req, &buf, nil); err != nil {
+	if err := r.store.StaffAssemble(r.ctx, tenant, req, "r", &buf, nil); err != nil {
 		t.Fatalf("StaffAssemble: %v", err)
 	}
 	return buf.Bytes()
@@ -326,15 +326,15 @@ func TestRLS_StaffEntitiesEmptyTenantIsAnEmptyList(t *testing.T) {
 
 func TestRLS_StaffAssembleRefusesAnotherTenantsEntity(t *testing.T) {
 	r := newStaffRig(t)
-	own := plantBundleTenant(t, r.super, "refuse-own", "INV-STAFF-RF", 1)
-	other := plantBundleTenant(t, r.super, "refuse-other", "INV-STAFF-RF", 1)
+	own := r.plant(t, "refuse-own", 1)
+	other := r.plant(t, "refuse-other", 1)
 
 	if _, err := r.store.StaffPreview(r.ctx, other.tenant, other.req); err != nil {
 		t.Fatalf("control: StaffPreview of the entity under its own tenant: %v", err)
 	}
 
 	var w countingWriter
-	err := r.store.StaffAssemble(r.ctx, own.tenant, other.req, &w, nil)
+	err := r.store.StaffAssemble(r.ctx, own.tenant, other.req, "r", &w, nil)
 	if !errors.Is(err, ErrEntityNotFound) {
 		t.Errorf("StaffAssemble(own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
 	}
@@ -344,6 +344,21 @@ func TestRLS_StaffAssembleRefusesAnotherTenantsEntity(t *testing.T) {
 	if _, err := r.store.StaffPreview(r.ctx, own.tenant, other.req); !errors.Is(err, ErrEntityNotFound) {
 		t.Errorf("StaffPreview(own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
 	}
+
+	// A member of one tenant asking for the other's entity is refused the same way. No refusal audits either tenant.
+	member := r.route("member", own)
+	if err := member.run(r.store, member.ctx, other.req, io.Discard, nil); !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("Assemble(member of own tenant, other's entity) error = %v, want ErrEntityNotFound", err)
+	}
+	requireCounts(t, r.counts(t, own.tenant), bundleCounts{})
+	requireCounts(t, r.counts(t, other.tenant), bundleCounts{})
+
+	// Control: the same staff member downloading under the entity's own tenant audits that tenant and no other.
+	if err := r.store.StaffAssemble(r.ctx, other.tenant, other.req, "r", io.Discard, nil); err != nil {
+		t.Fatalf("control: StaffAssemble of the entity under its own tenant: %v", err)
+	}
+	requireCounts(t, r.counts(t, other.tenant), r.route("staff", other).expect(1, 0))
+	requireCounts(t, r.counts(t, own.tenant), bundleCounts{})
 }
 
 func TestRLS_StaffBundleHoldsOnlyThePathTenant(t *testing.T) {
@@ -383,7 +398,7 @@ func TestRLS_StaffBundleUnknownTenantIsNotFound(t *testing.T) {
 			t.Errorf("StaffPreview(%q) error = %v, want ErrTenantNotFound", id, err)
 		}
 		var w countingWriter
-		if err := r.store.StaffAssemble(r.ctx, id, req, &w, nil); !errors.Is(err, ErrTenantNotFound) {
+		if err := r.store.StaffAssemble(r.ctx, id, req, "r", &w, nil); !errors.Is(err, ErrTenantNotFound) {
 			t.Errorf("StaffAssemble(%q) error = %v, want ErrTenantNotFound", id, err)
 		}
 		if w.n != 0 {
@@ -421,7 +436,7 @@ func TestRLS_StaffBundleNonHouseActorIsNotStaff(t *testing.T) {
 				t.Errorf("StaffPreview error = %v, want db.ErrNotStaff", err)
 			}
 			var w countingWriter
-			if err := r.store.StaffAssemble(ctx, fx.tenant, fx.req, &w, nil); !errors.Is(err, db.ErrNotStaff) {
+			if err := r.store.StaffAssemble(ctx, fx.tenant, fx.req, "r", &w, nil); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("StaffAssemble error = %v, want db.ErrNotStaff", err)
 			}
 			if w.n != 0 {
@@ -440,7 +455,7 @@ func TestRLS_StaffBundleOverTheCapRefusesBeforeTheFirstByte(t *testing.T) {
 	r.store.maxInvoices = 2
 
 	var w countingWriter
-	err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, &w, nil)
+	err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", &w, nil)
 	var tooMany *TooManyInvoicesError
 	if !errors.As(err, &tooMany) || tooMany.Count != 3 || tooMany.Limit != 2 {
 		t.Errorf("StaffAssemble error = %v, want *TooManyInvoicesError{3, 2}", err)
@@ -457,20 +472,15 @@ func TestRLS_StaffBundleOverTheCapRefusesBeforeTheFirstByte(t *testing.T) {
 	}
 }
 
-func TestRLS_StaffBundleRunsReadOnlyAndWritesNoAuditRow(t *testing.T) {
+func TestRLS_StaffBundleReadsReadOnlyAndOnlyTheDownloadIsAudited(t *testing.T) {
 	r := newStaffRig(t)
-	fx := plantBundleTenant(t, r.super, "readonly", "INV-STAFF-RO", 2)
-	var start time.Time
-	if err := r.super.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&start); err != nil {
-		t.Fatalf("read the clock: %v", err)
-	}
+	fx := r.plant(t, "readonly", 2)
 
-	calls := map[string]func() error{
+	reads := map[string]func() error{
 		"StaffEntities": func() error { _, err := r.store.StaffEntities(r.ctx, fx.tenant); return err },
 		"StaffPreview":  func() error { _, err := r.store.StaffPreview(r.ctx, fx.tenant, fx.req); return err },
-		"StaffAssemble": func() error { return r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, io.Discard, nil) },
 	}
-	for name, call := range calls {
+	for name, call := range reads {
 		t.Run(name, func(t *testing.T) {
 			r.rec.reset()
 			if err := call(); err != nil {
@@ -494,18 +504,46 @@ func TestRLS_StaffBundleRunsReadOnlyAndWritesNoAuditRow(t *testing.T) {
 			}
 		})
 	}
+	requireCounts(t, r.counts(t, fx.tenant), bundleCounts{})
 
-	ctx := context.Background()
-	var staffRows, tenantRows int
-	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM staff_audit_log WHERE actor::text = $1`, r.staff).Scan(&staffRows); err != nil {
-		t.Fatalf("count staff_audit_log: %v", err)
-	}
-	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND created_at >= $2`, fx.tenant, start).Scan(&tenantRows); err != nil {
-		t.Fatalf("count audit_log: %v", err)
-	}
-	if staffRows != 0 || tenantRows != 0 {
-		t.Errorf("reads wrote %d staff_audit_log row(s) and %d audit_log row(s), want none", staffRows, tenantRows)
-	}
+	t.Run("StaffAssemble", func(t *testing.T) {
+		r.rec.reset()
+		if err := r.store.StaffAssemble(r.ctx, fx.tenant, fx.req, "r", io.Discard, nil); err != nil {
+			t.Fatalf("StaffAssemble: %v", err)
+		}
+		var stmts []string
+		for _, s := range r.rec.statements() {
+			stmts = append(stmts, strings.ToLower(s))
+		}
+		readOnly := slices.Index(stmts, "begin isolation level repeatable read read only")
+		if readOnly < 0 {
+			t.Fatalf("no READ ONLY begin: %q", stmts)
+		}
+		audited := slices.Index(stmts[readOnly+1:], "begin")
+		if audited < 0 {
+			t.Fatalf("no plain begin after the READ ONLY transaction: %q", stmts)
+		}
+		audited += readOnly + 1
+		var inserts []string
+		for i, s := range stmts {
+			if !strings.HasPrefix(s, "insert into") {
+				continue
+			}
+			if i < audited {
+				t.Errorf("INSERT before the audit transaction began: %q", s)
+			} else if slices.Contains(stmts[audited+1:i], "begin") {
+				t.Errorf("INSERT %q is not in the one audit transaction", s)
+			}
+			inserts = append(inserts, s)
+		}
+		if len(inserts) != 2 || !strings.Contains(inserts[0], "staff_audit_log") || !strings.Contains(inserts[1], "audit_log") || strings.Contains(inserts[1], "staff_audit_log") {
+			t.Errorf("INSERTs = %q, want the staff_audit_log row, then the audit_log row", inserts)
+		}
+		if !r.rec.setConfigAfterReadOnlyBegin() {
+			t.Errorf("StaffAssemble set the tenant before beginning the READ ONLY transaction (or never): %q", stmts)
+		}
+		requireCounts(t, r.counts(t, fx.tenant), r.route("staff", fx).expect(1, 0))
+	})
 }
 
 // statements is a copy of the recorded SQL in order.

@@ -279,12 +279,37 @@ describe('verify notice: the Sign in button', () => {
     }
   })
 
-  it('only the failed notice offers Sign in', async () => {
+  it('the failed and the verified notices offer Sign in', async () => {
     await bootAt('/?verify=failed')
-    expect(noticeButtons(), 'control: failed has it').toContain('Sign in')
-    for (const search of ['?verified=1', '?reset=failed', '?invite=invalid']) {
+    expect(noticeButtons(), 'failed').toEqual(['Forgot password', 'Sign in', 'Dismiss'])
+    await rebootAt('/?verified=1')
+    expect(noticeButtons(), 'verified').toEqual(['Sign in', 'Dismiss'])
+    for (const search of ['?reset=failed', '?invite=invalid']) {
       await rebootAt(`/${search}`)
       expect(noticeButtons(), search).not.toContain('Sign in')
+    }
+  })
+
+  it('verified Sign in opens the window with a held state', async () => {
+    await bootAt(`/?verified=1&state=${STATE}`)
+    onlyNotice(VERIFIED)
+    const signIn = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')!
+    expect(signIn, 'the verified notice offers Sign in').toBeDefined()
+    await act(async () => signIn.click())
+    expect(dialogs().length).toBe(1)
+  })
+
+  it('verified Sign in without a state bounces like the header', async () => {
+    const nav = captureNavigation()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null)))
+    try {
+      await bootAt('/?verified=1')
+      const signIn = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')!
+      expect(signIn, 'the verified notice offers Sign in').toBeDefined()
+      await act(async () => signIn.click())
+      expect(nav.assigned).toEqual(['https://app.x?auth=start'])
+    } finally {
+      nav.restore()
     }
   })
 })

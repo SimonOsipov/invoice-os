@@ -229,6 +229,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/gateway/handoff_pg.go"},                                                  // sign-in hand-off codes: no tenant and no identity yet
 	{file: "internal/gateway/session_check_pg.go"},                                            // sign-out revocations: global gateway state keyed on the subject, no tenant
 	{file: "internal/gateway/signin_throttle_pg.go"},                                          // per-address limit counts: global gateway state keyed on a hash, no tenant
+	{file: "internal/gateway/verify_page_address.go", fn: "queryLinkAddress"},                 // masked address of a confirm-token hash: the token names the row, no tenant and no identity yet; func-scoped to the one read
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -730,6 +731,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                          // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                             // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/archive/bundle_audit.go", fn: "recordBundleEvent"},                     // audits a bundle download after its READ ONLY read; the read gated the caller; serves a locked workspace
 	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served
 	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
 	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
@@ -1011,7 +1013,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /auth/reset-password":                               {verdict: scExempt, reason: "no database; renders the reset page"},
 	"GET /readiness-check/confirm":                           {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                       {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
-	"GET /auth/verify":                                       {verdict: scExempt, reason: "no database; renders the set-password page, or redirects a stateless open to landing"},
+	"GET /auth/verify":                                       {verdict: scExempt, reason: "reads one masked address by token hash as invoice_gateway, no tenant; renders the set-password page, or redirects a stateless open to landing"},
 	"GET /blog/categories":                                   {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/covers/{id}/{version}":                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/posts":                                        {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
@@ -1144,7 +1146,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/staff/ai-calls":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/ai-calls/totals":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}/entities":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
-	"GET /v1/staff/tenants/{id}/evidence-bundle":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"POST /v1/staff/tenants/{id}/evidence-bundle":            {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts, then writes the audit rows in a short tenant tx"},
 	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":     {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/rules":                                          {verdict: scCovered},
 	"PATCH /v1/rules/{key}":                                  {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},

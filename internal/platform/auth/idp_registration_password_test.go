@@ -33,8 +33,8 @@ func TestIdP_RegistrationPasswordsNeverSignIn(t *testing.T) {
 	}
 	values.Set("password", p3)
 	status, location, err := postForm(action, values)
-	if err != nil || status != http.StatusSeeOther || !strings.HasPrefix(location, siteURL+"/?verified=1&handoff=") {
-		t.Fatalf("set-password POST: status %d, Location %q, err %v; want 303 %s/?verified=1&handoff=<code>", status, location, err, siteURL)
+	if err != nil || status != http.StatusSeeOther || location != siteURL+"/?verified=1" {
+		t.Fatalf("set-password POST: status %d, Location %q, err %v; want 303 %s/?verified=1", status, location, err, siteURL)
 	}
 
 	requireSignIn(t, base, u, p3, http.StatusOK, "")
@@ -42,7 +42,7 @@ func TestIdP_RegistrationPasswordsNeverSignIn(t *testing.T) {
 	requireSignIn(t, base, u, p2, http.StatusBadRequest, "invalid_credentials")
 }
 
-// setPasswordFromLink opens the mailed link with state, requires the set-password form, posts password and requires the hand-off redirect.
+// setPasswordFromLink opens the mailed link with state, requires the set-password form, posts password and requires the verified redirect.
 func setPasswordFromLink(t *testing.T, link, state, password string) (action string, values url.Values, location string) {
 	t.Helper()
 	action, values = confirmFormWithState(t, link, state)
@@ -54,8 +54,8 @@ func setPasswordFromLink(t *testing.T, link, state, password string) (action str
 	}
 	values.Set("password", password)
 	status, location, err := postForm(action, values)
-	if err != nil || status != http.StatusSeeOther || !strings.HasPrefix(location, siteURL+"/?verified=1&handoff=") {
-		t.Fatalf("set-password POST: status %d, Location %q, err %v; want 303 %s/?verified=1&handoff=<code>", status, location, err, siteURL)
+	if err != nil || status != http.StatusSeeOther || location != siteURL+"/?verified=1" {
+		t.Fatalf("set-password POST: status %d, Location %q, err %v; want 303 %s/?verified=1", status, location, err, siteURL)
 	}
 	return action, values, location
 }
@@ -145,9 +145,8 @@ func TestIdP_ASquattedInviteeSetsThePasswordAndTheSquatterStaysOut(t *testing.T)
 	}
 	pN, state := "pw-invitee-"+uuid.NewString(), newState(t)
 
-	_, _, location := setPasswordFromLink(t, link, state, pN)
+	setPasswordFromLink(t, link, state, pN)
 
-	exchanged(t, w.gw, inviteHandoffCode(t, location), state)
 	requireSignIn(t, w.base, squat, squat.password, http.StatusBadRequest, "invalid_credentials")
 	invitee := idpUser{email: w.email, password: pN}
 	requireSignIn(t, w.base, invitee, pN, http.StatusOK, "")

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,20 +99,22 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 	}
 }
 
-// One handoffHandlers call builds the invitee set-password and exchange handlers over one store.
-func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing.T) {
+// handoffHandlers builds the invitee set-password handler; a confirm mints no code and makes no /token call.
+func TestHandoffHandlers_InvitationPasswordMintsNoCode(t *testing.T) {
 	const (
-		prefix  = "https://site.example/?verified=1&handoff="
-		verify  = `{"access_token":"verify-at","refresh_token":"verify-rt","user":{"id":"u-1","email":"invitee@corp.example"}}`
-		session = `{"access_token":"grant-at","refresh_token":"grant-rt"}`
+		verified = "https://site.example/?verified=1"
+		verify   = `{"access_token":"verify-at","refresh_token":"verify-rt","user":{"id":"u-1","email":"invitee@corp.example"}}`
+		session  = `{"access_token":"grant-at","refresh_token":"grant-rt"}`
 	)
 	site, _ := url.Parse("https://site.example")
+	var tokenCalls atomic.Int32
 	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/verify"):
 			_, _ = w.Write([]byte(verify))
 		case strings.HasSuffix(r.URL.Path, "/token"):
+			tokenCalls.Add(1)
 			_, _ = w.Write([]byte(session))
 		case strings.HasSuffix(r.URL.Path, "/logout"):
 			w.WriteHeader(http.StatusNoContent)
@@ -126,25 +129,11 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 
 	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd&state="+handoffState)
 
-	loc := rec.Header().Get("Location")
-	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, prefix) {
-		t.Fatalf("invitation password = %d Location %q, want 303 %s<code>", rec.Code, loc, prefix)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || loc != verified {
+		t.Errorf("invitation password = %d Location %q, want 303 %s", rec.Code, loc, verified)
 	}
-	code := strings.TrimPrefix(loc, prefix)
-	exchange := func(state string) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(map[string]string{"code": code, "state": state})
-		return postJSON(h.Exchange, "/auth/exchange", handoffAllowedOrigin, string(body))
-	}
-	rec = exchange(handoffState)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("exchange = %d, want 200: %s", rec.Code, rec.Body.String())
-	}
-	var got map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got) != 2 || got["access_token"] != "grant-at" || got["refresh_token"] != "grant-rt" {
-		t.Errorf("exchange body = %s, want exactly the grant's access_token grant-at and refresh_token grant-rt", rec.Body.String())
-	}
-	if rec = exchange(handoffState); rec.Code != http.StatusBadRequest {
-		t.Errorf("second exchange = %d, want 400", rec.Code)
+	if n := tokenCalls.Load(); n != 0 {
+		t.Errorf("GoTrue saw %d /token calls, want 0", n)
 	}
 }
 

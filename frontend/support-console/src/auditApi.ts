@@ -167,7 +167,7 @@ export const fetchBundlePreview = (tenantId: string, r: BundleRequest, signal?: 
 const DISPOSITION_RE = /^attachment; filename=([A-Za-z0-9._-]+)$/
 
 // Bare fetch: the body is a zip, which `request` would parse as JSON.
-export const downloadBundle = async (tenantId: string, r: BundleRequest, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> => {
+export const downloadBundle = async (tenantId: string, r: BundleRequest, reason: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> => {
   const base = gatewayBase()
   if (!base) throw new ApiError('network', 'Gateway URL is not configured')
   const token = loadConsoleSession(SESSION_KEY)?.token
@@ -175,9 +175,9 @@ export const downloadBundle = async (tenantId: string, r: BundleRequest, fallbac
   const url = `${base}${staffTenantPath(tenantId)}/evidence-bundle?${bundleQuery(r)}`
   let res: Response
   try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason.trim() }) })
   } catch (e) {
-    reportApiFailure(e, { method: 'GET', url })
+    reportApiFailure(e, { method: 'POST', url })
     throw e
   }
   if (!res.ok) {
@@ -190,11 +190,11 @@ export const downloadBundle = async (tenantId: string, r: BundleRequest, fallbac
       // no JSON body: the status text stands
     }
     const error = new ApiError('http', msg, res.status, body)
-    reportApiFailure(error, { method: 'GET', url })
+    reportApiFailure(error, { method: 'POST', url })
     throw error
   }
   return {
-    blob: await readBody(() => res.blob(), { method: 'GET', url }),
+    blob: await readBody(() => res.blob(), { method: 'POST', url }),
     filename: res.headers.get('Content-Disposition')?.match(DISPOSITION_RE)?.[1] ?? fallbackFilename,
   }
 }

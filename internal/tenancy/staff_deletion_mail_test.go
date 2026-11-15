@@ -1,10 +1,12 @@
 package tenancy
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -160,7 +162,15 @@ func TestStaffDeletionMail_ALinkAfterPurgeNowIsRefused(t *testing.T) {
 		t.Fatalf("StaffSchedule: %v", err)
 	}
 	tok := tokenOf(t, messageTo(t, sender.messages(), emailOf(w.a2)))
-	at, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	// The staff wait has run out and a second staff subject purges: the first that can start it.
+	scheduleAgo(t, w.super, w.tenant, w.staff, (StaffPurgeWait + time.Hour).Seconds())
+	// Moving the schedule moves deletion_due_at, which the link must equal to be live; re-pin it so only the marker can refuse.
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE workspace_deletion_links SET expires_at = (SELECT deletion_due_at FROM tenants WHERE id = $1) WHERE tenant_id = $1`, w.tenant); err != nil {
+		t.Fatalf("re-pin the links to the moved due time: %v", err)
+	}
+	secondCtx, _ := secondStaff(t, w.staffDelWorld)
+	at, err := w.store.StaffPurgeWorkspace(secondCtx, w.tenant, obi, purgeReason)
 	if err != nil {
 		t.Fatalf("StaffPurgeWorkspace: %v", err)
 	}
@@ -174,6 +184,32 @@ func TestStaffDeletionMail_ALinkAfterPurgeNowIsRefused(t *testing.T) {
 	}
 	if got := deletionOf(t, w.super, w.tenant).DueAt; got == nil || due == nil || !got.Equal(*due) {
 		t.Errorf("deletion_due_at = %v, want %v unchanged", got, due)
+	}
+}
+
+// Core 3: a refused purge leaves the links alive, so an admin can still cancel.
+func TestStaffPurge_TheCancelLinkWorksAfterARefusedPurge(t *testing.T) {
+	w := withStaffMailMembers(t, newStaffPurgeWorld(t, "Ada Obi"))
+	sender := &apiSender{}
+	n, _ := notifierFor(w.invWorld, sender)
+	if _, err := n.StaffSchedule(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("StaffSchedule: %v", err)
+	}
+	tok := tokenOf(t, messageTo(t, sender.messages(), emailOf(w.a2)))
+	secondCtx, _ := secondStaff(t, w.staffDelWorld)
+
+	if _, err := w.store.StaffPurgeWorkspace(secondCtx, w.tenant, obi, purgeReason); !errors.Is(err, ErrPurgeWaitingPeriod) {
+		t.Fatalf("a second staff subject inside the wait: err = %v, want ErrPurgeWaitingPeriod", err)
+	}
+
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.a2), tok); err != nil {
+		t.Fatalf("the cancel link after the refused purge: err = %v, want nil", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns = %+v, want all NULL", c)
+	}
+	if m := purgeStartedAt(t, w.super, w.tenant); m != nil {
+		t.Errorf("deletion_purge_started_at = %v, want NULL", m)
 	}
 }
 

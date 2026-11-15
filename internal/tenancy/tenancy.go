@@ -71,6 +71,8 @@ var (
 	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
 	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 	ErrDeletionNotScheduled        = errors.New("tenancy: deletion not scheduled")
+	ErrPurgeSameStaff              = errors.New("tenancy: purge by the staff member who scheduled it")
+	ErrPurgeWaitingPeriod          = errors.New("tenancy: purge inside the staff waiting period")
 	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
 	ErrLastActiveMember            = errors.New("tenancy: last active member")
 	ErrNoEraseEmail                = errors.New("tenancy: no email to erase by")

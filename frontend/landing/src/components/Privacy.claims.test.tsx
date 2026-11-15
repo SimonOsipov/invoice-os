@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS, UNCONFIRMED_DAYS } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy, READINESS_CONFIRM_HOURS, STAFF_PURGE_WAIT_HOURS, UNCONFIRMED_DAYS } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -60,6 +60,8 @@ import {
   dialogStartsExportAndAsksTick,
   noticeOffersExportToAdmins,
   graceDays,
+  staffPurgeWaitHours,
+  purgeRefusesTheScheduler,
   gotrueVersion,
   nothingPrunesSigninAuditLog,
   signinScanFiles,
@@ -1017,6 +1019,21 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(deleteWorkspaceDialogNeedsTypedName(readSource(DLG), swap(LIB, 'return typed === name', 'return true'))).toBe(false)
   })
 
+  it('SECAUD-11 A6 R2 the staff wait is StaffPurgeWait', () => {
+    const SRC = 'internal/tenancy/staff_deletion.go'
+    expect(staffPurgeWaitHours()).toBe(STAFF_PURGE_WAIT_HOURS)
+    expect(sentence('A6')).toContain(`${STAFF_PURGE_WAIT_HOURS} hours`)
+    expect(sentence('R2')).toContain(`${STAFF_PURGE_WAIT_HOURS} hours`)
+    expect(staffPurgeWaitHours(swap(SRC, '48 * time.Hour', '24 * time.Hour'))).toBe(24)
+  })
+
+  it('SECAUD-11 A6 the staff member who requested the deletion cannot start it', () => {
+    const SRC = 'internal/tenancy/staff_deletion.go'
+    expect(sentence('A6')).toContain('A staff member who requested the deletion cannot start it')
+    expect(purgeRefusesTheScheduler()).toBe(true)
+    expect(purgeRefusesTheScheduler(swap(SRC, 'return refuse("same_approver", ErrPurgeSameStaff)', 'return refuse("same_approver", ErrPurgeWaitingPeriod)'))).toBe(false)
+  })
+
   it('DEL-10-02 A6 members see the date and can sign out', () => {
     const NOTICE = 'frontend/app/src/components/WorkspaceDeletionNotice.tsx'
     expect(sentence('A6')).toContain('Members see the date it will be deleted and can sign out')
@@ -1028,7 +1045,7 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
 
   it('DEL-10-02 A6 a cancel is refused once the purge started', () => {
     const WD = 'internal/tenancy/workspace_deletion.go'
-    expect(sentence('A6')).toContain(`Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end`)
+    expect(sentence('A6')).toContain('Any admin can cancel the deletion until it starts')
     expect(cancelRefusedOnceThePurgeStarted()).toBe(true)
     expect(cancelRefusedOnceThePurgeStarted(swap(WD, 'return ErrDeletionUnderway', 'return err'))).toBe(false)
     const relaxed = '-- +goose Up\nCREATE OR REPLACE FUNCTION public.tenants_purge_guard() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;\n-- +goose Down\nSELECT 1;'

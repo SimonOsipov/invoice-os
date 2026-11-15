@@ -26,6 +26,11 @@ const (
 	maxStaffReasonRunes = 500
 )
 
+// StaffPurgeWait is the only home of the staff purge waiting period.
+const StaffPurgeWait = 48 * time.Hour
+
+var purgeWaitingMessage = fmt.Sprintf("the waiting period has not ended; the purge opens %d hours after the deletion was scheduled", int(StaffPurgeWait.Hours()))
+
 // withinStaffTenant proves the path tenant through staff_read_tenants in WithinStaffTx, then runs fn in that tenant's transaction.
 // A malformed id answers ErrTenantNotFound before any statement.
 func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, opts pgx.TxOptions, fn func(tx pgx.Tx, tenant, actor uuid.UUID) error) error {
@@ -212,6 +217,10 @@ func staffDeletionStatus(err error) (int, string) {
 		return http.StatusConflict, "this workspace is already being deleted"
 	case errors.Is(err, ErrDeletionNotScheduled):
 		return http.StatusConflict, "this workspace has no scheduled deletion; use Delete workspace first"
+	case errors.Is(err, ErrPurgeSameStaff):
+		return http.StatusConflict, "the staff member who scheduled this deletion cannot start its purge"
+	case errors.Is(err, ErrPurgeWaitingPeriod):
+		return http.StatusConflict, purgeWaitingMessage
 	case errors.Is(err, ErrDeletionOutcomeChanged):
 		return http.StatusConflict, "the workspace changed; review the page and confirm again"
 	case errors.Is(err, ErrLastActiveMember):
@@ -271,18 +280,35 @@ func StaffCancelDeletionHandler(cancel func(ctx context.Context, tenantID, reaso
 	}
 }
 
-// StaffPurgeWorkspace starts the purge of the path tenant now; the tenant must already be scheduled.
-// The staff row and the workspace_purge job commit with the marker.
+// StaffPurgeWorkspace starts the purge of the path tenant once the staff wait has passed and a staff account
+// other than the scheduler asks; the tenant must already be scheduled. The staff row and the workspace_purge job
+// commit with the marker. Every refusal after the staff check commits one workspace.purge_refused row and returns its sentinel.
 func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, reason string) (time.Time, error) {
 	if s.eraseQueue == nil {
 		return time.Time{}, errNoEraseQueue
 	}
 	var startedAt time.Time
+	var refusal error
 	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+		// The row commits with the sentinel stored; the caller returns it after commit.
+		refuse := func(code string, sentinel error) error {
+			if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{
+				Actor: actor, Event: "workspace.purge_refused", TenantID: tenant,
+				Payload: map[string]any{"reason": reason, "refusal": code},
+			}); err != nil {
+				return err
+			}
+			refusal = sentinel
+			return nil
+		}
 		var name string
-		var scheduled, started bool
-		err := tx.QueryRow(ctx, `SELECT name, deletion_scheduled_at IS NOT NULL, deletion_purge_started_at IS NOT NULL FROM tenants FOR UPDATE`).
-			Scan(&name, &scheduled, &started)
+		var scheduled, started, waited bool
+		var scheduledBy *string
+		err := tx.QueryRow(ctx, `SELECT name, deletion_scheduled_at IS NOT NULL, deletion_purge_started_at IS NOT NULL,
+			deletion_scheduled_by::text,
+			coalesce(deletion_scheduled_at + make_interval(secs => $1) <= now(), false)
+			FROM tenants FOR UPDATE`, StaffPurgeWait.Seconds()).
+			Scan(&name, &scheduled, &started, &scheduledBy, &waited)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrTenantNotFound // purged after the staff check
 		}
@@ -290,16 +316,29 @@ func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, re
 			return err
 		}
 		if typedName != name {
-			return ErrWorkspaceNameMismatch
+			return refuse("name_mismatch", ErrWorkspaceNameMismatch)
 		}
 		if started {
-			return ErrDeletionUnderway
+			return refuse("underway", ErrDeletionUnderway)
 		}
 		if !scheduled {
-			if err := refuseHouseTenant(ctx, tx, actor); err != nil {
-				return err
+			herr := refuseHouseTenant(ctx, tx, actor)
+			if errors.Is(herr, ErrHouseWorkspace) {
+				return refuse("house", ErrHouseWorkspace)
 			}
-			return ErrDeletionNotScheduled
+			if herr != nil {
+				return herr
+			}
+			return refuse("not_scheduled", ErrDeletionNotScheduled)
+		}
+		if scheduledBy == nil {
+			return errors.New("tenancy: scheduled tenant without a scheduler") // the all-or-none CHECK forbids it
+		}
+		if *scheduledBy == actor.String() {
+			return refuse("same_approver", ErrPurgeSameStaff)
+		}
+		if !waited {
+			return refuse("waiting_period", ErrPurgeWaitingPeriod)
 		}
 		// The staff decision is final: the marker closes every cancel before the worker starts.
 		if err := tx.QueryRow(ctx, `UPDATE tenants SET deletion_purge_started_at = now() RETURNING deletion_purge_started_at`).Scan(&startedAt); err != nil {
@@ -316,6 +355,9 @@ func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, re
 	})
 	if err != nil {
 		return time.Time{}, err
+	}
+	if refusal != nil {
+		return time.Time{}, refusal
 	}
 	return startedAt, nil
 }

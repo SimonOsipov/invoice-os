@@ -29,6 +29,7 @@ paths:
   - "frontend/app/src/components/CreateUpload.tsx"
   - "internal/tenancy/account_deletion.go"
   - "internal/tenancy/workspace_deletion.go"
+  - "internal/tenancy/staff_deletion.go"
   - "internal/workspacepurge/**"
   - "internal/notifications/erase.go"
   - "internal/notifications/erase_by_id.go"
@@ -156,7 +157,7 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - `A3` HubSpot: its `gdpr-delete` page reads "Permanently delete a contact and all associated content to follow GDPR" (checked 2026-10-26).
 - `A4`: `actor.Resolve` picks `actor.RemovedName` for a removed membership. The audit reader and the invoice history call it.
 - `A5`: `WorkspaceSettings.tsx`, `DeleteWorkspaceDialog.tsx` and `SETTINGS_TABS`.
-- `A6`, `R2`: the `tenants_deletion_guard` trigger sets the 30 days. `ErrWorkspaceLocked`, `CancelWorkspaceDeletion` and `workspacepurge.Purger` do the rest.
+- `A6`, `R2`: the `tenants_deletion_guard` trigger sets the 30 days. `ErrWorkspaceLocked`, `CancelWorkspaceDeletion` and `workspacepurge.Purger` do the rest. `StaffPurgeWait` and the same-approver check in `StaffPurgeWorkspace` back the staff clause.
 - `A6` lock clause: `DeleteMyAccount` runs in a read-write request transaction, which a locked workspace refuses with `ErrWorkspaceLocked`. `deleteAccountRefusedWhileLocked()` pins it.
 - Read the last definition of a trigger function across all migrations. A later `CREATE OR REPLACE` wins.
 - `A7`: `decideAccountDeletion` and `eraseMembers`.
@@ -166,7 +167,7 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - `R5`: GoTrue v2.197.0 `adminUserDelete` writes `user_deleted` with `user_email` to `auth.audit_log_entries` before it destroys the user. `gotrueVersion()` pins the version. `nothingPrunesSigninAuditLog()` pins that no file in this repo names the table.
 - `R7`: `workspacepurge.purgeRows` writes the staff row. `staffLogEntryFacts()` and `staffLogIsAppendOnly()` pin the payload keys and the append-only trigger.
 - Change `BACKUP_DAYS`, `FILE_RECOVERY_DAYS` and `R3`..`R4` together with the infra.
-- Change `R2` and `A6` in the PR that adds a staff path to start or purge a deletion (DEL-09).
+- Change `R2` and `A6` in the PR that adds a staff path to start or purge a deletion (DEL-09), or changes `StaffPurgeWait`.
 - Change the retention paragraphs when the sign-in service version changes. Re-read `adminUserDelete` first.
 
 ## Sign-in records

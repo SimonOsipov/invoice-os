@@ -196,7 +196,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 			if errors.As(err, &pgErr) {
 				switch {
 				case pgErr.Code == "23505" && pgErr.ConstraintName == "customers_tenant_tin_uq":
-					// ceiling: a limited member probes whether a TIN is filed in the tenant (409); accepted, the directory is not a secret.
+					// ceiling: a hidden TIN answers 409, so a limited member learns it exists; revisit if TIN existence becomes sensitive
 					return ErrDuplicateTIN
 				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_tin_check":
 					return errTINFormat

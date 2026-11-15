@@ -1156,3 +1156,71 @@ func TestRLS_CustomersCreatedByIsTheSeamsUserOrNull(t *testing.T) {
 		t.Errorf("created_by through the request seam = %v, want %s", got, user)
 	}
 }
+
+// A scoped caller's client and user ids never admit another tenant's row: the tenant_id conjunct
+// guards every clause of the policy. Each row below is reachable through exactly one clause.
+func TestRLS_CustomersScopeClausesNeverCrossATenant(t *testing.T) {
+	h := requireHarness(t)
+	requireCustomersTable(t)
+	ctx := context.Background()
+	client, user := uuid.NewString(), uuid.NewString()
+	byClient, byUser := uuid.NewString(), uuid.NewString()
+	for _, r := range []struct{ id, tin, createdBy, clients string }{
+		{byClient, "12345678-0911", "NULL", "ARRAY['" + client + "']::uuid[]"},
+		{byUser, "12345678-0912", "'" + user + "'", "'{}'"},
+	} {
+		if _, err := h.super.Exec(ctx,
+			`INSERT INTO customers (id, tenant_id, tin, created_by, client_ids) VALUES ($1, $2, $3, `+r.createdBy+`, `+r.clients+`)`,
+			r.id, h.tenantA, r.tin); err != nil {
+			t.Fatalf("seed %s: %v", r.tin, err)
+		}
+		defer func(id string) { _, _ = h.super.Exec(context.Background(), `DELETE FROM customers WHERE id = $1`, id) }(r.id)
+	}
+
+	asScoped := func(tenant string, fn func(tx pgx.Tx) error) error {
+		return db.WithinTenantTx(ctx, h.app, tenant, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx,
+				`SELECT set_config('app.entity_scope', $1, true), set_config('app.current_user_id', $2, true)`,
+				"{"+client+"}", user); err != nil {
+				return err
+			}
+			return fn(tx)
+		})
+	}
+	visible := func(tenant string) []string {
+		var got []string
+		if err := asScoped(tenant, func(tx pgx.Tx) error {
+			rows, e := tx.Query(ctx, `SELECT id::text FROM customers WHERE id = ANY($1) ORDER BY id`, []string{byClient, byUser})
+			if e != nil {
+				return e
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id string
+				if e := rows.Scan(&id); e != nil {
+					return e
+				}
+				got = append(got, id)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read as %s: %v", tenant, err)
+		}
+		return got
+	}
+	want := []string{byClient, byUser}
+	sort.Strings(want)
+	if got := visible(h.tenantA); !reflect.DeepEqual(got, want) {
+		t.Fatalf("scoped caller of the row's own tenant sees %v, want %v (control: both clauses admit)", got, want)
+	}
+	if got := visible(h.tenantB); len(got) != 0 {
+		t.Errorf("scoped caller of another tenant sees %v, want none (the tenant conjunct guards the client_ids and created_by clauses)", got)
+	}
+
+	err := asScoped(h.tenantB, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO customers (id, tenant_id, tin, created_by) VALUES ($1, $2, $3, $4)`,
+			uuid.NewString(), h.tenantA, "12345678-0913", user)
+		return e
+	})
+	csAssertPGCode(t, err, "42501", "", "a scoped caller of tenant B inserting a row for tenant A")
+}

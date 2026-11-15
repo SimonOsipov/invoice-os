@@ -179,6 +179,14 @@ func TestClientScope_ALimitedMemberListsOnlyTheirClientsBuyersAndTheirOwn(t *tes
 	if total != 4 || !reflect.DeepEqual(got, want) {
 		t.Errorf("limited List = %v, total %d, want %v, total 4 (client_ids clause: aOnly, ab, aArch; created_by clause: memberOwn)", got, total, want)
 	}
+
+	// Two clients: a buyer linked to either one is reached (overlap, not containment).
+	both := csMember(t, w.super, w.tenant, "reviewer", w.entA, w.entB)
+	got, total = csListIDs(t, w.store, both, customer.ListFilter{})
+	want = csSorted(w.id["aOnly"], w.id["bOnly"], w.id["ab"], w.id["aArch"], w.id["bArch"])
+	if total != 5 || !reflect.DeepEqual(got, want) {
+		t.Errorf("List as a member limited to A and B = %v, total %d, want %v, total 5", got, total, want)
+	}
 }
 
 func TestClientScope_ALimitedMembersTINAndStatusFiltersStayInReach(t *testing.T) {

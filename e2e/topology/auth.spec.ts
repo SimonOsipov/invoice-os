@@ -3338,6 +3338,11 @@ async function expectFailedNotice(page: Page, width: number, text: string, actio
     [action, notice.getByRole('button', { name: action, exact: true })],
     ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
   ]
+  // fonts.ready can resolve before the woff2 request starts; load the faces the notice uses before any box read.
+  await notice.evaluate(async (el) => {
+    const faces = [el, ...el.querySelectorAll('*')].map((n) => getComputedStyle(n).font)
+    await Promise.all(faces.map((f) => document.fonts.load(f)))
+  })
   const noticeBox = await boxOf('the notice', notice, width)
   const boxes: [string, Awaited<ReturnType<typeof boxOf>>][] = []
   for (const [name, el] of parts) boxes.push([name, await boxOf(name, el, width)])

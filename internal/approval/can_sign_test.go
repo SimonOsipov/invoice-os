@@ -329,6 +329,10 @@ var signEarlierApproverRows = []signRow{
 		w.add(memberSpec{role: "preparer"})
 		w.add(memberSpec{role: "reviewer", status: "suspended"})
 	}},
+	{"a lone earlier approver, a reviewer limited to another client", "", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(w.limitedTo(w.entB))
+	}},
 	{"two earlier deciders in the role, a fresh reviewer outside it reaches", "earlier approver only", func(w *signWorld) {
 		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
 		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
@@ -347,6 +351,7 @@ var earlierApproverSigners = map[string][]int{
 	"earlier approver is the named delegate, a new reviewer reaches A":              {},
 	"creator in role and an earlier approver in role, nobody else":                  {1},
 	"earlier approver is the only approver":                                         {0},
+	"a lone earlier approver, a reviewer limited to another client":                 {0},
 	"two earlier deciders in the role, a fresh reviewer outside it reaches":         {},
 	"two earlier deciders in the role, nobody else":                                 {0, 1},
 }

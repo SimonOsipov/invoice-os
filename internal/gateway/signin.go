@@ -28,6 +28,9 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		var in struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
@@ -114,6 +117,9 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 func ExchangeHandler(store Handoffs, cookies *SessionCookies) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		aud, cookieMode, err := cookies.mode(r)

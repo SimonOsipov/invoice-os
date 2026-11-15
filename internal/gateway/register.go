@@ -35,7 +35,7 @@ const tokenLookupTimeout = time.Second
 const DefaultRegisterMinResponse = 2 * time.Second
 
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
-// Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
+// Every answer except a 400 or 415 arrives no earlier than minResponse after the request; 0 means no wait.
 // A nil tokens signs up without the unsubscribe token.
 // It sends the caller's password only when forward is true and GoTrue's GET /settings reports mailer_autoconfirm true; otherwise a random one.
 func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc, forward bool) http.Handler {

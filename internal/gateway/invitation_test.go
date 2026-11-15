@@ -73,7 +73,9 @@ func tokenBody(token string) string {
 
 func serveInvitation(h http.Handler, method, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(method, "/auth/invitation", strings.NewReader(body)))
+	req := httptest.NewRequest(method, "/auth/invitation", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -409,7 +411,9 @@ func TestHTTPInvitationPreviewer_GivesUpAfterTheDeadline(t *testing.T) {
 	log, _ := captureLog()
 	start = time.Now()
 	rec := httptest.NewRecorder()
-	InvitationHandler(preview, log).ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/invitation", strings.NewReader(tokenBody(inviteToken))))
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/invitation", strings.NewReader(tokenBody(inviteToken)))
+	req.Header.Set("Content-Type", "application/json")
+	InvitationHandler(preview, log).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("handler status = %d, want 502: %s", rec.Code, rec.Body.String())
 	}

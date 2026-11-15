@@ -175,6 +175,9 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		var in struct {
 			Token string `json:"token"`
 		}

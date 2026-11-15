@@ -47,7 +47,7 @@ type jsonRoute struct {
 	h                http.Handler
 }
 
-// jsonRig builds the eight public JSON handlers on recording fakes.
+// jsonRig builds the eleven public JSON handlers on recording fakes.
 type jsonRig struct {
 	routes   []jsonRoute
 	gotrue   atomic.Int32
@@ -109,6 +109,10 @@ func newJSONRig(t *testing.T, minResponse time.Duration) *jsonRig {
 	add("demo request", "/contacts/demo-request", demoJSON(nil), DemoRequestHandler(r.sink, log))
 	add("blog subscribe", "/blog/subscriptions", subBody("e@x.co"), blog.Subscribe)
 	add("blog confirm", "/blog/subscriptions/confirm", confirmBody(subGoodToken), blog.Confirm)
+	add("sign-in", "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)),
+		SignInHandler(authURL, testClient(), testHandoffStore(), th("sign-in"), log, nil, nil))
+	add("exchange", "/auth/exchange", `{"code":"c","state":"s"}`, ExchangeHandler(testHandoffStore(), nil))
+	add("invitation preview", "/auth/invitation", tokenBody(inviteToken), InvitationHandler(r.previews.preview, log))
 	return r
 }
 
@@ -122,8 +126,8 @@ func (r *jsonRig) post(rt jsonRoute, contentType, body string) *httptest.Respons
 
 func TestPublicJSONRoutes_RefuseANonJSONBodyBeforeAnyDownstreamCall(t *testing.T) {
 	r := newJSONRig(t, 0)
-	if len(r.routes) != 8 {
-		t.Fatalf("%d routes, want 8", len(r.routes))
+	if len(r.routes) != 11 {
+		t.Fatalf("%d routes, want 11", len(r.routes))
 	}
 	for _, rt := range r.routes {
 		rec := r.post(rt, "text/plain", rt.body)
@@ -196,8 +200,8 @@ func TestPublicJSONRoutes_AJSONBodyWithACharsetPassesTheCheck(t *testing.T) {
 
 func TestPublicJSONRoutes_AWrongMethodIs405NotTheJSON415(t *testing.T) {
 	r := newJSONRig(t, 0)
-	if len(r.routes) != 8 {
-		t.Fatalf("%d routes, want 8", len(r.routes))
+	if len(r.routes) != 11 {
+		t.Fatalf("%d routes, want 11", len(r.routes))
 	}
 	for _, rt := range r.routes {
 		for _, m := range []string{http.MethodGet, http.MethodOptions, http.MethodPut} {

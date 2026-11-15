@@ -44,6 +44,8 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'invoice.resolved_outside': { label: 'Resolved outside the system', domain: 'invoices' },
   'invoice.unresolved_outside': { label: 'Outside resolution withdrawn', domain: 'invoices' },
   'invoice_register.exported': { label: 'Invoice register exported', domain: 'invoices' },
+  'evidence_bundle.exported': { label: 'Evidence bundle downloaded', domain: 'invoices' },
+  'evidence_bundle.export_failed': { label: 'Evidence bundle download failed', domain: 'invoices', outcome: 'bad' },
 
   'invoice.approval_armed': { label: 'Approval requested', domain: 'approvals' },
   'invoice.approval_approved': { label: 'Approved', domain: 'approvals', outcome: 'good' },

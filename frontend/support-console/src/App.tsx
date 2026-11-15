@@ -106,7 +106,7 @@ function Console() {
   const [totalsMore, setTotalsMore] = useState<{ key: number; totals: AiTotalsPage['totals']; page: AiTotalsPage['page'] } | null>(null)
   const [totalsMoreKey, setTotalsMoreKey] = useState<number | null>(null)
   const focusSeenLoading = useRef(false)
-  const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '' })
+  const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '', reason: '' })
   const [bundleBusy, setBundleBusy] = useState(false)
   const bundleInFlight = useRef(false)
 
@@ -352,21 +352,24 @@ function Console() {
   }
   const onEvidence = drawer?.type === 'evidence'
   const entitiesRead = useAsync(() => fetchStaffEntities(evidence.tenant), { immediate: onEvidence && !!evidence.tenant, deps: [onEvidence, evidence.tenant], isEmpty: () => false })
-  const previewKey = JSON.stringify(evidence)
+  const previewKey = JSON.stringify({ ...evidence, reason: '' }) // typing a reason must not re-read the preview
   const previewArmed = onEvidence && !!evidence.tenant && !!evidence.entity && !!evidence.from && !!evidence.to && evidence.from <= evidence.to
   // Each answer carries the key it was read for, so a preview never outlives the inputs that produced it.
   const previewRead = useAsync(async () => ({ key: previewKey, res: await fetchBundlePreview(evidence.tenant, { entityId: evidence.entity, from: evidence.from, to: evidence.to }) }), { immediate: previewArmed, deps: [onEvidence, previewKey] })
   const shownPreview = previewRead.data?.key === previewKey ? previewRead.data.res : null
   const openEvidence = () => {
-    setEvidence({ tenant: auditFilters.tenant ?? '', entity: '', ...defaultBundlePeriod() })
+    setEvidence({ tenant: auditFilters.tenant ?? '', entity: '', reason: '', ...defaultBundlePeriod() })
     setDrawer({ type: 'evidence' })
   }
+  // A reason belongs to one tenant+company selection; openEvidence resets it on every open.
+  const patchEvidence = (patch: Partial<EvidenceInputs>) =>
+    setEvidence((v) => ({ ...v, ...('tenant' in patch || 'entity' in patch ? { reason: '' } : {}), ...patch }))
   const doDownload = async () => {
     if (!shownPreview || bundleInFlight.current) return
     bundleInFlight.current = true
     setBundleBusy(true)
     try {
-      const { blob, filename } = await downloadBundle(evidence.tenant, { entityId: evidence.entity, from: evidence.from, to: evidence.to }, shownPreview.filename)
+      const { blob, filename } = await downloadBundle(evidence.tenant, { entityId: evidence.entity, from: evidence.from, to: evidence.to }, evidence.reason, shownPreview.filename)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -832,7 +835,7 @@ function Console() {
       {onEvidence && (
         <EvidenceDrawer
           inputs={evidence}
-          onInputs={(patch) => setEvidence((v) => ({ ...v, ...patch }))}
+          onInputs={patchEvidence}
           tenants={auditTenantsRead.data ?? []}
           tenantsError={auditTenantsRead.status === 'error' && auditTenantsRead.error?.status !== 401 ? { text: auditTenantsRead.error?.message ?? 'Unavailable', onRetry: auditTenantsRead.run } : undefined}
           entities={evidence.tenant && entitiesRead.status === 'ready' ? entitiesRead.data : null}

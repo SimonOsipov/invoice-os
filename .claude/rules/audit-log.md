@@ -15,10 +15,12 @@ paths:
 - Write a staff change only through `audit.RecordStaff`, with one `audit.StaffEvent`.
 - Set `TenantID` on a staff change that touches one tenant. Call `RecordStaff` in that tenant's `WithinTenantTx`, from a method with an `scCoreAllowlist` entry. It also writes that tenant's `audit_log` row with the actor `audit.SupportActor`.
 - Put in the payload of a tenant staff change only what the customer may read. Never a staff name, an email or an internal note.
+- Put a staff `reason` that the customer must not read in `StaffPayload`. `RecordStaff` writes it to `staff_audit_log` only.
 - Leave `TenantID` zero on a global staff change. Call `RecordStaff` in `WithinStaffTx`. It writes no `audit_log` row.
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Write `evidence_bundle.exported` and `evidence_bundle.export_failed` only from `internal/archive`, with payload `entity_id`, `from`, `to`, `files` and `bytes`.
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
 - Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled` or `workspace.purge_started` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload.

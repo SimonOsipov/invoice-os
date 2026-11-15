@@ -14,7 +14,9 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -54,10 +56,10 @@ func DownloadHandler(assemble assembleFn, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		if sink.wrote {
-			// The 200 is already on the wire; assemble skipped bw.Close(), so the
-			// archive has no central directory (D-15). Log only, append no JSON.
+			// The 200 is on the wire and the archive has no central directory: abort so the
+			// client sees a broken download, not a short ZIP.
 			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
-			return
+			panic(http.ErrAbortHandler)
 		}
 		status, body := statusForErr(err)
 		if status == http.StatusInternalServerError {
@@ -179,7 +181,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 type (
 	staffEntitiesFn func(ctx context.Context, tenantID string) ([]StaffEntity, error)
 	staffPreviewFn  func(ctx context.Context, tenantID string, r Request) (Preview, error)
-	staffAssembleFn func(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error
+	staffAssembleFn func(ctx context.Context, tenantID string, r Request, reason string, w io.Writer, onStart func(filename string)) error
 )
 
 // parseStaffRequest parses the query as the tenant routes do, but fails a malformed escape instead of dropping it.
@@ -238,7 +240,46 @@ func StaffPreviewHandler(preview staffPreviewFn, log *slog.Logger) http.HandlerF
 	}
 }
 
-// StaffDownloadHandler returns GET /v1/staff/tenants/{id}/evidence-bundle.
+const (
+	maxStaffBodyBytes   = 8 << 10
+	maxStaffReasonRunes = 500
+)
+
+// readStaffReason applies the body rules of internal/staffjobs/handlers.go readReason and writes the error response itself.
+func readStaffReason(w http.ResponseWriter, r *http.Request) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxStaffBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	err := dec.Decode(&req)
+	if err == nil {
+		if err = dec.Decode(&struct{}{}); errors.Is(err, io.EOF) {
+			err = nil
+		} else if err == nil {
+			err = errors.New("trailing data")
+		}
+	}
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+		}
+		return "", false
+	}
+	reason := strings.TrimSpace(req.Reason)
+	// jsonb refuses U+0000, so the audit write would fail as a 500.
+	if n := utf8.RuneCountInString(reason); n < 1 || n > maxStaffReasonRunes || strings.ContainsRune(reason, 0) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("reason must be 1 to %d characters", maxStaffReasonRunes))
+		return "", false
+	}
+	return reason, true
+}
+
+// StaffDownloadHandler returns POST /v1/staff/tenants/{id}/evidence-bundle; the JSON body carries the reason.
 func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -249,14 +290,18 @@ func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.Handl
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
+		reason, ok := readStaffReason(w, r)
+		if !ok {
+			return
+		}
 		sink := &bundleSink{w: w, contentType: "application/zip"}
-		err := assemble(r.Context(), r.PathValue("id"), req, sink, sink.setFilename)
+		err := assemble(r.Context(), r.PathValue("id"), req, reason, sink, sink.setFilename)
 		if err == nil {
 			return
 		}
 		if sink.wrote {
 			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
-			return
+			panic(http.ErrAbortHandler)
 		}
 		writeStaffErr(w, r, log, "archive: staff assemble", err)
 	}

@@ -1899,3 +1899,135 @@ func TestArm_OpenRunKeepsItsDelegationAfterRepublish(t *testing.T) {
 		t.Fatalf("Decide(approved) as the delegate the run armed with: %v, want success", err)
 	}
 }
+
+// --- SECAUD-18-02: a threshold judges only a total in its currency ---------------------
+
+// seedThresholdPolicy seeds a sealed, active policy: <op> <amount> then [approval cfo], else [autoapprove].
+func seedThresholdPolicy(t *testing.T, super *pgxpool.Pool, tenantID, name string, position int, s scopeSpec, op, amount string) string {
+	t.Helper()
+	_, versionID := seedScopedPolicyDraft(t, super, tenantID, name, position, s)
+	cond := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "condition", CondOp: ptr(op), CondAmount: ptr(amount),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &cond, Branch: ptr("then"), Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("cfo"), SLAHours: ptr(24),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &cond, Branch: ptr("else"), Ord: 0, Kind: "autoapprove",
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+	return versionID
+}
+
+// armThreshold arms the invoice with money set and asserts the review lane (open, one pending cfo, no autoapprove)
+// or the auto lane (closed approved by system), failing with why on a mismatch.
+func armThreshold(t *testing.T, super, app *pgxpool.Pool, tenantID, inv string, currency, total *string, wantReview bool, why string) {
+	t.Helper()
+	setInvoiceMoney(t, super, inv, currency, total)
+	if _, err := arm(t, app, tenantID, inv, "fp-"+inv, "test-actor"); err != nil {
+		t.Fatalf("%s: ArmTx: %v", why, err)
+	}
+	run := oneApprovalRun(t, super, inv)
+	steps := runStepsOf(t, super, run.ID)
+	if wantReview {
+		if run.State != "open" || !reflect.DeepEqual(pendingRoleKeys(t, super, run.ID), []string{"cfo"}) {
+			t.Errorf("%s: run state %q, pending %v, want open with pending [cfo]", why, run.State, pendingRoleKeys(t, super, run.ID))
+		}
+		for _, s := range steps {
+			if s.Kind == "autoapprove" && s.State == "satisfied" {
+				t.Errorf("%s: autoapprove step satisfied, want the review lane", why)
+			}
+		}
+		return
+	}
+	if run.State != "approved" || run.ClosedBy == nil || *run.ClosedBy != "system" {
+		t.Errorf("%s: run state %q closed_by %v, want approved by system", why, run.State, run.ClosedBy)
+	}
+	if len(pendingRoleKeys(t, super, run.ID)) != 0 {
+		t.Errorf("%s: pending steps %v, want none", why, pendingRoleKeys(t, super, run.ID))
+	}
+}
+
+func TestApprovalBypass_UsdBelowANairaThresholdIsNotAutoApproved(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 usd-below-naira")
+	entityID := seedBusinessEntity(t, super, tenantID, "Usd Corp")
+	seedThresholdPolicy(t, super, tenantID, "catch-all", 1, scopeSpec{}, ">", "1000000.00")
+
+	for _, ccy := range []string{"USD", "EUR"} {
+		inv := seedInvoice(t, super, tenantID, entityID, "usd-below-"+ccy)
+		armThreshold(t, super, app, tenantID, inv, ptr(ccy), ptr("9000.00"), true, ccy+" 9000.00 under a naira threshold")
+	}
+}
+
+func TestArm_NairaTotalStillBranchesOnTheThreshold(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 naira-branches")
+	entityID := seedBusinessEntity(t, super, tenantID, "Naira Corp")
+	seedThresholdPolicy(t, super, tenantID, "catch-all", 1, scopeSpec{}, ">", "1000000.00")
+
+	armThreshold(t, super, app, tenantID, seedInvoice(t, super, tenantID, entityID, "ngn-below"),
+		ptr("NGN"), ptr("9000.00"), false, "NGN 9000.00 below the threshold")
+	armThreshold(t, super, app, tenantID, seedInvoice(t, super, tenantID, entityID, "ngn-above"),
+		ptr("NGN"), ptr("2000000.00"), true, "NGN 2000000.00 above the threshold")
+}
+
+func TestArm_UsdBandedPolicyBranchesOnItsThreshold(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 usd-banded")
+	entityID := seedBusinessEntity(t, super, tenantID, "Usd Band Corp")
+	banded := seedThresholdPolicy(t, super, tenantID, "USD band", 1,
+		scopeSpec{BandLower: ptr("0.00"), BandUpper: ptr("100000.00"), BandCurrency: ptr("USD")}, ">", "5000.00")
+	seedScopedPolicy(t, super, tenantID, "catch-all", 2, scopeSpec{}, "fin_dir")
+
+	above := seedInvoice(t, super, tenantID, entityID, "usd-band-above")
+	armThreshold(t, super, app, tenantID, above, ptr("USD"), ptr("9000.00"), true, "USD 9000.00 above a USD threshold")
+	below := seedInvoice(t, super, tenantID, entityID, "usd-band-below")
+	armThreshold(t, super, app, tenantID, below, ptr("USD"), ptr("1000.00"), false, "USD 1000.00 below a USD threshold")
+
+	for _, inv := range []string{above, below} {
+		if got := oneApprovalRun(t, super, inv).PolicyVersionID; got != banded {
+			t.Errorf("invoice %s armed %s, want the USD band's %s", inv, got, banded)
+		}
+		var scopes []string
+		if err := super.QueryRow(context.Background(),
+			`SELECT ARRAY(SELECT jsonb_array_elements_text(payload->'matched_scopes'))
+			   FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.approval_armed' AND payload->>'id' = $2`,
+			tenantID, inv).Scan(&scopes); err != nil {
+			t.Fatalf("read matched_scopes of %s: %v", inv, err)
+		}
+		if want := []string{"amount_band"}; !reflect.DeepEqual(scopes, want) {
+			t.Errorf("matched_scopes of %s = %v, want %v", inv, scopes, want)
+		}
+	}
+}
+
+func TestApprovalBypass_NullCurrencyTakesTheReviewLane(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 null-currency")
+	entityID := seedBusinessEntity(t, super, tenantID, "Null Currency Corp")
+	seedThresholdPolicy(t, super, tenantID, "catch-all", 1, scopeSpec{}, ">", "1000000.00")
+
+	armThreshold(t, super, app, tenantID, seedInvoice(t, super, tenantID, entityID, "null-ccy"),
+		nil, ptr("9000.00"), true, "NULL currency, total 9000.00")
+}
+
+func TestApprovalBypass_NullTotalNeverTakesTheAutoapproveLane(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 null-total")
+	entityID := seedBusinessEntity(t, super, tenantID, "Null Total Corp")
+	seedThresholdPolicy(t, super, tenantID, "catch-all", 1, scopeSpec{}, ">", "1000000.00")
+
+	armThreshold(t, super, app, tenantID, seedInvoice(t, super, tenantID, entityID, "null-total"),
+		ptr("NGN"), nil, true, "NGN, NULL total")
+}
+
+func TestApprovalBypass_NaNTotalNeverTakesTheAutoapproveLane(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-18-02 nan-total")
+	entityID := seedBusinessEntity(t, super, tenantID, "Nan Total Corp")
+	seedThresholdPolicy(t, super, tenantID, "catch-all", 1, scopeSpec{}, ">", "1000000.00")
+
+	armThreshold(t, super, app, tenantID, seedInvoice(t, super, tenantID, entityID, "nan-total"),
+		ptr("NGN"), ptr("NaN"), true, "NGN, NaN total")
+}

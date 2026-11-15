@@ -7,6 +7,7 @@ package approval
 import (
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -693,5 +694,90 @@ func TestMaterialise_ReturnedPointersAliasTheSourceTree(t *testing.T) {
 	*steps[0].WorkflowRoleKey = "mutated"
 	if *tree[0].WorkflowRoleKey != "mutated" {
 		t.Errorf("source tree unaffected by a mutation through the returned runStep — aliasing assumption is wrong")
+	}
+}
+
+// --- SECAUD-18-02: a condition with no comparable total takes the review lane ---------
+
+// show renders steps as kind:role so a failure names the lane, not pointer addresses.
+func show(steps []runStep) string {
+	out := []string{}
+	for _, s := range steps {
+		out = append(out, s.Kind+":"+strOrNil(s.WorkflowRoleKey))
+	}
+	return "[" + strings.Join(out, " ") + "]"
+}
+
+func TestMaterialise_NilTotalTakesTheReviewLane(t *testing.T) {
+	tree := []Step{stepCond(">", "500000.00", []Step{stepApproval("cfo", 24)}, []Step{stepAutoapprove()})}
+	steps, auto := materialise(tree, nil)
+	if want := ordered(wantApproval("cfo", 24)); !reflect.DeepEqual(steps, want) {
+		t.Errorf("nil total: steps = %s, want %s (the lane with no autoapprove)", show(steps), show(want))
+	}
+	if auto {
+		t.Error("nil total: auto = true, want false")
+	}
+}
+
+func TestMaterialise_ReviewLaneAvoidsAnAutoapproveThenLane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tree []Step
+		want []runStep
+	}{
+		{"then holds the autoapprove", []Step{stepCond("<", "1000.00", []Step{stepAutoapprove()}, []Step{stepApproval("fin_mgr", 24)})},
+			ordered(wantApproval("fin_mgr", 24))},
+		{"else holds the autoapprove", []Step{stepCond(">", "1000.00", []Step{stepApproval("fin_mgr", 24)}, []Step{stepAutoapprove()})},
+			ordered(wantApproval("fin_mgr", 24))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, auto := materialise(tc.tree, nil)
+			if !reflect.DeepEqual(steps, tc.want) {
+				t.Errorf("steps = %s, want %s", show(steps), show(tc.want))
+			}
+			if auto {
+				t.Error("auto = true, want false")
+			}
+		})
+	}
+}
+
+func TestMaterialise_ReviewLaneTieTakesTheHighLane(t *testing.T) {
+	for _, tc := range []struct{ op, wantRole string }{{">", "cfo"}, {">=", "cfo"}, {"<", "fin_mgr"}, {"<=", "fin_mgr"}} {
+		t.Run(tc.op, func(t *testing.T) {
+			// Amount 1000.00 makes the zero-fold take then for < and <= and else for > and >=.
+			tree := []Step{stepCond(tc.op, "1000.00", []Step{stepApproval("cfo", 24)}, []Step{stepApproval("fin_mgr", 24)})}
+			steps, _ := materialise(tree, nil)
+			if want := ordered(wantApproval(tc.wantRole, 24)); !reflect.DeepEqual(steps, want) {
+				t.Errorf("op %s, nil total: steps = %s, want %s", tc.op, show(steps), show(want))
+			}
+		})
+	}
+}
+
+func TestMaterialise_ReviewLaneBothAutoapproveTakesTheHighLane(t *testing.T) {
+	tree := []Step{stepCond(">=", "500.00",
+		[]Step{stepAutoapprove(), stepApproval("cfo", 24)},
+		[]Step{stepAutoapprove(), stepApproval("fin_mgr", 24)})}
+	steps, auto := materialise(tree, nil)
+	if want := ordered(wantAutoapprove(), wantApproval("cfo", 24)); !reflect.DeepEqual(steps, want) {
+		t.Errorf("steps = %s, want the then lane %s", show(steps), show(want))
+	}
+	if !auto {
+		t.Error("auto = false, want true")
+	}
+}
+
+func TestMaterialise_ReviewLaneNullOperatorTakesElse(t *testing.T) {
+	tree := []Step{{
+		Kind: "condition", CondAmount: ptr("1000.00"),
+		Then: []Step{stepApproval("cfo", 24)}, Else: []Step{stepApproval("fin_mgr", 24)},
+	}}
+	steps, auto := materialise(tree, nil)
+	if want := ordered(wantApproval("fin_mgr", 24)); !reflect.DeepEqual(steps, want) {
+		t.Errorf("NULL operator, nil total: steps = %s, want %s", show(steps), show(want))
+	}
+	if auto {
+		t.Error("auto = true, want false")
 	}
 }

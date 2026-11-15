@@ -64,6 +64,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -615,6 +616,21 @@ func (a *scriptedAdapter) pollCallCount() int {
 // trigger (mock_script.go's magic-TIN table) rather than a scripted outcome.
 type testInvoicePort struct {
 	buyerTIN string
+	// contentChanged makes ContentCleared report false; contentErr makes it fail;
+	// clearedCalls (when set) counts its calls.
+	contentChanged bool
+	contentErr     error
+	clearedCalls   *int32
+}
+
+func (t testInvoicePort) ContentCleared(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
+	if t.clearedCalls != nil {
+		atomic.AddInt32(t.clearedCalls, 1)
+	}
+	if t.contentErr != nil {
+		return false, t.contentErr
+	}
+	return !t.contentChanged, nil
 }
 
 // InvoiceNumber is read off the row, mirroring the real *invoice.Store.Canonical, which
@@ -2115,5 +2131,198 @@ func TestPollWorker_ALockedWorkspaceStillPolls(t *testing.T) {
 	}
 	if got := wjRequire(t, f, tenantID, idemKey).state; got != "accepted" {
 		t.Errorf("job state after the locked poll = %q, want accepted", got)
+	}
+}
+
+// --- SECAUD-18-03: the worker sends only cleared content --------------------------------
+
+const contentChangedSentence = "the invoice changed after it was validated and approved; it was not sent"
+
+func seedSecondInvoice(t *testing.T, f *effectsFixture, tenantID string) string {
+	t.Helper()
+	return seedInvoice(t, f, tenantID, seedEntity(t, f, tenantID))
+}
+
+func requireContentRefusal(t *testing.T, f *effectsFixture, err error, tenantID, idemKey string) {
+	t.Helper()
+	var cancelErr *river.JobCancelError
+	if !errors.As(err, &cancelErr) {
+		t.Errorf("Work error = %v, want a *river.JobCancelError", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "failed" {
+		t.Errorf("job state = %q, want \"failed\"", wj.state)
+	}
+	if wj.lastError == nil || *wj.lastError != contentChangedSentence {
+		t.Errorf("last_error = %q, want %q", strOrNil(wj.lastError), contentChangedSentence)
+	}
+}
+
+func TestApprovalBypass_WorkerDoesNotSendUnclearedContent(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(acceptedOnce()) // a worker that wrongly sends fails below, not by panic
+	w := newTestWorker(f.app, adapter)
+	w.InvoicePort = testInvoicePort{contentChanged: true}
+	auditBefore := countTenantAudit(t, f, tenantID)
+	histBefore := len(wiHistory(t, f, tenantID, invoiceID))
+
+	err := w.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey}))
+
+	if got := adapter.calls(); got != 0 {
+		t.Errorf("adapter.Submit calls = %d, want 0", got)
+	}
+	requireContentRefusal(t, f, err, tenantID, idemKey)
+	if wj := wjRequire(t, f, tenantID, idemKey); wj.attempts != 0 {
+		t.Errorf("attempts = %d, want unchanged 0", wj.attempts)
+	}
+	if n := exchangeCount(t, f, tenantID); n != 0 {
+		t.Errorf("app_exchange rows = %d, want 0", n)
+	}
+	if got := countTenantAudit(t, f, tenantID); got != auditBefore {
+		t.Errorf("audit_log rows = %d, want %d unchanged", got, auditBefore)
+	}
+	if got := len(wiHistory(t, f, tenantID, invoiceID)); got != histBefore {
+		t.Errorf("invoice_status_history rows = %d, want %d unchanged", got, histBefore)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "queued" || inv.irn != nil || inv.failureKind != nil {
+		t.Errorf("invoice = %+v, want unchanged queued with no irn and no failure_kind", inv)
+	}
+}
+
+func TestApprovalBypass_WorkerRefusalSpendsNoRateToken(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, refusedID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+	clearedID := seedSecondInvoice(t, f, tenantID)
+
+	adapter := newScriptedAdapter(acceptedOnce(), acceptedOnce())
+	w := newTestWorker(f.app, adapter)
+	w.RateLimit = 1 // one token for the tenant
+	refusing := *w
+	refusing.InvoicePort = testInvoicePort{contentChanged: true}
+
+	refusedKey := "req-" + uuid.NewString() + ":" + refusedID
+	_ = refusing.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: refusedID, IdempotencyKey: refusedKey}))
+
+	clearedKey := "req-" + uuid.NewString() + ":" + clearedID
+	err := w.Work(ctx, newSubmitJob(2, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: clearedID, IdempotencyKey: clearedKey}))
+	var snooze *river.JobSnoozeError
+	if errors.As(err, &snooze) {
+		t.Errorf("cleared job was rate-limited (%v): the refused job spent the token", err)
+	}
+	if got := wiRead(t, f, tenantID, clearedID).status; got != "accepted" {
+		t.Errorf("cleared invoice status = %q, want \"accepted\"", got)
+	}
+	if got := wiRead(t, f, tenantID, refusedID).status; got != "queued" {
+		t.Errorf("refused invoice status = %q, want \"queued\"", got)
+	}
+	if got := adapter.calls(); got != 1 {
+		t.Errorf("adapter.Submit calls = %d, want 1 (the cleared job only)", got)
+	}
+}
+
+func TestApprovalBypass_WorkerRefusesContentChangedWhileSnoozed(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(acceptedOnce())
+	w := newTestWorker(f.app, adapter)
+	w.RateLimit = 0 // no tokens: the first run snoozes
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	err := w.Work(ctx, job)
+	var snooze *river.JobSnoozeError
+	if !errors.As(err, &snooze) {
+		t.Fatalf("first Work = %v, want river.JobSnooze", err)
+	}
+	if got := adapter.calls(); got != 0 {
+		t.Fatalf("adapter.Submit calls after the snooze = %d, want 0", got)
+	}
+
+	w.InvoicePort = testInvoicePort{contentChanged: true}
+	w.RateLimit = 60
+	err = w.Work(ctx, job)
+
+	if got := adapter.calls(); got != 0 {
+		t.Errorf("adapter.Submit calls after the content changed = %d, want 0", got)
+	}
+	requireContentRefusal(t, f, err, tenantID, idemKey)
+	if got := wiRead(t, f, tenantID, invoiceID).status; got != "queued" {
+		t.Errorf("invoice status = %q, want \"queued\"", got)
+	}
+}
+
+func TestSubmitWorker_ContentClearedErrorWritesNothing(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(acceptedOnce())
+	w := newTestWorker(f.app, adapter)
+	boom := errors.New("content check unavailable")
+	w.InvoicePort = testInvoicePort{contentErr: boom}
+	auditBefore := countTenantAudit(t, f, tenantID)
+
+	err := w.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey}))
+
+	if !errors.Is(err, boom) {
+		t.Errorf("Work error = %v, want the ContentCleared error", err)
+	}
+	if got := adapter.calls(); got != 0 {
+		t.Errorf("adapter.Submit calls = %d, want 0", got)
+	}
+	if n := wjCount(t, f, tenantID, idemKey); n != 0 {
+		t.Errorf("submission_jobs rows = %d, want 0 (tx1 rolled back)", n)
+	}
+	if n := exchangeCount(t, f, tenantID); n != 0 {
+		t.Errorf("app_exchange rows = %d, want 0", n)
+	}
+	if got := countTenantAudit(t, f, tenantID); got != auditBefore {
+		t.Errorf("audit_log rows = %d, want %d unchanged", got, auditBefore)
+	}
+	if got := wiRead(t, f, tenantID, invoiceID).status; got != "queued" {
+		t.Errorf("invoice status = %q, want \"queued\"", got)
+	}
+}
+
+// Regression guard: green at head by design.
+func TestSubmitWorker_AlreadyClearedWinsBeforeTheContentCheck(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+	setInvoiceIRN(t, f, tenantID, invoiceID, "NG-STORED-2")
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter()
+	var calls int32
+	w := newTestWorker(f.app, adapter)
+	w.InvoicePort = testInvoicePort{contentChanged: true, clearedCalls: &calls}
+
+	if err := w.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Errorf("Work on an already-cleared invoice = %v, want nil", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Errorf("ContentCleared calls = %d, want 0", got)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "accepted" {
+		t.Errorf("job state = %q, want \"accepted\"", wj.state)
+	}
+	exchanges := wjExchanges(t, f, tenantID, wj.id)
+	if len(exchanges) != 1 || exchanges[0].outcome != "skipped_already_cleared" {
+		t.Errorf("app_exchange rows = %+v, want exactly one skipped_already_cleared row", exchanges)
 	}
 }

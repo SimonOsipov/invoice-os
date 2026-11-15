@@ -46,7 +46,7 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 // (A02-15; ApprovalPendingView's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
-  // Approvable, or refused only because the caller created the invoice: the checkbox stays on.
+  // Approvable, or refused by approve_blocked_by_creator: the checkbox stays on.
   selectable: boolean
   pendingOrd: number | null
   // Human-facing step label (G4, APPR-12-03): pending_ord is 0-based on the wire

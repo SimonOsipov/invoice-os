@@ -39,7 +39,9 @@ test.describe('import release (API E2E, over the deployed gateway)', () => {
   })
 
   test('REL-01 a failed import for A leaves the document free to import for B', async () => {
-    const csv = uniqueCsv()
+    // The repeated header is the last line: as the header row it leaves zero data rows (A fails);
+    // under header_row 1 it is a quarantined date-error row, so B still lists one invoice.
+    const csv = `${uniqueCsv()}\n${HEADER}`
     const lineCount = csv.split('\n').length
     const [a, b] = [
       await createEntity(token, { name: `REL-01 A ${freshTin()}`, tin: freshTin() }),
@@ -47,7 +49,7 @@ test.describe('import release (API E2E, over the deployed gateway)', () => {
     ]
     const documentId = await uploadDocument(token, csv)
 
-    // The last line as the header leaves zero data rows: the batch finalizes "failed" (service.go).
+    // Zero data rows: the batch finalizes "failed" (importer service Import, rowsTotal == 0).
     const failed = await importFetch(token, importForm(a.id, documentId, String(lineCount)))
     expect(failed.status, JSON.stringify(failed.body)).toBe(201)
     expect((failed.body as { status: string }).status).toBe('failed')

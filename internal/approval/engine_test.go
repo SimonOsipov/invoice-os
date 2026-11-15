@@ -697,7 +697,7 @@ func TestMaterialise_ReturnedPointersAliasTheSourceTree(t *testing.T) {
 	}
 }
 
-// --- SECAUD-18-02: a condition with no comparable total takes the review lane ---------
+// --- a condition with no comparable total takes the review lane ---------
 
 // show renders steps as kind:role so a failure names the lane, not pointer addresses.
 func show(steps []runStep) string {
@@ -737,6 +737,28 @@ func TestMaterialise_ReviewLaneAvoidsAnAutoapproveThenLane(t *testing.T) {
 			}
 			if auto {
 				t.Error("auto = true, want false")
+			}
+		})
+	}
+}
+
+func TestMaterialise_ReviewLanePrefersTheLaneWithAnApprover(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tree []Step
+		want []runStep
+	}{
+		{"notify then, approval else", []Step{stepCond(">", "1000000.00", []Step{stepNotify("x", "email")}, []Step{stepApproval("cfo", 24), stepAutoapprove()})},
+			ordered(wantApproval("cfo", 24), wantAutoapprove())},
+		{"approval then, notify else", []Step{stepCond("<", "1000000.00", []Step{stepApproval("cfo", 24), stepAutoapprove()}, []Step{stepNotify("x", "email")})},
+			ordered(wantApproval("cfo", 24), wantAutoapprove())},
+		{"approval beats a lane without one", []Step{stepCond(">", "1000.00", []Step{stepNotify("x", "email")}, []Step{stepApproval("cfo", 24)})},
+			ordered(wantApproval("cfo", 24))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, _ := materialise(tc.tree, nil)
+			if !reflect.DeepEqual(steps, tc.want) {
+				t.Errorf("steps = %s, want %s", show(steps), show(tc.want))
 			}
 		})
 	}

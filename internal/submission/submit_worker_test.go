@@ -2134,7 +2134,7 @@ func TestPollWorker_ALockedWorkspaceStillPolls(t *testing.T) {
 	}
 }
 
-// --- SECAUD-18-03: the worker sends only cleared content --------------------------------
+// --- the worker sends only cleared content --------------------------------
 
 // Copy of submission.ContentChangedReason, pinned on purpose.
 const contentChangedSentence = "Not sent: the invoice's current content is not the content that passed validation and approval."

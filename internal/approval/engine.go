@@ -83,19 +83,32 @@ func materialise(tree []Step, total *decimal.Decimal) (steps []runStep, auto boo
 	return steps, auto
 }
 
-// reviewLane is the lane a condition takes when it has no comparable total: the lane with
-// no autoapprove; on a tie, the lane a total above the threshold takes.
+// reviewLane is the lane a condition takes when it has no comparable total: the lane that
+// needs a human approver. Rank: approval without autoapprove, approval, no autoapprove;
+// on a tie, the lane a total above the threshold takes.
 func reviewLane(n Step) []Step {
-	if hasAutoapprove(n.Then) != hasAutoapprove(n.Else) {
-		if hasAutoapprove(n.Then) {
-			return n.Else
+	if rt, re := laneRank(n.Then), laneRank(n.Else); rt != re {
+		if rt > re {
+			return n.Then
 		}
-		return n.Then
+		return n.Else
 	}
 	if n.CondOp != nil && (*n.CondOp == ">" || *n.CondOp == ">=") {
 		return n.Then
 	}
 	return n.Else
+}
+
+func laneRank(lane []Step) int {
+	auto := hasAutoapprove(lane)
+	rank := 0
+	if !auto {
+		rank = 1
+	}
+	if slices.ContainsFunc(lane, func(s Step) bool { return s.Kind == "approval" }) {
+		rank += 2
+	}
+	return rank
 }
 
 func hasAutoapprove(lane []Step) bool {

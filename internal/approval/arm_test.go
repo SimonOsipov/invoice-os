@@ -1900,7 +1900,7 @@ func TestArm_OpenRunKeepsItsDelegationAfterRepublish(t *testing.T) {
 	}
 }
 
-// --- SECAUD-18-02: a threshold judges only a total in its currency ---------------------
+// --- a threshold judges only a total in its currency ---------------------
 
 // seedThresholdPolicy seeds a sealed, active policy: <op> <amount> then [approval cfo], else [autoapprove].
 func seedThresholdPolicy(t *testing.T, super *pgxpool.Pool, tenantID, name string, position int, s scopeSpec, op, amount string) string {

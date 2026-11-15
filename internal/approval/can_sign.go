@@ -81,14 +81,16 @@ func unsignableReasonsTx(ctx context.Context, tx pgx.Tx, probes []SignerProbe) (
 // The tenant pins keep the statement correct on a read that bypasses RLS (TestStranded_AnotherTenantsRoleDoesNotStaffThisRun).
 const unsignableReasonsSQL = `-- unsignableReasonsTx
 WITH p AS (
-  SELECT o.ord, i.id AS inv_id, i.tenant_id AS tid, o.role_key, o.allow, o.delegate, i.entity_id, h.actor
+  SELECT o.ord, i.id AS inv_id, i.tenant_id AS tid, o.role_key, o.allow, o.delegate, i.entity_id
     FROM unnest($1::uuid[], $2::text[], $3::bool[], $4::text[]) WITH ORDINALITY AS o(invoice_id, role_key, allow, delegate, ord)
     LEFT JOIN invoices i ON i.id = o.invoice_id
-    LEFT JOIN LATERAL (
-          SELECT sh.actor FROM invoice_status_history sh
-           WHERE sh.invoice_id = o.invoice_id AND sh.from_status IS NULL LIMIT 1) h ON true
 ), reach AS (
-  SELECT p.ord, m.user_id, (t.kind <> 'firm' OR m.role = 'admin' OR m.all_clients OR mc.user_id IS NOT NULL) AS reaches
+  SELECT p.ord, m.user_id, (t.kind <> 'firm' OR m.role = 'admin' OR m.all_clients OR mc.user_id IS NOT NULL) AS reaches,
+         -- An author is the creator or the actor of an invoice.updated row.
+         (m.user_id::text IN (SELECT sh.actor FROM invoice_status_history sh
+                               WHERE sh.invoice_id = p.inv_id AND sh.from_status IS NULL)
+          OR m.user_id::text IN (SELECT a.actor FROM audit_log a
+                                  WHERE a.tenant_id = p.tid AND a.invoice_id = p.inv_id AND a.event = 'invoice.updated')) AS is_author
     FROM p
     JOIN memberships m ON m.tenant_id = p.tid AND m.status = 'active' AND m.role IN ('admin', 'reviewer')
     JOIN tenants t ON t.id = m.tenant_id
@@ -96,33 +98,33 @@ WITH p AS (
 ), others AS (
   SELECT r.ord, count(*) AS n
     FROM reach r JOIN p ON p.ord = r.ord
-   WHERE r.reaches AND r.user_id::text IS DISTINCT FROM p.actor
+   WHERE r.reaches AND NOT r.is_author
    GROUP BY r.ord
 ), mem AS (
-  SELECT p.ord, wrm.user_id, r.reaches
+  SELECT p.ord, wrm.user_id, r.reaches, r.is_author
     FROM p
     JOIN workflow_roles wr ON wr.key = p.role_key AND wr.tenant_id = p.tid AND wr.deleted_at IS NULL
     JOIN workflow_role_members wrm ON wrm.tenant_id = wr.tenant_id AND wrm.workflow_role_id = wr.id
     JOIN reach r ON r.ord = p.ord AND r.user_id = wrm.user_id
 ), del AS (
   -- A delegate needs no role: DelegateMayDecide.
-  SELECT r.ord, r.user_id, r.reaches
+  SELECT r.ord, r.user_id, r.reaches, r.is_author
     FROM reach r JOIN p ON p.ord = r.ord
    WHERE p.allow AND (p.delegate IS NULL OR r.user_id::text = p.delegate)
 ), cand AS (
-  SELECT ord, user_id, reaches FROM mem UNION ALL SELECT ord, user_id, reaches FROM del
+  SELECT ord, user_id, reaches, is_author FROM mem UNION ALL SELECT ord, user_id, reaches, is_author FROM del
 )
 SELECT CASE WHEN p.inv_id IS NULL THEN ''
             WHEN count(c.user_id) = 0 THEN CASE WHEN wr.id IS NULL THEN 'deleted' ELSE 'no holder' END
             WHEN count(*) FILTER (WHERE c.reaches) = 0 THEN 'out of client reach'
             WHEN count(*) FILTER (WHERE c.reaches
-                   AND (c.user_id::text IS DISTINCT FROM p.actor OR coalesce(o.n, 0) = 0)) = 0 THEN 'creator only'
+                   AND (NOT c.is_author OR coalesce(o.n, 0) = 0)) = 0 THEN 'creator only'
             ELSE '' END,
        coalesce(bool_or(c.user_id::text = $5::text AND c.reaches
-                   AND (c.user_id::text IS DISTINCT FROM p.actor OR coalesce(o.n, 0) = 0)), false)
+                   AND (NOT c.is_author OR coalesce(o.n, 0) = 0)), false)
   FROM p
   LEFT JOIN workflow_roles wr ON wr.key = p.role_key AND wr.tenant_id = p.tid AND wr.deleted_at IS NULL
   LEFT JOIN cand c ON c.ord = p.ord
   LEFT JOIN others o ON o.ord = p.ord
- GROUP BY p.ord, p.inv_id, p.tid, p.actor, wr.id, o.n
+ GROUP BY p.ord, p.inv_id, p.tid, wr.id, o.n
  ORDER BY p.ord`

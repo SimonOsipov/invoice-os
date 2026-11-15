@@ -10,6 +10,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 )
 
+// nairaCode is the currency of a condition's cond_amount when the matched policy has no band.
+const nairaCode = "NGN"
+
 // runStep is one materialised approval_run_steps row before it is written. The columns
 // it omits — state, due_at, satisfied_at, satisfied_by — are all derived downstream.
 type runStep struct {
@@ -68,19 +71,52 @@ func materialise(tree []Step, total *decimal.Decimal) (steps []runStep, auto boo
 		if n.CondOp != nil {
 			op = *n.CondOp
 		}
-		if evalCondition(op, n.CondAmount, total) {
+		switch {
+		case total == nil:
+			take(reviewLane(n))
+		case evalCondition(op, n.CondAmount, total):
 			take(n.Then)
-		} else {
+		default:
 			take(n.Else)
 		}
 	}
 	return steps, auto
 }
 
+// reviewLane is the lane a condition takes when it has no comparable total: the lane that
+// needs a human approver. Rank: approval without autoapprove, approval, no autoapprove;
+// on a tie, the lane a total above the threshold takes.
+func reviewLane(n Step) []Step {
+	if rt, re := laneRank(n.Then), laneRank(n.Else); rt != re {
+		if rt > re {
+			return n.Then
+		}
+		return n.Else
+	}
+	if n.CondOp != nil && (*n.CondOp == ">" || *n.CondOp == ">=") {
+		return n.Then
+	}
+	return n.Else
+}
+
+func laneRank(lane []Step) int {
+	auto := hasAutoapprove(lane)
+	rank := 0
+	if !auto {
+		rank = 1
+	}
+	if slices.ContainsFunc(lane, func(s Step) bool { return s.Kind == "approval" }) {
+		rank += 2
+	}
+	return rank
+}
+
+func hasAutoapprove(lane []Step) bool {
+	return slices.ContainsFunc(lane, func(s Step) bool { return s.Kind == "autoapprove" })
+}
+
 // evalCondition ports the amount arm of the SPA's evalCondition
-// (frontend/app/src/lib/workflows.ts). Each side folds to zero when absent or
-// unparseable, mirroring its `Number(x) || 0` — a NULL invoices.total and a NULL
-// cond_amount both read as 0.
+// (frontend/app/src/lib/workflows.ts).
 func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
 	v := decimal.Zero
 	if condAmount != nil {
@@ -141,7 +177,7 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 
 	// total::text into a *string, never a bare decimal.Decimal: numeric(14,2) accepts NaN
 	// and decimal's Scan errors on it, which would roll back the caller's promotion. An
-	// unparseable total reads as absent, which evalCondition folds to zero.
+	// unparseable total reads as absent.
 	var totalText *string
 	var invoiceNumber string
 	doc := matchDoc{}
@@ -175,7 +211,15 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	if err != nil {
 		return ArmResult{}, err
 	}
-	steps, auto := materialise(trees[versionID], total)
+	condCurrency := nairaCode
+	if matchedVersion.BandCurrency != nil {
+		condCurrency = *matchedVersion.BandCurrency
+	}
+	condTotal := total
+	if doc.Currency == nil || *doc.Currency != condCurrency {
+		condTotal = nil
+	}
+	steps, auto := materialise(trees[versionID], condTotal)
 
 	// One pass building all seven arrays and the state of every step. unnest pads a short
 	// array with NULLs instead of erroring, so they must stay the same length; the

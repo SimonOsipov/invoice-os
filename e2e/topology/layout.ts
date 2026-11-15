@@ -16,7 +16,7 @@
 // These helpers are deliberately NOT visual regression, which
 // .claude/rules/e2e.md bans: nothing here compares pixels or keeps a baseline.
 // They read geometry the same way an assertion reads text.
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 /**
  * Waits until web fonts have loaded and every finite animation on each element and its ancestors has finished.
@@ -321,9 +321,48 @@ export async function assertControlFits(
           { message: `${label} at ${width}px wide`, timeout: 10_000 },
         )
         .toBe('ok')
-      await assertPageDoesNotScrollSideways(page, `${label} at ${width}px wide`)
+      if (wide) {
+        await assertPageDoesNotScrollSideways(page, `${label} at ${width}px wide`)
+      } else {
+        await assertControlAddsNoOverflow(page, control, `${label} at ${width}px wide`, width)
+      }
     }
   } finally {
     if (entry) await page.setViewportSize(entry)
   }
+}
+
+/** Overflow the page column carries without the control, and what the control adds to it. */
+export function controlOverflow(shown: number, hidden: number): { hiddenOverflow: number; addedByControl: number } {
+  return { hiddenOverflow: hidden, addedByControl: shown - hidden }
+}
+
+// Phone: the page may already overflow for another reason; the control must add at most 1px. The overflow with the control hidden is attached.
+async function assertControlAddsNoOverflow(page: Page, control: Locator, label: string, width: number): Promise<void> {
+  const column = page.locator('main.pf-main .pf-scroll')
+  const read = () =>
+    column.evaluate(async (el) => {
+      await el.ownerDocument.fonts.ready
+      return el.scrollWidth - el.clientWidth
+    })
+  const shown = await read()
+  let hidden: number
+  await control.evaluate((el) => {
+    el.dataset.prevDisplay = el.style.display
+    el.style.display = 'none'
+  })
+  try {
+    hidden = await read()
+  } finally {
+    await control.evaluate((el) => {
+      el.style.display = el.dataset.prevDisplay ?? ''
+      delete el.dataset.prevDisplay
+    })
+  }
+  const { hiddenOverflow, addedByControl } = controlOverflow(shown, hidden)
+  await test.info().attach(`control-overflow-${width}.json`, {
+    body: JSON.stringify({ label, width, shownOverflow: shown, hiddenOverflow, addedByControl }, null, 2),
+    contentType: 'application/json',
+  })
+  expect(addedByControl, `${label}: showing the control widens the page column by ${addedByControl}px (shown ${shown}, hidden ${hiddenOverflow})`).toBeLessThanOrEqual(1)
 }

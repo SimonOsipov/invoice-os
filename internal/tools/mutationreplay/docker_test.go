@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,7 +128,8 @@ func TestBuildInput(t *testing.T) {
 		}
 	}
 	for _, f := range []string{"sidecar/docling/pip_check_guard.py", "sidecar/docling/pyproject.toml", "sidecar/docling/build.txt", "sidecar/docling/tests/test_pins.py",
-		"sidecar/other/requirements.txt", ".github/workflows/ci.yml", "Dockerfile", "Dockerfile.dockerignore"} {
+		"sidecar/other/requirements.txt", ".github/workflows/ci.yml", "Dockerfile", "Dockerfile.dockerignore",
+		"sidecar/docling/tests/requirements.txt", "sidecar/docling/sub/Dockerfile", "sidecar/docling/sub/x.lock"} {
 		if BuildInput(f) {
 			t.Errorf("BuildInput(%s) = true, want false", f)
 		}
@@ -333,7 +335,16 @@ func TestDocker_RemovesTheMutatedImageOnEveryPath(t *testing.T) {
 func TestDocker_ImageRmFailureKeepsTheOutcome(t *testing.T) {
 	f := rebuildFake(reply{out: failedOut})
 	f.rm = func(call) reply { return reply{out: "Error response from daemon: conflict", code: 1} }
+	rd, wr, _ := os.Pipe()
+	stderr := os.Stderr
+	os.Stderr = wr
 	out, err := newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/requirements.lock"), true)
+	os.Stderr = stderr
+	wr.Close()
+	warn, _ := io.ReadAll(rd)
+	if want := "mutationreplay: WARNING image rm sha256:new: Error response from daemon: conflict"; !strings.Contains(string(warn), want) {
+		t.Errorf("stderr = %q, want %q", warn, want)
+	}
 	if out != Failed || err != nil {
 		t.Errorf("= %v, %v; want Failed, nil", out, err)
 	}
@@ -360,6 +371,9 @@ func TestReplay_FailedMutatedBuildIsInvalidAndRestores(t *testing.T) {
 		t.Errorf("result = %+v", res)
 	}
 	assertRestored(t, root, file, "x\n")
+	if f.count("image rm") != 0 {
+		t.Errorf("image rm called %d times after a failed build, want 0", f.count("image rm"))
+	}
 }
 
 func TestReplay_PytestRowRestoresTheTreeOnEveryPath(t *testing.T) {
@@ -462,6 +476,26 @@ func TestDocker_CleanBuildFailureIsKept(t *testing.T) {
 	}
 }
 
+func TestDocker_BuildExitingNonZeroIsFailedEvenWithAnID(t *testing.T) {
+	f := &fakeDocker{build: func(int, call) reply { return reply{out: "sha256:clean\n", code: 1} }}
+	_, err := newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/pip_check_guard.py"), false)
+	if err == nil || !strings.Contains(err.Error(), "docling:test build failed") {
+		t.Errorf("clean build: err = %v", err)
+	}
+	f = rebuildFake(reply{out: passedOut})
+	build := f.build
+	f.build = func(n int, c call) reply {
+		if r := build(n, c); n == 1 {
+			return r
+		}
+		return reply{out: "sha256:new\n", code: 1}
+	}
+	_, err = newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/requirements.lock"), true)
+	if err == nil || !strings.Contains(err.Error(), "image build from the mutated tree failed") || f.runs != 1 {
+		t.Errorf("mutated build: err = %v, runs = %d", err, f.runs)
+	}
+}
+
 func TestDocker_BuildWithoutAnImageID(t *testing.T) {
 	f := &fakeDocker{build: func(int, call) reply { return reply{out: "done\n"} }}
 	_, err := newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/pip_check_guard.py"), false)
@@ -502,6 +536,26 @@ func TestDocker_TimeoutIsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Verdict != Invalid || !strings.Contains(res.Reason, "control run: docker build timed out after 30m0s") {
+		t.Errorf("result = %+v", res)
+	}
+	assertRestored(t, root, file, "x\n")
+}
+
+func TestDocker_MutatedBuildTimeoutIsInvalid(t *testing.T) {
+	const file = "sidecar/docling/requirements.lock"
+	root := tree(t, file, "x\n")
+	f := &fakeDocker{build: func(n int, c call) reply {
+		if n == 1 {
+			return reply{out: "sha256:clean\n"}
+		}
+		return reply{err: errors.New("timed out after 30m0s")}
+	}}
+	control, run := Runners(nil, newDocker(root, f))
+	res, err := Replay(root, pyRow(file), control, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verdict != Invalid || !strings.Contains(res.Reason, "mutated run: docker build timed out after 30m0s") {
 		t.Errorf("result = %+v", res)
 	}
 	assertRestored(t, root, file, "x\n")

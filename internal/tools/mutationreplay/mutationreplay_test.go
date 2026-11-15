@@ -104,6 +104,9 @@ func TestPytestOutcome(t *testing.T) {
 		{"pass and fail", "test_pass_fail", "tests/test_mixed.py::test_pass_fail[0] PASSED                            [ 50%]\ntests/test_mixed.py::test_pass_fail[1] FAILED                            [100%]\nFAILED tests/test_mixed.py::test_pass_fail[1] - assert 1 == 0\n", Failed},
 		{"skip alone", "test_pass_skip", "tests/test_mixed.py::test_pass_skip[1] SKIPPED (case 1 skipped)          [100%]\n", NotRun},
 		{"xfail alone", "test_pass_xfail", "tests/test_mixed.py::test_pass_xfail[1] XFAIL (case 1 xfail)             [100%]\n", NotRun},
+		{"summary prefix is not the test", "test_a", "FAILED tests/t.py::test_ab - boom\ntests/t.py::test_a PASSED [100%]\n", Passed},
+		{"teardown error after pass", "test_a", "tests/t.py::test_a PASSED [ 50%]\ntests/t.py::test_a ERROR [100%]\n", Failed},
+		{"result line beats collection text", "test_a", "tests/t.py::test_a PASSED [100%]\nERROR collecting tests/other.py\n", Passed},
 		{"cut by timeout", "test_slow", "collected 1 item\n\ntests/test_mixed.py::test_slow ", NotRun},
 	}
 	for _, c := range cases {

@@ -17,7 +17,7 @@ import (
 )
 
 // dockerTimeout bounds every Docker call; ~9x the measured mutated image build.
-const dockerTimeout = 30 * time.Minute
+var dockerTimeout = 30 * time.Minute
 
 func main() {
 	changed := flag.Bool("changed", false, "skip a row proven earlier when nothing changed in its folders")
@@ -84,9 +84,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mutationreplay: %v\n", err)
 		os.Exit(2)
 	}
-	control, run := Runners(runTest, &Docker{Root: root, Exec: func(dir, name string, args ...string) (string, int, error) {
-		return runExec(dockerTimeout, dir, name, args...)
-	}})
+	control, run := Runners(runTest, &Docker{Root: root, Exec: dockerExec})
 	receipts := LoadReceipts(rowsFile)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -192,6 +190,10 @@ func runExec(timeout time.Duration, dir string, name string, args ...string) (st
 	child = nil
 	childMu.Unlock()
 	return out.String(), cmd.ProcessState.ExitCode(), timedOut
+}
+
+func dockerExec(dir, name string, args ...string) (string, int, error) {
+	return runExec(dockerTimeout, dir, name, args...)
 }
 
 func runCmd(dir string, name string, args ...string) (string, error) {

@@ -335,6 +335,14 @@ var anVariableEvents = []anIndirect{
 		reason: "the event is the job's account.* name, never invoice-scoped",
 	},
 	{
+		file: "internal/archive/store.go", fn: "memberBundleExported",
+		reason: "evidence_bundle.exported; the payload is a bundleAudit struct, never invoice-scoped",
+	},
+	{
+		file: "internal/archive/store.go", fn: "memberBundleFailed",
+		reason: "evidence_bundle.export_failed; the payload is a bundleAudit struct, never invoice-scoped",
+	},
+	{
 		file: "internal/document/document.go", fn: "Upsert",
 		reason: "document.created or document.reused, chosen by whether the row already existed",
 	},

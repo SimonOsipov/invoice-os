@@ -31,6 +31,7 @@ import {
   createEntity,
   createInvoice,
   firmApproverTokens,
+  getAuditLog,
   getInvoice,
   getInvoiceHistory,
   issueNote,
@@ -147,6 +148,9 @@ async function fetchBundle(
   const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json'])) as BundleManifest
   return { zip, manifest, filename }
 }
+
+// bundle_audit.go / store.go event name.
+const BUNDLE_EXPORTED = 'evidence_bundle.exported'
 
 // A wide, fixed period rather than one centered on "now": invoices.go's WHERE clause
 // scopes on entity_id AND created_at, and entity_id already isolates this query to only
@@ -394,6 +398,27 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(preview.entity, 'preview entity must match manifest.json entity').toEqual(manifest.entity)
     expect(preview.period, 'preview period must match manifest.json period').toEqual(manifest.period)
     expect(preview.counts, 'preview counts must match manifest.json counts').toEqual(manifest.counts)
+  })
+
+  test('a download writes one evidence_bundle.exported row naming the member and the company; the preview writes none', async () => {
+    const query = { event: [BUNDLE_EXPORTED], company: entityId }
+    const before = (await getAuditLog(token, query)).total
+
+    expect((await previewFetch(token, entityId, period)).status, 'preview status').toBe(200)
+    expect((await getAuditLog(token, query)).total, 'the preview writes no row').toBe(before)
+
+    const { zip } = await fetchBundle(token, entityId, period)
+    const after = await getAuditLog(token, query)
+    expect(after.total, 'the download writes one row').toBe(before + 1)
+    const newest = after.events[0]
+    expect(newest.actor, 'the row names the member').toBe(PERSONAS.A.subject)
+    expect(newest.entity_id, 'the row names the company').toBe(entityId)
+    expect(newest.payload, 'the payload holds the request period and the entry count without the manifest').toMatchObject({
+      entity_id: entityId,
+      from: period.from,
+      to: period.to,
+      files: Object.keys(zip).length - 1,
+    })
   })
 
   test('an entity_id belonging to no visible entity is 404 from both preview and download', async () => {

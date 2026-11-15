@@ -47,10 +47,11 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	var foundAuditLog, foundBundle, foundPreview, foundRegister bool
 	staffWant := map[string]string{
 		"GET /v1/staff/tenants/{id}/entities":                "StaffEntitiesHandler",
-		"GET /v1/staff/tenants/{id}/evidence-bundle":         "StaffDownloadHandler",
+		"POST /v1/staff/tenants/{id}/evidence-bundle":        "StaffDownloadHandler",
 		"GET /v1/staff/tenants/{id}/evidence-bundle/preview": "StaffPreviewHandler",
 	}
 	foundStaff := map[string]bool{}
+	var foundStaffDownloadGet bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -65,6 +66,9 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 			return true
 		}
 		pattern := strings.Trim(lit.Value, `"`)
+		if pattern == "GET /v1/staff/tenants/{id}/evidence-bundle" {
+			foundStaffDownloadGet = true
+		}
 		if h, ok := staffWant[pattern]; ok {
 			foundStaff[pattern] = true
 			checkHandler(pattern, call, h)
@@ -96,6 +100,9 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 	if !foundRegister {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/invoice-register", archive.RegisterHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+	if foundStaffDownloadGet {
+		t.Error(`main.go still registers GET /v1/staff/tenants/{id}/evidence-bundle: the staff download is POST-only (the reason is in the body)`)
 	}
 	for pattern, h := range staffWant {
 		if !foundStaff[pattern] {

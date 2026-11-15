@@ -391,10 +391,9 @@ func TestBundleHandler_StoreErrorAfterFilenameButBeforeFirstByteIsStill500(t *te
 	}
 }
 
-// TestBundleHandler_ErrorAfterFirstByteKeeps200AndAppendsNoJSON is the mirror case:
-// once bytes are on the wire the status line is already committed, so a later failure
-// can only be logged, never turned into a JSON error appended to the stream.
-func TestBundleHandler_ErrorAfterFirstByteKeeps200AndAppendsNoJSON(t *testing.T) {
+// After the first byte a failure aborts the connection: a clean 200 over a ZIP with no
+// central directory reads as a finished download. Before it, the JSON error stays.
+func TestBundleHandler_ErrorAfterFirstByteAbortsTheConnection(t *testing.T) {
 	streamedBytes := []byte("PK\x03\x04-partial-bundle-bytes")
 	spy := &assembleSpy{fn: func(w io.Writer, onStart func(string)) error {
 		onStart("mid-stream-failure.zip")
@@ -403,19 +402,26 @@ func TestBundleHandler_ErrorAfterFirstByteKeeps200AndAppendsNoJSON(t *testing.T)
 		}
 		return errors.New("boom: connection lost mid-stream")
 	}}
-	h := DownloadHandler(spy.Assemble, slog.Default())
-	r := newTestRequest(t, validQuery(), true)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (D-41: the status line is already committed once a byte has gone out; body %s)", rec.Code, rec.Body.String())
-	}
-	if got := rec.Body.Bytes(); !bytes.Equal(got, streamedBytes) {
-		t.Errorf("body = %q, want exactly the streamed bytes %q, no appended JSON", got, streamedBytes)
+	rec, aborted := serveWorkspace(DownloadHandler(spy.Assemble, slog.Default()), newTestRequest(t, validQuery(), true))
+	if !aborted {
+		t.Fatalf("handler returned normally after a mid-stream failure; want panic(http.ErrAbortHandler) (status %d)", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `{"error"`) {
-		t.Errorf("body %q contains an appended JSON error over an already-committed stream", rec.Body.String())
+		t.Errorf("body %q holds an appended JSON error", rec.Body.String())
+	}
+}
+
+func TestBundleHandler_ErrorBeforeTheFirstByteDoesNotAbort(t *testing.T) {
+	spy := &assembleSpy{fn: func(_ io.Writer, onStart func(string)) error {
+		onStart("early-failure.zip")
+		return errors.New("boom before any byte")
+	}}
+	rec, aborted := serveWorkspace(DownloadHandler(spy.Assemble, slog.Default()), newTestRequest(t, validQuery(), true))
+	if aborted {
+		t.Fatal("handler aborted before the first byte; want a JSON error")
+	}
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"error"`) {
+		t.Errorf("answer = %d %q, want a 500 JSON error", rec.Code, rec.Body.String())
 	}
 }
 

@@ -7,7 +7,7 @@
 # through mirror.gcr.io for the same egress reason as the root Dockerfile.
 
 # ---- deps: pinned installs + model prefetch (EXTR-03 story sec. 5) ----
-FROM mirror.gcr.io/library/python:3.12-slim AS deps
+FROM mirror.gcr.io/library/python:3.12.16-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS deps
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /build
@@ -71,7 +71,7 @@ USER appuser
 CMD ["pytest", "-v"]
 
 # ---- run: venv + models + app, non-root ----
-FROM mirror.gcr.io/library/python:3.12-slim AS run
+FROM mirror.gcr.io/library/python:3.12.16-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS run
 RUN useradd --no-create-home --uid 1000 --shell /usr/sbin/nologin appuser
 COPY --from=deps /opt/venv /opt/venv
 COPY --from=deps /opt/docling-models /opt/docling-models

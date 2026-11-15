@@ -371,7 +371,7 @@ func csAllClients(t *testing.T, super *pgxpool.Pool, ctx context.Context, tenant
 	}
 }
 
-// The full-access clause (entity_scope ” or '*') is the only one that admits adminOwn.
+// The full-access clause (entity_scope empty or '*') is the only one that admits adminOwn.
 func TestClientScope_FullAccessCallersSeeTheWholeDirectory(t *testing.T) {
 	w := newCSWorld(t, "CS dir full access")
 	all := csMember(t, w.super, w.tenant, "reviewer")

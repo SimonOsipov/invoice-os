@@ -421,6 +421,25 @@ func TestRefuseUnsignedWaitingRoles_CreatorOnlyRefuses(t *testing.T) {
 	f.wantPassedUnsigned(t, "tax-reviewer")
 }
 
+func TestRefuseUnsignedWaitingRoles_EditorOnlyRefuses(t *testing.T) {
+	f := newLastHolderFixture(t, "SECAUD-18 editor only refuses")
+	b := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // C: a non-author approver without the role
+	seedInvoiceEvent(t, f.super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	f.wantPassedUnsigned(t, "tax-reviewer") // control: D, a non-author, still signs
+	if _, err := f.super.Exec(context.Background(),
+		`DELETE FROM workflow_role_members WHERE workflow_role_id = $1 AND user_id = $2`, f.roleID, d); err != nil {
+		t.Fatalf("remove D from the role: %v", err)
+	}
+
+	inUse := f.wantRefusedUnsigned(t, "tax-reviewer")
+	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != f.invoiceID || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want only %s and 1", inUse.invoices, inUse.invoicesTotal, f.invoiceID)
+	}
+}
+
 func TestRefuseUnsignedWaitingRoles_CapsAtTwentyAcrossRolesAndSumsTheTotal(t *testing.T) {
 	f := newRunFixture(t, "APSC-14 cap across roles")
 	roleX := seedWorkflowRole(t, f.super, f.tenantID, "x", "Role X")

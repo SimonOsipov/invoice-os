@@ -86,6 +86,13 @@ func markJobTransformFailed(ctx context.Context, tx pgx.Tx, jobID, lastErr strin
 		`UPDATE submission_jobs SET state = 'failed', last_error = $2 WHERE id = $1`, jobID, lastErr)
 }
 
+// markJobContentChanged is the content-refusal write: state='failed' with
+// ContentChangedReason, attempts unchanged -- nothing reached the wire.
+func markJobContentChanged(ctx context.Context, tx pgx.Tx, jobID string) error {
+	return execJobUpdate(ctx, tx,
+		`UPDATE submission_jobs SET state = 'failed', last_error = $2 WHERE id = $1`, jobID, ContentChangedReason)
+}
+
 // markJobAccepted is tx2's Accepted write: state='accepted', attempts advanced to the
 // POST-increment value (this attempt genuinely reached the wire).
 func markJobAccepted(ctx context.Context, tx pgx.Tx, jobID string, attempts int) error {

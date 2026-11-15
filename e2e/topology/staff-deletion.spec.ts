@@ -1,9 +1,9 @@
-// Support Console Tenants: staff start, cancel and purge a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width; the header wraps at 390px.
+// Support Console Tenants: staff start and cancel a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width; the header wraps at 390px.
 // Every workspace is registered here; the seeded tenants are never acted on.
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { acceptById, inviteWithToken, listMine, me, provisionStaffAccount, rawFetch, registerFormAccount, registerFresh, signInSession, type PendingInvite, type StaffAccount } from '../api/client'
+import { acceptById, inviteWithToken, listMine, me, provisionStaffAccount, registerFormAccount, registerFresh, signInSession, type PendingInvite, type StaffAccount } from '../api/client'
 import { seedStaffSession } from '../staffSession'
-import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
+import { collectSourcedErrors } from './consoleGate'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.beforeAll(() => { expect(test.info().project.name, 'staff-deletion.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -14,7 +14,6 @@ const HEIGHT = 1080
 const MAX_NAME_CHARS = 200
 const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
 
-const auth = (token: string): Record<string, string> => ({ Authorization: `Bearer ${token}` })
 const main = (page: Page): Locator => page.locator('main')
 const rowOf = (page: Page, id: string): Locator => main(page).locator(`button[data-tenant-id="${id}"]`)
 
@@ -75,12 +74,12 @@ async function confirmModal(page: Page, confirm: string, reason: string): Promis
   await expect(dialog).toBeHidden()
 }
 
-test('support console: start, cancel and purge a workspace', async ({ page }) => {
+test('support console: start and cancel a workspace deletion; purge now waits 48 hours', async ({ page }) => {
   test.setTimeout(240_000)
-  const errors = collectSourcedErrors(page, expectedStatusDropper(page, 404, new RegExp(`${STAFF_TENANTS}/`)))
+  const errors = collectSourcedErrors(page)
   const ws = await fresh('staff-deletion-journey')
   const staff = await provisionStaffAccount('staff-deletion-ui')
-  const token = await staffSession(page, staff)
+  await staffSession(page, staff)
   await openTenant(page, ws.tenantId, ws.name)
 
   const actions = page.getByTestId('tenant-actions')
@@ -95,31 +94,13 @@ test('support console: start, cancel and purge a workspace', async ({ page }) =>
   await expect(scheduled).toBeHidden()
   expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the customer reads no due date').toBeNull()
   await expect(actions.getByRole('button', { name: 'Purge now', exact: true }), 'Purge now waits for a scheduled deletion').toHaveCount(0)
-  await expect(main(page).getByText('Not scheduled. Use Delete workspace first')).toBeVisible()
+  await expect(main(page).getByText('Not scheduled. Purge now opens 48 hours after Delete workspace')).toBeVisible()
 
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await confirmModal(page, 'Start deletion', 'e2e start again')
   await expect(scheduled).toBeVisible()
 
-  await actions.getByRole('button', { name: 'Purge now', exact: true }).click()
-  const dialog = page.getByRole('dialog')
-  const purge = dialog.getByRole('button', { name: 'Purge now', exact: true })
-  await dialog.getByLabel('Reason').fill('e2e purge')
-  await dialog.getByLabel('Workspace name').fill(`${ws.name}x`)
-  await expect(purge, 'a wrong name keeps the confirm blocked').toBeDisabled()
-  await dialog.getByLabel('Workspace name').fill(ws.name)
-  await expect(purge).toBeEnabled()
-  await purge.click()
-  await expect(page.getByText('Purge started'), 'the toast follows the 202').toBeVisible()
-  // The purge job may erase the tenant before the re-read lands; the read then answers 404.
-  await expect(main(page).getByText(/Purge in progress/).or(main(page).getByText('Tenant not found.'))).toBeVisible()
-
-  await expect.poll(async () => (await rawFetch(`${STAFF_TENANTS}/${ws.tenantId}`, { headers: auth(token) })).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)
-
-  await page.reload()
-  await page.locator('aside nav button.ops-nav').filter({ hasText: 'Tenants' }).click()
-  await main(page).getByLabel('Search tenants').fill(ws.name.slice(0, 60))
-  await expect(rowOf(page, ws.tenantId), 'the purged tenant leaves the list').toHaveCount(0)
+  await expect(actions.getByRole('button', { name: 'Purge now', exact: true }), 'Purge now waits for the staff waiting period').toHaveCount(0)
   expect(errors, errors.join('\n')).toEqual([])
 })
 
@@ -154,7 +135,15 @@ test('support console: the deletion header, member rows and modal fit at every w
     await noSideways(page, `Tenants, member rows at ${width}px`)
   })
 
-  // Purge now shows only on a scheduled workspace.
+  // Purge now shows only on a scheduled workspace past the staff wait (fixture).
+  // fixture check: a deployed env cannot backdate a schedule
+  await page.route((url) => url.pathname === `${STAFF_TENANTS}/${ws.tenantId}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const body = await res.json() as { tenant: { deletion_purge_opens_at: string | null } }
+    body.tenant.deletion_purge_opens_at = new Date(Date.now() - 3_600_000).toISOString()
+    await route.fulfill({ response: res, json: body })
+  })
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await confirmModal(page, 'Start deletion', 'e2e layout')
   await expect(main(page).getByText(/Scheduled for deletion on/)).toBeVisible()
@@ -285,7 +274,7 @@ test('support console: the tenant header wraps and shows the whole state line at
   }
 
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
-  await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
+  await check('unscheduled', main(page).getByText('Not scheduled. Purge now opens 48 hours after Delete workspace, for a different staff member than the one who scheduled it.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await page.route((url) => isListGet(url), async (route) => {
     if (route.request().method() !== 'GET' || listHeld) return route.fallback()

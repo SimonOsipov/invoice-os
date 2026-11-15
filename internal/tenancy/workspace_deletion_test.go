@@ -59,6 +59,24 @@ func lockByOwner(t *testing.T, super *pgxpool.Pool, tenant, by string) {
 	}
 }
 
+// scheduleAgo schedules as superuser with the clock secs seconds back, so a staff purge can sit on either side of the wait.
+func scheduleAgo(t *testing.T, super *pgxpool.Pool, tenant, by string, secs float64) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now() - make_interval(secs => $3), deletion_scheduled_by = $2 WHERE id = $1`, tenant, by, secs); err != nil {
+		t.Fatalf("schedule the tenant in the past: %v", err)
+	}
+}
+
+// scheduleOpenBy schedules 49 hours back, past the 48-hour staff wait, by the given subject.
+func scheduleOpenBy(t *testing.T, super *pgxpool.Pool, tenant, by string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now() - interval '49 hours', deletion_scheduled_by = $2 WHERE id = $1`, tenant, by); err != nil {
+		t.Fatalf("open the staff wait: %v", err)
+	}
+}
+
 func unlockByOwner(t *testing.T, super *pgxpool.Pool, tenant string) {
 	t.Helper()
 	if _, err := super.Exec(context.Background(),
@@ -82,7 +100,7 @@ func race(a, b func() error) (errA, errB error) {
 func requireNoSentinel(t *testing.T, err error) {
 	t.Helper()
 	for _, s := range []error{ErrDeleteWorkspaceNotPermitted, ErrCancelDeletionNotPermitted, ErrWorkspaceNameMismatch,
-		ErrHouseWorkspace, ErrDeletionNotScheduled, db.ErrWorkspaceLocked, db.ErrNotActiveMember, db.ErrNoTenant} {
+		ErrHouseWorkspace, ErrDeletionNotScheduled, ErrPurgeSameStaff, ErrPurgeWaitingPeriod, db.ErrWorkspaceLocked, db.ErrNotActiveMember, db.ErrNoTenant} {
 		if errors.Is(err, s) {
 			t.Errorf("err = %v, want the audit failure, not the refusal %v", err, s)
 		}

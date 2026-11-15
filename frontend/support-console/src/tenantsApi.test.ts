@@ -1,15 +1,18 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { cancelTenantDeletion, deleteMemberAccount, detailStatus, fetchStaffTenant, fetchStaffTenants, filterTenants, initials, kindLabel, memberName, previewMemberDeletion, purgeTenant, startTenantDeletion, type StaffTenant } from './tenantsApi'
+import { cancelTenantDeletion, deleteMemberAccount, detailStatus, fetchStaffTenant, fetchStaffTenants, filterTenants, initials, kindLabel, memberName, previewMemberDeletion, purgeTenant, STAFF_PURGE_WAIT_HOURS, startTenantDeletion, type StaffTenant } from './tenantsApi'
 
 const GW = 'https://gw.test'
 const ROUTE = `${GW}/api/tenancy/v1/staff/tenants`
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const tenant = (name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
-  id: name, name, kind: 'firm', created_at: '2026-01-01T00:00:00Z', demo: false, active_members: 1, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, ...over,
+  id: name, name, kind: 'firm', created_at: '2026-01-01T00:00:00Z', demo: false, active_members: 1, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, deletion_purge_opens_at: null, ...over,
 })
 
 let fetchMock: ReturnType<typeof vi.fn>
@@ -172,5 +175,12 @@ describe('tenantsApi', () => {
     expect(detailStatus(failed(null), 'X', 'X')).toBe('error')
     for (const code of [404, 403, 500, null]) expect(detailStatus(failed(code), 'Y', 'X')).toBe('loading')
     expect(detailStatus(failed(500), 'Y', null)).toBe('loading')
+  })
+})
+
+describe('STAFF_PURGE_WAIT_HOURS', () => {
+  it('equals StaffPurgeWait in the Go source', () => {
+    const go = readFileSync(fileURLToPath(new URL('../../../internal/tenancy/staff_deletion.go', import.meta.url)), 'utf8')
+    expect(Number(/StaffPurgeWait = (\d+) \* time\.Hour/.exec(go)?.[1])).toBe(STAFF_PURGE_WAIT_HOURS)
   })
 })

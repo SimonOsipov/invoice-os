@@ -126,6 +126,8 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
   const { tenant: t, members, invoices } = detail
   const scheduled = t.deletion_due_at !== null
   const started = t.deletion_purge_started_at !== null
+  // The server computes the opening instant (the console has no scheduling time); Purge now stays hidden until then.
+  const purgeOpen = t.deletion_purge_opens_at !== null && Date.parse(t.deletion_purge_opens_at) <= Date.now()
   // A hidden action does not apply; a running request locks the rest.
   const act = (label: string, action: DeletionAction, extra: CSSProperties = {}) => (
     <button key={action} type="button" onClick={() => onDeletion(action)} disabled={actionBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ ...ACTION_BTN, ...extra, ...(actionBusy ? LOCKED : {}) }}>
@@ -163,7 +165,7 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
         <div data-testid="tenant-actions" style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {!scheduled && act('Delete workspace', 'start', DANGER)}
           {scheduled && !started && act('Cancel deletion', 'cancel')}
-          {scheduled && !started && act('Purge now', 'purge', DANGER)}
+          {scheduled && purgeOpen && !started && act('Purge now', 'purge', DANGER)}
         </div>
       </div>
 

@@ -15,6 +15,7 @@ export interface StaffTenant {
   last_activity_at: string | null
   deletion_due_at: string | null
   deletion_purge_started_at: string | null
+  deletion_purge_opens_at: string | null
 }
 // tenancy.Membership
 export interface StaffMember {

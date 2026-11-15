@@ -98,7 +98,7 @@ const RULES_PROPS: Parameters<typeof Rules>[0] = {
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
 const tenant = (id: string, name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, ...over,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, deletion_purge_opens_at: null, ...over,
 })
 const T1 = tenant('t1', 'Okafor & Partners', { demo: true, active_members: 5, invoice_count: 31, last_activity_at: '2026-09-23T11:35:00Z' })
 const T2 = tenant('t2', 'In-house Co', { kind: 'in_house' })

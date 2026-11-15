@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, PRIVACY_CONTACT } from './Privacy'
+import { APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, PRIVACY_CONTACT, STAFF_PURGE_WAIT_HOURS } from './Privacy'
 
 const REPO = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 
@@ -237,10 +237,10 @@ export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
   { id: 'A4', text: `Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did what, with ${DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your membership record keeps your name and drops your email address.` },
   { id: 'A5', text: `An admin can delete the whole workspace. In ${APP_LABELS.settings}, under ${APP_LABELS.workspaceTab}, the admin chooses ${APP_LABELS.deleteWorkspace} and types the workspace name to confirm.` },
   { id: 'E1', text: `In the dialog that opens, ${EXPORT_LABELS.button} starts the download of one ZIP file, and the admin ticks “${EXPORT_LABELS.tick}” before the deletion can be confirmed. The ZIP holds the evidence bundle of every company in the workspace over all time, every original uploaded document and the audit log. While the workspace is locked, the notice offers the admin ${EXPORT_LABELS.button} again.` },
-  { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
+  { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until it starts. It starts when the ${DELETION_GRACE_DAYS} days end, or earlier if a member of our staff starts it, which they can do from ${STAFF_PURGE_WAIT_HOURS} hours after the deletion was requested. A staff member who requested the deletion cannot start it. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
   { id: 'A7', text: `If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your account then goes when the workspace is deleted, ${DELETION_GRACE_DAYS} days later, not at once.` },
   { id: 'R1', text: 'This section covers the main copies in our own systems. It says how long they last after an account or a workspace is deleted.' },
-  { id: 'R2', text: `When an admin deletes a workspace, it and everything in it stay for ${DELETION_GRACE_DAYS} days. Then our server deletes them.` },
+  { id: 'R2', text: `When an admin deletes a workspace, it and everything in it stay for ${DELETION_GRACE_DAYS} days, or for at least ${STAFF_PURGE_WAIT_HOURS} hours if a member of our staff starts the deletion sooner. Then our server deletes them.` },
   { id: 'R3', text: `Database backups: our database keeps backups, and a log of recent changes, for ${BACKUP_DAYS} days. Data that has been deleted can stay in a backup for up to ${BACKUP_DAYS} more days.` },
   { id: 'R4', text: `Stored files: the storage that holds uploaded documents keeps a deleted file for ${FILE_RECOVERY_DAYS} days before it is gone for good. A file can stay in storage for up to ${FILE_RECOVERY_DAYS} more days after it is deleted.` },
   { id: 'R5', text: 'Sign-in record: our sign-in service writes a record when an account is deleted. The record includes the email address of the account. We have set no time after which it is removed.' },
@@ -447,6 +447,17 @@ function lastDefinition(migrations: string[], re: RegExp, what: string): string 
 export function graceDays(migrations: string[] = migrationUps()): number {
   const fn = lastDefinition(migrations, /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?tenants_deletion_guard\(\)[\s\S]*?\$\$[\s\S]*?\$\$/i, 'the tenants_deletion_guard function')
   return Number(found(/deletion_scheduled_at \+ interval '(\d+) days'/.exec(fn)?.[1], 'the deletion interval'))
+}
+
+// The staff purge wait in hours, read from StaffPurgeWait.
+export function staffPurgeWaitHours(src: string = readSource('internal/tenancy/staff_deletion.go')): number {
+  return Number(found(/StaffPurgeWait = (\d+) \* time\.Hour/.exec(src)?.[1], 'StaffPurgeWait'))
+}
+
+// StaffPurgeWorkspace reads the scheduler and refuses the same staff subject with ErrPurgeSameStaff.
+export function purgeRefusesTheScheduler(src: string = readSource('internal/tenancy/staff_deletion.go')): boolean {
+  const fn = goFunc(src, /func \(s \*Store\) StaffPurgeWorkspace\b/, 'Store.StaffPurgeWorkspace')
+  return fn.includes('deletion_scheduled_by') && /\*scheduledBy == actor\.String\(\)[\s\S]*?return refuse\("same_approver", ErrPurgeSameStaff\)/.test(fn)
 }
 
 // The two labels of EXPORT_LABELS, read from the app's EXPORT_COPY.

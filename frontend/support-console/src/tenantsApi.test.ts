@@ -9,7 +9,7 @@ const ROUTE = `${GW}/api/tenancy/v1/staff/tenants`
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const tenant = (name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
-  id: name, name, kind: 'firm', created_at: '2026-01-01T00:00:00Z', demo: false, active_members: 1, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, ...over,
+  id: name, name, kind: 'firm', created_at: '2026-01-01T00:00:00Z', demo: false, active_members: 1, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, deletion_purge_opens_at: null, ...over,
 })
 
 let fetchMock: ReturnType<typeof vi.fn>

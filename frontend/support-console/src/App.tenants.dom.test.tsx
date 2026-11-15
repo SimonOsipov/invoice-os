@@ -58,7 +58,7 @@ const preview = vi.mocked(previewMemberDeletion)
 const delAccount = vi.mocked(deleteMemberAccount)
 
 const tenant = (id: string, name: string): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, deletion_purge_opens_at: null,
 })
 const X = tenant('X', 'Okafor & Partners')
 const Y = tenant('Y', 'Yaba Freight')
@@ -92,8 +92,12 @@ const waitRow = async (id: string) => waitFor(() => expect(rowOf(id)).toBeTruthy
 
 const DUE = '2026-11-25T10:00:00Z'
 const STARTED = '2026-10-26T10:00:00Z'
-const SCHEDULED = { ...X, deletion_due_at: DUE }
-const PURGING = { ...X, deletion_due_at: DUE, deletion_purge_started_at: STARTED }
+const HOUR = 3_600_000
+const OPENS_LATER = new Date(Date.now() + 47 * HOUR).toISOString()
+const OPENS_PASSED = new Date(Date.now() - HOUR).toISOString()
+const WAITING = { ...X, deletion_due_at: DUE, deletion_purge_opens_at: OPENS_LATER }
+const SCHEDULED = { ...X, deletion_due_at: DUE, deletion_purge_opens_at: OPENS_PASSED }
+const PURGING = { ...X, deletion_due_at: DUE, deletion_purge_opens_at: OPENS_PASSED, deletion_purge_started_at: STARTED }
 const openX = async (t: StaffTenant = X, names = ['Ada One', 'Bola Two', 'Chi Three']) => {
   list.mockResolvedValue([t, Y, H])
   one.mockImplementation(async (id) => (id === 'X' ? detail(t, names) : detail(Y, ['Yemi Only'])))
@@ -376,12 +380,13 @@ describe('Console tenants wiring', () => {
   it('tenant detail: the actions follow the deletion state', async () => {
     const cases: [StaffTenant, string[], number][] = [
       [X, ['View jobs', 'Delete workspace'], 3],
+      [WAITING, ['View jobs', 'Cancel deletion'], 0],
       [SCHEDULED, ['View jobs', 'Cancel deletion', 'Purge now'], 0],
       [PURGING, ['View jobs'], 0],
     ]
     for (const [t, names, rows] of cases) {
       await openX(t)
-      expect(headerButtons(), t.deletion_due_at ?? 'unscheduled').toEqual(names)
+      expect(headerButtons(), `${t.deletion_due_at} ${t.deletion_purge_opens_at}`).toEqual(names)
       expect(screen.queryAllByRole('button', { name: 'Delete account' }), `${t.deletion_due_at} rows`).toHaveLength(rows)
       cleanup()
     }
@@ -392,6 +397,14 @@ describe('Console tenants wiring', () => {
     fireEvent.click(rowOf('X'))
     await screen.findByText('Ada One')
     expect(screen.getAllByRole('button', { name: 'Delete account' })).toHaveLength(1)
+  })
+
+  it('tenant detail: purge now appears when the staff wait ends, not before', async () => {
+    await openX({ ...SCHEDULED, deletion_purge_opens_at: new Date(Date.now() + 60_000).toISOString() })
+    expect(headerButtons()).toEqual(['View jobs', 'Cancel deletion'])
+    cleanup()
+    await openX({ ...SCHEDULED, deletion_purge_opens_at: new Date(Date.now() - 1000).toISOString() })
+    expect(headerButtons()).toEqual(['View jobs', 'Cancel deletion', 'Purge now'])
   })
 
   it('tenant detail: an unscheduled tenant says to delete the workspace first', async () => {
@@ -465,6 +478,20 @@ describe('Console tenants wiring', () => {
 
   it('a purge refused with 409 shows the server sentence, closes the modal and re-reads', async () => {
     const sentence = 'this workspace has no scheduled deletion; use Delete workspace first'
+    await openX(SCHEDULED)
+    purge.mockRejectedValueOnce(new ApiError('http', sentence, 409))
+    fireEvent.click(btn('Purge now'))
+    fireEvent.change(within(dialog()).getByLabelText('Workspace name'), { target: { value: 'Okafor & Partners' } })
+    typeReason('r')
+    const reads = one.mock.calls.length
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Purge now' }))
+    await screen.findByText(sentence)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(one.mock.calls.length).toBe(reads + 1))
+  })
+
+  it('a purge refused by the scheduling staff member shows the server sentence and re-reads', async () => {
+    const sentence = 'the staff member who scheduled this deletion cannot start its purge'
     await openX(SCHEDULED)
     purge.mockRejectedValueOnce(new ApiError('http', sentence, 409))
     fireEvent.click(btn('Purge now'))

@@ -50,6 +50,11 @@ paths:
 - Allow an author when no active admin or reviewer who is not an author can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Add the creator refusal's second sentence only when no other role holder and no other delegate who can decide and is not an author exist (`CreatorStanding.OtherDelegate`).
 - Let an author reject on the two axes.
+- Refuse an approve by a person who approved an earlier step of the invoice's open run, as a holder or a delegate. Run this refusal after the author refusal and before the second axis. Read it through `CreatorStandingTx` only. Refuse with `EarlierApproverRefusedReason`.
+- Allow an earlier approver when no other active admin or reviewer who reaches the client is neither an author nor an earlier approver of the run. Write `approved_as = repeat_approved` in the audit payload. Write `self_approved` when the author exception also holds.
+- Add `CreatorNoRoleHolderReason` to the earlier-approver refusal only when no such other approver holds the role or is a delegate who can decide.
+- Let an earlier approver reject on the two axes.
+- Refuse no write that adds an approver, also when the add makes an earlier approver refusable. The blocked step then warns through `holder.warn`.
 - Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is an active admin or reviewer who is a member of the live role or the run step's delegate (`DelegateMayDecide`), reaches the invoice's client, and passes the author rule (`TestCanSign_AgreesWithTheApprovePath`).
 - Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
 - Count an eligible delegate as a signer (`TestStranded_AnEligibleDelegateCountsAsADecider`). The role delete refusal and `CreatorStanding.OtherRoleHolder` count role holders only (`TestDeleteRole_RefusesWhileOnlyADelegateCanDecide`).

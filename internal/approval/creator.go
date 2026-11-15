@@ -12,10 +12,14 @@ const (
 	CreatorRefusedReason      = "You created this invoice, so another approver must approve it."
 	EditorRefusedReason       = "You changed this invoice, so another approver must approve it."
 	CreatorNoRoleHolderReason = "No other approver holds the role this step is waiting on. An admin must give one of them that role."
+
+	EarlierApproverRefusedReason = "You approved an earlier step of this invoice, so another approver must approve this step."
 )
 
+// ErrCreatorRefused: a person rule refuses the approve (author, or earlier approver of the run).
 var ErrCreatorRefused = errors.New("approval: the creator cannot approve their own invoice")
 
+// creatorRefusal carries the sentence of whichever person rule refused.
 type creatorRefusal struct{ reason string }
 
 func (e *creatorRefusal) Error() string { return ErrCreatorRefused.Error() }
@@ -46,23 +50,40 @@ type CreatorStanding struct {
 	OtherNewApprover, OtherNewRoleHolder, OtherNewDelegate bool
 }
 
-// RepeatApproved and ApprovedAs are red-test stubs; SECAUD-40-01 implements them.
-func (s CreatorStanding) RepeatApproved() bool { return false }
-func (s CreatorStanding) ApprovedAs() string   { return "" }
-
-// Refusal is the one rule: an author is refused when an approver who is not an author reaches the client.
+// Refusal is the person rung: an author is refused when an approver who is not an author reaches
+// the client; failing that, an earlier approver of the run is refused when a fresh approver reaches it.
 func (s CreatorStanding) Refusal() (reason string, refused bool) {
-	if !(s.IsCreator || s.IsEditor) || !s.OtherApprover {
-		return "", false
+	if (s.IsCreator || s.IsEditor) && s.OtherApprover {
+		first := EditorRefusedReason
+		if s.IsCreator {
+			first = CreatorRefusedReason
+		}
+		if !s.OtherRoleHolder && !s.OtherDelegate {
+			return first + " " + CreatorNoRoleHolderReason, true
+		}
+		return first, true
 	}
-	first := EditorRefusedReason
-	if s.IsCreator {
-		first = CreatorRefusedReason
+	if s.EarlierApprover && s.OtherNewApprover {
+		if !s.OtherNewRoleHolder && !s.OtherNewDelegate {
+			return EarlierApproverRefusedReason + " " + CreatorNoRoleHolderReason, true
+		}
+		return EarlierApproverRefusedReason, true
 	}
-	if !s.OtherRoleHolder && !s.OtherDelegate {
-		return first + " " + CreatorNoRoleHolderReason, true
+	return "", false
+}
+
+// RepeatApproved reports an earlier approver approving with no fresh approver on the client.
+func (s CreatorStanding) RepeatApproved() bool { return s.EarlierApprover && !s.OtherNewApprover }
+
+// ApprovedAs is the audit marker; self_approved wins.
+func (s CreatorStanding) ApprovedAs() string {
+	switch {
+	case s.SelfApproved():
+		return "self_approved"
+	case s.RepeatApproved():
+		return "repeat_approved"
 	}
-	return first, true
+	return "approver"
 }
 
 // SelfApproved reports an author approving with no other approver on the client.
@@ -84,14 +105,20 @@ func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT x.id::text, bool_or(x.creator), bool_or(NOT x.creator)
-		   FROM (SELECT h.invoice_id AS id, true AS creator
+		`SELECT x.id::text, bool_or(x.kind = 'c'), bool_or(x.kind = 'e'), bool_or(x.kind = 'a')
+		   FROM (SELECT h.invoice_id AS id, 'c' AS kind
 		           FROM invoice_status_history h
 		          WHERE h.invoice_id = ANY($1::uuid[]) AND h.from_status IS NULL AND h.actor = $2
 		         UNION ALL
-		         SELECT a.invoice_id, false
+		         SELECT a.invoice_id, 'e'
 		           FROM audit_log a
-		          WHERE a.invoice_id = ANY($1::uuid[]) AND a.event = 'invoice.updated' AND a.actor = $2) x
+		          WHERE a.invoice_id = ANY($1::uuid[]) AND a.event = 'invoice.updated' AND a.actor = $2
+		         UNION ALL
+		         -- ceiling: no run_id index on approval_decisions; add (tenant_id, run_id) above ~100k rows per tenant
+		         SELECT r.invoice_id, 'a'
+		           FROM approval_decisions d
+		           JOIN approval_runs r ON r.tenant_id = d.tenant_id AND r.id = d.run_id
+		          WHERE r.invoice_id = ANY($1::uuid[]) AND r.state = 'open' AND d.decision = 'approved' AND d.actor = $2) x
 		  GROUP BY x.id`,
 		ids, subject)
 	if err != nil {
@@ -99,12 +126,12 @@ func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []
 	}
 	for rows.Next() {
 		var id string
-		var creator, editor bool
-		if err := rows.Scan(&id, &creator, &editor); err != nil {
+		var creator, editor, earlier bool
+		if err := rows.Scan(&id, &creator, &editor, &earlier); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		out[id] = CreatorStanding{IsCreator: creator, IsEditor: editor}
+		out[id] = CreatorStanding{IsCreator: creator, IsEditor: editor, EarlierApprover: earlier}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -128,11 +155,17 @@ func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []
 	// (TestAxis2_ZeroWorkflowRoleMembersExistsPredicatesRemain).
 	rows, err = tx.Query(ctx,
 		`SELECT i.id::text, bool_or(wrm.user_id IS NOT NULL),
-		        bool_or(p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text))
+		        bool_or(p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text)),
+		        bool_or(NOT x.decided),
+		        bool_or(NOT x.decided AND wrm.user_id IS NOT NULL),
+		        bool_or(NOT x.decided AND p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text))
 		   FROM unnest($1::uuid[], $2::text[], $3::boolean[], $4::text[]) AS p(invoice_id, role_key, allow_delegation, delegate_user_id)
 		   JOIN invoices i ON i.id = p.invoice_id
 		   JOIN memberships m ON m.status = 'active' AND m.role IN ('admin', 'reviewer')
 		   JOIN tenants t ON t.id = m.tenant_id
+		   CROSS JOIN LATERAL (SELECT m.user_id::text IN (SELECT d.actor FROM approval_decisions d
+		                                                    JOIN approval_runs r ON r.tenant_id = d.tenant_id AND r.id = d.run_id
+		                                                   WHERE r.invoice_id = i.id AND r.state = 'open' AND d.decision = 'approved') AS decided) x
 		   LEFT JOIN membership_clients mc ON mc.user_id = m.user_id AND mc.entity_id = i.entity_id
 		   LEFT JOIN workflow_roles wr ON wr.key = p.role_key AND wr.deleted_at IS NULL
 		   LEFT JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id AND wrm.user_id = m.user_id
@@ -148,13 +181,14 @@ func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []
 	}
 	for rows.Next() {
 		var id string
-		var holder, delegate bool
-		if err := rows.Scan(&id, &holder, &delegate); err != nil {
+		var holder, delegate, newAny, newHolder, newDelegate bool
+		if err := rows.Scan(&id, &holder, &delegate, &newAny, &newHolder, &newDelegate); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		st := out[id]
 		st.OtherApprover, st.OtherRoleHolder, st.OtherDelegate = true, holder, delegate
+		st.OtherNewApprover, st.OtherNewRoleHolder, st.OtherNewDelegate = newAny, newHolder, newDelegate
 		out[id] = st
 	}
 	rows.Close()

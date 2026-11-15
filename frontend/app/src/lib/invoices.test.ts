@@ -239,6 +239,15 @@ describe('invoiceStatusStyle', () => {
     expect(distinct.size).toBe(statuses.length)
   })
 
+  it('invoiceStatusStyle names discarded', () => {
+    expect(invoiceStatusStyle('discarded')).toEqual({
+      bg: 'var(--status-muted-bg)',
+      border: 'var(--status-muted-border)',
+      text: 'var(--status-muted-text)',
+      label: 'DISCARDED',
+    })
+  })
+
   it('I2: an unrecognized status falls back to the muted style without throwing', () => {
     expect(() => invoiceStatusStyle('bogus' as InvoiceStatus)).not.toThrow()
 

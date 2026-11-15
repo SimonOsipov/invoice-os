@@ -197,6 +197,8 @@ type ExtractionDetail struct {
 	Document        ExtractionDocument     `json:"document"`
 	Pages           []ExtractionPage       `json:"pages"`
 	Fields          []ExtractionFieldState `json:"fields"`
+	// The newest completed import batch of the document the caller can see; NULL when none.
+	ImportBatchID *string `json:"import_batch_id"`
 }
 
 // emptyDetail is what every failure path returns: a nil slice marshals to JSON null and every
@@ -241,12 +243,15 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 	var storedAt time.Time
 	err := tx.QueryRow(ctx,
 		`SELECT j.id, j.document_id, j.state, j.failure_kind, j.document_type, j.ai_text_truncated,
-		        d.filename, d.declared_content_type, d.size_bytes, d.created_at
+		        d.filename, d.declared_content_type, d.size_bytes, d.created_at,
+		        (SELECT b.id FROM import_batches b
+		          WHERE b.document_id = j.document_id AND b.status = 'completed'
+		          ORDER BY b.created_at DESC, b.id DESC LIMIT 1)
 		   FROM extraction_jobs j
 		   JOIN documents d ON d.id = j.document_id
 		  WHERE j.id = $1`,
 		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind, &out.DocumentType, &out.AITextTruncated,
-		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt)
+		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt, &out.ImportBatchID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return emptyDetail(), ErrNotFound

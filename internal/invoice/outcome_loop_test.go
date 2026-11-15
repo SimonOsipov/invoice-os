@@ -622,7 +622,7 @@ func TestOutcomeLoop_AcceptedInvoiceIsATrueDeadEnd(t *testing.T) {
 		})
 		illegalCount++
 	}
-	if illegalCount != 6 {
-		t.Fatalf("illegal-target attempts = %d, want 6 (7 statuses minus the self-edge)", illegalCount)
+	if illegalCount != 7 {
+		t.Fatalf("illegal-target attempts = %d, want 7 (8 statuses minus the self-edge)", illegalCount)
 	}
 }

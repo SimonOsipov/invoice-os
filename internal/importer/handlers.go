@@ -606,6 +606,7 @@ type batchResponse struct {
 
 	RuleSetVersion *int      `json:"rule_set_version"`
 	CreatedAt      time.Time `json:"created_at"`
+	Undoable       bool      `json:"undoable"`
 }
 
 // GetHandler is GET /v1/imports/{id} (task-283): identity-first-401 -> a
@@ -666,7 +667,42 @@ func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *sl
 
 			RuleSetVersion: batch.RuleSetVersion,
 			CreatedAt:      batch.CreatedAt,
+			Undoable:       batch.Undoable,
 		})
+	}
+}
+
+type undoResponse struct {
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	DiscardedInvoices int    `json:"discarded_invoices"`
+}
+
+// UndoHandler is POST /v1/imports/{id}/undo: identity 401, uuid 400, then the store.
+func UndoHandler(undo func(ctx context.Context, id string) (UndoResult, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		id := r.PathValue("id")
+		if _, err := uuid.Parse(id); err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+		res, err := undo(r.Context(), id)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: undo batch", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, undoResponse{ID: res.ID, Status: "undone", DiscardedInvoices: res.DiscardedInvoices})
 	}
 }
 
@@ -934,6 +970,12 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrUndoForbidden):
+		return http.StatusForbidden, "only the uploader, an admin or a full-access member can undo an import"
+	case errors.Is(err, ErrNotUndoable):
+		return http.StatusConflict, "only a completed import can be undone"
+	case errors.Is(err, ErrImportSent):
+		return http.StatusConflict, "an invoice of this import was sent to the tax authority"
 	case errors.Is(err, ErrNotFound), errors.Is(err, invoice.ErrNotFound):
 		return http.StatusNotFound, "not found"
 	default:

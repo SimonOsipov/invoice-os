@@ -135,7 +135,7 @@ export async function getRollupHistory(authedFetch: AuthedFetch, base: string): 
 // lowercase InvoiceStatus (== the rollup's Counts keys); the human label is the key with
 // its first letter capitalized (Draft, Validated, …), and the segment colour comes from
 // DONUT_COLOR below — deliberately NOT the badge palette, see its comment.
-const CANONICAL_STATES: InvoiceStatus[] = [
+const CANONICAL_STATES: Array<keyof Counts> = [
   'draft',
   'validated',
   'queued',
@@ -163,6 +163,7 @@ const DONUT_COLOR: Record<InvoiceStatus, string> = {
   accepted: 'var(--status-green-text)',
   rejected: 'var(--status-red-text)',
   failed: 'var(--destructive)',
+  discarded: 'var(--status-muted-border)',
 }
 
 export function donutSegments(counts: Counts): DonutSeg[] {

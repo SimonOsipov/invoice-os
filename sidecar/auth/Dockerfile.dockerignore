@@ -4,3 +4,5 @@
 !go.sum
 !cmd/authsentry
 !internal/platform
+# Last match wins: keep after the re-includes so no env file enters the allowlisted trees.
+**/.env*

@@ -2,10 +2,9 @@
 // neither root ignore-file excludes, so every other service's build context
 // uploads its Python source, models config and fixtures.
 //
-// Lives here rather than internal/extraction: this scans two repo-root ignore
-// files that govern all fourteen services' build contexts, not extraction
-// package behavior -- internal/tools/{rlsgate,forcepushgate,stalerefs} are the
-// existing home for a CI hygiene gate with no single feature owner. No main.go:
+// Lives here rather than internal/extraction: these ignore files govern the
+// services' build contexts, not extraction package behavior --
+// internal/tools/{rlsgate,forcepushgate,stalerefs} are the existing home for a CI hygiene gate with no single feature owner. No main.go:
 // unlike those three, this needs no runtime arguments (PR json, git refs), so a
 // plain `go test ./...` reaches it with no extra ci.yml wiring.
 package dockerignoregate
@@ -15,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -85,11 +85,12 @@ func ignored(patterns []string, p string) bool {
 	return out
 }
 
-func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
-	root := repoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "frontend/blog/Dockerfile.dockerignore"))
+// ignorePatterns reads one ignore file's patterns, without comments or blanks.
+func ignorePatterns(t *testing.T, root, rel string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
-		t.Fatalf("read the blog ignore file: %v", err)
+		t.Fatalf("read %s: %v", rel, err)
 	}
 	var patterns []string
 	for _, l := range strings.Split(string(raw), "\n") {
@@ -97,6 +98,41 @@ func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
 			patterns = append(patterns, l)
 		}
 	}
+	return patterns
+}
+
+func TestIgnoreFilesDenyEnvFiles(t *testing.T) {
+	root := repoRoot(t)
+	// Enumerate rather than list: a new ignore file is covered without an edit.
+	// The test already needs git (repoRoot), so git ls-files adds no dependency.
+	out, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "*dockerignore").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	files := strings.Fields(string(out))
+	// Floor: a broken enumeration must not pass vacuously.
+	if !slices.Contains(files, ".dockerignore") || len(files) < 5 {
+		t.Fatalf("enumerated ignore files %v; want .dockerignore and at least 5 files", files)
+	}
+	for _, rel := range files {
+		t.Run(rel, func(t *testing.T) {
+			patterns := ignorePatterns(t, root, rel)
+			if !ignored(patterns, ".env") {
+				t.Fatalf("control: .env is not ignored by %s; the matcher reached nothing", rel)
+			}
+			// The last three sit inside trees an allowlist `!` line re-includes.
+			for _, p := range []string{".env.local", ".env.production", "cmd/gateway/.env.local", "frontend/app/.env.local", "sidecar/docling/.env.local", "internal/platform/.env.local", "cmd/blog/.env.local", "cmd/authsentry/.env.local"} {
+				if !ignored(patterns, p) {
+					t.Errorf("%s is not ignored; it would enter the build context", p)
+				}
+			}
+		})
+	}
+}
+
+func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
+	root := repoRoot(t)
+	patterns := ignorePatterns(t, root, "frontend/blog/Dockerfile.dockerignore")
 
 	// Control: the matcher denies a path the file names outright.
 	if !ignored(patterns, ".claude/rules/blog.md") {

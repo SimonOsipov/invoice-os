@@ -1090,6 +1090,25 @@ func TestRLS_CustomersClientScopeDownThenUpRoundTrips(t *testing.T) {
 			t.Errorf("tenant_isolation USING after the Up = %s, want it to name %s", q, want)
 		}
 	}
+	// The Up re-applies FORCE after its NO FORCE backfill window, and sets both column definitions.
+	var forced bool
+	if err := tx.QueryRow(ctx, `SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.customers'::regclass`).Scan(&forced); err != nil || !forced {
+		t.Errorf("customers FORCE ROW LEVEL SECURITY after the Up = %v (err %v), want true", forced, err)
+	}
+	for col, want := range map[string]string{
+		"created_by": "uuid|YES|(NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid",
+		"client_ids": "_uuid|NO|'{}'::uuid[]",
+	} {
+		var got string
+		if err := tx.QueryRow(ctx,
+			`SELECT udt_name || '|' || is_nullable || '|' || coalesce(column_default, '') FROM information_schema.columns
+			  WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = $1`, col).Scan(&got); err != nil {
+			t.Fatalf("read %s after the Up: %v", col, err)
+		}
+		if got != want {
+			t.Errorf("customers.%s (type|nullable|default) after the Up = %s, want %s", col, got, want)
+		}
+	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
 		t.Fatalf("set_config: %v", err)
 	}

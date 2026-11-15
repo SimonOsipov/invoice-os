@@ -637,20 +637,28 @@ func csSubjectOf(ctx context.Context) string {
 	return id.Subject
 }
 
+// N is shared by A and B before A's invoice is edited: a refill of N, then a move to M, must keep both links.
 func TestClientScope_ALinkOutlivesTheInvoiceThatMadeIt(t *testing.T) {
 	f := newCSFixture(t, "CS link outlives invoice")
 	const n, m = "12345678-0607", "12345678-0608"
 	member := csMember(t, f.super, f.tenant, "reviewer", f.entA)
 	inv := csFileFor(t, f, member, f.entA, "CS-OUT-1", strPtr(n), strPtr("N Ltd"), nil)
+	csFileFor(t, f, f.admin, f.entB, "CS-OUT-B1", strPtr(n), strPtr("N Ltd"), nil)
+	csWantDirLinks(t, f.super, f.tenant, n, f.entA, f.entB)
+
+	if _, err := f.store.Edit(member, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("N Ltd 2")}}); err != nil {
+		t.Fatalf("Edit name: %v", err)
+	}
+	csWantDirLinks(t, f.super, f.tenant, n, f.entA, f.entB)
 
 	if _, err := f.store.Edit(member, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerTIN: strPtr(m), BuyerName: strPtr("M Ltd")}}); err != nil {
-		t.Fatalf("Edit: %v", err)
+		t.Fatalf("Edit TIN: %v", err)
 	}
 
 	got := csListedTINs(t, f, member)
 	if !slices.Contains(got, n) || !slices.Contains(got, m) {
 		t.Errorf("member lists %v, want both %s and %s", got, n, m)
 	}
-	csWantDirLinks(t, f.super, f.tenant, n, f.entA)
+	csWantDirLinks(t, f.super, f.tenant, n, f.entA, f.entB)
 	csWantDirLinks(t, f.super, f.tenant, m, f.entA)
 }

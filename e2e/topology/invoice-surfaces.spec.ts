@@ -22,6 +22,7 @@ import { test, expect, type Locator, type Page, type Request, type Response, typ
 import {
   login,
   createEntity,
+  createImportBatch,
   createInvoice,
   validateInvoice,
   failedByStaffCancel,
@@ -53,6 +54,7 @@ import { buildMixedCsv, buildPerfCsv, PR_LANE_MAPPING, steerExplainMarker } from
 import { setExactMapping } from './importWizardShared'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
+  assertControlFits,
   assertFillsColumn,
   assertPageDoesNotScrollSideways,
   assertSameHeight,
@@ -7638,6 +7640,33 @@ test('create surface: the NRS sections and line sub-rows fit at every wide width
       }
     }
   }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('UN-03 invoice detail: the undo button and its arm step fit the action column, and confirming discards the invoice', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `UN-03 ${Date.now()}`, tin: freshTin() })
+  const batchId = await createImportBatch(token, entity.id, `INV-UN03-${Date.now()}`)
+  const [inv] = (await listInvoices(token, { import_batch_id: batchId })).invoices
+  expect(inv, 'the seeded import lists its invoice').toBeDefined()
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
+  const actions = page.getByTestId('invoice-actions')
+  await expect(actions).toBeVisible({ timeout: 60_000 })
+  const submit = page.getByTestId('detail-submit')
+
+  await assertControlFits(page, page.getByTestId('undo-import'), actions, [submit], null, 'undo-import')
+  await page.getByTestId('undo-import').click()
+  for (const id of ['undo-import-cancel', 'undo-import-confirm']) {
+    await assertControlFits(page, page.getByTestId(id), actions, [submit], null, id)
+  }
+
+  await page.getByTestId('undo-import-confirm').click()
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DISCARDED')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

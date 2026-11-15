@@ -128,6 +128,7 @@ export type InvoiceStatus =
   | 'accepted'
   | 'rejected'
   | 'failed'
+  | 'discarded'
 
 // One line_items row (invoice.go:56-64, LineItem). Optional on InvoiceRecord: Store.List
 // leaves LineItems nil ([D7]/[D8]), so list items never carry this key, while Store.Get
@@ -944,6 +945,7 @@ const INVOICE_STATUS_STYLE: Partial<Record<InvoiceStatus, StatusStyle>> = {
   accepted: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ACCEPTED' },
   rejected: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'REJECTED' },
   failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' },
+  discarded: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'DISCARDED' },
 }
 
 // Out-of-enum values reach this at runtime (JSON.parse'd server data, no enum

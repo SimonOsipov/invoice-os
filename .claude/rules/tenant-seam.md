@@ -38,5 +38,5 @@ paths:
 - Write `app.entity_scope` in the membership statement of the seam batch: `*` for an admin, an "All clients" member or an in-house tenant, else the member's client ids.
 - In product code, write `app.entity_scope` only in the seam. An unset scope means every client.
 - Write `app.current_user_id` in the membership statement of the seam batch, from `memberships.user_id`. In product code, write it only in the seam.
-- Read a `documents` row in a member's request through `docSvc.OpenLinked` or `document.ReadableByScope`. A limited member reads a document they uploaded (any `document_uploaders` row), an uncited document, one bound to a client they see, or one cited by a visible invoice or batch.
-- Test document citations only through `public.document_link_state`. It restores `app.entity_scope` after its own queries.
+- Read a `documents` row in a member's request through `docSvc.OpenLinked` or `document.ReadableByScope`. A limited member reads a document they uploaded (any `document_uploaders` row), an uncited document, one bound to a client they see, or one with a live citation by a visible invoice or batch.
+- Test document citations only through `public.document_link_state`. It restores `app.entity_scope` after its own queries. It counts live citations only: no `failed` or `undone` batch, no `discarded` invoice.

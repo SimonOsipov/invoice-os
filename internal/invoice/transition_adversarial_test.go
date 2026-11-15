@@ -26,11 +26,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// allStatuses is the full 7-state universe for the exhaustive matrix below,
+// allStatuses is the full 8-state universe for the exhaustive matrix below,
 // listed independently of legalTransitions' map keys in store.go.
 var allStatuses = []Status{
 	StatusDraft, StatusValidated, StatusQueued, StatusSubmitted,
-	StatusAccepted, StatusRejected, StatusFailed,
+	StatusAccepted, StatusRejected, StatusFailed, StatusDiscarded,
 }
 
 // wantLegalEdge is a HARD-CODED, independent restatement of the story's
@@ -79,12 +79,12 @@ func seedInvoiceAtStatus(t *testing.T, super *pgxpool.Pool, tenantID, entityID, 
 	return id
 }
 
-// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable drives all 7x7 = 49
+// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable drives all 8x8 = 64
 // ordered (from,target) pairs through the REAL Store.Transition and asserts
-// the outcome class against the hard-coded wantLegalEdge oracle above: the 8
+// the outcome class against the hard-coded wantLegalEdge oracle above: the 11
 // legal pairs must succeed (status=target, +1 history row, +1
-// invoice.transitioned audit row); the 7 self-pairs must resolve to
-// ErrRedundantTransition; the remaining 34 must resolve to
+// invoice.transitioned audit row); the 8 self-pairs must resolve to
+// ErrRedundantTransition; the remaining 45 must resolve to
 // ErrIllegalTransition -- the non-success classes leaving
 // status/history/audit completely unchanged. This pins legalTransitions'
 // shape completely: a future edit that silently added or dropped ANY edge
@@ -168,11 +168,11 @@ func TestTransition_ExhaustiveMatrixLocksLegalEdgeTable(t *testing.T) {
 	if legalCount != 11 {
 		t.Errorf("classified as legal = %d, want 11", legalCount)
 	}
-	if redundantCount != 7 {
-		t.Errorf("classified as redundant (self-edge) = %d, want 7", redundantCount)
+	if redundantCount != 8 {
+		t.Errorf("classified as redundant (self-edge) = %d, want 8", redundantCount)
 	}
-	if illegalCount != 31 {
-		t.Errorf("classified as illegal = %d, want 31", illegalCount)
+	if illegalCount != 45 {
+		t.Errorf("classified as illegal = %d, want 45", illegalCount)
 	}
 }
 
@@ -231,8 +231,8 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 		}
 	}
 
-	if attempts != 12 {
-		t.Fatalf("attempts = %d, want 12 (2 terminals x 6 non-self targets)", attempts)
+	if attempts != 14 {
+		t.Fatalf("attempts = %d, want 14 (2 terminals x 7 non-self targets)", attempts)
 	}
 	if illegalCount != attempts {
 		t.Errorf("illegal-classified = %d, want all %d attempts", illegalCount, attempts)

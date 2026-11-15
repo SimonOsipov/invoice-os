@@ -159,6 +159,12 @@ func TestDocker_RunArgs(t *testing.T) {
 		"sidecar/docling/tests/data/x.json":  "/app/tests/data/x.json",
 		"sidecar/docling/requirements.lock":  "",
 		".github/workflows/ci.yml":           "",
+		// build-only files: a mount cannot deliver them
+		"sidecar/docling/Dockerfile":              "",
+		"sidecar/docling/Dockerfile.dockerignore": "",
+		"sidecar/docling/requirements.txt":        "",
+		"sidecar/docling/requirements-dev.txt":    "",
+		"sidecar/docling/torch.lock":              "",
 	}
 	for file, mount := range files {
 		f.calls = nil

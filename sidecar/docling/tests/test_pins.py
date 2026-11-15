@@ -137,12 +137,20 @@ _PYPI = "https://pypi.org/simple"
 _TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
+def _code(text: str) -> str:
+    """text without comment lines, so a comment can neither trip nor satisfy a scan."""
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+
+_PIP_INSTALL_RE = re.compile(r"\bpip[\d.]*\s+install\b", re.IGNORECASE)
+
+
 def _install_segments(text: str) -> list[str]:
     """Each `pip install` segment of a RUN: joins `\\`-continued lines, splits on `&&` and `;`."""
     segments = []
     for line in text.replace("\\\n", " ").splitlines():
         if line.lstrip().upper().startswith("RUN "):
-            segments += [s.strip() for s in re.split(r"&&|;", line) if "pip install" in s]
+            segments += [s.strip() for s in re.split(r"&&|;", line) if _PIP_INSTALL_RE.search(s)]
     return segments
 
 
@@ -160,10 +168,10 @@ def _pip_install_problems(text: str) -> list[str]:
 
 
 def test_no_extra_index_url_in_requirements_or_dockerfile():
-    reqs = REQUIREMENTS.read_text()
-    docker = DOCKERFILE.read_text()
+    reqs = _code(REQUIREMENTS.read_text()).lower()
+    docker = _code(DOCKERFILE.read_text()).lower()
     assert "==" in reqs, f"{REQUIREMENTS}: no == line -- the scan reached nothing"
-    assert "FROM" in docker, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"
+    assert "from " in docker, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"
     assert "--extra-index-url" not in reqs, f"{REQUIREMENTS} carries --extra-index-url"
     assert "--extra-index-url" not in docker, f"{DOCKERFILE} carries --extra-index-url"
 
@@ -182,17 +190,21 @@ def test_every_dockerfile_pip_install_is_hashed_no_deps_and_single_index():
 
 
 def test_dockerfile_never_calls_download_models():
-    text = DOCKERFILE.read_text()
-    assert "fetch_docling_models.py" in text, f"{DOCKERFILE}: control needle missing"
-    assert "download_models" not in text, (
+    text = _code(DOCKERFILE.read_text())
+    assert re.search(r"^RUN python3 fetch_docling_models\.py", text, re.MULTILINE), (
+        f"{DOCKERFILE}: no RUN of fetch_docling_models.py -- the scan reached nothing"
+    )
+    assert "download_models" not in text.lower(), (
         f"{DOCKERFILE} calls download_models, which takes no revision; use fetch_docling_models.py"
     )
 
 
 def test_dockerfile_never_uninstalls_a_package():
-    text = DOCKERFILE.read_text()
+    text = _code(DOCKERFILE.read_text())
     assert "FROM" in text, f"{DOCKERFILE}: no FROM line -- the scan reached nothing"
-    assert "pip uninstall" not in text, f"{DOCKERFILE} runs pip uninstall"
+    assert not re.search(r"\bpip[\d.]*\s+uninstall\b", text, re.IGNORECASE), (
+        f"{DOCKERFILE} runs pip uninstall"
+    )
 
 
 def _lock_blocks(path) -> list[tuple[str, list[str]]]:

@@ -44,7 +44,7 @@ func TestArm_EmptyChosenLaneArmsClosedApprovedRun(t *testing.T) {
 	activateApprovalPolicyVersion(t, super, versionID)
 
 	belowInvoice := seedInvoice(t, super, tenantID, entityID, "empty-lane-below")
-	setInvoiceTotal(t, super, belowInvoice, "100000000.00")
+	setInvoiceMoney(t, super, belowInvoice, ptr("NGN"), ptr("100000000.00"))
 
 	res, err := arm(t, app, tenantID, belowInvoice, "fp-empty-lane-below", "test-actor")
 	if err != nil {
@@ -196,7 +196,7 @@ func TestArm_AuditFailureRollsBackTheWholeArm(t *testing.T) {
 
 // --- QA: inherited constraint 1 — a NaN total must not roll back the arm ------------
 
-// TestArm_NaNTotalArmsSuccessfullyFoldedToZero pins the ArmTx step-2 constraint from
+// TestArm_NaNTotalArmsOnTheReviewLane pins the ArmTx step-2 constraint from
 // task-480's Implementation Notes: total is read as total::text into a *string and
 // parsed with decimal.NewFromString, mapping unparseable to nil — because
 // decimal.Decimal.Scan errors on the literal "NaN", and Postgres accepts 'NaN'::numeric
@@ -206,12 +206,12 @@ func TestArm_AuditFailureRollsBackTheWholeArm(t *testing.T) {
 // directly via SQL, bypassing the app-level total-non-negative rule that blocks NaN
 // from reaching ArmTx through the normal invoice flow today (a runtime kill switch,
 // not a schema guarantee — invoices.total carries no CHECK).
-func TestArm_NaNTotalArmsSuccessfullyFoldedToZero(t *testing.T) {
+func TestArm_NaNTotalArmsOnTheReviewLane(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-06 arm-nan-total")
 	entityID := seedBusinessEntity(t, super, tenantID, "NaN Total Corp")
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "nan-total-invoice-1")
-	setInvoiceTotal(t, super, invoiceID, "NaN")
+	setInvoiceMoney(t, super, invoiceID, ptr("NGN"), ptr("NaN"))
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "NaN-total threshold policy")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -237,26 +237,25 @@ func TestArm_NaNTotalArmsSuccessfullyFoldedToZero(t *testing.T) {
 	}
 	run := oneApprovalRun(t, super, invoiceID)
 	steps := runStepsOf(t, super, run.ID)
-	if len(steps) != 1 || steps[0].Kind != "notify" {
-		t.Fatalf("steps = %+v, want one notify step — NaN folds to 0, below the ₦500m threshold, so the else lane is chosen", steps)
+	if len(steps) != 1 || steps[0].Kind != "approval" {
+		t.Fatalf("steps = %+v, want one approval step — a NaN total takes the review lane (then)", steps)
 	}
-	if !res.Closed || run.State != "approved" {
-		t.Errorf("run.State = %q, Closed = %v, want approved/true — a notify-only chosen lane closes the run", run.State, res.Closed)
+	if res.Closed || run.State != "open" {
+		t.Errorf("run.State = %q, Closed = %v, want open/false — the review lane keeps a pending approval", run.State, res.Closed)
 	}
 }
 
 // --- QA: a NULL invoice total, distinct from NaN, also folds to 0 --------------------
 
-// TestArm_NullInvoiceTotalFoldsToZero: seedInvoice leaves total NULL (no default, no
-// CHECK). Against the SAME threshold policy as the NaN spec, a NULL total must select
-// the else lane exactly like NaN does — proving the *string nil path (no row parse
-// attempted at all) and the unparseable-string path both fold to absent/0, not two
-// different behaviours.
-func TestArm_NullInvoiceTotalFoldsToZero(t *testing.T) {
+// TestArm_NullInvoiceTotalArmsOnTheReviewLane: seedInvoice leaves total NULL (no default,
+// no CHECK). Against the SAME threshold policy as the NaN spec, a NULL total must take the
+// review lane exactly like NaN does — the nil path and the unparseable path agree.
+func TestArm_NullInvoiceTotalArmsOnTheReviewLane(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-06 arm-null-total")
 	entityID := seedBusinessEntity(t, super, tenantID, "Null Total Corp")
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "null-total-invoice-1") // total left NULL
+	setInvoiceMoney(t, super, invoiceID, ptr("NGN"), nil)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Null-total threshold policy")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -281,8 +280,8 @@ func TestArm_NullInvoiceTotalFoldsToZero(t *testing.T) {
 		t.Fatalf("Steps = %d, want 1", res.Steps)
 	}
 	steps := runStepsOf(t, super, oneApprovalRun(t, super, invoiceID).ID)
-	if len(steps) != 1 || steps[0].Kind != "notify" {
-		t.Fatalf("steps = %+v, want one notify step — a NULL total folds to 0, below the ₦500m threshold", steps)
+	if len(steps) != 1 || steps[0].Kind != "approval" {
+		t.Fatalf("steps = %+v, want one approval step — a NULL total takes the review lane (then)", steps)
 	}
 }
 
@@ -525,7 +524,7 @@ func TestArm_OrdDensityAcrossMixedKinds(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-06 arm-ord-density-mixed-kinds")
 	entityID := seedBusinessEntity(t, super, tenantID, "Ord Density Corp")
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "ord-density-invoice-1")
-	setInvoiceTotal(t, super, invoiceID, "750000000.00") // above the 500m threshold below
+	setInvoiceMoney(t, super, invoiceID, ptr("NGN"), ptr("750000000.00")) // above the 500m threshold below
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Ord density mixed-kinds policy")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)

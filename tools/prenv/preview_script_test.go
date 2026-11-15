@@ -109,6 +109,7 @@ done
 if [ -n "$out" ]; then
   cp "$D/curl-body-$ep" "$out" 2>/dev/null || echo '{}' > "$out"
 fi
+if [ -s "$D/curl-exit-$ep" ]; then exit "$(cat "$D/curl-exit-$ep")"; fi
 if [ -s "$D/curl-seq-$ep" ]; then
   head -n 1 "$D/curl-seq-$ep" | tr -d '\n'
   sed -i.bak 1d "$D/curl-seq-$ep"
@@ -2267,6 +2268,23 @@ func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) 
 				t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
 			}
 		})
+	}
+}
+
+func TestPreviewInvariantsNameTheAccountWhenCurlFails(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"pr-7-gateway-token"}, nlGoodSvcs(), map[string]string{
+		"curl-exit-" + nightlyIdentityEP(runNightlySA): "7",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	})
+	if r.code != 1 {
+		t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "7")) != 1 {
+		t.Errorf("want one ::error:: line naming run-nightly and curl exit 7:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run after the curl failure:\n%s\n%s", r.stdout, r.stderr)
 	}
 }
 

@@ -599,7 +599,7 @@ cmd_budget() {
 
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
+  local bad=0 rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
   [ "$closed" = true ] && mode='(enforced)'
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
@@ -659,10 +659,16 @@ cmd_invariants() {
     fi
   done < <(grep '^nightly-' <<<"$names" || true)
   for email in run-nightly@ascomply-preview.iam.gserviceaccount.com deploy-nightly@ascomply-preview.iam.gserviceaccount.com; do
+    rc=0
     code=$(curl -sS -o "$RUNNER_TEMP/sa-held.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" \
       -H 'Content-Type: application/json' \
       -d '{"permissions":["iam.serviceAccounts.actAs","iam.serviceAccounts.getAccessToken"]}' \
-      "https://iam.googleapis.com/v1/projects/$PROJECT/serviceAccounts/$email:testIamPermissions")
+      "https://iam.googleapis.com/v1/projects/$PROJECT/serviceAccounts/$email:testIamPermissions") || rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "::error::could not check $email: curl exited $rc."
+      bad=1
+      continue
+    fi
     [ "$code" = 200 ] || die "testIamPermissions on $email answered HTTP $code"
     held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/sa-held.json")
     if [ -n "$held" ]; then

@@ -168,6 +168,20 @@ func (w *signWorld) approvers() []string {
 	return out
 }
 
+// earlierApprovedBy gives u an approved decision on a satisfied step above the pending one.
+func (w *signWorld) earlierApprovedBy(u string) {
+	w.t.Helper()
+	ctx := context.Background()
+	var stepID string
+	if err := w.super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, state, workflow_role_key)
+		 SELECT $1, $2, max(ord) + 1, 'approval', 'satisfied', $3 FROM approval_run_steps WHERE run_id = $2
+		 RETURNING id`, w.f.tenantID, w.f.runID, w.key).Scan(&stepID); err != nil {
+		w.t.Fatalf("seed satisfied step: %v", err)
+	}
+	seedApprovalDecision(w.t, w.super, w.f.tenantID, w.f.runID, stepID, "approved", u, nil)
+}
+
 // signRow seeds one world and names the reason it must read.
 type signRow struct {
 	name string
@@ -291,6 +305,52 @@ var signAuthorRows = []signRow{
 	}},
 }
 
+var signEarlierApproverRows = []signRow{
+	{"earlier approver alone in the role, a new reviewer outside the role reaches A", "earlier approver only", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "reviewer"})
+	}},
+	{"earlier approver and a new role member", "", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.inRole(memberSpec{role: "reviewer"})
+	}},
+	{"earlier approver is the named delegate, a new reviewer reaches A", "earlier approver only", func(w *signWorld) {
+		a := w.add(memberSpec{role: "reviewer"})
+		w.earlierApprovedBy(a)
+		w.add(memberSpec{role: "reviewer"})
+		w.delegation(true, &a)
+	}},
+	{"creator in role and an earlier approver in role, nobody else", "", func(w *signWorld) {
+		w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+	}},
+	{"earlier approver is the only approver", "", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "preparer"})
+		w.add(memberSpec{role: "reviewer", status: "suspended"})
+	}},
+	{"two earlier deciders in the role, a fresh reviewer outside it reaches", "earlier approver only", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "reviewer"})
+	}},
+	{"two earlier deciders in the role, nobody else", "", func(w *signWorld) {
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.earlierApprovedBy(w.inRole(memberSpec{role: "reviewer"}))
+	}},
+}
+
+// earlierApproverSigners indexes w.users: who decideTx lets approve, per earlier-approver row.
+var earlierApproverSigners = map[string][]int{
+	"earlier approver alone in the role, a new reviewer outside the role reaches A": {},
+	"earlier approver and a new role member":                                        {1},
+	"earlier approver is the named delegate, a new reviewer reaches A":              {},
+	"creator in role and an earlier approver in role, nobody else":                  {1},
+	"earlier approver is the only approver":                                         {0},
+	"two earlier deciders in the role, a fresh reviewer outside it reaches":         {},
+	"two earlier deciders in the role, nobody else":                                 {0, 1},
+}
+
 // signDelegateRows are the delegate rows D1-D13 of the agreement table. "anyone" is allow with no named user.
 var signDelegateRows = []signRow{
 	{"D1 role empty, named reviewer outside the role", "", func(w *signWorld) {
@@ -361,7 +421,7 @@ var signDelegateRows = []signRow{
 // exactly when some seeded candidate's decideTx approve succeeds.
 func TestCanSign_AgreesWithTheApprovePath(t *testing.T) {
 	super, app := dbTestPools(t)
-	for _, set := range [][]signRow{signRows, signCreatorRows, signAuthorRows, signDelegateRows} {
+	for _, set := range [][]signRow{signRows, signCreatorRows, signAuthorRows, signDelegateRows, signEarlierApproverRows} {
 		for _, r := range set {
 			t.Run(r.name, func(t *testing.T) {
 				w := newSignWorld(t, super, app, "APSC-14 agree "+r.name)
@@ -375,6 +435,18 @@ func TestCanSign_AgreesWithTheApprovePath(t *testing.T) {
 				}
 				if r.want != "" && len(got) != 0 {
 					t.Errorf("reason is %q but %d candidates approve through decideTx", r.want, len(got))
+				}
+				if idx, ok := earlierApproverSigners[r.name]; ok {
+					want := []string{}
+					for _, i := range idx {
+						want = append(want, w.users[i])
+					}
+					if got == nil {
+						got = []string{}
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("approvers through decideTx = %v, want %v", got, want)
+					}
 				}
 			})
 		}
@@ -710,10 +782,12 @@ func TestCanSign_SubjectSignsMatchesTheApprovePath(t *testing.T) {
 	cases := []struct {
 		prefix  string
 		signers int
-	}{{"D1 ", 1}, {"D6 ", 0}, {"D7 ", 1}, {"D8 ", 0}, {"D12 ", 1}}
+	}{{"D1 ", 1}, {"D6 ", 0}, {"D7 ", 1}, {"D8 ", 0}, {"D12 ", 1},
+		{"earlier approver alone", 0}, {"earlier approver and a new", 1}, {"creator in role and an earlier", 1},
+		{"two earlier deciders in the role, nobody", 2}}
 	for _, c := range cases {
 		var row signRow
-		for _, r := range signDelegateRows {
+		for _, r := range append(append([]signRow{}, signDelegateRows...), signEarlierApproverRows...) {
 			if strings.HasPrefix(r.name, c.prefix) {
 				row = r
 			}
@@ -753,4 +827,43 @@ func TestCanSign_SubjectSignsMatchesTheApprovePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A decision on another invoice's run of the same tenant makes no earlier approver here.
+func TestCanSign_AnotherInvoicesApprovalDoesNotMakeAnEarlierApprover(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newSignWorld(t, super, app, "SECAUD-40 other invoice")
+	a := w.inRole(memberSpec{role: "reviewer"})
+	w.add(memberSpec{role: "reviewer"}) // a new reviewer outside the role reaches A
+	i2 := secondValidatedInvoice(t, super, app, w.f, "SECAUD-40 other invoice I2")
+	var run2, step2 string
+	if err := super.QueryRow(context.Background(),
+		`SELECT r.id, s.id FROM approval_runs r JOIN approval_run_steps s ON s.run_id = r.id
+		  WHERE r.invoice_id = $1 AND s.ord = 0`, i2).Scan(&run2, &step2); err != nil {
+		t.Fatalf("read I2 run: %v", err)
+	}
+	seedApprovalDecision(t, super, w.f.tenantID, run2, step2, "approved", a, nil)
+
+	wantReasons(t, readReasons(t, app, w.f.tenantID, []SignerProbe{w.probe()}), "")
+	if got := w.approvers(); len(got) != 1 || got[0] != a {
+		t.Errorf("approvers through decideTx = %v, want [%s]", got, a)
+	}
+}
+
+// The FK forbids a cross-tenant decision row; tenant 2's own row by the same user must not reach tenant 1's probe.
+func TestCanSign_AnotherTenantsDecisionNeverCounts(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	pinned := newSignWorld(t, super, app, "SECAUD-40 pin")
+	a := pinned.inRole(memberSpec{role: "reviewer"})
+	pinned.add(memberSpec{role: "reviewer"})
+	foreign := newSignWorld(t, super, app, "SECAUD-40 pin foreign")
+	seedApprovalDecision(t, super, foreign.f.tenantID, foreign.f.runID, foreign.f.stepID, "approved", a, nil)
+
+	control := newSignWorld(t, super, app, "SECAUD-40 pin control")
+	control.inRole(memberSpec{role: "reviewer"})
+	control.add(memberSpec{role: "reviewer"})
+
+	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{control.probe()}), "")
+	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{pinned.probe()}), "")
 }

@@ -153,6 +153,16 @@ func TestStranded_ListsAnyPendingApprovalStepAndFlagsTheCurrentOne(t *testing.T)
 		step(0, "approval", "pending", "dead-b"), step(1, "approval", "pending", "empty"))
 	d, _ := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-D", f.versionID,
 		step(0, "notify", "pending", "dead-b"), step(1, "approval", "pending", "dead-a"))
+	// E: A approved step 0 and holds step 2, B (fresh) holds only the current step 1; the earlier-approver terms stop at step 1.
+	ek0 := seedWorkflowRole(t, f.super, f.tenantID, "e-k0", "EK0")
+	ek1 := seedWorkflowRole(t, f.super, f.tenantID, "e-k1", "EK1")
+	ek2 := seedWorkflowRole(t, f.super, f.tenantID, "e-k2", "EK2")
+	ea := memberIn(t, f, ek0, memberSpec{role: "reviewer"})
+	staffWorkflowRole(t, f.super, f.tenantID, ek2, ea, 0)
+	memberIn(t, f, ek1, memberSpec{role: "reviewer"})
+	_, eRun := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-E", f.versionID,
+		step(0, "approval", "satisfied", "e-k0"), step(1, "approval", "pending", "e-k1"), step(2, "approval", "pending", "e-k2"))
+	seedApprovalDecision(t, f.super, f.tenantID, eRun, oneApprovalStep(t, f.super, eRun, 0), "approved", ea, nil)
 
 	rows := strandedFor(t, f.app, f.tenantID)
 	if len(rows) != 4 {
@@ -300,6 +310,24 @@ func TestStranded_ListsACreatorOnlyRun(t *testing.T) {
 	rows := strandedFor(t, f.app, f.tenantID)
 	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedCreatorOnly || rows[0].Blocks != BlocksNow {
 		t.Fatalf("rows = %+v, want one creator only row blocking now", rows)
+	}
+}
+
+func TestStranded_ListsAnEarlierApproverOnlyRun(t *testing.T) {
+	f := newRunFixture(t, "SECAUD-40 stranded earlier approver")
+	k0 := seedWorkflowRole(t, f.super, f.tenantID, "k0", "K0")
+	k1 := seedWorkflowRole(t, f.super, f.tenantID, "k1", "K1")
+	a := memberIn(t, f, k0, memberSpec{role: "reviewer"})
+	staffWorkflowRole(t, f.super, f.tenantID, k1, a, 0)
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // reaches the client, holds no role
+	inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("k0")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("k1")})
+	seedApprovalDecision(t, f.super, f.tenantID, run, oneApprovalStep(t, f.super, run, 0), "approved", a, nil)
+
+	rows := strandedFor(t, f.app, f.tenantID)
+	if len(rows) != 1 || rows[0].InvoiceID != inv || rows[0].Reason != StrandedDeciderOnly || rows[0].Blocks != BlocksNow {
+		t.Fatalf("rows = %+v, want one earlier approver only row blocking now", rows)
 	}
 }
 

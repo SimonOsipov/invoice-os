@@ -156,7 +156,7 @@ func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...s
 	writeShim(t, filepath.Join(shims, "sleep"), "echo \"sleep $*\" >> '"+dir+"/order'\n") // a retry wait costs no time, and is logged
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NIGHTLY_KEYS_CLOSED=") }), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
 	stdout, stderr, err := runToFiles(t, cmd, false)
 	r := previewRun{dir: dir, stdout: stdout, stderr: stderr}
 	if ee, ok := err.(*exec.ExitError); ok {

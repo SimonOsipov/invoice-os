@@ -27,7 +27,7 @@
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
 #   preview.sh cap <pr|nightly>           print open=<other PR previews> and full=true|false (a new PR is full at 2, the nightly at 3)
-#   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images
+#   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images or reach the nightly's keys
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
 
@@ -599,7 +599,8 @@ cmd_budget() {
 
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 names envs held token code perms
+  local bad=0 names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
+  [ "$closed" = true ] && mode='(enforced)'
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
     echo "::error::ascomply-preview holds an OpenRouter or Sentry secret (listed above); only nightly-openrouter-api-key is allowed."
@@ -644,6 +645,31 @@ cmd_invariants() {
     echo "::error::the preview deployer can write production images: $held on $PROD_IMAGES."
     bad=1
   fi
+  # A nightly-* secret must be unreadable to the preview deployer; PERMISSION_DENIED is the only pass.
+  while read -r n; do
+    if gcloud secrets versions access latest --secret "$n" --project "$PROJECT" </dev/null >/dev/null 2>"$RUNNER_TEMP/nightly-read.err"; then
+      if [ "$closed" = true ]; then
+        echo "::error::the preview deployer can read $n."
+        bad=1
+      else
+        echo "::warning::the preview deployer can read $n; the PR side keeps it until invoice-os-infra closes it and NIGHTLY_KEYS_CLOSED is true."
+      fi
+    elif ! grep -q PERMISSION_DENIED "$RUNNER_TEMP/nightly-read.err"; then
+      die "could not check $n: $(tail -n 1 "$RUNNER_TEMP/nightly-read.err")"
+    fi
+  done < <(grep '^nightly-' <<<"$names" || true)
+  for email in run-nightly@ascomply-preview.iam.gserviceaccount.com deploy-nightly@ascomply-preview.iam.gserviceaccount.com; do
+    code=$(curl -sS -o "$RUNNER_TEMP/sa-held.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" \
+      -H 'Content-Type: application/json' \
+      -d '{"permissions":["iam.serviceAccounts.actAs","iam.serviceAccounts.getAccessToken"]}' \
+      "https://iam.googleapis.com/v1/projects/$PROJECT/serviceAccounts/$email:testIamPermissions")
+    [ "$code" = 200 ] || die "testIamPermissions on $email answered HTTP $code"
+    held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/sa-held.json")
+    if [ -n "$held" ]; then
+      echo "::error::the preview deployer holds $held on $email."
+      bad=1
+    fi
+  done
   # A deploy trigger outside GitHub Actions needs Cloud Build or Cloud Deploy.
   if gcloud services list --project "$PROJECT" --enabled --format 'value(config.name)' |
     grep -Ex 'cloudbuild.googleapis.com|clouddeploy.googleapis.com'; then
@@ -651,7 +677,7 @@ cmd_invariants() {
     bad=1
   fi
   [ "$bad" = 0 ] || exit 1
-  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no deploy trigger outside GitHub Actions."
+  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no act-as on run-nightly or deploy-nightly, no read of a nightly-* secret, no deploy trigger outside GitHub Actions $mode"
 }
 
 case "${1:-}" in

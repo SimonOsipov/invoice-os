@@ -230,6 +230,9 @@ jobs:
           # Checks the PR deployer on every run.
           service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
       - run: bash scripts/ci/preview.sh invariants
+        env:
+          # The owner sets it to true once the PR side has lost the nightly secrets.
+          NIGHTLY_KEYS_CLOSED: ${{ vars.NIGHTLY_KEYS_CLOSED }}
       # Proves a push by digest lands in previews as one untagged image manifest, before production relies on it.
       - name: Push a probe image by digest
         if: ${{ !cancelled() }}

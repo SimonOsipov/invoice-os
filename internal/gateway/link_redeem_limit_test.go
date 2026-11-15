@@ -44,7 +44,7 @@ func lrRoutes() []lrRoute {
 		{"invitation", "invitation-password", lrVerifyFailed, ipPath, "signup", lrPasswordBody,
 			func(t *testing.T, f *gaGoTrue, th *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 				sessions := NewSessionChecker(f.URL, testClient(), time.Now, log)
-				return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), sessions, signIn(), nil, log, testHandoffStore(), nil, th, enforce)
+				return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), sessions, signIn(), nil, log, th, enforce, nil)
 			}},
 	}
 }

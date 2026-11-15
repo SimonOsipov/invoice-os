@@ -933,6 +933,7 @@ jobs:
       GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_GATEWAY_URL: postgres://invoice_gateway:gateway@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v7

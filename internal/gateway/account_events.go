@@ -22,7 +22,7 @@ const (
 // AccountEvent is one account event. UserID or Email must be set; IP and UserAgent are filled from the request.
 type AccountEvent struct {
 	Event, UserID, Email, IP, UserAgent string
-	// FirstSession marks a hand-off mint; the worker records its device.
+	// FirstSession: the worker still records the device for queued rows from the rollout window.
 	FirstSession bool
 }
 

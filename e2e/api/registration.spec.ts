@@ -183,6 +183,9 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(body).toMatch(/<input type="password" name="password"[^>]*minlength="6"[^>]*maxlength="72"/)
     expect(body).toContain(`name="state" value="${state}"`)
     expect(body).not.toContain('Confirm my email')
+    // An unknown link names no address.
+    expect(body).not.toContain('***@')
+    expect(body).not.toContain('Continue only if this is your address')
   })
 
   test('a POST to `/auth/verify` answers 405', async () => {

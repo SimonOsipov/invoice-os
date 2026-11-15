@@ -2246,7 +2246,7 @@ func TestPreviewInvariantsRefuseAReadableNightlySecret(t *testing.T) {
 
 func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) {
 	t.Parallel()
-	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}, "empty": {"NIGHTLY_KEYS_CLOSED="}, "other": {"NIGHTLY_KEYS_CLOSED=1"}, "case": {"NIGHTLY_KEYS_CLOSED=True"}} {
+	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}, "empty": {"NIGHTLY_KEYS_CLOSED="}, "other": {"NIGHTLY_KEYS_CLOSED=1"}, "case": {"NIGHTLY_KEYS_CLOSED=True"}, "upper": {"NIGHTLY_KEYS_CLOSED=TRUE"}, "space": {"NIGHTLY_KEYS_CLOSED= true"}} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "pr-7-gateway-token"}, nlGoodSvcs(),
@@ -2289,7 +2289,8 @@ func TestPreviewInvariantsWarnModeStillRefusesActAs(t *testing.T) {
 
 func TestPreviewInvariantsReadOnlyNightlySecrets(t *testing.T) {
 	t.Parallel()
-	have := []string{"nightly-hubspot-token", "pr-7-gateway-token", "nightly-resend-read-key", "pr-7-s2s-token", "app-password"}
+	// The last four are lookalikes: readable, so a loose prefix match would read them.
+	have := []string{"nightly-hubspot-token", "pr-7-gateway-token", "nightly-resend-read-key", "pr-7-s2s-token", "app-password", "not-nightly-x", "nightly", "Nightly-x", "pr-7-nightly-token"}
 	r := runInvariantsWith(t, have, nlGoodSvcs(), nil)
 	if r.code != 0 {
 		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
@@ -2442,6 +2443,15 @@ func TestPreviewInvariantsReportTheNightlyAndTheImageProblemsTogether(t *testing
 		if len(errLines(r, w...)) != 1 {
 			t.Errorf("want one ::error:: line with %v:\n%s\n%s", w, r.stdout, r.stderr)
 		}
+	}
+	// Both nightly identities are reported in one run, not just the first.
+	both := map[string]string{
+		"curl-body-" + nightlyIdentityEP(runNightlySA):    permBody("iam.serviceAccounts.actAs"),
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	}
+	b := runInvariantsEnv(t, []string{invClosed}, have, nlGoodSvcs(), both)
+	if len(errLines(b, "iam.serviceAccounts.actAs", "run-nightly@")) != 1 || len(errLines(b, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("want one ::error:: line per held nightly identity:\n%s\n%s", b.stdout, b.stderr)
 	}
 	// Soft mode: the read is a warning, and the other two problems still fail the run.
 	s := runInvariantsEnv(t, nil, have, nlGoodSvcs(), files)

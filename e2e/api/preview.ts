@@ -40,7 +40,7 @@ async function step(name: string, res: Response): Promise<Record<string, unknown
 }
 
 // Google ID token for a Cloud Run audience. CI mints it from the federated credential
-// (gcloud cannot, and deploy-preview cannot sign its own); a laptop uses gcloud.
+// (gcloud cannot, and the deployer cannot sign its own); a laptop uses gcloud.
 const idTokens = new Map<string, Promise<string>>()
 
 export function googleIdToken(audience: string): Promise<string> {

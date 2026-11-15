@@ -2,7 +2,6 @@ package approval
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -309,27 +308,6 @@ func TestCreatorStanding_DelegateAgreesWithDelegateMayDecide(t *testing.T) {
 	}
 }
 
-// withEditor sets CreatorStanding.IsEditor by reflection: the field is absent on head, and a plain
-// reference would stop the whole package compiling.
-func withEditor(t *testing.T, s CreatorStanding, v bool) CreatorStanding {
-	t.Helper()
-	f := reflect.ValueOf(&s).Elem().FieldByName("IsEditor")
-	if !f.IsValid() {
-		t.Fatal("CreatorStanding has no IsEditor field")
-	}
-	f.SetBool(v)
-	return s
-}
-
-func isEditor(t *testing.T, s CreatorStanding) bool {
-	t.Helper()
-	f := reflect.ValueOf(s).FieldByName("IsEditor")
-	if !f.IsValid() {
-		t.Fatal("CreatorStanding has no IsEditor field")
-	}
-	return f.Bool()
-}
-
 func TestCreatorStanding_Refusal(t *testing.T) {
 	both := CreatorRefusedReason + " " + CreatorNoRoleHolderReason
 	editorBoth := editorSentence + " " + CreatorNoRoleHolderReason
@@ -357,7 +335,7 @@ func TestCreatorStanding_Refusal(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := c.s
 			if c.editor {
-				s = withEditor(t, s, true)
+				s.IsEditor = true
 			}
 			got, refused := s.Refusal()
 			if got != c.want || refused != c.wantRefused {
@@ -385,10 +363,10 @@ func TestCreatorStanding_AnotherTenantsEditDoesNotCount(t *testing.T) {
 
 	got := readStanding(t, app, w.tenantID, b,
 		CreatorProbe{InvoiceID: crossed, RoleKey: ptr("standing-role")}, CreatorProbe{InvoiceID: edited, RoleKey: ptr("standing-role")})
-	if !isEditor(t, got[edited]) {
+	if !got[edited].IsEditor {
 		t.Errorf("standing of the invoice B edited in this tenant = %+v, want IsEditor", got[edited])
 	}
-	if isEditor(t, got[crossed]) {
+	if got[crossed].IsEditor {
 		t.Errorf("standing of the invoice with only another tenant's edit row = %+v, want no IsEditor", got[crossed])
 	}
 }

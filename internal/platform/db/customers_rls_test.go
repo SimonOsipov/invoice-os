@@ -6,6 +6,7 @@ package db_test
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"reflect"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
@@ -543,6 +545,8 @@ func TestRLS_CustomersColumnsTypesAndDefaults(t *testing.T) {
 		"edited_fields":  {"_text", "NO", "'{}'::text[]"},
 		"created_at":     {"timestamptz", "NO", "now()"},
 		"status":         {"text", "NO", "'active'::text"},
+		"created_by":     {"uuid", "YES", "(NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid"},
+		"client_ids":     {"_uuid", "NO", "'{}'::uuid[]"},
 	}
 	rows, err := h.super.Query(context.Background(),
 		`SELECT column_name, udt_name, is_nullable, coalesce(column_default, '')
@@ -723,8 +727,8 @@ func TestRLS_CustomersMigrationDownDropsExactlyItsObjects(t *testing.T) {
 	if !has || nrs != len(nrsCols) || otherBefore == 0 {
 		t.Fatalf("before Down: customers %v, NRS columns %d, other columns %d, want true, %d, >0", has, nrs, otherBefore, len(nrsCols))
 	}
-	// The status migration alters customers, so it rolls back first and re-applies last.
-	reapply := rollBackMigrations(t, provider, migrationVersion(t, "*_customer_status.sql"), version)
+	// The status and client-scope migrations alter customers, so they roll back first and re-apply last.
+	reapply := rollBackMigrations(t, provider, migrationVersion(t, "*_customers_client_scope.sql"), migrationVersion(t, "*_customer_status.sql"), version)
 	has, nrs, other := state()
 	if has || nrs != 0 || other != otherBefore {
 		t.Errorf("after Down: customers %v, NRS columns %d, other columns %d, want false, 0, %d", has, nrs, other, otherBefore)
@@ -737,6 +741,25 @@ func TestRLS_CustomersMigrationDownDropsExactlyItsObjects(t *testing.T) {
 	if !csHasStatusColumn(t) {
 		t.Error("customers.status is absent after the buyer_directory round-trip, want present")
 	}
+	cols := csColumns(t)
+	for _, c := range []string{"created_by", "client_ids"} {
+		if _, ok := cols[c]; !ok {
+			t.Errorf("customers.%s is absent after the round-trip, want present (customers_client_scope re-applied last)", c)
+		}
+	}
+	if qual := csPolicyQual(t); !strings.Contains(qual, "client_ids") {
+		t.Errorf("tenant_isolation USING after the round-trip = %s, want it to name client_ids", qual)
+	}
+}
+
+func csPolicyQual(t *testing.T) string {
+	t.Helper()
+	var qual string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT coalesce(qual, '') FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'tenant_isolation'`).Scan(&qual); err != nil {
+		t.Fatalf("read the customers tenant_isolation qual: %v", err)
+	}
+	return qual
 }
 
 func csHasStatusColumn(t *testing.T) bool {
@@ -978,5 +1001,158 @@ func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
 	sort.Strings(wantConsUp)
 	if got := csConstraintNames(t); !reflect.DeepEqual(got, wantConsUp) {
 		t.Errorf("customers constraints after Up, Down, Up = %v, want %v", got, wantConsUp)
+	}
+}
+
+// csTenantOnlyQual is the buyer_directory USING as pg_policies prints it.
+const csTenantOnlyQual = `(tenant_id = (NULLIF(current_setting('app.current_tenant'::text, true), ''::text))::uuid)`
+
+// The shipped Down restores the tenant-only policy and the shipped Up links and re-scopes over its
+// result. Runs on the migrator inside a transaction that is always rolled back.
+func TestRLS_CustomersClientScopeDownThenUpRoundTrips(t *testing.T) {
+	h := requireHarness(t)
+	requireCustomersTable(t)
+	ctx := context.Background()
+	const name = "*_customers_client_scope.sql"
+	matches, err := fs.Glob(migrations.FS, name)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("migrations.FS %s = %v (err %v), want exactly one file", name, matches, err)
+	}
+	up := auditEntitySectionOf(t, matches[0], "Up")
+	down := shippedDownStatements(t, name)
+	if len(down) == 0 {
+		t.Fatal("the Down block holds no statement")
+	}
+
+	const linked, unused = "12345678-0901", "12345678-0902"
+	entA, cleanA := seedBusinessEntity(t, h.tenantA, "CS roundtrip A")
+	defer cleanA()
+	entB, cleanB := seedBusinessEntity(t, h.tenantA, "CS roundtrip B")
+	defer cleanB()
+	seedCustomer(t, h.tenantA, linked)
+	seedCustomer(t, h.tenantA, unused)
+	for i, r := range []struct{ ent, tin string }{{entA, " " + linked + " "}, {entB, linked}} {
+		id := uuid.NewString()
+		if _, err := h.super.Exec(ctx,
+			`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, buyer_tin) VALUES ($1, $2, $3, $4, $5)`,
+			id, h.tenantA, r.ent, "CS-RT-"+strconv.Itoa(i), r.tin); err != nil {
+			t.Fatalf("seed invoice: %v", err)
+		}
+		defer func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id) }()
+	}
+
+	tx, err := h.mig.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
+		t.Fatalf("set lock_timeout: %v", err)
+	}
+	qual := func() string {
+		var q string
+		if err := tx.QueryRow(ctx,
+			`SELECT coalesce(qual, '') FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'tenant_isolation'`).Scan(&q); err != nil {
+			t.Fatalf("read the qual: %v", err)
+		}
+		return q
+	}
+	scopeCols := func() int {
+		var n int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM information_schema.columns
+			  WHERE table_schema = 'public' AND table_name = 'customers' AND column_name IN ('created_by', 'client_ids')`).Scan(&n); err != nil {
+			t.Fatalf("count scope columns: %v", err)
+		}
+		return n
+	}
+	if n := scopeCols(); n != 2 {
+		t.Errorf("created_by and client_ids before the Down = %d columns, want 2", n)
+	}
+
+	for _, stmt := range down {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("Down statement %q: %v", stmt, err)
+		}
+	}
+	if q := qual(); q != csTenantOnlyQual {
+		t.Errorf("tenant_isolation USING after the Down = %s, want the tenant-only text %s", q, csTenantOnlyQual)
+	}
+	if n := scopeCols(); n != 0 {
+		t.Errorf("created_by and client_ids after the Down = %d columns, want 0", n)
+	}
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("Up over the Down's result: %v", err)
+	}
+
+	for _, want := range []string{"entity_scope", "created_by", "client_ids"} {
+		if q := qual(); !strings.Contains(q, want) {
+			t.Errorf("tenant_isolation USING after the Up = %s, want it to name %s", q, want)
+		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
+		t.Fatalf("set_config: %v", err)
+	}
+	read := func(tin string) (createdBy *string, clients []string) {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT to_jsonb(c) FROM customers c WHERE tin = $1`, tin).Scan(&raw); err != nil {
+			t.Fatalf("read %s after the Up: %v", tin, err)
+		}
+		var m struct {
+			CreatedBy *string  `json:"created_by"`
+			ClientIDs []string `json:"client_ids"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode %s: %v", tin, err)
+		}
+		sort.Strings(m.ClientIDs)
+		return m.CreatedBy, m.ClientIDs
+	}
+	want := []string{entA, entB}
+	sort.Strings(want)
+	by, got := read(linked)
+	if !reflect.DeepEqual(got, want) || by != nil {
+		t.Errorf("linked record after the Up: client_ids %v, created_by %v, want %v and NULL (padded TIN trimmed)", got, by, want)
+	}
+	by, got = read(unused)
+	if len(got) != 0 || by != nil {
+		t.Errorf("unused record after the Up: client_ids %v, created_by %v, want {} and NULL", got, by)
+	}
+}
+
+// created_by defaults from the seam's app.current_user_id; a tx that sets none leaves it NULL.
+func TestRLS_CustomersCreatedByIsTheSeamsUserOrNull(t *testing.T) {
+	h := requireHarness(t)
+	requireCustomersTable(t)
+	ctx := context.Background()
+	user := uuid.NewString()
+	_, cleanupM := seedMembership(t, h.tenantA, user, "reviewer")
+	defer cleanupM()
+	plain, seamed := uuid.NewString(), uuid.NewString()
+	csInsertCleanup(t, plain, seamed)
+
+	if err := csAsApp(h.tenantA, csInsert, plain, h.tenantA, "12345678-0903"); err != nil {
+		t.Fatalf("insert without a user setting: %v", err)
+	}
+	if err := db.WithinRequestTenantTx(auth.WithIdentity(ctx, auth.Identity{Subject: user, Role: "authenticated", TenantID: h.tenantA}), h.app,
+		func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, csInsert, seamed, h.tenantA, "12345678-0904")
+			return e
+		}); err != nil {
+		t.Fatalf("insert through the request seam: %v", err)
+	}
+
+	createdBy := func(id string) *string {
+		var v *string
+		if err := h.super.QueryRow(ctx, `SELECT to_jsonb(c)->>'created_by' FROM customers c WHERE id = $1`, id).Scan(&v); err != nil {
+			t.Fatalf("read created_by: %v", err)
+		}
+		return v
+	}
+	if got := createdBy(plain); got != nil {
+		t.Errorf("created_by with no user setting = %s, want NULL", *got)
+	}
+	if got := createdBy(seamed); got == nil || *got != user {
+		t.Errorf("created_by through the request seam = %v, want %s", got, user)
 	}
 }

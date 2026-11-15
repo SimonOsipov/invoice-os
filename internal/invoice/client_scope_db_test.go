@@ -6,12 +6,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -449,4 +452,205 @@ func TestClientScope_AwaitingApprovalListStopsAtTheSet(t *testing.T) {
 	if total != 2 || len(items) != 2 || !idSet(items)[validA] || !idSet(items)[f.invB] {
 		t.Errorf("admin awaiting = %v, total %d, want [%s %s]", sortedIDs(idSet(items)), total, validA, f.invB)
 	}
+}
+
+// csDirRow is the whole customers row as text, so "unchanged" covers every column.
+func csDirRow(t *testing.T, super *pgxpool.Pool, tenant, tin string) string {
+	t.Helper()
+	var row string
+	if err := super.QueryRow(context.Background(),
+		`SELECT to_jsonb(c)::text FROM customers c WHERE tenant_id = $1 AND tin = $2`, tenant, tin).Scan(&row); err != nil {
+		t.Fatalf("read customers row %s: %v", tin, err)
+	}
+	return row
+}
+
+// csDirLinks reads created_by and client_ids through to_jsonb, so a column the migration has not
+// added yet fails the assertion instead of the query. clients is sorted.
+func csDirLinks(t *testing.T, super *pgxpool.Pool, tenant, tin string) (createdBy *string, clients []string) {
+	t.Helper()
+	var m struct {
+		CreatedBy *string  `json:"created_by"`
+		ClientIDs []string `json:"client_ids"`
+	}
+	if err := json.Unmarshal([]byte(csDirRow(t, super, tenant, tin)), &m); err != nil {
+		t.Fatalf("decode customers row %s: %v", tin, err)
+	}
+	sort.Strings(m.ClientIDs)
+	return m.CreatedBy, m.ClientIDs
+}
+
+func csWantDirLinks(t *testing.T, super *pgxpool.Pool, tenant, tin string, want ...string) {
+	t.Helper()
+	sort.Strings(want)
+	_, got := csDirLinks(t, super, tenant, tin)
+	if !slices.Equal(got, want) {
+		t.Errorf("client_ids of %s = %v, want %v", tin, got, want)
+	}
+}
+
+func csListedTINs(t *testing.T, f csFixture, ctx context.Context) []string {
+	t.Helper()
+	items, _, err := customer.NewStore(f.app).List(ctx, customer.ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("customer List: %v", err)
+	}
+	out := make([]string, len(items))
+	for i, c := range items {
+		out[i] = c.TIN
+	}
+	return out
+}
+
+func csFileFor(t *testing.T, f csFixture, ctx context.Context, entity, number string, tin, name, email *string) Invoice {
+	t.Helper()
+	inv, err := f.store.Create(ctx, CreateInput{EntityID: entity, InvoiceNumber: number, BuyerTIN: tin, BuyerName: name, BuyerEmail: email})
+	if err != nil {
+		t.Fatalf("Create %s: %v", number, err)
+	}
+	return inv
+}
+
+// created_by is the only clause that admits T to member 1 before the fill; the fill's link opens it to member 2.
+func TestClientScope_AnAddedBuyerReachesTheClientOnceItsCreatorFilesIt(t *testing.T) {
+	f := newCSFixture(t, "CS added buyer reaches client")
+	const tin = "12345678-0601"
+	m1 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	m2 := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	if _, err := customer.NewStore(f.app).Create(m1, customer.CreateInput{TIN: strPtr(tin)}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := csListedTINs(t, f, m2); slices.Contains(got, tin) {
+		t.Fatalf("member 2 lists %v before any fill, want T hidden", got)
+	}
+
+	csFileFor(t, f, m1, f.entA, "CS-ADDED-1", strPtr(tin), nil, nil)
+
+	csWantDirLinks(t, f.super, f.tenant, tin, f.entA)
+	if got := csListedTINs(t, f, m2); !slices.Contains(got, tin) {
+		t.Errorf("member 2 lists %v after the fill, want T", got)
+	}
+}
+
+// The fill must not read or change a record the caller cannot reach (USING of the customers policy).
+func TestClientScope_AnInvoiceWithAHiddenTINChangesNothingInTheDirectory(t *testing.T) {
+	f := newCSFixture(t, "CS hidden tin invoice")
+	const tin = "12345678-0602"
+	csFileFor(t, f, f.admin, f.entB, "CS-HID-B", strPtr(tin), strPtr("Hidden Ltd"), strPtr("hidden@x.ng"))
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE customers SET contact_person = 'Pat Hidden' WHERE tenant_id = $1 AND tin = $2`, f.tenant, tin); err != nil {
+		t.Fatalf("set contact_person: %v", err)
+	}
+	before := csDirRow(t, f.super, f.tenant, tin)
+
+	csFileFor(t, f, f.limited, f.entA, "CS-HID-A", strPtr(tin), strPtr("Member Typed Name"), strPtr(""))
+
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number = 'CS-HID-A'`, f.tenant); n != 1 {
+		t.Errorf("invoices saved = %d, want 1", n)
+	}
+	if after := csDirRow(t, f.super, f.tenant, tin); after != before {
+		t.Errorf("hidden record changed:\nbefore %s\nafter  %s", before, after)
+	}
+	if got := csListedTINs(t, f, f.limited); slices.Contains(got, tin) {
+		t.Errorf("member limited to A lists %v, want the B-only TIN still hidden", got)
+	}
+}
+
+func TestClientScope_ABuyerTINEditToAHiddenTINChangesNothing(t *testing.T) {
+	f := newCSFixture(t, "CS hidden tin edit")
+	const tin = "12345678-0603"
+	csFileFor(t, f, f.admin, f.entB, "CS-HIDE-B", strPtr(tin), strPtr("Hidden Ltd"), strPtr("hidden@x.ng"))
+	before := csDirRow(t, f.super, f.tenant, tin)
+	draft := csFileFor(t, f, f.limited, f.entA, "CS-HIDE-A", nil, nil, nil)
+
+	if _, err := f.store.Edit(f.limited, draft.ID, EditInput{UpdateInput: UpdateInput{BuyerTIN: strPtr(tin), BuyerName: strPtr("Edited Name")}}); err != nil {
+		t.Fatalf("Edit to a hidden buyer TIN: %v, want nil", err)
+	}
+
+	if after := csDirRow(t, f.super, f.tenant, tin); after != before {
+		t.Errorf("hidden record changed:\nbefore %s\nafter  %s", before, after)
+	}
+	if got := csListedTINs(t, f, f.limited); slices.Contains(got, tin) {
+		t.Errorf("member limited to A lists %v, want the B-only TIN still hidden", got)
+	}
+}
+
+func TestClientScope_AnInvoiceRefreshesAndLinksABuyerTheMemberReaches(t *testing.T) {
+	f := newCSFixture(t, "CS refresh and link")
+	const shared, own = "12345678-0604", "12345678-0605"
+	csFileFor(t, f, f.admin, f.entA, "CS-REF-A", strPtr(shared), strPtr("Shared Ltd"), strPtr("old@x.ng"))
+	csFileFor(t, f, f.admin, f.entB, "CS-REF-B", strPtr(shared), strPtr("Shared Ltd"), strPtr("old@x.ng"))
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE customers SET name = 'Corrected Name', edited_fields = ARRAY['name'] WHERE tenant_id = $1 AND tin = $2`, f.tenant, shared); err != nil {
+		t.Fatalf("mark name edited: %v", err)
+	}
+	if _, err := customer.NewStore(f.app).Create(f.limited, customer.CreateInput{TIN: strPtr(own)}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	csFileFor(t, f, f.limited, f.entA, "CS-REF-1", strPtr(" "+shared+" "), strPtr("Typed Name"), strPtr("new@x.ng"))
+	csFileFor(t, f, f.limited, f.entA, "CS-REF-2", strPtr(own), nil, nil)
+
+	var name, email string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT name, email FROM customers WHERE tenant_id = $1 AND tin = $2`, f.tenant, shared).Scan(&name, &email); err != nil {
+		t.Fatalf("read shared record: %v", err)
+	}
+	if name != "Corrected Name" || email != "new@x.ng" {
+		t.Errorf("shared record = name %q, email %q, want the edited name kept and the email refreshed", name, email)
+	}
+	csWantDirLinks(t, f.super, f.tenant, shared, f.entA, f.entB)
+	csWantDirLinks(t, f.super, f.tenant, own, f.entA)
+}
+
+func TestClientScope_AnInvoiceFilesANewBuyerForItsClientOnly(t *testing.T) {
+	f := newCSFixture(t, "CS files new buyer")
+	const tin = "12345678-0606"
+	member := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+
+	csFileFor(t, f, member, f.entA, "CS-NEW-1", strPtr(tin), strPtr("New Ltd"), nil)
+
+	by, links := csDirLinks(t, f.super, f.tenant, tin)
+	if by != nil || !slices.Equal(links, []string{f.entA}) {
+		t.Errorf("filed record: created_by %v, client_ids %v, want NULL and [%s]", by, links, f.entA)
+	}
+	if got := csListedTINs(t, f, member); !slices.Contains(got, tin) {
+		t.Fatalf("member lists %v, want the filed TIN", got)
+	}
+	if _, err := f.super.Exec(context.Background(),
+		`DELETE FROM membership_clients WHERE tenant_id = $1 AND user_id = $2 AND entity_id = $3`, f.tenant, csSubjectOf(member), f.entA); err != nil {
+		t.Fatalf("drop client A from the member: %v", err)
+	}
+	if got := csListedTINs(t, f, member); slices.Contains(got, tin) {
+		t.Errorf("member who lost client A lists %v, want the filed TIN gone (client_ids clause; created_by is NULL)", got)
+	}
+
+	before := mustCount(t, f.super, `SELECT count(*) FROM customers WHERE tenant_id = $1`, f.tenant)
+	csFileFor(t, f, f.admin, f.entA, "CS-NEW-2", strPtr("  "), strPtr("Blank Ltd"), nil)
+	if n := mustCount(t, f.super, `SELECT count(*) FROM customers WHERE tenant_id = $1`, f.tenant); n != before {
+		t.Errorf("customers after a blank buyer TIN = %d, want %d", n, before)
+	}
+}
+
+func csSubjectOf(ctx context.Context) string {
+	id, _ := auth.IdentityFromContext(ctx)
+	return id.Subject
+}
+
+func TestClientScope_ALinkOutlivesTheInvoiceThatMadeIt(t *testing.T) {
+	f := newCSFixture(t, "CS link outlives invoice")
+	const n, m = "12345678-0607", "12345678-0608"
+	member := csMember(t, f.super, f.tenant, "reviewer", f.entA)
+	inv := csFileFor(t, f, member, f.entA, "CS-OUT-1", strPtr(n), strPtr("N Ltd"), nil)
+
+	if _, err := f.store.Edit(member, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerTIN: strPtr(m), BuyerName: strPtr("M Ltd")}}); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+
+	got := csListedTINs(t, f, member)
+	if !slices.Contains(got, n) || !slices.Contains(got, m) {
+		t.Errorf("member lists %v, want both %s and %s", got, n, m)
+	}
+	csWantDirLinks(t, f.super, f.tenant, n, f.entA)
+	csWantDirLinks(t, f.super, f.tenant, m, f.entA)
 }

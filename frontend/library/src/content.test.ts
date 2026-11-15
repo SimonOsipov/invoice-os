@@ -90,7 +90,7 @@ describe('content', () => {
   it('content_approvalQueueStatesTheCreatorRule', () => {
     const f = byId('approval-queue')
     expect(f.desc).toContain('The creator of an invoice, and anyone who edited it, cannot approve it, unless they are the only approvers of that client.')
-    expect(f.desc).toContain('Someone who approved an earlier step cannot approve a later step of the same invoice, unless they are the only approver of that client.')
+    expect(f.desc).toContain('Someone who approved an earlier step cannot approve a later step of the same invoice, unless they are the only approvers of that client.')
     expect(COMING_SOON_IDS).not.toContain('approval-queue')
     expect(f.benefits).toHaveLength(3)
   })

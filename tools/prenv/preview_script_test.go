@@ -59,6 +59,7 @@ case "$1 $2 $3" in
   echo "$4" >> "$D/deleted" ;;
 "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
+"services list "*) cat "$D/enabled-services" 2>/dev/null || : ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
@@ -79,6 +80,10 @@ case "$1 $2 $3" in
     [ "$prev" = --secret ] && name=$a
     prev=$a
   done
+  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Permission 'secretmanager.versions.access' denied for resource 'projects/1/secrets/$name/versions/latest' (or it may not exist)." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [projects/1/secrets/$name] not found or has no versions." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/otherdenied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Secret Manager API has not been used in project 1 or it is disabled." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/accesserr" 2>/dev/null; then echo "ERROR: INTERNAL: backend error on $name" >&2; exit 1; fi
   cat "$D/access-$name" 2>/dev/null || printf pw ;;
 "sql instances describe") echo 10.0.0.1 ;;
 "run jobs execute")
@@ -107,6 +112,7 @@ done
 if [ -n "$out" ]; then
   cp "$D/curl-body-$ep" "$out" 2>/dev/null || echo '{}' > "$out"
 fi
+if [ -s "$D/curl-exit-$ep" ]; then exit "$(cat "$D/curl-exit-$ep")"; fi
 if [ -s "$D/curl-seq-$ep" ]; then
   head -n 1 "$D/curl-seq-$ep" | tr -d '\n'
   sed -i.bak 1d "$D/curl-seq-$ep"
@@ -154,7 +160,7 @@ func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...s
 	writeShim(t, filepath.Join(shims, "sleep"), "echo \"sleep $*\" >> '"+dir+"/order'\n") // a retry wait costs no time, and is logged
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NIGHTLY_KEYS_CLOSED=") }), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
 	stdout, stderr, err := runToFiles(t, cmd, false)
 	r := previewRun{dir: dir, stdout: stdout, stderr: stderr}
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -1655,7 +1661,14 @@ func runInvariants(t *testing.T, secrets []string, svcs []invSvc) previewRun {
 }
 
 // runInvariantsWith is runInvariants with extra files in the shim dir (curl-body-<endpoint>, curl-code-<endpoint>).
+// Every nightly-* secret is unreadable unless files sets denied.
 func runInvariantsWith(t *testing.T, secrets []string, svcs []invSvc, files map[string]string) previewRun {
+	t.Helper()
+	return runInvariantsEnv(t, nil, secrets, svcs, files)
+}
+
+// runInvariantsEnv is runInvariantsWith with extra KEY=value environment entries.
+func runInvariantsEnv(t *testing.T, env, secrets []string, svcs []invSvc, files map[string]string) previewRun {
 	t.Helper()
 	var list []map[string]any
 	for _, s := range svcs {
@@ -1676,9 +1689,16 @@ func runInvariantsWith(t *testing.T, secrets []string, svcs []invSvc, files map[
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runPreview(t, func(dir string) {
+	return runPreviewEnv(t, env, func(dir string) {
 		writeIn(t, dir, "have", strings.Join(secrets, "\n")+"\n")
 		writeIn(t, dir, "list-services", string(b))
+		var denied []string
+		for _, s := range secrets {
+			if strings.HasPrefix(s, "nightly-") {
+				denied = append(denied, s)
+			}
+		}
+		writeIn(t, dir, "denied", strings.Join(denied, "\n")+"\n")
 		for name, body := range files {
 			writeIn(t, dir, name, body)
 		}
@@ -2061,11 +2081,14 @@ func imgCalls(t *testing.T, r previewRun, suffix string) []string {
 }
 
 // errLines returns the ::error:: lines of both streams that contain every want.
-func errLines(r previewRun, want ...string) []string {
+func errLines(r previewRun, want ...string) []string { return annLines(r, "::error::", want...) }
+
+// annLines is errLines for any annotation prefix, such as ::warning::.
+func annLines(r previewRun, prefix string, want ...string) []string {
 	var out []string
 next:
 	for _, l := range strings.Split(r.stdout+"\n"+r.stderr, "\n") {
-		if !strings.Contains(l, "::error::") {
+		if !strings.Contains(l, prefix) {
 			continue
 		}
 		for _, w := range want {
@@ -2188,5 +2211,496 @@ func TestPreviewInvariantsReportBothIAMProblems(t *testing.T) {
 	}
 	if len(errLines(r, "artifactregistry.tags.update", repo)) == 0 {
 		t.Errorf("the image repository problem is not reported:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+const (
+	deployNightlySA = "deploy-nightly@ascomply-preview.iam.gserviceaccount.com"
+	invSentinel     = "SENTINEL-VALUE-1"
+	invClosed       = "NIGHTLY_KEYS_CLOSED=true"
+	invWarnTail     = "(not enforced: NIGHTLY_KEYS_CLOSED is not true)"
+)
+
+func nightlyIdentityEP(email string) string { return email + ":testIamPermissions" }
+
+// nightlyPerms are the two permissions the preview deployer must not hold on a nightly identity.
+var nightlyPerms = []string{"iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"}
+
+func permBody(perm string) string { return `{"permissions":["` + perm + `"]}` }
+
+func TestPreviewInvariantsRefuseAReadableNightlySecret(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsEnv(t, []string{invClosed}, []string{"nightly-hubspot-token", "nightly-resend-read-key", "pr-7-gateway-token"}, nlGoodSvcs(),
+		map[string]string{"denied": "nightly-resend-read-key\n", "access-nightly-hubspot-token": invSentinel})
+	if r.code != 1 {
+		t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "the preview deployer can read nightly-hubspot-token")) != 1 {
+		t.Errorf("want one ::error:: line naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+	}
+	for _, l := range strings.Split(r.stdout+"\n"+r.stderr, "\n") {
+		if strings.Contains(l, "nightly-resend-read-key") {
+			t.Errorf("a denied secret is named: %q", l)
+		}
+	}
+	if strings.Contains(r.stdout+r.stderr, invSentinel) {
+		t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}, "empty": {"NIGHTLY_KEYS_CLOSED="}, "other": {"NIGHTLY_KEYS_CLOSED=1"}, "case": {"NIGHTLY_KEYS_CLOSED=True"}, "upper": {"NIGHTLY_KEYS_CLOSED=TRUE"}, "space": {"NIGHTLY_KEYS_CLOSED= true"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "pr-7-gateway-token"}, nlGoodSvcs(),
+				map[string]string{"denied": "", "access-nightly-hubspot-token": invSentinel})
+			if r.code != 0 {
+				t.Fatalf("invariants exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if n := len(annLines(r, "::warning::", "the preview deployer can read nightly-hubspot-token")); n != 1 {
+				t.Errorf("%d ::warning:: lines name nightly-hubspot-token, want 1:\n%s\n%s", n, r.stdout, r.stderr)
+			}
+			if len(errLines(r)) != 0 {
+				t.Errorf("::error:: line in warn mode:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if !strings.HasSuffix(strings.TrimSpace(r.stdout), invWarnTail) {
+				t.Errorf("stdout does not end %q:\n%s", invWarnTail, r.stdout)
+			}
+			if strings.Contains(r.stdout, "no read of a nightly-* secret") || !strings.Contains(r.stdout, "not enforced and 1 are readable") {
+				t.Errorf("success line misstates the nightly-secret read:\n%s", r.stdout)
+			}
+			if strings.Contains(r.stdout+r.stderr, invSentinel) {
+				t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsNameTheAccountWhenCurlFails(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"pr-7-gateway-token"}, nlGoodSvcs(), map[string]string{
+		"curl-exit-" + nightlyIdentityEP(runNightlySA):    "7",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	})
+	if r.code != 1 {
+		t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "7")) != 1 {
+		t.Errorf("want one ::error:: line naming run-nightly and curl exit 7:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run after the curl failure:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsWarnModeStillRefusesActAs(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token"}, nlGoodSvcs(),
+				map[string]string{"curl-body-" + nightlyIdentityEP(runNightlySA): permBody("iam.serviceAccounts.actAs")})
+			if r.code != 1 {
+				t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(errLines(r, "iam.serviceAccounts.actAs", "run-nightly@")) != 1 {
+				t.Errorf("want one ::error:: line naming actAs and run-nightly:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReadOnlyNightlySecrets(t *testing.T) {
+	t.Parallel()
+	// The last four are lookalikes: readable, so a loose prefix match would read them.
+	have := []string{"nightly-hubspot-token", "pr-7-gateway-token", "nightly-resend-read-key", "pr-7-s2s-token", "app-password", "not-nightly-x", "nightly", "Nightly-x", "pr-7-nightly-token"}
+	r := runInvariantsWith(t, have, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	var read []string
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets versions access ") {
+			read = append(read, "access latest --secret "+flagValue(l, "--secret"))
+		}
+	}
+	sort.Strings(read)
+	want := []string{"access latest --secret nightly-hubspot-token", "access latest --secret nightly-resend-read-key"}
+	if !slices.Equal(read, want) {
+		t.Errorf("secret reads = %v, want %v", read, want)
+	}
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets versions access ") && !strings.HasPrefix(l, "secrets versions access latest --secret ") {
+			t.Errorf("read is not of the latest version: %q", l)
+		}
+	}
+}
+
+func TestPreviewInvariantsRefuseActAsOnANightlyIdentity(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"", invClosed} {
+		for _, email := range []string{runNightlySA, deployNightlySA} {
+			for _, p := range nightlyPerms {
+				t.Run(strings.TrimPrefix(mode, "NIGHTLY_KEYS_CLOSED=")+"/"+email+"/"+p, func(t *testing.T) {
+					t.Parallel()
+					var env []string
+					if mode != "" {
+						env = []string{mode}
+					}
+					r := runInvariantsEnv(t, env, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{"curl-body-" + nightlyIdentityEP(email): permBody(p)})
+					if r.code != 1 {
+						t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+					}
+					if len(errLines(r, p, email)) != 1 {
+						t.Errorf("want one ::error:: line naming %s and %s:\n%s\n%s", p, email, r.stdout, r.stderr)
+					}
+					if strings.Contains(r.stdout, imgHeld) {
+						t.Errorf("success line printed:\n%s", r.stdout)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPreviewInvariantsAskBothNightlyIdentities(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	for _, email := range []string{runNightlySA, deployNightlySA} {
+		url := "https://iam.googleapis.com/v1/projects/ascomply-preview/serviceAccounts/" + nightlyIdentityEP(email)
+		var asked []string
+		for _, c := range imgCalls(t, r, nightlyIdentityEP(email)) {
+			if strings.HasSuffix(c, url) {
+				asked = append(asked, c)
+			}
+		}
+		if len(asked) != 1 {
+			t.Errorf("want one call to %s, got %d in:\n%s", url, len(asked), r.file(t, "curl-calls"))
+			continue
+		}
+		body := flagValue(asked[0], "-d")
+		for _, p := range nightlyPerms {
+			if !strings.Contains(body, p) {
+				t.Errorf("-d body %q lacks %s", body, p)
+			}
+		}
+	}
+}
+
+func TestPreviewInvariantsPassWhenTheNightlyIsClosed(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsEnv(t, []string{invClosed}, []string{"nightly-hubspot-token", "nightly-resend-read-key", "pr-7-gateway-token"}, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	for _, w := range []string{imgHeld, "no act-as on run-nightly or deploy-nightly", "no read of a nightly-* secret"} {
+		if !strings.Contains(r.stdout, w) {
+			t.Errorf("success line lacks %q:\n%s", w, r.stdout)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(r.stdout), "(enforced)") || strings.Contains(r.stdout, "not enforced") {
+		t.Errorf("stdout does not end (enforced):\n%s", r.stdout)
+	}
+	if len(annLines(r, "::warning::")) != 0 {
+		t.Errorf("warning on a closed nightly:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnAnUnexpectedReadError(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "closed": {invClosed}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "pr-7-gateway-token"}, nlGoodSvcs(),
+				map[string]string{"denied": "", "accesserr": "nightly-hubspot-token\n"})
+			if r.code == 0 {
+				t.Fatalf("a read error passed:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if len(errLines(r, "could not check nightly-hubspot-token", "INTERNAL")) != 1 {
+				t.Errorf("want one ::error:: line with the secret name and the error:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("success line printed:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnAnIdentityAnswer(t *testing.T) {
+	t.Parallel()
+	for _, email := range []string{runNightlySA, deployNightlySA} {
+		for _, code := range []string{"403", "404", "500", "000", "401", "429", "302", "201"} {
+			t.Run(email+"/"+code, func(t *testing.T) {
+				t.Parallel()
+				r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{"curl-code-" + nightlyIdentityEP(email): code})
+				if r.code == 0 {
+					t.Fatalf("an answer of HTTP %s passed:\n%s\n%s", code, r.stdout, r.stderr)
+				}
+				if len(errLines(r, email, "HTTP "+code)) == 0 {
+					t.Errorf("no ::error:: line names %s and HTTP %s:\n%s\n%s", email, code, r.stdout, r.stderr)
+				}
+				if strings.Contains(r.stdout, imgHeld) {
+					t.Errorf("success line printed:\n%s", r.stdout)
+				}
+			})
+		}
+	}
+}
+
+func TestPreviewInvariantsReportTheNightlyAndTheImageProblemsTogether(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"denied": "",
+		"curl-body-" + nightlyIdentityEP(runNightlySA): permBody("iam.serviceAccounts.actAs"),
+		"curl-body-" + imagesEP:                        permBody("artifactregistry.tags.update"),
+	}
+	have := []string{"nightly-hubspot-token", "pr-7-gateway-token"}
+	r := runInvariantsEnv(t, []string{invClosed}, have, nlGoodSvcs(), files)
+	if r.code != 1 || len(errLines(r)) != 3 {
+		t.Errorf("enforced: exit %d with %d ::error:: lines, want exit 1 and 3:\n%s\n%s", r.code, len(errLines(r)), r.stdout, r.stderr)
+	}
+	for _, w := range [][]string{{"nightly-hubspot-token"}, {"iam.serviceAccounts.actAs", "run-nightly@"}, {"artifactregistry.tags.update", prodImagesRepo(t)}} {
+		if len(errLines(r, w...)) != 1 {
+			t.Errorf("want one ::error:: line with %v:\n%s\n%s", w, r.stdout, r.stderr)
+		}
+	}
+	// Both nightly identities are reported in one run, not just the first.
+	both := map[string]string{
+		"curl-body-" + nightlyIdentityEP(runNightlySA):    permBody("iam.serviceAccounts.actAs"),
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	}
+	b := runInvariantsEnv(t, []string{invClosed}, have, nlGoodSvcs(), both)
+	if len(errLines(b, "iam.serviceAccounts.actAs", "run-nightly@")) != 1 || len(errLines(b, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("want one ::error:: line per held nightly identity:\n%s\n%s", b.stdout, b.stderr)
+	}
+	// Soft mode: the read is a warning, and the other two problems still fail the run.
+	s := runInvariantsEnv(t, nil, have, nlGoodSvcs(), files)
+	if s.code != 1 || len(errLines(s)) != 2 || len(annLines(s, "::warning::", "nightly-hubspot-token")) != 1 {
+		t.Errorf("soft: exit %d, %d ::error:: lines, %d warnings; want exit 1, 2 errors, 1 warning:\n%s\n%s",
+			s.code, len(errLines(s)), len(annLines(s, "::warning::", "nightly-hubspot-token")), s.stdout, s.stderr)
+	}
+}
+
+const (
+	runNightlySA = "run-nightly@ascomply-preview.iam.gserviceaccount.com"
+	runPreviewSA = "run-preview@ascomply-preview.iam.gserviceaccount.com"
+)
+
+func nightlyBindLine(secret string) string {
+	return "secrets add-iam-policy-binding " + secret + " --project ascomply-preview --member serviceAccount:" + runNightlySA +
+		" --role roles/secretmanager.secretAccessor --condition=None"
+}
+
+// nightlySecretNames is every secret `secrets nightly` makes.
+func nightlySecretNames(t *testing.T) []string {
+	t.Helper()
+	return append(previewList(t, "PR_SECRETS"), "mock-issuer-token")
+}
+
+func TestPreviewNightlyRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	env := []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	svcs := prAll(t)
+	dep := runPreviewEnv(t, env, nil, append([]string{"deploy", "nightly", "abc123"}, svcs...)...)
+	mig := runPreviewEnv(t, env, nil, "migrate", "nightly", "abc123")
+	if dep.code != 0 || mig.code != 0 {
+		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+	}
+	n := 0
+	for _, l := range append(nonBlankLines(dep.file(t, "calls")), nonBlankLines(mig.file(t, "calls"))...) {
+		if !strings.HasPrefix(l, "run deploy ") && !strings.HasPrefix(l, "run jobs deploy ") {
+			continue
+		}
+		n++
+		if got := flagValue(l, "--service-account"); got != runNightlySA {
+			t.Errorf("--service-account = %q, want %q:\n%s", got, runNightlySA, l)
+		}
+	}
+	if n != len(svcs)+1 {
+		t.Errorf("%d deploy lines, want %d services + the migrate job", n, len(svcs))
+	}
+}
+
+func TestPreviewPRNeverRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	svcs := prAll(t)
+	var all []string
+	for _, args := range [][]string{append([]string{"deploy", "7", "abc123"}, svcs...), {"migrate", "7", "abc123"}, {"secrets", "7"}, {"teardown", "7"}} {
+		r := runPreview(t, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("%s exited %d: %s", args[0], r.code, r.stderr)
+		}
+		all = append(all, nonBlankLines(r.file(t, "calls"))...)
+	}
+	sa := 0
+	for _, l := range all {
+		if strings.Contains(l, "run-nightly") {
+			t.Errorf("a PR call names run-nightly:\n%s", l)
+		}
+		if got := flagValue(l, "--service-account"); got != "" {
+			sa++
+			if got != runPreviewSA {
+				t.Errorf("--service-account = %q, want %q", got, runPreviewSA)
+			}
+		}
+	}
+	if sa != len(svcs)+1 {
+		t.Errorf("%d --service-account flags, want %d", sa, len(svcs)+1)
+	}
+}
+
+func TestPreviewSecretsNightlyBindsRunNightlyOnEachSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	names := nightlySecretNames(t)
+	if len(names) != 13 {
+		t.Fatalf("%d nightly secrets, want 13", len(names))
+	}
+	for _, n := range names {
+		sec := "nightly-" + n
+		create, bind, count := -1, -1, 0
+		for i, l := range lines {
+			if strings.HasPrefix(l, "secrets create "+sec+" ") {
+				create = i
+			}
+			if l == nightlyBindLine(sec) {
+				bind = i
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, count)
+		} else if create < 0 || bind < create {
+			t.Errorf("%s: binding (line %d) is not after its create (line %d)", sec, bind, create)
+		}
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "run-preview") {
+			t.Errorf("a binding names run-preview:\n%s", l)
+		}
+	}
+}
+
+func TestPreviewSecretsNightlyBindsAnExistingSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-database-app-url\n")
+	}, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 11 {
+		t.Errorf("%d creates, want 11 (the 13 secrets less the 2 that exist)", got)
+	}
+	for _, sec := range []string{"nightly-gateway-token", "nightly-database-app-url"} {
+		if strings.Contains(calls, "secrets create "+sec+" ") {
+			t.Errorf("%s exists but was created", sec)
+		}
+		if got := strings.Count(calls, nightlyBindLine(sec)+"\n"); got != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, got)
+		}
+	}
+}
+
+func TestPreviewSecretsNightlyFailsWhenABindingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-add-iam-policy-binding", "") }, "secrets", "nightly")
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 1 {
+		t.Errorf("%d creates before the stop, want 1", got)
+	}
+	if r.code == 0 {
+		t.Errorf("secrets nightly exited 0 after a failed binding")
+	}
+	if !strings.Contains(r.stderr, "::error::cannot give run-nightly access to nightly-") {
+		t.Errorf("stderr lacks the binding error:\n%s", r.stderr)
+	}
+	if got := strings.Count(calls, "secrets add-iam-policy-binding"); got != 1 {
+		t.Errorf("%d binding attempts, want 1 (the run stops at the first failure)", got)
+	}
+}
+
+func TestPreviewSecretsPRMakesNoIAMCall(t *testing.T) {
+	t.Parallel()
+	for name, setup := range map[string]func(dir string){
+		"new":      nil,
+		"existing": func(dir string) { writeIn(t, dir, "have", allPRSecrets(t)) },
+	} {
+		r := runPreview(t, setup, "secrets", "7")
+		if r.code != 0 {
+			t.Fatalf("%s: secrets exited %d: %s", name, r.code, r.stderr)
+		}
+		calls := r.file(t, "calls")
+		if name == "new" && !strings.Contains(calls, "secrets create pr-7-") {
+			t.Errorf("%s: no secret was created:\n%s", name, calls)
+		}
+		if strings.Contains(calls, "add-iam-policy-binding") {
+			t.Errorf("%s: a PR secret got an IAM call:\n%s", name, calls)
+		}
+	}
+}
+
+func TestPreviewInvariantsPassWhenANightlySecretVanishes(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "closed": {invClosed}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+				map[string]string{"denied": "nightly-resend-read-key\n", "missing": "nightly-hubspot-token\n"})
+			if r.code != 0 || len(errLines(r)) != 0 {
+				t.Fatalf("exit %d with ::error:: lines, want a pass:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(annLines(r, "::notice::", "nightly-hubspot-token")) != 1 {
+				t.Errorf("want one ::notice:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if !strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("no success line:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReportAnIdentityAnswerAndRunTheLaterChecks(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{
+		"curl-code-" + nightlyIdentityEP(runNightlySA):    "500",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.actAs"),
+		"enabled-services": "cloudbuild.googleapis.com\n",
+	})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "HTTP 500")) != 1 {
+		t.Errorf("want one ::error:: naming run-nightly and HTTP 500:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.actAs", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "Cloud Build")) != 1 {
+		t.Errorf("the Cloud Build check did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnADenialThatIsNotTheSecretRead(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+		map[string]string{"denied": "nightly-resend-read-key\n", "otherdenied": "nightly-hubspot-token\n"})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "could not check nightly-hubspot-token")) != 1 {
+		t.Errorf("want one ::error:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if strings.Contains(r.stdout, imgHeld) {
+		t.Errorf("success line printed:\n%s", r.stdout)
 	}
 }

@@ -34,6 +34,7 @@ type App struct {
 	Mux    *http.ServeMux
 
 	gatewayToken string
+	healthToken  string
 	openPatterns []string
 	readiness    readiness
 	bgWorkers    []BackgroundWorker
@@ -61,9 +62,9 @@ func New(service string) (*App, error) {
 		Logger: logger,
 		Mux:    http.NewServeMux(),
 	}
-	app.Mux.HandleFunc("GET /healthz", healthzHandler)
+	app.Mux.HandleFunc("GET /healthz", app.health)
 	// Cloud Run's front end answers /healthz itself on a run.app host, so callers there use /health.
-	app.Mux.HandleFunc("GET /health", healthzHandler)
+	app.Mux.HandleFunc("GET /health", app.health)
 	app.Mux.HandleFunc("GET /readyz", app.readiness.readyzHandler)
 	return app, nil
 }

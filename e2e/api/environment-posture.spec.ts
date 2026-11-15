@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { rawFetch, me, headerOf, mockIssuerHeaders, PERSONAS } from './client'
+import { rawFetch, me, headerOf, mockIssuerHeaders, fleetHeaders, PERSONAS } from './client'
 import { nightlyTarget } from '../targets'
 
 // The mock routes the nightly gate covers (cmd/gateway/main.go).
@@ -11,10 +11,17 @@ function noToken(body: unknown): boolean {
 
 test.describe('the preview environment posture (F-242)', () => {
   test('the preview gateway reports the mock issuer on', async () => {
-    const res = await rawFetch('/health')
+    const res = await rawFetch('/health', { headers: fleetHeaders() })
     expect(res.status).toBe(200)
     // mock_issuer "on": platform.MockIssuer in cmd/gateway/main.go
     expect((res.body as { mock_issuer?: string }).mock_issuer).toBe('on')
+  })
+
+  test('the preview gateway hides build detail from an anonymous caller', async () => {
+    const res = await rawFetch('/health')
+    expect(res.status).toBe(200)
+    // {"status":"ok"} is App.HideHealthDetail's answer in internal/platform/health.go
+    expect(res.body).toEqual({ status: 'ok' })
   })
 
   test('the mock login mints a token the gateway accepts', async () => {

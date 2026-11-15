@@ -40,7 +40,15 @@ type CreatorStanding struct {
 	OtherRoleHolder bool
 	// OtherDelegate: another approver the step's delegation lets decide (DelegateMayDecide).
 	OtherDelegate bool
+	// EarlierApprover: the subject approved a step of the invoice's open run.
+	EarlierApprover bool
+	// OtherNew*: another approver who reaches the client, is no author and approved no step of the run.
+	OtherNewApprover, OtherNewRoleHolder, OtherNewDelegate bool
 }
+
+// RepeatApproved and ApprovedAs are red-test stubs; SECAUD-40-01 implements them.
+func (s CreatorStanding) RepeatApproved() bool { return false }
+func (s CreatorStanding) ApprovedAs() string   { return "" }
 
 // Refusal is the one rule: an author is refused when an approver who is not an author reaches the client.
 func (s CreatorStanding) Refusal() (reason string, refused bool) {

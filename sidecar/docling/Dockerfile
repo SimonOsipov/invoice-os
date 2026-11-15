@@ -37,6 +37,8 @@ RUN python3 fetch_rapidocr_models.py
 # (see tests/conftest.py) for the repo-scanning specs; the run stage's own build context
 # needs nothing mounted, only this stage.
 FROM deps AS test
+# Deps venv as built here; ci.yml's docling-freeze diffs it with the canary's run image.
+RUN pip freeze > /build/deps.freeze
 COPY sidecar/docling/requirements-dev.lock .
 RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements-dev.lock \
     && python3 pip_check_guard.py

@@ -11,7 +11,11 @@ paths:
 - Keep the `docling[rapidocr]` extra. Bare `docling` ships `rapidocr` without `onnxruntime`, and the first scan fails.
 - Keep `docling-core` and `docling-parse` pinned in `requirements.txt`. Both float and own word segmentation.
 - Bump a pinned docling dependency deliberately and regenerate every golden. Never let a release do it.
-- Install the CPU torch wheel from the PyTorch CPU index. Torch is unavoidable and the CPU wheel drops the CUDA payload.
+- Install only torch and torchvision from the PyTorch CPU index, through `torch.lock`, and everything else from PyPI through `requirements.lock`. One index per `pip install`.
+- Run `sidecar/docling/lock.sh` after any change to `requirements*.txt`. CI's `lock.sh --check` fails until you do.
+- Push that lock commit to a Dependabot `pip` PR: it gives the PR the full preview. A group bump can move many transitive packages, so read the lock diff.
+- Install locally on Linux with `pip install --require-hashes --no-deps --index-url https://download.pytorch.org/whl/cpu -r sidecar/docling/torch.lock && pip install --require-hashes --no-deps --index-url https://pypi.org/simple -r sidecar/docling/requirements-dev.lock`. On macOS, use `docling:test`.
+- Keep the `docling-test` and `docling-canary` builds free of `cache-from`. `docling-freeze` needs two independent builds.
 - Bake every model into the image at build time. The image runs with `--network none`.
 - Fetch the layout and TableFormer models with `fetch_docling_models.py` (pinned commits, SHA-256 manifest) and the RapidOCR checkpoints with `fetch_rapidocr_models.py`, never Docling's `download_models`.
 - Render PDF page images through pypdfium2 (`PdfiumImageBackend` in `convert.py`). docling-parse paints a `/RunLengthDecode` image blank, and OCR then reads nothing.

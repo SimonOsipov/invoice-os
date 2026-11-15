@@ -88,6 +88,12 @@ func (w *signWorld) createdBy(actor string) {
 	seedHistory(w.t, w.super, w.f.tenantID, w.f.invoiceID, nil, actor)
 }
 
+// editedBy gives actor one invoice.updated row on the world's invoice.
+func (w *signWorld) editedBy(actor string) {
+	w.t.Helper()
+	seedInvoiceEvent(w.t, w.super, w.f.tenantID, "invoice.updated", w.f.invoiceID, actor)
+}
+
 // delegation sets the pending step's delegation: allow with a nil user is "anyone".
 func (w *signWorld) delegation(allow bool, user *string) {
 	w.t.Helper()
@@ -237,6 +243,39 @@ var signCreatorRows = []signRow{
 	}},
 }
 
+var signAuthorRows = []signRow{
+	{"editor in role, a non-author reviewer outside the role reaches A", "creator only", func(w *signWorld) {
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "reviewer"})
+	}},
+	{"creator and editor in role, a non-author reviewer outside the role reaches A", "creator only", func(w *signWorld) {
+		w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "reviewer"})
+	}},
+	{"editor alone among the approvers", "", func(w *signWorld) {
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+	}},
+	{"creator and editor are the only approvers", "", func(w *signWorld) {
+		w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+	}},
+	{"editor with a non-author colleague in the role", "", func(w *signWorld) {
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.inRole(memberSpec{role: "reviewer"})
+	}},
+	{"editor in role, the other approver suspended", "", func(w *signWorld) {
+		w.editedBy(w.inRole(memberSpec{role: "reviewer"}))
+		w.add(memberSpec{role: "reviewer", status: "suspended"})
+	}},
+	{"editor is the named delegate, a non-author reviewer reaches A", "creator only", func(w *signWorld) {
+		d := w.add(memberSpec{role: "reviewer"})
+		w.editedBy(d)
+		w.add(memberSpec{role: "reviewer"})
+		w.delegation(true, &d)
+	}},
+}
+
 // signDelegateRows are the delegate rows D1-D13 of the agreement table. "anyone" is allow with no named user.
 var signDelegateRows = []signRow{
 	{"D1 role empty, named reviewer outside the role", "", func(w *signWorld) {
@@ -307,7 +346,7 @@ var signDelegateRows = []signRow{
 // exactly when some seeded candidate's decideTx approve succeeds.
 func TestCanSign_AgreesWithTheApprovePath(t *testing.T) {
 	super, app := dbTestPools(t)
-	for _, set := range [][]signRow{signRows, signCreatorRows, signDelegateRows} {
+	for _, set := range [][]signRow{signRows, signCreatorRows, signAuthorRows, signDelegateRows} {
 		for _, r := range set {
 			t.Run(r.name, func(t *testing.T) {
 				w := newSignWorld(t, super, app, "APSC-14 agree "+r.name)
@@ -324,6 +363,20 @@ func TestCanSign_AgreesWithTheApprovePath(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCanSign_OnlyAuthorsCanSignReadsCreatorOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newSignWorld(t, super, app, "SECAUD-18 authors only")
+	w.createdBy(w.inRole(memberSpec{role: "reviewer"}))
+	b := w.inRole(memberSpec{role: "reviewer"})
+	w.editedBy(b)
+	w.add(memberSpec{role: "reviewer"}) // a non-author approver without the role
+
+	wantReasons(t, readReasons(t, app, w.f.tenantID, []SignerProbe{w.probe()}), "creator only")
+	if got := w.approvers(); len(got) != 0 {
+		t.Errorf("candidates that approve through decideTx = %d, want 0", len(got))
 	}
 }
 
@@ -580,6 +633,24 @@ func TestCanSign_AnotherTenantNeverCountsForAnAnyoneDelegate(t *testing.T) {
 
 	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{t3.probe()}), "")
 	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{t1.probe()}), "no holder")
+}
+
+// A tenant-2 edit row naming tenant 1's invoice counts only if the author read lacks the tenant pin; the control row is same-tenant.
+func TestCanSign_AnotherTenantsEditNeverMakesAnAuthor(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	pinned := newSignWorld(t, super, app, "SECAUD-18 pin")
+	b := pinned.inRole(memberSpec{role: "reviewer"})
+	pinned.add(memberSpec{role: "reviewer"}) // a non-author approver without the role
+	foreign := newSignWorld(t, super, app, "SECAUD-18 pin foreign")
+	seedInvoiceEvent(t, super, foreign.f.tenantID, "invoice.updated", pinned.f.invoiceID, b)
+
+	control := newSignWorld(t, super, app, "SECAUD-18 pin control")
+	control.editedBy(control.inRole(memberSpec{role: "reviewer"}))
+	control.add(memberSpec{role: "reviewer"})
+
+	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{control.probe()}), "creator only")
+	wantReasons(t, readReasonsAsSuper(t, super, []SignerProbe{pinned.probe()}), "")
 }
 
 func TestCanSign_ReadErrorIsReturned(t *testing.T) {

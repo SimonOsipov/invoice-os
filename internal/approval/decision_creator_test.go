@@ -8,16 +8,19 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // The story's copy ([message copy]), restated on purpose: the oracle for the shipped constants.
 const (
 	creatorSentence  = "You created this invoice, so another approver must approve it."
 	noHolderSentence = "No other approver holds the role this step is waiting on. An admin must give one of them that role."
+	editorSentence   = "You changed this invoice, so another approver must approve it."
 )
 
 // memberSpec is one membership: all-clients unless limited, staffed to roleID when set.
@@ -566,4 +569,209 @@ func TestDecide_CreatorRung_DelegateStepWithAStaffedRoleStillDropsTheSecondSente
 
 	_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
 	wantRefused(t, err, creatorSentence)
+}
+
+// seedInvoiceEvent appends one audit_log row of event for invoiceID; the generated invoice_id column reads payload.id.
+func seedInvoiceEvent(t *testing.T, super *pgxpool.Pool, tenantID, event, invoiceID, actor string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO audit_log (tenant_id, actor, event, payload) VALUES ($1, $2, $3, jsonb_build_object('id', $4::text))`,
+		tenantID, actor, event, invoiceID); err != nil {
+		t.Fatalf("seed %s audit row: %v", event, err)
+	}
+}
+
+// authorWorld: creator a (creation row), editor b and non-author approver c, all holding the step's role.
+// The tests seed the edits.
+func authorWorld(t *testing.T, name string) (super, app *pgxpool.Pool, f approveFixture, a, b, c string) {
+	t.Helper()
+	super, app = dbTestPools(t)
+	f = newApproveFixture(t, super, app, name, "author-role")
+	a = seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	b = seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	c = seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedHistory(t, super, f.tenantID, f.invoiceID, nil, a)
+	return
+}
+
+// secondValidatedInvoice arms another invoice of f's tenant and client on the same policy.
+func secondValidatedInvoice(t *testing.T, super, app *pgxpool.Pool, f approveFixture, number string) string {
+	t.Helper()
+	id := seedInvoice(t, super, f.tenantID, f.entityID, number)
+	setInvoiceStatus(t, super, id, "validated")
+	if _, err := arm(t, app, f.tenantID, id, "fp-"+number, "fixture-arm"); err != nil {
+		t.Fatalf("arm %s: %v", number, err)
+	}
+	return id
+}
+
+func TestApprovalBypass_EditorCannotApprove(t *testing.T) {
+	super, app, f, _, b, c := authorWorld(t, "SECAUD-18 editor")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	_, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	assertNothingWritten(t, super, f)
+	if n := auditCount(t, super, f.tenantID, "invoice.approval_approved"); n != 0 {
+		t.Errorf("approval_approved audit rows = %d, want 0 after a refusal", n)
+	}
+
+	// Control: the non-author approver is not refused.
+	run, err := approve(t, app, f.tenantID, c, f.invoiceID, nil)
+	if err != nil || run.State != "approved" {
+		t.Fatalf("non-author approve = %q, %v, want approved", run.State, err)
+	}
+	wantApprovedAs(t, super, f.tenantID, "approver")
+}
+
+func TestApprovalBypass_EditorWhoDemotedCannotApprove(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 demoter")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+	seedHistory(t, super, f.tenantID, f.invoiceID, ptr("validated"), b) // the edit also demoted validated -> draft
+
+	_, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	assertNothingWritten(t, super, f)
+}
+
+// Three authors (creator, B, D) and an edit order B then D: a last-editor-only read refuses D and passes B.
+func TestApprovalBypass_EarlierEditorOfTwoCannotApprove(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 two editors")
+	d := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, d)
+
+	_, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	_, err = approve(t, app, f.tenantID, d, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	assertNothingWritten(t, super, f)
+}
+
+// The editor read runs for the creator too: creator-and-editor reads the creator sentence, an editor alone the editor one.
+func TestDecide_AuthorRung_CreatorWhoAlsoEditedGetsTheCreatorSentence(t *testing.T) {
+	super, app, f, a, b, _ := authorWorld(t, "SECAUD-18 creator-editor")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, a)
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	_, err := approve(t, app, f.tenantID, a, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+	_, err = approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	assertNothingWritten(t, super, f)
+}
+
+// Discriminates "exclude only the subject": A is another approver of B, yet both are authors.
+func TestDecide_AuthorRung_AuthorsWhoAreTheOnlyApproversSelfApprove(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "SECAUD-18 only authors", "author-role")
+	a := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	b := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedHistory(t, super, f.tenantID, f.invoiceID, nil, a)
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	run, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	if err != nil || run.State != "approved" {
+		t.Fatalf("editor who is an only approver approves = %q, %v, want approved", run.State, err)
+	}
+	wantApprovedAs(t, super, f.tenantID, "self_approved")
+}
+
+// B's edit of invoice X is the control: it refuses B on X, so the pass on Y comes from the invoice filter.
+func TestDecide_AuthorRung_AnotherInvoicesEditDoesNotCount(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 other invoice")
+	x := secondValidatedInvoice(t, super, app, f, "author-other-x")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", x, b)
+
+	_, err := approve(t, app, f.tenantID, b, x, nil)
+	wantRefused(t, err, editorSentence)
+
+	run, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	if err != nil || run.State != "approved" {
+		t.Fatalf("approve of the invoice B never edited = %q, %v, want approved", run.State, err)
+	}
+	wantApprovedAs(t, super, f.tenantID, "approver")
+}
+
+// Rejecting clause: the event = 'invoice.updated' filter. The edit on X is the control.
+func TestDecide_AuthorRung_NonContentEventsDoNotMakeAnAuthor(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 non-content")
+	x := secondValidatedInvoice(t, super, app, f, "author-noncontent-x")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", x, b)
+	for _, ev := range []string{"invoice.validated", "invoice.kept_as_is", "invoice.transitioned"} {
+		seedInvoiceEvent(t, super, f.tenantID, ev, f.invoiceID, b)
+	}
+
+	_, err := approve(t, app, f.tenantID, b, x, nil)
+	wantRefused(t, err, editorSentence)
+
+	run, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	if err != nil || run.State != "approved" {
+		t.Fatalf("approve after non-content events only = %q, %v, want approved", run.State, err)
+	}
+	wantApprovedAs(t, super, f.tenantID, "approver")
+}
+
+func TestDecide_AuthorRung_EditorMayReject(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 editor rejects")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	// Control: the same editor is refused on approve, so the reject below passes the author rung by design.
+	_, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+
+	run, err := reject(t, app, f.tenantID, b, f.invoiceID, ptr("wrong buyer"))
+	if err != nil || run.State != "rejected" {
+		t.Fatalf("editor reject = %q, %v, want rejected", run.State, err)
+	}
+	if ds := decisionsForRun(t, super, f.runID); len(ds) != 1 || ds[0].Decision != "rejected" {
+		t.Errorf("decisions = %+v, want one rejected", ds)
+	}
+}
+
+// Rejecting clause: the author exclusion in the OtherDelegate read. B is the step's only delegate and an author.
+func TestDecide_AuthorRung_AnEditorDelegateIsNotAnOtherDelegate(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "SECAUD-18 editor delegate", "author-role")
+	a := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	b := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"})
+	seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer"}) // C: reaches the client, no role
+	seedHistory(t, super, f.tenantID, f.invoiceID, nil, a)
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+	setStepDelegation(t, super, f.stepID, true, &b)
+
+	_, err := approve(t, app, f.tenantID, a, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence+" "+noHolderSentence)
+	assertNothingWritten(t, super, f)
+}
+
+// B edited before the first validation, then moved the invoice to draft with no edit and A validated again.
+// An "edits since the previous validation" read would pass B on the new run.
+func TestApprovalBypass_EditorFromAnEarlierCycleCannotApprove(t *testing.T) {
+	super, app, f, _, b, _ := authorWorld(t, "SECAUD-18 earlier cycle")
+	seedInvoiceEvent(t, super, f.tenantID, "invoice.updated", f.invoiceID, b)
+	_, err := approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+
+	if err := db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
+		_, err := CancelLiveRunTx(context.Background(), tx, f.invoiceID, "INV-1", b)
+		return err
+	}); err != nil {
+		t.Fatalf("cancel the first run: %v", err)
+	}
+	setInvoiceStatus(t, super, f.invoiceID, "draft")
+	setInvoiceStatus(t, super, f.invoiceID, "validated")
+	res, err := arm(t, app, f.tenantID, f.invoiceID, "fp-second-cycle", "fixture-arm")
+	if err != nil {
+		t.Fatalf("arm the second cycle: %v", err)
+	}
+	if res.RunID == f.runID {
+		t.Fatalf("second cycle reused run %s, want a new run", res.RunID)
+	}
+
+	_, err = approve(t, app, f.tenantID, b, f.invoiceID, nil)
+	wantRefused(t, err, editorSentence)
+	if n := len(decisionsForRun(t, super, res.RunID)); n != 0 {
+		t.Errorf("decisions on the new run = %d, want 0", n)
+	}
 }

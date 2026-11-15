@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -308,26 +309,87 @@ func TestCreatorStanding_DelegateAgreesWithDelegateMayDecide(t *testing.T) {
 	}
 }
 
+// withEditor sets CreatorStanding.IsEditor by reflection: the field is absent on head, and a plain
+// reference would stop the whole package compiling.
+func withEditor(t *testing.T, s CreatorStanding, v bool) CreatorStanding {
+	t.Helper()
+	f := reflect.ValueOf(&s).Elem().FieldByName("IsEditor")
+	if !f.IsValid() {
+		t.Fatal("CreatorStanding has no IsEditor field")
+	}
+	f.SetBool(v)
+	return s
+}
+
+func isEditor(t *testing.T, s CreatorStanding) bool {
+	t.Helper()
+	f := reflect.ValueOf(s).FieldByName("IsEditor")
+	if !f.IsValid() {
+		t.Fatal("CreatorStanding has no IsEditor field")
+	}
+	return f.Bool()
+}
+
 func TestCreatorStanding_Refusal(t *testing.T) {
 	both := CreatorRefusedReason + " " + CreatorNoRoleHolderReason
+	editorBoth := editorSentence + " " + CreatorNoRoleHolderReason
 	for _, c := range []struct {
 		name        string
 		s           CreatorStanding
+		editor      bool
 		want        string
 		wantRefused bool
+		wantSelf    bool
 	}{
-		{"not the creator", CreatorStanding{OtherApprover: true}, "", false},
-		{"creator, no other approver", CreatorStanding{IsCreator: true}, "", false},
-		{"holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, CreatorRefusedReason, true},
-		{"delegate only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}, CreatorRefusedReason, true},
-		{"neither", CreatorStanding{IsCreator: true, OtherApprover: true}, both, true},
+		{"not an author", CreatorStanding{OtherApprover: true}, false, "", false, false},
+		{"creator, no other approver", CreatorStanding{IsCreator: true}, false, "", false, true},
+		{"holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, false, CreatorRefusedReason, true, false},
+		{"delegate only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}, false, CreatorRefusedReason, true, false},
+		{"neither", CreatorStanding{IsCreator: true, OtherApprover: true}, false, both, true, false},
+		{"editor, no other approver", CreatorStanding{}, true, "", false, true},
+		{"editor, holder only", CreatorStanding{OtherApprover: true, OtherRoleHolder: true}, true, editorSentence, true, false},
+		{"editor, delegate only", CreatorStanding{OtherApprover: true, OtherDelegate: true}, true, editorSentence, true, false},
+		{"editor, neither", CreatorStanding{OtherApprover: true}, true, editorBoth, true, false},
+		{"creator and editor, holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, true, CreatorRefusedReason, true, false},
+		{"creator and editor, neither", CreatorStanding{IsCreator: true, OtherApprover: true}, true, both, true, false},
+		{"creator and editor, no other approver", CreatorStanding{IsCreator: true}, true, "", false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, refused := c.s.Refusal()
+			s := c.s
+			if c.editor {
+				s = withEditor(t, s, true)
+			}
+			got, refused := s.Refusal()
 			if got != c.want || refused != c.wantRefused {
 				t.Errorf("Refusal() = %q, %t, want %q, %t", got, refused, c.want, c.wantRefused)
 			}
+			if self := s.SelfApproved(); self != c.wantSelf {
+				t.Errorf("SelfApproved() = %t, want %t", self, c.wantSelf)
+			}
 		})
+	}
+}
+
+// B is an editor in tenant 1 only through a same-tenant row. The row in tenant 2 names tenant 1's invoice and must not count.
+func TestCreatorStanding_AnotherTenantsEditDoesNotCount(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newStandingWorld(t, super, "SECAUD-18 xt-edit")
+	other := newStandingWorld(t, super, "SECAUD-18 xt-edit other")
+	b := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", roleID: w.roleID})
+	seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", roleID: w.roleID}) // a non-author approver
+	crossed := w.invoice
+	seedInvoiceEvent(t, super, other.tenantID, "invoice.updated", crossed, b)
+	edited := seedInvoice(t, super, w.tenantID, w.entA, "xt-edited")
+	seedHistory(t, super, w.tenantID, edited, nil, w.creator)
+	seedInvoiceEvent(t, super, w.tenantID, "invoice.updated", edited, b)
+
+	got := readStanding(t, app, w.tenantID, b,
+		CreatorProbe{InvoiceID: crossed, RoleKey: ptr("standing-role")}, CreatorProbe{InvoiceID: edited, RoleKey: ptr("standing-role")})
+	if !isEditor(t, got[edited]) {
+		t.Errorf("standing of the invoice B edited in this tenant = %+v, want IsEditor", got[edited])
+	}
+	if isEditor(t, got[crossed]) {
+		t.Errorf("standing of the invoice with only another tenant's edit row = %+v, want no IsEditor", got[crossed])
 	}
 }
 

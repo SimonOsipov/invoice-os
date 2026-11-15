@@ -25,7 +25,8 @@ env:
   PR: ${{ github.event.pull_request.number || 'nightly' }}
   WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
   HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
-  DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
+  # The nightly (dispatch from main) deploys as deploy-nightly; Workload Identity admits it from main only.
+  DEPLOYER: ${{ github.event_name == 'workflow_dispatch' && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}
 
 jobs:
   # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant or a Dependabot PR whose every commit is Dependabot's.
@@ -226,8 +227,12 @@ jobs:
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.DEPLOYER }}
+          # Checks the PR deployer on every run.
+          service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
       - run: bash scripts/ci/preview.sh invariants
+        env:
+          # The owner sets it to true once the PR side has lost the nightly secrets.
+          NIGHTLY_KEYS_CLOSED: ${{ vars.NIGHTLY_KEYS_CLOSED }}
       # Proves a push by digest lands in previews as one untagged image manifest, before production relies on it.
       - name: Push a probe image by digest
         if: ${{ !cancelled() }}

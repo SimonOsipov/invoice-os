@@ -510,9 +510,23 @@ jobs:
     if: "!cancelled() && needs.deploy.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      # The gateway /health shows its detail only to X-Gateway-Token.
+      - name: Read the PR's gateway token
+        run: |
+          token=$(bash scripts/ci/preview.sh token "$PR")
+          echo "::add-mask::$token"
+          echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
       - name: Wait for gateway /health 200 on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -523,7 +537,7 @@ jobs:
           mock=""
           issuers=""
           for _ in $(seq 1 60); do
-            body=$(curl -fsS --connect-timeout 5 --max-time 10 "$GATEWAY_URL/health" 2>/dev/null || echo '')
+            body=$(curl -fsS --connect-timeout 5 --max-time 10 -H "X-Gateway-Token: $GATEWAY_TOKEN" "$GATEWAY_URL/health" 2>/dev/null || echo '')
             seen=$(printf '%s' "$body" | jq -r '.build // empty' 2>/dev/null || echo '')
             if [ -n "$seen" ] && [ "$seen" = "$EXPECTED_BUILD" ]; then
               # Read the fields out of the SAME body that carried the matching build.
@@ -550,7 +564,6 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod

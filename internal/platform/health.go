@@ -61,6 +61,24 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+// HideHealthDetail makes /health and /healthz answer status only unless the
+// caller sends token in X-Gateway-Token. Panics on an empty token.
+func (a *App) HideHealthDetail(token string) {
+	if token == "" {
+		panic("platform: HideHealthDetail got an empty token")
+	}
+	a.healthToken = token
+}
+
+// health answers 200 either way; a missing or wrong token never gets a 401.
+func (a *App) health(w http.ResponseWriter, r *http.Request) {
+	if a.healthToken != "" && !tokenMatches(r.Header.Get(HeaderGatewayToken), a.healthToken) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	healthzHandler(w, r)
+}
+
 // readyzHandler runs every registered readiness check. All pass → 200; any
 // failure → 503 with the failing dependency names.
 func (rd *readiness) readyzHandler(w http.ResponseWriter, r *http.Request) {

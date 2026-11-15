@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# preview.sh — one preview (a PR's, or the nightly's) in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview.
+# preview.sh — one preview (a PR's, or the nightly's) in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview, or deploy-nightly for the nightly.
 # The shared resources (network, Cloud SQL, preview-db job, shared secrets) are invoice-os-infra preview.tf.
 #
 #   preview.sh urls <pr|nightly>                  print <name>_url=<address> for each public site
@@ -37,7 +37,6 @@ REGION=africa-south1
 REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/previews
 # The repository deploy-prod.yml deploys from; preview must not write to it.
 PROD_IMAGES=images
-RUNTIME=run-preview@ascomply-preview.iam.gserviceaccount.com
 LABEL=preview-pr
 gc=(--project "$PROJECT" --region "$REGION" --quiet)
 
@@ -71,6 +70,8 @@ deal_stage() { echo appointmentscheduled; }
 
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
+# runtime <name>: the service account a preview runs as; only run-nightly reads nightly-* secrets.
+runtime() { if [ "$1" = nightly ]; then echo run-nightly@ascomply-preview.iam.gserviceaccount.com; else echo run-preview@ascomply-preview.iam.gserviceaccount.com; fi; }
 dbname() { if [ "$1" = nightly ]; then echo pr_0; else echo "pr_$1"; fi; }
 
 url() { printf 'https://%s-%s-%s.%s.run.app' "$1" "$(suffix "$2")" "$PROJECT_NUMBER" "$REGION"; }
@@ -132,6 +133,12 @@ repool() {
   echo "updated $1"
 }
 
+# bind_nightly <secret>: run-nightly alone may read a nightly secret.
+bind_nightly() {
+  gcloud secrets add-iam-policy-binding "$1" --project "$PROJECT" --member "serviceAccount:$(runtime nightly)" \
+    --role roles/secretmanager.secretAccessor --condition=None >/dev/null || die "cannot give run-nightly access to $1"
+}
+
 cmd_secrets() {
   local pr=$1 db have name ip pool
   db=$(dbname "$pr")
@@ -146,6 +153,7 @@ cmd_secrets() {
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
       [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"
+      [ "$pr" != nightly ] || bind_nightly "$(secret "$pr" "$name")"
       continue
     fi
     case "$name" in
@@ -159,6 +167,7 @@ cmd_secrets() {
       database-gateway-url) dsn invoice_gateway "$(shared gateway-password)" "&pool_max_conns=$(pool_conns database-gateway-url)" ;;
       database-auth-url) dsn supabase_auth_admin "$(shared auth-admin-password)" '' ;;
     esac | put "$(secret "$pr" "$name")" "$pr"
+    [ "$pr" != nightly ] || bind_nightly "$(secret "$pr" "$name")"
   done
 }
 
@@ -314,7 +323,7 @@ deploy_one() {
   esac
   envf=$(mktemp)
   env_file "$pr" "$svc" "$envf"
-  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$RUNTIME" --labels "$LABEL=$pr"
+  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$(runtime "$pr")" --labels "$LABEL=$pr"
     --env-vars-file "$envf" --min-instances "$min" --max-instances "$(max_instances "$svc")" --cpu "$cpu" --memory "$memory"
     --no-cpu-boost --ingress all)
   secrets=$(secrets_of "$pr" "$svc")
@@ -345,8 +354,8 @@ cmd_deploy() {
       esac
     done
   fi
-  export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool deal_stage
-  export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL HUBSPOT_TOKEN_SECRET
+  export -f deploy_one env_file secrets_of url image secret suffix runtime dbname max_instances gotrue_pool deal_stage
+  export PROJECT PROJECT_NUMBER REGION REGISTRY LABEL HUBSPOT_TOKEN_SECRET
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
   printf '%s\n' "$@" | xargs -P 4 -I{} bash -c 'gc=(--project "$PROJECT" --region "$REGION" --quiet); deploy_one "$0" "$1" "$2" >"deploy-$2.log" 2>&1' \
@@ -371,7 +380,7 @@ migrate_job() {
     echo "DOCUMENT_REGION: auto"
   } >"$envf"
   gcloud run jobs deploy "migrate-$(suffix "$pr")" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
-    --service-account "$RUNTIME" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
+    --service-account "$(runtime "$pr")" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
     --network preview --subnet run --vpc-egress private-ranges-only \
     --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest"
   rm -f "$envf"

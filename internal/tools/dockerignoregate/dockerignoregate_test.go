@@ -85,11 +85,12 @@ func ignored(patterns []string, p string) bool {
 	return out
 }
 
-func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
-	root := repoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "frontend/blog/Dockerfile.dockerignore"))
+// ignorePatterns reads one ignore file's patterns, without comments or blanks.
+func ignorePatterns(t *testing.T, root, rel string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
-		t.Fatalf("read the blog ignore file: %v", err)
+		t.Fatalf("read %s: %v", rel, err)
 	}
 	var patterns []string
 	for _, l := range strings.Split(string(raw), "\n") {
@@ -97,6 +98,29 @@ func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
 			patterns = append(patterns, l)
 		}
 	}
+	return patterns
+}
+
+func TestIgnoreFilesDenyEnvFiles(t *testing.T) {
+	root := repoRoot(t)
+	for _, rel := range []string{".dockerignore", "frontend/blog/Dockerfile.dockerignore", "Dockerfile.dockerignore", "sidecar/docling/Dockerfile.dockerignore"} {
+		t.Run(rel, func(t *testing.T) {
+			patterns := ignorePatterns(t, root, rel)
+			if !ignored(patterns, ".env") {
+				t.Fatalf("control: .env is not ignored by %s; the matcher reached nothing", rel)
+			}
+			for _, p := range []string{".env.local", ".env.production", "cmd/gateway/.env.local", "frontend/app/.env.local", "sidecar/docling/.env.local"} {
+				if !ignored(patterns, p) {
+					t.Errorf("%s is not ignored; it would enter the build context", p)
+				}
+			}
+		})
+	}
+}
+
+func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
+	root := repoRoot(t)
+	patterns := ignorePatterns(t, root, "frontend/blog/Dockerfile.dockerignore")
 
 	// Control: the matcher denies a path the file names outright.
 	if !ignored(patterns, ".claude/rules/blog.md") {

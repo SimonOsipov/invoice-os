@@ -27,6 +27,8 @@ paths:
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Call a mock route only through the `e2e/api/client.ts` helpers. Never call it through the Playwright `request` fixture or a `page`, because a trace records request headers.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
+- Read a session's refresh token only from the browser context's gateway cookie (`e2e/sessionCookie.ts`), never from storage.
+- Seed a console session through a real hand-off (`openWithHandoff`).
 - Serve `/auth/mock/member`, `/auth/mock/invitation-token`, `/auth/mock/deletion-link-token` and `/auth/mock/readiness-confirm-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
@@ -66,3 +68,5 @@ paths:
 - Expect every preview SPA image to carry all eight `VITE_*_URL` build args from `preview.sh urls` (`dev-env.yml` `Build and push`), and each backend's URLs from `preview.sh`'s env file. Change them there, not in a spec.
 - Expect a preview to accept registrations, send no mail and confirm at once. The `auth` case of `preview.sh`'s env file sets `GOTRUE_DISABLE_SIGNUP` false and `GOTRUE_MAILER_AUTOCONFIRM` true.
 - Expect a PR topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.
+- Cover the SPA script policy, its violations and the HttpOnly-only refresh token in `e2e/smoke/content-security-policy.spec.ts`.
+- Set `bypassCSP` only in `error-monitoring.spec.ts`.

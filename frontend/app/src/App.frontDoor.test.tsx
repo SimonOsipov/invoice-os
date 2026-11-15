@@ -374,7 +374,7 @@ describe('front door: ?auth=console forwards a code to the console', () => {
   const seatWith = (token: string) =>
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, refresh_token: 'R0', received_at: Date.now() }),
+      JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, received_at: Date.now() }),
     )
 
   type Answer = { status: number; body: unknown } | 'held' | 'network' | 'badjson'
@@ -486,7 +486,7 @@ describe('front door: ?auth=console forwards a code to the console', () => {
     const seen: string[] = []
     vi.stubGlobal('fetch', (u: string, i: RequestInit) => {
       seen.push(u)
-      if (u === `${GATEWAY}/auth/exchange`) return ok({ access_token: STAFF, refresh_token: 'R0' })
+      if (u === `${GATEWAY}/auth/exchange`) return ok({ access_token: STAFF, renewable: true })
       if (u === `${GATEWAY}/api/tenancy/v1/me`) return ok(ME)
       return base(u, i)
     })

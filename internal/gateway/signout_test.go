@@ -139,7 +139,7 @@ func newSignOutRig(t *testing.T, gotrue *signOutFake, authURL *url.URL, log *slo
 		sessionRig: rg,
 		user:       user,
 		gotrue:     gotrue,
-		handler:    SignOutHandler(authURL, testClient(), rg.sessions, log, nil),
+		handler:    SignOutHandler(authURL, testClient(), rg.sessions, log, nil, nil),
 		tokS1:      rg.signer.token(t, subjectS1, sid1),
 	}
 	if rec := rg.get(r.tokS1); rec.Code != http.StatusOK || user.Hits() != 1 {
@@ -303,7 +303,7 @@ func ptr(b bool) *bool { return &b }
 
 func TestSignOut_BadBody400NoUpstreamCall(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
-	h := SignOutHandler(fake.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil)
+	h := SignOutHandler(fake.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil, nil)
 
 	// The contract's limit, not the constant: refreshBody adds 20 bytes around the token.
 	const oneKiB = 1024
@@ -352,7 +352,7 @@ func TestSignOut_NoStoreAndPostOnly(t *testing.T) {
 	ok := answer(http.StatusNoContent, "")
 	handler := func(token, logout http.HandlerFunc) (http.Handler, *signOutFake) {
 		f := newSignOutFake(t, token, logout)
-		return SignOutHandler(f.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil), f
+		return SignOutHandler(f.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil, nil), f
 	}
 	h, fake := handler(granted, ok)
 	answers := map[string]*httptest.ResponseRecorder{}
@@ -418,7 +418,7 @@ func TestSignOut_NeverLogsSecrets(t *testing.T) {
 			authURL = closedURL(t)
 		}
 		log, buf := captureLog()
-		doSignOut(SignOutHandler(authURL, testClient(), liveSessions(t), log, nil), refreshBody(signOutR0))
+		doSignOut(SignOutHandler(authURL, testClient(), liveSessions(t), log, nil, nil), refreshBody(signOutR0))
 		logs[c.name] = buf.String()
 		for _, secret := range []string{signOutR0, signOutR1, access, sig, subjectS1} {
 			if strings.Contains(buf.String(), secret) {
@@ -584,7 +584,7 @@ func TestSignOut_GrantSurvivesClientCancel(t *testing.T) {
 
 func TestSignOut_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
-	h := SignOutHandler(fake.URL.JoinPath("prefix"), testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil)
+	h := SignOutHandler(fake.URL.JoinPath("prefix"), testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil, nil)
 
 	if rec := doSignOut(h, refreshBody(signOutR0)); rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204: %s", rec.Code, rec.Body.String())
@@ -717,4 +717,338 @@ func TestSignOut_AFailedRevocationWriteStillAnswers204(t *testing.T) {
 	if !rg.evicted() {
 		t.Error("S1's next request used the cache, want the local eviction to hold")
 	}
+}
+
+// newCookieSignOutRig is newSignOutRig with the session origins configured; a nil authURL is gotrue's.
+func newCookieSignOutRig(t *testing.T, gotrue *signOutFake, authURL *url.URL, log *slog.Logger, events AccountEvents) *signOutRig {
+	t.Helper()
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	rg := newSignOutRig(t, gotrue, authURL, log)
+	if authURL == nil {
+		authURL = gotrue.URL
+	}
+	rg.handler = SignOutHandler(authURL, testClient(), rg.sessions, log, events, testSessionCookies(t))
+	return rg
+}
+
+func doCookieSignOut(h http.Handler, origin, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return doSession(h, "/auth/sign-out", body, cookieModeHeaders(origin), cookies...)
+}
+
+// grantTokens returns the refresh_token of each /token call GoTrue saw.
+func grantTokens(t *testing.T, f *signOutFake) []string {
+	t.Helper()
+	var out []string
+	for _, c := range f.Calls() {
+		if !strings.HasSuffix(c.Path, "/token") {
+			continue
+		}
+		var m map[string]string
+		if err := json.Unmarshal(c.Body, &m); err != nil {
+			t.Fatalf("grant body %q is not JSON: %v", c.Body, err)
+		}
+		out = append(out, m["refresh_token"])
+	}
+	return out
+}
+
+func okSignOutFake(t *testing.T) (*signOutFake, string) {
+	t.Helper()
+	access := signOutAccess(t, subjectS1)
+	return newSignOutFake(t, answer(http.StatusOK, signOutGranted(access)), answer(http.StatusNoContent, "")), access
+}
+
+func TestSignOut_CookieModeRevokesWithTheCookieAndClears(t *testing.T) {
+	fake, access := okSignOutFake(t)
+	events := &recEvents{}
+	rg := newCookieSignOutRig(t, fake, nil, nil, events)
+
+	rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("answer = %d %q, want 204 with no body", rec.Code, rec.Body.String())
+	}
+	calls := fake.Calls()
+	if len(calls) != 2 || !strings.HasSuffix(calls[0].Path, "/token") || calls[1].Path != "/logout" || calls[1].RawQuery != "scope=global" {
+		t.Fatalf("GoTrue saw %+v, want [refresh grant, POST /logout?scope=global]", calls)
+	}
+	if got := grantTokens(t, fake); len(got) != 1 || got[0] != signOutR0 {
+		t.Errorf("grant saw %q, want the cookie's %q", got, signOutR0)
+	}
+	if calls[1].Auth != "Bearer "+access {
+		t.Errorf("logout Authorization = %q, want the grant's access token", calls[1].Auth)
+	}
+	if !rg.evicted() {
+		t.Error("S1 is still cached after a cookie-mode sign-out")
+	}
+	events.requireNames(t, EventSignedOut)
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestSignOut_CookieModeRefusesAnOriginOutsideTheList(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	for name, origin := range map[string]string{"landing": scLanding, "foreign": scEvil, "null": "null", "none": ""} {
+		t.Run(name, func(t *testing.T) {
+			rec := doCookieSignOut(rg.handler, origin, ``, rtCookie("app", signOutR0))
+			requireRefusal(t, rec, http.StatusForbidden, msgOriginNotAllowed)
+			requireNoSetCookie(t, rec)
+		})
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+
+	// Positive pair: the same cookie from the app origin signs out.
+	if rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0)); rec.Code != http.StatusNoContent {
+		t.Errorf("app origin = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSignOut_BodyModeIgnoresTheCookie(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+	cookie := rtCookie("app", signOutR0)
+
+	// A cross-site POST with the cookie and no header cannot sign the user out.
+	rec := doSession(rg.handler, "/auth/sign-out", ``, map[string]string{"Origin": scEvil}, cookie)
+	requireRefusal(t, rec, http.StatusBadRequest, msgInvalidBody)
+	requireNoSetCookie(t, rec)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls from a cookie without the header, want 0", n)
+	}
+
+	// Positive pair: with the header, the same cookie is read.
+	if got := doCookieSignOut(rg.handler, scApp, ``, cookie); got.Code != http.StatusNoContent {
+		t.Errorf("cookie mode with the same cookie = %d, want 204: %s", got.Code, got.Body.String())
+	}
+}
+
+func TestSignOut_CookieModeWithoutACookieIs401AndClears(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	rec := doCookieSignOut(rg.handler, scApp, ``)
+
+	requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestSignOut_CookieModeClearsOnEveryAnswer(t *testing.T) {
+	granted := answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1)))
+	cases := []struct {
+		name          string
+		token, logout http.HandlerFunc
+		closed        bool
+		wantStatus    int
+		wantMsg       string
+	}{
+		{"grant 4xx", answer(400, gtRefreshNotFound), answer(204, ""), false, http.StatusUnauthorized, msgRefreshRefused},
+		{"grant 429", answer(429, gtOverRequestRateLimit), answer(204, ""), false, http.StatusTooManyRequests, msgTooMany},
+		{"grant 5xx", answer(500, gtInternal), answer(204, ""), false, http.StatusBadGateway, msgSignOutUnavailable},
+		{"grant unreachable", nil, nil, true, http.StatusBadGateway, msgSignOutUnavailable},
+		{"logout 5xx", granted, answer(500, gtInternal), false, http.StatusBadGateway, msgSignOutUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newSignOutFake(t, c.token, c.logout)
+			var authURL *url.URL
+			if c.closed {
+				authURL = closedURL(t)
+			}
+			rg := newCookieSignOutRig(t, fake, authURL, nil, nil)
+
+			rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+
+			requireRefusal(t, rec, c.wantStatus, c.wantMsg)
+			requireClearCookie(t, rec, "__Host-rt-app")
+		})
+	}
+}
+
+func TestSignOut_CookieModeAFailedRevocationWriteStillAnswers204(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+	rg.sessions.Shared(deadPool(t))
+
+	rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("answer = %d %q, want 204 with no body", rec.Code, rec.Body.String())
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+	if !rg.evicted() {
+		t.Error("S1's next request used the cache, want the local eviction to hold")
+	}
+}
+
+func TestSignOut_CookieModeRecorderFailureKeepsTheAnswer(t *testing.T) {
+	fake, access := okSignOutFake(t)
+	log, buf := captureLog()
+	rg := newCookieSignOutRig(t, fake, nil, log, &recEvents{err: context.DeadlineExceeded})
+
+	rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+	out := buf.String()
+	if !strings.Contains(out, EventSignedOut) {
+		t.Errorf("the log does not name %s: %s", EventSignedOut, out)
+	}
+	for _, secret := range []string{signOutR0, signOutR1, access, subjectS1} {
+		if strings.Contains(out, secret) {
+			t.Errorf("log carries %q: %s", secret, out)
+		}
+	}
+}
+
+func TestSignOut_CookieModeIgnoresABodyToken(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	rec := doCookieSignOut(rg.handler, scApp, refreshBody(signOutR0), rtCookie("app", scCookieOnly))
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if got := grantTokens(t, fake); len(got) != 1 || got[0] != scCookieOnly {
+		t.Errorf("grant saw %q, want only the cookie's %q", got, scCookieOnly)
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestSignOut_CookieModeSurvivesClientCancel(t *testing.T) {
+	access := signOutAccess(t, subjectS1)
+	arrived := make(chan struct{})
+	release, open := gate(t)
+	var mu sync.Mutex
+	var completed []string // bearers of /logout calls answered on a live connection
+	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(access)), func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release
+		// A caller that abandoned the call closes the connection; give the server time to see it.
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+		mu.Lock()
+		completed = append(completed, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/sign-out", nil)
+	req.Header.Set(SessionHeader, "cookie")
+	req.Header.Set("Origin", scApp)
+	req.AddCookie(rtCookie("app", signOutR0))
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rg.handler.ServeHTTP(rec, req)
+	}()
+
+	select {
+	case <-arrived:
+		cancel() // the app gives up once the grant has rotated the token
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler neither finished nor reached /logout within 5s")
+	}
+	open()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not finish within 5s of the logout answer")
+	}
+
+	mu.Lock()
+	got := slices.Clone(completed)
+	mu.Unlock()
+	if want := []string{"Bearer " + access}; !slices.Equal(got, want) {
+		t.Errorf("completed /logout calls = %q, want %q", got, want)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	requireClearCookie(t, rec, "__Host-rt-app")
+}
+
+func TestSignOut_CookieModeReadsOnlyItsOwnAudienceCookie(t *testing.T) {
+	fake, _ := okSignOutFake(t)
+	rg := newCookieSignOutRig(t, fake, nil, nil, nil)
+
+	// Each other audience's cookie, presented from the app origin, signs nobody out.
+	for _, aud := range []string{"ops", "support"} {
+		rec := doCookieSignOut(rg.handler, scApp, ``, rtCookie(aud, signOutR0))
+		requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+		requireClearCookie(t, rec, "__Host-rt-app")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+
+	// Positive pair: the ops origin reads its own cookie and clears its own name.
+	rec := doCookieSignOut(rg.handler, scOps, ``, rtCookie("ops", signOutR0))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("ops origin with the ops cookie = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	requireClearCookie(t, rec, "__Host-rt-ops")
+}
+
+// A replayed sign-out (a second tab, or a copied cookie) revokes nothing twice and still clears.
+func TestSignOut_CookieModeRepeatedSignOutRevokesOnce(t *testing.T) {
+	access := signOutAccess(t, subjectS1)
+	var grants int
+	var mu sync.Mutex
+	token := func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		grants++
+		first := grants == 1
+		mu.Unlock()
+		if first {
+			answer(http.StatusOK, signOutGranted(access))(w, r)
+			return
+		}
+		answer(http.StatusBadRequest, gtRefreshAlreadyUsed)(w, r)
+	}
+	fake := newSignOutFake(t, token, answer(http.StatusNoContent, ""))
+	events := &recEvents{}
+	rg := newCookieSignOutRig(t, fake, nil, nil, events)
+
+	first := doCookieSignOut(rg.handler, scApp, ``, rtCookie("app", signOutR0))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first sign-out = %d, want 204: %s", first.Code, first.Body.String())
+	}
+	requireClearCookie(t, first, "__Host-rt-app")
+
+	// The same cookie again, then no cookie at all.
+	for _, cookies := range [][]*http.Cookie{{rtCookie("app", signOutR0)}, nil} {
+		rec := doCookieSignOut(rg.handler, scApp, ``, cookies...)
+		requireRefusal(t, rec, http.StatusUnauthorized, msgRefreshRefused)
+		requireClearCookie(t, rec, "__Host-rt-app")
+	}
+
+	logouts := 0
+	for _, c := range fake.Calls() {
+		if c.Path == "/logout" {
+			logouts++
+		}
+	}
+	if logouts != 1 {
+		t.Errorf("GoTrue saw %d logouts, want exactly 1", logouts)
+	}
+	events.requireNames(t, EventSignedOut)
 }

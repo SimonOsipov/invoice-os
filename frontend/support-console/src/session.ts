@@ -9,8 +9,8 @@ const renewOnce = (): Promise<void> => {
   renewing ??= (async () => {
     const s = loadConsoleSession(SESSION_KEY)
     const base = gatewayBase()
-    if (!s?.refreshToken || !base) throw new ApiError('http', 'Not signed in', 401)
-    const next = await renewConsoleSession(base, { token: s.token, refreshToken: s.refreshToken })
+    if (!s || s.borrowed || !base) throw new ApiError('http', 'Not signed in', 401)
+    const next = await renewConsoleSession(base, s.legacyRefreshToken)
     if (!isStaffToken(next.token)) throw new ApiError('http', 'Not signed in', 401)
     saveConsoleSession(SESSION_KEY, next)
   })().finally(() => {

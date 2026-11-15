@@ -136,7 +136,7 @@ func newExportRigLogging(t *testing.T, log *slog.Logger) *exportRig {
 		up:       up,
 		mint:     verifier.Middleware(sessions.Middleware(ExportCodeHandler(store, log))),
 		download: ExportDownloadHandler(store, api, log),
-		exchange: ExchangeHandler(store),
+		exchange: ExchangeHandler(store, nil),
 	}
 }
 

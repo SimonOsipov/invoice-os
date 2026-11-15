@@ -40,7 +40,17 @@ const (
 //
 // No Access-Control-Allow-Credentials: the round trip authenticates with a bearer token,
 // not cookies, so credentialed CORS (and its ban on a wildcard origin) never applies.
+// The three session routes are the one exception, through SessionCORS.
 func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	return cors(allowedOrigins, nil)
+}
+
+// SessionCORS is CORS plus credentials and the X-Auth-Session grant for the session origins of c.
+func SessionCORS(allowed []string, c *SessionCookies) func(http.Handler) http.Handler {
+	return cors(allowed, c)
+}
+
+func cors(allowedOrigins []string, session *SessionCookies) func(http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, o := range allowedOrigins {
 		if o = strings.TrimSpace(o); o != "" {
@@ -61,6 +71,9 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				// (evidence-bundle download, AUDIT-05-08); grants no access, leaks
 				// nothing (D-43).
 				h.Set("Access-Control-Expose-Headers", "Content-Disposition")
+				if session.isSessionOrigin(origin) {
+					h.Set("Access-Control-Allow-Credentials", "true")
+				}
 			}
 
 			// Preflight: an OPTIONS carrying an Origin. Answer it here so it never falls
@@ -69,7 +82,11 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				if originAllowed {
 					h := w.Header()
 					h.Set("Access-Control-Allow-Methods", corsAllowMethods)
-					h.Set("Access-Control-Allow-Headers", corsAllowHeaders)
+					allow := corsAllowHeaders
+					if session.isSessionOrigin(origin) {
+						allow += ", " + SessionHeader
+					}
+					h.Set("Access-Control-Allow-Headers", allow)
 					h.Set("Access-Control-Max-Age", corsMaxAge)
 				}
 				w.WriteHeader(http.StatusNoContent)

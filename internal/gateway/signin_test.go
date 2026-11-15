@@ -120,7 +120,7 @@ func newSignInRigSink(t *testing.T, authURL *url.URL, log *slog.Logger, sink Con
 		throttle: th,
 		clock:    clk,
 		signIn:   SignInHandler(authURL, testClient(), store, th, log, sink, nil),
-		exchange: ExchangeHandler(store),
+		exchange: ExchangeHandler(store, nil),
 	}
 }
 
@@ -861,5 +861,163 @@ func TestSignIn_AnUnreadableThrottleAnswers503(t *testing.T) {
 	requireRefusal(t, rec, http.StatusServiceUnavailable, msgUnavailable)
 	if n := fake.Hits(); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+// cookieExchangeRig is an exchange handler in front of a store, with the session origins configured.
+func cookieExchangeRig(t *testing.T) *signInRig {
+	t.Helper()
+	rig := newSignInRig(t, closedURL(t), nil)
+	rig.exchange = ExchangeHandler(rig.store, testSessionCookies(t))
+	return rig
+}
+
+// doCookieExchange redeems in cookie mode from origin; "" sends no Origin.
+func (r *signInRig) doCookieExchange(origin, body string) *httptest.ResponseRecorder {
+	return doSession(r.exchange, "/auth/exchange", body, cookieModeHeaders(origin))
+}
+
+func (r *signInRig) put(t *testing.T, answer, state string) string {
+	t.Helper()
+	code, ok := r.store.Put(answer, stateHash(state))
+	if !ok {
+		t.Fatal("hand-off store refused the answer")
+	}
+	return code
+}
+
+const exchangeAnswerRT = `{"access_token":"A","refresh_token":"R"}`
+
+func requireJSONBody(t *testing.T, rec *httptest.ResponseRecorder, want map[string]any) {
+	t.Helper()
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("body = %s (err %v), want exactly %v", rec.Body.String(), err, want)
+	}
+}
+
+func TestExchange_CookieModeSetsTheCookieAndAnswersNoRefreshToken(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+	code := rig.put(t, exchangeAnswerRT, s)
+
+	rec := rig.doCookieExchange(scApp, exchangeBody(code, s))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	requireJSONBody(t, rec, map[string]any{"access_token": "A", "renewable": true})
+	requireSetCookie(t, rec, "__Host-rt-app", "R")
+}
+
+func TestExchange_CookieModeRefusesAnOriginOutsideTheList(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+	code := rig.put(t, exchangeAnswerRT, s)
+
+	for name, origin := range map[string]string{"landing": scLanding, "foreign": scEvil, "null": "null", "none": ""} {
+		t.Run(name, func(t *testing.T) {
+			rec := rig.doCookieExchange(origin, exchangeBody(code, s))
+			requireRefusal(t, rec, http.StatusForbidden, msgOriginNotAllowed)
+			requireNoSetCookie(t, rec)
+		})
+	}
+
+	// The refusals left the code unspent.
+	rec := rig.doCookieExchange(scApp, exchangeBody(code, s))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("redeem from the app origin = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	requireSetCookie(t, rec, "__Host-rt-app", "R")
+}
+
+func TestExchange_BrowserOriginWithoutTheHeaderIs403(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+	code := rig.put(t, exchangeAnswerRT, s)
+
+	for _, origin := range []string{scApp, scLanding, scEvil, "null"} {
+		t.Run(origin, func(t *testing.T) {
+			rec := doSession(rig.exchange, "/auth/exchange", exchangeBody(code, s), map[string]string{"Origin": origin})
+			requireRefusal(t, rec, http.StatusForbidden, msgOriginNotAllowed)
+			requireNoSetCookie(t, rec)
+		})
+	}
+
+	rec := rig.doCookieExchange(scApp, exchangeBody(code, s))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("redeem in cookie mode = %d, want 200: the refusals spent the code: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExchange_BodyModeIsUnchanged(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+	code := rig.put(t, sessionAnswer, s)
+
+	rec := serve(rig.exchange, http.MethodPost, "/auth/exchange", exchangeBody(code, s))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != sessionAnswer {
+		t.Errorf("body = %s, want the stored answer byte for byte %s", got, sessionAnswer)
+	}
+	requireNoSetCookie(t, rec)
+}
+
+func TestExchange_CookieModeBorrowedCodeClearsTheCookie(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+	code := rig.put(t, `{"access_token":"A"}`, s)
+
+	rec := rig.doCookieExchange(scSupport, exchangeBody(code, s))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	requireJSONBody(t, rec, map[string]any{"access_token": "A", "renewable": false})
+	requireClearCookie(t, rec, "__Host-rt-support")
+}
+
+func TestExchange_CookieModeSpentCodeLeavesTheCookie(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+
+	// Positive control: a live code does set the cookie.
+	live := rig.put(t, exchangeAnswerRT, s)
+	requireSetCookie(t, rig.doCookieExchange(scApp, exchangeBody(live, s)), "__Host-rt-app", "R")
+
+	expired := rig.put(t, exchangeAnswerRT, s)
+	rig.clock.Advance(HandoffTTL + time.Second)
+	wrongState := rig.put(t, exchangeAnswerRT, s)
+	for name, body := range map[string]string{
+		"spent":       exchangeBody(live, s),
+		"expired":     exchangeBody(expired, s),
+		"wrong state": exchangeBody(wrongState, randomState(t)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := rig.doCookieExchange(scApp, body)
+			requireRefusal(t, rec, http.StatusBadRequest, msgBadCode)
+			requireNoSetCookie(t, rec)
+		})
+	}
+}
+
+func TestExchange_CookieModeUnreadableAnswerIs502(t *testing.T) {
+	rig := cookieExchangeRig(t)
+	s := randomState(t)
+
+	for name, stored := range map[string]string{"not json": `not json`, "no access token": `{"refresh_token":"R"}`} {
+		t.Run(name, func(t *testing.T) {
+			rec := rig.doCookieExchange(scApp, exchangeBody(rig.put(t, stored, s), s))
+			requireRefusal(t, rec, http.StatusBadGateway, msgUnavailable)
+			requireNoSetCookie(t, rec)
+		})
+	}
+
+	// Positive pair: a readable answer on the same handler is 200.
+	if rec := rig.doCookieExchange(scApp, exchangeBody(rig.put(t, exchangeAnswerRT, s), s)); rec.Code != http.StatusOK {
+		t.Errorf("readable answer = %d, want 200", rec.Code)
 	}
 }

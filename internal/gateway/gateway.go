@@ -185,6 +185,7 @@ func newReverseProxy(service string, target *url.URL, gatewayToken string, log *
 			// The outbound round tripper sets its own sentry-trace; inbound ones are not trusted.
 			pr.Out.Header.Del("sentry-trace")
 			pr.Out.Header.Del("baggage")
+			dropSessionCookies(pr.Out)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// A guard refusal is a gateway/service token mismatch, not the user's: answer 502, never 401.
@@ -206,6 +207,17 @@ func newReverseProxy(service string, target *url.URL, gatewayToken string, log *
 				slog.String("upstream", service), slog.Any("err", err))
 			writeError(w, http.StatusBadGateway, "bad gateway")
 		},
+	}
+}
+
+// dropSessionCookies keeps the refresh-token cookies out of upstream requests and logs; other cookies pass.
+func dropSessionCookies(r *http.Request) {
+	cs := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, c := range cs {
+		if !strings.HasPrefix(c.Name, sessionCookiePrefix) {
+			r.AddCookie(c)
+		}
 	}
 }
 

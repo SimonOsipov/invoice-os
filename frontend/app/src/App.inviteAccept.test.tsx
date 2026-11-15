@@ -112,12 +112,12 @@ const networkDown: Reply = () => Promise.reject(new TypeError('Failed to fetch')
 type Call = { url: string; method: string; auth: string | null; body: unknown }
 let calls: Call[] = []
 let acceptReply: Reply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
-let refreshReply: Reply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
+let refreshReply: Reply = ok({ access_token: T_RENEWED })
 let renewedMeReply: Reply = ok(ME)
 let mineReply: Reply = ok({ invitations: [] })
 let exchangeToken = T_FIRST
 let workspacesReply: Reply = ok({ tenant: ME.tenant })
-let exchangeRefresh: string | null = 'R0'
+let exchangeRenewable: boolean | null = true
 
 const path = (c: Call) => c.url.replace(GATEWAY, '')
 const hits = (p: string) => calls.filter((c) => path(c) === p)
@@ -128,7 +128,7 @@ function routeFetch() {
     vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
       const auth = init?.headers?.get('Authorization') ?? null
       calls.push({ url, method: init?.method ?? 'GET', auth, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
-      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: exchangeToken, ...(exchangeRefresh === null ? {} : { refresh_token: exchangeRefresh }) })()
+      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: exchangeToken, ...(exchangeRenewable === null ? {} : { renewable: exchangeRenewable }) })()
       if (url === ACCEPT_URL) return acceptReply()
       if (url === `${GATEWAY}/auth/refresh`) return refreshReply()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${exchangeToken}` ? fail(403, 'forbidden') : renewedMeReply)()
@@ -181,12 +181,12 @@ beforeEach(() => {
   capturedCtx = undefined
   calls = []
   acceptReply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
-  refreshReply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
+  refreshReply = ok({ access_token: T_RENEWED })
   renewedMeReply = ok(ME)
   mineReply = ok({ invitations: [] })
   exchangeToken = T_FIRST
   workspacesReply = ok({ tenant: ME.tenant })
-  exchangeRefresh = 'R0'
+  exchangeRenewable = true
   routeFetch()
 })
 
@@ -272,7 +272,7 @@ describe('a hand-off with a held invite accepts it and renews the session (D11, 
     expect(calls[1].body).toEqual({ token: INVITE })
     expect(calls[1].auth).toBe(`Bearer ${T_FIRST}`)
     expect(calls[3].auth).toBe(`Bearer ${T_RENEWED}`)
-    expect(JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')).toMatchObject({ token: T_RENEWED, handoff: true, refresh_token: 'R1' })
+    expect(JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')).toMatchObject({ token: T_RENEWED, handoff: true, received_at: expect.any(Number) })
     expect(sessionStorage.getItem(INVITE_KEY), 'the invite is one-shot').toBeNull()
     expect(hrefWrites).toEqual([])
   })
@@ -764,8 +764,8 @@ describe('a first-workspace sign-in: no invites, no answers', () => {
   }
 
   for (const [name, reply] of [['POST 201', ok({ tenant: ME.tenant })], ['POST 401', fail(401, 'unauthorized')], ['POST 500', fail(500, 'boom')]] as [string, Reply][]) {
-    it(`App: a missing refresh token leaves for the failed notice (${name})`, async () => {
-      exchangeRefresh = null
+    it(`App: a missing renewable flag leaves for the failed notice (${name})`, async () => {
+      exchangeRenewable = null
       workspacesReply = reply
       const hrefWrites = await form()
       fill(FIRM)
@@ -776,8 +776,8 @@ describe('a first-workspace sign-in: no invites, no answers', () => {
     })
   }
 
-  it('App: an empty refresh token leaves for the failed notice', async () => {
-    exchangeRefresh = ''
+  it('App: renewable false leaves for the failed notice', async () => {
+    exchangeRenewable = false
     const hrefWrites = await form()
     fill(FIRM)
     fireEvent.click(control('join-create'))

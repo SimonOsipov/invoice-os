@@ -1,5 +1,5 @@
 // On-demand session renewal: clock and storage are injected, no React.
-import { ApiError, apiFetch } from '@invoice-os/api-client'
+import { ApiError, sessionFetch } from '@invoice-os/api-client'
 
 import type { Session } from '../auth'
 import { decodeJwtPayload } from './session'
@@ -52,24 +52,24 @@ export function isRenewalDue(session: Session, now: number = Date.now()): boolea
   return at === null || now >= at
 }
 
-// A 200 without two non-empty string tokens throws a 'malformed' ApiError, which the renewer treats as transient.
-export async function refreshTokens(base: string, refreshToken: string, signal: AbortSignal): Promise<{ access: string; refresh: string }> {
-  const body = await apiFetch<{ access_token?: unknown; refresh_token?: unknown } | null>(`${base}/auth/refresh`, {
+// Renews through the gateway cookie; `legacy` posts a pre-cookie stored token once to adopt it.
+// A 200 without a non-empty access_token throws a 'malformed' ApiError, which the renewer treats as transient.
+export async function refreshAccess(base: string, signal: AbortSignal, legacy?: string): Promise<string> {
+  const body = await sessionFetch<{ access_token?: unknown } | null>(`${base}/auth/refresh`, {
     method: 'POST',
-    body: { refresh_token: refreshToken },
+    ...(legacy === undefined ? {} : { body: { refresh_token: legacy } }),
     signal,
   })
   const access = body?.access_token
-  const refresh = body?.refresh_token
-  if (typeof access !== 'string' || access === '' || typeof refresh !== 'string' || refresh === '') {
-    throw new ApiError('malformed', 'refresh answered without both tokens', 200)
+  if (typeof access !== 'string' || access === '') {
+    throw new ApiError('malformed', 'refresh answered without an access token', 200)
   }
-  return { access, refresh }
+  return access
 }
 
 export async function refreshSession(base: string, session: Session, now: number = Date.now()): Promise<Session> {
-  const { access, refresh } = await refreshTokens(base, session.renewal?.refreshToken ?? '', AbortSignal.timeout(RENEW_TIMEOUT_MS))
-  return { ...session, token: access, renewal: { refreshToken: refresh, receivedAt: now } }
+  const access = await refreshAccess(base, AbortSignal.timeout(RENEW_TIMEOUT_MS), session.renewal?.legacyRefreshToken)
+  return { ...session, token: access, renewal: { receivedAt: now } }
 }
 
 export interface RenewerOptions {
@@ -107,7 +107,7 @@ export function createRenewer({ base, now = () => Date.now(), load, onRenewed, o
       end(start, true)
     }
     // Another tab already renewed: adopt its session without a request.
-    if (stored.renewal?.refreshToken !== start.renewal?.refreshToken && !isRenewalDue(stored, now())) {
+    if (stored.token !== start.token && !isRenewalDue(stored, now())) {
       current = stored
       onRenewed(stored)
       return stored.token
@@ -140,7 +140,7 @@ export function createRenewer({ base, now = () => Date.now(), load, onRenewed, o
     if (failure instanceof ApiError && failure.kind === 'http' && (failure.status === 400 || failure.status === 401)) {
       end(start, false)
     }
-    // The refresh token may outlive the access token: the record stays for the next boot.
+    // The gateway cookie may outlive the access token: the record stays for the next boot.
     const until = deadline(start)
     if (until === null || now() >= until) {
       end(start, true)

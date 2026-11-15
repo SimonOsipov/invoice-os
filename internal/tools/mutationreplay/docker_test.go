@@ -19,7 +19,7 @@ type call struct {
 
 func (c call) verb() string {
 	if c.args[0] == "image" {
-		return "image rm"
+		return "image " + c.args[1]
 	}
 	return c.args[0]
 }
@@ -43,7 +43,8 @@ type reply struct {
 type fakeDocker struct {
 	calls                []call
 	version, build, run  func(n int, c call) reply
-	rm                   func(c call) reply
+	rm, inspect          func(c call) reply
+	onRun                func(c call)
 	builds, runs, probes int
 }
 
@@ -66,11 +67,19 @@ func (f *fakeDocker) exec(dir, name string, args ...string) (string, int, error)
 		}
 	case "run":
 		f.runs++
+		if f.onRun != nil {
+			f.onRun(c)
+		}
 		r = reply{out: passedOut}
 		if f.run != nil {
 			r = f.run(f.runs, c)
 		}
-	default:
+	case "image inspect":
+		r = reply{out: "0\n"}
+		if f.inspect != nil {
+			r = f.inspect(c)
+		}
+	case "image rm":
 		if f.rm != nil {
 			r = f.rm(c)
 		}
@@ -122,12 +131,13 @@ func assertRestored(t *testing.T, root, file, want string) {
 }
 
 func TestBuildInput(t *testing.T) {
-	for _, f := range []string{"Dockerfile", "requirements.txt", "requirements-dev.txt", "requirements.lock", "requirements-dev.lock", "torch.lock", "Dockerfile.dockerignore"} {
+	for _, f := range []string{"Dockerfile", "requirements.txt", "requirements-dev.txt", "requirements.lock", "requirements-dev.lock", "torch.lock", "Dockerfile.dockerignore",
+		"fetch_rapidocr_models.py", "pip_check_guard.py", "pyproject.toml", "build.txt"} {
 		if !BuildInput("sidecar/docling/" + f) {
 			t.Errorf("BuildInput(%s) = false, want true", f)
 		}
 	}
-	for _, f := range []string{"sidecar/docling/pip_check_guard.py", "sidecar/docling/pyproject.toml", "sidecar/docling/build.txt", "sidecar/docling/tests/test_pins.py",
+	for _, f := range []string{"sidecar/docling/tests/test_pins.py", "sidecar/docling/tests/data/x.json",
 		"sidecar/other/requirements.txt", ".github/workflows/ci.yml", "Dockerfile", "Dockerfile.dockerignore",
 		"sidecar/docling/tests/requirements.txt", "sidecar/docling/sub/Dockerfile", "sidecar/docling/sub/x.lock"} {
 		if BuildInput(f) {
@@ -157,7 +167,10 @@ func TestDocker_RunArgs(t *testing.T) {
 				run = c
 			}
 		}
-		want := []string{"run", "--rm", "-v", root + ":/repo:ro", "-e", "REPO_ROOT=/repo"}
+		if len(run.args) < 4 || run.args[2] != "--name" || !strings.HasPrefix(run.args[3], "mutationreplay-") {
+			t.Fatalf("%s: run args = %q, want --name mutationreplay-*", file, run.args)
+		}
+		want := []string{"run", "--rm", "--name", run.args[3], "-v", root + ":/repo:ro", "-e", "REPO_ROOT=/repo"}
 		if mount != "" {
 			want = append(want, "-v", filepath.Join(root, file)+":"+mount+":ro")
 		}
@@ -207,7 +220,7 @@ func TestDocker_RebuildsOnlyWhenTheMutatedMountRunStaysGreen(t *testing.T) {
 	for _, mutated := range []bool{false, true} {
 		for _, input := range []bool{false, true} {
 			for _, mountOut := range []string{passedOut, failedOut} {
-				file := "sidecar/docling/pip_check_guard.py"
+				file := "sidecar/docling/tests/data/x.json"
 				if input {
 					file = "sidecar/docling/requirements.lock"
 				}
@@ -559,4 +572,101 @@ func TestDocker_MutatedBuildTimeoutIsInvalid(t *testing.T) {
 		t.Errorf("result = %+v", res)
 	}
 	assertRestored(t, root, file, "x\n")
+}
+
+func TestDocker_BuildTimeScriptRowRebuildsOnlyOnAGreenMount(t *testing.T) {
+	const fetch = "sidecar/docling/fetch_rapidocr_models.py"
+	for _, tc := range []struct {
+		file, mount string
+		rebuild     bool
+	}{
+		{fetch, passedOut, true},
+		{fetch, failedOut, false},
+		{"sidecar/docling/tests/test_x.py", passedOut, false},
+	} {
+		f := rebuildFake(reply{out: failedOut})
+		f.run = func(n int, c call) reply {
+			if n == 1 {
+				return reply{out: tc.mount}
+			}
+			return reply{out: failedOut}
+		}
+		if _, err := newDocker(t.TempDir(), f).Pytest(pyRow(tc.file), true); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.builds == 2; got != tc.rebuild {
+			t.Errorf("%s mount=%.20q: rebuilt=%v, want %v", tc.file, tc.mount, got, tc.rebuild)
+		}
+		var firstRun call
+		for _, c := range f.calls {
+			if c.verb() == "run" {
+				firstRun = c
+				break
+			}
+		}
+		if !firstRun.has(filepath.Join(firstRun.dir, tc.file) + ":/app/" + strings.TrimPrefix(tc.file, "sidecar/docling/") + ":ro") {
+			t.Errorf("%s: /app mount missing from %q", tc.file, firstRun.args)
+		}
+	}
+}
+
+func TestDocker_RunIsNamedAndRemovedWhenItTimesOut(t *testing.T) {
+	f := &fakeDocker{run: func(int, call) reply { return reply{err: errors.New("timed out after 30m0s")} }}
+	if _, err := newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/tests/test_x.py"), false); err == nil {
+		t.Fatal("want an error")
+	}
+	var name string
+	for i, a := range f.calls[len(f.calls)-2].args {
+		if a == "--name" {
+			name = f.calls[len(f.calls)-2].args[i+1]
+		}
+	}
+	rm := f.last()
+	if name == "" || rm.verb() != "rm" || !rm.has("-f") || !rm.has(name) {
+		t.Errorf("calls = %v, want docker rm -f %q after the run", f.calls, name)
+	}
+}
+
+func TestDocker_RemoveLiveRemovesTheRunInFlight(t *testing.T) {
+	f := &fakeDocker{}
+	d := newDocker(t.TempDir(), f)
+	d.RemoveLive()
+	if f.count("rm") != 0 {
+		t.Fatal("rm -f with no run in flight")
+	}
+	f.onRun = func(call) { d.RemoveLive() }
+	if _, err := d.Pytest(pyRow("sidecar/docling/tests/test_x.py"), false); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	for _, c := range f.calls {
+		if c.verb() == "run" {
+			name = c.args[3]
+		}
+	}
+	if f.count("rm") != 1 || !f.last().has(name) {
+		t.Errorf("calls = %v, want one rm -f %s", f.calls, name)
+	}
+	f.calls = nil
+	d.RemoveLive()
+	if f.count("rm") != 0 {
+		t.Error("live name kept after the run ended")
+	}
+}
+
+func TestDocker_KeepsATaggedRebuildImage(t *testing.T) {
+	for name, inspect := range map[string]reply{
+		"tagged":         {out: "1\n"},
+		"inspect fails":  {out: "Error: No such image", code: 1},
+		"inspect errors": {err: errors.New("fork/exec docker: no such file")},
+	} {
+		f := rebuildFake(reply{out: failedOut})
+		f.inspect = func(call) reply { return inspect }
+		if _, err := newDocker(t.TempDir(), f).Pytest(pyRow("sidecar/docling/requirements.lock"), true); err != nil {
+			t.Fatal(err)
+		}
+		if f.count("image inspect") != 1 || f.count("image rm") != 0 {
+			t.Errorf("%s: inspect=%d rm=%d, want 1 and 0", name, f.count("image inspect"), f.count("image rm"))
+		}
+	}
 }

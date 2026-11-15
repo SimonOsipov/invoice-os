@@ -19,6 +19,8 @@ import (
 // dockerTimeout bounds every Docker call; ~9x the measured mutated image build.
 var dockerTimeout = 30 * time.Minute
 
+var dk = &Docker{Exec: dockerExec}
+
 func main() {
 	changed := flag.Bool("changed", false, "skip a row proven earlier when nothing changed in its folders")
 	flag.Usage = func() {
@@ -53,6 +55,7 @@ func main() {
 	go func() {
 		s := <-sigs
 		killChild()
+		dk.RemoveLive()
 		if err := Abort(); err != nil {
 			fmt.Fprintf(os.Stderr, "mutationreplay: %v: restore FAILED: %v\n", s, err)
 			os.Exit(3)
@@ -84,7 +87,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mutationreplay: %v\n", err)
 		os.Exit(2)
 	}
-	control, run := Runners(runTest, &Docker{Root: root, Exec: dockerExec})
+	dk.Root = root
+	control, run := Runners(runTest, dk)
 	receipts := LoadReceipts(rowsFile)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)

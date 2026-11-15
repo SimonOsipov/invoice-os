@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
@@ -20,17 +21,18 @@ const (
 // the command did not start or outlived its deadline.
 type Exec func(dir, name string, args ...string) (out string, code int, err error)
 
-var buildInputName = regexp.MustCompile(`^(requirements.*\.txt|.*\.lock)$`)
+var buildOnlyName = regexp.MustCompile(`^(requirements.*\.txt|.*\.lock)$`)
 
-// BuildInput reports whether file shapes the test image, so only a rebuild
-// delivers a mutation of it; a mount at /app would change nothing.
+// BuildInput reports whether file, directly in sidecar/docling/, may shape the
+// test image through a build step; only a rebuild delivers that mutation.
 func BuildInput(file string) bool {
-	p := filepath.ToSlash(file)
-	if path.Dir(p)+"/" != sidecarDir {
-		return false
-	}
-	b := path.Base(p)
-	return b == "Dockerfile" || b == "Dockerfile.dockerignore" || buildInputName.MatchString(b)
+	return path.Dir(filepath.ToSlash(file))+"/" == sidecarDir
+}
+
+// buildOnly reports a build input that the /app mount cannot deliver at all.
+func buildOnly(file string) bool {
+	b := path.Base(filepath.ToSlash(file))
+	return b == "Dockerfile" || b == "Dockerfile.dockerignore" || buildOnlyName.MatchString(b)
 }
 
 // Docker runs pytest rows in the docling:test image. Root is absolute.
@@ -41,6 +43,10 @@ type Docker struct {
 	prepared bool
 	cleanID  string
 	cleanErr error
+
+	mu   sync.Mutex
+	seq  int
+	live string // name of the container a docker run is using now
 }
 
 // docker runs `docker <args>` in Root. Start errors and deadlines come back as errors.
@@ -125,8 +131,14 @@ func (d *Docker) Pytest(r Row, mutated bool) (Outcome, error) {
 	return d.runIn(newID, r)
 }
 
+// removeImage removes an image this run built, unless a tag points at it: a
+// cached rebuild can return the ID of another tree's tagged image.
 func (d *Docker) removeImage(id string) {
-	out, code, err := d.docker("image", "rm", id)
+	out, code, err := d.docker("image", "inspect", "-f", "{{len .RepoTags}}", id)
+	if err != nil || code != 0 || strings.TrimSpace(out) != "0" {
+		return
+	}
+	out, code, err = d.docker("image", "rm", id)
 	if err != nil || code != 0 {
 		why := lastLines(out, 5)
 		if err != nil {
@@ -139,13 +151,18 @@ func (d *Docker) removeImage(id string) {
 // runIn runs the row's test in image id. The /app mount puts the mutated
 // file in front of the image's own copy.
 func (d *Docker) runIn(id string, r Row) (Outcome, error) {
-	args := []string{"run", "--rm", "-v", d.Root + ":/repo:ro", "-e", "REPO_ROOT=/repo"}
-	if f := filepath.ToSlash(r.File); strings.HasPrefix(f, sidecarDir) && !BuildInput(f) {
+	name := d.begin()
+	defer d.end()
+	args := []string{"run", "--rm", "--name", name, "-v", d.Root + ":/repo:ro", "-e", "REPO_ROOT=/repo"}
+	if f := filepath.ToSlash(r.File); strings.HasPrefix(f, sidecarDir) && !buildOnly(f) {
 		args = append(args, "-v", filepath.Join(d.Root, r.File)+":/app/"+strings.TrimPrefix(f, sidecarDir)+":ro")
 	}
 	node := "tests/" + strings.TrimPrefix(filepath.ToSlash(r.TestFile), sidecarTests) + "::" + r.Test
 	args = append(args, id, "timeout", pytestSeconds, "pytest", "-v", node)
 	out, code, err := d.docker(args...)
+	if err != nil || code < 0 {
+		d.RemoveLive() // the deadline or a signal killed the docker CLI, not the container
+	}
 	if err != nil {
 		return NotRun, err
 	}
@@ -156,6 +173,33 @@ func (d *Docker) runIn(id string, r Row) (Outcome, error) {
 		return NotRun, fmt.Errorf("docker run failed (exit %d): %s", code, lastLines(out, 5))
 	}
 	return PytestOutcome(out, r.Test), nil
+}
+
+func (d *Docker) begin() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.seq++
+	d.live = fmt.Sprintf("mutationreplay-%d-%d", os.Getpid(), d.seq)
+	return d.live
+}
+
+func (d *Docker) end() {
+	d.mu.Lock()
+	d.live = ""
+	d.mu.Unlock()
+}
+
+// RemoveLive force-removes the container of the run in flight, if any.
+func (d *Docker) RemoveLive() {
+	d.mu.Lock()
+	name := d.live
+	d.mu.Unlock()
+	if name == "" {
+		return
+	}
+	if out, code, err := d.docker("rm", "-f", name); err != nil || code != 0 {
+		fmt.Fprintf(os.Stderr, "mutationreplay: WARNING rm -f %s: %v %s\n", name, err, lastLines(out, 3))
+	}
 }
 
 // Runners sends pytest rows to Docker and every other row to other. Only the

@@ -69,8 +69,10 @@ func TestRegisterAnswersMatchProvisionRules(t *testing.T) {
 			}, slog.New(slog.DiscardHandler))
 
 			regRec := httptest.NewRecorder()
-			register.ServeHTTP(regRec, httptest.NewRequest(http.MethodPost, "/auth/register",
-				strings.NewReader(`{"email":"new@corp.example","password":"Corr3ct-Horse",`+c.fields+`}`)))
+			regReq := httptest.NewRequest(http.MethodPost, "/auth/register",
+				strings.NewReader(`{"email":"new@corp.example","password":"Corr3ct-Horse",`+c.fields+`}`))
+			regReq.Header.Set("Content-Type", "application/json")
+			register.ServeHTTP(regRec, regReq)
 			provRec := httptest.NewRecorder()
 			provision.ServeHTTP(provRec, httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader("{"+c.fields+"}")))
 

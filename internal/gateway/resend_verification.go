@@ -18,7 +18,7 @@ const (
 )
 
 // ResendVerificationHandler answers POST /auth/resend-verification with one answer for every account state.
-// Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
+// Every answer except a 400 or 415 arrives no earlier than minResponse after the request; 0 means no wait.
 func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
 		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
@@ -33,6 +33,9 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		start := time.Now()

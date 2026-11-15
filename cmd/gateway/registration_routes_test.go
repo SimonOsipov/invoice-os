@@ -592,6 +592,29 @@ func TestRegisterPreflightGrantsTheAllowedOrigin(t *testing.T) {
 	}
 }
 
+func TestRegister_ANonJSONPostIs415AndOnlyAnAllowedOriginReadsIt(t *testing.T) {
+	mux, calls := registerMux(t)
+
+	const body = `{"email":"new@corp.example","password":"Corr3ct-Horse","workspace_name":"Acme","display_name":"Ada","kind":"firm"}`
+	for origin, wantGrant := range map[string]string{registerAllowedOrigin: registerAllowedOrigin, "https://evil.example": ""} {
+		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "text/plain")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("%s: status = %d, want 415: %s", origin, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != wantGrant {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", origin, got, wantGrant)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("GoTrue saw %v, want no call", got)
+	}
+}
+
 // Only a preflight (an OPTIONS carrying an Origin) is answered by CORS. Any other OPTIONS reaches the
 // handler, which must refuse it as sign-in does (TestHandoffPreflightIsAnsweredByCORS), not register.
 func TestRegisterOptionsWithoutOriginIsNotARegistration(t *testing.T) {

@@ -63,6 +63,7 @@ const FOOTER: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'flex-end',
+  flexWrap: 'wrap',
   gap: 14,
   padding: '12px 20px',
   borderTop: '1px solid var(--line-1)',

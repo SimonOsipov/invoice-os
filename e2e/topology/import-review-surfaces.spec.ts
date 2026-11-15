@@ -317,7 +317,7 @@ async function assertGridAligned(page: Page, headerLabel: string, label: string)
 }
 
 // Copy of importWizardShared.ts's extractOneDocument: the document journey to the invoice detail, then the review screen.
-async function extractOneDocument(
+async function uploadToExtractionReview(
   page: Page,
   label: string,
   file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
@@ -340,6 +340,14 @@ async function extractOneDocument(
   await expect
     .poll(() => new URL(page.url()).pathname, { message: 'the landing must be addressed at its own job path' })
     .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+}
+
+async function extractOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
+): Promise<void> {
+  await uploadToExtractionReview(page, label, file)
   await expect(page.getByTestId('extraction-open-invoice'), 'the review must offer its exit').toBeVisible({ timeout: 60_000 })
   await page.getByTestId('extraction-open-invoice').click()
   await expect(page.getByTestId('invoice-detail'), 'the exit must reach the real invoice detail').toBeVisible({ timeout: 60_000 })
@@ -1363,6 +1371,28 @@ test.describe('UN undo import layout', () => {
     await expect(page.getByTestId('review-undone')).toBeVisible()
     const batch = await getImportBatch(token, batchId)
     expect(batch.body).toMatchObject({ status: 'undone', undoable: false })
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('UN-04 extraction footer: the undo button and its arm step stay inside the footer at every width', async ({ page }) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+
+    await uploadToExtractionReview(page, 'UN-04')
+    const open = page.getByTestId('extraction-open-invoice')
+    await expect(open).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('undo-import'), 'the import behind this document is undoable').toBeVisible({ timeout: 60_000 })
+    // Enclosure is checked against the footer's own rect: the page never scrolls sideways here.
+    const footer = open.locator('xpath=..')
+    const save = page.getByTestId('extraction-save')
+
+    await assertControlFits(page, page.getByTestId('undo-import'), footer, [open, save], null, 'undo-import')
+    await page.getByTestId('undo-import').click()
+    for (const id of ['undo-import-cancel', 'undo-import-confirm']) {
+      await assertControlFits(page, page.getByTestId(id), footer, [open, save], null, id)
+    }
+    await page.getByTestId('undo-import-cancel').click()
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

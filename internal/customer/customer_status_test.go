@@ -166,6 +166,10 @@ func TestSetStatus_PreparerCanArchiveAndRestore(t *testing.T) {
 	h := newMux(customer.NewStore(app))
 	tenantA := seedTenant(t, super, "customer preparer status")
 	_, ctxP := seedMember(t, super, tenantA, "preparer", "active")
+	// Role test, not scope: the preparer reaches every buyer (a scoped preparer: client_scope_db_test.go).
+	if _, err := super.Exec(context.Background(), `UPDATE memberships SET all_clients = true WHERE tenant_id = $1`, tenantA); err != nil {
+		t.Fatalf("grant all_clients: %v", err)
+	}
 	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
 
 	wantStatus(t, do(t, h, ctxP, http.MethodPost, "/v1/customers/"+id+"/archive", ""), http.StatusOK)

@@ -1,5 +1,6 @@
 import { readdirSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
+import { argosOn } from './argos'
 import { nightlyTarget } from './targets'
 import { partitionErrors, UNITS } from './topology/shards'
 
@@ -43,6 +44,8 @@ export default defineConfig({
     headless: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Argos injects its script with addScriptTag; the PR-gate topology and smoke CSP spec keep the policy enforced.
+    bypassCSP: argosOn(),
   },
   projects: UNITS.map((u) => ({
     name: u.name,

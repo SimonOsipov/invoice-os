@@ -59,6 +59,7 @@ case "$1 $2 $3" in
   echo "$4" >> "$D/deleted" ;;
 "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
+"services list "*) cat "$D/enabled-services" 2>/dev/null || : ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
@@ -79,7 +80,9 @@ case "$1 $2 $3" in
     [ "$prev" = --secret ] && name=$a
     prev=$a
   done
-  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: PERMISSION_DENIED: no access to $name" >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Permission 'secretmanager.versions.access' denied for resource 'projects/1/secrets/$name/versions/latest' (or it may not exist)." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [projects/1/secrets/$name] not found or has no versions." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/otherdenied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Secret Manager API has not been used in project 1 or it is disabled." >&2; exit 1; fi
   if grep -qxF -- "$name" "$D/accesserr" 2>/dev/null; then echo "ERROR: INTERNAL: backend error on $name" >&2; exit 1; fi
   cat "$D/access-$name" 2>/dev/null || printf pw ;;
 "sql instances describe") echo 10.0.0.1 ;;
@@ -2264,6 +2267,9 @@ func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) 
 			if !strings.HasSuffix(strings.TrimSpace(r.stdout), invWarnTail) {
 				t.Errorf("stdout does not end %q:\n%s", invWarnTail, r.stdout)
 			}
+			if strings.Contains(r.stdout, "no read of a nightly-* secret") || !strings.Contains(r.stdout, "not enforced and 1 are readable") {
+				t.Errorf("success line misstates the nightly-secret read:\n%s", r.stdout)
+			}
 			if strings.Contains(r.stdout+r.stderr, invSentinel) {
 				t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
 			}
@@ -2414,8 +2420,8 @@ func TestPreviewInvariantsFailClosedOnAnUnexpectedReadError(t *testing.T) {
 			if r.code == 0 {
 				t.Fatalf("a read error passed:\n%s\n%s", r.stdout, r.stderr)
 			}
-			if !strings.Contains(r.stderr, "could not check nightly-hubspot-token") || !strings.Contains(r.stderr, "INTERNAL") {
-				t.Errorf("stderr lacks the secret name and the error:\n%s", r.stderr)
+			if len(errLines(r, "could not check nightly-hubspot-token", "INTERNAL")) != 1 {
+				t.Errorf("want one ::error:: line with the secret name and the error:\n%s\n%s", r.stdout, r.stderr)
 			}
 			if strings.Contains(r.stdout, imgHeld) {
 				t.Errorf("success line printed:\n%s", r.stdout)
@@ -2640,5 +2646,61 @@ func TestPreviewSecretsPRMakesNoIAMCall(t *testing.T) {
 		if strings.Contains(calls, "add-iam-policy-binding") {
 			t.Errorf("%s: a PR secret got an IAM call:\n%s", name, calls)
 		}
+	}
+}
+
+func TestPreviewInvariantsPassWhenANightlySecretVanishes(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "closed": {invClosed}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+				map[string]string{"denied": "nightly-resend-read-key\n", "missing": "nightly-hubspot-token\n"})
+			if r.code != 0 || len(errLines(r)) != 0 {
+				t.Fatalf("exit %d with ::error:: lines, want a pass:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(annLines(r, "::notice::", "nightly-hubspot-token")) != 1 {
+				t.Errorf("want one ::notice:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if !strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("no success line:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReportAnIdentityAnswerAndRunTheLaterChecks(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{
+		"curl-code-" + nightlyIdentityEP(runNightlySA):    "500",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.actAs"),
+		"enabled-services": "cloudbuild.googleapis.com\n",
+	})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "HTTP 500")) != 1 {
+		t.Errorf("want one ::error:: naming run-nightly and HTTP 500:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.actAs", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "Cloud Build")) != 1 {
+		t.Errorf("the Cloud Build check did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnADenialThatIsNotTheSecretRead(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+		map[string]string{"denied": "nightly-resend-read-key\n", "otherdenied": "nightly-hubspot-token\n"})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "could not check nightly-hubspot-token")) != 1 {
+		t.Errorf("want one ::error:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if strings.Contains(r.stdout, imgHeld) {
+		t.Errorf("success line printed:\n%s", r.stdout)
 	}
 }

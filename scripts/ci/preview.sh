@@ -599,7 +599,7 @@ cmd_budget() {
 
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
+  local bad=0 readable=0 rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
   [ "$closed" = true ] && mode='(enforced)'
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
@@ -645,17 +645,22 @@ cmd_invariants() {
     echo "::error::the preview deployer can write production images: $held on $PROD_IMAGES."
     bad=1
   fi
-  # A nightly-* secret must be unreadable to the preview deployer; PERMISSION_DENIED is the only pass.
+  # A nightly-* secret must be unreadable to the preview deployer. A secret deleted since the listing
+  # is gone, not a finding; only a denial of secretmanager.versions.access on it passes.
   while read -r n; do
     if gcloud secrets versions access latest --secret "$n" --project "$PROJECT" </dev/null >/dev/null 2>"$RUNNER_TEMP/nightly-read.err"; then
+      readable=$((readable + 1))
       if [ "$closed" = true ]; then
         echo "::error::the preview deployer can read $n."
         bad=1
       else
         echo "::warning::the preview deployer can read $n; the PR side keeps it until invoice-os-infra closes it and NIGHTLY_KEYS_CLOSED is true."
       fi
-    elif ! grep -q PERMISSION_DENIED "$RUNNER_TEMP/nightly-read.err"; then
-      die "could not check $n: $(tail -n 1 "$RUNNER_TEMP/nightly-read.err")"
+    elif grep -q NOT_FOUND "$RUNNER_TEMP/nightly-read.err"; then
+      echo "::notice::$n is gone or has no version; skipped."
+    elif ! grep -q PERMISSION_DENIED "$RUNNER_TEMP/nightly-read.err" || ! grep -q secretmanager.versions.access "$RUNNER_TEMP/nightly-read.err"; then
+      echo "::error::could not check $n: $(tail -n 1 "$RUNNER_TEMP/nightly-read.err")"
+      bad=1
     fi
   done < <(grep '^nightly-' <<<"$names" || true)
   for email in run-nightly@ascomply-preview.iam.gserviceaccount.com deploy-nightly@ascomply-preview.iam.gserviceaccount.com; do
@@ -669,7 +674,11 @@ cmd_invariants() {
       bad=1
       continue
     fi
-    [ "$code" = 200 ] || die "testIamPermissions on $email answered HTTP $code"
+    if [ "$code" != 200 ]; then
+      echo "::error::testIamPermissions on $email answered HTTP $code."
+      bad=1
+      continue
+    fi
     held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/sa-held.json")
     if [ -n "$held" ]; then
       echo "::error::the preview deployer holds $held on $email."
@@ -683,7 +692,9 @@ cmd_invariants() {
     bad=1
   fi
   [ "$bad" = 0 ] || exit 1
-  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no act-as on run-nightly or deploy-nightly, no read of a nightly-* secret, no deploy trigger outside GitHub Actions $mode"
+  local nightly_read='no read of a nightly-* secret'
+  [ "$readable" = 0 ] || nightly_read="the nightly-* secret read is not enforced and $readable are readable"
+  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no act-as on run-nightly or deploy-nightly, $nightly_read, no deploy trigger outside GitHub Actions $mode"
 }
 
 case "${1:-}" in

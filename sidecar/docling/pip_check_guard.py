@@ -24,7 +24,7 @@ def offending(rc: int, out: str) -> list[str]:
 
 def main() -> None:
     res = subprocess.run(
-        [sys.executable, "-m", "pip", "check"], capture_output=True, text=True
+        [sys.executable, "-m", "pip", "check"], capture_output=True, text=True, check=False
     )
     bad = offending(res.returncode, res.stdout + res.stderr)
     if bad:

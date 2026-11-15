@@ -2190,3 +2190,167 @@ func TestPreviewInvariantsReportBothIAMProblems(t *testing.T) {
 		t.Errorf("the image repository problem is not reported:\n%s\n%s", r.stdout, r.stderr)
 	}
 }
+
+const (
+	runNightlySA = "run-nightly@ascomply-preview.iam.gserviceaccount.com"
+	runPreviewSA = "run-preview@ascomply-preview.iam.gserviceaccount.com"
+)
+
+func nightlyBindLine(secret string) string {
+	return "secrets add-iam-policy-binding " + secret + " --project ascomply-preview --member serviceAccount:" + runNightlySA +
+		" --role roles/secretmanager.secretAccessor --condition=None"
+}
+
+// nightlySecretNames is every secret `secrets nightly` makes.
+func nightlySecretNames(t *testing.T) []string {
+	t.Helper()
+	return append(previewList(t, "PR_SECRETS"), "mock-issuer-token")
+}
+
+func TestPreviewNightlyRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	env := []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	svcs := prAll(t)
+	dep := runPreviewEnv(t, env, nil, append([]string{"deploy", "nightly", "abc123"}, svcs...)...)
+	mig := runPreviewEnv(t, env, nil, "migrate", "nightly", "abc123")
+	if dep.code != 0 || mig.code != 0 {
+		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+	}
+	n := 0
+	for _, l := range append(nonBlankLines(dep.file(t, "calls")), nonBlankLines(mig.file(t, "calls"))...) {
+		if !strings.HasPrefix(l, "run deploy ") && !strings.HasPrefix(l, "run jobs deploy ") {
+			continue
+		}
+		n++
+		if got := flagValue(l, "--service-account"); got != runNightlySA {
+			t.Errorf("--service-account = %q, want %q:\n%s", got, runNightlySA, l)
+		}
+	}
+	if n != len(svcs)+1 {
+		t.Errorf("%d deploy lines, want %d services + the migrate job", n, len(svcs))
+	}
+}
+
+func TestPreviewPRNeverRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	svcs := prAll(t)
+	var all []string
+	for _, args := range [][]string{append([]string{"deploy", "7", "abc123"}, svcs...), {"migrate", "7", "abc123"}, {"secrets", "7"}, {"teardown", "7"}} {
+		r := runPreview(t, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("%s exited %d: %s", args[0], r.code, r.stderr)
+		}
+		all = append(all, nonBlankLines(r.file(t, "calls"))...)
+	}
+	sa := 0
+	for _, l := range all {
+		if strings.Contains(l, "run-nightly") {
+			t.Errorf("a PR call names run-nightly:\n%s", l)
+		}
+		if got := flagValue(l, "--service-account"); got != "" {
+			sa++
+			if got != runPreviewSA {
+				t.Errorf("--service-account = %q, want %q", got, runPreviewSA)
+			}
+		}
+	}
+	if sa != len(svcs)+1 {
+		t.Errorf("%d --service-account flags, want %d", sa, len(svcs)+1)
+	}
+}
+
+func TestPreviewSecretsNightlyBindsRunNightlyOnEachSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	names := nightlySecretNames(t)
+	if len(names) != 13 {
+		t.Fatalf("%d nightly secrets, want 13", len(names))
+	}
+	for _, n := range names {
+		sec := "nightly-" + n
+		create, bind, count := -1, -1, 0
+		for i, l := range lines {
+			if strings.HasPrefix(l, "secrets create "+sec+" ") {
+				create = i
+			}
+			if l == nightlyBindLine(sec) {
+				bind = i
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, count)
+		} else if create < 0 || bind < create {
+			t.Errorf("%s: binding (line %d) is not after its create (line %d)", sec, bind, create)
+		}
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "run-preview") {
+			t.Errorf("a binding names run-preview:\n%s", l)
+		}
+	}
+}
+
+func TestPreviewSecretsNightlyBindsAnExistingSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-database-app-url\n")
+	}, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 11 {
+		t.Errorf("%d creates, want 11 (the 13 secrets less the 2 that exist)", got)
+	}
+	for _, sec := range []string{"nightly-gateway-token", "nightly-database-app-url"} {
+		if strings.Contains(calls, "secrets create "+sec+" ") {
+			t.Errorf("%s exists but was created", sec)
+		}
+		if got := strings.Count(calls, nightlyBindLine(sec)+"\n"); got != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, got)
+		}
+	}
+}
+
+func TestPreviewSecretsNightlyFailsWhenABindingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-add-iam-policy-binding", "") }, "secrets", "nightly")
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 1 {
+		t.Errorf("%d creates before the stop, want 1", got)
+	}
+	if r.code == 0 {
+		t.Errorf("secrets nightly exited 0 after a failed binding")
+	}
+	if !strings.Contains(r.stderr, "::error::cannot give run-nightly access to nightly-") {
+		t.Errorf("stderr lacks the binding error:\n%s", r.stderr)
+	}
+	if got := strings.Count(calls, "secrets add-iam-policy-binding"); got != 1 {
+		t.Errorf("%d binding attempts, want 1 (the run stops at the first failure)", got)
+	}
+}
+
+func TestPreviewSecretsPRMakesNoIAMCall(t *testing.T) {
+	t.Parallel()
+	for name, setup := range map[string]func(dir string){
+		"new":      nil,
+		"existing": func(dir string) { writeIn(t, dir, "have", allPRSecrets(t)) },
+	} {
+		r := runPreview(t, setup, "secrets", "7")
+		if r.code != 0 {
+			t.Fatalf("%s: secrets exited %d: %s", name, r.code, r.stderr)
+		}
+		calls := r.file(t, "calls")
+		if name == "new" && !strings.Contains(calls, "secrets create pr-7-") {
+			t.Errorf("%s: no secret was created:\n%s", name, calls)
+		}
+		if strings.Contains(calls, "add-iam-policy-binding") {
+			t.Errorf("%s: a PR secret got an IAM call:\n%s", name, calls)
+		}
+	}
+}

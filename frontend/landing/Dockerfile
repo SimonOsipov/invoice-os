@@ -50,6 +50,9 @@ RUN pnpm --filter @invoice-os/landing build
 
 # ---- Serve: Caddy static server + /health; /srv/404.html makes it serve only built pages (404 otherwise) ----
 FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve
+# 8080 needs no capability; a non-root exec of a file-capable binary fails under --cap-drop ALL.
+RUN setcap -r /usr/bin/caddy
+USER nobody:nobody
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/landing/dist /srv
 # The commit under test, stamped by scripts/ci/stamp-build-sha.sh before the image build

@@ -302,6 +302,7 @@ jobs:
       id-token: write
     env:
       SHA: ${{ needs.await-ci.outputs.sha }}
+      TAG: ${{ needs.await-ci.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v3
@@ -312,7 +313,7 @@ jobs:
         with:
           name: serving
       - name: Send 100 % to the new revisions
-        run: bash scripts/ci/gcp-traffic.sh promote serving.txt
+        run: bash scripts/ci/gcp-traffic.sh promote serving.txt "$TAG"
       # Through the load balancer: --resolve reaches it before and after DNS moves (GKE-10).
       - name: Poll /healthz/fleet until every backend serves the commit
         id: fleet

@@ -77,6 +77,9 @@ func NewExtractJobAfterErrorsForTest(riverJobID int64, attempt, maxAttempts int,
 // any resolution.
 func NewPDFiumReaderAtDPIForTest(dpi int) *PDFiumReader { return &PDFiumReader{dpi: dpi} }
 
+// MaxRenderPxForTest is the per-side render cap.
+const MaxRenderPxForTest = maxRenderPx
+
 // PDFiumCleanupsForTest reads the render-bitmap release counter.
 func PDFiumCleanupsForTest() int64 { return pdfiumCleanups.Load() }
 

@@ -38,6 +38,20 @@ func pageCapError(n int) error {
 	return unreadableError{fmt.Errorf("pdfium: document has %d pages, over the %d page limit: %w", n, MaxPages, ErrTooManyPages)}
 }
 
+// maxRenderPx caps either side of a page's render grid: 5000 x 5000 is 25 MB of grayscale, and
+// it admits A1.
+const maxRenderPx = 5000
+
+func pageSizeError(n, w, h int) error {
+	return unreadableError{fmt.Errorf("pdfium: page %d renders %dx%d px, over the %d px limit", n, w, h, maxRenderPx)}
+}
+
+// renderGridFits is false below 1 px too: go-pdfium's float-to-int overflow yields a negative
+// side on amd64.
+func renderGridFits(w, h int) bool {
+	return w >= 1 && h >= 1 && w <= maxRenderPx && h <= maxRenderPx
+}
+
 // Render-bitmap releases, read by TestPDFiumReader_HoldsOnePageAtATime.
 var pdfiumCleanups atomic.Int64
 
@@ -177,6 +191,15 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 // renderPage renders one page, hands it to onPage, then releases the render bitmap. Cleanup is
 // mandatory under the wasm backend and runs on every path, including onPage's error.
 func (r *PDFiumReader) renderPage(inst pdfium.Pdfium, ref requests.Page, page Page, onPage func(Page) error) error {
+	// ceiling: a page past the cap is refused here, after pages 1..k-1 were rendered and stored;
+	// a pre-pass would cost up to MaxPages extra page loads on every upload.
+	px, err := inst.GetPageSizeInPixels(&requests.GetPageSizeInPixels{Page: ref, DPI: r.renderDPI()})
+	if err != nil {
+		return fmt.Errorf("pdfium: page %d size in pixels: %w", page.Number, err)
+	}
+	if !renderGridFits(px.Width, px.Height) {
+		return pageSizeError(page.Number, px.Width, px.Height)
+	}
 	rendered, err := inst.RenderPageInDPI(&requests.RenderPageInDPI{
 		Page:        ref,
 		DPI:         r.renderDPI(),

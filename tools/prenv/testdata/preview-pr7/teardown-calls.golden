@@ -52,3 +52,4 @@ secrets delete pr-7-database-reader-url --project ascomply-preview --quiet
 secrets delete pr-7-database-gateway-url --project ascomply-preview --quiet
 secrets delete pr-7-database-auth-url --project ascomply-preview --quiet
 secrets delete pr-7-mock-issuer-key --project ascomply-preview --quiet
+secrets delete pr-7-mock-issuer-token --project ascomply-preview --quiet

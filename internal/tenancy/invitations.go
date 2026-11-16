@@ -310,6 +310,7 @@ func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 		}
 		rows.Close() // the connection is busy until the rows are closed
 		// ceiling: one savepoint round trip per pending row; batch the read above ~500 rows
+		// ceiling: the admin learns whether any address they invite has an account; revisit if invites are used as an existence probe
 		for i := range out {
 			out[i].Account, out[i].accountErr = accountState(ctx, tx, out[i].Email)
 		}

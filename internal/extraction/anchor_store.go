@@ -24,6 +24,7 @@ type AnchorRule struct {
 	Rule  Rule
 }
 
+// ceiling: rules are tenant-wide, so a member limited to one client teaches every client's copy of the layout (TestRLS_LearnedRulesTenantWide_ALimitedMembersCorrectionTeachesAnotherClientsLayout); revisit if a firm reports a rule taught under another client
 // AnchorRulesFor returns the tenant's anchor rules for one layout fingerprint, newest first,
 // never a nil slice.
 func (s *Store) AnchorRulesFor(ctx context.Context, tenantID, fingerprint string) ([]AnchorRule, error) {

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -220,6 +221,7 @@ type clFixture struct {
 	documentID string
 	jobID      string
 	invoiceID  string
+	entityID   string
 }
 
 func clSeed(t *testing.T, ctx context.Context, number string) clFixture {
@@ -232,7 +234,40 @@ func clSeed(t *testing.T, ctx context.Context, number string) clFixture {
 		`UPDATE invoices SET buyer_tin = $1 WHERE id = $2`, clReadingTIN, invoiceID); err != nil {
 		t.Fatalf("seed the invoice buyer_tin: %v", err)
 	}
-	return clFixture{reqCtx: reqCtx, tenantID: tenantID, documentID: documentID, jobID: jobID, invoiceID: invoiceID}
+	return clFixture{reqCtx: reqCtx, tenantID: tenantID, documentID: documentID, jobID: jobID, invoiceID: invoiceID, entityID: entityID}
+}
+
+// Proves the accepted ceiling: a member limited to client A teaches client B's copy of the layout (rules are tenant-wide).
+func TestRLS_LearnedRulesTenantWide_ALimitedMembersCorrectionTeachesAnotherClientsLayout(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "SECAUD-42-03")
+	fp, pages := clLayout(t, ctx, f.jobID)
+	region := clTokenRegion(t, pages, clTINToken)
+	limited := cseMember(t, ctx, f.tenantID, "reviewer", f.entityID)
+
+	docB := rvdSeedDocumentMeta(t, ctx, f.tenantID, nil, nil, 1024, strings.Repeat("b", 64), time.Now().UTC().Truncate(time.Microsecond))
+	jobB := cxJobIn(t, ctx, f.tenantID, docB)
+	clLayoutRaw(t, ctx, jobB, fp, []byte("[]"))
+	cxInvoice(t, ctx, f.tenantID, cxEntity(t, ctx, f.tenantID), docB, "SECAUD-42-03-B", "draft")
+
+	s := stStore(t)
+	if before, err := s.AnchorRulesFor(ctx, f.tenantID, fp); err != nil || len(before) != 0 {
+		t.Fatalf("control: before the correction AnchorRulesFor = %d rule(s), err %v; want none", len(before), err)
+	}
+
+	w := cxServe(t, limited, f.jobID, clField, clPointedBody(clTINValue, region, ""),
+		cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	got, err := s.AnchorRulesFor(ctx, f.tenantID, fp)
+	if err != nil {
+		t.Fatalf("AnchorRulesFor: %v", err)
+	}
+	if len(got) != 1 || got[0].Field != clField {
+		t.Errorf("AnchorRulesFor for client B's layout = %+v, want exactly the rule the limited member taught on %s", got, clField)
+	}
 }
 
 // --- an AI-only field teaches no rule ---

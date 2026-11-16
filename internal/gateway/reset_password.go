@@ -16,10 +16,12 @@ import (
 
 const (
 	resetFormMaxBytes = 2 << 10
-	resetPasswordMin  = 6
-	resetPasswordMax  = 72
-	resetPasswordHint = "Use a password of 6 to 72 characters."
+	// ceiling: a rollback moves gateway ~7 s before auth; a 6-9 byte set-password then spends its link. Revisit if rollbacks reorder or recur.
+	resetPasswordMin = 10
+	resetPasswordMax = 72
 )
+
+var resetPasswordHint = "Use a password of " + strconv.Itoa(resetPasswordMin) + " to " + strconv.Itoa(resetPasswordMax) + " characters."
 
 // resetScript blocks a second submit; its hash goes into the CSP.
 const resetScript = `var f = document.querySelector('form')
@@ -56,7 +58,7 @@ func renderNamedPasswordPage(page, token, state, alert, address string) string {
 	if alert != "" {
 		alert = `<p class="alert" role="alert">` + html.EscapeString(alert) + `</p>`
 	}
-	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Intro}}", intro, "{{.Script}}", resetScript).Replace(page)
+	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Intro}}", intro, "{{.Script}}", resetScript, "{{.MinLength}}", strconv.Itoa(resetPasswordMin)).Replace(page)
 }
 
 // formState is the posted state when exactly one state field has the shape of one, else "".

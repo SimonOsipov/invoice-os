@@ -335,7 +335,7 @@ func TestLinkRedeemLimit_ARequestRefusedBeforeVerifyCountsNothing(t *testing.T) 
 		{"empty token", func(rt lrRoute) string { return rt.body("", rt.typ, rpPass) }, http.StatusSeeOther},
 		{"oversize token", func(rt lrRoute) string { return rt.body(strings.Repeat("a", maxVerifyTokenBytes+1), rt.typ, rpPass) }, http.StatusSeeOther},
 		{"wrong type", func(rt lrRoute) string { return rt.body(lrToken(1), "magiclink", rpPass) }, http.StatusSeeOther},
-		{"password of 5 characters", func(rt lrRoute) string { return rt.body(lrToken(1), rt.typ, "12345") }, http.StatusBadRequest},
+		{"password one under the minimum", func(rt lrRoute) string { return rt.body(lrToken(1), rt.typ, strings.Repeat("a", resetPasswordMin-1)) }, http.StatusBadRequest},
 	}
 	for _, rt := range lrRoutes() {
 		for _, c := range rows {

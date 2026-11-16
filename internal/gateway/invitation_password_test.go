@@ -110,7 +110,7 @@ func TestInvitationPassword_HandsTheConfirmedUserToTheContactSink(t *testing.T) 
 }
 
 func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
-	for name, pw := range map[string]string{"5 bytes": "abcde", "73 bytes": strings.Repeat("a", 73)} {
+	for name, pw := range map[string]string{"9 bytes": "abcdefghi", "73 bytes": strings.Repeat("a", 73)} {
 		t.Run(name, func(t *testing.T) {
 			f := newResetGoTrue(t)
 
@@ -134,6 +134,13 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 			if got := f.names(); len(got) != 0 {
 				t.Errorf("GoTrue calls = %v, want none", got)
+			}
+			if name == "9 bytes" {
+				doc := vpParse(t, rec.Body.String())
+				if got, _ := vpAttr(rpInputs(doc)["password"], "minlength"); got != "10" {
+					t.Errorf("re-rendered minlength = %q, want 10", got)
+				}
+				rpRequireHint(t, doc)
 			}
 		})
 	}
@@ -166,7 +173,7 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 		})
 	}
-	for name, pw := range map[string]string{"6 bytes": "abcdef", "72 bytes": strings.Repeat("a", 72)} {
+	for name, pw := range map[string]string{"10 bytes": "abcdefghij", "72 bytes": strings.Repeat("a", 72)} {
 		t.Run("control "+name, func(t *testing.T) {
 			f := newResetGoTrue(t)
 			rpRequireRedirect(t, ipPost(t, newInviteHandler(t, f, nil, nil), rpValues(rpToken, "signup", pw)), ipOK)
@@ -225,12 +232,12 @@ func TestInvitationPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T)
 }
 
 func TestInvitationPassword_BadFormsAreTheFailedNoticeWithoutACall(t *testing.T) {
-	good := rpValues(rpToken, "signup", "newpass1").Encode()
+	good := rpValues(rpToken, "signup", rpPass).Encode()
 	big := good + "&pad=" + strings.Repeat("a", 3<<10)
 	rows := []struct{ name, contentType, body string }{
-		{"missing token", rpFormType, url.Values{"type": {"signup"}, "password": {"newpass1"}}.Encode()},
-		{"257-byte token", rpFormType, rpValues(strings.Repeat("a", 257), "signup", "newpass1").Encode()},
-		{"type recovery", rpFormType, rpValues(rpToken, "recovery", "newpass1").Encode()},
+		{"missing token", rpFormType, url.Values{"type": {"signup"}, "password": {rpPass}}.Encode()},
+		{"257-byte token", rpFormType, rpValues(strings.Repeat("a", 257), "signup", rpPass).Encode()},
+		{"type recovery", rpFormType, rpValues(rpToken, "recovery", rpPass).Encode()},
 		{"3 KiB body", rpFormType, big},
 	}
 	if len(big) < 3<<10 {

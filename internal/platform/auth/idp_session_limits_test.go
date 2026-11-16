@@ -30,14 +30,14 @@ func goTrueRefresh(t *testing.T, base, refreshToken string) (int, string, string
 }
 
 // requireRefused expects GoTrue's session_expired and the gateway's 401 for the same token.
-func requireRefused(t *testing.T, h renewal, base, label, refreshToken, wantMsg string, inactivity bool) {
+func requireRefused(t *testing.T, h renewal, base, label, refreshToken, wantMsg string) {
 	t.Helper()
 	status, code, msg := goTrueRefresh(t, base, refreshToken)
 	if status != http.StatusBadRequest || code != "session_expired" {
 		t.Errorf("%s: GoTrue answered %d %q (%q), want 400 session_expired", label, status, code, msg)
 	}
-	if inactivity && !strings.HasSuffix(msg, "(Inactivity)") || !inactivity && msg != wantMsg {
-		t.Errorf("%s: GoTrue msg = %q, want the %s refusal", label, msg, map[bool]string{true: "inactivity", false: "timebox"}[inactivity])
+	if msg != wantMsg {
+		t.Errorf("%s: GoTrue msg = %q, want %q", label, msg, wantMsg)
 	}
 	gs, m := h.renew(t, refreshToken)
 	if gs != http.StatusUnauthorized || m["error"] != "invalid or expired refresh token" {
@@ -60,17 +60,18 @@ func TestIdP_SessionPastTheTimeboxIsRefused(t *testing.T) {
 	for name, u := range sessionSubjects(t, base) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			start := time.Now() // before sign-in, so elapsed never undercounts the session's age
+			before0 := time.Now() // before sign-in: never undercounts the session's age
 			a, r := h.session(t, u)
+			created := time.Now() // after sign-in: never overcounts it (GoTrue counts from created_at)
 			if name == "staff" {
 				requireStaff(t, "exchanged token", a)
 			}
 			// Always the latest token, so the parent-token exception never applies.
 			for {
 				time.Sleep(2 * time.Second)
-				before := time.Since(start)
+				before := time.Since(created)
 				status, m := h.renew(t, r)
-				after := time.Since(start)
+				after := time.Since(before0)
 				if status == http.StatusOK {
 					if before >= sessionTimebox+2*time.Second {
 						t.Fatalf("refresh at %s answered 200; the %s timebox did not end the session", before, sessionTimebox)
@@ -83,7 +84,7 @@ func TestIdP_SessionPastTheTimeboxIsRefused(t *testing.T) {
 				}
 				break
 			}
-			requireRefused(t, h, base, name+" past the timebox", r, "Invalid Refresh Token: Session Expired", false)
+			requireRefused(t, h, base, name+" past the timebox", r, "Invalid Refresh Token: Session Expired")
 		})
 	}
 }
@@ -106,8 +107,9 @@ func TestIdP_IdleSessionIsRefused(t *testing.T) {
 	}
 	// The customer's second sign-in (another device) keeps refreshing while the first goes idle.
 	_, c := h.session(t, subjects["customer"])
+	// Scheduled from the idle sessions' last refresh, so this gap stays well under sessionIdle on a slow runner.
 	for _, at := range []time.Duration{3 * time.Second, 6 * time.Second} {
-		time.Sleep(time.Until(start.Add(at)))
+		time.Sleep(time.Until(lastRefresh.Add(at)))
 		_, c = h.renewOK(t, "other device", c)
 	}
 
@@ -116,7 +118,7 @@ func TestIdP_IdleSessionIsRefused(t *testing.T) {
 		t.Fatalf("control: the sessions are %s old; the timebox would end them, not the idle limit", age)
 	}
 	for name, r := range tokens {
-		requireRefused(t, h, base, name+" idle", r, "", true)
+		requireRefused(t, h, base, name+" idle", r, "Invalid Refresh Token: Session Expired (Inactivity)")
 	}
 	h.renewOK(t, "other device after the first session's refusal", c)
 }

@@ -365,23 +365,20 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 
 			es := stubEnv(t, r.log, "idp-es256", "GOTRUE_JWT_KEYS")
 			rb := stubEnv(t, r.log, "idp-rebuild", "GOTRUE_JWT_KEYS")
-			sh := stubEnv(t, r.log, "idp-short", "GOTRUE_JWT_KEYS")
-			ss := stubEnv(t, r.log, "idp-session", "GOTRUE_JWT_KEYS")
-			if !strings.Contains(es, stubKeyMarker) || !strings.Contains(rb, stubKeyMarker) || !strings.Contains(sh, stubKeyMarker) {
-				t.Fatalf("es256, rebuild or short got no generated key: %q / %q / %q", es, rb, sh)
+			mail := stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS")
+			keys := map[string]string{"idp-es256": es, "idp-rebuild": rb, "idp-short": stubEnv(t, r.log, "idp-short", "GOTRUE_JWT_KEYS"), "idp-session": stubEnv(t, r.log, "idp-session", "GOTRUE_JWT_KEYS")}
+			for n, k := range keys {
+				if !strings.Contains(k, stubKeyMarker) {
+					t.Fatalf("%s got no generated key: %q", n, k)
+				}
 			}
-			if es == rb {
-				t.Error("idp-rebuild reuses idp-es256's key; each container gets its own")
-			}
-			if sh == es || sh == rb || sh == stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS") {
-				t.Error("idp-short reuses another container's key; each container gets its own")
-			}
-			if !strings.Contains(ss, stubKeyMarker) {
-				t.Fatalf("idp-session got no generated key: %q", ss)
-			}
-			for n, other := range map[string]string{"idp-es256": es, "idp-rebuild": rb, "idp-short": sh, "idp-mail": stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS")} {
-				if ss == other {
-					t.Errorf("idp-session reuses %s's key; each container gets its own", n)
+			// idp-mail may equal idp-es256; every other pair differs.
+			keys["idp-mail"] = mail
+			for n, k := range keys {
+				for m, other := range keys {
+					if n < m && k == other && !(n == "idp-es256" && m == "idp-mail") {
+						t.Errorf("%s reuses %s's key; each container gets its own", m, n)
+					}
 				}
 			}
 			for c, want := range map[string]bool{"idp-es256": true, "idp-hs256": false, "idp-rebuild": true, "idp-short": true, "idp-session": true} {

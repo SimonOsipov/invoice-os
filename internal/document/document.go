@@ -19,6 +19,11 @@ import (
 // (s3.go) covers the row-not-found case too.
 var ErrValidation = errors.New("document: validation")
 
+// ErrHeldElsewhere: the bytes dedupe onto a document the caller cannot read.
+var ErrHeldElsewhere = errors.New("document: held elsewhere")
+
+const HeldElsewhereMessage = "this file already belongs to a client you cannot see; remove it to continue"
+
 // Document is one documents row. Filename and DeclaredContentType are nil when
 // the column is NULL, i.e. nothing usable was recorded.
 type Document struct {
@@ -33,8 +38,10 @@ type Document struct {
 
 const documentColumns = `id, storage_key, content_hash, size_bytes, filename, declared_content_type, created_at`
 
-func scanDocument(row pgx.Row, d *Document) error {
-	return row.Scan(&d.ID, &d.StorageKey, &d.ContentHash, &d.SizeBytes, &d.Filename, &d.DeclaredContentType, &d.CreatedAt)
+// scanDocument scans documentColumns into d, then any extra columns selected after them.
+func scanDocument(row pgx.Row, d *Document, extra ...any) error {
+	dest := append([]any{&d.ID, &d.StorageKey, &d.ContentHash, &d.SizeBytes, &d.Filename, &d.DeclaredContentType, &d.CreatedAt}, extra...)
+	return row.Scan(dest...)
 }
 
 // Store persists documents rows as the invoice_app role: it holds the app-role
@@ -68,7 +75,8 @@ func (s *Store) Admit(ctx context.Context) error {
 }
 
 // Upsert inserts one documents row, or resolves the existing one when this
-// tenant already holds the same content hash, and writes document.created or
+// tenant already holds the same content hash and the caller can read it (else
+// ErrHeldElsewhere), and writes document.created or
 // document.reused in the SAME transaction. tenant_id comes from the caller's
 // identity, so no caller can supply one.
 //
@@ -98,10 +106,16 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 			// row, so the row has to be read back here. RLS scopes it, and the
 			// unique index is (tenant_id, content_hash), so this can only ever
 			// resolve the caller's own row.
+			var readable bool
 			if err := scanDocument(tx.QueryRow(ctx,
-				`SELECT `+documentColumns+` FROM documents WHERE content_hash = $1`, d.ContentHash,
-			), &out); err != nil {
+				`SELECT `+documentColumns+`, public.document_readable(id) FROM documents WHERE content_hash = $1`, d.ContentHash,
+			), &out, &readable); err != nil {
 				return err
+			}
+			// ceiling: an uncited document is readable by every member, so a dedupe hit on one still answers its id; revisit if documents gain per-user ownership.
+			if !readable {
+				out = Document{}
+				return ErrHeldElsewhere
 			}
 		default:
 			return err

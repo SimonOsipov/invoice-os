@@ -184,7 +184,7 @@ func nullIfEmpty(v string) *string {
 
 // ListMemberships lists the caller's tenant's memberships with their client
 // access, RLS-scoped, in one transaction. A non-admin caller reads its own
-// row's client_access and nil on every other row.
+// row's client_access and email, and nil for both on every other row.
 func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 	var memberships []MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -203,6 +203,7 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 			for i := range rows {
 				if !strings.EqualFold(rows[i].UserID, caller.Subject) {
 					rows[i].ClientAccess = nil
+					rows[i].Email = nil
 				}
 			}
 		}

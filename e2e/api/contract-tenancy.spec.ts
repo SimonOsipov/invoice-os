@@ -219,16 +219,28 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       for (const m of (await memberships(tokenB)).memberships) expect(m.client_access, `in-house ${m.user_id}`).toBeNull()
     })
 
-    test('a firm non-admin reads client_access on its own row only and null on every other (pm BQ1)', async () => {
-      for (const subject of [PREPARER_SUBJECT, LIMITED_REVIEWER]) {
-        const own = await login({ ...PERSONAS.A, subject })
+    test('a non-admin reads client_access and email on its own row only and null on every other (pm BQ1)', async () => {
+      const adminB = await login(PERSONAS.B)
+      const cases = [
+        { persona: { ...PERSONAS.A, subject: PREPARER_SUBJECT }, subject: PREPARER_SUBJECT, adminToken: token },
+        { persona: { ...PERSONAS.A, subject: LIMITED_REVIEWER }, subject: LIMITED_REVIEWER, adminToken: token },
+        { persona: { ...PERSONAS.B, subject: INHOUSE_REVIEWER_SUBJECT }, subject: INHOUSE_REVIEWER_SUBJECT, adminToken: adminB },
+      ]
+      for (const { persona, subject, adminToken } of cases) {
+        const own = await login(persona)
         const { memberships: rows } = await memberships(own)
+        const adminRows = (await memberships(adminToken)).memberships
         const mine = rows.find((m) => m.user_id === subject)!
-        const adminView = byId((await memberships(token)).memberships).get(subject)
-        expect(mine.client_access, `${subject} reads its own row`).toEqual(adminView)
+        const adminRow = adminRows.find((m) => m.user_id === subject)!
+        expect(mine.client_access, `${subject} reads its own row`).toEqual(adminRow.client_access)
+        expect(adminRow.email, `${subject}: the admin reads the seeded address`).not.toBeNull()
+        expect(mine.email, `${subject} reads its own email`).toBe(adminRow.email)
         const others = rows.filter((m) => m.user_id !== subject)
-        expect(others.length, 'the firm has other members').toBeGreaterThan(0)
-        for (const m of others) expect(m.client_access, `${subject} reading ${m.user_id}`).toBeNull()
+        expect(others.length, 'the workspace has other members').toBeGreaterThan(0)
+        for (const m of others) {
+          expect(m.client_access, `${subject} reading ${m.user_id}`).toBeNull()
+          expect(m.email, `${subject} reading ${m.user_id}: email`).toBeNull()
+        }
       }
     })
   })
@@ -238,7 +250,6 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
   test.describe('roster identity, both tenants', () => {
     const SEEDED_ROLES = ['admin', 'preparer', 'reviewer']
     const SEEDED_STATUSES = ['active', 'suspended']
-    const INHOUSE_REVIEWER = 'c0000000-0000-0000-0000-000000000008'
 
     let tokenB: string
 
@@ -287,7 +298,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
     test('a newly admitted in-house reviewer resolves its seeded access role', async () => {
       // Proves ROLE RESOLUTION only: /auth/login mints for any subject, so signing in
       // proves nothing about membership.
-      const reviewerToken = await login({ ...PERSONAS.B, subject: INHOUSE_REVIEWER })
+      const reviewerToken = await login({ ...PERSONAS.B, subject: INHOUSE_REVIEWER_SUBJECT })
       const res = await rawFetch('/api/tenancy/v1/me', {
         headers: { Authorization: `Bearer ${reviewerToken}` },
       })

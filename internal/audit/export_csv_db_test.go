@@ -265,3 +265,27 @@ func TestExportCSV_CarriesCreatedAcceptedDetail(t *testing.T) {
 		t.Errorf("payload %v lacks the stored ip_address and device", payload)
 	}
 }
+
+// The workspace export is admin-only (archive.AssembleWorkspace gates the role), so a member
+// with no display name is named by email there.
+func TestExportCSV_ANamelessMemberIsNamedByEmail(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	p := pageSeedTenant(t, f)
+	member := uuid.NewString()
+	csMemberUser(t, super, member, p.tenant, "preparer", true)
+	email := "nameless-" + member[:8] + "@example.com"
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET email = $3 WHERE tenant_id = $1 AND user_id = $2`, p.tenant, member, email); err != nil {
+		t.Fatalf("set email: %v", err)
+	}
+	filtInsert(t, f, p, []filtRow{{event: "approval_policy.published", actor: member, payload: "{}", ageSeconds: 10}})
+
+	_, recs := exportCSV(t, f, p)
+	if len(recs) != 2 {
+		t.Fatalf("export holds %d records, want header and one row", len(recs))
+	}
+	if got := recs[1][exportCol(t, "actor_name")]; got != email {
+		t.Errorf("actor_name = %q, want the email %q", got, email)
+	}
+}

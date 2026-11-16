@@ -25,7 +25,7 @@ type Label struct {
 //
 // D-31: a non-nil pointer to "" is absent and falls through at every rung,
 // exactly like nil. This deliberately diverges from internal/approval's
-// holderName (read_model.go:421), which stops on a non-nil "" -- pinned by
+// holderName, which stops on a non-nil "" -- pinned by
 // TestHolderName_EmptyStringDisplayNameDoesNotFallThrough. Do not reconcile
 // the two; see TestActorName_DivergesFromHolderNameDeliberately.
 //
@@ -40,6 +40,18 @@ func Name(displayName, email *string, subject string) Label {
 		return Label{Text: *email, Kind: KindPerson}
 	}
 	return Label{Text: subject, Kind: KindRaw}
+}
+
+// UnnamedMember is the label for a member with no display name that a non-admin
+// reads; the SPA's UNNAMED_NAME (members.ts) is the same literal.
+const UnnamedMember = "Unnamed member"
+
+// NameWithoutEmail is Name for a viewer who may not read the member's email.
+func NameWithoutEmail(displayName *string) Label {
+	if displayName != nil && *displayName != "" {
+		return Label{Text: *displayName, Kind: KindPerson}
+	}
+	return Label{Text: UnnamedMember, Kind: KindPerson}
 }
 
 // RemovedName labels a removed member by display_name alone; the email never

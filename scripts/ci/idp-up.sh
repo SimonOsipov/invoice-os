@@ -3,7 +3,8 @@
 #
 # Builds sidecar/auth/Dockerfile and starts idp-es256, idp-hs256 and idp-rebuild on 9991-9993,
 # plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its branded confirmation and reset links there,
-# and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler).
+# and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler),
+# and idp-session on 9997, whose sessions end after 20 s, or 8 s idle.
 # Stdout carries only the NAME=url lines, IDP_ISSUER and IDP_ES256_KEYS_FILE (safe for $GITHUB_ENV); the rest goes to stderr.
 # IDP_SLOT=n (0-500, default 0) suffixes every container name with -s<n> and adds 10*n to every
 # port, so two worktrees' runs do not remove each other's containers; `make test-idp` derives it.
@@ -109,7 +110,7 @@ start_mailpit() {
 
 # Only idp-mail mails.
 no_mail=(-e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_SMTP_HOST=)
-# The gateway-backed tests share one local key, so these three containers lift the per-IP rates.
+# The gateway-backed tests share one local key, so these four containers lift the per-IP rates.
 per_ip=(-e GOTRUE_RATE_LIMIT_VERIFY=100000 -e GOTRUE_RATE_LIMIT_OTP=100000 -e GOTRUE_RATE_LIMIT_TOKEN_REFRESH=100000)
 
 # Sequential: each GoTrue runs its migrations on boot, so the first finishes them alone.
@@ -140,12 +141,15 @@ start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e
   -e GOTRUE_MAILER_URLPATHS_CONFIRMATION="http://localhost:$verify/auth/verify"
 es256_keys
 start idp-short 9996 -e GOTRUE_JWT_KEYS "${no_mail[@]}" "${per_ip[@]}" -e GOTRUE_JWT_EXP=5
+es256_keys
+start idp-session 9997 -e GOTRUE_JWT_KEYS "${no_mail[@]}" "${per_ip[@]}" -e GOTRUE_SESSIONS_TIMEBOX=20s -e GOTRUE_SESSIONS_INACTIVITY_TIMEOUT=8s
 
 echo "IDP_ES256_URL=http://localhost:$((9991 + off))"
 echo "IDP_HS256_URL=http://localhost:$((9992 + off))"
 echo "IDP_REBUILD_URL=http://localhost:$((9993 + off))"
 echo "IDP_MAIL_URL=http://localhost:$((9994 + off))"
 echo "IDP_SHORT_URL=http://localhost:$((9996 + off))"
+echo "IDP_SESSION_URL=http://localhost:$((9997 + off))"
 echo "MAILPIT_URL=http://localhost:$mail_api"
 echo "IDP_ISSUER=$issuer"
 echo "IDP_ES256_KEYS_FILE=$keys_file"

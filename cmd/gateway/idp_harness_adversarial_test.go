@@ -178,7 +178,7 @@ func stubEnv(t *testing.T, log, container, name string) string {
 	return ""
 }
 
-var idpContainers = []string{"idp-es256", "idp-hs256", "idp-rebuild", "idp-short"}
+var idpContainers = []string{"idp-es256", "idp-hs256", "idp-rebuild", "idp-short", "idp-session"}
 
 const idpIssuer = "urn:ascomply:auth:ci"
 
@@ -270,7 +270,7 @@ func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
 			want := []string{
 				"IDP_ES256_URL=http://localhost:9991", "IDP_HS256_URL=http://localhost:9992",
 				"IDP_REBUILD_URL=http://localhost:9993", "IDP_MAIL_URL=http://localhost:9994",
-				"IDP_SHORT_URL=http://localhost:9996", "MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
+				"IDP_SHORT_URL=http://localhost:9996", "IDP_SESSION_URL=http://localhost:9997", "MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
 			}
 			got, keysFile := splitKeysFile(t, r.stdout)
 			assertKeysFile(t, r, keysFile, "idp-es256-keys.json", "idp-es256")
@@ -326,7 +326,7 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if !strings.Contains(r.log, "docker build -q -f sidecar/auth/Dockerfile -t idp:ci .") {
 				t.Errorf("the committed Dockerfile was not built; stub log:\n%s", r.log)
 			}
-			ports := map[string]string{"idp-es256": "9991", "idp-hs256": "9992", "idp-rebuild": "9993", "idp-short": "9996"}
+			ports := map[string]string{"idp-es256": "9991", "idp-hs256": "9992", "idp-rebuild": "9993", "idp-short": "9996", "idp-session": "9997"}
 			for _, c := range idpContainers {
 				runs := stubLines(r.log, "RUN", c)
 				if len(runs) != 1 {
@@ -366,6 +366,7 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			es := stubEnv(t, r.log, "idp-es256", "GOTRUE_JWT_KEYS")
 			rb := stubEnv(t, r.log, "idp-rebuild", "GOTRUE_JWT_KEYS")
 			sh := stubEnv(t, r.log, "idp-short", "GOTRUE_JWT_KEYS")
+			ss := stubEnv(t, r.log, "idp-session", "GOTRUE_JWT_KEYS")
 			if !strings.Contains(es, stubKeyMarker) || !strings.Contains(rb, stubKeyMarker) || !strings.Contains(sh, stubKeyMarker) {
 				t.Fatalf("es256, rebuild or short got no generated key: %q / %q / %q", es, rb, sh)
 			}
@@ -375,7 +376,15 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if sh == es || sh == rb || sh == stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS") {
 				t.Error("idp-short reuses another container's key; each container gets its own")
 			}
-			for c, want := range map[string]bool{"idp-es256": true, "idp-hs256": false, "idp-rebuild": true, "idp-short": true} {
+			if !strings.Contains(ss, stubKeyMarker) {
+				t.Fatalf("idp-session got no generated key: %q", ss)
+			}
+			for n, other := range map[string]string{"idp-es256": es, "idp-rebuild": rb, "idp-short": sh, "idp-mail": stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS")} {
+				if ss == other {
+					t.Errorf("idp-session reuses %s's key; each container gets its own", n)
+				}
+			}
+			for c, want := range map[string]bool{"idp-es256": true, "idp-hs256": false, "idp-rebuild": true, "idp-short": true, "idp-session": true} {
 				if got := strings.Contains(stubLines(r.log, "RUN", c)[0]+" ", "-e GOTRUE_JWT_KEYS "); got != want {
 					t.Errorf("%s forwards GOTRUE_JWT_KEYS = %v, want %v", c, got, want)
 				}
@@ -383,12 +392,12 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if rbArgv := stubLines(r.log, "RUN", "idp-rebuild")[0]; !strings.Contains(rbArgv, "GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI=pg-functions://postgres/public/test_rebuild_claims_hook") {
 				t.Errorf("idp-rebuild does not point the hook at test_rebuild_claims_hook: %s", rbArgv)
 			}
-			for _, c := range []string{"idp-es256", "idp-hs256", "idp-short"} {
+			for _, c := range []string{"idp-es256", "idp-hs256", "idp-short", "idp-session"} {
 				if strings.Contains(stubLines(r.log, "RUN", c)[0], "HOOK_CUSTOM_ACCESS_TOKEN_URI") {
 					t.Errorf("%s overrides the image's hook URI", c)
 				}
 			}
-			// idp-mail, idp-es256 and idp-short raise the per-IP rates: their tests share one loopback key.
+			// idp-mail, idp-es256, idp-short and idp-session raise the per-IP rates: their tests share one loopback key.
 			// idp-hs256 carries the limiter proof and idp-rebuild keeps the defaults.
 			rates := []string{"GOTRUE_RATE_LIMIT_VERIFY", "GOTRUE_RATE_LIMIT_OTP", "GOTRUE_RATE_LIMIT_TOKEN_REFRESH"}
 			for _, c := range append([]string{"idp-mail"}, idpContainers...) {
@@ -396,19 +405,32 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 				if len(run) != 1 {
 					t.Fatalf("%s started %d times, want 1", c, len(run))
 				}
-				raised := c == "idp-mail" || c == "idp-es256" || c == "idp-short"
+				raised := c == "idp-mail" || c == "idp-es256" || c == "idp-short" || c == "idp-session"
 				for _, v := range rates {
 					n, got := strings.Count(run[0], "-e "+v+"="), argvEnv(run[0], v)
 					if raised && (n != 1 || got != "100000") {
 						t.Errorf("%s passes %s %d times as %q, want once as 100000: %s", c, v, n, got, run[0])
 					}
 					if !raised && strings.Contains(run[0], v) {
-						t.Errorf("%s sets %s; only idp-mail, idp-es256 and idp-short raise it", c, v)
+						t.Errorf("%s sets %s; only idp-mail, idp-es256, idp-short and idp-session raise it", c, v)
 					}
 				}
 			}
 			if v := argvEnv(stubLines(r.log, "RUN", "idp-mail")[0], rateLimitVar); v != "1000" {
 				t.Errorf("idp-mail %s = %q, want 1000", rateLimitVar, v)
+			}
+			// Only idp-session shortens the session limits, once each; the others keep the image's 720h/168h.
+			for _, c := range append(slices.Clone(idpContainers), "idp-mail") {
+				run := stubLines(r.log, "RUN", c)[0]
+				for v, want := range map[string]string{"GOTRUE_SESSIONS_TIMEBOX": "20s", "GOTRUE_SESSIONS_INACTIVITY_TIMEOUT": "8s"} {
+					n, got := strings.Count(run, "-e "+v+"="), argvEnv(run, v)
+					if c == "idp-session" && (n != 1 || got != want) {
+						t.Errorf("idp-session passes %s %d times as %q, want once as %s: %s", v, n, got, want, run)
+					}
+					if c != "idp-session" && strings.Contains(run, v) {
+						t.Errorf("%s sets %s; only idp-session shortens the session limits: %s", c, v, run)
+					}
+				}
 			}
 			// The image owns the code length, the lifetime and the limiter header.
 			for _, l := range strings.Split(r.log, "\n") {
@@ -641,14 +663,14 @@ func TestIdpSlotGivesAWorktreeItsOwnContainersAndPorts(t *testing.T) {
 			want := []string{
 				"IDP_ES256_URL=http://localhost:10011", "IDP_HS256_URL=http://localhost:10012",
 				"IDP_REBUILD_URL=http://localhost:10013", "IDP_MAIL_URL=http://localhost:10014",
-				"IDP_SHORT_URL=http://localhost:10016", "MAILPIT_URL=http://localhost:8045", "IDP_ISSUER=" + idpIssuer,
+				"IDP_SHORT_URL=http://localhost:10016", "IDP_SESSION_URL=http://localhost:10017", "MAILPIT_URL=http://localhost:8045", "IDP_ISSUER=" + idpIssuer,
 			}
 			got, keysFile := splitKeysFile(t, r.stdout)
 			if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 				t.Errorf("stdout = %q, want %q", r.stdout, want)
 			}
 			assertKeysFile(t, r, keysFile, "idp-es256-keys-s2.json", "idp-es256-s2")
-			for c, port := range map[string]string{"idp-es256": "10011", "idp-hs256": "10012", "idp-rebuild": "10013", "idp-mail": "10014", "idp-short": "10016"} {
+			for c, port := range map[string]string{"idp-es256": "10011", "idp-hs256": "10012", "idp-rebuild": "10013", "idp-mail": "10014", "idp-short": "10016", "idp-session": "10017"} {
 				if len(stubLines(r.log, "RUN", c)) != 0 {
 					t.Errorf("slot 2 started the unsuffixed %s", c)
 				}
@@ -692,7 +714,7 @@ func TestIdpSlotGivesAWorktreeItsOwnContainersAndPorts(t *testing.T) {
 		t.Fatalf("idp-down.sh: %v: %s", err, out)
 	}
 	log, _ := os.ReadFile(logPath)
-	if got := strings.TrimSpace(string(log)); got != "rm -f idp-es256-s2 idp-hs256-s2 idp-rebuild-s2 idp-mail-s2 idp-short-s2 mailpit-s2" {
+	if got := strings.TrimSpace(string(log)); got != "rm -f idp-es256-s2 idp-hs256-s2 idp-rebuild-s2 idp-mail-s2 idp-short-s2 idp-session-s2 mailpit-s2" {
 		t.Errorf("idp-down.sh with IDP_SLOT=2 ran %q", got)
 	}
 }

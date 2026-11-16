@@ -1151,8 +1151,8 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
 
   it('DEL-10-03 R5 the GoTrue version that was read is the one pinned', () => {
     const dockerfile = readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8')
-    expect(gotrueVersion()).toBe('2.197.0')
-    expect(gotrueVersion(dockerfile.replace('auth:v2.197.0@', 'auth:v2.198.0@'))).not.toBe('2.197.0')
+    expect(gotrueVersion()).toBe('2.198.0')
+    expect(gotrueVersion(dockerfile.replace('auth:v2.198.0@', 'auth:v2.199.0@'))).not.toBe('2.198.0')
   })
 
   it('DEL-10-03 R5 nothing in this repo prunes the sign-in audit table', () => {

@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// GoTrue v2.197.0 /token?grant_type=password refusals (internal/api/token.go, story P15).
+// GoTrue v2.198.0 /token?grant_type=password refusals (internal/api/token.go, story P15).
 const (
 	gtInvalidCredentials = `{"code":400,"error_code":"invalid_credentials","msg":"Invalid login credentials"}`
 	gtUserBanned         = `{"code":400,"error_code":"user_banned","msg":"User is banned"}`

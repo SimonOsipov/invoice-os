@@ -27,7 +27,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
-// GoTrue v2.197.0 fixtures. Errors use the initial-API-version HTTPError shape
+// GoTrue v2.198.0 fixtures. Errors use the initial-API-version HTTPError shape
 // {"code","error_code","msg"} (internal/api/apierrors/apierrors.go, HTTPError).
 const (
 	// internal/api/signup.go, Signup: sendJSON(w, 200, user) with autoconfirm off.

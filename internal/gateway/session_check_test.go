@@ -39,7 +39,7 @@ const (
 	msgSessionUnavailable = "session check unavailable"
 )
 
-// GoTrue v2.197.0 GET /user answers (internal/api/auth.go requireAuthentication, internal/api/user.go).
+// GoTrue v2.198.0 GET /user answers (internal/api/auth.go requireAuthentication, internal/api/user.go).
 const gtUser = `{"id":"5b0e7c1a-3f2d-4e8a-9c61-1d2e3f4a5b6c","aud":"authenticated","role":"authenticated","email":"ada@corp.example"}`
 
 func gtError(status int, code string) string {

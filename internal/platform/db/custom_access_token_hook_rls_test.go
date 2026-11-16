@@ -47,7 +47,7 @@ func seedHookMembership(t *testing.T, tenantID, userID, status string) {
 	})
 }
 
-// hookEvent builds a CustomAccessTokenInput as supabase/auth v2.197.0 marshals it
+// hookEvent builds a CustomAccessTokenInput as supabase/auth v2.198.0 marshals it
 // (internal/hooks/v0hooks: metadata, user_id, claims, authentication_method).
 func hookEvent(t *testing.T, userID string) (event []byte, claims map[string]any) {
 	t.Helper()
@@ -138,7 +138,7 @@ func TestRLS_CustomAccessTokenHookProjectsSingleActiveTenant(t *testing.T) {
 	event, in := hookEvent(t, userID)
 	want := roundTrip(t, in)
 	if len(want) != 14 {
-		t.Fatalf("input claims = %d keys, want the 14 GoTrue v2.197.0 emits", len(want))
+		t.Fatalf("input claims = %d keys, want the 14 GoTrue v2.198.0 emits", len(want))
 	}
 
 	got := outputClaims(t, callHook(t, auth, event))

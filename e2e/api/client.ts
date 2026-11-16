@@ -93,10 +93,10 @@ export const PERSONAS: { A: Persona; B: Persona } = {
 // mockIssuerTokenHeader in cmd/gateway/mockissuer.go. A preview's mock routes refuse a request without it.
 const MOCK_ISSUER_HEADER = 'X-Mock-Issuer-Token'
 
-let previewMockToken: string | undefined
+const previewMockTokens = new Map<string, string>()
 
 // The mock-route header: MOCK_ISSUER_TOKEN, else on a preview gateway (pr-<N> or nightly) that preview's
-// mock-issuer-token secret (read once, kept in memory). Off a preview with no variable: none. Never logs the value.
+// mock-issuer-token secret (read once per preview, kept in memory). Off a preview with no variable: none. Never logs the value.
 export function mockIssuerHeaders(): Record<string, string> {
   let token = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
   if (!token) {
@@ -107,14 +107,14 @@ export function mockIssuerHeaders(): Record<string, string> {
       // not a preview gateway
     }
     if (suffix) {
-      if (previewMockToken === undefined) {
+      if (!previewMockTokens.has(suffix)) {
         try {
-          previewMockToken = previewSecret('mock-issuer-token').trim()
+          previewMockTokens.set(suffix, previewSecret('mock-issuer-token').trim())
         } catch {
           throw new Error(`mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read ${suffix}-mock-issuer-token`)
         }
       }
-      token = previewMockToken
+      token = previewMockTokens.get(suffix) ?? ''
     }
   }
   return token ? { [MOCK_ISSUER_HEADER]: token } : {}

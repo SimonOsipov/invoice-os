@@ -609,6 +609,8 @@ func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
 				"the token twice":        {"X-Mock-Issuer-Token": gateToken + gateToken},
 				"a single space":         {"X-Mock-Issuer-Token": " "},
 				"one MiB":                {"X-Mock-Issuer-Token": strings.Repeat("0a1b2c3d", 1<<17)},
+				"without the X- prefix":  {"Mock-Issuer-Token": gateToken},
+				"in a cookie":            {"Cookie": "X-Mock-Issuer-Token=" + gateToken},
 			}
 			for _, r := range routes {
 				for name, hdr := range wrong {
@@ -616,6 +618,11 @@ func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
 						wantRefused(t, r, serveGate(t, r, r.method, r.body, hdr), &logs)
 					})
 				}
+				t.Run(r.name+"/the token in the query string", func(t *testing.T) {
+					q := r
+					q.path += "?X-Mock-Issuer-Token=" + gateToken
+					wantRefused(t, q, serveGate(t, q, q.method, q.body, nil), &logs)
+				})
 				// Header.Get reads the first value, so a right value after a wrong one must not open the route.
 				t.Run(r.name+"/a wrong value then the right one", func(t *testing.T) {
 					hdr := http.Header{}
@@ -639,7 +646,15 @@ func TestTaggedMockLoginRefusesAPreflightWithoutAnOrigin(t *testing.T) {
 			if login.name != "login" {
 				t.Fatalf("first route is %q, want login", login.name)
 			}
-			wantRefused(t, login, serveGate(t, login, http.MethodOptions, "", nil), &logs)
+			for name, hdr := range map[string]map[string]string{
+				"no header":             nil,
+				"a wrong token":         {"X-Mock-Issuer-Token": gateToken + "0"},
+				"an empty Origin value": {"Origin": ""},
+			} {
+				t.Run(name, func(t *testing.T) {
+					wantRefused(t, login, serveGate(t, login, http.MethodOptions, "", hdr), &logs)
+				})
+			}
 		})
 	}
 }
@@ -787,8 +802,26 @@ func TestTaggedMockRoutesServeWithTheToken(t *testing.T) {
 	}
 }
 
+// Every name platform.Posture reads as a preview gates the routes, not only pr-7.
+func TestTaggedMockGateCoversEveryPreviewName(t *testing.T) {
+	for _, env := range []string{"pr-12", "feature-pr-3"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			var logs strings.Builder
+			routes := gateRoutes(t, &logs)
+			if len(routes) != 5 {
+				t.Fatalf("%d routes under test, want 5", len(routes))
+			}
+			for _, r := range routes {
+				wantRefused(t, r, serveGate(t, r, r.method, r.body, nil), &logs)
+			}
+		})
+	}
+}
+
 func TestTaggedMockRoutesStayOpenOffAPreview(t *testing.T) {
-	for _, env := range []string{"", "production"} {
+	for _, env := range []string{"", "production", "staging"} {
 		t.Run("DEPLOY_ENV="+env, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", env)
 			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", "")

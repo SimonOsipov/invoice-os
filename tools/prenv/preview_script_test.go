@@ -481,7 +481,6 @@ func TestPreviewSecretsNeverPrintsTheKey(t *testing.T) {
 			if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
 				t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
 			}
-
 		})
 	}
 }
@@ -2729,9 +2728,28 @@ func TestPreviewSecretsPRMakesItsMockIssuerToken(t *testing.T) {
 	}
 }
 
+func TestPreviewSecretsPRKeepsAnExistingMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have", "pr-7-mock-issuer-token\n") }, "secrets", "7")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create pr-7-"); got != len(previewList(t, "PR_SECRETS"))-1 {
+		t.Errorf("%d creates, want every PR secret but the token:\n%s", got, calls)
+	}
+	if strings.Contains(calls, "secrets create pr-7-mock-issuer-token ") || strings.Contains(calls, "versions add pr-7-mock-issuer-token ") {
+		t.Errorf("the existing token was recreated or re-versioned:\n%s", calls)
+	}
+}
+
 func TestPreviewOnlyTheGatewayMountsTheMockIssuerToken(t *testing.T) {
 	t.Parallel()
-	for svc, line := range argvBySvc(prGolden(t, "deploy-argv"), "pr-7") {
+	argv := argvBySvc(nameGoldens(t, "7")["deploy-argv"], "pr-7")
+	if len(argv) == 0 {
+		t.Fatal("no service deployed")
+	}
+	for svc, line := range argv {
 		got := flagValue(line, "--set-secrets")
 		if svc == "gateway" {
 			if !strings.Contains(got, "GATEWAY_MOCK_ISSUER_TOKEN=pr-7-mock-issuer-token:latest") {
@@ -2765,16 +2783,22 @@ func TestPreviewTeardownDeletesTheTokenSecretsMade(t *testing.T) {
 func TestPreviewMockTokenReadsThePreviewsSecret(t *testing.T) {
 	t.Parallel()
 	const value = "shim-output"
-	r := runPreview(t, func(dir string) { writeIn(t, dir, "access-pr-7-mock-issuer-token", value) }, "mock-token", "7")
-	calls := nonBlankLines(r.file(t, "calls"))
-	if r.code != 0 || r.stdout != value || len(calls) != 1 || !strings.HasPrefix(calls[0], "secrets versions access latest --secret pr-7-mock-issuer-token ") {
-		t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+	for _, name := range []string{"7", "12", "nightly"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sec := previewSuffix(name) + "-mock-issuer-token"
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+sec, value) }, "mock-token", name)
+			calls := nonBlankLines(r.file(t, "calls"))
+			if r.code != 0 || r.stdout != value || len(calls) != 1 || !strings.HasPrefix(calls[0], "secrets versions access latest --secret "+sec+" ") {
+				t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+			}
+		})
 	}
 }
 
 func TestPreviewMockTokenRefusesABadName(t *testing.T) {
 	t.Parallel()
-	for _, bad := range []string{"", "07"} {
+	for _, bad := range []string{"", "07", "0", "pr-7", "7x", "-7", "7 8", "NIGHTLY", "nightly "} {
 		t.Run("name="+bad, func(t *testing.T) {
 			t.Parallel()
 			r := runPreview(t, nil, "mock-token", bad)

@@ -55,6 +55,7 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedMockRoutesRefuseEverythingWhenTheTokenIsUnset",
 		"TestTaggedMockIssuerWarnsWhenTheTokenIsUnset",
 		"TestTaggedMockRoutesServeWithTheToken",
+		"TestTaggedMockGateCoversEveryPreviewName",
 		"TestTaggedMockRoutesStayOpenOffAPreview",
 		"TestTaggedMockGateLeavesJWKSAndPreflightOpen",
 		"TestTaggedMockIssuerUsesConfiguredKey",

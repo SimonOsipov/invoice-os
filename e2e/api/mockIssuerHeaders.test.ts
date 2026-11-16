@@ -158,6 +158,43 @@ describe('mockIssuerHeaders', () => {
     expect(exec).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['a suffixed host', 'https://gateway-pr-7-944095690109.africa-south1.run.app.evil.test'],
+    ['a zero-padded PR number', 'https://gateway-pr-07-944095690109.africa-south1.run.app'],
+    ['a plain-http scheme', 'http://gateway-pr-7-944095690109.africa-south1.run.app'],
+    ['another project number', 'https://gateway-pr-7-111111111111.africa-south1.run.app'],
+  ])('a look-alike gateway (%s) gets no header and no secret read', async (_n, gateway) => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockReturnValue('tok-p')
+    const c = await load(gateway)
+    await c.login(PERSONA)
+    expect(seen).toHaveLength(1)
+    expect(seen.map(headerOf)).toEqual([undefined])
+    expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('a switch from one PR gateway to another reads the new PR\'s secret', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockReturnValueOnce('tok-7').mockReturnValueOnce('tok-8')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    vi.stubEnv('GATEWAY_URL', PR.replace('pr-7', 'pr-8'))
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-7', 'tok-8'])
+    expect((exec.mock.calls[1] as unknown as [string, string[]])[1]).toContain('pr-8-mock-issuer-token')
+  })
+
+  it('a failed read error carries nothing the gcloud error said', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockImplementation(() => {
+      throw new Error('gcloud stderr: tok-leak')
+    })
+    const c = await load(PR)
+    const err = await c.login(PERSONA).then(() => undefined, (e: Error) => e)
+    expect(err?.message).toMatch(/MOCK_ISSUER_TOKEN/)
+    expect(`${err?.message}\n${err?.stack}`).not.toContain('tok-leak')
+  })
+
   it('a failed PR secret read names both sources and is retried', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', '')
     exec.mockImplementationOnce(() => {

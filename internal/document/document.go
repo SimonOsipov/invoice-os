@@ -19,6 +19,11 @@ import (
 // (s3.go) covers the row-not-found case too.
 var ErrValidation = errors.New("document: validation")
 
+// Red prelude (SECAUD-42-01): declared so the tests compile; the executor fills the text and the check.
+var ErrHeldElsewhere = errors.New("document: held elsewhere")
+
+const HeldElsewhereMessage = ""
+
 // Document is one documents row. Filename and DeclaredContentType are nil when
 // the column is NULL, i.e. nothing usable was recorded.
 type Document struct {

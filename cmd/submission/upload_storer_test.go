@@ -229,6 +229,7 @@ func TestNewDocumentStorer_StoreErrorReachesTheHandlerUnwrapped(t *testing.T) {
 	}{
 		{"suspended member is 403", db.ErrNotActiveMember, http.StatusForbidden},
 		{"no tenant is 401", db.ErrNoTenant, http.StatusUnauthorized},
+		{"held elsewhere is 409", document.ErrHeldElsewhere, http.StatusConflict},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := &dsScript{err: c.err}
@@ -240,5 +241,17 @@ func TestNewDocumentStorer_StoreErrorReachesTheHandlerUnwrapped(t *testing.T) {
 				t.Errorf("enqueue ran %d time(s) after a failed store, want 0 -- there is no document to extract", s.enqueues)
 			}
 		})
+	}
+}
+
+// The 409 sentence lives in two packages because internal/extraction cannot import internal/document.
+func TestDocumentHeldElsewhereMessage_MatchesTheDocumentPackagesSentence(t *testing.T) {
+	const want = "this file already belongs to a client you cannot see; remove it to continue"
+	if extraction.DocumentHeldElsewhereMessage != document.HeldElsewhereMessage {
+		t.Errorf("extraction.DocumentHeldElsewhereMessage = %q, want document.HeldElsewhereMessage %q",
+			extraction.DocumentHeldElsewhereMessage, document.HeldElsewhereMessage)
+	}
+	if document.HeldElsewhereMessage != want {
+		t.Errorf("document.HeldElsewhereMessage = %q, want %q", document.HeldElsewhereMessage, want)
 	}
 }

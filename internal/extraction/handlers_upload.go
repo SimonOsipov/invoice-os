@@ -27,6 +27,11 @@ const uploadRefusalMessage = "this file type cannot be read here"
 // readUploadHead is the head-read seam; a test swaps it to inject a read failure.
 var readUploadHead = io.ReadFull
 
+// Red prelude (SECAUD-42-01): declared so the tests compile; the executor fills the text and the mapping.
+var ErrDocumentHeldElsewhere = errors.New("extraction: document held elsewhere")
+
+const DocumentHeldElsewhereMessage = ""
+
 // StoredDocument is what the store seam reports back. internal/extraction never imports
 // internal/document (deps_test.go's fence), so cmd/submission adapts document.Service.Store
 // into this shape, mirroring newDocumentOpener.

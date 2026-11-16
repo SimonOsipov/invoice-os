@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/actor"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -321,19 +323,29 @@ func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string, withHolders 
 	type memberInfo struct {
 		displayName, email *string
 		status, role       string
+		restricted         bool
 	}
 	members := map[string]memberInfo{}
+	// A non-admin caller reads no other member's email; its own row keeps it. No identity
+	// (in-process) is unrestricted.
+	caller, _ := auth.IdentityFromContext(ctx)
+	var viewer *string
+	if _, err := uuid.Parse(caller.Subject); err == nil {
+		viewer = &caller.Subject
+	}
 	mrows, err := tx.Query(ctx,
-		`SELECT user_id, display_name, email, status, role
+		`SELECT user_id, display_name, email, status, role,
+		        $2::uuid IS NOT NULL AND user_id <> $2::uuid
+		        AND NOT coalesce((SELECT role = 'admin' FROM memberships WHERE user_id = $2::uuid), false)
 		   FROM memberships
-		  WHERE user_id = ANY($1::uuid[])`, userIDs)
+		  WHERE user_id = ANY($1::uuid[])`, userIDs, viewer)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	for mrows.Next() {
 		var userID string
 		var mi memberInfo
-		if err := mrows.Scan(&userID, &mi.displayName, &mi.email, &mi.status, &mi.role); err != nil {
+		if err := mrows.Scan(&userID, &mi.displayName, &mi.email, &mi.status, &mi.role, &mi.restricted); err != nil {
 			mrows.Close()
 			return nil, nil, nil, err
 		}
@@ -348,7 +360,7 @@ func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string, withHolders 
 		for _, userID := range roleUsers[roleID] {
 			mi := members[userID]
 			holders[key] = append(holders[key], holderInput{
-				Name:       holderName(mi.displayName, mi.email, userID),
+				Name:       holderName(mi.displayName, mi.email, userID, mi.restricted),
 				Status:     mi.status,
 				AccessRole: mi.role,
 			})
@@ -451,10 +463,14 @@ func withExtra(primary string, extra int) string {
 	return primary
 }
 
-// holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:552).
-func holderName(displayName, email *string, userID string) string {
+// holderName is display_name ?? email ?? user_id, except that a restricted viewer (a non-admin)
+// reads another member's missing display name as actor.UnnamedMember, never their email.
+func holderName(displayName, email *string, userID string, restricted bool) string {
 	if displayName != nil {
 		return *displayName
+	}
+	if restricted {
+		return actor.UnnamedMember
 	}
 	if email != nil {
 		return *email

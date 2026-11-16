@@ -215,5 +215,5 @@ export function cardIdentity(session: Session): { name: string; initials: string
   if (!session.handoff) return { name: session.persona.name, initials: session.persona.initials }
   const displayName = presentText(session.me?.user.display_name)
   const email = presentText(session.me?.user.email)
-  return { name: displayName ?? email ?? '', initials: memberInitials(displayName, email, '') }
+  return { name: displayName ?? email ?? '', initials: displayName || email ? memberInitials(displayName, email) : '' }
 }

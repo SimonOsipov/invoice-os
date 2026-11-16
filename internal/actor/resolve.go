@@ -41,7 +41,17 @@ func normalizeUUID(subject string) (string, bool) {
 // GUC and writes no tenant_id predicate. The memberships tenant_isolation policy
 // on tx's connection is the only filter, so a tx with no app.current_tenant
 // resolves nothing and a superuser tx would resolve across tenants.
-func Resolve(ctx context.Context, tx pgx.Tx, subjects []string) (map[string]Label, error) {
+//
+// viewer is the caller's user id. A viewer who is a non-admin member reads no other
+// member's email: a person with no display name labels as UnnamedMember. An empty or
+// non-uuid viewer is an in-process caller and reads everything.
+func Resolve(ctx context.Context, tx pgx.Tx, viewer string, subjects []string) (map[string]Label, error) {
+	var viewerArg *string
+	viewerNorm := ""
+	if n, ok := normalizeUUID(viewer); ok {
+		viewerNorm = n
+		viewerArg = &viewer
+	}
 	out := make(map[string]Label, len(subjects))
 	// De-duplicated on the normalised uuid, keyed on the raw subject: two
 	// spellings of one id bind once and key twice.
@@ -73,9 +83,11 @@ func Resolve(ctx context.Context, tx pgx.Tx, subjects []string) (map[string]Labe
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT user_id, display_name, email, status
+		`SELECT user_id, display_name, email, status,
+		        $2::uuid IS NOT NULL
+		        AND NOT coalesce((SELECT role = 'admin' FROM memberships WHERE user_id = $2::uuid), false)
 		   FROM memberships
-		  WHERE user_id = ANY($1::uuid[])`, bind)
+		  WHERE user_id = ANY($1::uuid[])`, bind, viewerArg)
 	if err != nil {
 		return nil, err
 	}
@@ -84,12 +96,17 @@ func Resolve(ctx context.Context, tx pgx.Tx, subjects []string) (map[string]Labe
 		var userID string
 		var displayName, email *string
 		var status string
-		if err := rows.Scan(&userID, &displayName, &email, &status); err != nil {
+		var restricted bool
+		if err := rows.Scan(&userID, &displayName, &email, &status, &restricted); err != nil {
 			return nil, err
 		}
 		for _, subject := range subjectsOf[strings.ReplaceAll(userID, "-", "")] {
 			if status == "removed" {
 				out[subject] = RemovedName(displayName)
+				continue
+			}
+			if restricted && strings.ReplaceAll(userID, "-", "") != viewerNorm {
+				out[subject] = NameWithoutEmail(displayName)
 				continue
 			}
 			out[subject] = Name(displayName, email, subject)

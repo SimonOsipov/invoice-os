@@ -725,7 +725,7 @@ describe('cardIdentity (AUTH-09-02)', () => {
     const email = 'folake.adesina@acme.ng'
     const got = cardIdentity(handoffOf({ display_name: null, email }))
     expect(got).toEqual({ name: email, initials: 'FA' })
-    expect(got.initials).toBe(memberInitials(null, email, ''))
+    expect(got.initials).toBe(memberInitials(null, email))
   })
 
   it('cardIdentity shows nothing legible, never the user id', () => {

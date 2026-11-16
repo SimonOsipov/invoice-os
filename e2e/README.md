@@ -84,7 +84,7 @@ deployed database, so parallel workers would race — entity-namespace contentio
 environments only.
 
 The suite needs `GATEWAY_TOKEN` and, off CI, a signed-in `gcloud` that can read `ascomply-preview` (secrets and ID tokens).
-Against a preview (a PR or the nightly), the suite also reads `MOCK_ISSUER_TOKEN`, else that preview's `<pr-N|nightly>-mock-issuer-token` through gcloud.
+Against a preview, the suite also reads `MOCK_ISSUER_TOKEN`, else `<pr-N|nightly>-mock-issuer-token` through gcloud.
 
 ```bash
 GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
@@ -170,7 +170,7 @@ ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left 
 ```
 
 - **`env <pr-N|production>`** prints the service URLs: the PR's run.app services, or production's hosts. It needs no login.
-- **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). Each preview deploy recreates the database; `login` then re-creates the accounts. `--env production` exits 1: production has no demo account, so use read-only probes there.
+- **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). Each preview deploy recreates the database; `login` then re-creates the accounts. `--env production` exits 1: production has no demo account, so use read-only probes there. It needs a signed-in gcloud that can read `ascomply-preview`, or `MOCK_ISSUER_TOKEN`.
 - **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1. `--viewport` leaves the open page at that width.
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.
 - **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` (`developer.json`, `support.json` for staff) are the storage states. Output never prints a password. Delete the directory to re-create the accounts.

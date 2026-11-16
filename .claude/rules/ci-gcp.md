@@ -20,7 +20,7 @@ paths:
 - Check the tagged revisions with the `deploy-check` job (`cmd/deploycheck`). Tag URLs answer only inside the production network.
 - The `deploy-check` job reads the gateway `/health` with `GATEWAY_TOKEN`, mounted from the `gateway-token` secret.
 - Read the library, the blog and the check in the deploy's site check at `www.ascomply.com/library`, `www.ascomply.com/blog` and `www.ascomply.com/check`.
-- Move traffic with `gcp-traffic.sh promote`. It sends 100 % to latest and tags the previous revision `rollback`.
+- Move traffic with `gcp-traffic.sh promote`. It sends 100 % to the run's tagged revision and tags the previous revision `rollback`.
 - A tagged revision with a revision-level minimum keeps running. The worker's rule is in `add-service.md`.
 - After the move, poll `/healthz/fleet` through the load balancer. On failure, `gcp-traffic.sh restore` sends traffic back.
 - Roll back with `rollback-prod.yml`. It moves every service to its `rollback` revision together.

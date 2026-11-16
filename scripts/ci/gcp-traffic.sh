@@ -3,7 +3,7 @@
 # as deploy-prod, PROJECT and REGION.
 #
 #   gcp-traffic.sh snapshot <file>        write "<service> <revision>" for the revision serving each service
-#   gcp-traffic.sh promote <file>         send 100 % to the latest revision; tag each revision in <file> `rollback`
+#   gcp-traffic.sh promote <file> <tag>   send 100 % to the revision tagged <tag>; tag each revision in <file> `rollback`
 #   gcp-traffic.sh restore <file>         send 100 % of each service in <file> to its revision
 #   gcp-traffic.sh untag                  remove every deploy tag (c-*) from every service
 #   gcp-traffic.sh rollback <file>        send 100 % to the revision tagged `rollback`; write "<service> <from> <to>"
@@ -46,11 +46,22 @@ case "${1:-}" in
     done
     ;;
   promote)
-    in="${2:?usage: gcp-traffic.sh promote <file>}"
+    in="${2:?usage: gcp-traffic.sh promote <file> <tag>}"
+    tag="${3:?usage: gcp-traffic.sh promote <file> <tag>}"
+    plan=()
     while read -r svc rev; do
-      gcloud run services update-traffic "$svc" "${gc[@]}" --to-latest --update-tags "rollback=$rev" >/dev/null
-      echo "$svc: 100 % to latest; rollback = $rev"
+      new=$(tagged "$svc" "$tag")
+      if [ -z "$new" ]; then
+        echo "::error::$svc has no revision tagged $tag; nothing moved." >&2
+        exit 1
+      fi
+      plan+=("$svc $rev $new")
     done <"$in"
+    for line in "${plan[@]}"; do
+      read -r svc rev new <<<"$line"
+      gcloud run services update-traffic "$svc" "${gc[@]}" --to-revisions "$new=100" --update-tags "rollback=$rev" >/dev/null
+      echo "$svc: 100 % to $new; rollback = $rev"
+    done
     ;;
   restore)
     in="${2:?usage: gcp-traffic.sh restore <file>}"
@@ -63,14 +74,21 @@ case "${1:-}" in
     ;;
   untag)
     # Runs never overlap, so every c-* tag is this run's or a failed run's.
+    failed=0
     for svc in "${SERVICES[@]}"; do
-      tags=$(gcloud run services describe "$svc" "${gc[@]}" --format=json |
-        jq -r '[.spec.traffic[].tag // empty | select(startswith("c-"))] | join(",")')
+      if ! tags=$(gcloud run services describe "$svc" "${gc[@]}" --format=json |
+        jq -r '[.spec.traffic[].tag // empty | select(startswith("c-"))] | join(",")'); then
+        echo "::error::$svc: tags could not be read." >&2
+        failed=1
+        continue
+      fi
       if [ -n "$tags" ]; then
-        gcloud run services update-traffic "$svc" "${gc[@]}" --remove-tags "$tags" >/dev/null
+        gcloud run services update-traffic "$svc" "${gc[@]}" --remove-tags "$tags" >/dev/null ||
+          { echo "::error::$svc: tags $tags were not removed." >&2; failed=1; continue; }
         echo "$svc: removed $tags"
       fi
     done
+    exit "$failed"
     ;;
   rollback)
     out="${2:?usage: gcp-traffic.sh rollback <file>}"

@@ -148,9 +148,12 @@ func TestDeployProd_SpaBuildPassesTheSentryTokenAsASecret(t *testing.T) {
 		t.Errorf("last docker call %q lacks --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN", last)
 	}
 	for _, l := range argv {
-		if strings.Contains(l, "--build-arg SENTRY_AUTH_TOKEN") || strings.Contains(l, token) {
+		if regexp.MustCompile(`--build-arg[ =]\S*SENTRY_AUTH_TOKEN`).MatchString(l) || strings.Contains(l, token) {
 			t.Errorf("docker argv leaks the token or passes it as a build arg: %s", l)
 		}
+	}
+	if n := strings.Count(last, "--secret "); n != 1 {
+		t.Errorf("last docker call has %d --secret flags, want 1: %s", n, last)
 	}
 	if got, _ := os.ReadFile(filepath.Join(b.root, "build-env")); string(got) != token {
 		t.Errorf("docker's environment held SENTRY_AUTH_TOKEN = %q, want %q", got, token)

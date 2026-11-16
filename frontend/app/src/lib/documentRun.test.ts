@@ -1686,7 +1686,7 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
   })
 })
 
-// --- SECAUD-52: a refused upload in a batch ---------------------------------
+// --- a refused upload in a batch ---------------------------------
 
 const HELD_LITERAL =
   'Not imported: this file already belongs to a client you cannot see. The other files were imported.'
@@ -1808,11 +1808,11 @@ describe('startDocumentRun — a refused file in a batch (SECAUD-52)', () => {
     expect(filesStrip([], run, 'document').map((r) => r.reason)).toContain(HELD_LITERAL)
   })
 
-  it('HELD-8: a Go reword of HeldElsewhereMessage would silently bring back "remove it to continue" in the batch', () => {
+  it('HELD-8: a Go reword of DocumentHeldElsewhereMessage would silently bring back "remove it to continue" in the batch', () => {
     // Comments stripped and only the declaration read: a comment keeping the old sentence must not pass.
-    const src = stripComments(readRepoFile('../../internal/document/document.go', 'HeldElsewhereMessage'))
-    const decl = src.split('\n').filter((l) => /^const HeldElsewhereMessage = /.test(l))
-    expect(decl).toEqual([`const HeldElsewhereMessage = "${HELD_ELSEWHERE_SENTENCE}"`])
+    const src = stripComments(readRepoFile('../../internal/extraction/handlers_upload.go', 'DocumentHeldElsewhereMessage'))
+    const decl = src.split('\n').filter((l) => /^const DocumentHeldElsewhereMessage = /.test(l))
+    expect(decl).toEqual([`const DocumentHeldElsewhereMessage = "${HELD_ELSEWHERE_SENTENCE}"`])
   })
 
   it('HELD-9: a held file beside an imported file and a failed file claims nothing about the others', async () => {
@@ -1832,5 +1832,19 @@ describe('startDocumentRun — a refused file in a batch (SECAUD-52)', () => {
     expect(failedMessage(outcomes[0])).toBe(HELD_NOT_IMPORTED)
     expect(failedMessage(outcomes[2])).toBe(HELD_NOT_IMPORTED)
     expect(outcomes[1].outcome.kind).toBe('imported')
+  })
+
+  it('HELD-11: a held file beside a failed-status or zero-invoice report claims nothing about the others', async () => {
+    const bad = (id: string, over: Partial<ImportReport>) => ({ ...report(id), ...over })
+    for (const over of [
+      { status: 'failed' as const, rows_valid: 0, ready_invoices: 0 },
+      { rows_valid: 0, ready_invoices: 0 },
+    ]) {
+      const outcomes = await startDocumentRun(
+        docFiles(['a.pdf', 'b.pdf', 'c.pdf']),
+        heldDeps(['a.pdf'], { importDocument: async (d) => (d === 'doc-b.pdf' ? bad(d, over) : report(d)) }),
+      )
+      expect(failedMessage(outcomes[0])).toBe(HELD_NOT_IMPORTED)
+    }
   })
 })

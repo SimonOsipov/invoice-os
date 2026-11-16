@@ -165,23 +165,26 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-// Mirrors document.HeldElsewhereMessage (internal/document/document.go); a scan test pins it.
+// Mirrors extraction.DocumentHeldElsewhereMessage (internal/extraction/handlers_upload.go), which POST /v1/documents sends; a scan test pins it.
 export const HELD_ELSEWHERE_SENTENCE = 'this file already belongs to a client you cannot see; remove it to continue'
 export const HELD_NOT_IMPORTED = 'Not imported: this file already belongs to a client you cannot see.'
 export const HELD_OTHERS_IMPORTED = ' The other files were imported.'
 
 // Exact 409 + sentence only: anything else keeps the server text, so a reword fails safe.
-export function isHeldElsewhere(err: unknown): boolean {
+function isHeldElsewhere(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409 && err.message === HELD_ELSEWHERE_SENTENCE
 }
 
-// Appends the suffix only where it is true: another file exists and every other one imported.
+// Appends the suffix only where it is true: another file exists and every other one really
+// imported (same rows_valid rule as the review screen's batchReason, never status alone).
 // Re-reports the stage so the progress row keeps equalling the outcome (RUN-13).
 function withBatchContext(outcomes: DocumentRunOutcome[], deps: DocumentPipelineDeps): DocumentRunOutcome[] {
+  const imported = outcomes.filter(
+    (x) => x.outcome.kind === 'imported' && x.outcome.report.status !== 'failed' && x.outcome.report.rows_valid > 0,
+  ).length
+  const othersImported = outcomes.length > 1 && imported === outcomes.length - 1
   return outcomes.map((o) => {
-    if (o.outcome.kind !== 'failed' || o.outcome.message !== HELD_NOT_IMPORTED) return o
-    const others = outcomes.filter((x) => x !== o)
-    if (others.length === 0 || !others.every((x) => x.outcome.kind === 'imported')) return o
+    if (o.outcome.kind !== 'failed' || o.outcome.message !== HELD_NOT_IMPORTED || !othersImported) return o
     const reason = HELD_NOT_IMPORTED + HELD_OTHERS_IMPORTED
     try {
       deps.onStage(o.id, { kind: 'failed', reason })
@@ -208,7 +211,6 @@ export function startDocumentRun(
       try {
         documentId = await deps.upload(f.file)
         const verdict = await deps.poll(documentId, f.id)
-        // Carried VERBATIM: the poll owns the wording, this only relays it.
         if (verdict.kind !== 'succeeded') {
           const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
           deps.onStage(f.id, { kind: 'failed', reason })

@@ -29,6 +29,9 @@ func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID stri
 	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
 }
 
+// PDFiumMaxTotalForTest is the pool size; a leak test refuses more often than this.
+const PDFiumMaxTotalForTest = pdfiumMaxTotal
+
 // DocumentTypeVerdictsForTest is every option name a verdict may carry.
 func DocumentTypeVerdictsForTest() []string {
 	var out []string

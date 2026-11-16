@@ -192,7 +192,7 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 // mandatory under the wasm backend and runs on every path, including onPage's error.
 func (r *PDFiumReader) renderPage(inst pdfium.Pdfium, ref requests.Page, page Page, onPage func(Page) error) error {
 	// ceiling: a page past the cap is refused here, after pages 1..k-1 were rendered and stored;
-	// a pre-pass would cost up to MaxPages extra page loads on every upload.
+	// revisit with a size pre-pass if dead-letters of this kind show up.
 	px, err := inst.GetPageSizeInPixels(&requests.GetPageSizeInPixels{Page: ref, DPI: r.renderDPI()})
 	if err != nil {
 		return fmt.Errorf("pdfium: page %d size in pixels: %w", page.Number, err)

@@ -12,6 +12,7 @@ package extraction_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -800,10 +802,23 @@ func TestPDFiumEndsReader_SkipsAnOversizedMiddlePage(t *testing.T) {
 func TestPDFiumReader_RendersAfterARefusal(t *testing.T) {
 	r := extraction.NewPDFiumReader()
 	before := extraction.PDFiumCleanupsForTest()
-	_, _, _, err := sizedRead(t, r, fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400}))
-	requireSizeRefusal(t, err)
+	// More refusals than pool instances: a refusal that leaks its instance starves a later Read,
+	// so every Read shares one short deadline and a leak surfaces as a deadline error.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	read := func(raw []byte) (pages []extraction.Page, err error) {
+		_, err = r.Read(ctx, extraction.Document{Bytes: raw, ContentType: "application/pdf"}, func(p extraction.Page) error {
+			pages = append(pages, p)
+			return nil
+		})
+		return pages, err
+	}
+	for i := 0; i <= extraction.PDFiumMaxTotalForTest; i++ {
+		_, err := read(fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400}))
+		requireSizeRefusal(t, err)
+	}
 
-	pages, _, _, err := sizedRead(t, r, fxBuildSizedPages(fxSizedPage{W: 612, H: 792}))
+	pages, err := read(fxBuildSizedPages(fxSizedPage{W: 612, H: 792}))
 	if err != nil {
 		t.Fatalf("Read after a refusal: %v", err)
 	}
@@ -814,6 +829,6 @@ func TestPDFiumReader_RendersAfterARefusal(t *testing.T) {
 		t.Errorf("decode: %v", err)
 	}
 	if d := extraction.PDFiumCleanupsForTest() - before; d != 1 {
-		t.Errorf("cleanups over both reads = %d, want 1", d)
+		t.Errorf("cleanups over all reads = %d, want 1", d)
 	}
 }

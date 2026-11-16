@@ -2206,18 +2206,17 @@ describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projectio
 
 describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third variant', () => {
   it('takes initials from the display name when present', () => {
-    expect(memberInitials('Folake Adesina', 'f.adesina@x.ng', 'u1')).toBe('FA')
+    expect(memberInitials('Folake Adesina', 'f.adesina@x.ng')).toBe('FA')
   })
 
   it('falls back to initialsFrom(email) when there is no display name', () => {
-    expect(memberInitials(null, 'f.adesina@x.ng', 'u1')).toBe('FA')
+    expect(memberInitials(null, 'f.adesina@x.ng')).toBe('FA')
   })
 
   it('memberInitials of a nameless, emailless member is the Unnamed member initials, not the uuid', () => {
-    const uuid = 'c0000000-0000-0000-0000-000000000009'
-    expect(memberInitials(null, null, uuid)).toBe(initials(UNNAMED_NAME))
-    expect(memberInitials(null, null, uuid)).not.toBe('C0')
-    expect(memberInitials(null, null, uuid)).toBe('UM')
+    expect(memberInitials(null, null)).toBe(initials(UNNAMED_NAME))
+    expect(memberInitials(null, null)).not.toBe('C0')
+    expect(memberInitials(null, null)).toBe('UM')
   })
 })
 
@@ -2292,23 +2291,23 @@ describe('AC-2 — toMember keeps status VERBATIM too, and an unfamiliar one is 
 
 describe('AC-3 — memberInitials, adversarial shapes', () => {
   it('an empty-string display name is falsy, so it falls through to email like a missing one', () => {
-    expect(memberInitials('', 'f.adesina@okafor.ng', 'u1')).toBe('FA')
+    expect(memberInitials('', 'f.adesina@okafor.ng')).toBe('FA')
   })
 
   it('a punctuation-only display name strips to nothing — unreachable from the seed, deliberately unguarded', () => {
-    expect(memberInitials('---', 'f.adesina@okafor.ng', 'u1')).toBe('')
+    expect(memberInitials('---', 'f.adesina@okafor.ng')).toBe('')
   })
 
   it('a single-word display name yields one letter, not a two-word pair', () => {
-    expect(memberInitials('Zainab', null, 'u1')).toBe('Z')
+    expect(memberInitials('Zainab', null)).toBe('Z')
   })
 
   it('diacritics do not crash or mojibake — the underlying initials() strips non-ASCII letters rather than transliterating them', () => {
-    expect(() => memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).not.toThrow()
+    expect(() => memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null)).not.toThrow()
     // 'Ò' is stripped along with the other accented characters, so the second word's leading
     // letter is its first PLAIN one ('g'), not the accented 'Ò' a person would read as the name's
     // initial — recorded fact, not a regression this subtask introduced (initials() is customers.ts's).
-    expect(memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).toBe('AG')
+    expect(memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null)).toBe('AG')
   })
 })
 

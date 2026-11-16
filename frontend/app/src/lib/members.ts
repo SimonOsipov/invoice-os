@@ -567,7 +567,7 @@ export function toMember(w: MembershipWire, selfSubject: string): Member {
     id: w.user_id,
     // A removed row carries no email; its name is never an email or a uuid.
     name: w.status === 'removed' ? w.display_name || REMOVED_NAME : (w.display_name ?? w.email ?? UNNAMED_NAME),
-    initials: w.status === 'removed' ? initials(w.display_name || REMOVED_NAME) : memberInitials(w.display_name, w.email, w.user_id),
+    initials: w.status === 'removed' ? initials(w.display_name || REMOVED_NAME) : memberInitials(w.display_name, w.email),
     email: w.status === 'removed' ? null : w.email,
     role: w.role as AccessRole,
     status: w.status as MemberStatus,
@@ -577,7 +577,7 @@ export function toMember(w: MembershipWire, selfSubject: string): Member {
 }
 
 /** Composes the two existing helpers rather than adding a third initials variant. A nameless, emailless member gets the fixed label's initials, never uuid letters. */
-export function memberInitials(displayName: string | null, email: string | null, _userId: string): string {
+export function memberInitials(displayName: string | null, email: string | null): string {
   if (displayName) return initials(displayName)
   if (email) return initialsFrom(email)
   return initials(UNNAMED_NAME)

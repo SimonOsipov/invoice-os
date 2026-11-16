@@ -2588,6 +2588,7 @@ function mkBatch(id: string, filename: string | null, overrides: Partial<ImportB
     errors: [],
     rule_set_version: 5,
     created_at: '2026-07-30T00:00:00Z',
+    undoable: false,
     ...overrides,
   }
 }
@@ -2662,6 +2663,22 @@ describe('reviewShellStateAll (BULK-01-06, AC-4)', () => {
     expect(reviewShellStateAll([completed, failed])).toBe('batch')
     expect(reviewShellStateAll([failed, failed])).toBe('rejected')
     expect(reviewShellStateAll([completed])).toBe(reviewShellState(completed))
+  })
+})
+
+describe('reviewShellStateAll reads undone (SECAUD-50-04)', () => {
+  it('reviewShellStateAll reads undone', () => {
+    const undone: Pick<ImportBatch, 'status'> = { status: 'undone' }
+    expect(reviewShellStateAll([undone, undone])).toBe('undone')
+    expect(reviewShellStateAll([undone, { status: 'completed' }])).toBe('batch')
+    expect(reviewShellStateAll([{ status: 'failed' }])).toBe('rejected')
+    expect(reviewShellStateAll([{ status: 'failed' }, undone])).toBe('undone')
+  })
+
+  it('filesStrip marks an undone batch', () => {
+    const rows = filesStrip([{ ...mkBatch('b1', 'a.csv', { rows_valid: 0 }), status: 'undone' }, mkBatch('b2', 'b.csv')], null, 'spreadsheet')
+    expect(rows[0]).toMatchObject({ undone: true, reason: null })
+    expect(rows[1].undone).toBe(false)
   })
 })
 

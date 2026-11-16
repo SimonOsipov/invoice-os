@@ -41,7 +41,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 const storeSession = (raw: string | null) =>
   vi.stubGlobal('localStorage', { getItem: (k: string) => (k === SESSION_KEY ? raw : null) })
-const signedIn = () => storeSession(JSON.stringify({ v: 2, token: 'T', refresh_token: 'R' }))
+const signedIn = () => storeSession(JSON.stringify({ v: 3, token: 'T' }))
 
 const lastCall = () => {
   expect(fetchMock, 'fetch was called').toHaveBeenCalledTimes(1)
@@ -440,7 +440,7 @@ describe('blog calls through withSession', () => {
   const bearer = (c: unknown[]) => new Headers((c[1] as RequestInit).headers).get('Authorization')
 
   beforeEach(() => {
-    stored = JSON.stringify({ v: 2, token: 'OLD', refresh_token: 'R' })
+    stored = JSON.stringify({ v: 3, token: 'OLD' })
     vi.stubGlobal('localStorage', {
       getItem: (k: string) => (k === SESSION_KEY ? stored : null),
       setItem: (k: string, v: string) => {
@@ -457,7 +457,7 @@ describe('blog calls through withSession', () => {
 
   it('withSession: an expired token is renewed over the wire and the retry carries the new token', async () => {
     fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
-      if (url === `${GW}/auth/refresh`) return json({ access_token: STAFF, refresh_token: 'R2' })
+      if (url === `${GW}/auth/refresh`) return json({ access_token: STAFF })
       return new Headers(init.headers).get('Authorization') === 'Bearer OLD' ? json({ error: 'expired' }, 401) : json({ id: 'p9' }, 201)
     })
     await expect(withSession(() => createPost(INPUT))).resolves.toEqual({ id: 'p9' })
@@ -465,11 +465,11 @@ describe('blog calls through withSession', () => {
     expect(urls).toEqual([`${ROUTE}/posts`, `${GW}/auth/refresh`, `${ROUTE}/posts`])
     expect(bearer(fetchMock.mock.calls[0])).toBe('Bearer OLD')
     expect(bearer(fetchMock.mock.calls[2])).toBe(`Bearer ${STAFF}`)
-    expect(JSON.parse(stored ?? '')).toEqual({ v: 2, token: STAFF, refresh_token: 'R2' })
+    expect(JSON.parse(stored ?? '')).toEqual({ v: 3, token: STAFF })
   })
 
   it('withSession: parallel blog reads send one refresh', async () => {
-    answer(() => json({ access_token: STAFF, refresh_token: 'R2' }))
+    answer(() => json({ access_token: STAFF }))
     await expect(Promise.all([withSession(fetchPosts), withSession(fetchCategories), withSession(fetchAuthors)])).resolves.toHaveLength(3)
     expect(fetchMock.mock.calls.filter((c) => c[0] === `${GW}/auth/refresh`)).toHaveLength(1)
   })

@@ -3340,7 +3340,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // EXTR-15-01: failure_kind carries no omitempty, so a job that settled cleanly still sends
   // the key with an explicit null -- the deployed proof that the tag was not written with one.
   expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
-    ['ai_text_truncated', 'document', 'document_id', 'document_type', 'failure_kind', 'fields', 'id', 'pages', 'state'].sort(),
+    ['ai_text_truncated', 'document', 'document_id', 'document_type', 'failure_kind', 'fields', 'id', 'import_batch_id', 'pages', 'state'].sort(),
   )
   expect(
     (detail as unknown as Record<string, unknown>).failure_kind,

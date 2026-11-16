@@ -31,6 +31,14 @@ export interface ApiFetchOptions {
   // 'text' resolves the raw body (the UBL route serves XML). Errors stay JSON on
   // every path, so this is read only after the !res.ok check below.
   responseType?: 'json' | 'text'
+  credentials?: RequestCredentials
+}
+
+export const SESSION_HEADER = 'X-Auth-Session'
+
+// Cookie-mode call to /auth/exchange, /auth/refresh or /auth/sign-out; the gateway holds the refresh token.
+export function sessionFetch<T>(url: string, opts?: Omit<ApiFetchOptions, 'credentials' | 'token'>): Promise<T> {
+  return apiFetch<T>(url, { ...opts, credentials: 'include', headers: { ...opts?.headers, [SESSION_HEADER]: 'cookie' } })
 }
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.
@@ -67,6 +75,7 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
       headers,
       body,
       signal: opts?.signal,
+      credentials: opts?.credentials,
     })
   } catch (e) {
     // undici reports every socket error as "fetch failed"; the cause names it (ECONNRESET).

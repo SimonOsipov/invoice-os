@@ -96,7 +96,7 @@ describe('blog package', () => {
   it('dockerfile_bakesTheGaMeasurementId', () => {
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
     const from = lines.findIndex((l) => /AS build$/.test(l))
-    const build = lines.findIndex((l) => l === 'RUN pnpm --filter @invoice-os/blog build')
+    const build = lines.findIndex((l) => l.endsWith(' pnpm --filter @invoice-os/blog build'))
     const arg = lines.indexOf('ARG VITE_GA_MEASUREMENT_ID')
     expect(lines.indexOf('ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')).toBeGreaterThan(arg)
     expect(arg).toBeGreaterThan(from)
@@ -114,7 +114,7 @@ describe('blog package', () => {
     expect(read_.has('VITE_LANDING_URL')).toBe(true)
 
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
-    const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
+    const build = lines.findIndex((l) => /^RUN .*pnpm --filter/.test(l))
     expect(build).toBeGreaterThan(-1)
     // GA4 and the gateway URL are read by modules of later subtasks; their pairs ship with the image now.
     for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID', 'VITE_GATEWAY_URL'])) {
@@ -131,9 +131,9 @@ describe('blog package', () => {
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
     const froms = lines.flatMap((l, i) => (/^FROM\s/.test(l) ? [i] : []))
     expect(froms).toHaveLength(3)
-    expect(lines[froms[0]]).toMatch(/^FROM node:\S+ AS build$/)
+    expect(lines[froms[0]]).toMatch(/^FROM (?:\S+\/)?node:\S+ AS build$/)
     expect(lines[froms[1]]).toMatch(/^FROM \S*golang:\S+ AS server$/)
-    expect(lines[froms[2]]).toMatch(/^FROM \S*distroless\/static\S*:nonroot AS serve$/)
+    expect(lines[froms[2]]).toMatch(/^FROM \S*distroless\/static\S*:nonroot(?:@sha256:[0-9a-f]{64})? AS serve$/)
 
     const server = lines.slice(froms[1] + 1, froms[2])
     for (const copy of ['COPY go.mod go.sum ./', 'COPY cmd/blog cmd/blog', 'COPY internal/blogweb internal/blogweb', 'COPY internal/platform internal/platform']) {

@@ -9,6 +9,7 @@ import {
   assertFitsNarrow,
   assertPageDoesNotScrollSideways,
   assertSameHeight,
+  controlOverflow,
   enclosesRect,
   gaps,
   inflateRect,
@@ -536,4 +537,14 @@ describe('assertFitsNarrow', () => {
     expect((err as Error).message).toContain('the card must not scroll sideways at 320px wide')
     expect(fake.page.viewportSize()).toEqual({ width: 1280, height: 1080 })
   }, 20_000)
+})
+
+describe('controlOverflow', () => {
+  it('blames the page, not the control, when the overflow is there with the control hidden', () => {
+    expect(controlOverflow(135, 135)).toEqual({ hiddenOverflow: 135, addedByControl: 0 })
+  })
+
+  it('reports what the control adds', () => {
+    expect(controlOverflow(135, 100)).toEqual({ hiddenOverflow: 100, addedByControl: 35 })
+  })
 })

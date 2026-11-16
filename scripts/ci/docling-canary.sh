@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden> [args...]
+# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden|freeze> [args...]
 #
 # Assertion steps for ci.yml's docling-canary job (T-02-1..4). Every check execs
 # into the already-running `docling-canary` container and asks it in python3:
@@ -15,7 +15,7 @@ set -euo pipefail
 CONTAINER="${DOCLING_CANARY_CONTAINER:-docling-canary}"
 PORT="${DOCLING_CANARY_PORT:-8080}"
 
-check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden> [args...]}"
+check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden|freeze> [args...]}"
 shift
 
 healthz_json() {
@@ -53,7 +53,7 @@ buildsha)
 models)
   # T-02-1: layout, TableFormer and all three RapidOCR-en checkpoints are present.
   # Substrings/names traced from the pinned docling-slim source, not
-  # guessed: model_downloader.download_models() names its HF snapshot dirs after
+  # guessed: fetch_docling_models.py names its HF snapshot dirs (as download_models() did) after
   # the repo_id (`docling-project--docling-layout-heron[-onnx]` for layout;
   # `docling-project--docling-models/model_artifacts/tableformer/...` for
   # TableFormer), and RapidOcrModel._model_repo_folder is literally "RapidOcr".
@@ -221,6 +221,59 @@ print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
     exit 1
   fi
   echo "$golden_path matches the built image ($got_sha)"
+  ;;
+
+freeze)
+  # The run image's pip freeze equals the lock files' pins (names normalised, versions exact).
+  # --out also keeps the raw freeze for ci.yml's docling-freeze job. stderr is dropped: pip
+  # warns there about appuser's cache directory.
+  out=""
+  if [ "${1:-}" = "--out" ]; then
+    out="${2:?usage: docling-canary.sh freeze [--out FILE] [LOCK...]}"
+    shift 2
+  fi
+  if [ "$#" -eq 0 ]; then
+    set -- sidecar/docling/requirements.lock sidecar/docling/torch.lock
+  fi
+  frz="$(mktemp)"
+  trap 'rm -f "$frz"' EXIT
+  docker exec "$CONTAINER" python3 -m pip freeze >"$frz" 2>/dev/null
+  if [ -n "$out" ]; then
+    cp "$frz" "$out"
+  fi
+  python3 - "$frz" "$@" <<'PY'
+import re, sys
+
+def norm(line):
+    name, _, ver = line.partition("==")
+    return re.sub(r"[-_.]+", "-", name).lower() + "==" + ver
+
+def pins(path, locked):
+    out = set()
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if locked:
+            if not re.match(r"[a-z0-9]", line):
+                continue
+            line = line.split(" ")[0]
+        elif not line or line.startswith("#") or "==" not in line:
+            continue
+        out.add(norm(line))
+    return out
+
+have = pins(sys.argv[1], False)
+want = set()
+for p in sys.argv[2:]:
+    want |= pins(p, True)
+if not have:
+    print("::error::pip freeze of the run image is empty")
+    sys.exit(1)
+extra, missing = sorted(have - want), sorted(want - have)
+if extra or missing:
+    print(f"::error::run image pip freeze differs from the lock: installed but not locked {extra}; locked but not installed {missing}")
+    sys.exit(1)
+print(f"run image pip freeze equals the lock ({len(have)} packages)")
+PY
   ;;
 
 nonroot)

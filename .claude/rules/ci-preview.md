@@ -13,7 +13,11 @@ paths:
 - `changes` fails a PR whose head does not contain `origin/main`, or `origin/<base>` for another base. No preview job runs.
 - `preview.sh` retries a `preview-db` or `grant` execution up to 3 times only when its log shows SQLSTATE 53300 (`TestPreviewJobRetriesOnlyOnTooManyConnections`).
 - Push preview images only to `africa-south1-docker.pkg.dev/ascomply-preview/previews` (`preview.sh image`). From invoice-os-infra #43 on, `deploy-preview` holds no write on `images` (before it, still a writer); `Preview invariants` fails when it does.
-- Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
+- Authenticate a `pull_request` run as `deploy-preview` and a dispatched (nightly) run as `deploy-nightly` (`DEPLOYER` in `dev-env.yml`). Workload Identity admits `deploy-preview` from `pull_request` and `main`, and `deploy-nightly` from `main` only. Neither holds a role in `ascomply-prod`. `Preview invariants` always authenticates as `deploy-preview`.
+- PR services, `migrate-pr-<N>` and `preview-db` run as `run-preview`. `<svc>-nightly` and `migrate-nightly` run as `run-nightly` (`preview.sh runtime`).
+- `run-nightly` and `deploy-nightly` read a `nightly-*` secret. Until invoice-os-infra #48 applies, `run-preview` and `deploy-preview` keep read access to it. After #48, only the nightly accounts hold it, under the condition `not-nightly`. Name every nightly-only secret `nightly-*`.
+- `preview.sh secrets nightly` gives `run-nightly` access to each secret it makes. Add a new nightly vendor secret to `nightly_vendor_secrets` in invoice-os-infra `preview.tf`.
+- `Preview invariants` fails when `deploy-preview` can act as `run-nightly` or `deploy-nightly`. It fails when `deploy-preview` can read a `nightly-*` secret and the Actions variable `NIGHTLY_KEYS_CLOSED` is `true`; otherwise that read is a warning. The owner sets `NIGHTLY_KEYS_CLOSED=true` after #48 applies. Until then the check warns; after that it fails. A `nightly-*` secret that is gone or has no version is not a finding. A denial that does not name `secretmanager.versions.access` fails the check.
 - A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
 - A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.
 - When `commit-authors` fails, re-run the whole workflow.
@@ -38,9 +42,10 @@ paths:
 - Give no preview service a Sentry DSN, and no PR preview an OpenRouter key. The one exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` as `OPENROUTER_API_KEY` and set no `AI_FAKE` or `JEV_FAKE`. They also set `OPENROUTER_APP_NAME` and `OPENROUTER_APP_URL`. The `Preview invariants` job fails on any other OpenRouter secret or variable and on any Sentry one.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
 - List the library origin and the check origin in the preview gateway's `CORS_ALLOWED_ORIGINS`. The library serves the landing not-found page, which calls the gateway.
+- Set `AUTH_SESSION_ORIGINS` on every preview gateway to `app=`, `ops=` and `support=` with the app, ops-console and support-console URLs.
 - Print the library, blog and check addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Bake `VITE_CHECK_URL` (the check address from `preview.sh urls`) into the landing, library and check images.
-- Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.
+- Send `X-Gateway-Token` to `/healthz/fleet` and to the gateway `/health` detail. `preview.sh token <N>` prints the PR's token.
 - Generate `nightly-mock-issuer-token` in `preview.sh secrets nightly`. The nightly gateway mounts it as `GATEWAY_MOCK_ISSUER_TOKEN`. `preview.sh mock-token nightly` prints it.
 - Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN` in the nightly `e2e`, `topology` and `nightly-ai` jobs.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.

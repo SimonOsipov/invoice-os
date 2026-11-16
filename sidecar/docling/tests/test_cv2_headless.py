@@ -1,8 +1,7 @@
-"""Guards the Dockerfile's opencv swap (deps stage installs -headless over rapidocr's
-transitive GUI build; the test stage's requirements-dev.txt re-resolve undoes it and
-must redo the swap). A regression here is a convincing false green: dist-info can be
-present while cv2/ itself is missing (confirmed empirically pre-fix) -- import AND
-distribution-name checks are both required.
+"""Guards the opencv swap: the locks leave out rapidocr's opencv-python and install
+opencv-python-headless, and --no-deps stops pip from pulling the GUI build back. A
+regression here is a convincing false green: dist-info can be present while cv2/ itself
+is missing -- import AND distribution-name checks are both required.
 
 Needs docling importable -- run only via the Docker `test` stage.
 """
@@ -23,5 +22,5 @@ def test_cv2_imports_and_only_the_headless_distribution_is_present():
     assert opencv == {"opencv-python-headless"}, (
         f"opencv distributions are {sorted(opencv) or 'none'}, want exactly "
         "['opencv-python-headless'] -- every variant shares the cv2 namespace, so any other "
-        "one present means the deps-stage swap to -headless was undone or shadowed"
+        "one present means the lock's swap to -headless was undone or shadowed"
     )

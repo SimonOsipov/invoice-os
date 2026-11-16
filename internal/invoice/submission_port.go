@@ -41,6 +41,41 @@ func (s *Store) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID strin
 	return has, err
 }
 
+// ContentCleared reports whether a queued invoice still has the content that was
+// validated and approved. FOR SHARE keeps editTx out until tx ends.
+// ceiling: a NULL verdict_fingerprint with no approved run passes on the status rung only; drop once no such row remains.
+// ceiling: the fingerprint omits document_type and original_invoice_id; hash them if either becomes editable.
+func (s *Store) ContentCleared(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
+	var (
+		status  Status
+		verdict *string
+	)
+	if err := tx.QueryRow(ctx,
+		`SELECT status, verdict_fingerprint FROM invoices WHERE id = $1 FOR SHARE`, invoiceID,
+	).Scan(&status, &verdict); err != nil {
+		return false, err
+	}
+	if canEdit(status) {
+		return false, nil
+	}
+	current, err := FingerprintTx(ctx, tx, invoiceID)
+	if err != nil {
+		return false, err
+	}
+	if verdict != nil && *verdict != current {
+		return false, nil
+	}
+	var runFP *string
+	err = tx.QueryRow(ctx,
+		`SELECT content_fingerprint FROM approval_runs
+		  WHERE invoice_id = $1 AND state = 'approved' ORDER BY opened_at DESC LIMIT 1`, invoiceID,
+	).Scan(&runFP)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	return runFP == nil || *runFP == current, nil
+}
+
 // Number reports invoices.invoice_number for invoiceID -- one column off the
 // primary key, for PollWorker's terminal audit rows. RLS 0-rows returns
 // pgx.ErrNoRows rather than a blank: an absent number must not be substituted

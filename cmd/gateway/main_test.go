@@ -845,7 +845,9 @@ func fakeAuth(t *testing.T) (*url.URL, func() []string) {
 
 func serveRegistration(h http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -953,7 +955,7 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 			// handoffHandlers needs a GoTrue URL to build the rest, so only AUTH_SITE_URL unset reaches it.
 			if unset == "AUTH_SITE_URL" {
 				log := slog.New(slog.DiscardHandler)
-				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil).InvitationPassword
+				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil, nil).InvitationPassword
 				answers["InvitationPassword"] = serveForm(invitee, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd")
 			}
 			for name, rec := range answers {
@@ -1166,6 +1168,7 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 	preview, _ := unconfirmedPreviewer("tunde@obi.test")
 	h := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, log)
 	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -1257,6 +1260,7 @@ func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 			}, log)
 			for range 11 {
 				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
+				req.Header.Set("Content-Type", "application/json")
 				resend.ServeHTTP(httptest.NewRecorder(), req)
 			}
 			if got := countCalls(calls(), "POST /resend"); got != c.wantResend {
@@ -1269,6 +1273,7 @@ func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 // resendFrom posts one resend for email.
 func resendFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1288,6 +1293,7 @@ func countCalls(calls []string, want string) int {
 // resetFrom posts one reset request for email.
 func resetFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1611,7 +1617,7 @@ func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", c.env)
 			authURL, calls := fakeAuth(t)
 			sessions := gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log)
-			h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil)
+			h := handoffHandlers(authURL, site, sessions, log, nil, nil, nil, nil, nil)
 			if h.LinkRedeemByIP == nil {
 				t.Fatal("handoffHandlers built no LinkRedeemByIP")
 			}

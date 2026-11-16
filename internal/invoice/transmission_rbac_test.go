@@ -640,6 +640,8 @@ var shippedSubmitGateOracle = map[Status]submitGateWant{
 	StatusAccepted:  {false, ""},
 	StatusRejected:  {false, exactSubmitBlockedReasonRejected},
 	StatusFailed:    {false, ""},
+
+	StatusDiscarded: {false, ""},
 }
 
 // assertSubmitGateRow compares one (can, reason) pair against one oracle row.

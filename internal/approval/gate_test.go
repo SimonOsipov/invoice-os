@@ -1351,6 +1351,19 @@ func TestRowFactsTx_WarnsWhenOnlyTheCreatorCouldSign(t *testing.T) {
 	w.wantFlag(inv, false, "nil")
 }
 
+func TestRowFactsTx_WarnsWhenOnlyAuthorsCouldSign(t *testing.T) {
+	w := newWarnWorld(t, "SECAUD-18 authors only")
+	users := w.role("wk-a", memberSpec{role: "reviewer"}, memberSpec{role: "reviewer"})
+	o := seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "reviewer"}) // a non-author approver without the role
+	inv := w.waiting(w.entA, ptr("wk-a"))
+	seedHistory(t, w.super, w.tenantID, inv, nil, users[0])
+	seedInvoiceEvent(t, w.super, w.tenantID, "invoice.updated", inv, users[1])
+
+	w.wantFlag(inv, true, HolderReasonNobodyCanApprove)
+	w.suspend(o)
+	w.wantFlag(inv, false, "nil")
+}
+
 func TestRowFactsTx_WarnsWhenNoMemberReachesTheClient(t *testing.T) {
 	w := newWarnWorld(t, "APSC-14-03 no reach")
 	r := w.role("wk-r", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})[0]

@@ -52,7 +52,7 @@ func WriteExportCSV(ctx context.Context, tx pgx.Tx, w interface{ Write([]string)
 		for i, r := range page {
 			subjects[i] = r.actor
 		}
-		labels, err := actor.Resolve(ctx, tx, subjects)
+		labels, err := actor.Resolve(ctx, tx, "", subjects) // admin-only workspace export: unrestricted
 		if err != nil {
 			return total, fmt.Errorf("audit: resolve actors: %w", err)
 		}

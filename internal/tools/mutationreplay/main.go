@@ -13,7 +13,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// dockerTimeout bounds every Docker call; ~9x the measured mutated image build.
+var dockerTimeout = 30 * time.Minute
+
+var dk = &Docker{Exec: dockerExec}
 
 func main() {
 	changed := flag.Bool("changed", false, "skip a row proven earlier when nothing changed in its folders")
@@ -49,6 +55,7 @@ func main() {
 	go func() {
 		s := <-sigs
 		killChild()
+		dk.RemoveLive()
 		if err := Abort(); err != nil {
 			fmt.Fprintf(os.Stderr, "mutationreplay: %v: restore FAILED: %v\n", s, err)
 			os.Exit(3)
@@ -75,7 +82,13 @@ func main() {
 
 	counts := map[Verdict]int{}
 	total, unchanged := 0, 0
-	control := OnceControl(runTest)
+	root, err := filepath.Abs(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mutationreplay: %v\n", err)
+		os.Exit(2)
+	}
+	dk.Root = root
+	control, run := Runners(runTest, dk)
 	receipts := LoadReceipts(rowsFile)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -97,7 +110,7 @@ func main() {
 			unchanged++
 			fmt.Printf("UNCHANGED %s — proven earlier, its folders are the same\n", label)
 			continue
-		} else if res, err = Replay(".", row, control, runTest); err != nil {
+		} else if res, err = Replay(".", row, control, run); err != nil {
 			fmt.Fprintf(os.Stderr, "mutationreplay: FATAL %v\n", err)
 			os.Exit(3)
 		} else if err := receipts.Update(".", row, res.Verdict); err != nil {
@@ -141,7 +154,9 @@ func killChild() {
 	}
 }
 
-func runCmd(dir string, name string, args ...string) (string, error) {
+// runExec runs a command in its own process group. A non-zero timeout kills the
+// group at the deadline and returns the output so far with a "timed out" error.
+func runExec(timeout time.Duration, dir string, name string, args ...string) (string, int, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -154,13 +169,40 @@ func runCmd(dir string, name string, args ...string) (string, error) {
 	}
 	childMu.Unlock()
 	if err != nil {
-		return "", err
+		return "", -1, err
 	}
-	_ = cmd.Wait() // a red test exits non-zero; the outcome comes from the output
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait() // a red test exits non-zero; the outcome comes from the output
+		close(done)
+	}()
+	var deadline <-chan time.Time
+	if timeout > 0 {
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		deadline = t.C
+	}
+	var timedOut error
+	select {
+	case <-done:
+	case <-deadline:
+		killChild()
+		<-done
+		timedOut = fmt.Errorf("timed out after %v", timeout)
+	}
 	childMu.Lock()
 	child = nil
 	childMu.Unlock()
-	return out.String(), nil
+	return out.String(), cmd.ProcessState.ExitCode(), timedOut
+}
+
+func dockerExec(dir, name string, args ...string) (string, int, error) {
+	return runExec(dockerTimeout, dir, name, args...)
+}
+
+func runCmd(dir string, name string, args ...string) (string, error) {
+	out, _, err := runExec(0, dir, name, args...)
+	return out, err
 }
 
 func runTest(r Row, k Kind) (Outcome, error) {

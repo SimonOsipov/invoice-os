@@ -80,7 +80,7 @@ func newRevocation(t *testing.T, base string) revocation {
 
 			GatewayToken: "gw-test-token",
 		}),
-		signOut: gateway.SignOutHandler(authURL, idpHTTP, sessions, log, nil),
+		signOut: gateway.SignOutHandler(authURL, idpHTTP, sessions, log, nil, nil),
 		hits:    hits,
 	}
 }
@@ -186,6 +186,22 @@ func TestIdP_SignOutWithTheParentRefreshToken(t *testing.T) {
 	if status, m := r.renew(t, r1); status != http.StatusUnauthorized {
 		t.Errorf("refresh R1 after sign-out: status %d, keys %v; want 401", status, keys(m))
 	}
+}
+
+// A reuse revocation refuses refresh tokens only; an access token already issued lives to its exp.
+func TestIdP_FamilyRevocationLeavesAnIssuedAccessTokenLive(t *testing.T) {
+	base := idpURL(t)
+	r := newRevocation(t, base)
+	_, r0 := r.session(t, workspaceUser(t, base))
+	_, r1 := r.renewOK(t, "R0", r0)
+	a2, r2 := r.renewOK(t, "R1", r1)
+
+	for _, step := range []struct{ label, token string }{{"R0 two generations old", r0}, {"R2 after the family was revoked", r2}} {
+		if status, m := r.renew(t, step.token); status != http.StatusUnauthorized {
+			t.Fatalf("refresh %s: status %d, keys %v; want 401 (no revocation, so the next check proves nothing)", step.label, status, keys(m))
+		}
+	}
+	r.expect(t, "A2 after the family revocation", a2, http.StatusOK, 1)
 }
 
 // The clock never moves, so only the sign-out's eviction can drop the cached "live".

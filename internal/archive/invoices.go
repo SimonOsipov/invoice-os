@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,7 +37,7 @@ var invoicesCSVHeader = []string{
 // selectInvoicesSQL, selectInvoiceIDsSQL and countInvoicesSQL are all built from this
 // exact text so they cannot drift from each other.
 const invoicesScope = `
-  FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3`
+  FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3 AND status <> 'discarded'`
 
 // invoicesColumns: the SELECT list shared by the bundle and the register. date and
 // time columns need an explicit ::text cast -- pgx errors scanning them into *string
@@ -53,6 +54,9 @@ const invoicesColumns = `id, invoice_number, status, issue_date::text, currency,
 const selectInvoicesSQL = `
 SELECT ` + invoicesColumns +
 	invoicesScope + ` ORDER BY created_at, id`
+
+// selectInvoicesAllSQL is selectInvoicesSQL without the discarded exclusion (workspace export).
+var selectInvoicesAllSQL = strings.Replace(selectInvoicesSQL, " AND status <> 'discarded'", "", 1)
 
 // selectInvoiceIDsSQL: no ORDER BY -- order cannot change a row set or a count
 // (D-47, subtask-09 preview).
@@ -71,7 +75,11 @@ func selectInvoices(ctx context.Context, tx pgx.Tx, r Request, w csvWriter) ([]s
 	if err := w.Write(invoicesCSVHeader); err != nil {
 		return nil, fmt.Errorf("archive: write invoices.csv header: %w", err)
 	}
-	return writeInvoiceRows(ctx, tx, selectInvoicesSQL, []any{canonical, r.From, r.To}, w)
+	q := selectInvoicesSQL
+	if r.keepDiscarded {
+		q = selectInvoicesAllSQL
+	}
+	return writeInvoiceRows(ctx, tx, q, []any{canonical, r.From, r.To}, w)
 }
 
 // writeInvoiceRows runs a query selecting invoicesColumns and writes each row as an

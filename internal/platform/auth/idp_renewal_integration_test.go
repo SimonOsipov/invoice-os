@@ -35,7 +35,7 @@ func newRenewal(t *testing.T, base string) renewal {
 	}
 	return renewal{
 		handoff: newHandoff(t, base),
-		refresh: gateway.RefreshHandler(authURL, idpHTTP, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		refresh: gateway.RefreshHandler(authURL, idpHTTP, slog.New(slog.NewTextHandler(io.Discard, nil)), nil),
 	}
 }
 
@@ -147,6 +147,10 @@ func TestIdP_RefreshRotationAndReuse(t *testing.T) {
 	_, r2 := h.renewOK(t, "R1", r1)
 	if r2 == r1 || r2 == r0 {
 		t.Fatal("refresh R1 answered an earlier token; want a rotated token")
+	}
+	// The parent holder follows each rotation, not only the first.
+	if _, again := h.renewOK(t, "R1 as R2's parent", r1); again != r2 {
+		t.Error("refresh R1 while R2 is active: refresh_token is not R2")
 	}
 	// Control for the last step: a third-generation token renews while no stale token was presented.
 	_, c0 := h.session(t, u)

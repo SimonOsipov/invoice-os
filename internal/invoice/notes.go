@@ -200,7 +200,7 @@ func (s *Store) Notes(ctx context.Context, originalID string) (NotesOnInvoice, e
 		}
 		rows, err := tx.Query(ctx,
 			`SELECT id::text, document_type, invoice_number, status, total::text
-			   FROM invoices WHERE original_invoice_id = $1 ORDER BY created_at, id`, originalID)
+			   FROM invoices WHERE original_invoice_id = $1 AND status <> 'discarded' ORDER BY created_at, id`, originalID)
 		if err != nil {
 			return err
 		}

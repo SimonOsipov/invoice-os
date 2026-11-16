@@ -2,14 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 // fleet serves every target from one server; the first path segment names the service.
@@ -22,6 +28,8 @@ func fleet(t *testing.T, sha string, override func(svc, path string, w http.Resp
 			return
 		}
 		switch {
+		case svc == "gateway" && path == "/health" && r.Header.Get(platform.HeaderGatewayToken) != "tok":
+			fmt.Fprint(w, `{"status":"ok"}`)
 		case svc == "gateway" && path == "/health":
 			fmt.Fprintf(w, `{"build":%q,"mock_issuer":"absent","auth_issuers":"1"}`, sha)
 		case svc == "gateway":
@@ -39,7 +47,7 @@ func fleet(t *testing.T, sha string, override func(svc, path string, w http.Resp
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return checker{sha: sha, client: srv.Client(), url: func(svc string) string { return srv.URL + "/" + svc }, interval: time.Millisecond, parallel: 4}
+	return checker{sha: sha, client: srv.Client(), url: func(svc string) string { return srv.URL + "/" + svc }, interval: time.Millisecond, parallel: 4, gatewayToken: "tok"}
 }
 
 func runFor(c checker, d time.Duration) []string {
@@ -132,5 +140,108 @@ func TestRun_ChecksAtMostParallelTargetsAtOnce(t *testing.T) {
 	}
 	if peak != 2 {
 		t.Fatalf("peak concurrent requests = %d, want 2", peak)
+	}
+}
+
+func TestRun_GatewayWithoutTheTokenFails(t *testing.T) {
+	t.Parallel()
+	c := fleet(t, "abc", nil)
+	c.gatewayToken = "wrong"
+	err := c.backend(context.Background(), "gateway")
+	if err == nil || !strings.Contains(err.Error(), platform.HeaderGatewayToken) || strings.Contains(err.Error(), "want abc") {
+		t.Fatalf("err = %v, want one naming %s, not a stale build", err, platform.HeaderGatewayToken)
+	}
+}
+
+func TestBackend_ABuildThatDiffersIsStale(t *testing.T) {
+	t.Parallel()
+	c := fleet(t, "abc", func(svc, path string, w http.ResponseWriter) bool {
+		fmt.Fprint(w, `{"build":"old"}`)
+		return true
+	})
+	err := c.backend(context.Background(), "gateway")
+	if err == nil || !strings.Contains(err.Error(), `build "old", want abc`) {
+		t.Fatalf("err = %v, want the stale build error", err)
+	}
+}
+
+func TestRun_SendsTheGatewayTokenOnlyToTheGateway(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var gatewayHealth int
+	var leaked []string
+	c := fleet(t, "abc", func(svc, path string, w http.ResponseWriter) bool { return false })
+	// Wrap the fleet server's client transport to record the header per request.
+	c.client = &http.Client{Transport: recordTokens(c.client.Transport, func(r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		svc, path, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		got := r.Header.Get(platform.HeaderGatewayToken)
+		switch {
+		case svc == "gateway" && path == "health" && got == "tok":
+			gatewayHealth++
+		case got != "":
+			leaked = append(leaked, r.Method+" "+r.URL.Path)
+		}
+	})}
+	if failed := runFor(c, time.Second); len(failed) > 0 {
+		t.Fatalf("failed = %v, want none", failed)
+	}
+	if gatewayHealth == 0 {
+		t.Error("gateway /health never carried the token")
+	}
+	if len(leaked) > 0 {
+		t.Errorf("token sent to %v, want the gateway /health reads only", leaked)
+	}
+}
+
+type tokenRecorder struct {
+	next http.RoundTripper
+	seen func(*http.Request)
+}
+
+func (t tokenRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.seen(r)
+	return t.next.RoundTrip(r)
+}
+
+func recordTokens(next http.RoundTripper, seen func(*http.Request)) http.RoundTripper {
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	return tokenRecorder{next, seen}
+}
+
+const fatalChildEnv = "DEPLOYCHECK_FATAL_CHILD"
+
+func TestDeployCheck_FatalsWithoutGatewayToken(t *testing.T) {
+	if os.Getenv(fatalChildEnv) == "1" {
+		os.Args = []string{"deploycheck", "sha", "tag"}
+		deployCheck(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		os.Exit(0)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDeployCheck_FatalsWithoutGatewayToken$", "-test.count=1")
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "GATEWAY_TOKEN=") }),
+		fatalChildEnv+"=1", "RUN_HOST_SUFFIX=1.africa-south1.run.app")
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() == 0 {
+		t.Fatalf("err = %v, want a non-zero exit (output %q)", err, out)
+	}
+	if !strings.Contains(string(out), "GATEWAY_TOKEN") {
+		t.Errorf("output %q does not name GATEWAY_TOKEN", out)
+	}
+}
+
+func TestNewChecker_ReadsTheGatewayTokenFromTheEnv(t *testing.T) {
+	env := map[string]string{"GATEWAY_TOKEN": "env-tok", "RUN_HOST_SUFFIX": "1.africa-south1.run.app"}
+	c := newChecker([]string{"deploycheck", "abc", "c-abc"}, func(k string) string { return env[k] })
+	if c.gatewayToken != "env-tok" {
+		t.Errorf("gatewayToken = %q, want the GATEWAY_TOKEN value", c.gatewayToken)
+	}
+	if got, want := c.url("auth"), "https://c-abc---auth-1.africa-south1.run.app"; got != want || c.sha != "abc" {
+		t.Errorf("url = %q sha = %q, want %q and abc", got, c.sha, want)
 	}
 }

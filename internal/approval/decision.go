@@ -172,20 +172,6 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, err
 	}
 
-	// Creator rung: approve only, before AXIS 2 so the creator message wins.
-	var selfApproved bool
-	if decision == "approved" {
-		standing, err := CreatorStandingTx(ctx, tx, caller.Subject, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: roleKey, AllowDelegation: allowDelegation, DelegateUserID: delegateUserID}})
-		if err != nil {
-			return Run{}, err
-		}
-		st := standing[invoiceID]
-		if reason, refused := st.Refusal(); refused {
-			return Run{}, newCreatorRefused(reason)
-		}
-		selfApproved = st.SelfApproved()
-	}
-
 	// AXIS 2: the inverse of reconciliation's approval_blocked_unstaffed NOT EXISTS
 	// body (internal/reconciliation/reconciliation.go:179-204), narrowed to the
 	// caller -- resolved through HeldRoleKeysTx (gate.go), the one AXIS-2 predicate.
@@ -199,11 +185,25 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 	}
 	// A holder who is also the delegate decides as a holder.
 	asDelegate := !holds && DelegateMayDecide(allowDelegation, delegateUserID, caller.Subject)
+
+	// Person rung, approve only. The author branch beats AXIS 2; the earlier-approver branch needs a decider.
+	var approvedAs string
+	if decision == "approved" {
+		standing, err := CreatorStandingTx(ctx, tx, caller.Subject, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: roleKey, AllowDelegation: allowDelegation, DelegateUserID: delegateUserID}})
+		if err != nil {
+			return Run{}, err
+		}
+		st := standing[invoiceID]
+		if reason, refused := st.RefusalFor(holds || asDelegate); refused {
+			return Run{}, newCreatorRefused(reason)
+		}
+		approvedAs = st.ApprovedAs()
+	}
 	if !holds && !asDelegate {
 		return Run{}, ErrNotRoleHolder
 	}
 
-	if _, err := commitDecisionTx(ctx, tx, invoiceID, invoiceNumber, caller.TenantID, runID, stepID, stepOrd, roleKey, asDelegate, decision, caller.Subject, reason, selfApproved, demoter); err != nil {
+	if _, err := commitDecisionTx(ctx, tx, invoiceID, invoiceNumber, caller.TenantID, runID, stepID, stepOrd, roleKey, asDelegate, decision, caller.Subject, reason, approvedAs, demoter); err != nil {
 		return Run{}, err
 	}
 
@@ -233,7 +233,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 // UPDATE, which makes "the UPDATE affects 0 rows" unreachable through the full
 // Decide seam under normal concurrency (the resolving SELECT would simply find no
 // pending row instead) -- this lets the guard be driven directly as its own unit.
-func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, tenantID, runID, stepID string, stepOrd int, roleKey *string, asDelegate bool, decision, actor string, reason *string, selfApproved bool, demoter Demoter) (satisfied bool, err error) {
+func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, tenantID, runID, stepID string, stepOrd int, roleKey *string, asDelegate bool, decision, actor string, reason *string, approvedAs string, demoter Demoter) (satisfied bool, err error) {
 	// approval_decisions holds only SELECT+INSERT for invoice_app (migrations/
 	// 20260809232011_approval_runs.sql:114) -- the UPDATE must claim the row FIRST,
 	// or a 0-row UPDATE would leave an unremovable phantom decision. Rejected is not
@@ -309,10 +309,6 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 			}
 		}
 
-		approvedAs := "approver"
-		if selfApproved {
-			approvedAs = "self_approved"
-		}
 		// Inline literals on purpose: TestRLS_AuditNumberExemptionTablesMatchExactly (internal/platform/db).
 		if actedKey == "" {
 			err = audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{

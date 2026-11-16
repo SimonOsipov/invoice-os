@@ -566,8 +566,8 @@ export function toMember(w: MembershipWire, selfSubject: string): Member {
   return {
     id: w.user_id,
     // A removed row carries no email; its name is never an email or a uuid.
-    name: w.status === 'removed' ? w.display_name || REMOVED_NAME : (w.display_name ?? w.email ?? w.user_id),
-    initials: w.status === 'removed' ? initials(w.display_name || REMOVED_NAME) : memberInitials(w.display_name, w.email, w.user_id),
+    name: w.status === 'removed' ? w.display_name || REMOVED_NAME : (w.display_name ?? w.email ?? UNNAMED_NAME),
+    initials: w.status === 'removed' ? initials(w.display_name || REMOVED_NAME) : memberInitials(w.display_name, w.email),
     email: w.status === 'removed' ? null : w.email,
     role: w.role as AccessRole,
     status: w.status as MemberStatus,
@@ -576,11 +576,11 @@ export function toMember(w: MembershipWire, selfSubject: string): Member {
   }
 }
 
-/** Composes the two existing helpers rather than adding a third initials variant. */
-export function memberInitials(displayName: string | null, email: string | null, userId: string): string {
+/** Composes the two existing helpers rather than adding a third initials variant. A nameless, emailless member gets the fixed label's initials, never uuid letters. */
+export function memberInitials(displayName: string | null, email: string | null): string {
   if (displayName) return initials(displayName)
   if (email) return initialsFrom(email)
-  return userId.slice(0, 2).toUpperCase()
+  return initials(UNNAMED_NAME)
 }
 
 /** A membership row can carry no address; a bare `{m.email}` would render nothing at all. */
@@ -610,6 +610,9 @@ export function membersSurface(status: AsyncStatus): MembersSurface {
 
 /** A removed member with no stored name. */
 export const REMOVED_NAME = 'Deleted member'
+
+/** A live member with neither display name nor email (a non-admin never reads others' emails). */
+export const UNNAMED_NAME = 'Unnamed member'
 
 /** Absence, rendered. ONE em dash for the whole tab, so no two cells can disagree. */
 export const ABSENT_LABEL = '—'

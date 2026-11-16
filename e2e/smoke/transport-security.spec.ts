@@ -55,3 +55,22 @@ test('every https response carries one HSTS header', async ({ request }) => {
   }
   expect(failures).toEqual([])
 })
+
+test('a throttled public route grants CORS only to an ASComply origin', async ({ request }) => {
+  const failures: string[] = []
+  for (const path of ['/auth/register', '/contacts/demo-request', '/blog/posts', '/readiness-check/run']) {
+    for (const origin of ['https://evil.example', 'https://www.ascomply.com']) {
+      const res = await request.fetch(`https://api.ascomply.com${path}`, {
+        method: 'OPTIONS',
+        headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+      })
+      const h = res.headers()
+      const allow = h['access-control-allow-origin']
+      const ok =
+        res.status() === 204 &&
+        (origin === 'https://evil.example' ? allow === undefined : allow === origin && (h['access-control-allow-headers'] ?? '').toLowerCase().includes('content-type'))
+      if (!ok) failures.push(`${path} from ${origin}: ${res.status()} allow-origin=${allow} allow-headers=${h['access-control-allow-headers']}`)
+    }
+  }
+  expect(failures).toEqual([])
+})

@@ -20,6 +20,7 @@ const (
 	nlTeardown  = "always() && " + nlOn + " && " + authorCond
 	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
+	nlDeployer  = "DEPLOYER: ${{ github.event_name == 'workflow_dispatch' && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}"
 	nlFlakyStep = "Fail on a retry-pass in a spec this PR changed"
 	nlArgosFlag = "ARGOS_SHOTS: ${{ " + nlOn + " && secrets.ARGOS_TOKEN != '' && '1' || '' }}"
 )
@@ -33,6 +34,17 @@ func nlJSONFile(name string) string {
 // nlCode drops the comments of a run block, so a commented command does not count.
 func nlCode(run string) string {
 	return strings.Join(stripHashComments(strings.Split(run, "\n")), "\n")
+}
+
+// blockSet maps the keys of env block lines (`KEY: value`) to their values.
+func blockSet(lines []string) map[string]string {
+	m := map[string]string{}
+	for _, l := range lines {
+		if k, v, ok := strings.Cut(l, ":"); ok {
+			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return m
 }
 
 func nlJobs(yml string) map[string]workflowJob {
@@ -86,6 +98,37 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	if !slices.Contains(top, "  "+nlPRVar) {
 		bad("env.PR is not " + nlPRVar)
+	}
+	// Neither the PR's own run nor the pre-cutover nightly shows a wrong deployer; only the source does.
+	if !slices.Contains(top, "  "+nlDeployer) {
+		bad("env.DEPLOYER does not send the nightly to deploy-nightly")
+	}
+	authSteps := 0
+	for _, j := range workflowJobsOf(yml) {
+		if j.name == "invariants" {
+			continue
+		}
+		for _, st := range rawSteps(j) {
+			if len(st) == 0 || !strings.HasPrefix(st[0], "uses: google-github-actions/auth@") {
+				continue
+			}
+			authSteps++
+			if !slices.Contains(st, "service_account: ${{ env.DEPLOYER }}") {
+				bad(j.name + ": auth step does not use env.DEPLOYER")
+			}
+		}
+		_, jobSets := blockSet(blockLines(j.lines, 4, "env"))["DEPLOYER"]
+		for _, st := range j.steps() {
+			if _, ok := st.env["DEPLOYER"]; ok {
+				jobSets = true
+			}
+		}
+		if jobSets {
+			bad(j.name + " overrides DEPLOYER")
+		}
+	}
+	if authSteps == 0 {
+		bad("no auth step outside invariants")
 	}
 
 	ch, ok := jobs["changes"]
@@ -1082,10 +1125,26 @@ func TestDevEnvNightly_HealthGateHasNoModeBranch(t *testing.T) {
 	t.Parallel()
 	hg := devEnvJob(t, "health-gate")
 	s, _ := nlStep(hg, "Wait for gateway /health 200 on the commit under test")
-	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`} {
+	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`, `-H "X-Gateway-Token: $GATEWAY_TOKEN"`} {
 		if !strings.Contains(s.keys["run"], w) {
 			t.Errorf("health gate lacks %q", w)
 		}
+	}
+	tok, ok := nlStep(hg, "Read the PR's gateway token")
+	if !ok {
+		t.Fatal("health-gate has no step that reads the PR's gateway token")
+	}
+	if tok.index >= s.index {
+		t.Error("health-gate reads the token after the wait step")
+	}
+	for _, w := range []string{`preview.sh token "$PR"`, `GATEWAY_TOKEN=`, `>>"$GITHUB_ENV"`} {
+		if !strings.Contains(tok.keys["run"], w) {
+			t.Errorf("health-gate token step lacks %q", w)
+		}
+	}
+	// The token read needs a Google login and the OIDC permission; only a deployed run observes their loss.
+	if joined := strings.Join(hg.lines, "\n"); !strings.Contains(joined, "id-token: write") || !strings.Contains(joined, "uses: google-github-actions/auth@") {
+		t.Error("health-gate lacks id-token: write or the Google auth step")
 	}
 	if strings.Contains(strings.Join(hg.lines, "\n"), "nightly") {
 		t.Error("health-gate names the nightly mode")

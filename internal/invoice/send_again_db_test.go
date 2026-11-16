@@ -561,8 +561,8 @@ func TestSendAgain_RefusesEveryNonFailedStatus(t *testing.T) {
 			}
 		})
 	}
-	if seen != 6 {
-		t.Fatalf("covered %d statuses, want 6", seen)
+	if seen != 7 {
+		t.Fatalf("covered %d statuses, want 7", seen)
 	}
 }
 

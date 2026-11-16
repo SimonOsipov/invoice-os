@@ -33,7 +33,8 @@ docker-compose.yml
 go.mod
 go.sum
 .env
-.env.example
+.env.*
+**/.env*
 
 # Editor / OS
 .DS_Store

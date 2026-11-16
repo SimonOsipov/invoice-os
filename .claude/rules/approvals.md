@@ -7,6 +7,8 @@ paths:
   - "internal/tenancy/staff_account_deletion.go"
   - "internal/demopolicy/**"
   - "internal/invoice/batch_submit.go"
+  - "internal/invoice/submission_port.go"
+  - "internal/submission/worker.go"
   - "migrations/*approval*"
   - "frontend/app/src/lib/policies.ts"
   - "frontend/app/src/lib/workflows.ts"
@@ -22,7 +24,8 @@ paths:
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
 - Match the scopes in `firstMatch` only. A document type, a client or a creator role matches when the document's value is in the list. An amount band matches when the currency is equal and the total is within both bounds. An unset scope matches every document (`TestFirstMatch_*`).
-- The creator is the actor of the `from_status IS NULL` history row of `invoice_status_history`. Both creator readers use that row.
+- A condition's `cond_amount` is in the matched policy's band currency, or in `NGN` when the policy has no band. Compare it with the total only when the invoice's currency equals that currency and its total parses. Otherwise take the review lane: the lane that needs an approver (an `approval` step and no `autoapprove`, then an `approval` step, then no `autoapprove`); on a tie, the lane a total above the threshold takes (`TestApprovalBypass_*Lane*`).
+- The creator is the actor of the `from_status IS NULL` history row of `invoice_status_history`. The creator-role scope reads that row. The authors of an invoice are its creator and the actor of each of its `invoice.updated` audit rows. `CreatorStandingTx` and `unsignableReasonsTx` read the authors.
 - A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.
 - Never retry a publish 409 automatically.
@@ -33,6 +36,7 @@ paths:
 - Record `policy_id`, `position` and `matched_scopes` in `invoice.approval_armed`. Record scope names, never scope values (`TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes`).
 - Write the run closed `approved` with `closed_by = 'system'` when no approval step is pending. Write no decision row.
 - Enforce the `TransmitClear` gate in `Store.Transition` and `Submitter.BatchSubmit` only.
+- Send an invoice from the submit worker only when `Store.ContentCleared` holds: the status is not editable, and the content fingerprint equals `verdict_fingerprint` and the live approved run's `content_fingerprint` where each is set. Otherwise end the job `failed` with `ContentChangedReason` and send nothing (`TestApprovalBypass_Worker*`).
 - Treat an unreadable approval standing as not clear. Both transmit doors fail closed.
 - Filter overdue and SLA queries on `state = 'pending'`. A settled step keeps its `due_at`.
 - Never change a sealed version. Write a change as a new version.
@@ -42,11 +46,17 @@ paths:
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role or is the run step's delegate (`DelegateMayDecide`).
-- Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
-- Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
-- Add the creator refusal's second sentence only when no other role holder and no other delegate who can decide exist (`CreatorStanding.OtherDelegate`).
-- Let the creator reject on the two axes.
-- Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is an active admin or reviewer who is a member of the live role or the run step's delegate (`DelegateMayDecide`), reaches the invoice's client, and passes the creator rule (`TestCanSign_AgreesWithTheApprovePath`).
+- Refuse an approve by an author of the invoice before the second axis. Read the authors for this refusal through `CreatorStandingTx` only. Refuse the creator with `CreatorRefusedReason` and any other author with `EditorRefusedReason`.
+- Allow an author when no active admin or reviewer who is not an author can reach the client. Write `approved_as = self_approved` in the audit payload.
+- Add the creator refusal's second sentence only when no other role holder and no other delegate who can decide and is not an author exist (`CreatorStanding.OtherDelegate`).
+- Let an author reject on the two axes.
+- Refuse an approve by a person who approved an earlier step of the invoice's open run. Refuse a holder or a delegate of the pending step. Answer a caller who is neither with `ErrNotRoleHolder`. Run the refusal after the author refusal. Read it through `CreatorStandingTx` only. Refuse with `EarlierApproverRefusedReason`.
+- Allow an earlier approver when every other active admin or reviewer who reaches the client is an author or an earlier approver of the run. Write `approved_as = repeat_approved` in the audit payload. Write `self_approved` when the author exception also holds.
+- Add `CreatorNoRoleHolderReason` to the earlier-approver refusal only when no such other approver holds the role or is a delegate who can decide.
+- Let an earlier approver reject on the two axes.
+- Judge a role staffing write on the stored new set. An add can end in 409 while the step is already stranded. A blocked step warns through `holder.warn`.
+- Judge who can sign an invoice's approval step with `unsignableReasonsTx` only. A signer is an active admin or reviewer who is a member of the live role or the run step's delegate (`DelegateMayDecide`), reaches the invoice's client, and passes the author rule and the earlier-approver rule (`TestCanSign_AgreesWithTheApprovePath`).
+- Apply the earlier-approver rule in the signer statement only to the run's lowest-ord pending approval step (`SignerProbe.Ord`). Judge a later pending step by the author rule only (`TestStranded_ListsAnyPendingApprovalStepAndFlagsTheCurrentOne`).
 - Treat a caller who holds the step's role as a holder, also when the step names them as delegate. Write `as_delegate` on the decision row and in both decision audit events. Add `acted_for_role_key` and `acted_for_role_title` only when `as_delegate` is true.
 - Count an eligible delegate as a signer (`TestStranded_AnEligibleDelegateCountsAsADecider`). The role delete refusal and `CreatorStanding.OtherRoleHolder` count role holders only (`TestDeleteRole_RefusesWhileOnlyADelegateCanDecide`).
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
@@ -65,7 +75,7 @@ paths:
 - Refuse a membership remove, suspension, demotion to preparer or client access change that removes reach with 409 when a live workflow role the member is staffed in leaves an invoice that an open run waits on through the role with no signer after the change. Read the roles with `StaffedRoleKeysTx` before the write and judge them with `RefuseUnsignedWaitingRolesTx` after it.
 - Before the write, also collect with `SignedWaitingStepsTx` every waiting step the member can sign as a role member, a named delegate or an "anyone" delegate. Judge those steps in the same refusal (`TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign`).
 - Never refuse a member's self-deletion or a staff account deletion. Collect `SignedWaitingStepsTx` with no keys before `endMembership` and judge the steps with `StrandedStepsTx` after it (`TestStrandedAlert_SelfDeletionOfTheLastSignerAlertsTheAdmins`). Mail every active admin after the commit, then record the send as `membership.stranded_alert` (`TestStrandedAlertMail_TheAlertRowRecordsTheSend`).
-- List the open runs nobody can decide, now or later, with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing. It reports the reason: `deleted`, `no holder`, `out of client reach` or `creator only`.
+- List the open runs nobody can decide now with `cmd/strandedruns`. It reads each tenant in a `READ ONLY` transaction on the app role and writes nothing. It reports the reason: `deleted`, `no holder`, `out of client reach`, `creator only` or `earlier approver only`. `creator only` means only authors of the invoice can sign. `earlier approver only` means only people who approved an earlier step of the run can sign. The earlier-approver rule judges the current step only, so a later step can strand after the current one signs.
 - Raise `pending_holder_warn` and the pending step's `holder.warn` when `unsignableReasonsTx` gives the step a reason. Set `pending_holder_reason` and `holder.reason` with `holderReason`: `unstaffed` or `nobody_can_approve`.
 - Name a workflow role in a scope by its key on the wire. Store its id.
 - Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.

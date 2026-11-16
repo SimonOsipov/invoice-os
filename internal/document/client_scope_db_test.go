@@ -1,11 +1,16 @@
 package document_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"slices"
 	"strings"
 	"testing"
@@ -596,39 +601,53 @@ func csDownloadAs(f csFixture, who context.Context, id string) *httptest.Respons
 	return rec
 }
 
-func TestClientScope_AnUploadOfBytesBoundOutsideTheCallerGrantsNothing(t *testing.T) {
+// csHeldSentence is the refusal sentence, spelled out so a wrong constant fails here too.
+const csHeldSentence = "this file already belongs to a client you cannot see; remove it to continue"
+
+func csStoreAs(svc *document.Service, who context.Context, seed string) (document.Document, bool, error) {
+	return svc.Store(who, "up.csv", "text/csv", int64(len(seed)), strings.NewReader(seed))
+}
+
+// csHeld: u1 (limited to B) stores the bytes; the admin then cites the document for B.
+func csHeld(t *testing.T, f csFixture, svc *document.Service, seed string) (u1 context.Context, doc document.Document) {
+	t.Helper()
+	u1 = csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+	doc, reused, err := csStoreAs(svc, u1, seed)
+	if err != nil || reused {
+		t.Fatalf("control: the first upload = reused %v, err %v, want a new document", reused, err)
+	}
+	csCiteAs(t, f, f.admin, f.entB, doc.ID, "CS-HELD-"+seed)
+	return u1, doc
+}
+
+func TestClientScope_UploadDedupeLeak_AnOutOfScopeHitAnswersNoIDAndNoFilename(t *testing.T) {
 	f := newCSFixture(t)
-	u1 := csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
 	u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
 	svc := document.NewService(f.store, &fakeObjects{})
-	store := func(who context.Context) (document.Document, bool) {
-		d, reused, err := svc.Store(who, "up.csv", "text/csv", 11, strings.NewReader("bound-to-b!"))
-		if err != nil {
-			t.Fatalf("Service.Store: %v", err)
+	u1, d := csHeld(t, f, svc, "bound-to-b!")
+
+	// The repeat is a second tab or device: the refusal holds no session state.
+	for _, attempt := range []string{"first", "repeat"} {
+		again, reused, err := csStoreAs(svc, u2, "bound-to-b!")
+		if !errors.Is(err, document.ErrHeldElsewhere) {
+			t.Errorf("%s dedupe upload of bytes bound to B as a member limited to A: err = %v, want ErrHeldElsewhere", attempt, err)
 		}
-		return d, reused
+		if again.ID != "" || again.Filename != nil || reused {
+			t.Errorf("%s dedupe upload answered id %q filename %v reused=%v, want the zero Document", attempt, again.ID, again.Filename, reused)
+		}
 	}
+	if n := auditCitingCount(t, f.app, f.tenant, "document.reused", d.ID); n != 0 {
+		t.Errorf("document.reused audit rows citing the held document = %d, want 0", n)
+	}
+	csWantUploaders(t, f, "after the refused dedupe uploads", d.ID, u1)
 
-	d, reused := store(u1)
-	if reused {
-		t.Fatal("control: the first upload reports reused")
-	}
-	csCiteAs(t, f, f.admin, f.entB, d.ID, "CS-OUT-B")
-
-	again, reused := store(u2)
-	if again.ID != d.ID || !reused {
-		t.Errorf("a dedupe upload of bytes bound to B = %s reused=%v, want the same document %s with reused=true (the answer at PR head)", again.ID, reused, d.ID)
-	}
 	if _, err := f.store.GetLinked(u2, d.ID); !errors.Is(err, document.ErrNotFound) {
-		t.Errorf("GetLinked as the uploader of bytes bound outside their set: err = %v, want ErrNotFound", err)
+		t.Errorf("GetLinked as the refused uploader: err = %v, want ErrNotFound", err)
 	}
 	if got, unknown := csDownloadAs(f, u2, d.ID), csDownloadAs(f, u2, uuid.NewString()); got.Code != http.StatusNotFound || got.Body.String() != unknown.Body.String() {
 		t.Errorf("download: %d %q, want the unknown id's 404 %d %q", got.Code, got.Body.String(), unknown.Code, unknown.Body.String())
 	}
-	csWantUploaders(t, f, "after the out-of-scope dedupe", d.ID, u1)
-	store(u2)
-	csWantUploaders(t, f, "after a second out-of-scope dedupe", d.ID, u1)
-	// The dedupe grants no citation either: the document stays bound to B and A gets no invoice for it.
+	// The refusal grants no citation either: the document stays bound to B and A gets no invoice for it.
 	err := db.WithinRequestTenantTx(u2, f.app, func(tx pgx.Tx) error {
 		_, err := tx.Exec(context.Background(),
 			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-OUT-A', $3)`, f.tenant, f.entA, d.ID)
@@ -636,13 +655,152 @@ func TestClientScope_AnUploadOfBytesBoundOutsideTheCallerGrantsNothing(t *testin
 	})
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23503" || pgErr.ConstraintName != "documents_bound_client" {
-		t.Errorf("citing the bound document for A after the dedupe: err = %v, want 23503 documents_bound_client", err)
+		t.Errorf("citing the bound document for A after the refusal: err = %v, want 23503 documents_bound_client", err)
 	}
 	if entity := csEntityOf(t, f.super, d.ID); entity == nil || *entity != f.entB {
 		t.Errorf("documents.entity_id = %v after the refused citation, want %s", entity, f.entB)
 	}
 	if got, err := f.store.GetLinked(u1, d.ID); err != nil || got.ID != d.ID {
 		t.Errorf("control: GetLinked as the first uploader (limited to B) = %q, %v, want found", got.ID, err)
+	}
+}
+
+func TestClientScope_UploadDedupeLeak_TheRefusalIsTheReadableClause(t *testing.T) {
+	f := newCSFixture(t)
+	svc := document.NewService(f.store, &fakeObjects{})
+	_, d := csHeld(t, f, svc, "readable-clause")
+	limitedB := csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+	limitedA := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+
+	// Same bytes, same role, never an uploader: only the client set differs.
+	if got, reused, err := csStoreAs(svc, limitedB, "readable-clause"); err != nil || got.ID != d.ID || !reused {
+		t.Errorf("control: upload as a member limited to B = id %q reused %v err %v, want %q reused true", got.ID, reused, err, d.ID)
+	}
+	if _, _, err := csStoreAs(svc, limitedA, "readable-clause"); !errors.Is(err, document.ErrHeldElsewhere) {
+		t.Errorf("upload as a member limited to A: err = %v, want ErrHeldElsewhere", err)
+	}
+}
+
+func TestClientScope_UploadDedupe_AReadableHitAnswersTheDocument(t *testing.T) {
+	f := newCSFixture(t)
+	svc := document.NewService(f.store, &fakeObjects{})
+	coB := csMember(t, f.super, f.tenant, "reviewer", false, f.entB)
+	first, reused, err := csStoreAs(svc, coB, "readable-hit")
+	if err != nil || reused {
+		t.Fatalf("control: the first upload = reused %v, err %v, want a new document", reused, err)
+	}
+	// coB uploaded before the bind, so it keeps read after A cites the document.
+	csCiteAs(t, f, f.admin, f.entA, first.ID, "CS-READ-A")
+
+	want := []context.Context{coB}
+	for name, who := range map[string]context.Context{
+		"admin": f.admin, "an All clients member": f.allCli, "a member limited to the bound client A": f.limited, "a recorded uploader limited to B": coB,
+	} {
+		got, reused, err := csStoreAs(svc, who, "readable-hit")
+		if err != nil || got.ID != first.ID || !reused {
+			t.Errorf("upload as %s = id %q reused %v err %v, want %q reused true", name, got.ID, reused, err, first.ID)
+		}
+		if who != coB {
+			want = append(want, who)
+		}
+	}
+	csWantUploaders(t, f, "after the readable hits", first.ID, want...)
+
+	g := newCSFixture(t)
+	gsvc := document.NewService(g.store, &fakeObjects{})
+	csExec(t, g.super, `UPDATE tenants SET kind = 'in_house' WHERE id = $1`, g.tenant)
+	uploader := csMember(t, g.super, g.tenant, "reviewer", false, g.entA)
+	doc, _, err := csStoreAs(gsvc, uploader, "in-house-hit")
+	if err != nil {
+		t.Fatalf("control: in-house first upload: %v", err)
+	}
+	csCiteAs(t, g, g.admin, g.entA, doc.ID, "CS-READ-IH")
+	inHouse := csMember(t, g.super, g.tenant, "reviewer", false)
+	if got, reused, err := csStoreAs(gsvc, inHouse, "in-house-hit"); err != nil || got.ID != doc.ID || !reused {
+		t.Errorf("upload as an in-house reviewer with no clients = id %q reused %v err %v, want %q reused true", got.ID, reused, err, doc.ID)
+	}
+	csWantUploaders(t, g, "after the in-house hit", doc.ID, uploader, inHouse)
+}
+
+// csPreviewAs POSTs one file part to the real preview handler over the real Service.Store.
+func csPreviewAs(t *testing.T, svc *document.Service, who context.Context, filename, contentType, content string) (int, []byte, map[string]json.RawMessage) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename=%q`, filename))
+	h.Set("Content-Type", contentType)
+	fw, err := w.CreatePart(h)
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	_, _ = fw.Write([]byte(content))
+	_ = w.Close()
+	r := httptest.NewRequest("POST", "/v1/imports/preview", &buf).WithContext(who)
+	r.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	importer.PreviewHandler(svc.Store, nil).ServeHTTP(rec, r)
+	decoded := map[string]json.RawMessage{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	return rec.Code, rec.Body.Bytes(), decoded
+}
+
+func TestClientScope_UploadDedupeLeak_ThePreviewRouteAnswers409BeforeTheFormatCheck(t *testing.T) {
+	f := newCSFixture(t)
+	u2 := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	svc := document.NewService(f.store, &fakeObjects{})
+	csHeld(t, f, svc, "bound-to-b!")
+
+	for _, c := range []struct{ name, filename, contentType string }{
+		{"a recognised format", "held.csv", "text/csv"},
+		{"an unrecognised format", "data.txt", "application/octet-stream"},
+	} {
+		code, raw, decoded := csPreviewAs(t, svc, u2, c.filename, c.contentType, "bound-to-b!")
+		if code != http.StatusConflict {
+			t.Errorf("%s: held bytes as a member limited to A: status %d (%s), want 409", c.name, code, raw)
+		}
+		if _, ok := decoded["document_id"]; ok {
+			t.Errorf("%s: the answer carries document_id (%s), want none", c.name, raw)
+		}
+		if got := string(decoded["error"]); got != `"`+csHeldSentence+`"` || len(decoded) != 1 {
+			t.Errorf("%s: body %s, want exactly {\"error\":%q}", c.name, raw, csHeldSentence)
+		}
+	}
+
+	// Control: fresh bytes pass the store and reach the format check, which carries the id.
+	code, raw, decoded := csPreviewAs(t, svc, u2, "data.txt", "application/octet-stream", "fresh-bytes")
+	if code != http.StatusBadRequest || len(decoded["document_id"]) == 0 {
+		t.Errorf("control: fresh bytes as data.txt = %d %s, want 400 with a document_id", code, raw)
+	}
+}
+
+func TestClientScope_UploadDedupeLeak_TheGateRefusesBeforeTheHeldAnswer(t *testing.T) {
+	f := newCSFixture(t)
+	svc := document.NewService(f.store, &fakeObjects{})
+	csHeld(t, f, svc, "gate-first")
+	suspended := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	locked := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+	active := csMember(t, f.super, f.tenant, "reviewer", false, f.entA)
+
+	if _, _, err := csStoreAs(svc, active, "gate-first"); !errors.Is(err, document.ErrHeldElsewhere) {
+		t.Errorf("control: an active member limited to A: err = %v, want ErrHeldElsewhere", err)
+	}
+	csExec(t, f.super, `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, f.tenant, subjectOf(t, suspended))
+	if _, _, err := csStoreAs(svc, suspended, "gate-first"); !errors.Is(err, db.ErrNotActiveMember) || errors.Is(err, document.ErrHeldElsewhere) {
+		t.Errorf("suspended member on held bytes: err = %v, want db.ErrNotActiveMember", err)
+	}
+	// The preview route maps the same refusals before the 409.
+	if code, raw, decoded := csPreviewAs(t, svc, suspended, "held.csv", "text/csv", "gate-first"); code != http.StatusForbidden || len(decoded["document_id"]) != 0 {
+		t.Errorf("preview of held bytes as a suspended member = %d %s, want 403 with no document_id", code, raw)
+	}
+	if _, _, err := csStoreAs(svc, context.Background(), "gate-first"); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("no identity on held bytes: err = %v, want db.ErrNoTenant", err)
+	}
+	setTenantLock(t, f.super, f.tenant, true)
+	if _, _, err := csStoreAs(svc, locked, "gate-first"); !errors.Is(err, db.ErrWorkspaceLocked) || errors.Is(err, document.ErrHeldElsewhere) {
+		t.Errorf("locked workspace on held bytes: err = %v, want db.ErrWorkspaceLocked", err)
 	}
 }
 

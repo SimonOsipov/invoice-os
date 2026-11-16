@@ -473,6 +473,8 @@ test.describe("screens that span clients stop at a limited member's clients (FIR
   let notHeldInvoiceId: string
   let tin: string
   let customerId: string
+  let ownBuyerTin: string
+  let otherBuyerTin: string
 
   const COUNT_KEYS = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed'] as const
 
@@ -503,6 +505,11 @@ test.describe("screens that span clients stop at a limited member's clients (FIR
     ownInvoiceId = await validated(ownEntityId, 'OWN')
     tin = freshTin()
     customerId = (await createCustomer(admin, { tin, name: `FIRMS-04 buyer ${tin}` })).id
+    // An invoice save files its buyer for that invoice's client.
+    ownBuyerTin = freshTin()
+    otherBuyerTin = freshTin()
+    await createInvoice(admin, { entity_id: ownEntityId, ...cleanInvoiceFields(`INV-SECAUD-41-OWN-${freshTin()}`), buyer_tin: ownBuyerTin })
+    await createInvoice(admin, { entity_id: fresh.id, ...cleanInvoiceFields(`INV-SECAUD-41-NH-${freshTin()}`), buyer_tin: otherBuyerTin })
   })
 
   test("FIRMS-04: the limited reviewer's rollup counts only its clients", async () => {
@@ -562,8 +569,25 @@ test.describe("screens that span clients stop at a limited member's clients (FIR
     expect(all.invoices.map((i) => i.id), 'positive control: the admin queue holds the not-held invoice').toContain(notHeldInvoiceId)
   })
 
-  test('FIRMS-04: the buyer directory stays shared', async () => {
-    const { customers } = await listCustomers(limited, { tin })
-    expect(customers.map((c) => c.id)).toContain(customerId)
+  test("SECAUD-41: the limited reviewer reaches only its clients' buyers", async () => {
+    const rows = async (token: string, buyerTin: string) => (await listCustomers(token, { tin: buyerTin })).customers
+    const otherRow = (await rows(allClients, otherBuyerTin))[0]
+    expect(otherRow, 'positive control: the invoice filed the not-held buyer').toBeTruthy()
+    expect(await rows(allClients, ownBuyerTin), 'the All clients member lists the own buyer').toHaveLength(1)
+    expect((await rows(allClients, tin)).map((c) => c.id), 'the All clients member lists the unused buyer').toEqual([customerId])
+
+    expect(await rows(limited, ownBuyerTin), 'its own client\'s buyer').toHaveLength(1)
+    expect(await rows(limited, otherBuyerTin), "the not-held client's buyer").toEqual([])
+    expect(await rows(limited, tin), 'the admin-created buyer no invoice uses').toEqual([])
+
+    const res = await rawFetch(`/api/invoice/v1/customers/${otherRow.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${limited}` },
+      body: { name: 'Hijacked' },
+    })
+    assertErrorEnvelope(res, 404, 'PATCH the not-held buyer')
+    // internal/customer statusForErr: ErrNotFound -> 404 "not found".
+    expect((res.body as { error: string }).error).toBe('not found')
+    expect((await rows(allClients, otherBuyerTin))[0].name, 'the record is unchanged').toBe(otherRow.name)
   })
 })

@@ -175,6 +175,9 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		var in struct {
 			Token string `json:"token"`
 		}
@@ -245,6 +248,9 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		if registrations.Claim == nil || registrations.Release == nil {
@@ -319,6 +325,9 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 	endpoint := authURL.JoinPath("resend").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		var in struct {

@@ -80,8 +80,8 @@ var approvalRunStates = []string{"", "open", "approved", "rejected", "cancelled"
 // sampled fixture. A mutant that survives one hand-picked shape (rung 4's two halves
 // are the known pair) cannot survive the cross product.
 func TestApprovalGate_FullOracle(t *testing.T) {
-	if len(allStatuses) != 7 {
-		t.Fatalf("allStatuses covers %d statuses, want 7 -- a new status needs no edit here, but the count guard must be retuned deliberately", len(allStatuses))
+	if len(allStatuses) != 8 {
+		t.Fatalf("allStatuses covers %d statuses, want 8 -- a new status needs no edit here, but the count guard must be retuned deliberately", len(allStatuses))
 	}
 	rows, allowed := 0, 0
 	for _, s := range allStatuses {

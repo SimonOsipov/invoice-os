@@ -727,6 +727,28 @@ func TestNotes_ScopedToThisOriginal(t *testing.T) {
 	}
 }
 
+func TestNotes_LeavesADiscardedNoteOut(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "SECAUD-50-02 notes")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("1000.00"))
+	live := ntNoteAt(t, super, tenant, ent, "NT-LIVE", "credit_note", orig, "submitted", "100.00", 1)
+	ntNoteAt(t, super, tenant, ent, "NT-GONE", "credit_note", orig, "discarded", "300.00", 2)
+	ntNoteAt(t, super, tenant, ent, "NT-GONE-D", "debit_note", orig, "discarded", "50.00", 3)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(got.Notes) != 1 || got.Notes[0].ID != live {
+		t.Errorf("notes = %+v, want only the submitted credit note %s", got.Notes, live)
+	}
+	if got.CreditedSoFar != "100.00" {
+		t.Errorf("credited_so_far = %q, want 100.00", got.CreditedSoFar)
+	}
+}
+
 func TestNotes_CreditedCountsPerD9(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := NewStore(app)

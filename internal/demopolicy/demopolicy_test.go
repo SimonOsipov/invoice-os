@@ -1201,8 +1201,8 @@ func TestSeed_ActivePolicyCarriesTheNotifyStepQ10Decided(t *testing.T) {
 }
 
 // AC-11's named tripwire, re-founded on the shape the import actually produces:
-// the wizard maps only Invoice No, so total lands NULL and evalCondition folds
-// it to zero. The live consumer is e2e/topology/persona-surfaces.spec.ts:305-310,
+// the wizard maps only Invoice No, so total lands NULL and a NULL total takes the
+// review lane (open, never autoapproved). The live consumer is the e2e test "in-house sweep: every sidebar surface renders real content for the in-house persona",
 // which validates two in-house invoices at total 1075 on every gate run.
 func TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -1211,13 +1211,13 @@ func TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane(t *testing.T) {
 	small := "107.50"
 	gate := "1075.00"
 	lanes := []struct{ label, id string }{
-		{"a NULL total (what the import wizard stores)", f.addValidatedInvoice("DEMO-T-LANE-NULL", nil)},
 		{"total 1075 (persona-surfaces.spec.ts's createValidatedInvoice)", f.addValidatedInvoice("DEMO-T-LANE-GATE", &gate)},
 		{"total 107.50", f.addValidatedInvoice("DEMO-T-LANE-SMALL", &small)},
 	}
 	// Control: with no above-threshold row, a seeder carrying no condition at
 	// all — everything autoapproves — would satisfy the loop below.
 	control := f.addValidatedInvoice("DEMO-T-LANE-ABOVE", &backlogTotals[0])
+	nullTotal := f.addValidatedInvoice("DEMO-T-LANE-NULL", nil)
 
 	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
 		t.Fatalf("seedTenant: %v", err)
@@ -1235,6 +1235,9 @@ func TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane(t *testing.T) {
 	}
 	if state, _, _ := runOf(t, super, control); state != "open" {
 		t.Errorf("the above-threshold control closed %q, want open — this test cannot tell an else-lane autoapprove from a policy with no condition", state)
+	}
+	if state, _, _ := runOf(t, super, nullTotal); state != "open" {
+		t.Errorf("a NULL total (what the import wizard stores) closed %q, want open — a NULL total takes the review lane", state)
 	}
 }
 

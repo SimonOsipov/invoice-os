@@ -1,5 +1,5 @@
 # Wrapper stage. The golang tag equals go.mod; TestGoPins_RepoAgree fails when they differ.
-FROM mirror.gcr.io/library/golang:1.26.11-alpine AS wrap
+FROM mirror.gcr.io/library/golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS wrap
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/authsentry cmd/authsentry
@@ -29,6 +29,11 @@ ENV GOTRUE_DB_DRIVER=postgres \
     GOTRUE_LOG_LEVEL=info \
     GOTRUE_MAILER_OTP_LENGTH=10 \
     GOTRUE_MAILER_OTP_EXP=3600 \
+    GOTRUE_PASSWORD_MIN_LENGTH=10 \
+    GOTRUE_SESSIONS_TIMEBOX=720h \
+    GOTRUE_SESSIONS_INACTIVITY_TIMEOUT=168h \
+    GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED=true \
+    GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL=0 \
     GOTRUE_RATE_LIMIT_HEADER=X-User-Address
 
 # The upstream image sets CMD ["auth"] and no ENTRYPOINT. The wrapper runs its args as GoTrue.

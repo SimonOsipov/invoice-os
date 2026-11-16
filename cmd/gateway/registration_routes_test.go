@@ -505,7 +505,7 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil).InvitationPassword)
+	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil, nil).InvitationPassword)
 
 	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
@@ -589,6 +589,29 @@ func TestRegisterPreflightGrantsTheAllowedOrigin(t *testing.T) {
 	rec = postJSON(mux, "/auth/register", "https://evil.example", body)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST from a disallowed origin got grant %q, want none", got)
+	}
+}
+
+func TestRegister_ANonJSONPostIs415AndOnlyAnAllowedOriginReadsIt(t *testing.T) {
+	mux, calls := registerMux(t)
+
+	const body = `{"email":"new@corp.example","password":"Corr3ct-Horse","workspace_name":"Acme","display_name":"Ada","kind":"firm"}`
+	for origin, wantGrant := range map[string]string{registerAllowedOrigin: registerAllowedOrigin, "https://evil.example": ""} {
+		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "text/plain")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("%s: status = %d, want 415: %s", origin, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != wantGrant {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", origin, got, wantGrant)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("GoTrue saw %v, want no call", got)
 	}
 }
 

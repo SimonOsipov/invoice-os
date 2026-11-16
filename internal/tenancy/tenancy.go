@@ -71,6 +71,8 @@ var (
 	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
 	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 	ErrDeletionNotScheduled        = errors.New("tenancy: deletion not scheduled")
+	ErrPurgeSameStaff              = errors.New("tenancy: purge by the staff member who scheduled it")
+	ErrPurgeWaitingPeriod          = errors.New("tenancy: purge inside the staff waiting period")
 	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
 	ErrLastActiveMember            = errors.New("tenancy: last active member")
 	ErrNoEraseEmail                = errors.New("tenancy: no email to erase by")
@@ -251,6 +253,7 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 
 // membershipsResponse is the GET /v1/memberships body: the caller's tenant's
 // memberships, each as {user_id, role, status, display_name, email, client_access}.
+// A non-admin reads email and client_access on its own row only.
 type membershipsResponse struct {
 	Memberships []MemberAccess `json:"memberships"`
 }

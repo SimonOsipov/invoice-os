@@ -11,11 +11,11 @@ const byId = (id: string) => {
 }
 
 describe('content', () => {
-  it('content_hasElevenGroupsThirtyTwoFeaturesSixStagesSevenTourStops', () => {
-    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 32, 6, 7])
+  it('content_hasElevenGroupsThirtyThreeFeaturesSixStagesSevenTourStops', () => {
+    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 33, 6, 7])
     expect(FEATURES).toEqual(GROUPS.flatMap((g) => g.feats))
     expect(GROUPS.map((g) => g.n)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'])
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([5, 3, 3, 2, 2, 2, 2, 3, 4, 2, 4])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([6, 3, 3, 2, 2, 2, 2, 3, 4, 2, 4])
   })
 
   it('content_membersGroupEndsWithTheTwoDeletionFeatures', () => {
@@ -27,7 +27,7 @@ describe('content', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     const counts: Record<SceneKind, number> = { list: 0, form: 0, flow: 0, feed: 0, metrics: 0, toggles: 0 }
     for (const f of FEATURES) counts[f.sc.kind]++
-    expect(counts).toEqual({ list: 6, form: 12, flow: 6, feed: 2, metrics: 2, toggles: 4 })
+    expect(counts).toEqual({ list: 7, form: 12, flow: 6, feed: 2, metrics: 2, toggles: 4 })
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
@@ -89,7 +89,8 @@ describe('content', () => {
 
   it('content_approvalQueueStatesTheCreatorRule', () => {
     const f = byId('approval-queue')
-    expect(f.desc).toContain('The creator of an invoice cannot approve it, unless they are the only approver of that client.')
+    expect(f.desc).toContain('The creator of an invoice, and anyone who edited it, cannot approve it, unless they are the only approvers of that client.')
+    expect(f.desc).toContain('Someone who approved an earlier step cannot approve a later step of the same invoice, unless they are the only approvers of that client.')
     expect(COMING_SOON_IDS).not.toContain('approval-queue')
     expect(f.benefits).toHaveLength(3)
   })
@@ -114,17 +115,32 @@ describe('content', () => {
     expect(COMING_SOON_IDS).not.toContain('workflow-builder')
   })
 
-  it('content_marksTheOtherTwentySevenShipped', () => {
+  it('content_marksTheOtherTwentyEightShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
-    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',
+    expect(shipped).toEqual(['import-files', 'undo-import', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',
       'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
       'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile', 'app-analytics', 'unsubscribe-link'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
   })
 
+  it('content_undoImportIsShippedOnCreate', () => {
+    const f = byId('undo-import')
+    expect([f.status, f.view]).toEqual(['shipped', 'create'])
+    for (const r of f.rel) expect(FEATURES.map((x) => x.id), r).toContain(r)
+  })
+
+  it('content_undoImportWordsCoverOnlyWhatShips', () => {
+    const f = byId('undo-import')
+    const words = [f.title, f.short, f.desc, ...f.benefits].join(' ')
+    expect(f.desc).toMatch(/discarded/)
+    expect(f.desc).toMatch(/submitted/)
+    expect(f.benefits.join(' ')).toMatch(/submitted/)
+    expect(words).not.toMatch(/credit note|move/i)
+  })
+
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped).toHaveLength(27)
+    expect(shipped).toHaveLength(28)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')

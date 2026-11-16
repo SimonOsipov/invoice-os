@@ -29,10 +29,14 @@ export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
 export const customerToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
   jwt({ sub: 'cust-1', exp: expSec, tag, app_metadata: { tenant_id: 'tenant-1' } })
 
-// The stored borrowed record: `{v:2, token, from:"app"}`.
+// The current records: `{v:3, token}` (landing) and `{v:3, token, from:"app"}` (borrowed).
+export const v3Raw = (token: string): string => JSON.stringify({ v: 3, token })
+export const v3BorrowedRaw = (token: string): string => JSON.stringify({ v: 3, token, from: 'app' })
+
+// The legacy v2 borrowed record: `{v:2, token, from:"app"}`.
 export const borrowedRaw = (token: string): string => JSON.stringify({ v: 2, token, from: 'app' })
 
-// The stored console record: AC-6 `{v:2, token, refresh_token}`.
+// The legacy v2 landing record: `{v:2, token, refresh_token}`.
 export const recordRaw = (token: string, refresh: string): string => JSON.stringify({ v: 2, token, refresh_token: refresh })
 
 // The stored sign-in state: `{v, s, at}` with v = SIGN_IN_STATE_SCHEMA_VERSION (1).
@@ -81,6 +85,7 @@ export interface Call {
   method: string
   body: unknown
   headers: Record<string, string>
+  credentials: RequestCredentials | undefined
   signal: AbortSignal | null | undefined
 }
 
@@ -101,6 +106,7 @@ export function installFetch(handler: (c: Call) => Response | Error | Promise<Re
       method: init?.method ?? 'GET',
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       headers,
+      credentials: init?.credentials,
       signal: init?.signal,
     }
     calls.push(call)

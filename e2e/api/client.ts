@@ -24,10 +24,10 @@ export function apiBase(): string {
   return resolveTarget('GATEWAY_URL')
 }
 
-// fleetHeaders(): /healthz/fleet answers only with the gateway token (GKE-08); CI reads the PR's token.
+// fleetHeaders(): /healthz/fleet and the gateway /health detail need the gateway token; CI reads the PR's token.
 export function fleetHeaders(): Record<string, string> {
   const token = process.env.GATEWAY_TOKEN
-  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet needs X-Gateway-Token')
+  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet and the gateway /health detail need X-Gateway-Token')
   return { 'X-Gateway-Token': token }
 }
 
@@ -45,7 +45,7 @@ export function fleetHeaders(): Record<string, string> {
 export async function rawFetch(
   path: string,
   init?: { method?: string; headers?: Record<string, string>; body?: unknown; redirect?: RequestRedirect },
-): Promise<{ status: number; body: unknown; location: string | null }> {
+): Promise<{ status: number; body: unknown; location: string | null; setCookie: string[] }> {
   const hasBody = init?.body !== undefined
   const res = await fetch(`${apiBase()}${path}`, {
     method: init?.method,
@@ -59,7 +59,7 @@ export async function rawFetch(
   } catch {
     body = undefined
   }
-  return { status: res.status, body, location: res.headers.get('Location') }
+  return { status: res.status, body, location: res.headers.get('Location'), setCookie: res.headers.getSetCookie() }
 }
 
 export interface Persona {
@@ -771,7 +771,7 @@ export interface Invoice {
   entity_id: string
   import_batch_id: string | null
   invoice_number: string
-  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed'
+  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed' | 'discarded'
   issue_date: string | null
   supplier_tin: string | null
   supplier_name: string | null
@@ -862,6 +862,7 @@ export interface ListInvoicesQuery {
   q?: string
   entity_id?: string
   awaiting_approval?: boolean
+  import_batch_id?: string
 }
 
 export interface ListInvoicesResponse {
@@ -880,6 +881,7 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
   if (query?.awaiting_approval !== undefined) params.set('awaiting_approval', String(query.awaiting_approval))
+  if (query?.import_batch_id !== undefined) params.set('import_batch_id', query.import_batch_id)
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }
@@ -926,8 +928,8 @@ export interface GetInvoiceResult extends Invoice {
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
   // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
-  // no-omitempty convention. The pairs agree except at the creator rung: the creator
-  // may reject but not approve (approve_blocked_by_creator).
+  // no-omitempty convention. The pairs agree except at the person rung: an author or
+  // an earlier approver may reject but not approve (approve_blocked_by_creator).
   can_approve: boolean
   approve_blocked_reason: string | null
   approve_blocked_by_creator: boolean
@@ -1424,6 +1426,30 @@ export async function importFetch(token: string, form: FormData): Promise<{ stat
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// GET /v1/imports/{id}; raw status and body, never throws on a status.
+export async function getImportBatch(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// POST /v1/imports/{id}/undo; raw status and body, never throws on a status.
+export async function undoImport(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}/undo`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
   let body: unknown
   try {
     body = await res.json()
@@ -2282,6 +2308,7 @@ export interface ExtractionDetail {
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
+  import_batch_id: string | null
 }
 
 export function getExtractionDetail(token: string, jobId: string): Promise<ExtractionDetail> {

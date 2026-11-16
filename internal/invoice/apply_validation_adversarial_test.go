@@ -329,7 +329,7 @@ func TestEdit_AmountRaisedAboveThresholdLeavesNoStaleApprovedRun(t *testing.T) {
 
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-THRESHOLD", Total: strPtr("100000000.00")})
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-THRESHOLD", Currency: strPtr("NGN"), Total: strPtr("100000000.00")})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

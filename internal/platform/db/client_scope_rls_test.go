@@ -19,7 +19,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
-const clientScopeMigrationGlob = "*_client_scope.sql"
+// 14-digit timestamp: "*_" would also match *_customers_client_scope.sql.
+const clientScopeMigrationGlob = "??????????????_client_scope.sql"
 
 // csClient is one client (business entity) of a seeded tenant with the rows that hang off it.
 type csClient struct {

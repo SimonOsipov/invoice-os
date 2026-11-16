@@ -613,6 +613,10 @@ describe('rawFetch redirect', () => {
         res.writeHead(303, { Location: '/landed?verify=failed' }).end()
         return
       }
+      if (req.url === '/cookies') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': ['a=1; Path=/; HttpOnly', 'b=2; Path=/; Max-Age=0'] }).end('{}')
+        return
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"landed":true}')
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -632,6 +636,16 @@ describe('rawFetch redirect', () => {
       const res = await rawFetch('/go', { redirect: 'manual' })
       expect(res.status).toBe(303)
       expect(res.location).toBe('/landed?verify=failed')
+    })
+  })
+
+  it('rawFetch returns the Set-Cookie lines', async () => {
+    const { rawFetch } = await import('./client')
+    await withServer(async () => {
+      const res = await rawFetch('/cookies')
+      expect(res.setCookie).toEqual(['a=1; Path=/; HttpOnly', 'b=2; Path=/; Max-Age=0'])
+      // Positive pair: a response with no cookie gives an empty list, not a missing key.
+      expect((await rawFetch('/go', { redirect: 'manual' })).setCookie).toEqual([])
     })
   })
 

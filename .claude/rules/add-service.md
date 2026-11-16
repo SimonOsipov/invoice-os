@@ -35,11 +35,12 @@ paths:
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.
 - Declare `ARG BUILD_SHA`, then `ENV VITE_BUILD_SHA=${BUILD_SHA}`, in the same stage.
-- Declare `ARG SENTRY_AUTH_TOKEN` in the SPA Dockerfile with no `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins both.
+- Mount the secret `sentry_auth_token` with `env=SENTRY_AUTH_TOKEN` on each SPA build `RUN`; never `ARG` or `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins it.
 - Add `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to the SPA `vite.config.ts`.
 - Serve a `.map` file as 404 from the shared `Caddyfile`. A new SPA inherits it.
 - A site that ships `/srv/404.html` serves only its built pages, else `/404.html` with status 404. A new SPA without it keeps the `try_files {path} /index.html` fallback.
 - The blog serves `.map` as 404 from `internal/blogweb`, typed `text/plain`. Cloud Run labels a typeless response `text/html`.
 - Give a Python sidecar its own `sidecar/<svc>/Dockerfile`. Declare no `ARG SERVICE`.
-- Pin a third-party sidecar image by digest in the `FROM` line. `sidecar/auth/Dockerfile` is the example.
+- Pin every external image by digest on its `FROM` line, with its full version tag. `internal/tools/dockerguard` fails an unpinned `FROM`. Add no `# syntax=` line: it pulls a BuildKit frontend from Docker Hub.
+- End a served image's final stage with a non-root `USER`. Add no `USER` when the upstream base already runs non-root. `sidecar/auth/Dockerfile` keeps the upstream `supabase` user, and `TestAuthImage_FinalStageKeepsGoTrueUser` fails on a `USER` line. A Caddy serve stage runs `RUN setcap -r /usr/bin/caddy`, then `USER nobody:nobody`. `scripts/ci/caddy-headers.sh` runs the app's serve stage that way.
 - Prove a new service with a green `dev-env.yml` preview run, then a green `deploy-prod.yml` run.

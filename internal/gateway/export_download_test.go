@@ -136,7 +136,7 @@ func newExportRigLogging(t *testing.T, log *slog.Logger) *exportRig {
 		up:       up,
 		mint:     verifier.Middleware(sessions.Middleware(ExportCodeHandler(store, log))),
 		download: ExportDownloadHandler(store, api, log),
-		exchange: ExchangeHandler(store),
+		exchange: ExchangeHandler(store, nil),
 	}
 }
 
@@ -371,7 +371,9 @@ func TestExportDownload_CodesDoNotCrossRoutes(t *testing.T) {
 	code := rg.seed(t, rg.bearer(t), state)
 	b, _ := json.Marshal(map[string]string{"code": code, "state": state})
 	rec := httptest.NewRecorder()
-	rg.exchange.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b)))
+	req := httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rg.exchange.ServeHTTP(rec, req)
 	assertErrorBody(t, rec, http.StatusBadRequest, "invalid or expired code")
 
 	// A sign-in code is bound to sha256(state), with no prefix.
@@ -853,7 +855,9 @@ func TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState(t *
 	ex := func(code, state string) *httptest.ResponseRecorder {
 		b, _ := json.Marshal(map[string]string{"code": code, "state": state})
 		rec := httptest.NewRecorder()
-		rg.exchange.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b)))
+		req := httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rg.exchange.ServeHTTP(rec, req)
 		return rec
 	}
 	if plain := ex(rg.seed(t, bearer, state), state); plain.Code != http.StatusBadRequest {

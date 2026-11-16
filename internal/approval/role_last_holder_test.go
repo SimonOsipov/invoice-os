@@ -436,6 +436,29 @@ func TestSetRoleMembers_RefusesWhenTheOnlyMemberCreatedTheInvoice(t *testing.T) 
 	}
 }
 
+func TestSetRoleMembers_RefusesWhenOnlyTheEarlierApproverCouldSign(t *testing.T) {
+	f := newRunFixture(t, "SECAUD-40 staffing earlier approver")
+	k0 := seedWorkflowRole(t, f.super, f.tenantID, "k0", "K0")
+	k1 := seedWorkflowRole(t, f.super, f.tenantID, "tax-reviewer", "Tax Reviewer")
+	a := memberIn(t, f, k0, memberSpec{role: "reviewer"})
+	b := memberIn(t, f, k1, memberSpec{role: "reviewer"})
+	staffWorkflowRole(t, f.super, f.tenantID, k1, a, 1)
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // reaches the client, holds no role
+	inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-1", f.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("k0")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("tax-reviewer")})
+	seedApprovalDecision(t, f.super, f.tenantID, run, oneApprovalStep(t, f.super, run, 0), "approved", a, nil)
+	before := userIDs(staffingRows(t, f.super, k1))
+
+	wantStaffingRefusal(t, f, []string{a}, []InvoiceRef{{ID: inv, Number: "INV-1"}}, 1)
+	if got := userIDs(staffingRows(t, f.super, k1)); !slices.Equal(got, before) {
+		t.Errorf("members = %v, want %v (a refusal writes nothing)", got, before)
+	}
+	if _, err := f.store.SetRoleMembers(f.admin, "tax-reviewer", []string{a, b}); err != nil {
+		t.Fatalf("SetRoleMembers {A, B} err = %v, want success", err)
+	}
+}
+
 func TestSetRoleMembers_RefusesWhenNoMemberReachesTheClient(t *testing.T) {
 	f := newLastHolderFixture(t, "APSC-14 out of reach")
 	entB := seedBusinessEntity(t, f.super, f.tenantID, "APSC-14 B")
@@ -550,5 +573,24 @@ func TestSetRoleMembers_JudgesEveryPendingStepOnTheRole(t *testing.T) {
 	}
 	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != stuck || inUse.invoicesTotal != 1 {
 		t.Errorf("invoices = %+v, total = %d, want [%s] once and 1", inUse.invoices, inUse.invoicesTotal, stuck)
+	}
+}
+
+// The earlier-approver terms stop at the run's lowest pending step: staffing k2 = {A} saves.
+func TestSetRoleMembers_EarlierApproverDoesNotJudgeALaterStep(t *testing.T) {
+	f := newRunFixture(t, "SECAUD-40 later step")
+	k0 := seedWorkflowRole(t, f.super, f.tenantID, "k0", "K0")
+	k1 := seedWorkflowRole(t, f.super, f.tenantID, "k1", "K1")
+	seedWorkflowRole(t, f.super, f.tenantID, "k2", "K2")
+	a := memberIn(t, f, k0, memberSpec{role: "reviewer"})
+	memberIn(t, f, k1, memberSpec{role: "reviewer"}) // B holds k1 only
+	_, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-3", f.versionID,
+		runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("k0")},
+		runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("k1")},
+		runStepSeed{Ord: 2, Kind: "approval", State: "pending", Key: ptr("k2")})
+	seedApprovalDecision(t, f.super, f.tenantID, run, oneApprovalStep(t, f.super, run, 0), "approved", a, nil)
+
+	if _, err := f.store.SetRoleMembers(f.admin, "k2", []string{a}); err != nil {
+		t.Fatalf("SetRoleMembers k2 = {A} err = %v, want success (step 2 is not the current step)", err)
 	}
 }

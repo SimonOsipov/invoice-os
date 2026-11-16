@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/actor"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // historyCSVHeader: pinned by AUDIT-05-04's Stage 1 architecture (D-9). No column
@@ -84,7 +85,8 @@ func selectHistory(ctx context.Context, tx pgx.Tx, ids []string, w csvWriter) er
 
 		// One Resolve call for the whole chunk (AC-6) -- it dedupes subjects
 		// internally, so callers never pre-dedupe.
-		labels, err := actor.Resolve(ctx, tx, subjects)
+		callerID, _ := auth.IdentityFromContext(ctx) // staff carry none: unrestricted
+		labels, err := actor.Resolve(ctx, tx, callerID.Subject, subjects)
 		if err != nil {
 			return fmt.Errorf("archive: resolve actors: %w", err)
 		}

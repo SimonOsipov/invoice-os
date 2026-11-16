@@ -256,6 +256,16 @@ func TestAuditScopeOf_PurgeStartedIsWorkspace(t *testing.T) {
 	}
 }
 
+// A refused staff purge is firm-wide too. Not in readerFirmWideEvents: that list mirrors the SQL rule vocabulary, which has no purge_refused.
+func TestAuditScopeOf_PurgeRefusedIsWorkspace(t *testing.T) {
+	if got := audit.ScopeOf("some.entirely.unclassified.event", nil); got != audit.ScopeUnattributed {
+		t.Fatalf("control: ScopeOf(unclassified, nil) = %q, want %q", got, audit.ScopeUnattributed)
+	}
+	if got := audit.ScopeOf("workspace.purge_refused", nil); got != audit.ScopeWorkspace {
+		t.Errorf("ScopeOf(workspace.purge_refused, nil) = %q, want %q", got, audit.ScopeWorkspace)
+	}
+}
+
 // An invite is a workspace act until an entity id is attached.
 func TestAuditScopeOf_InvitationEventsAreWorkspace(t *testing.T) {
 	if got := audit.ScopeOf("some.unclassified", nil); got != audit.ScopeUnattributed {

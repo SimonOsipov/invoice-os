@@ -20,6 +20,8 @@ export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
 // Pinned to the tenants_deletion_guard trigger (graceDays in privacyCodeFacts.test.util.ts).
 export const DELETION_GRACE_DAYS = 30
+// Pinned to StaffPurgeWait in internal/tenancy/staff_deletion.go (staffPurgeWaitHours in privacyCodeFacts.test.util.ts).
+export const STAFF_PURGE_WAIT_HOURS = 48
 // Cloud SQL backups and change log; the rule file records the source. Pinned by value (the infra repo is private).
 export const BACKUP_DAYS = 7
 // Bucket soft delete; the rule file records the source. Pinned by value.
@@ -173,8 +175,9 @@ export function Privacy() {
             workspace is deleted.
           </p>
           <p style={P}>
-            When an admin deletes a workspace, it and everything in it stay for {DELETION_GRACE_DAYS} days. Then our
-            server deletes them.
+            When an admin deletes a workspace, it and everything in it stay for {DELETION_GRACE_DAYS} days, or for at
+            least {STAFF_PURGE_WAIT_HOURS} hours if a member of our staff starts the deletion sooner. Then our server
+            deletes them.
           </p>
           <p style={P}>
             Database backups: our database keeps backups, and a log of recent changes, for {BACKUP_DAYS} days. Data that
@@ -424,13 +427,15 @@ export function Privacy() {
           </p>
           <p style={P}>
             The workspace is then locked for {DELETION_GRACE_DAYS} days. Nobody can create or change anything in it.
-            While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the{' '}
-            {DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and
+            While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until it starts. It starts when the{' '}
+            {DELETION_GRACE_DAYS} days end, or earlier if a member of our staff starts it, which they can do from{' '}
+            {STAFF_PURGE_WAIT_HOURS} hours after the deletion was requested. A staff member who requested the deletion
+            cannot start it. Then our server deletes every invoice, file and member of the workspace, and
             erases the records of each member still in it, as described above.
           </p>
           <p style={P}>
             If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your
-            account then goes when the workspace is deleted, {DELETION_GRACE_DAYS} days later, not at once.
+            account then goes when the workspace is deleted, not at once.
           </p>
 
           <h2 style={H2}>If you upload invoice documents</h2>

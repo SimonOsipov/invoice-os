@@ -421,6 +421,25 @@ func TestRefuseUnsignedWaitingRoles_CreatorOnlyRefuses(t *testing.T) {
 	f.wantPassedUnsigned(t, "tax-reviewer")
 }
 
+func TestRefuseUnsignedWaitingRoles_EditorOnlyRefuses(t *testing.T) {
+	f := newLastHolderFixture(t, "SECAUD-18 editor only refuses")
+	b := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // C: a non-author approver without the role
+	seedInvoiceEvent(t, f.super, f.tenantID, "invoice.updated", f.invoiceID, b)
+
+	f.wantPassedUnsigned(t, "tax-reviewer") // control: D, a non-author, still signs
+	if _, err := f.super.Exec(context.Background(),
+		`DELETE FROM workflow_role_members WHERE workflow_role_id = $1 AND user_id = $2`, f.roleID, d); err != nil {
+		t.Fatalf("remove D from the role: %v", err)
+	}
+
+	inUse := f.wantRefusedUnsigned(t, "tax-reviewer")
+	if len(inUse.invoices) != 1 || inUse.invoices[0].ID != f.invoiceID || inUse.invoicesTotal != 1 {
+		t.Errorf("invoices = %+v, total = %d, want only %s and 1", inUse.invoices, inUse.invoicesTotal, f.invoiceID)
+	}
+}
+
 func TestRefuseUnsignedWaitingRoles_CapsAtTwentyAcrossRolesAndSumsTheTotal(t *testing.T) {
 	f := newRunFixture(t, "APSC-14 cap across roles")
 	roleX := seedWorkflowRole(t, f.super, f.tenantID, "x", "Role X")
@@ -549,6 +568,36 @@ func TestRefuseUnsignedWaitingRoles_JudgesStepsTheTargetCanSign(t *testing.T) {
 		seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // E reaches A and signs
 		if err := f.refuseSigned(nil, signed); err != nil {
 			t.Errorf("RefuseUnsignedWaitingRolesTx with E signing: %v, want nil", err)
+		}
+	})
+
+	t.Run("earlier approver", func(t *testing.T) {
+		f := newRunFixture(t, "SECAUD-40 signed earlier approver")
+		k0 := seedWorkflowRole(t, f.super, f.tenantID, "k0", "K0")
+		y := seedWorkflowRole(t, f.super, f.tenantID, "y", "Y")
+		a := memberIn(t, f, k0, memberSpec{role: "reviewer"})
+		staffWorkflowRole(t, f.super, f.tenantID, y, a, 0)
+		d := seedMemberOf(t, f.super, f.tenantID, memberSpec{role: "reviewer"}) // names Y's step, holds no role
+		inv, run := seedOpenRun(t, f.super, f.tenantID, f.entityID, "INV-Y", f.versionID,
+			runStepSeed{Ord: 0, Kind: "approval", State: "satisfied", Key: ptr("k0")},
+			runStepSeed{Ord: 1, Kind: "approval", State: "pending", Key: ptr("y")})
+		seedApprovalDecision(t, f.super, f.tenantID, run, oneApprovalStep(t, f.super, run, 0), "approved", a, nil)
+		setStepDelegation(t, f.super, oneApprovalStep(t, f.super, run, 1), true, &d)
+
+		signed := f.signedSteps(t, d, nil)
+		if len(signed) != 1 {
+			t.Fatalf("SignedWaitingStepsTx returned %d steps, want Y's step", len(signed))
+		}
+		if err := f.refuseSigned(nil, signed); err != nil {
+			t.Fatalf("RefuseUnsignedWaitingRolesTx with D active: %v, want nil", err)
+		}
+
+		// Only A, who approved step 0, is left in the role, and the admin reaches the client.
+		setMembershipStatus(t, f.super, f.tenantID, d, "suspended")
+		inUse := f.wantRefusedSigned(t, nil, signed)
+		want := InvoiceRef{ID: inv, Number: "INV-Y", RoleKey: "y", RoleTitle: "Y"}
+		if len(inUse.invoices) != 1 || inUse.invoices[0] != want {
+			t.Errorf("invoices = %+v, want [%+v]", inUse.invoices, want)
 		}
 	})
 

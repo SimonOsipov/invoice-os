@@ -3563,6 +3563,47 @@ func fxBuildNPage(n int) []byte {
 	return fxAssemble(objs)
 }
 
+// fxSizedPage is one blank page with its own boxes. A zero CropW/CropH, Rotate or UserUnit
+// leaves that key out.
+type fxSizedPage struct {
+	W, H, CropW, CropH, UserUnit float64
+	Rotate                       int
+}
+
+// fxBuildSizedPages is one blank page per entry. Numbers use 'f' format: %g writes 1e+06, which
+// pdfium does not parse. A whole number gets ".0": pdfium reads an integer token past int32 as
+// absent and falls back to Letter, so 1e19 would render.
+func fxBuildSizedPages(pages ...fxSizedPage) []byte {
+	num := func(v float64) string {
+		s := strconv.FormatFloat(v, 'f', -1, 64)
+		if !strings.Contains(s, ".") {
+			s += ".0"
+		}
+		return s
+	}
+	objs := make([]fxObject, 2, len(pages)+2)
+	objs[0] = fxObject("<< /Type /Catalog /Pages 2 0 R >>")
+
+	kids := make([]string, 0, len(pages))
+	for i, p := range pages {
+		kids = append(kids, fmt.Sprintf("%d 0 R", i+3))
+		d := fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %s %s]", num(p.W), num(p.H))
+		if p.CropW != 0 || p.CropH != 0 {
+			d += fmt.Sprintf(" /CropBox [0 0 %s %s]", num(p.CropW), num(p.CropH))
+		}
+		if p.Rotate != 0 {
+			d += fmt.Sprintf(" /Rotate %d", p.Rotate)
+		}
+		if p.UserUnit != 0 {
+			d += " /UserUnit " + num(p.UserUnit)
+		}
+		objs = append(objs, fxObject(d+" >>"))
+	}
+	objs[1] = fxObject(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages)))
+
+	return fxAssemble(objs)
+}
+
 // fxE2EDir holds the Playwright-side copies of a subset of this package's PDF corpus.
 const fxE2EDir = "../../e2e/fixtures/documents"
 

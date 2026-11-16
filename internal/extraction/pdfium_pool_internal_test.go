@@ -8,6 +8,7 @@ package extraction
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 
@@ -74,5 +75,27 @@ func TestPDFiumPool_BuiltAtMostOnce(t *testing.T) {
 	}
 	if got := pdfiumBuilds.Load(); got != 1 {
 		t.Errorf("the once-func ran %d time(s) across %d concurrent first calls, want 1: each build compiles the embedded wasm and adds its own ~254 MiB plateau", got, callers)
+	}
+}
+
+func TestRenderGridFits(t *testing.T) {
+	for _, c := range []struct {
+		w, h int
+		want bool
+	}{
+		{1275, 1651, true},
+		{5000, 5000, true},
+		{1, 1, true},
+		{5001, 1275, false},
+		{1275, 5001, false},
+		{0, 1275, false},
+		{1275, 0, false},
+		{math.MinInt64, 1275, false},
+		{1275, math.MinInt64, false},
+		{math.MaxInt64, 1275, false},
+	} {
+		if got := renderGridFits(c.w, c.h); got != c.want {
+			t.Errorf("renderGridFits(%d, %d) = %v, want %v", c.w, c.h, got, c.want)
+		}
 	}
 }

@@ -18,7 +18,7 @@ describe('dockerfiles', () => {
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
-      const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
+      const build = lines.findIndex((l) => /^RUN\s+(?:--mount=\S+\s+)?pnpm\s+--filter/i.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(-1)
       // An ARG above the stage's FROM is out of scope for it, and an ENV above its ARG expands empty.
       const from = lines.findIndex((l) => /^FROM /.test(l))
@@ -60,50 +60,54 @@ describe('dockerfiles', () => {
     const lib = codeLines(readFileSync(join(FRONTEND, 'library/Dockerfile'), 'utf8'))
     const libFrom = lib.findIndex((l) => /^FROM /.test(l))
     const libServe = lib.findIndex((l, i) => i > libFrom && /^FROM /.test(l))
-    const libBuild = lib.findIndex((l) => /^RUN pnpm --filter/.test(l))
+    const libBuild = lib.findIndex((l) => /^RUN\s+(?:--mount=\S+\s+)?pnpm\s+--filter/.test(l))
     for (const key of landingArgs) {
       const arg = lib.indexOf(`ARG ${key}`)
       expect(arg, `library: ARG ${key} is not inside the build stage`).toBeGreaterThan(libFrom)
       expect(lib.indexOf(`ENV ${key}=$${key}`), `library: ENV ${key} is not after its ARG`).toBeGreaterThan(arg)
       expect(arg, `library: ARG ${key} is after the first build RUN`).toBeLessThan(libBuild)
     }
-    expect(lib.some((l) => /^RUN pnpm --filter @invoice-os\/landing exec vite build --base=\/library\/_landing\//.test(l))).toBe(true)
+    expect(lib.some((l) => /^RUN\s+(?:--mount=\S+\s+)?pnpm --filter @invoice-os\/landing exec vite build --base=\/library\/_landing\//.test(l))).toBe(true)
     const copy404 = lib.findIndex((l) => /^COPY --from=build \S*\/404\.html \/srv\/404\.html$/.test(l))
     expect(copy404, 'library: no COPY of 404.html to /srv/404.html in the serve stage').toBeGreaterThan(libServe)
     const copyAssets = lib.findIndex((l) => /^COPY --from=build \S*\/library-404\/assets \/srv\/library\/_landing\/assets$/.test(l))
     expect(copyAssets, 'library: the 404 page assets are not copied to /srv/library/_landing/assets').toBeGreaterThan(libServe)
   })
 
-  it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
+  it('dockerfiles_theAuthTokenReachesTheBuildOnlyAsASecretMount', () => {
     const monitored = monitoredSpas()
     expect(monitored).toEqual(['app', 'blog', 'check', 'landing', 'library', 'ops-console', 'support-console'])
+    const mount = 'RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN '
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const froms = lines.flatMap((l, i) => (/^FROM\s/i.test(l) ? [i] : []))
       expect(froms.length, `${name}: expected a build FROM and a serve FROM`).toBeGreaterThanOrEqual(2)
       const buildFrom = froms[0]
-      const build = lines.findIndex((l) => /^RUN\s+pnpm\s+--filter/i.test(l))
-      expect(build, `${name}: no build RUN`).toBeGreaterThan(buildFrom)
-      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(froms[1])
+      const builds = lines.flatMap((l, i) => (/^RUN\s.*\bpnpm\s.*\bbuild\b/i.test(l) ? [i] : []))
+      expect(builds.length, `${name}: no build RUN`).toBeGreaterThanOrEqual(1)
+      // check and library also build the landing 404 page.
+      expect(builds, `${name}: build RUN count`).toHaveLength(['check', 'library'].includes(name) ? 2 : 1)
+      for (const b of builds) {
+        expect(b, `${name}: build RUN is not in the build stage`).toBeGreaterThan(buildFrom)
+        expect(b).toBeLessThan(froms[1])
+        expect(lines[b].startsWith(mount), `${name}: build RUN lacks the secret mount: ${lines[b]}`).toBe(true)
+      }
+      expect(lines.filter((l) => l.includes('sentry_auth_token')).length, `${name}: the mount is on a non-build line`).toBe(builds.length)
 
       // Control: the same finder locates a pre-existing ARG inside the build stage.
       const dsn = lines.findIndex((l) => /^ARG\s+VITE_SENTRY_DSN$/i.test(l))
       expect(dsn, `${name}: finder missed ARG VITE_SENTRY_DSN`).toBeGreaterThan(buildFrom)
-      expect(dsn).toBeLessThan(build)
+      expect(dsn).toBeLessThan(builds[0])
 
-      const args = lines.flatMap((l, i) => (/^ARG\s+SENTRY_AUTH_TOKEN$/i.test(l) ? [i] : []))
-      expect(args, `${name}/Dockerfile must declare ARG SENTRY_AUTH_TOKEN exactly once`).toHaveLength(1)
-      expect(args[0], `${name}: ARG SENTRY_AUTH_TOKEN is before the build FROM`).toBeGreaterThan(buildFrom)
-      expect(args[0], `${name}: ARG SENTRY_AUTH_TOKEN is after the build RUN`).toBeLessThan(build)
-
-      // The token must not persist in image metadata or a default value.
+      // The token must not persist as a build arg, in image metadata or as a default value.
+      expect(lines.filter((l) => /^ARG\s+SENTRY_AUTH_TOKEN/i.test(l)), `${name}: ARG names the token`).toEqual([])
       expect(lines.filter((l) => /^ENV\b.*SENTRY_AUTH_TOKEN/i.test(l)), `${name}: ENV names the token`).toEqual([])
       expect(lines.filter((l) => /SENTRY_AUTH_TOKEN=/i.test(l)), `${name}: token assigned`).toEqual([])
 
       const serve = lines.slice(froms[1] + 1)
       expect(serve.length, `${name}: serve stage is empty`).toBeGreaterThan(0)
-      expect(serve.filter((l) => /SENTRY_AUTH_TOKEN/i.test(l)), `${name}: serve stage names the token`).toEqual([])
+      expect(serve.filter((l) => /SENTRY_AUTH_TOKEN|sentry_auth_token/i.test(l)), `${name}: serve stage names the token`).toEqual([])
     }
   })
 })

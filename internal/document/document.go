@@ -19,10 +19,10 @@ import (
 // (s3.go) covers the row-not-found case too.
 var ErrValidation = errors.New("document: validation")
 
-// Red prelude (SECAUD-42-01): declared so the tests compile; the executor fills the text and the check.
+// ErrHeldElsewhere: the bytes dedupe onto a document the caller cannot read.
 var ErrHeldElsewhere = errors.New("document: held elsewhere")
 
-const HeldElsewhereMessage = ""
+const HeldElsewhereMessage = "this file already belongs to a client you cannot see; remove it to continue"
 
 // Document is one documents row. Filename and DeclaredContentType are nil when
 // the column is NULL, i.e. nothing usable was recorded.
@@ -103,10 +103,16 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 			// row, so the row has to be read back here. RLS scopes it, and the
 			// unique index is (tenant_id, content_hash), so this can only ever
 			// resolve the caller's own row.
-			if err := scanDocument(tx.QueryRow(ctx,
-				`SELECT `+documentColumns+` FROM documents WHERE content_hash = $1`, d.ContentHash,
-			), &out); err != nil {
+			var readable bool
+			if err := tx.QueryRow(ctx,
+				`SELECT `+documentColumns+`, public.document_readable(id) FROM documents WHERE content_hash = $1`, d.ContentHash,
+			).Scan(&out.ID, &out.StorageKey, &out.ContentHash, &out.SizeBytes, &out.Filename, &out.DeclaredContentType, &out.CreatedAt, &readable); err != nil {
 				return err
+			}
+			// ceiling: an uncited document is readable by every member, so a hit on one still answers its id (SECAUD-42 [dedupe-ceiling]).
+			if !readable {
+				out = Document{}
+				return ErrHeldElsewhere
 			}
 		default:
 			return err

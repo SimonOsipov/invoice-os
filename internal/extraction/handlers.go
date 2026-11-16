@@ -60,6 +60,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, InvoiceNumberTakenReason
 	case errors.Is(err, ErrInvoiceNumberFixed):
 		return http.StatusConflict, InvoiceNumberFixedReason
+	case errors.Is(err, ErrDocumentHeldElsewhere):
+		return http.StatusConflict, DocumentHeldElsewhereMessage
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

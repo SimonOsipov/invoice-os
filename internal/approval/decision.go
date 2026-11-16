@@ -172,20 +172,6 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, err
 	}
 
-	// Person rung (author, earlier approver): approve only, before AXIS 2 so its message wins.
-	var approvedAs string
-	if decision == "approved" {
-		standing, err := CreatorStandingTx(ctx, tx, caller.Subject, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: roleKey, AllowDelegation: allowDelegation, DelegateUserID: delegateUserID}})
-		if err != nil {
-			return Run{}, err
-		}
-		st := standing[invoiceID]
-		if reason, refused := st.Refusal(); refused {
-			return Run{}, newCreatorRefused(reason)
-		}
-		approvedAs = st.ApprovedAs()
-	}
-
 	// AXIS 2: the inverse of reconciliation's approval_blocked_unstaffed NOT EXISTS
 	// body (internal/reconciliation/reconciliation.go:179-204), narrowed to the
 	// caller -- resolved through HeldRoleKeysTx (gate.go), the one AXIS-2 predicate.
@@ -199,6 +185,20 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 	}
 	// A holder who is also the delegate decides as a holder.
 	asDelegate := !holds && DelegateMayDecide(allowDelegation, delegateUserID, caller.Subject)
+
+	// Person rung, approve only. The author branch beats AXIS 2; the earlier-approver branch needs a decider.
+	var approvedAs string
+	if decision == "approved" {
+		standing, err := CreatorStandingTx(ctx, tx, caller.Subject, []CreatorProbe{{InvoiceID: invoiceID, RoleKey: roleKey, AllowDelegation: allowDelegation, DelegateUserID: delegateUserID}})
+		if err != nil {
+			return Run{}, err
+		}
+		st := standing[invoiceID]
+		if reason, refused := st.RefusalFor(holds || asDelegate); refused {
+			return Run{}, newCreatorRefused(reason)
+		}
+		approvedAs = st.ApprovedAs()
+	}
 	if !holds && !asDelegate {
 		return Run{}, ErrNotRoleHolder
 	}

@@ -50,9 +50,13 @@ type CreatorStanding struct {
 	OtherNewApprover, OtherNewRoleHolder, OtherNewDelegate bool
 }
 
-// Refusal is the person rung: an author is refused when an approver who is not an author reaches
+// Refusal is RefusalFor a caller who may decide the step.
+func (s CreatorStanding) Refusal() (reason string, refused bool) { return s.RefusalFor(true) }
+
+// RefusalFor is the person rung: an author is refused when an approver who is not an author reaches
 // the client; failing that, an earlier approver of the run is refused when a fresh approver reaches it.
-func (s CreatorStanding) Refusal() (reason string, refused bool) {
+// mayDecide: the caller holds the step's role or is its delegate; a non-decider gets the role answer.
+func (s CreatorStanding) RefusalFor(mayDecide bool) (reason string, refused bool) {
 	if (s.IsCreator || s.IsEditor) && s.OtherApprover {
 		first := EditorRefusedReason
 		if s.IsCreator {
@@ -63,7 +67,7 @@ func (s CreatorStanding) Refusal() (reason string, refused bool) {
 		}
 		return first, true
 	}
-	if s.EarlierApprover && s.OtherNewApprover {
+	if mayDecide && s.EarlierApprover && s.OtherNewApprover {
 		if !s.OtherNewRoleHolder && !s.OtherNewDelegate {
 			return EarlierApproverRefusedReason + " " + CreatorNoRoleHolderReason, true
 		}
@@ -154,18 +158,20 @@ func CreatorStandingTx(ctx context.Context, tx pgx.Tx, subject string, probes []
 	// Reach and holder are LEFT JOINs: no EXISTS may name workflow_role_members
 	// (TestAxis2_ZeroWorkflowRoleMembersExistsPredicatesRemain).
 	rows, err = tx.Query(ctx,
-		`SELECT i.id::text, bool_or(wrm.user_id IS NOT NULL),
+		`WITH dec AS (SELECT DISTINCT r.invoice_id, d.actor
+		                FROM approval_decisions d
+		                JOIN approval_runs r ON r.tenant_id = d.tenant_id AND r.id = d.run_id
+		               WHERE r.invoice_id = ANY($1::uuid[]) AND r.state = 'open' AND d.decision = 'approved')
+		 SELECT i.id::text, bool_or(wrm.user_id IS NOT NULL),
 		        bool_or(p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text)),
-		        bool_or(NOT x.decided),
-		        bool_or(NOT x.decided AND wrm.user_id IS NOT NULL),
-		        bool_or(NOT x.decided AND p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text))
+		        bool_or(dec.actor IS NULL),
+		        bool_or(dec.actor IS NULL AND wrm.user_id IS NOT NULL),
+		        bool_or(dec.actor IS NULL AND p.allow_delegation AND (p.delegate_user_id IS NULL OR p.delegate_user_id = m.user_id::text))
 		   FROM unnest($1::uuid[], $2::text[], $3::boolean[], $4::text[]) AS p(invoice_id, role_key, allow_delegation, delegate_user_id)
 		   JOIN invoices i ON i.id = p.invoice_id
 		   JOIN memberships m ON m.status = 'active' AND m.role IN ('admin', 'reviewer')
 		   JOIN tenants t ON t.id = m.tenant_id
-		   CROSS JOIN LATERAL (SELECT m.user_id::text IN (SELECT d.actor FROM approval_decisions d
-		                                                    JOIN approval_runs r ON r.tenant_id = d.tenant_id AND r.id = d.run_id
-		                                                   WHERE r.invoice_id = i.id AND r.state = 'open' AND d.decision = 'approved') AS decided) x
+		   LEFT JOIN dec ON dec.invoice_id = i.id AND dec.actor = m.user_id::text
 		   LEFT JOIN membership_clients mc ON mc.user_id = m.user_id AND mc.entity_id = i.entity_id
 		   LEFT JOIN workflow_roles wr ON wr.key = p.role_key AND wr.deleted_at IS NULL
 		   LEFT JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id AND wrm.user_id = m.user_id

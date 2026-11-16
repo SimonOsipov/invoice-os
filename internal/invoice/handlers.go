@@ -627,7 +627,7 @@ func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
 		return false, reason, false
 	}
 	if f.CreatorErr == nil {
-		if reason, refused := f.Creator.Refusal(); refused {
+		if reason, refused := f.Creator.RefusalFor(f.CallerHoldsRole || f.CallerIsDelegate); refused {
 			return false, &reason, true
 		}
 	}

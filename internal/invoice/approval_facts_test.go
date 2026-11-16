@@ -438,8 +438,9 @@ func TestCreatorRefusal_NoOtherDeciderKeepsBothSentencesOnAllThreeDoors(t *testi
 const wantEarlierApproverReason = "You approved an earlier step of this invoice, so another approver must approve this step."
 
 // earlierFixture: a two-step run on an invoice a preparer created. A holds both roles and has approved
-// step 0. B is a reviewer; he holds step 1's role only when bHoldsStep1. fx acts as A.
-func earlierFixture(t *testing.T, super, app *pgxpool.Pool, label string, bHoldsStep1 bool) approvalFactsFixture {
+// step 0. B is a reviewer; he holds step 1's role only when bHoldsStep1. A holds step 1's role
+// only when aHoldsStep1. fx acts as A.
+func earlierFixture(t *testing.T, super, app *pgxpool.Pool, label string, aHoldsStep1, bHoldsStep1 bool) approvalFactsFixture {
 	t.Helper()
 	tenantID := seedTenant(t, super, label+" tenant")
 	entityID := seedEntity(t, super, tenantID, label+" entity")
@@ -455,7 +456,9 @@ func earlierFixture(t *testing.T, super, app *pgxpool.Pool, label string, bHolds
 	a, b, creator := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	seedMembership(t, super, tenantID, a, "reviewer")
 	staffWorkflowRoleFor(t, super, tenantID, role0, a, 0)
-	staffWorkflowRoleFor(t, super, tenantID, role1, a, 0)
+	if aHoldsStep1 {
+		staffWorkflowRoleFor(t, super, tenantID, role1, a, 0)
+	}
 	seedMembership(t, super, tenantID, b, "reviewer")
 	if bHoldsStep1 {
 		staffWorkflowRoleFor(t, super, tenantID, role1, b, 1)
@@ -520,7 +523,7 @@ func earlierWires(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture) (det
 
 func TestEarlierApproverRefusal_DetailListAndDecideAgree(t *testing.T) {
 	super, app := dbTestPools(t)
-	fx := earlierFixture(t, super, app, "SECAUD-40-AGREE", true)
+	fx := earlierFixture(t, super, app, "SECAUD-40-AGREE", true, true)
 
 	// The wires first: an unrefused POST would close the run under the reads.
 	detail, row := earlierWires(t, app, fx)
@@ -544,11 +547,37 @@ func TestEarlierApproverRefusal_DetailListAndDecideAgree(t *testing.T) {
 
 func TestEarlierApproverRefusal_NoOtherSignerKeepsBothSentencesOnAllThreeDoors(t *testing.T) {
 	super, app := dbTestPools(t)
-	fx := earlierFixture(t, super, app, "SECAUD-40-BOTH", false)
+	fx := earlierFixture(t, super, app, "SECAUD-40-BOTH", true, false)
 	both := wantEarlierApproverReason + " " + approval.CreatorNoRoleHolderReason
 
 	detailSentence, listSentence, decideSentence := creatorDoors(t, app, fx, fx.invID)
 	if detailSentence != both || listSentence != both || decideSentence != both {
 		t.Errorf("detail %q, list %q, decide %q, want all %q", detailSentence, listSentence, decideSentence, both)
+	}
+}
+
+// A approved step 0 but does not hold step 1's role: every door answers as for any non-holder.
+func TestEarlierApproverRefusal_NonHolderGetsTheRoleAnswerOnAllDoors(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := earlierFixture(t, super, app, "SECAUD-40-NONHOLDER", false, true)
+
+	detail, row := earlierWires(t, app, fx)
+	if detail.CanApprove || detail.ApproveBlockedByCreator {
+		t.Errorf("detail can_approve = %t, approve_blocked_by_creator = %t, want both false", detail.CanApprove, detail.ApproveBlockedByCreator)
+	}
+	if detail.ApproveBlockedReason != nil && *detail.ApproveBlockedReason == wantEarlierApproverReason {
+		t.Errorf("detail approve_blocked_reason = the earlier-approver sentence, want the non-holder one")
+	}
+	if string(row["approve_blocked_by_creator"]) != "false" {
+		t.Errorf("list approve_blocked_by_creator = %s, want false (row not selectable)", row["approve_blocked_by_creator"])
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(approvalStoreFor(app).DecideSeam, nil))
+	req := httptest.NewRequest("POST", "/v1/invoices/"+fx.invID+"/approvals", strings.NewReader(`{"decision":"approved"}`)).WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), wantEarlierApproverReason) {
+		t.Errorf("decide = %d %s, want the 403 non-holder answer", rec.Code, rec.Body.String())
 	}
 }

@@ -254,6 +254,21 @@ func TestDecide_Distinct_AnAuthorIsNotAnotherEligibleApprover(t *testing.T) {
 	wantApprovedAsSeq(t, super, w.tenantID, "approver", "repeat_approved")
 }
 
+// A approved step 0 and does not hold step 1's role: the role answer, not the earlier-approver one.
+func TestDecide_Distinct_NonHolderEarlierApproverGetsTheRoleAnswer(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 non-holder", "k0", "k1")
+	a := w.reviewer(t, 0)
+	w.reviewer(t, 1) // B
+
+	w.mustApprove(t, a)
+	_, err := approve(t, app, w.tenantID, a, w.invoiceID, nil)
+	if !errors.Is(err, ErrNotRoleHolder) || errors.Is(err, ErrCreatorRefused) {
+		t.Fatalf("A approves step 1 without its role: err = %v, want ErrNotRoleHolder", err)
+	}
+	w.wantNothingMore(t, 1, 1)
+}
+
 func TestDecide_Distinct_EarlierApproverMayReject(t *testing.T) {
 	super, app := dbTestPools(t)
 	w := newDistinctWorld(t, super, app, "SECAUD-40 may-reject", "k0", "k1")
@@ -392,6 +407,32 @@ func TestDecide_Distinct_OnlyAnApprovedDecisionMakesAnEarlierApprover(t *testing
 	w.mustApprove(t, a)
 	if got := readStanding(t, app, w.tenantID, a, probe)[w.invoiceID]; !got.EarlierApprover {
 		t.Errorf("standing after A's approval = %+v, want EarlierApprover true", got)
+	}
+}
+
+// One read over two invoices: B decided on I2 only, so B stays a fresh approver on I1.
+func TestDecide_Distinct_DecidersAreJudgedPerInvoiceInOneRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 per-invoice", "k0", "k1", "k2")
+	a := w.reviewer(t, 0, 1, 2)
+	b := w.reviewer(t, 0, 1, 2)
+	i2 := seedInvoice(t, super, w.tenantID, w.entityID, "distinct-per-invoice-i2")
+	setInvoiceStatus(t, super, i2, "validated")
+	if _, err := arm(t, app, w.tenantID, i2, "fp-per-invoice-i2", "fixture-arm"); err != nil {
+		t.Fatalf("arm I2: %v", err)
+	}
+	for _, id := range []string{w.invoiceID, i2} {
+		if _, err := approve(t, app, w.tenantID, a, id, nil); err != nil {
+			t.Fatalf("A approves step 0 of %s: %v", id, err)
+		}
+	}
+	if _, err := approve(t, app, w.tenantID, b, i2, nil); err != nil {
+		t.Fatalf("B approves step 1 of I2: %v", err)
+	}
+
+	got := readStanding(t, app, w.tenantID, a, CreatorProbe{InvoiceID: w.invoiceID, RoleKey: ptr("k2")}, CreatorProbe{InvoiceID: i2, RoleKey: ptr("k2")})
+	if !got[w.invoiceID].OtherNewApprover {
+		t.Errorf("standing of A on I1 = %+v, want OtherNewApprover true (B decided on I2 only)", got[w.invoiceID])
 	}
 }
 

@@ -1023,13 +1023,8 @@ func TestDecide_DelegationOnOneStepDoesNotReachTheOtherStep(t *testing.T) {
 				t.Helper()
 				before := len(decisionsForRun(t, super, res.RunID))
 				err := decideAs(who)
-				// D approved step 0 as the delegate, so on step 1 the earlier-approver rule answers first.
-				want := ErrNotRoleHolder
-				if delegated == 0 {
-					want = ErrCreatorRefused
-				}
-				if !errors.Is(err, want) {
-					t.Fatalf("Decide(approved) as %s on the step that does not name them: err = %v, want %v", who, err, want)
+				if !errors.Is(err, ErrNotRoleHolder) {
+					t.Fatalf("Decide(approved) as %s on the step that does not name them: err = %v, want ErrNotRoleHolder", who, err)
 				}
 				if n := len(decisionsForRun(t, super, res.RunID)); n != before {
 					t.Errorf("decisions after the refusal = %d, want %d", n, before)

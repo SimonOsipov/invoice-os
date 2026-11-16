@@ -45,6 +45,17 @@ func TestDevEnvMockIssuerToken_NotUnmaskedOrExportedToAnOutput(t *testing.T) {
 		if strings.Contains(text, "GITHUB_OUTPUT") || strings.Contains(text, "GITHUB_STEP_SUMMARY") {
 			t.Errorf("%s: the token step writes to GITHUB_OUTPUT or GITHUB_STEP_SUMMARY", name)
 		}
+		for _, want := range []string{
+			`MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"`,
+			`MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: the token step does not export %s", name, want)
+			}
+		}
+		if !strings.Contains(text, `if [ "$PR" = nightly ]`) {
+			t.Errorf("%s: MOCK_ISSUER_TOKEN_FOR is not chosen by the preview", name)
+		}
 		if has(s, "if:") {
 			t.Errorf("%s: wrong if on the token step: %v", name, s)
 		}

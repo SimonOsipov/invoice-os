@@ -2118,6 +2118,8 @@ describe('AC-2 — toMember maps the wire row to a Member', () => {
     expect(
       toMember(wire({ display_name: null, email: null, user_id: 'c0000000-0000-0000-0000-000000000009' }), SELF_SUBJECT).name,
     ).toBe(UNNAMED_NAME)
+    // The sentence itself, not the constant: a reworded constant must fail here.
+    expect(UNNAMED_NAME).toBe('Unnamed member')
   })
 
   it('resolves isYou from the passed self subject', () => {
@@ -2215,6 +2217,7 @@ describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third v
     const uuid = 'c0000000-0000-0000-0000-000000000009'
     expect(memberInitials(null, null, uuid)).toBe(initials(UNNAMED_NAME))
     expect(memberInitials(null, null, uuid)).not.toBe('C0')
+    expect(memberInitials(null, null, uuid)).toBe('UM')
   })
 })
 

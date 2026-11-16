@@ -791,6 +791,13 @@ func TestClientScope_UploadDedupeLeak_TheGateRefusesBeforeTheHeldAnswer(t *testi
 	if _, _, err := csStoreAs(svc, suspended, "gate-first"); !errors.Is(err, db.ErrNotActiveMember) || errors.Is(err, document.ErrHeldElsewhere) {
 		t.Errorf("suspended member on held bytes: err = %v, want db.ErrNotActiveMember", err)
 	}
+	// The preview route maps the same refusals before the 409.
+	if code, raw, decoded := csPreviewAs(t, svc, suspended, "held.csv", "text/csv", "gate-first"); code != http.StatusForbidden || len(decoded["document_id"]) != 0 {
+		t.Errorf("preview of held bytes as a suspended member = %d %s, want 403 with no document_id", code, raw)
+	}
+	if _, _, err := csStoreAs(svc, context.Background(), "gate-first"); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("no identity on held bytes: err = %v, want db.ErrNoTenant", err)
+	}
 	setTenantLock(t, f.super, f.tenant, true)
 	if _, _, err := csStoreAs(svc, locked, "gate-first"); !errors.Is(err, db.ErrWorkspaceLocked) || errors.Is(err, document.ErrHeldElsewhere) {
 		t.Errorf("locked workspace on held bytes: err = %v, want db.ErrWorkspaceLocked", err)

@@ -276,21 +276,22 @@ func TestClientAccess_MemberListEmailLeak_ALimitedMemberReadsNoOtherMembersEmail
 	p := w.addMember(t, "preparer", "active", "Pia Preparer")
 	r := w.addMember(t, "reviewer", "active", "Rex Reviewer")
 	s := w.addMember(t, "reviewer", "suspended", "Sue Suspended")
+	nameless := w.addMember(t, "preparer", "active", "")
 	giveClients(t, w.super, w.tenant, p, seedEntity(t, w.super, w.tenant))
 	giveAllClients(t, w.super, w.tenant, r)
 
 	adminView := w.listAs(t, w.admin)
-	if len(adminView) != 4 {
-		t.Fatalf("admin view: %d rows, want 4", len(adminView))
+	if len(adminView) != 5 {
+		t.Fatalf("admin view: %d rows, want 5", len(adminView))
 	}
-	for _, id := range []string{w.admin, p, r, s} {
+	for _, id := range []string{w.admin, p, r, s, nameless} {
 		requireEmail(t, "admin view: "+id, adminView[id], storedEmail(id))
 	}
 
 	for name, caller := range map[string]string{"limited preparer": p, "all-clients reviewer": r} {
 		rows := w.listAs(t, caller)
-		if len(rows) != 4 {
-			t.Fatalf("as %s: %d rows, want 4 (a non-admin still lists everyone)", name, len(rows))
+		if len(rows) != 5 {
+			t.Fatalf("as %s: %d rows, want 5 (a non-admin still lists everyone)", name, len(rows))
 		}
 		for id, row := range rows {
 			if id == caller {
@@ -310,6 +311,10 @@ func TestClientAccess_MemberListEmailLeak_ALimitedMemberReadsNoOtherMembersEmail
 		}
 		// The suspended row is among the hidden ones.
 		requireEmail(t, name+" reading the suspended row", rows[s], `null`)
+		// A member with no display name reads with neither name nor address: the SPA labels it "Unnamed member" (SECAUD-42-04).
+		if string(rows[nameless]["display_name"]) != "null" {
+			t.Errorf("as %s, the nameless member's display_name = %s, want null", name, rows[nameless]["display_name"])
+		}
 	}
 }
 

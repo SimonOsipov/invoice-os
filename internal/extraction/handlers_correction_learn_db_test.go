@@ -268,6 +268,11 @@ func TestRLS_LearnedRulesTenantWide_ALimitedMembersCorrectionTeachesAnotherClien
 	if len(got) != 1 || got[0].Field != clField {
 		t.Errorf("AnchorRulesFor for client B's layout = %+v, want exactly the rule the limited member taught on %s", got, clField)
 	}
+
+	// Only the rule crosses clients: the same member still cannot correct client B's job.
+	if w := cxServe(t, limited, jobB, clField, clPointedBody(clTINValue, region, ""), cxApplier(false, nil), cxAuditor(nil)); w.Code != http.StatusNotFound {
+		t.Errorf("limited member correcting client B's job = %d, want 404 (body=%q)", w.Code, w.Body.String())
+	}
 }
 
 // --- an AI-only field teaches no rule ---

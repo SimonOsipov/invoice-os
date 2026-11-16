@@ -73,7 +73,8 @@ func (s *Store) Admit(ctx context.Context) error {
 }
 
 // Upsert inserts one documents row, or resolves the existing one when this
-// tenant already holds the same content hash, and writes document.created or
+// tenant already holds the same content hash and the caller can read it (else
+// ErrHeldElsewhere), and writes document.created or
 // document.reused in the SAME transaction. tenant_id comes from the caller's
 // identity, so no caller can supply one.
 //

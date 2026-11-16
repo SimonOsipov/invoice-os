@@ -20,6 +20,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // --- fixtures ----------------------------------------------------------------
@@ -854,5 +856,66 @@ func TestArchive_StatusHistoryNamesARemovedActorDeleted(t *testing.T) {
 	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
 	if rows[0][nameIdx] != "Ada Obi (deleted)" || rows[0][kindIdx] != "person" {
 		t.Errorf("actor_name/actor_kind = %q/%q, want %q/person", rows[0][nameIdx], rows[0][kindIdx], "Ada Obi (deleted)")
+	}
+}
+
+// seedNamelessMember inserts an active member of role with an email and no display name.
+func seedNamelessMember(t *testing.T, tx pgx.Tx, tenantID, userID, role, email string) {
+	t.Helper()
+	if _, err := tx.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, email) VALUES ($1, $2, $3, $4)`,
+		tenantID, userID, role, email); err != nil {
+		t.Fatalf("insert %s membership: %v", role, err)
+	}
+}
+
+// A nameless actor's email is the status_history label for an admin and for that member's own
+// rows, never for another non-admin, who reads "Unnamed member"; the manifest's generated_by is
+// the generator's own row, so it keeps the email.
+func TestSelectHistory_ActorNameEmailLeak_NonAdminReadsUnnamedMemberNotAnotherMembersEmail(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-email-leak")
+	entity := mustCreateEntity(t, tx, tenant, "Email Leak Co", "40000005-0003")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-LEAK-01"})
+	adminID, selfID, otherID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	adminEmail, selfEmail, otherEmail := "admin-leak@example.com", "self-leak@example.com", "other-leak@example.com"
+	seedNamelessMember(t, tx, tenant, adminID, "admin", adminEmail)
+	seedNamelessMember(t, tx, tenant, selfID, "preparer", selfEmail)
+	seedNamelessMember(t, tx, tenant, otherID, "reviewer", otherEmail)
+	validated := "validated"
+	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, toStatus: "validated", actor: otherID, changedAt: at})
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, fromStatus: &validated, toStatus: "draft", actor: selfID, changedAt: at.Add(time.Hour)})
+	actingAs(t, tx, tenant)
+
+	names := func(viewer string) []string {
+		ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: viewer, Role: "authenticated", TenantID: tenant})
+		var buf bytes.Buffer
+		w := csv.NewWriter(&buf)
+		if err := selectHistory(ctx, tx, []string{invID}, w); err != nil {
+			t.Fatalf("selectHistory as %s: %v", viewer, err)
+		}
+		w.Flush()
+		rows := historyRowsFor(t, buf.Bytes(), invID)
+		if len(rows) != 2 {
+			t.Fatalf("selectHistory wrote %d rows, want 2", len(rows))
+		}
+		idx := historyColIndex(t, "actor_name")
+		return []string{rows[0][idx], rows[1][idx]}
+	}
+	if got := names(adminID); got[0] != otherEmail || got[1] != selfEmail {
+		t.Errorf("admin reads %v, want both emails", got)
+	}
+	if got := names(selfID); got[0] != "Unnamed member" || got[1] != selfEmail {
+		t.Errorf("non-admin reads %v, want [Unnamed member %s]", got, selfEmail)
+	}
+
+	gen, err := resolveGeneratedBy(context.Background(), tx, selfID)
+	if err != nil {
+		t.Fatalf("resolveGeneratedBy: %v", err)
+	}
+	if gen.Name != selfEmail {
+		t.Errorf("generated_by = %q, want the generator's own email %q", gen.Name, selfEmail)
 	}
 }

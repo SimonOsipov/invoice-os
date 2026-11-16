@@ -25,7 +25,7 @@ type Label struct {
 //
 // D-31: a non-nil pointer to "" is absent and falls through at every rung,
 // exactly like nil. This deliberately diverges from internal/approval's
-// holderName (read_model.go:421), which stops on a non-nil "" -- pinned by
+// holderName, which stops on a non-nil "" -- pinned by
 // TestHolderName_EmptyStringDisplayNameDoesNotFallThrough. Do not reconcile
 // the two; see TestActorName_DivergesFromHolderNameDeliberately.
 //

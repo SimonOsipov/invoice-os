@@ -387,6 +387,41 @@ func TestApprovalRun_HolderNameEmailLeak_NonAdminReadsUnnamedMemberNotAnotherMem
 	}
 }
 
+// TestApprovalRun_HolderNameEmailLeak_ACallerReadsTheirOwnEmailAsHolder: the restriction is on
+// other members; a non-admin who holds the role keeps their own email.
+func TestApprovalRun_HolderNameEmailLeak_ACallerReadsTheirOwnEmailAsHolder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-42 holder-own-email")
+	entityID := seedBusinessEntity(t, super, tenantID, "Holder Own Email Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "holder-own-email-invoice-1")
+
+	roleID := seedWorkflowRole(t, super, tenantID, "own-email-role", "Own Email Role")
+	c, callerID := callerCtx(t, super, tenantID, "reviewer", "active")
+	setMembershipEmail(t, super, callerID, "me@example.com")
+	staffWorkflowRole(t, super, tenantID, roleID, callerID, 0)
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Own email policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("own-email-role"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-own-email", "test-actor"); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
+	if err != nil {
+		t.Fatalf("ApprovalRun: %v", err)
+	}
+	if len(run.Steps) != 1 || run.Steps[0].Holder == nil {
+		t.Fatalf("steps = %+v, want one step with a holder", run.Steps)
+	}
+	if got := run.Steps[0].Holder.Text; got != "me@example.com" {
+		t.Errorf("Holder.Text = %q, want the caller's own email", got)
+	}
+}
+
 // --- ORDER BY really is load-bearing, not incidentally matching insertion order ------
 
 // TestApprovalRun_StepsReturnInOrdOrderRegardlessOfPhysicalInsertOrder: ArmTx always

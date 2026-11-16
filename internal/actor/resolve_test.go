@@ -563,6 +563,62 @@ func TestActorResolve_EmailLeak_NonAdminViewerReadsUnnamedMemberNotAnotherMember
 	assertLabel(t, map[string]actor.Label{okaforBlankable: resolveAs(okaforPreparer)}, okaforBlankable, person(actor.UnnamedMember))
 }
 
+// The viewer id is matched on the uuid, not the text, and the restriction never outranks the
+// removed-member label or reaches an in-process caller.
+func TestActorResolve_EmailLeak_ViewerShapeAndRemovedMember(t *testing.T) {
+	super, _ := dbTestPools(t)
+	var origName, origEmail *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT display_name, email FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		okaforTenantID, okaforBlankable).Scan(&origName, &origEmail); err != nil || origEmail == nil {
+		t.Fatalf("read the fixture row: %v (email %v)", err, origEmail)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $1, email = $2, status = 'active' WHERE tenant_id = $3 AND user_id = $4`,
+			origName, origEmail, okaforTenantID, okaforBlankable)
+	})
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET display_name = NULL WHERE tenant_id = $1 AND user_id = $2`, okaforTenantID, okaforBlankable); err != nil {
+		t.Fatalf("null the display name: %v", err)
+	}
+	resolveAs := func(viewer string) actor.Label {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+		got, err := actor.Resolve(context.Background(), tx, viewer, []string{okaforBlankable})
+		if err != nil {
+			t.Fatalf("Resolve as %q: %v", viewer, err)
+		}
+		return got[okaforBlankable]
+	}
+	email, unnamed := person(*origEmail), person(actor.UnnamedMember)
+	for name, tc := range map[string]struct {
+		viewer string
+		want   actor.Label
+	}{
+		"own id, upper case and braced":      {"{" + strings.ToUpper(okaforBlankable) + "}", email},
+		"own id, no hyphens":                 {strings.ReplaceAll(okaforBlankable, "-", ""), email},
+		"another member, upper case":         {strings.ToUpper(okaforPreparer), unnamed},
+		"admin, upper case":                  {strings.ToUpper(okaforAdmin), email},
+		"a uuid that is no member here":      {honeywellAdmin, unnamed},
+		"in-process caller (empty)":          {"", email},
+		"in-process caller (not a uuid)":     {"ASComply support", email},
+		"in-process caller (near-uuid text)": {okaforPreparer + "x", email},
+	} {
+		if got := resolveAs(tc.viewer); got != tc.want {
+			t.Errorf("%s: viewer %q reads %+v, want %+v", name, tc.viewer, got, tc.want)
+		}
+	}
+
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'removed' WHERE tenant_id = $1 AND user_id = $2`, okaforTenantID, okaforBlankable); err != nil {
+		t.Fatalf("remove the member: %v", err)
+	}
+	if got, want := resolveAs(okaforPreparer), person("Deleted member"); got != want {
+		t.Errorf("a non-admin reads a removed nameless member as %+v, want %+v (RemovedName outranks the restriction)", got, want)
+	}
+}
+
 // AC-2: a dropped key renders as a blank cell, not as raw text — the failure mode
 // nothing downstream can detect. 100 distinct subjects across all four shapes.
 func TestActorResolve_EveryInputSubjectIsAKey(t *testing.T) {

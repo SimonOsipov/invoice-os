@@ -719,7 +719,7 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 	if pw := inputs["password"]; pw == nil {
 		t.Error("no password input")
 	} else {
-		for k, want := range map[string]string{"type": "password", "autocomplete": "new-password", "minlength": "6", "maxlength": "72"} {
+		for k, want := range map[string]string{"type": "password", "autocomplete": "new-password", "minlength": "10", "maxlength": "72"} {
 			if got, ok := vpAttr(pw, k); !ok || got != want {
 				t.Errorf("password input %s = %q (present %v), want %q", k, got, ok, want)
 			}
@@ -727,6 +727,7 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 		if _, ok := vpAttr(pw, "required"); !ok {
 			t.Error("password input is not required")
 		}
+		rpRequireHint(t, doc)
 	}
 	h1 := vpFind(doc, vpTag("h1"))
 	if len(h1) != 1 || strings.TrimSpace(vpText(h1[0])) != "Choose your password" {
@@ -882,11 +883,12 @@ func TestVerifyPage_EveryStatedSignupLinkServesTheSetPasswordPage(t *testing.T) 
 			if pw == nil {
 				t.Fatal("no password input")
 			}
-			for k, want := range map[string]string{"type": "password", "minlength": "6", "maxlength": "72"} {
+			for k, want := range map[string]string{"type": "password", "minlength": "10", "maxlength": "72"} {
 				if got, _ := vpAttr(pw, k); got != want {
 					t.Errorf("password input %s = %q, want %q", k, got, want)
 				}
 			}
+			rpRequireHint(t, doc)
 			if got := rec.Header().Get("Content-Security-Policy"); got != resetCSP {
 				t.Errorf("Content-Security-Policy = %q, want the set-password page's %q", got, resetCSP)
 			}

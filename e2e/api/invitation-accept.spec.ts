@@ -6,6 +6,8 @@ import { apiBase, claimsOf, grantMembership, inviteWithToken, me, mintSignInStat
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
+// GOTRUE_PASSWORD_MIN_LENGTH in sidecar/auth/Dockerfile; the gateway's resetPasswordMin follows it.
+const PASSWORD_MIN = 10
 // internal/tenancy/accept.go msgInviteNotValid, msgAlreadyMember and msgWrongAddress.
 const NOT_VALID = 'this invite is no longer valid'
 const ALREADY_MEMBER = 'you already belong to a workspace'
@@ -17,7 +19,7 @@ const ACCOUNT_EXISTS = 'account_exists'
 const INVALID_CREDENTIALS = 'invalid email or password'
 // internal/gateway/invitation_password.go failed redirect; reset_password.go resetPasswordHint, shared by the password-link handler.
 const VERIFY_FAILED = '?verify=failed'
-const PASSWORD_HINT = 'Use a password of 6 to 72 characters.'
+const PASSWORD_HINT = `Use a password of ${PASSWORD_MIN} to 72 characters.`
 
 function auth(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
@@ -230,7 +232,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(res.headers.get('location'), 'a Location header').toBeNull()
     const html = await res.text()
-    for (const part of ['action="/auth/invitation/password"', 'name="password"', 'minlength="6"', 'maxlength="72"']) {
+    for (const part of ['action="/auth/invitation/password"', 'name="password"', `minlength="${PASSWORD_MIN}"`, 'maxlength="72"', `${PASSWORD_MIN} to 72 characters.`]) {
       expect(html, part).toContain(part)
     }
     expect(html, 'the hidden state field').toMatch(new RegExp(`<input[^>]*name="state"[^>]*value="${INVITE_STATE}"|<input[^>]*value="${INVITE_STATE}"[^>]*name="state"`))
@@ -257,7 +259,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
   })
 
   test('invitation accept: a too-short set-password re-renders the page with 400', async () => {
-    const res = await postPassword({ token: `bogus-${crypto.randomUUID()}`, password: 'abc' })
+    const res = await postPassword({ token: `bogus-${crypto.randomUUID()}`, password: crypto.randomUUID().slice(0, PASSWORD_MIN - 1) })
     expect(res.status).toBe(400)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(await res.text()).toContain(PASSWORD_HINT)

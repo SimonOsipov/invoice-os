@@ -46,7 +46,7 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 // (A02-15; ApprovalPendingView's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
-  // Approvable, or refused only because the caller created the invoice: the checkbox stays on.
+  // Approvable, or refused by approve_blocked_by_creator: the checkbox stays on.
   selectable: boolean
   pendingOrd: number | null
   // Human-facing step label (G4, APPR-12-03): pending_ord is 0-based on the wire
@@ -69,12 +69,12 @@ export interface ApprovalsBarView {
   eligible: string[]
   // The selected rows loaded can_approve:true -- the only ids confirm posts.
   toSend: string[]
-  // The selected creator-refused rows, reported locally; never posted.
+  // The selected rows refused by approve_blocked_by_creator, reported locally; never posted.
   localRefused: ApprovalResultRow[]
   notReady: number
   countLabel: string
   note: string | null
-  // One `<numbers>: <reason>` line per distinct reason among the selected creator-refused rows.
+  // One `<numbers>: <reason>` line per distinct reason among the selected rows refused by approve_blocked_by_creator.
   refused: string[]
   submitLabel: string
   confirmPrompt: string
@@ -110,7 +110,7 @@ export function isApprovableRow(row: Pick<InvoiceRecord, 'can_approve'>): boolea
   return row.can_approve === true
 }
 
-// A creator-refused row stays selectable so bulk approve can report it by number.
+// A row refused by approve_blocked_by_creator stays selectable so bulk approve can report it by number.
 export function isSelectableRow(row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_by_creator'>): boolean {
   return isApprovableRow(row) || row.approve_blocked_by_creator === true
 }

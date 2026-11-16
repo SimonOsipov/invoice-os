@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -431,4 +432,152 @@ func TestCreatorRefusal_NoOtherDeciderKeepsBothSentencesOnAllThreeDoors(t *testi
 			t.Errorf("Refusal = %q, want %q", reason, both)
 		}
 	})
+}
+
+// The story's copy, restated on purpose: the oracle for approval.EarlierApproverRefusedReason.
+const wantEarlierApproverReason = "You approved an earlier step of this invoice, so another approver must approve this step."
+
+// earlierFixture: a two-step run on an invoice a preparer created. A holds both roles and has approved
+// step 0. B is a reviewer; he holds step 1's role only when bHoldsStep1. A holds step 1's role
+// only when aHoldsStep1. fx acts as A.
+func earlierFixture(t *testing.T, super, app *pgxpool.Pool, label string, aHoldsStep1, bHoldsStep1 bool) approvalFactsFixture {
+	t.Helper()
+	tenantID := seedTenant(t, super, label+" tenant")
+	entityID := seedEntity(t, super, tenantID, label+" entity")
+	policyID := seedApprovalPolicyFor(t, super, tenantID, label+" policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	for ord, key := range []string{"step-0", "step-1"} {
+		seedApprovalStepFor(t, super, tenantID, versionID, approvalStepSpecFor{Ord: ord, Kind: "approval", WorkflowRoleKey: strPtr(key)})
+	}
+	activateApprovalPolicyVersionFor(t, super, versionID)
+	role0 := seedWorkflowRoleFor(t, super, tenantID, "step-0", "Step 0")
+	role1 := seedWorkflowRoleFor(t, super, tenantID, "step-1", "Step 1")
+
+	a, b, creator := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, a, "reviewer")
+	staffWorkflowRoleFor(t, super, tenantID, role0, a, 0)
+	if aHoldsStep1 {
+		staffWorkflowRoleFor(t, super, tenantID, role1, a, 0)
+	}
+	seedMembership(t, super, tenantID, b, "reviewer")
+	if bHoldsStep1 {
+		staffWorkflowRoleFor(t, super, tenantID, role1, b, 1)
+	}
+	seedMembership(t, super, tenantID, creator, "preparer")
+
+	ctxOf := func(subject string) context.Context {
+		return auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+	}
+	store := NewStore(app)
+	inv, err := store.Create(ctxOf(creator), CreateInput{EntityID: entityID, InvoiceNumber: "earlier-" + label})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got, err := store.ApplyValidation(ctxOf(creator), inv.ID, []Violation{}, seedRuleSetVersionID(t, super), contentFingerprint(inv, inv.LineItems)); err != nil || got.Status != StatusValidated {
+		t.Fatalf("ApplyValidation = %q, %v, want validated", got.Status, err)
+	}
+	fx := approvalFactsFixture{tenantID: tenantID, entityID: entityID, versionID: versionID, invID: inv.ID, subject: a, ctx: ctxOf(a)}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(approvalStoreFor(app).DecideSeam, nil))
+	req := httptest.NewRequest("POST", "/v1/invoices/"+inv.ID+"/approvals", strings.NewReader(`{"decision":"approved"}`)).WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("A approves step 0: status %d: %s", rec.Code, rec.Body.String())
+	}
+	return fx
+}
+
+// earlierWires reads the refused earlier approver's detail and list wires.
+func earlierWires(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture) (detail approveGateBody, list map[string]json.RawMessage) {
+	t.Helper()
+	store := NewStore(app)
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil).WithContext(fx.ctx)
+	r.SetPathValue("id", fx.invID)
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	detail = decodeApproveBody(t, rec)
+
+	lr := httptest.NewRequest("GET", "/v1/invoices?limit=200", nil).WithContext(fx.ctx)
+	lrec := httptest.NewRecorder()
+	ListHandler(store.List, store.RowFacts, nil).ServeHTTP(lrec, lr)
+	if lrec.Code != http.StatusOK {
+		t.Fatalf("list status = %d (body=%s)", lrec.Code, lrec.Body.String())
+	}
+	for _, row := range listRowsRaw(t, lrec) {
+		var id string
+		if err := json.Unmarshal(row["id"], &id); err != nil {
+			t.Fatalf("decode row id: %v", err)
+		}
+		if id == fx.invID {
+			return detail, row
+		}
+	}
+	t.Fatalf("invoice %s is not on the list page: %s", fx.invID, lrec.Body.String())
+	return
+}
+
+func TestEarlierApproverRefusal_DetailListAndDecideAgree(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := earlierFixture(t, super, app, "SECAUD-40-AGREE", true, true)
+
+	// The wires first: an unrefused POST would close the run under the reads.
+	detail, row := earlierWires(t, app, fx)
+	assertApprovalGate(t, detail.CanApprove, detail.ApproveBlockedReason, false, wantEarlierApproverReason)
+	if !detail.ApproveBlockedByCreator || !detail.CanReject {
+		t.Errorf("detail approve_blocked_by_creator = %t, can_reject = %t, want both true", detail.ApproveBlockedByCreator, detail.CanReject)
+	}
+	listCan, listReason := approveFlagsOf(t, row, "the LIST row")
+	if listCan != "false" || listReason != strconv.Quote(wantEarlierApproverReason) {
+		t.Errorf("list can_approve = %s, approve_blocked_reason = %s, want false and %q", listCan, listReason, wantEarlierApproverReason)
+	}
+	if string(row["approve_blocked_by_creator"]) != "true" {
+		t.Errorf("list approve_blocked_by_creator = %s, want true", row["approve_blocked_by_creator"])
+	}
+
+	detailSentence, listSentence, decideSentence := creatorDoors(t, app, fx, fx.invID)
+	if detailSentence != wantEarlierApproverReason || listSentence != wantEarlierApproverReason || decideSentence != wantEarlierApproverReason {
+		t.Errorf("detail %q, list %q, decide %q, want all %q", detailSentence, listSentence, decideSentence, wantEarlierApproverReason)
+	}
+}
+
+func TestEarlierApproverRefusal_NoOtherSignerKeepsBothSentencesOnAllThreeDoors(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := earlierFixture(t, super, app, "SECAUD-40-BOTH", true, false)
+	both := wantEarlierApproverReason + " " + approval.CreatorNoRoleHolderReason
+
+	detailSentence, listSentence, decideSentence := creatorDoors(t, app, fx, fx.invID)
+	if detailSentence != both || listSentence != both || decideSentence != both {
+		t.Errorf("detail %q, list %q, decide %q, want all %q", detailSentence, listSentence, decideSentence, both)
+	}
+}
+
+// A approved step 0 but does not hold step 1's role: every door answers as for any non-holder.
+func TestEarlierApproverRefusal_NonHolderGetsTheRoleAnswerOnAllDoors(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := earlierFixture(t, super, app, "SECAUD-40-NONHOLDER", false, true)
+
+	detail, row := earlierWires(t, app, fx)
+	if detail.CanApprove || detail.ApproveBlockedByCreator {
+		t.Errorf("detail can_approve = %t, approve_blocked_by_creator = %t, want both false", detail.CanApprove, detail.ApproveBlockedByCreator)
+	}
+	if detail.ApproveBlockedReason != nil && *detail.ApproveBlockedReason == wantEarlierApproverReason {
+		t.Errorf("detail approve_blocked_reason = the earlier-approver sentence, want the non-holder one")
+	}
+	if string(row["approve_blocked_by_creator"]) != "false" {
+		t.Errorf("list approve_blocked_by_creator = %s, want false (row not selectable)", row["approve_blocked_by_creator"])
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(approvalStoreFor(app).DecideSeam, nil))
+	req := httptest.NewRequest("POST", "/v1/invoices/"+fx.invID+"/approvals", strings.NewReader(`{"decision":"approved"}`)).WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), wantEarlierApproverReason) {
+		t.Errorf("decide = %d %s, want the 403 non-holder answer", rec.Code, rec.Body.String())
+	}
 }

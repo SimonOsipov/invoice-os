@@ -32,12 +32,13 @@ func StaffedRoleKeysTx(ctx context.Context, tx pgx.Tx, subject string) ([]string
 // SignedStep is one waiting invoice step the target could sign before a member write.
 type SignedStep struct {
 	invoiceID, number, roleKey, roleTitle string
+	ord                                   int
 	allow                                 bool
 	delegate                              *string
 }
 
 func (s SignedStep) probe() SignerProbe {
-	p := SignerProbe{InvoiceID: s.invoiceID, AllowDelegation: s.allow, DelegateUserID: s.delegate}
+	p := SignerProbe{InvoiceID: s.invoiceID, Ord: s.ord, AllowDelegation: s.allow, DelegateUserID: s.delegate}
 	if s.roleKey != "" {
 		k := s.roleKey
 		p.RoleKey = &k
@@ -48,7 +49,7 @@ func (s SignedStep) probe() SignerProbe {
 // signedWaitingSQL lists the pending approval steps the target could sign by kind: a member of the live role
 // (a join, never EXISTS), or a delegate. Keys in $2 are judged by the role loop.
 const signedWaitingSQL = `-- SignedWaitingStepsTx
-SELECT i.id, i.invoice_number, s.workflow_role_key, COALESCE(wr.title, ''), s.allow_delegation, s.delegate_user_id::text
+SELECT i.id, i.invoice_number, s.workflow_role_key, COALESCE(wr.title, ''), s.ord, s.allow_delegation, s.delegate_user_id::text
   FROM approval_runs r
   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
   JOIN approval_run_steps s ON s.tenant_id = r.tenant_id AND s.run_id = r.id
@@ -77,7 +78,7 @@ func SignedWaitingStepsTx(ctx context.Context, tx pgx.Tx, target string, keys []
 	steps, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (SignedStep, error) {
 		var st SignedStep
 		var key *string
-		err := row.Scan(&st.invoiceID, &st.number, &key, &st.roleTitle, &st.allow, &st.delegate)
+		err := row.Scan(&st.invoiceID, &st.number, &key, &st.roleTitle, &st.ord, &st.allow, &st.delegate)
 		if key != nil {
 			st.roleKey = *key
 		}

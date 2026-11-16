@@ -3134,6 +3134,19 @@ describe('AuditView self-approved', () => {
   })
 })
 
+describe('AuditView repeat approval', () => {
+  it('auditRow_repeatApprovedPrintsItsLabel', async () => {
+    const events = [
+      auditEvent({ id: 'evt-repeat', event: 'invoice.approval_approved', payload: { approved_as: 'repeat_approved' } }),
+      auditEvent({ id: 'evt-plain', event: 'invoice.approval_approved', payload: { approved_as: 'approver' } }),
+    ]
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(logResponse({ events, total: 2 }))))
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-what').length).toBe(2))
+    expect(screen.getAllByTestId('audit-what').map((e) => e.textContent)).toEqual(['Repeat approval', 'Approved'])
+  })
+})
+
 describe('AuditView row evidence (AUDIT-16-03)', () => {
   const previewBody = {
     entity: { id: 'ent-a', name: 'Alpha', tin: null },

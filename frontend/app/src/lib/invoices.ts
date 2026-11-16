@@ -257,7 +257,7 @@ export interface InvoiceRecord {
   // OPEN. The REJECT pair stays detail-only (U5a) -- the queue has no reject action.
   can_approve: boolean
   approve_blocked_reason: string | null
-  // True only when the creator rung refused the approve; the reject pair ignores it.
+  // True only when the person rung (author or earlier approver) refused the approve; the reject pair ignores it.
   approve_blocked_by_creator: boolean
   // can_submit/submit_blocked_reason -- the second such pair. Both wires carry them from
   // one submitGate call (handlers.go), so InvoiceDetailRecord inherits rather than
@@ -331,8 +331,8 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
   // can_reject/reject_blocked_reason (APPR-08-06) -- same convention again. They agree
-  // with the inherited can_approve pair except at the creator rung, where the creator
-  // may reject but not approve (approve_blocked_by_creator); the screen renders two
+  // with the inherited can_approve pair except at the person rung, where an author or
+  // an earlier approver may reject but not approve (approve_blocked_by_creator); the screen renders two
   // buttons, each needing its own slot.
   can_reject: boolean
   reject_blocked_reason: string | null

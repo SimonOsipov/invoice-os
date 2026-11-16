@@ -208,7 +208,7 @@ func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, invoiceID stri
 			break
 		}
 		reasons, err := unsignableReasonsTx(ctx, tx, []SignerProbe{{InvoiceID: invoiceID, RoleKey: st.WorkflowRoleKey,
-			AllowDelegation: st.allowDelegation, DelegateUserID: st.delegateUserID}})
+			Ord: st.Ord, AllowDelegation: st.allowDelegation, DelegateUserID: st.delegateUserID}})
 		if err != nil {
 			return err
 		}

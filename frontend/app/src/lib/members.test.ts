@@ -64,6 +64,7 @@ import {
   listInvitations,
   listMembers,
   memberInitials,
+  UNNAMED_NAME,
   membersSurface,
   membersViewState,
   mergeChips,
@@ -97,6 +98,7 @@ import {
   type MembershipWire,
   type PendingInvite,
 } from './members'
+import { initials } from './customers'
 // Legal in a spec: roles.ts imports members.ts, and the test graph has no cycle. The
 // approver pair is transcribed inline in members.ts; T3-6 below pins the two agree.
 import { isApprover } from './roles'
@@ -2108,14 +2110,14 @@ describe('AC-2 — toMember maps the wire row to a Member', () => {
     expect(toMember(wire({ role: 'Auditor' }), SELF_SUBJECT).role as string).toBe('Auditor')
   })
 
-  it('falls back the name display_name -> email -> user_id', () => {
+  it('falls back the name display_name -> email -> Unnamed member', () => {
     expect(toMember(wire({ display_name: 'Folake Adesina', email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe(
       'Folake Adesina',
     )
     expect(toMember(wire({ display_name: null, email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe('f.adesina@okafor.ng')
     expect(
       toMember(wire({ display_name: null, email: null, user_id: 'c0000000-0000-0000-0000-000000000009' }), SELF_SUBJECT).name,
-    ).toBe('c0000000-0000-0000-0000-000000000009')
+    ).toBe(UNNAMED_NAME)
   })
 
   it('resolves isYou from the passed self subject', () => {
@@ -2209,8 +2211,10 @@ describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third v
     expect(memberInitials(null, 'f.adesina@x.ng', 'u1')).toBe('FA')
   })
 
-  it('falls back to the first two characters of the subject, upper-cased, when both are absent', () => {
-    expect(memberInitials(null, null, 'zzuser')).toBe('ZZ')
+  it('memberInitials of a nameless, emailless member is the Unnamed member initials, not the uuid', () => {
+    const uuid = 'c0000000-0000-0000-0000-000000000009'
+    expect(memberInitials(null, null, uuid)).toBe(initials(UNNAMED_NAME))
+    expect(memberInitials(null, null, uuid)).not.toBe('C0')
   })
 })
 

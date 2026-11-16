@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -1526,4 +1527,34 @@ func sortedCopy(in []string) []string {
 	out := slices.Clone(in)
 	slices.Sort(out)
 	return out
+}
+
+// The lookup dies at the client_ids clause of the customers policy; the all_clients import is the visible sibling.
+func TestClientScope_ADocumentImportTakesNoBuyerTypeFromAnotherClientsBuyer(t *testing.T) {
+	f := newCSFixture(t, "CS import buyer type")
+	const tin = "12345678-0701"
+	kind := btB2G
+	if _, err := invoice.NewStore(f.app).Create(f.admin, invoice.CreateInput{
+		EntityID: f.entB, InvoiceNumber: "CS-BT-B", BuyerTIN: btPtr(tin), InvoiceKind: &kind}); err != nil {
+		t.Fatalf("file the B-only buyer: %v", err)
+	}
+
+	if _, err := f.svc.ImportDocument(f.limited, f.entA, btDocument(t, f.super, f.tenant, tin, "CS-BT-1")); err != nil {
+		t.Fatalf("ImportDocument as a reviewer limited to A: %v", err)
+	}
+	limitedDoc := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number = 'CS-BT-1' AND invoice_kind IS NULL`, f.tenant)
+	if limitedDoc != 1 {
+		t.Errorf("limited member's invoice with a NULL invoice_kind = %d, want 1 (no type from B's buyer)", limitedDoc)
+	}
+
+	all := csMember(t, f.super, f.tenant, "reviewer")
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE memberships SET all_clients = true WHERE tenant_id = $1 AND user_id = $2`, f.tenant, all.Subject); err != nil {
+		t.Fatalf("grant all_clients: %v", err)
+	}
+	doc := btDocument(t, f.super, f.tenant, tin, "CS-BT-2")
+	if _, err := f.svc.ImportDocument(auth.WithIdentity(context.Background(), all), f.entA, doc); err != nil {
+		t.Fatalf("ImportDocument as an all_clients member: %v", err)
+	}
+	btWantKind(t, "all_clients member", btKind(t, f.super, doc), btB2G)
 }

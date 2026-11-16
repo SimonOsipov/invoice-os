@@ -641,7 +641,7 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	return got, nil
 }
 
-// fillBuyerType fills an unprinted buyer type from the tenant's buyer directory.
+// fillBuyerType fills an unprinted buyer type from the buyer directory.
 func (s *Service) fillBuyerType(ctx context.Context, in *invoice.CreateInput) error {
 	if in.InvoiceKind != nil || in.BuyerTIN == nil || strings.TrimSpace(*in.BuyerTIN) == "" {
 		return nil

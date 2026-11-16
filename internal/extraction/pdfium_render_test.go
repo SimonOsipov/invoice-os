@@ -12,6 +12,7 @@ package extraction_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -621,5 +623,219 @@ func TestPDFiumReader_TheDifferencesArrayChangesTheDrawnNaira(t *testing.T) {
 
 	if bytes.Equal(pBoth.ImagePNG, pOnly.ImagePNG) {
 		t.Errorf("the two renders are byte-identical over %d byte(s): /Differences [164 /naira] changes nothing that is drawn, so nothing in this package tells the naira glyph from what StandardEncoding puts at code 164", len(pBoth.ImagePNG))
+	}
+}
+
+// --- the page-size cap ---
+
+// sizedRead reads raw and reports what the cap must keep at zero on a refusal.
+func sizedRead(t *testing.T, r *extraction.PDFiumReader, raw []byte) (pages []extraction.Page, cleanups int64, res extraction.PageResult, err error) {
+	t.Helper()
+	before := extraction.PDFiumCleanupsForTest()
+	res, err = r.Read(t.Context(), extraction.Document{Bytes: raw, ContentType: "application/pdf"}, func(p extraction.Page) error {
+		pages = append(pages, p)
+		return nil
+	})
+	return pages, extraction.PDFiumCleanupsForTest() - before, res, err
+}
+
+func requireSizeRefusal(t *testing.T, err error, wantInMsg ...string) {
+	t.Helper()
+	if !errors.Is(err, extraction.ErrDocumentUnreadable) {
+		t.Fatalf("err = %v, want ErrDocumentUnreadable", err)
+	}
+	if errors.Is(err, extraction.ErrTooManyPages) {
+		t.Errorf("err = %v matches ErrTooManyPages; the page-limit sentence is not this refusal", err)
+	}
+	for _, w := range wantInMsg {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("err %q does not contain %q", err.Error(), w)
+		}
+	}
+}
+
+func TestPDFiumReader_RefusesAPageOverTheSizeCap(t *testing.T) {
+	if extraction.MaxRenderPxForTest != 5000 {
+		t.Fatalf("MaxRenderPxForTest = %d, want 5000: the boundary rows below assume it", extraction.MaxRenderPxForTest)
+	}
+	raw := fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400})
+	pages, cleanups, res, err := sizedRead(t, extraction.NewPDFiumReader(), raw)
+	requireSizeRefusal(t, err, "30001", strconv.Itoa(extraction.MaxRenderPxForTest))
+	if len(pages) != 0 || cleanups != 0 || res != (extraction.PageResult{}) {
+		t.Errorf("onPage calls = %d, cleanups = %d, res = %+v; want none, so no bitmap was made", len(pages), cleanups, res)
+	}
+}
+
+func TestPDFiumReader_TheSizeCapBoundary(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		w, h         float64
+		wantW, wantH int
+		refused      string
+	}{
+		{name: "width_5000", w: 2400, h: 612, wantW: 5000, wantH: 1275},
+		{name: "height_5000", w: 612, h: 2400, wantW: 1275, wantH: 5000},
+		{name: "width_5001", w: 2400.01, h: 612, refused: "5001x1275"},
+		{name: "height_5001", w: 612, h: 2400.01, refused: "1275x5001"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), fxBuildSizedPages(fxSizedPage{W: c.w, H: c.h}))
+			if c.refused != "" {
+				requireSizeRefusal(t, err, c.refused)
+				if len(pages) != 0 || cleanups != 0 {
+					t.Errorf("onPage calls = %d, cleanups = %d; want 0", len(pages), cleanups)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			if len(pages) != 1 || pages[0].ImageWidth != c.wantW || pages[0].ImageHeight != c.wantH || cleanups != 1 {
+				t.Errorf("pages = %d, cleanups = %d, want one %dx%d page and one cleanup", len(pages), cleanups, c.wantW, c.wantH)
+			}
+		})
+	}
+}
+
+func TestPDFiumEndsReader_RefusesAPageOverTheSizeCap(t *testing.T) {
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumEndsReader(), fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400}))
+	requireSizeRefusal(t, err)
+	if len(pages) != 0 || cleanups != 0 {
+		t.Errorf("onPage calls = %d, cleanups = %d; want 0", len(pages), cleanups)
+	}
+}
+
+func TestPDFiumReader_ALaterOversizedPageReleasesTheEarlierOnes(t *testing.T) {
+	raw := fxBuildSizedPages(fxSizedPage{W: 612, H: 792}, fxSizedPage{W: 14400, H: 14400})
+	pages, cleanups, res, err := sizedRead(t, extraction.NewPDFiumReader(), raw)
+	requireSizeRefusal(t, err, "page 2")
+	if len(pages) != 1 || cleanups != 1 {
+		t.Errorf("onPage calls = %d, cleanups = %d; want 1 and 1: every delivered page is released", len(pages), cleanups)
+	}
+	if res != (extraction.PageResult{}) {
+		t.Errorf("res = %+v, want zero", res)
+	}
+}
+
+func TestPDFiumReader_CommonPaperSizesRenderAsToday(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		w, h         float64
+		wantW, wantH int
+	}{
+		{"letter", 612, 792, 1275, 1651},
+		{"a4", 595.276, 841.89, 1241, 1754},
+		{"a3", 841.89, 1190.551, 1754, 2481},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), fxBuildSizedPages(fxSizedPage{W: c.w, H: c.h}))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			if len(pages) != 1 || cleanups != 1 {
+				t.Fatalf("pages = %d, cleanups = %d, want 1 and 1", len(pages), cleanups)
+			}
+			if pages[0].ImageWidth != c.wantW || pages[0].ImageHeight != c.wantH {
+				t.Errorf("grid = %dx%d, want %dx%d", pages[0].ImageWidth, pages[0].ImageHeight, c.wantW, c.wantH)
+			}
+			img, err := png.Decode(bytes.NewReader(pages[0].ImagePNG))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if b := img.Bounds(); b.Dx() != c.wantW || b.Dy() != c.wantH {
+				t.Errorf("png = %dx%d, want %dx%d", b.Dx(), b.Dy(), c.wantW, c.wantH)
+			}
+		})
+	}
+}
+
+func TestPDFiumReader_TheSizeCapReadsTheCropBox(t *testing.T) {
+	raw := fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400, CropW: 612, CropH: 792})
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), raw)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ImageWidth != 1275 || pages[0].ImageHeight != 1651 || cleanups != 1 {
+		t.Errorf("pages = %d, cleanups = %d, want one 1275x1651 page and one cleanup: the cap reads the rendered box, not the MediaBox", len(pages), cleanups)
+		for _, p := range pages {
+			t.Errorf("page %d grid = %dx%d", p.Number, p.ImageWidth, p.ImageHeight)
+		}
+	}
+}
+
+// The grid is negative on amd64 and MaxInt64 on arm64; without the < 1 bound this fails on
+// amd64 CI only.
+func TestPDFiumReader_RefusesAnOverflowedPageSize(t *testing.T) {
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), fxBuildSizedPages(fxSizedPage{W: 1e19, H: 612}))
+	requireSizeRefusal(t, err)
+	if len(pages) != 0 || cleanups != 0 {
+		t.Errorf("onPage calls = %d, cleanups = %d; want 0", len(pages), cleanups)
+	}
+}
+
+func TestPDFiumReader_TheSizeCapReadsTheRotatedGrid(t *testing.T) {
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), fxBuildSizedPages(fxSizedPage{W: 2400.01, H: 612, Rotate: 90}))
+	requireSizeRefusal(t, err, "1275x5001")
+	if len(pages) != 0 || cleanups != 0 {
+		t.Errorf("onPage calls = %d, cleanups = %d; want 0", len(pages), cleanups)
+	}
+}
+
+func TestPDFiumReader_TheSizeCapIgnoresUserUnit(t *testing.T) {
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), fxBuildSizedPages(fxSizedPage{W: 612, H: 792, UserUnit: 10}))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ImageWidth != 1275 || pages[0].ImageHeight != 1651 || cleanups != 1 {
+		t.Errorf("pages = %d, cleanups = %d, want one 1275x1651 page and one cleanup", len(pages), cleanups)
+	}
+}
+
+func TestPDFiumEndsReader_SkipsAnOversizedMiddlePage(t *testing.T) {
+	raw := fxBuildSizedPages(fxSizedPage{W: 612, H: 792}, fxSizedPage{W: 14400, H: 14400}, fxSizedPage{W: 612, H: 792})
+	pages, cleanups, res, err := sizedRead(t, extraction.NewPDFiumEndsReader(), raw)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(pages) != 2 || pages[0].Number != 1 || pages[1].Number != 3 || cleanups != 2 || res.Pages != 3 {
+		t.Errorf("onPage calls = %d, cleanups = %d, res.Pages = %d; want pages 1 and 3, 2 cleanups, 3 pages", len(pages), cleanups, res.Pages)
+	}
+}
+
+func TestPDFiumReader_RendersAfterARefusal(t *testing.T) {
+	r := extraction.NewPDFiumReader()
+	// Warm the pool outside the deadline: the cold wasm compile is slow.
+	if _, err := r.Read(context.Background(), extraction.Document{Bytes: fxBuildSizedPages(fxSizedPage{W: 612, H: 792}), ContentType: "application/pdf"}, func(extraction.Page) error { return nil }); err != nil {
+		t.Fatalf("warm-up Read: %v", err)
+	}
+	before := extraction.PDFiumCleanupsForTest()
+	// More refusals than pool instances: a refusal that leaks its instance starves a later Read,
+	// so every Read shares one short deadline and a leak surfaces as a deadline error.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	read := func(raw []byte) (pages []extraction.Page, err error) {
+		_, err = r.Read(ctx, extraction.Document{Bytes: raw, ContentType: "application/pdf"}, func(p extraction.Page) error {
+			pages = append(pages, p)
+			return nil
+		})
+		return pages, err
+	}
+	for i := 0; i <= extraction.PDFiumMaxTotalForTest; i++ {
+		_, err := read(fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400}))
+		requireSizeRefusal(t, err)
+	}
+
+	pages, err := read(fxBuildSizedPages(fxSizedPage{W: 612, H: 792}))
+	if err != nil {
+		t.Fatalf("Read after a refusal: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ImageWidth != 1275 || pages[0].ImageHeight != 1651 {
+		t.Fatalf("pages = %d, want one 1275x1651 page", len(pages))
+	}
+	if _, err := png.Decode(bytes.NewReader(pages[0].ImagePNG)); err != nil {
+		t.Errorf("decode: %v", err)
+	}
+	if d := extraction.PDFiumCleanupsForTest() - before; d != 1 {
+		t.Errorf("cleanups over all reads = %d, want 1", d)
 	}
 }

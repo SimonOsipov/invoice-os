@@ -474,6 +474,43 @@ func TestCheck_ACorruptPDFInTheImagePathIsBadFile(t *testing.T) {
 	}
 }
 
+// onePagePDF is a one-page PDF with a blank page of the given MediaBox sides.
+func onePagePDF(w, h string) []byte {
+	objs := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + w + " " + h + "] >>",
+	}
+	var b strings.Builder
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objs))
+	for i, o := range objs {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return []byte(b.String())
+}
+
+func TestCheck_AnOversizedPDFInTheImagePathIsBadFile(t *testing.T) {
+	r := newRig()
+	r.tx.chars = 0
+	r.c.Readers.Render = extraction.NewPDFiumEndsReader()
+	_, err := r.c.Check(context.Background(), publiccheck.Request{File: onePagePDF("14400", "14400"), Format: "pdf"})
+	if !errors.Is(err, publiccheck.ErrBadFile) || errors.Is(err, publiccheck.ErrReadUnavailable) {
+		t.Fatalf("err = %v, want ErrBadFile and not ErrReadUnavailable", err)
+	}
+	// An open failure is also ErrBadFile; the page size in the text shows the cap refused it.
+	if !strings.Contains(err.Error(), "30001") {
+		t.Errorf("err = %q, want the refused page size 30001", err.Error())
+	}
+}
+
 func TestCheck_ARenderFailureInTheImagePathIsReadUnavailable(t *testing.T) {
 	r := newRig()
 	r.tx.chars = 0

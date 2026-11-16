@@ -20,7 +20,7 @@ ARG SERVICE
 # Pinned to the go.mod version; TestGoPins_RepoAgree fails when the two differ.
 # Go never downloads a toolchain at build time.
 # Pulled through mirror.gcr.io, not docker.io: no Docker Hub rate limit.
-FROM mirror.gcr.io/library/golang:1.26.11-alpine AS build
+FROM mirror.gcr.io/library/golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 WORKDIR /src
 # Modules first: this COPY+download layer is reused across source-only changes.
 COPY go.mod go.sum ./
@@ -33,7 +33,7 @@ RUN test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >
 
 # ---- Run: distroless static (CA certs + nonroot user), binary only ----
 # The service binds :$PORT on all interfaces; Cloud Run injects PORT.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/service /service
 EXPOSE 8080
 USER nonroot:nonroot

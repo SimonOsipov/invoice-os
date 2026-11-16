@@ -335,6 +335,7 @@ const roleInRunListCap = 20
 // waitingStep is one pending approval step an open run holds on a live role, with its delegation.
 type waitingStep struct {
 	InvoiceRef
+	ord      int
 	allow    bool
 	delegate *string
 }
@@ -344,7 +345,7 @@ func waitingOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]waitingStep,
 	// ceiling: arm does not take the tenant lock, so a staffing or delete write racing an arm can strand one run; take a shared tenant lock in ArmTx if seen
 	// Live role only (404 before 409); validated only, since no other invoice's run can be decided.
 	rows, err := tx.Query(ctx,
-		`SELECT i.id, i.invoice_number, s.allow_delegation, s.delegate_user_id::text
+		`SELECT i.id, i.invoice_number, s.ord, s.allow_delegation, s.delegate_user_id::text
 		   FROM approval_runs r
 		   JOIN invoices i ON i.tenant_id = r.tenant_id AND i.id = r.invoice_id
 		   JOIN approval_run_steps s ON s.run_id = r.id AND s.kind = 'approval'
@@ -358,7 +359,7 @@ func waitingOnRoleTx(ctx context.Context, tx pgx.Tx, key string) ([]waitingStep,
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (waitingStep, error) {
 		var w waitingStep
-		return w, row.Scan(&w.ID, &w.Number, &w.allow, &w.delegate)
+		return w, row.Scan(&w.ID, &w.Number, &w.ord, &w.allow, &w.delegate)
 	})
 }
 
@@ -397,7 +398,7 @@ func unsignedWaitingInvoicesTx(ctx context.Context, tx pgx.Tx, key string) ([]In
 	}
 	probes := make([]SignerProbe, len(waiting))
 	for i, w := range waiting {
-		probes[i] = SignerProbe{InvoiceID: w.ID, RoleKey: &key, AllowDelegation: w.allow, DelegateUserID: w.delegate}
+		probes[i] = SignerProbe{InvoiceID: w.ID, RoleKey: &key, Ord: w.ord, AllowDelegation: w.allow, DelegateUserID: w.delegate}
 	}
 	reasons, err := unsignableReasonsTx(ctx, tx, probes)
 	if err != nil {

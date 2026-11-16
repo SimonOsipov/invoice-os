@@ -273,19 +273,19 @@ func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
 	if got[byOther].IsCreator {
 		t.Error("an invoice created by someone else reads IsCreator")
 	}
-	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}); got[w.invoice] != want {
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true, OtherNewApprover: true, OtherNewRoleHolder: true}); got[w.invoice] != want {
 		t.Errorf("client A, key held by the limited reviewer = %+v, want %+v", got[w.invoice], want)
 	}
-	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: false, OtherDelegate: true}); got[unheldOnA] != want {
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: false, OtherDelegate: true, OtherNewApprover: true, OtherNewDelegate: true}); got[unheldOnA] != want {
 		t.Errorf("client A, key nobody holds, step open to anyone = %+v, want %+v", got[unheldOnA], want)
 	}
 	if want := (CreatorStanding{IsCreator: true}); got[onB] != want {
 		t.Errorf("client B, only a reviewer limited to A = %+v, want %+v", got[onB], want)
 	}
-	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}); got[namedOnA] != want {
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true, OtherNewApprover: true, OtherNewDelegate: true}); got[namedOnA] != want {
 		t.Errorf("client A, step names the limited reviewer = %+v, want %+v", got[namedOnA], want)
 	}
-	if want := (CreatorStanding{IsCreator: true, OtherApprover: true}); got[namedSuspended] != want {
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherNewApprover: true}); got[namedSuspended] != want {
 		t.Errorf("client A, step names a suspended reviewer = %+v, want %+v", got[namedSuspended], want)
 	}
 }
@@ -311,6 +311,7 @@ func TestCreatorStanding_DelegateAgreesWithDelegateMayDecide(t *testing.T) {
 func TestCreatorStanding_Refusal(t *testing.T) {
 	both := CreatorRefusedReason + " " + CreatorNoRoleHolderReason
 	editorBoth := editorSentence + " " + CreatorNoRoleHolderReason
+	earlierBoth := earlierSentence + " " + CreatorNoRoleHolderReason
 	for _, c := range []struct {
 		name        string
 		s           CreatorStanding
@@ -318,19 +319,31 @@ func TestCreatorStanding_Refusal(t *testing.T) {
 		want        string
 		wantRefused bool
 		wantSelf    bool
+		wantRepeat  bool
+		wantAs      string
 	}{
-		{"not an author", CreatorStanding{OtherApprover: true}, false, "", false, false},
-		{"creator, no other approver", CreatorStanding{IsCreator: true}, false, "", false, true},
-		{"holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, false, CreatorRefusedReason, true, false},
-		{"delegate only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}, false, CreatorRefusedReason, true, false},
-		{"neither", CreatorStanding{IsCreator: true, OtherApprover: true}, false, both, true, false},
-		{"editor, no other approver", CreatorStanding{}, true, "", false, true},
-		{"editor, holder only", CreatorStanding{OtherApprover: true, OtherRoleHolder: true}, true, editorSentence, true, false},
-		{"editor, delegate only", CreatorStanding{OtherApprover: true, OtherDelegate: true}, true, editorSentence, true, false},
-		{"editor, neither", CreatorStanding{OtherApprover: true}, true, editorBoth, true, false},
-		{"creator and editor, holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, true, CreatorRefusedReason, true, false},
-		{"creator and editor, neither", CreatorStanding{IsCreator: true, OtherApprover: true}, true, both, true, false},
-		{"creator and editor, no other approver", CreatorStanding{IsCreator: true}, true, "", false, true},
+		{"not an author", CreatorStanding{OtherApprover: true}, false, "", false, false, false, "approver"},
+		{"creator, no other approver", CreatorStanding{IsCreator: true}, false, "", false, true, false, "self_approved"},
+		{"holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, false, CreatorRefusedReason, true, false, false, "approver"},
+		{"delegate only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherDelegate: true}, false, CreatorRefusedReason, true, false, false, "approver"},
+		{"neither", CreatorStanding{IsCreator: true, OtherApprover: true}, false, both, true, false, false, "approver"},
+		{"editor, no other approver", CreatorStanding{}, true, "", false, true, false, "self_approved"},
+		{"editor, holder only", CreatorStanding{OtherApprover: true, OtherRoleHolder: true}, true, editorSentence, true, false, false, "approver"},
+		{"editor, delegate only", CreatorStanding{OtherApprover: true, OtherDelegate: true}, true, editorSentence, true, false, false, "approver"},
+		{"editor, neither", CreatorStanding{OtherApprover: true}, true, editorBoth, true, false, false, "approver"},
+		{"creator and editor, holder only", CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}, true, CreatorRefusedReason, true, false, false, "approver"},
+		{"creator and editor, neither", CreatorStanding{IsCreator: true, OtherApprover: true}, true, both, true, false, false, "approver"},
+		{"creator and editor, no other approver", CreatorStanding{IsCreator: true}, true, "", false, true, false, "self_approved"},
+
+		{"earlier, new holder", CreatorStanding{EarlierApprover: true, OtherApprover: true, OtherNewApprover: true, OtherNewRoleHolder: true}, false, earlierSentence, true, false, false, "approver"},
+		{"earlier, new delegate only", CreatorStanding{EarlierApprover: true, OtherApprover: true, OtherNewApprover: true, OtherNewDelegate: true}, false, earlierSentence, true, false, false, "approver"},
+		{"earlier, new approver holds nothing", CreatorStanding{EarlierApprover: true, OtherApprover: true, OtherNewApprover: true}, false, earlierBoth, true, false, false, "approver"},
+		{"earlier, only other approver also decided", CreatorStanding{EarlierApprover: true, OtherApprover: true}, false, "", false, false, true, "repeat_approved"},
+		{"earlier, no other approver at all", CreatorStanding{EarlierApprover: true}, false, "", false, false, true, "repeat_approved"},
+		{"not earlier, new approver exists", CreatorStanding{OtherApprover: true, OtherNewApprover: true}, false, "", false, false, false, "approver"},
+		{"creator and earlier, non-author reaches", CreatorStanding{IsCreator: true, EarlierApprover: true, OtherApprover: true, OtherRoleHolder: true, OtherNewApprover: true, OtherNewRoleHolder: true}, false, CreatorRefusedReason, true, false, false, "approver"},
+		{"editor and earlier, non-author reaches", CreatorStanding{EarlierApprover: true, OtherApprover: true, OtherRoleHolder: true, OtherNewApprover: true, OtherNewRoleHolder: true}, true, editorSentence, true, false, false, "approver"},
+		{"creator and earlier, no other approver", CreatorStanding{IsCreator: true, EarlierApprover: true}, false, "", false, true, true, "self_approved"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := c.s
@@ -344,7 +357,69 @@ func TestCreatorStanding_Refusal(t *testing.T) {
 			if self := s.SelfApproved(); self != c.wantSelf {
 				t.Errorf("SelfApproved() = %t, want %t", self, c.wantSelf)
 			}
+			if rep := s.RepeatApproved(); rep != c.wantRepeat {
+				t.Errorf("RepeatApproved() = %t, want %t", rep, c.wantRepeat)
+			}
+			if as := s.ApprovedAs(); as != c.wantAs {
+				t.Errorf("ApprovedAs() = %q, want %q", as, c.wantAs)
+			}
 		})
+	}
+}
+
+// The standing reads the open run's approved decisions: A is earlier, a bystander is absent, and the
+// subject never counts as a new approver.
+func TestCreatorStanding_EarlierApproverIsReadFromTheOpenRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newDistinctWorld(t, super, app, "SECAUD-40 standing", "k0", "k1")
+	a := w.member(t, memberSpec{role: "reviewer"}, 0, 1)
+	b := w.member(t, memberSpec{role: "reviewer"}, 1)
+	c := w.member(t, memberSpec{role: "reviewer"})
+	if _, err := approve(t, app, w.tenantID, a, w.invoiceID, nil); err != nil {
+		t.Fatalf("A approves step 0: %v", err)
+	}
+	probe := CreatorProbe{InvoiceID: w.invoiceID, RoleKey: ptr("k1")}
+
+	got := readStanding(t, app, w.tenantID, a, probe)[w.invoiceID]
+	if !got.EarlierApprover || got.IsCreator || got.IsEditor {
+		t.Errorf("standing of A = %+v, want EarlierApprover only", got)
+	}
+	if !got.OtherNewApprover || !got.OtherNewRoleHolder || got.OtherNewDelegate {
+		t.Errorf("standing of A = %+v, want OtherNewApprover and OtherNewRoleHolder (B holds k1, C holds nothing), no OtherNewDelegate", got)
+	}
+
+	open := probe
+	open.AllowDelegation = true
+	if got := readStanding(t, app, w.tenantID, a, open)[w.invoiceID]; !got.OtherNewDelegate {
+		t.Errorf("standing of A on an anyone step = %+v, want OtherNewDelegate", got)
+	}
+
+	// Rejecting clause: the decided exclusion. With B and C gone, A is the only approver left and is no new one.
+	for _, u := range []string{b, c} {
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, u); err != nil {
+			t.Fatalf("suspend: %v", err)
+		}
+	}
+	if got := readStanding(t, app, w.tenantID, a, open)[w.invoiceID]; !got.EarlierApprover || got.OtherNewApprover || got.OtherNewRoleHolder || got.OtherNewDelegate {
+		t.Errorf("standing of A with nobody else = %+v, want EarlierApprover and no OtherNew*", got)
+	}
+
+	// A neither-author-nor-earlier subject stops after one statement.
+	traced, rec := tracedAppPool(t)
+	rec.reset()
+	if _, ok := readStanding(t, traced, w.tenantID, b, probe)[w.invoiceID]; ok {
+		t.Error("a subject who is neither author nor earlier approver is in the map, want absent")
+	}
+	if n := len(rec.mentioning("memberships")); n != 0 {
+		t.Errorf("statements mentioning memberships = %d, want 0", n)
+	}
+	rec.reset()
+	if !readStanding(t, traced, w.tenantID, a, probe)[w.invoiceID].EarlierApprover {
+		t.Error("EarlierApprover = false through the traced pool, want true")
+	}
+	if n := len(rec.mentioning("memberships")); n != 1 {
+		t.Errorf("statements mentioning memberships = %d, want exactly 1 for an earlier approver", n)
 	}
 }
 

@@ -17,6 +17,7 @@ const (
 	StrandedNoHolder    = "no holder"
 	StrandedOutOfReach  = "out of client reach"
 	StrandedCreatorOnly = "creator only"
+	StrandedDeciderOnly = "earlier approver only"
 	BlocksNow           = "now"
 	BlocksLater         = "later"
 )
@@ -86,7 +87,7 @@ func StrandedRunsTx(ctx context.Context, tx pgx.Tx) ([]StrandedRun, error) {
 			s.run.RoleKey = *key
 		}
 		steps = append(steps, s)
-		probes = append(probes, SignerProbe{InvoiceID: s.run.InvoiceID, RoleKey: key, AllowDelegation: allow, DelegateUserID: delegate})
+		probes = append(probes, SignerProbe{InvoiceID: s.run.InvoiceID, RoleKey: key, Ord: s.ord, AllowDelegation: allow, DelegateUserID: delegate})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

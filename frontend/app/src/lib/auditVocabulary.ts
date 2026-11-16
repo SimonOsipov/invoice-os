@@ -144,7 +144,8 @@ export function auditEventView(event: string, payload?: unknown, actorName?: str
     return { label: 'Self-approved', domain: def.domain, tone: TONE.good }
   }
   if (!def) return { label: humanise(event), domain: null, tone: null }
-  const p = payload as { as_delegate?: unknown; acted_for_role_title?: unknown } | null | undefined
+  const p = payload as { as_delegate?: unknown; acted_for_role_title?: unknown; approved_as?: unknown } | null | undefined
+  const repeat = event === 'invoice.approval_approved' && p?.approved_as === 'repeat_approved'
   const title = p?.acted_for_role_title
   if (
     (event === 'invoice.approval_approved' || event === 'invoice.approval_rejected') &&
@@ -152,9 +153,10 @@ export function auditEventView(event: string, payload?: unknown, actorName?: str
     typeof title === 'string' && title !== '' &&
     actorName
   ) {
-    const verb = event === 'invoice.approval_approved' ? 'Approved' : 'Rejected'
+    const verb = repeat ? 'Repeat approval' : event === 'invoice.approval_approved' ? 'Approved' : 'Rejected'
     return { label: `${verb} by ${actorName} as delegate for ${title}`, domain: def.domain, tone: TONE[def.outcome!] }
   }
+  if (repeat) return { label: 'Repeat approval', domain: def.domain, tone: TONE.good }
   return { label: def.label, domain: def.domain, tone: def.outcome ? TONE[def.outcome] : null }
 }
 

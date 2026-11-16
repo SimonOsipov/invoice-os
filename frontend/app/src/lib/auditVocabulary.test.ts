@@ -446,6 +446,14 @@ describe('audit vocabulary', () => {
     expect(auditEventView('invoice.approval_rejected', { approved_as: 'self_approved' }).label).toBe('Rejected')
   })
 
+  it('auditEventView_repeatApprovedLabel', () => {
+    const repeat = auditEventView('invoice.approval_approved', { approved_as: 'repeat_approved' })
+    expect(repeat.label).toBe('Repeat approval')
+    expect(repeat.tone).toBe('green')
+    expect(auditEventView('invoice.approval_rejected', { approved_as: 'repeat_approved' }).label).toBe('Rejected')
+    expect(auditEventView('invoice.approval_approved', { approved_as: 'self_approved' }).label).toBe('Self-approved')
+  })
+
   it('auditEventView_delegateApprovalNamesTheDelegateAndTheRole', () => {
     const payload = { as_delegate: true, acted_for_role_title: 'Finance Manager' }
     const ok = auditEventView('invoice.approval_approved', payload, 'Ada Obi')
@@ -460,6 +468,8 @@ describe('audit vocabulary', () => {
   it('auditEventView_delegateFallbacks', () => {
     const t = { acted_for_role_title: 'Finance Manager' }
     expect(auditEventView('invoice.approval_approved', { approved_as: 'self_approved', as_delegate: true, ...t }, 'Ada Obi').label).toBe('Self-approved')
+    expect(auditEventView('invoice.approval_approved', { approved_as: 'repeat_approved', as_delegate: true, ...t }, 'Ada Obi').label).toBe('Repeat approval by Ada Obi as delegate for Finance Manager')
+    expect(auditEventView('invoice.approval_approved', { approved_as: 'repeat_approved', as_delegate: true, ...t }).label).toBe('Repeat approval')
     expect(auditEventView('invoice.approval_approved', { as_delegate: false, ...t }, 'Ada Obi').label).toBe('Approved')
     expect(auditEventView('invoice.approval_approved', { as_delegate: true, acted_for_role_title: '' }, 'Ada Obi').label).toBe('Approved')
     expect(auditEventView('invoice.approval_approved', { as_delegate: true }, 'Ada Obi').label).toBe('Approved')

@@ -21,6 +21,8 @@ var today = time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
 
 const okLog = `Scanned /w/go.mod file and found 107 packages
 Scanned /w/sidecar/docling/requirements.txt file and found 9 packages
+Scanned /w/sidecar/docling/requirements.lock file and found 100 packages
+Scanned /w/sidecar/docling/torch.lock file and found 2 packages
 Scanned /w/pnpm-lock.yaml file and found 226 packages
 `
 
@@ -442,6 +444,8 @@ func TestRun_ScannerArgv(t *testing.T) {
 	has("--output-file", argv[indexOf(argv, "--output-file")+1])
 	has("-L", "go.mod")
 	has("-L", "sidecar/docling/requirements.txt")
+	has("-L", "requirements.txt:sidecar/docling/requirements.lock")
+	has("-L", "requirements.txt:sidecar/docling/torch.lock")
 	has("-L", "pnpm-lock.yaml")
 	for _, a := range argv {
 		if strings.HasPrefix(a, "--config") {
@@ -644,9 +648,17 @@ func TestRun_BadIgnoreFailsWithCleanScan(t *testing.T) {
 }
 
 func TestRun_ManifestLineMissingIsToolError(t *testing.T) {
-	log := "Scanned /w/go.mod file and found 1 package\nScanned /w/sidecar/docling/requirements.txt file and found 9 packages\n"
+	log := strings.Replace(okLog, "Scanned /w/pnpm-lock.yaml file and found 226 packages\n", "", 1)
 	code, _, errOut := gate(t, fakeScanner(t, 0, `{"results":[]}`, log), t.TempDir(), nil)
 	if code != 2 || !strings.Contains(errOut, "pnpm-lock.yaml") {
+		t.Fatalf("code %d stderr %q", code, errOut)
+	}
+}
+
+func TestRun_LockZeroPackagesIsToolError(t *testing.T) {
+	log := strings.Replace(okLog, "torch.lock file and found 2 packages", "torch.lock file and found 0 packages", 1)
+	code, _, errOut := gate(t, fakeScanner(t, 0, `{"results":[]}`, log), t.TempDir(), nil)
+	if code != 2 || !strings.Contains(errOut, "sidecar/docling/torch.lock") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 }

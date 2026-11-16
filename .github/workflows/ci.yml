@@ -369,6 +369,7 @@ jobs:
       # T-02-4 needs a non-"dev" build value baked in before the boot below.
       - name: Stamp a build sha
         run: ./scripts/ci/stamp-build-sha.sh "$GITHUB_SHA"
+      # No cache-from on this build: docling-freeze needs two independent builds.
       - name: Build the docling image
         uses: docker/build-push-action@v6
         with:
@@ -385,6 +386,15 @@ jobs:
         run: scripts/ci/docling-canary.sh buildsha "$GITHUB_SHA"
       - name: T-02-1 — every model is baked and reachable offline
         run: scripts/ci/docling-canary.sh models
+      - name: The image installs exactly the lock
+        run: mkdir -p "$RUNNER_TEMP/freeze" && scripts/ci/docling-canary.sh freeze --out "$RUNNER_TEMP/freeze/canary-run.freeze"
+      - name: Upload the run image's pip freeze
+        uses: actions/upload-artifact@v7
+        with:
+          name: docling-freeze-canary
+          path: ${{ runner.temp }}/freeze/canary-run.freeze
+          if-no-files-found: error
+          retention-days: 1
       - name: OCR engine imports and builds an ONNX session offline
         run: scripts/ci/docling-canary.sh ocr
       - name: T-03-12 — the baked models convert the scanned fixture offline
@@ -554,7 +564,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.7"
+      - name: The locks agree with requirements*.txt
+        run: sidecar/docling/lock.sh --check
       - uses: docker/setup-buildx-action@v4
+      # No cache-from on this build: docling-freeze needs two independent builds.
       - name: Build the docling test image
         uses: docker/build-push-action@v6
         with:
@@ -564,6 +580,15 @@ jobs:
           tags: docling:test
           load: true
           push: false
+      - name: Save the deps stage's pip freeze
+        run: mkdir -p "$RUNNER_TEMP/freeze" && docker run --rm --entrypoint cat docling:test /build/deps.freeze > "$RUNNER_TEMP/freeze/test-build.freeze"
+      - name: Upload the deps stage's pip freeze
+        uses: actions/upload-artifact@v7
+        with:
+          name: docling-freeze-test
+          path: ${{ runner.temp }}/freeze/test-build.freeze
+          if-no-files-found: error
+          retention-days: 1
       # Lint before the suite: ruff is pinned in requirements-dev.txt and installed in this
       # same stage, so it needs no Python on the runner and no second image build. Nothing in
       # this repository prescribed a Python linter before this service (D-18).
@@ -1575,13 +1600,33 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/ci/caddy-headers.sh
 
+  # The deps stage of docling-test and the run image of docling-canary are
+  # two independent builds of this commit; their pip freeze output must be identical.
+  docling-freeze:
+    name: Docling image (two builds, one pip freeze)
+    needs: [changes, docling-canary, docling-test]
+    if: needs.changes.outputs.sidecar == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docling-freeze-*
+          merge-multiple: true
+          path: freeze
+      - name: Two builds from this commit list identical pip freeze output
+        run: |
+          set -eu
+          # Empty files would diff equal; require both, each naming torch.
+          for f in freeze/test-build.freeze freeze/canary-run.freeze; do grep -q '^torch==' "$f" || { echo "::error::$f is empty or lacks torch"; exit 1; }; done
+          diff -u freeze/test-build.freeze freeze/canary-run.freeze
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: ${{ github.event_name == 'workflow_dispatch' && 'CI (nightly)' || 'CI' }}
-    needs: [changes, go, frontend, library, blog, rule-globs, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, prod-ids, rls, idp, queue, audit, stale-refs, migration-order, contract-step, dockerfile-guard, cite-refs, history-rewrite, govulncheck, advisories]
+    needs: [changes, go, frontend, library, blog, rule-globs, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-freeze, docling-test, prod-ids, rls, idp, queue, audit, stale-refs, migration-order, contract-step, dockerfile-guard, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1593,6 +1638,7 @@ jobs:
           echo "caddy-headers: ${{ needs.caddy-headers.result }}"
           echo "docling-canary: ${{ needs.docling-canary.result }}"
           echo "docling-test:  ${{ needs.docling-test.result }}"
+          echo "docling-freeze: ${{ needs.docling-freeze.result }}"
           echo "prod-ids:      ${{ needs.prod-ids.result }}"
           echo "rule-globs:    ${{ needs.rule-globs.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
@@ -1629,6 +1675,9 @@ jobs:
           fi
           if [ "${{ needs.docling-test.result }}" = "failure" ] || [ "${{ needs.docling-test.result }}" = "cancelled" ]; then
             echo "::error::Docling test suite failed"; exit 1
+          fi
+          if [ "${{ needs.docling-freeze.result }}" = "failure" ] || [ "${{ needs.docling-freeze.result }}" = "cancelled" ]; then
+            echo "::error::Docling builds disagree on pip freeze"; exit 1
           fi
           if [ "${{ needs.migrations.result }}" = "failure" ] || [ "${{ needs.migrations.result }}" = "cancelled" ]; then
             echo "::error::Migrations job failed"; exit 1

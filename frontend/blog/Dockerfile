@@ -22,9 +22,7 @@ ARG VITE_HUBSPOT_PORTAL_ID
 ENV VITE_HUBSPOT_PORTAL_ID=$VITE_HUBSPOT_PORTAL_ID
 ARG BUILD_SHA
 ENV VITE_BUILD_SHA=${BUILD_SHA}
-# Build stage only, never ENV; empty skips the source-map upload.
-ARG SENTRY_AUTH_TOKEN
-RUN pnpm --filter @invoice-os/blog build
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/blog build
 
 # ---- Server: the blog binary, built from the root go.mod ----
 FROM mirror.gcr.io/library/golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS server

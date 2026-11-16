@@ -116,6 +116,45 @@ func TestDeployProd_BuildStepsRecordTheirOwnPushDigest(t *testing.T) {
 	if len(argv) == 0 || !strings.HasPrefix(argv[len(argv)-1], "buildx build ") || !strings.HasSuffix(argv[len(argv)-1], " "+wantTail) {
 		t.Errorf("docker argv:\n%s\nwant the last call to be buildx build ... %s", strings.Join(argv, "\n"), wantTail)
 	}
+	if i := slices.IndexFunc(argv, func(l string) bool { return strings.Contains(l, "--secret") }); i >= 0 {
+		t.Errorf("a non-SPA leg passed a secret: %s", argv[i])
+	}
+	if got, err := os.ReadFile(filepath.Join(b.root, "build-env")); err != nil || len(got) != 0 {
+		t.Errorf("build-env = %q (read error %v), want empty on a non-SPA leg", got, err)
+	}
+}
+
+func TestDeployProd_SpaBuildPassesTheSentryTokenAsASecret(t *testing.T) {
+	t.Parallel()
+	take := stepOf(t, "deploy-prod.yml", "build", takeScriptStep)
+	build := stepOf(t, "deploy-prod.yml", "build", "Build and push")
+	b, _, _ := buildBox(t)
+	const token = "sntrys_FIXTURE_not_a_real_token"
+	b.env["SPA"], b.env["DOCKERFILE"], b.env["SERVICE"], b.env["IMAGE_NAME"] = "true", "frontend/app/Dockerfile", "", "app"
+	b.put("secret.out", token+"\n")
+	b.meta("sha256:"+hex64("a"), prodRegistry+"/app")
+	if r := b.step(take); r.code != 0 {
+		t.Fatalf("%s: exit %d stderr %q", takeScriptStep, r.code, r.stderr)
+	}
+	if r := b.step(build); r.code != 0 {
+		t.Fatalf("Build and push: exit %d stderr %q", r.code, r.stderr)
+	}
+	argv := b.dockerArgv()
+	last := ""
+	if len(argv) > 0 {
+		last = argv[len(argv)-1]
+	}
+	if !strings.HasPrefix(last, "buildx build ") || !strings.Contains(last, " --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN ") {
+		t.Errorf("last docker call %q lacks --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN", last)
+	}
+	for _, l := range argv {
+		if strings.Contains(l, "--build-arg SENTRY_AUTH_TOKEN") || strings.Contains(l, token) {
+			t.Errorf("docker argv leaks the token or passes it as a build arg: %s", l)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(b.root, "build-env")); string(got) != token {
+		t.Errorf("docker's environment held SENTRY_AUTH_TOKEN = %q, want %q", got, token)
+	}
 }
 
 func TestDeployProd_BuildStepFailsWhenThePushFails(t *testing.T) {

@@ -50,14 +50,14 @@ describe('check package', () => {
     copy(/^COPY --from=build \S*\/check-404\/404\.html \/srv\/404\.html$/)
     copy(/^COPY --from=build \S*\/check-404\/assets \/srv\/check\/_landing\/assets$/)
     copy(/ \/srv\/check\/_landing\/$/)
-    expect(lines.some((l) => /^RUN pnpm --filter @invoice-os\/landing exec vite build --base=\/check\/_landing\//.test(l))).toBe(true)
+    expect(lines.some((l) => /^RUN (?:--mount=\S+ )?pnpm --filter @invoice-os\/landing exec vite build --base=\/check\/_landing\//.test(l))).toBe(true)
   })
 
   it('dockerfile_declaresCheckUrl', () => {
     for (const app of ['landing', 'library', 'check']) {
       const d = read(join(HERE, `../../${app}/Dockerfile`))
       const stage = d.indexOf('AS build')
-      const run = d.search(/^RUN pnpm .*\bbuild\b/m)
+      const run = d.search(/^RUN .*\bpnpm .*\bbuild\b/m)
       const at = d.indexOf('ARG VITE_CHECK_URL\nENV VITE_CHECK_URL=$VITE_CHECK_URL')
       expect(stage, app).toBeGreaterThan(-1)
       expect(run, app).toBeGreaterThan(stage)
@@ -69,7 +69,7 @@ describe('check package', () => {
   it('dockerfile_bakesEveryViteVarBeforeTheBuild', () => {
     const d = read(join(HERE, '../Dockerfile'))
     const stage = d.indexOf('AS build')
-    const run = d.indexOf('RUN pnpm --filter @invoice-os/check build')
+    const run = d.indexOf('pnpm --filter @invoice-os/check build')
     expect(stage).toBeGreaterThan(-1)
     expect(run).toBeGreaterThan(stage)
     for (const v of ['VITE_GATEWAY_URL', 'VITE_LANDING_URL', 'VITE_GA_MEASUREMENT_ID', 'VITE_HUBSPOT_PORTAL_ID', 'VITE_SENTRY_DSN', 'VITE_SENTRY_TEST_DIGEST']) {
@@ -77,8 +77,8 @@ describe('check package', () => {
       expect(at, v).toBeGreaterThan(stage)
       expect(at, v).toBeLessThan(run)
     }
-    expect(d).toMatch(/^ARG SENTRY_AUTH_TOKEN$/m)
-    expect(d).not.toMatch(/^ENV SENTRY_AUTH_TOKEN/m)
+    expect(d).toMatch(/^RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os\/check build$/m)
+    expect(d).not.toMatch(/^(ARG|ENV) SENTRY_AUTH_TOKEN/m)
   })
 
   it('indexHtml_carriesTheCrawlerStringsOfCopy', () => {

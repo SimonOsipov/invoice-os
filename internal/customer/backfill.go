@@ -40,7 +40,7 @@ type BackfillResult struct {
 	Collisions   []Collision
 }
 
-// fileableTIN must match the pattern in fillSQL.
+// fileableTIN must match the pattern in fillSrcSQL.
 const fileableTIN = `^([0-9]{8}-[0-9]{4}|RN-[0-9]+)$`
 
 // newest picks a column's newest non-blank value, as repeated fills would leave it.
@@ -48,10 +48,10 @@ func newest(col string) string {
 	return "(array_agg(f." + col + " ORDER BY f.created_at DESC, f.id DESC) FILTER (WHERE f." + col + " IS NOT NULL))[1]"
 }
 
-// Column expressions mirror fillSQL.
+// Column expressions mirror fillSrcSQL.
 var backfillAggSQL = `
 WITH f AS (
-	SELECT btrim(buyer_tin) AS tin, created_at, id,
+	SELECT btrim(buyer_tin) AS tin, created_at, id, entity_id,
 		nullif(btrim(buyer_name), '') AS name,
 		CASE WHEN btrim(invoice_kind) IN ('B2B','B2G','B2C') THEN btrim(invoice_kind) END AS buyer_type,
 		nullif(btrim(buyer_email), '') AS email,
@@ -68,20 +68,22 @@ SELECT f.tin, ` + newest("name") + `, ` + newest("buyer_type") + `, ` + newest("
 	newest("telephone") + `, ` + newest("street") + `, ` + newest("city") + `, ` + newest("postal_zone") + `, ` +
 	newest("country") + `, ` + newest("state") + `, ` + newest("lga") + `,
 	coalesce(array_agg(DISTINCT f.name) FILTER (WHERE f.name IS NOT NULL), '{}'),
+	array_agg(DISTINCT f.entity_id ORDER BY f.entity_id),
 	c.id IS NOT NULL, c.name
 FROM f LEFT JOIN customers c ON c.tin = f.tin
 GROUP BY f.tin, c.id, c.name
 ORDER BY f.tin`
 
 const backfillInsertSQL = `
-INSERT INTO customers (tenant_id, tin, name, buyer_type, email, telephone, street, city, postal_zone, country, state, lga)
-VALUES (nullif(current_setting('app.current_tenant', true), '')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO customers (tenant_id, tin, name, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, client_ids)
+VALUES (nullif(current_setting('app.current_tenant', true), '')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid[])
 ON CONFLICT (tenant_id, tin) DO NOTHING`
 
 type backfillRow struct {
 	tin      string
 	vals     [10]*string // name, buyer_type, email, telephone, street, city, postal_zone, country, state, lga
 	names    []string
+	clients  []string
 	exists   bool
 	existing *string
 }
@@ -132,7 +134,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, tenantID string, dryRun b
 			for i := range r.vals {
 				dest = append(dest, &r.vals[i])
 			}
-			dest = append(dest, &r.names, &r.exists, &r.existing)
+			dest = append(dest, &r.names, &r.clients, &r.exists, &r.existing)
 			if err := rows.Scan(dest...); err != nil {
 				rows.Close()
 				return fmt.Errorf("customer: backfill aggregate: %w", err)
@@ -169,6 +171,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, tenantID string, dryRun b
 			for _, v := range r.vals {
 				args = append(args, v)
 			}
+			args = append(args, r.clients)
 			tag, err := tx.Exec(ctx, backfillInsertSQL, args...)
 			if err != nil {
 				return fmt.Errorf("customer: backfill insert %s: %w", r.tin, err)

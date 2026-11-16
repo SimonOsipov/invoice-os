@@ -38,8 +38,10 @@ type Document struct {
 
 const documentColumns = `id, storage_key, content_hash, size_bytes, filename, declared_content_type, created_at`
 
-func scanDocument(row pgx.Row, d *Document) error {
-	return row.Scan(&d.ID, &d.StorageKey, &d.ContentHash, &d.SizeBytes, &d.Filename, &d.DeclaredContentType, &d.CreatedAt)
+// scanDocument scans documentColumns into d, then any extra columns selected after them.
+func scanDocument(row pgx.Row, d *Document, extra ...any) error {
+	dest := append([]any{&d.ID, &d.StorageKey, &d.ContentHash, &d.SizeBytes, &d.Filename, &d.DeclaredContentType, &d.CreatedAt}, extra...)
+	return row.Scan(dest...)
 }
 
 // Store persists documents rows as the invoice_app role: it holds the app-role
@@ -105,12 +107,12 @@ func (s *Store) Upsert(ctx context.Context, d Document) (Document, bool, error) 
 			// unique index is (tenant_id, content_hash), so this can only ever
 			// resolve the caller's own row.
 			var readable bool
-			if err := tx.QueryRow(ctx,
+			if err := scanDocument(tx.QueryRow(ctx,
 				`SELECT `+documentColumns+`, public.document_readable(id) FROM documents WHERE content_hash = $1`, d.ContentHash,
-			).Scan(&out.ID, &out.StorageKey, &out.ContentHash, &out.SizeBytes, &out.Filename, &out.DeclaredContentType, &out.CreatedAt, &readable); err != nil {
+			), &out, &readable); err != nil {
 				return err
 			}
-			// ceiling: an uncited document is readable by every member, so a hit on one still answers its id (SECAUD-42 [dedupe-ceiling]).
+			// ceiling: an uncited document is readable by every member, so a dedupe hit on one still answers its id; revisit if documents gain per-user ownership.
 			if !readable {
 				out = Document{}
 				return ErrHeldElsewhere

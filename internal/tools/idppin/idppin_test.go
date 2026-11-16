@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	pinnedTag   = "v2.197.0"
-	plannedFrom = "FROM ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b"
+	pinnedTag   = "v2.198.0"
+	plannedFrom = "FROM ghcr.io/supabase/auth:v2.198.0@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d"
 	plannedBody = plannedFrom + "\n\nENV GOTRUE_DB_DRIVER=postgres \\\n    GOTRUE_JWT_AUD=authenticated\n"
 )
 
@@ -142,8 +142,8 @@ func TestLatestCheckExitCodes(t *testing.T) {
 			latest string
 			want   int
 		}{
-			{"v2.197.0", 0},
-			{"v2.198.0", 1},
+			{"v2.198.0", 0},
+			{"v2.199.0", 1},
 		} {
 			stdout, stderr, code := runIdppin(t, "latest-check", df, c.latest)
 			if code != c.want {

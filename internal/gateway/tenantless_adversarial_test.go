@@ -312,7 +312,7 @@ func (s *sidSigner) tenantlessToken(t *testing.T, sub string, c tenantlessClaims
 // confirmedUser is the testdata GoTrue GET /user body, edited by edit.
 func confirmedUser(t *testing.T, edit func(map[string]any)) string {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/gotrue_user_v2.197.0.json")
+	raw, err := os.ReadFile("testdata/gotrue_user_v2.198.0.json")
 	if err != nil {
 		t.Fatalf("read testdata: %v", err)
 	}

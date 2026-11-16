@@ -89,6 +89,37 @@ func TestIdP_SessionPastTheTimeboxIsRefused(t *testing.T) {
 	}
 }
 
+// The parent token's holder keeps the session alive, so only the timebox ends it.
+func TestIdP_ParentTokenPastTheTimeboxIsRefused(t *testing.T) {
+	base := sessionURL(t)
+	h := newRenewal(t, base)
+	before0 := time.Now() // before sign-in: never undercounts the session's age
+	_, r0 := h.session(t, signUp(t, superConn(t), base))
+	created := time.Now() // after sign-in: never overcounts it (GoTrue counts from created_at)
+	_, r1 := h.renewOK(t, "R0", r0)
+	// R0 is R1's parent from here on; each answer resets the idle clock.
+	for {
+		time.Sleep(2 * time.Second)
+		before := time.Since(created)
+		status, m := h.renew(t, r0)
+		after := time.Since(before0)
+		if status == http.StatusOK {
+			if before >= sessionTimebox+2*time.Second {
+				t.Fatalf("parent refresh at %s answered 200; the %s timebox did not end the session", before, sessionTimebox)
+			}
+			if m["refresh_token"] != r1 {
+				t.Fatal("parent refresh inside the timebox: refresh_token is not R1")
+			}
+			continue
+		}
+		if after < sessionTimebox {
+			t.Fatalf("parent refresh at %s answered %d; the session is younger than %s", after, status, sessionTimebox)
+		}
+		break
+	}
+	requireRefused(t, h, base, "parent token past the timebox", r0, "Invalid Refresh Token: Session Expired")
+}
+
 func TestIdP_IdleSessionIsRefused(t *testing.T) {
 	base := sessionURL(t)
 	h := newRenewal(t, base)

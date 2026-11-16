@@ -164,7 +164,7 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - `UNCONFIRMED_DAYS` sentence (an account unconfirmed 7 days after its last confirmation or reset mail is deleted): `unconfirmedPurgeDays()` reads `UnconfirmedPurgeDays` in `account_state_read.go` and the `unconfirmed-purge` line of `cmd/worker/main.go`.
 - `R3`: Cloud SQL `prod` has `retainedBackups` 7 and `transactionLogRetentionDays` 7. Source: infra `terraform/sql.tf`. Read with `gcloud sql instances describe prod --project ascomply-prod --format='yaml(settings.backupConfiguration,region,state)'`.
 - `R4`: bucket `ascomply-prod-documents` has `soft_delete_policy.retentionDurationSeconds` 604800. Source: infra `terraform/storage.tf`. Read with `gcloud storage buckets describe gs://ascomply-prod-documents --project ascomply-prod --format='yaml(name,location,soft_delete_policy)'`.
-- `R5`: GoTrue v2.197.0 `adminUserDelete` writes `user_deleted` with `user_email` to `auth.audit_log_entries` before it destroys the user. `gotrueVersion()` pins the version. `nothingPrunesSigninAuditLog()` pins that no file in this repo names the table.
+- `R5`: GoTrue v2.198.0 `adminUserDelete` writes `user_deleted` with `user_email` to `auth.audit_log_entries` before it destroys the user. `gotrueVersion()` pins the version. `nothingPrunesSigninAuditLog()` pins that no file in this repo names the table.
 - `R7`: `workspacepurge.purgeRows` writes the staff row. `staffLogEntryFacts()` and `staffLogIsAppendOnly()` pin the payload keys and the append-only trigger.
 - Change `BACKUP_DAYS`, `FILE_RECOVERY_DAYS` and `R3`..`R4` together with the infra.
 - Change `R2` and `A6` in the PR that adds a staff path to start or purge a deletion (DEL-09), or changes `StaffPurgeWait`.

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// GoTrue v2.197.0 conf TemplateMaxSize; its io.LimitReader reads this many bytes.
+	// GoTrue v2.198.0 conf TemplateMaxSize; its io.LimitReader reads this many bytes.
 	goTrueTemplateMaxSize = 1_000_000
 
 	// The sample ConfirmationURL; html/template writes its & as &amp;.

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	pinnedDigest = "sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b"
-	pinnedRef    = "ghcr.io/supabase/auth:v2.197.0@" + pinnedDigest
+	pinnedDigest = "sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d"
+	pinnedRef    = "ghcr.io/supabase/auth:v2.198.0@" + pinnedDigest
 )
 
 func TestParsePinAdversarial(t *testing.T) {
@@ -30,7 +30,7 @@ func TestParsePinAdversarial(t *testing.T) {
 		{"CRLF line endings", "FROM " + pinnedRef + "\r\nENV A=b\r\n"},
 		{"a commented FROM does not count", "# FROM docker.io/supabase/auth:v1@" + pinnedDigest + "\nFROM " + pinnedRef + "\n"},
 		{"builder stage before the pin", "FROM mirror.gcr.io/library/golang:1.26.10-alpine AS wrap\nFROM " + pinnedRef + "\n"},
-		{"registry with a port", "FROM ghcr.io:443/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
+		{"registry with a port", "FROM ghcr.io:443/supabase/auth:v2.198.0@" + pinnedDigest + "\n"},
 	}
 	for _, c := range accepted {
 		t.Run("accepts/"+c.name, func(t *testing.T) {
@@ -41,17 +41,17 @@ func TestParsePinAdversarial(t *testing.T) {
 	}
 
 	refused := []struct{ name, body string }{
-		{"sha512 digest", "FROM ghcr.io/supabase/auth:v2.197.0@sha512:" + hex + hex + "\n"},
-		{"uppercase digest hex", "FROM ghcr.io/supabase/auth:v2.197.0@sha256:" + strings.ToUpper(hex) + "\n"},
-		{"63-char digest", "FROM ghcr.io/supabase/auth:v2.197.0@sha256:" + hex[1:] + "\n"},
+		{"sha512 digest", "FROM ghcr.io/supabase/auth:v2.198.0@sha512:" + hex + hex + "\n"},
+		{"uppercase digest hex", "FROM ghcr.io/supabase/auth:v2.198.0@sha256:" + strings.ToUpper(hex) + "\n"},
+		{"63-char digest", "FROM ghcr.io/supabase/auth:v2.198.0@sha256:" + hex[1:] + "\n"},
 		{"digest but no tag", "FROM ghcr.io/supabase/auth@" + pinnedDigest + "\n"},
-		{"index.docker.io", "FROM index.docker.io/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
-		{"registry-1.docker.io", "FROM registry-1.docker.io/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
-		{"library image, no namespace", "FROM auth:v2.197.0@" + pinnedDigest + "\n"},
-		{"--platform with a Hub name", "FROM --platform=linux/amd64 supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
-		{"AS stage after an unpinned ref", "FROM ghcr.io/supabase/auth:v2.197.0 AS base\n"},
+		{"index.docker.io", "FROM index.docker.io/supabase/auth:v2.198.0@" + pinnedDigest + "\n"},
+		{"registry-1.docker.io", "FROM registry-1.docker.io/supabase/auth:v2.198.0@" + pinnedDigest + "\n"},
+		{"library image, no namespace", "FROM auth:v2.198.0@" + pinnedDigest + "\n"},
+		{"--platform with a Hub name", "FROM --platform=linux/amd64 supabase/auth:v2.198.0@" + pinnedDigest + "\n"},
+		{"AS stage after an unpinned ref", "FROM ghcr.io/supabase/auth:v2.198.0 AS base\n"},
 		{"FROM with no reference", "FROM\n"},
-		{"Hub namespace before supabase/auth", "FROM myorg/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
+		{"Hub namespace before supabase/auth", "FROM myorg/supabase/auth:v2.198.0@" + pinnedDigest + "\n"},
 		{"two supabase/auth FROM lines", "FROM " + pinnedRef + " AS a\nFROM " + pinnedRef + "\n"},
 		{"auth FROM not last", "FROM " + pinnedRef + "\nFROM golang:1 AS w\n"},
 		{"no auth FROM", "FROM golang:1 AS w\nFROM alpine\n"},
@@ -67,7 +67,7 @@ func TestParsePinAdversarial(t *testing.T) {
 
 // A refusal must print nothing on stdout: CI captures it into IDP_PINNED_TAG.
 func TestIdppinRefusalsExit2WithEmptyStdout(t *testing.T) {
-	bad := writeDockerfile(t, "FROM supabase/auth:v2.197.0@"+pinnedDigest+"\n")
+	bad := writeDockerfile(t, "FROM supabase/auth:v2.198.0@"+pinnedDigest+"\n")
 	good := writeDockerfile(t, plannedBody)
 	cases := []struct {
 		name string
@@ -76,7 +76,7 @@ func TestIdppinRefusalsExit2WithEmptyStdout(t *testing.T) {
 		{"tag on a Hub FROM", []string{"tag", bad}},
 		{"tag on a missing file", []string{"tag", bad + ".missing"}},
 		{"latest-check on a Hub FROM, same tag", []string{"latest-check", bad, pinnedTag}},
-		{"latest-check on a Hub FROM, other tag", []string{"latest-check", bad, "v2.198.0"}},
+		{"latest-check on a Hub FROM, other tag", []string{"latest-check", bad, "v2.199.0"}},
 		{"tag without a file", []string{"tag"}},
 		{"latest-check without a latest tag", []string{"latest-check", good}},
 		{"no subcommand", nil},
@@ -99,27 +99,29 @@ func TestIdppinRefusalsExit2WithEmptyStdout(t *testing.T) {
 
 // d3Env is the committed ENV block the plan's D3, D8, D19 and D20 name, one value each.
 var d3Env = map[string]string{
-	"GOTRUE_DB_DRIVER":                        "postgres",
-	"GOTRUE_DB_MAX_POOL_SIZE":                 "10",
-	"GOTRUE_JWT_AUD":                          "authenticated",
-	"GOTRUE_JWT_DEFAULT_GROUP_NAME":           "authenticated",
-	"GOTRUE_JWT_EXP":                          "3600",
-	"GOTRUE_DISABLE_SIGNUP":                   "true",
-	"GOTRUE_MAILER_AUTOCONFIRM":               "false",
-	"GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED": "true",
-	"GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI":     "pg-functions://postgres/public/custom_access_token_hook",
-	"GOTRUE_SMTP_HOST":                        "smtp.resend.com",
-	"GOTRUE_SMTP_PORT":                        "465",
-	"GOTRUE_SMTP_USER":                        "resend",
-	"GOTRUE_SMTP_ADMIN_EMAIL":                 "no-reply@ascomply.com",
-	"GOTRUE_SMTP_SENDER_NAME":                 "ASComply",
-	"GOTRUE_LOG_LEVEL":                        "info",
-	"GOTRUE_MAILER_OTP_LENGTH":                "10",
-	"GOTRUE_MAILER_OTP_EXP":                   "3600",
-	"GOTRUE_PASSWORD_MIN_LENGTH":              "10",
-	"GOTRUE_SESSIONS_TIMEBOX":                 "720h",
-	"GOTRUE_SESSIONS_INACTIVITY_TIMEOUT":      "168h",
-	"GOTRUE_RATE_LIMIT_HEADER":                "X-User-Address",
+	"GOTRUE_DB_DRIVER":                               "postgres",
+	"GOTRUE_DB_MAX_POOL_SIZE":                        "10",
+	"GOTRUE_JWT_AUD":                                 "authenticated",
+	"GOTRUE_JWT_DEFAULT_GROUP_NAME":                  "authenticated",
+	"GOTRUE_JWT_EXP":                                 "3600",
+	"GOTRUE_DISABLE_SIGNUP":                          "true",
+	"GOTRUE_MAILER_AUTOCONFIRM":                      "false",
+	"GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED":        "true",
+	"GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI":            "pg-functions://postgres/public/custom_access_token_hook",
+	"GOTRUE_SMTP_HOST":                               "smtp.resend.com",
+	"GOTRUE_SMTP_PORT":                               "465",
+	"GOTRUE_SMTP_USER":                               "resend",
+	"GOTRUE_SMTP_ADMIN_EMAIL":                        "no-reply@ascomply.com",
+	"GOTRUE_SMTP_SENDER_NAME":                        "ASComply",
+	"GOTRUE_LOG_LEVEL":                               "info",
+	"GOTRUE_MAILER_OTP_LENGTH":                       "10",
+	"GOTRUE_MAILER_OTP_EXP":                          "3600",
+	"GOTRUE_PASSWORD_MIN_LENGTH":                     "10",
+	"GOTRUE_SESSIONS_TIMEBOX":                        "720h",
+	"GOTRUE_SESSIONS_INACTIVITY_TIMEOUT":             "168h",
+	"GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED": "true",
+	"GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL":   "0",
+	"GOTRUE_RATE_LIMIT_HEADER":                       "X-User-Address",
 }
 
 var envPairRE = regexp.MustCompile(`^([A-Z_][A-Z0-9_]*)=(\S*)$`)

@@ -21,7 +21,7 @@ const (
 	msgRefreshRequired    = "refresh_token is required"
 )
 
-// GoTrue v2.197.0 /token?grant_type=refresh_token answers (internal/api/token_refresh.go, internal/tokens/service.go).
+// GoTrue v2.198.0 /token?grant_type=refresh_token answers (internal/api/token_refresh.go, internal/tokens/service.go).
 var (
 	gtRefreshed = `{"access_token":"` + refreshA1 + `","token_type":"bearer","expires_in":3600,"expires_at":1790000000,"refresh_token":"` + refreshR1 + `","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","email":"renewed@corp.example"}}`
 

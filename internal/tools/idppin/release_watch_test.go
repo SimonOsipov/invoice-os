@@ -264,12 +264,12 @@ func runWatchStep(t *testing.T, stepName, dockerfile string, fixtures map[string
 const compareStep = "Compare the pin with the latest release and published advisories"
 
 func TestReleaseWatchCompare(t *testing.T) {
-	pinnedAt := `{"published_at":"2026-09-09T15:27:11Z","tag_name":"v2.197.0"}`
+	pinnedAt := `{"published_at":"2026-09-09T15:27:11Z","tag_name":"v2.198.0"}`
 	older := `{"ghsa_id":"GHSA-old0-0000-0000","published_at":"2026-03-11T08:25:57Z"}`
 	same := `{"ghsa_id":"GHSA-same-0000-0000","published_at":"2026-09-09T15:27:11Z"}`
 	newer := `{"ghsa_id":"GHSA-new0-0000-0000","published_at":"2026-09-20T00:00:00Z"}`
 	page2 := `{"ghsa_id":"GHSA-pag2-0000-0000","published_at":"2026-09-21T00:00:00Z"}`
-	current := `{"tag_name":"v2.197.0"}`
+	current := `{"tag_name":"v2.198.0"}`
 
 	for _, c := range []struct {
 		name       string
@@ -281,16 +281,16 @@ func TestReleaseWatchCompare(t *testing.T) {
 		wantNotIn  []string
 	}{
 		{"current pin, only older advisories", plannedBody, current, "[" + older + "," + same + "]\n",
-			0, []string{"No finding: v2.197.0"}, nil},
-		{"newer release, no new advisory", plannedBody, `{"tag_name":"v2.198.0"}`, "[" + older + "]\n",
-			1, []string{"`v2.197.0`", "`v2.198.0`", "after the pin: none."}, nil},
+			0, []string{"No finding: v2.198.0"}, nil},
+		{"newer release, no new advisory", plannedBody, `{"tag_name":"v2.199.0"}`, "[" + older + "]\n",
+			1, []string{"`v2.198.0`", "`v2.199.0`", "after the pin: none."}, nil},
 		{"advisory after the pin, no release", plannedBody, current, "[" + older + "," + same + "," + newer + "]\n",
-			1, []string{"GHSA-new0-0000-0000", "Latest release: `v2.197.0`"}, []string{"GHSA-old0", "GHSA-same"}},
+			1, []string{"GHSA-new0-0000-0000", "Latest release: `v2.198.0`"}, []string{"GHSA-old0", "GHSA-same"}},
 		{"advisory on the second page", plannedBody, current, "[" + older + "]\n[" + page2 + "]\n",
 			1, []string{"GHSA-pag2-0000-0000"}, []string{"GHSA-old0"}},
-		{"newer release and advisory together", plannedBody, `{"tag_name":"v2.198.0"}`, "[" + newer + "]\n",
-			1, []string{"`v2.198.0`", "GHSA-new0-0000-0000"}, nil},
-		{"unreadable pin", "FROM ghcr.io/supabase/auth:v2.197.0\n", current, "[]\n",
+		{"newer release and advisory together", plannedBody, `{"tag_name":"v2.199.0"}`, "[" + newer + "]\n",
+			1, []string{"`v2.199.0`", "GHSA-new0-0000-0000"}, nil},
+		{"unreadable pin", "FROM ghcr.io/supabase/auth:v2.198.0\n", current, "[]\n",
 			2, nil, nil},
 		{"empty latest tag", plannedBody, `{"tag_name":""}`, "[]\n",
 			2, nil, nil},
@@ -345,7 +345,7 @@ func TestReleaseWatchIssueFoundByExactTitle(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := runWatchStep(t, issueStep, plannedBody, map[string]string{
-				"issues.json": c.issues, "finding.md": "Pinned: `v2.197.0`\n",
+				"issues.json": c.issues, "finding.md": "Pinned: `v2.198.0`\n",
 			}, "FINDING=true")
 			if r.exit != 0 {
 				t.Fatalf("exit = %d, want 0\n%s", r.exit, r.out)
@@ -375,8 +375,8 @@ func TestReleaseWatchIssueBodyNamesTheFailureKind(t *testing.T) {
 		want          []string
 		notWant       string
 	}{
-		{"finding", "true", map[string]string{"issues.json": "[]", "finding.md": "Kind: finding.\nPinned: `v2.197.0`\n"},
-			[]string{"Kind: finding.", "Pinned: `v2.197.0`"}, "Kind: error."},
+		{"finding", "true", map[string]string{"issues.json": "[]", "finding.md": "Kind: finding.\nPinned: `v2.198.0`\n"},
+			[]string{"Kind: finding.", "Pinned: `v2.198.0`"}, "Kind: error."},
 		{"error", "", map[string]string{"issues.json": "[]"},
 			[]string{"Kind: error.", "https://github.example/o/r/actions/runs/42"}, "Kind: finding."},
 	} {

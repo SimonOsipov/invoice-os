@@ -480,7 +480,7 @@ type goldenSource struct {
 	CapturedAt string `json:"captured_at"`
 }
 
-const goldenComment = "Shape of a real access token from the self-hosted supabase/auth image in sidecar/auth/Dockerfile " +
+const goldenComment = "Shape of a real access token from the self-hosted supabase/auth image " +
 	"(CI container idp-es256, second sign-in, one active membership). Tests compare keys and JSON kinds, never values. " +
 	"The raw JWT is omitted (public repo); jwks holds only the served public key. " +
 	"Refresh: go test -run TestIdP_TokenShapeMatchesGolden ./internal/platform/auth/ -update, with the env scripts/ci/idp-up.sh prints."

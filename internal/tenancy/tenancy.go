@@ -253,6 +253,7 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 
 // membershipsResponse is the GET /v1/memberships body: the caller's tenant's
 // memberships, each as {user_id, role, status, display_name, email, client_access}.
+// A non-admin reads email and client_access on its own row only.
 type membershipsResponse struct {
 	Memberships []MemberAccess `json:"memberships"`
 }

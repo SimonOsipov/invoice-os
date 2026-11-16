@@ -350,6 +350,7 @@ func TestResetPasswordPage_RendersOneFormWithTheToken(t *testing.T) {
 	if _, ok := vpAttr(pw, "required"); !ok {
 		t.Error("password input is not required")
 	}
+	rpRequireHint(t, doc)
 	id, _ := vpAttr(pw, "id")
 	labels := vpFind(doc, func(n *html.Node) bool {
 		f, _ := vpAttr(n, "for")
@@ -1043,7 +1044,9 @@ func TestResetPassword_MinimumMatchesTheIdP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`GOTRUE_PASSWORD_MIN_LENGTH=(\d+)`).FindSubmatch(df)
+	// A commented-out setting must not satisfy the scan.
+	live := regexp.MustCompile(`(?m)^\s*#.*$`).ReplaceAll(df, nil)
+	m := regexp.MustCompile(`GOTRUE_PASSWORD_MIN_LENGTH=(\d+)`).FindSubmatch(live)
 	if m == nil {
 		t.Fatal("sidecar/auth/Dockerfile sets no GOTRUE_PASSWORD_MIN_LENGTH")
 	}

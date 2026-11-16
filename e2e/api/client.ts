@@ -90,31 +90,31 @@ export const PERSONAS: { A: Persona; B: Persona } = {
   },
 }
 
-// mockIssuerTokenHeader in cmd/gateway/mockissuer.go. On the nightly the mock routes refuse a request without it.
+// mockIssuerTokenHeader in cmd/gateway/mockissuer.go. A preview's mock routes refuse a request without it.
 const MOCK_ISSUER_HEADER = 'X-Mock-Issuer-Token'
 
-let nightlyMockToken: string | undefined
+let previewMockToken: string | undefined
 
-// The mock-route header: MOCK_ISSUER_TOKEN, else on the nightly gateway the nightly-mock-issuer-token secret
-// (read once, kept in memory). Off the nightly with no variable: none. Never logs the value.
+// The mock-route header: MOCK_ISSUER_TOKEN, else on a preview gateway (pr-<N> or nightly) that preview's
+// mock-issuer-token secret (read once, kept in memory). Off a preview with no variable: none. Never logs the value.
 export function mockIssuerHeaders(): Record<string, string> {
   let token = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
   if (!token) {
-    let nightly = false
+    let suffix: string | undefined
     try {
-      nightly = previewSuffix() === 'nightly'
+      suffix = previewSuffix()
     } catch {
       // not a preview gateway
     }
-    if (nightly) {
-      if (nightlyMockToken === undefined) {
+    if (suffix) {
+      if (previewMockToken === undefined) {
         try {
-          nightlyMockToken = previewSecret('mock-issuer-token').trim()
+          previewMockToken = previewSecret('mock-issuer-token').trim()
         } catch {
-          throw new Error('mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read nightly-mock-issuer-token')
+          throw new Error(`mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read ${suffix}-mock-issuer-token`)
         }
       }
-      token = nightlyMockToken
+      token = previewMockToken
     }
   }
   return token ? { [MOCK_ISSUER_HEADER]: token } : {}

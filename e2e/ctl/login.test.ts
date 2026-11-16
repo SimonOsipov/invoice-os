@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Account, AccountKey, LoginDeps, LoginRequest, Persona, Role, StoredAccounts } from './login'
 import type { EnvResult } from './envUrls'
 
+const exec = vi.hoisted(() => vi.fn<(...args: unknown[]) => string>(() => 'unused'))
+vi.mock('node:child_process', async (orig) => ({ ...(await orig<typeof import('node:child_process')>()), execFileSync: exec }))
+
 type Login = typeof import('./login')
 
 const URL_VARS = ['GATEWAY_URL', 'APP_URL', 'LANDING_URL', 'OPS_CONSOLE_URL', 'SUPPORT_CONSOLE_URL'] as const
@@ -145,7 +148,7 @@ async function setup(over: Partial<LoginDeps> | ((calls: string[]) => Partial<Lo
 
 type Answer = { status: number; body?: unknown }
 interface Gateway {
-  requests: { method: string; path: string; body: any }[]
+  requests: { method: string; path: string; body: any; mockToken: string | null }[]
 }
 
 const meOk = (role: string): Answer => ({ status: 200, body: { tenant: { id: TENANT.firm, name: 'Okafor', kind: 'firm' }, user: { id: SUBJECT, role, display_name: null, email: null } } })
@@ -158,10 +161,10 @@ function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; fai
   let memberGrants = 0
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+    vi.fn(async (url: string, init?: { method?: string; body?: string; headers?: HeadersInit }) => {
       const method = init?.method ?? 'GET'
       const p = new URL(url).pathname
-      gw.requests.push({ method, path: p, body: init?.body ? JSON.parse(init.body) : undefined })
+      gw.requests.push({ method, path: p, body: init?.body ? JSON.parse(init.body) : undefined, mockToken: new Headers(init?.headers).get('X-Mock-Issuer-Token') })
       opts.log?.push(`${method} ${p}`)
       const answer = (a: Answer) => new Response(a.body === undefined ? null : JSON.stringify(a.body), { status: a.status })
       switch (p) {
@@ -1166,5 +1169,44 @@ describe('login scrubs saved passwords from every escaping error', () => {
     expect(err.message).toContain('then fill(')
     expect(err.message.includes(admin), `a password fragment survived: ${err.message}`).toBe(false)
     expect(err.message.includes('-reviewer'), `the reviewer suffix survived: ${err.message}`).toBe(false)
+  })
+})
+
+describe('ctl login on a PR preview', () => {
+  const PR_GATEWAY = 'https://gateway-pr-7-944095690109.africa-south1.run.app'
+  const prDeps = async () => {
+    const { L, root, deps } = await setup()
+    const resolveEnv = vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: ENV_ID, urls: { ...urls, GATEWAY_URL: PR_GATEWAY }, dark: [] }))
+    return { L, root, deps: { ...deps, resolveEnv, provisionAll: L.provisionAll } }
+  }
+  beforeEach(() => {
+    exec.mockReset()
+  })
+
+  it("ctl login on a PR preview sends the PR's mock issuer token", async () => {
+    const { L, deps } = await prDeps()
+    const gw = stubGateway()
+    exec.mockReturnValue('tok-ctl\n')
+
+    await L.login(req('firm', 'reviewer', 'pr-7'), deps)
+
+    expect(grants(gw).length).toBeGreaterThan(0)
+    expect(grants(gw).map((r) => r.mockToken)).toEqual(grants(gw).map(() => 'tok-ctl'))
+    expect((exec.mock.calls[0] as unknown as [string, string[]])[1]).toContain('pr-7-mock-issuer-token')
+  })
+
+  it('ctl login on a PR preview fails closed when the token read fails', async () => {
+    const { L, root, deps } = await prDeps()
+    const gw = stubGateway()
+    exec.mockImplementation(() => {
+      throw new Error('gcloud: not signed in')
+    })
+
+    const err = await refused(L.login(req('firm', 'reviewer', 'pr-7'), deps))
+
+    expect(err.message).toMatch(/MOCK_ISSUER_TOKEN/)
+    expect(err.message).toContain('pr-7-mock-issuer-token')
+    expect(gw.requests.filter((r) => r.path.startsWith('/auth/mock/') || r.path === '/auth/login')).toEqual([])
+    expect(existsSync(accountsFile(root, 'pr-7'))).toBe(false)
   })
 })

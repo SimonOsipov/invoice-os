@@ -14,6 +14,7 @@ vi.mock('@invoice-os/api-client/client', () => ({
 }))
 
 const HEADER = 'X-Mock-Issuer-Token'
+const PR = 'https://gateway-pr-7-944095690109.africa-south1.run.app'
 const NIGHTLY = 'https://gateway-nightly-944095690109.africa-south1.run.app'
 let status = 204
 let fetchStatuses: number[] = []
@@ -66,7 +67,7 @@ describe('mockIssuerHeaders', () => {
     expect(exec).not.toHaveBeenCalled()
   })
 
-  it('MOCK_ISSUER_TOKEN is sent trimmed, and a blank one falls back to the nightly secret', async () => {
+  it('MOCK_ISSUER_TOKEN is sent trimmed, and a blank one falls back to the preview secret', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', ' \ttok-7\n ')
     const c = await load(NIGHTLY)
     await c.login(PERSONA)
@@ -77,7 +78,7 @@ describe('mockIssuerHeaders', () => {
     expect(exec).toHaveBeenCalledTimes(1)
   })
 
-  it('MOCK_ISSUER_TOKEN set off the nightly gateway is still sent', async () => {
+  it('MOCK_ISSUER_TOKEN set off a preview gateway is still sent', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-9')
     const c = await load('https://gateway.test')
     await c.login(PERSONA)
@@ -105,12 +106,9 @@ describe('mockIssuerHeaders', () => {
     expect(seen.map(headerOf).filter(Boolean)).toEqual([])
   })
 
-  it.each([
-    ['a PR preview', 'https://gateway-pr-7-944095690109.africa-south1.run.app'],
-    ['a non-preview gateway', 'https://gateway.test'],
-  ])('off the nightly gateway (%s) no header and no secret read', async (_n, gateway) => {
+  it('off a preview gateway no header and no secret read', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', '')
-    const c = await load(gateway)
+    const c = await load('https://gateway.test')
     await c.login(PERSONA)
     await c.grantMembership(GRANT)
     expect(seen).toHaveLength(2)
@@ -127,6 +125,53 @@ describe('mockIssuerHeaders', () => {
     expect(exec).toHaveBeenCalledTimes(1)
     expect((exec.mock.calls[0] as unknown as [string, string[]])[1]).toContain('nightly-mock-issuer-token')
     expect(seen.map(headerOf)).toEqual(['tok-2', 'tok-2'])
+  })
+
+  it('on a PR preview gateway the token comes from that preview\'s secret once', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockReturnValue('tok-p\n')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    await c.login(PERSONA)
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect((exec.mock.calls[0] as unknown as [string, string[]])[1]).toContain('pr-7-mock-issuer-token')
+    expect(seen.map(headerOf)).toEqual(['tok-p', 'tok-p'])
+  })
+
+  it('each mock-route helper sends the header on a PR preview', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockReturnValue('tok-p')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    await c.grantMembership(GRANT)
+    await c.setInvitationToken('t', 'i', 'x')
+    await c.setDeletionLinkToken('t', 'u', 'x')
+    await c.setReadinessConfirmToken('e@example.com', 'x')
+    expect(seen.map(headerOf)).toEqual(Array(5).fill('tok-p'))
+  })
+
+  it('MOCK_ISSUER_TOKEN set on a PR preview is sent and no secret is read', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-9')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-9'])
+    expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('a failed PR secret read names both sources and is retried', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockImplementationOnce(() => {
+      throw new Error('gcloud: not signed in')
+    })
+    exec.mockReturnValue('tok-6\n')
+    const c = await load(PR)
+    const err = await c.grantMembership(GRANT).then(() => undefined, (e: Error) => e)
+    expect(err?.message).toMatch(/MOCK_ISSUER_TOKEN/)
+    expect(err?.message).toMatch(/gcloud/)
+    expect(err?.message).toContain('pr-7-mock-issuer-token')
+    expect(fetchMock).not.toHaveBeenCalled()
+    await c.grantMembership(GRANT)
+    expect(seen.map(headerOf)).toEqual(['tok-6'])
   })
 
   it('a failed secret read names both sources and is retried', async () => {

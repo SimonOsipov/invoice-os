@@ -1,5 +1,5 @@
 {
-  "_comment": "Shape of a real access token from the self-hosted supabase/auth image in sidecar/auth/Dockerfile (CI container idp-es256, second sign-in, one active membership). Tests compare keys and JSON kinds, never values. The raw JWT is omitted (public repo); jwks holds only the served public key. Refresh: go test -run TestIdP_TokenShapeMatchesGolden ./internal/platform/auth/ -update, with the env scripts/ci/idp-up.sh prints.",
+  "_comment": "Shape of a real access token from the self-hosted supabase/auth image (CI container idp-es256, second sign-in, one active membership). Tests compare keys and JSON kinds, never values. The raw JWT is omitted (public repo); jwks holds only the served public key. Refresh: go test -run TestIdP_TokenShapeMatchesGolden ./internal/platform/auth/ -update, with the env scripts/ci/idp-up.sh prints.",
   "source": {
     "image": "ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b",
     "issuer": "urn:ascomply:auth:ci",

@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -o /out/authsentry ./cmd/authsentry
 
 # The tag and digest live here only; internal/tools/idppin reads them for every other consumer.
 # ghcr.io, not Docker Hub: Docker Hub rate-limits anonymous CI pulls.
-FROM ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b
+FROM ghcr.io/supabase/auth:v2.198.0@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d
 COPY --from=wrap /out/authsentry /usr/local/bin/authsentry
 
 # Environment-independent settings. The rate-limit header is the one the gateway sends (platform.HeaderUserIP). Per-environment values and secrets are set on the Cloud Run service.

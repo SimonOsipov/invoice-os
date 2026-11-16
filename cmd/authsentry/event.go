@@ -31,7 +31,7 @@ var (
 	emailRE = regexp.MustCompile(`[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+`)
 )
 
-// emailPaths are GoTrue's sign-in, sign-up, password-reset and refresh routes (supabase/auth v2.197.0 internal/api/api.go).
+// emailPaths are GoTrue's sign-in, sign-up, password-reset and refresh routes (supabase/auth v2.198.0 internal/api/api.go).
 var emailPaths = map[string]bool{"/token": true, "/signup": true, "/recover": true, "/verify": true}
 
 // reqMemo is what an earlier line of one request left behind.

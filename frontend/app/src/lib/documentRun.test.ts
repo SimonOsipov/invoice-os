@@ -15,6 +15,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { ApiError } from '@invoice-os/api-client'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it, vi } from 'vitest'
 
 import * as documentRunModule from './documentRun'
@@ -1808,9 +1809,10 @@ describe('startDocumentRun — a refused file in a batch (SECAUD-52)', () => {
   })
 
   it('HELD-8: a Go reword of HeldElsewhereMessage would silently bring back "remove it to continue" in the batch', () => {
-    // HeldElsewhereMessage, internal/document/document.go
-    const src = readRepoFile('../../internal/document/document.go', 'HeldElsewhereMessage')
-    expect(src).toContain(`HeldElsewhereMessage = "${HELD_ELSEWHERE_SENTENCE}"`)
+    // Comments stripped and only the declaration read: a comment keeping the old sentence must not pass.
+    const src = stripComments(readRepoFile('../../internal/document/document.go', 'HeldElsewhereMessage'))
+    const decl = src.split('\n').filter((l) => /^const HeldElsewhereMessage = /.test(l))
+    expect(decl).toEqual([`const HeldElsewhereMessage = "${HELD_ELSEWHERE_SENTENCE}"`])
   })
 
   it('HELD-9: a held file beside an imported file and a failed file claims nothing about the others', async () => {

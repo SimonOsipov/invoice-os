@@ -12,11 +12,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
 	resetFormMaxBytes = 2 << 10
-	// ceiling: a rollback moves gateway ~7 s before auth; a 6-9 byte set-password then spends its link. Revisit if rollbacks reorder or recur.
+	// ceiling: a rollback moves gateway ~7 s before auth; a 6-9 character set-password then spends its link. Revisit if rollbacks reorder or recur.
 	resetPasswordMin = 10
 	resetPasswordMax = 72
 )
@@ -163,7 +164,8 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
+		// The minimum counts characters, the maximum bytes (GoTrue caps at 72 bytes).
+		if utf8.RuneCountInString(password) < resetPasswordMin || len(password) > resetPasswordMax {
 			masked, ok := lookupLinkAddress(r, flow.address, perIP, enforce, label, log, token)
 			if !ok {
 				http.Redirect(w, r, failed, http.StatusSeeOther)

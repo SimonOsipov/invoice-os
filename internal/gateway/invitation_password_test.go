@@ -110,7 +110,7 @@ func TestInvitationPassword_HandsTheConfirmedUserToTheContactSink(t *testing.T) 
 }
 
 func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
-	for name, pw := range map[string]string{"9 bytes": "abcdefghi", "73 bytes": strings.Repeat("a", 73)} {
+	for name, pw := range map[string]string{"9 bytes": "abcdefghi", "73 bytes": strings.Repeat("a", 73), "5 runes in 10 bytes": "ééééé", "3 emoji": "😀😀😀"} {
 		t.Run(name, func(t *testing.T) {
 			f := newResetGoTrue(t)
 
@@ -173,7 +173,7 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 		})
 	}
-	for name, pw := range map[string]string{"10 bytes": "abcdefghij", "72 bytes": strings.Repeat("a", 72)} {
+	for name, pw := range map[string]string{"10 bytes": "abcdefghij", "72 bytes": strings.Repeat("a", 72), "10 runes, multi-byte": "ééééééééé" + "a"} {
 		t.Run("control "+name, func(t *testing.T) {
 			f := newResetGoTrue(t)
 			rpRequireRedirect(t, ipPost(t, newInviteHandler(t, f, nil, nil), rpValues(rpToken, "signup", pw)), ipOK)

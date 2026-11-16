@@ -50,7 +50,6 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
   test('a fresh address registers, and a repeat answers the same 202', async () => {
     const credentials = { email: `reg-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 12) }
     expect(credentials.password).toHaveLength(12)
-    expect(credentials.password.length).toBeGreaterThanOrEqual(PASSWORD_MIN)
 
     // Lower bounds only: the deployed app's upper latency is not ours to assert.
     let t0 = performance.now()

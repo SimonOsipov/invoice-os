@@ -743,6 +743,8 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 	rows := map[string]string{
 		"9 bytes": "abcdefghi", "73 bytes": strings.Repeat("a", 73), "empty": "",
 		"9 bytes in 5 runes":   "éééé" + "a",
+		"5 runes in 10 bytes":  "ééééé",
+		"3 emoji":              "😀😀😀",
 		"75 bytes in 25 runes": strings.Repeat("€", 25),
 	}
 	pageCSP := rpGet(rpPageHandler(t), http.MethodGet, rpQuery(rpToken)).Header().Get("Content-Security-Policy")
@@ -808,7 +810,7 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 func TestResetPassword_PasswordAtTheBoundsIsSent(t *testing.T) {
 	for name, pw := range map[string]string{
 		"10 bytes": "abcdefghij", "72 bytes": strings.Repeat("a", 72),
-		"10 bytes in 5 runes":      "ééééé",
+		"10 runes, multi-byte":     "ééééééééé" + "a",
 		"72 bytes in 24 runes":     strings.Repeat("€", 24),
 		"quotes, spaces and signs": ` p"a\ss&w+o%rd=` + "\t ",
 	} {
@@ -1046,10 +1048,12 @@ func TestResetPassword_MinimumMatchesTheIdP(t *testing.T) {
 	}
 	// A commented-out setting must not satisfy the scan.
 	live := regexp.MustCompile(`(?m)^\s*#.*$`).ReplaceAll(df, nil)
-	m := regexp.MustCompile(`GOTRUE_PASSWORD_MIN_LENGTH=(\d+)`).FindSubmatch(live)
-	if m == nil {
+	// Docker ENV is last-wins.
+	all := regexp.MustCompile(`\bGOTRUE_PASSWORD_MIN_LENGTH=(\d+)`).FindAllSubmatch(live, -1)
+	if all == nil {
 		t.Fatal("sidecar/auth/Dockerfile sets no GOTRUE_PASSWORD_MIN_LENGTH")
 	}
+	m := all[len(all)-1]
 	if got, _ := strconv.Atoi(string(m[1])); got != resetPasswordMin {
 		t.Errorf("GOTRUE_PASSWORD_MIN_LENGTH = %d, resetPasswordMin = %d; they must match", got, resetPasswordMin)
 	}

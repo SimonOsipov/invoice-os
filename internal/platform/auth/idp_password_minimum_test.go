@@ -85,7 +85,7 @@ func TestIdP_AShortPasswordSetBeforeTheMinimumStillSignsIn(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("sign in with the old short password: status %d, error_code %v; want 200", status, body["error_code"])
 	}
-	// Without the weak_password reason, a GoTrue still at 6 would pass this test.
+	// weak_password.reasons proves the live minimum is above the old password length.
 	weak, _ := body["weak_password"].(map[string]any)
 	reasons, _ := weak["reasons"].([]any)
 	if !slices.Contains(reasons, any("length")) {

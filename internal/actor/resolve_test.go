@@ -258,7 +258,7 @@ func raw(text string) actor.Label    { return actor.Label{Text: text, Kind: acto
 // success case, and a 22P02 would abort the caller's transaction.
 func mustResolve(t *testing.T, tx pgx.Tx, subjects []string) map[string]actor.Label {
 	t.Helper()
-	got, err := actor.Resolve(context.Background(), tx, subjects)
+	got, err := actor.Resolve(context.Background(), tx, "", subjects)
 	if err != nil {
 		t.Fatalf("Resolve(%d subjects) = error %v (SQLSTATE %q)", len(subjects), err, pgCode(err))
 	}
@@ -310,7 +310,7 @@ func TestActorResolve_FreeTextNeverReachesTheUUIDArray(t *testing.T) {
 	tx := scopedTx(t, traced, rec, okaforTenantID)
 
 	subjects := append(append([]string{}, freeTextActors...), okaforAdmin)
-	got, err := actor.Resolve(context.Background(), tx, subjects)
+	got, err := actor.Resolve(context.Background(), tx, "", subjects)
 	if err != nil {
 		t.Fatalf("Resolve = error %v (SQLSTATE %q); 22P02 means the free-text actors reached the uuid[] bind", err, pgCode(err))
 	}
@@ -530,6 +530,39 @@ func TestActorResolve_StoredEmptyStringFallsThrough(t *testing.T) {
 	})
 }
 
+// TestActorResolve_EmailLeak_NonAdminViewerReadsUnnamedMemberNotAnotherMembersEmail: a nameless
+// member's email is the label for an admin viewer and the viewer's own row, never for another
+// non-admin viewer.
+func TestActorResolve_EmailLeak_NonAdminViewerReadsUnnamedMemberNotAnotherMembersEmail(t *testing.T) {
+	super, _ := dbTestPools(t)
+	var origName, origEmail *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT display_name, email FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		okaforTenantID, okaforBlankable).Scan(&origName, &origEmail); err != nil || origEmail == nil {
+		t.Fatalf("read the fixture row: %v (email %v)", err, origEmail)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $1 WHERE tenant_id = $2 AND user_id = $3`, origName, okaforTenantID, okaforBlankable)
+	})
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET display_name = NULL WHERE tenant_id = $1 AND user_id = $2`, okaforTenantID, okaforBlankable); err != nil {
+		t.Fatalf("null the display name: %v", err)
+	}
+	resolveAs := func(viewer string) actor.Label {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+		got, err := actor.Resolve(context.Background(), tx, viewer, []string{okaforBlankable})
+		if err != nil {
+			t.Fatalf("Resolve as %s: %v", viewer, err)
+		}
+		return got[okaforBlankable]
+	}
+	assertLabel(t, map[string]actor.Label{okaforBlankable: resolveAs(okaforAdmin)}, okaforBlankable, person(*origEmail))
+	assertLabel(t, map[string]actor.Label{okaforBlankable: resolveAs(okaforBlankable)}, okaforBlankable, person(*origEmail))
+	assertLabel(t, map[string]actor.Label{okaforBlankable: resolveAs(okaforPreparer)}, okaforBlankable, person(actor.UnnamedMember))
+}
+
 // AC-2: a dropped key renders as a blank cell, not as raw text — the failure mode
 // nothing downstream can detect. 100 distinct subjects across all four shapes.
 func TestActorResolve_EveryInputSubjectIsAKey(t *testing.T) {
@@ -678,7 +711,7 @@ func TestActorResolve_UnscopedTxResolvesNothingRatherThanWrongly(t *testing.T) {
 	rec.reset()
 
 	subjects := []string{okaforAdmin, okaforPreparer, okaforSuspended, honeywellAdmin, honeywellSuspended}
-	got, err := actor.Resolve(context.Background(), tx, subjects)
+	got, err := actor.Resolve(context.Background(), tx, "", subjects)
 	if err != nil {
 		t.Fatalf("Resolve on an unscoped tx = error %v (SQLSTATE %q); it must resolve nothing, not fail", err, pgCode(err))
 	}
@@ -879,7 +912,7 @@ func TestActorResolve_NilEmptyAndBlankSubjects(t *testing.T) {
 		traced, rec := tracedAppPool(t)
 		tx := scopedTx(t, traced, rec, okaforTenantID)
 
-		got, err := actor.Resolve(context.Background(), tx, nil)
+		got, err := actor.Resolve(context.Background(), tx, "", nil)
 		if err != nil {
 			t.Fatalf("Resolve(nil) = error %v", err)
 		}
@@ -898,7 +931,7 @@ func TestActorResolve_NilEmptyAndBlankSubjects(t *testing.T) {
 		traced, rec := tracedAppPool(t)
 		tx := scopedTx(t, traced, rec, okaforTenantID)
 
-		got, err := actor.Resolve(context.Background(), tx, []string{})
+		got, err := actor.Resolve(context.Background(), tx, "", []string{})
 		if err != nil {
 			t.Fatalf("Resolve([]) = error %v", err)
 		}

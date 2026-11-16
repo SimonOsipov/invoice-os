@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/actor"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -771,7 +772,8 @@ func armTwoSteps(t *testing.T, w *warnWorld, k0, k1 string) (invoiceID, runID st
 func TestApprovalRun_PendingStepWarnFollowsTheRow(t *testing.T) {
 	w := newWarnWorld(t, "APSC-14-03 card follows row")
 	w.role("wk-first", memberSpec{role: "reviewer"})
-	away := w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})[0]
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	away := actor.UnnamedMember // the panel caller is a non-admin and the holder has no display name
 	inv, runID := armTwoSteps(t, w, "wk-first", "wk-away")
 	setRunStepState(t, w.super, runStepID(t, w.super, runID, 0), "satisfied")
 

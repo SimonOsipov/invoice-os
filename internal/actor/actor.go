@@ -42,6 +42,18 @@ func Name(displayName, email *string, subject string) Label {
 	return Label{Text: subject, Kind: KindRaw}
 }
 
+// UnnamedMember is the label for a member with no display name that a non-admin
+// reads; the SPA's UNNAMED_NAME (members.ts) is the same literal.
+const UnnamedMember = "Unnamed member"
+
+// NameWithoutEmail is Name for a viewer who may not read the member's email.
+func NameWithoutEmail(displayName *string) Label {
+	if displayName != nil && *displayName != "" {
+		return Label{Text: *displayName, Kind: KindPerson}
+	}
+	return Label{Text: UnnamedMember, Kind: KindPerson}
+}
+
 // RemovedName labels a removed member by display_name alone; the email never
 // shows. "" is absent (D-31).
 func RemovedName(displayName *string) Label {

@@ -18,7 +18,21 @@ import (
 	"time"
 )
 
-var manifests = []string{"go.mod", "sidecar/docling/requirements.txt", "pnpm-lock.yaml"}
+var manifests = []string{
+	"go.mod",
+	"sidecar/docling/requirements.txt",
+	"sidecar/docling/requirements.lock",
+	"sidecar/docling/torch.lock",
+	"pnpm-lock.yaml",
+}
+
+// lockType names the parser for a manifest whose filename the scanner cannot infer.
+func lockType(m string) string {
+	if strings.HasSuffix(m, ".lock") {
+		return "requirements.txt:"
+	}
+	return ""
+}
 
 const maxIgnoreDays = 30
 
@@ -297,7 +311,7 @@ func parseTOMLDate(v string) (time.Time, error) {
 func scannerArgs(out string) []string {
 	args := []string{"scan", "source", "--no-resolve", "--all-vulns", "--no-call-analysis=go", "--format", "json", "--output-file", out}
 	for _, m := range manifests {
-		args = append(args, "-L", m)
+		args = append(args, "-L", lockType(m)+m)
 	}
 	return args
 }

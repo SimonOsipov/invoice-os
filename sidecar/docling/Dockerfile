@@ -11,24 +11,17 @@ FROM mirror.gcr.io/library/python:3.12.16-slim@sha256:5e2bdb1b0d542d5039cffb8181
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /build
-COPY sidecar/docling/requirements.txt .
-# rapidocr==3.9.2 hard-requires opencv_python (the GUI build) with no marker to swap
-# it for -headless, so `pip install -r requirements.txt` alone always pulls it in.
-# -headless serves the identical cv2 API rapidocr/docling_ibm_models call here
-# (imgproc/imgcodecs only, no highgui) with no X11/GL libs. The uninstall must sit
-# strictly between the two installs: resolving both in one command lets pip's
-# internal install order silently decide whose cv2/ files land on disk last, and the
-# losing order reproduces this story's ImportError (confirmed empirically).
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y opencv-python \
-    && pip install --no-cache-dir --no-deps opencv-python-headless==5.0.0.93
+COPY sidecar/docling/torch.lock sidecar/docling/requirements.lock sidecar/docling/pip_check_guard.py ./
+# One index per step. --no-deps: the locks are the full closure, with opencv-python-headless
+# in place of rapidocr's opencv-python; the guard fails on any other missing dependency.
+RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://download.pytorch.org/whl/cpu -r torch.lock \
+    && pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements.lock \
+    && python3 pip_check_guard.py
 
-# Layout + TableFormer (torch) only here -- skips code/formula (~640 MB) and the
-# picture classifier (~16 MB), neither of which an invoice pipeline touches. Baked
-# here, not fetched at boot: with DOCLING_ARTIFACTS_PATH set below, Docling refuses
-# to fetch anything at runtime, so a mismatched selector here fails loudly on the
-# first scan instead of quietly re-downloading.
-RUN python3 -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/opt/docling-models'), with_code_formula=False, with_picture_classifier=False, with_rapidocr=False)"
+# Layout + TableFormer only (no code/formula, no picture classifier). Baked at build:
+# with DOCLING_ARTIFACTS_PATH set, Docling refuses to fetch at runtime.
+COPY sidecar/docling/fetch_docling_models.py .
+RUN python3 fetch_docling_models.py
 
 # RapidOCR English (onnxruntime backend) fetched separately -- see the script's own
 # docstring: official host first (short timeout, one retry), pinned HF mirror on
@@ -44,21 +37,14 @@ RUN python3 fetch_rapidocr_models.py
 # (see tests/conftest.py) for the repo-scanning specs; the run stage's own build context
 # needs nothing mounted, only this stage.
 FROM deps AS test
-COPY sidecar/docling/requirements-dev.txt .
-# requirements-dev.txt re-includes `-r requirements.txt` (so a local `pip install -r
-# requirements-dev.txt` is self-sufficient) -- that re-resolve sees rapidocr's declared
-# "opencv-python" as unsatisfied (this stage only has -headless, a different distribution
-# name) and reinstalls the GUI build, undoing deps' swap above. Redo the swap after.
-# --force-reinstall is required here: -headless' dist-info already exists from the deps
-# stage (unaffected by the uninstall above, which only removes opencv-python's files), so
-# a plain `pip install` sees it as "already satisfied" and skips writing cv2/ back --
-# leaving the package uninstalled in all but name. Confirmed empirically (T-03-cv2 guard).
-RUN pip install --no-cache-dir -r requirements-dev.txt \
-    && pip uninstall -y opencv-python \
-    && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==5.0.0.93
+# Deps venv as built here; ci.yml's docling-freeze diffs it with the canary's run image.
+RUN pip freeze > /build/deps.freeze
+COPY sidecar/docling/requirements-dev.lock .
+RUN pip install --no-cache-dir --require-hashes --no-deps --index-url https://pypi.org/simple -r requirements-dev.lock \
+    && python3 pip_check_guard.py
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
-COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pyproject.toml ./
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/sentry_setup.py sidecar/docling/sentryfilter.py sidecar/docling/pip_check_guard.py sidecar/docling/fetch_docling_models.py sidecar/docling/pyproject.toml ./
 COPY sidecar/docling/tests ./tests
 # Same non-root user the run stage uses below, not just for parity: running as root
 # makes chmod 000 a no-op (root bypasses the DAC check), which was silently defeating

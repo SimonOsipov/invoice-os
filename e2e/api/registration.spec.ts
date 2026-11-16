@@ -10,6 +10,8 @@ import { apiBase, getAuditLog, login, memberships, rawFetch, registerFresh, requ
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
+// GOTRUE_PASSWORD_MIN_LENGTH in sidecar/auth/Dockerfile; the gateway's resetPasswordMin follows it.
+const PASSWORD_MIN = 10
 // internal/gateway/register.go RegisterHandler: the 202 body.
 const VERIFICATION_PENDING = { status: 'verification_pending' }
 // internal/gateway/register.go RegisterHandler: the free-mail refusal.
@@ -96,6 +98,15 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     })
     assertErrorEnvelope(res, 400, 'over-long workspace name')
     expect((res.body as { error: string }).error).toBe(NAME_REFUSED)
+  })
+
+  test('a password one under the minimum is refused at register with a sentence that states it', async () => {
+    const res = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: { email: `reg-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, PASSWORD_MIN - 1) },
+    })
+    assertErrorEnvelope(res, 400, 'a short password')
+    expect((res.body as { error: string }).error).toBe(`Password should be at least ${PASSWORD_MIN} characters.`)
   })
 
   test('a body with no password answers 202', async () => {
@@ -199,7 +210,8 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     const body = await res.text()
     // internal/gateway/invitation_password.html: the form and its password input.
     expect(body).toContain('action="/auth/invitation/password"')
-    expect(body).toMatch(/<input type="password" name="password"[^>]*minlength="6"[^>]*maxlength="72"/)
+    expect(body).toMatch(new RegExp(`<input type="password" name="password"[^>]*minlength="${PASSWORD_MIN}"[^>]*maxlength="72"`))
+    expect(body).toContain(`<p class="hint">${PASSWORD_MIN} to 72 characters.</p>`)
     expect(body).toContain(`name="state" value="${state}"`)
     expect(body).not.toContain('Confirm my email')
     // An unknown link names no address.
@@ -222,7 +234,7 @@ test.describe('password reset (API E2E, over the deployed gateway)', () => {
   // internal/gateway/reset_password.go resetFailedURL: the failure redirect's query.
   const RESET_FAILED = '?reset=failed'
   // internal/gateway/reset_password.go resetPasswordHint: the short-password alert.
-  const RESET_PASSWORD_HINT = 'Use a password of 6 to 72 characters.'
+  const RESET_PASSWORD_HINT = `Use a password of ${PASSWORD_MIN} to 72 characters.`
   const pageUrl = (token: string) => `${apiBase()}/auth/reset-password?token=${token}&type=recovery`
   const postForm = (fields: Record<string, string>) =>
     fetch(`${apiBase()}/auth/reset-password`, {
@@ -271,7 +283,10 @@ test.describe('password reset (API E2E, over the deployed gateway)', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(res.headers.get('location'), 'a Location header').toBeNull()
-    expect(await res.text()).toContain('Set new password')
+    const body = await res.text()
+    expect(body).toContain('Set new password')
+    expect(body).toMatch(new RegExp(`<input type="password" name="password"[^>]*minlength="${PASSWORD_MIN}"[^>]*maxlength="72"`))
+    expect(body).toContain(`<p class="hint">${PASSWORD_MIN} to 72 characters.</p>`)
   })
 
   test('a reset link with an empty token redirects 303 to the landing failure notice', async () => {
@@ -287,7 +302,7 @@ test.describe('password reset (API E2E, over the deployed gateway)', () => {
   })
 
   test('a too-short password re-renders the page with 400', async () => {
-    const res = await postForm({ token: `bogus-${crypto.randomUUID()}`, password: 'short' })
+    const res = await postForm({ token: `bogus-${crypto.randomUUID()}`, password: crypto.randomUUID().slice(0, PASSWORD_MIN - 1) })
     expect(res.status).toBe(400)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(await res.text()).toContain(RESET_PASSWORD_HINT)

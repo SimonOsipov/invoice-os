@@ -311,7 +311,7 @@ func TestClientAccess_MemberListEmailLeak_ALimitedMemberReadsNoOtherMembersEmail
 		}
 		// The suspended row is among the hidden ones.
 		requireEmail(t, name+" reading the suspended row", rows[s], `null`)
-		// A member with no display name reads with neither name nor address: the SPA labels it "Unnamed member" (SECAUD-42-04).
+		// A member with no display name reads with neither name nor address: the SPA labels it "Unnamed member".
 		if string(rows[nameless]["display_name"]) != "null" {
 			t.Errorf("as %s, the nameless member's display_name = %s, want null", name, rows[nameless]["display_name"])
 		}

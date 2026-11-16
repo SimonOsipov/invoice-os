@@ -37,7 +37,7 @@ describe('app chat seam', () => {
     const d = readFileSync(join(SRC, '..', 'Dockerfile'), 'utf8')
     const pair = d.indexOf('ARG VITE_GA_MEASUREMENT_ID\nENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')
     expect(pair).toBeGreaterThan(d.indexOf('AS build'))
-    expect(pair).toBeLessThan(d.indexOf('pnpm --filter @invoice-os/app build'))
+    expect(pair).toBeLessThan(d.search(/^RUN .*pnpm --filter @invoice-os\/app build$/m))
   })
 
   it('every app form tells HubSpot not to collect it', () => {

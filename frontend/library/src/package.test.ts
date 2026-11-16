@@ -71,7 +71,7 @@ describe('library package', () => {
     const d = read(join(HERE, '../Dockerfile'))
     const stage = d.indexOf('AS build')
     const arg = d.indexOf('ARG VITE_GA_MEASUREMENT_ID\nENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')
-    const run = d.indexOf('pnpm --filter @invoice-os/library build')
+    const run = d.search(/^RUN .*pnpm --filter @invoice-os\/library build$/m)
     expect(stage).toBeGreaterThan(-1)
     expect(arg).toBeGreaterThan(stage)
     expect(run).toBeGreaterThan(arg)

@@ -69,7 +69,7 @@ describe('check package', () => {
   it('dockerfile_bakesEveryViteVarBeforeTheBuild', () => {
     const d = read(join(HERE, '../Dockerfile'))
     const stage = d.indexOf('AS build')
-    const run = d.indexOf('pnpm --filter @invoice-os/check build')
+    const run = d.search(/^RUN .*pnpm --filter @invoice-os\/check build$/m)
     expect(stage).toBeGreaterThan(-1)
     expect(run).toBeGreaterThan(stage)
     for (const v of ['VITE_GATEWAY_URL', 'VITE_LANDING_URL', 'VITE_GA_MEASUREMENT_ID', 'VITE_HUBSPOT_PORTAL_ID', 'VITE_SENTRY_DSN', 'VITE_SENTRY_TEST_DIGEST']) {

@@ -38,9 +38,7 @@ ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID
 # The release fallback when no release is stamped.
 ARG BUILD_SHA
 ENV VITE_BUILD_SHA=${BUILD_SHA}
-# Build stage only, never ENV; empty skips the source-map upload.
-ARG SENTRY_AUTH_TOKEN
-RUN pnpm --filter @invoice-os/app build
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/app build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----
 FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve

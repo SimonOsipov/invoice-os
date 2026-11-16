@@ -96,7 +96,7 @@ describe('blog package', () => {
   it('dockerfile_bakesTheGaMeasurementId', () => {
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
     const from = lines.findIndex((l) => /AS build$/.test(l))
-    const build = lines.findIndex((l) => l === 'RUN pnpm --filter @invoice-os/blog build')
+    const build = lines.findIndex((l) => l.endsWith(' pnpm --filter @invoice-os/blog build'))
     const arg = lines.indexOf('ARG VITE_GA_MEASUREMENT_ID')
     expect(lines.indexOf('ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')).toBeGreaterThan(arg)
     expect(arg).toBeGreaterThan(from)
@@ -114,7 +114,7 @@ describe('blog package', () => {
     expect(read_.has('VITE_LANDING_URL')).toBe(true)
 
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
-    const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
+    const build = lines.findIndex((l) => /^RUN .*pnpm --filter/.test(l))
     expect(build).toBeGreaterThan(-1)
     // GA4 and the gateway URL are read by modules of later subtasks; their pairs ship with the image now.
     for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID', 'VITE_GATEWAY_URL'])) {

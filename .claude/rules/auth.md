@@ -119,7 +119,8 @@ paths:
 - Send `X-User-Address` from `checkIPKey(clientIP)` on every GoTrue call except the session check's `GET /user` and the fleet probe. Never copy it from the client.
 - Keep `GOTRUE_MAILER_OTP_LENGTH=10` and `GOTRUE_MAILER_OTP_EXP=3600` in `sidecar/auth/Dockerfile`; the mail copy follows `GOTRUE_MAILER_OTP_EXP` (`TestLinkExpiryCopyMatchesTheIdPLifetime`).
 - Keep `GOTRUE_PASSWORD_MIN_LENGTH` in `sidecar/auth/Dockerfile` equal to `resetPasswordMin` in `internal/gateway/reset_password.go`. The reset and set-password pages and their alert take the number from that constant (`TestResetPassword_MinimumMatchesTheIdP`).
-- In `idp-up.sh`, `idp-mail`, `idp-es256` and `idp-short` raise GoTrue's per-IP rates: gateway-backed IdP tests there share one local key. `idp-hs256` keeps the defaults; it carries the limiter proof.
+- Write `GOTRUE_SESSIONS_TIMEBOX` and `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT` in `sidecar/auth/Dockerfile` as Go durations (`720h`). `TestDockerfileCommitsTheD3EnvBlockAndNoSecret` pins the values; `idp-up.sh` fails at boot on a value GoTrue cannot parse.
+- In `idp-up.sh`, `idp-mail`, `idp-es256`, `idp-short` and `idp-session` raise GoTrue's per-IP rates: gateway-backed IdP tests there share one local key. `idp-hs256` keeps the defaults; it carries the limiter proof.
 - Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429.
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.

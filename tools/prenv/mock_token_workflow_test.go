@@ -9,10 +9,9 @@ import (
 func TestDevEnvMockIssuerToken_NotUnmaskedOrExportedToAnOutput(t *testing.T) {
 	t.Parallel()
 	const (
-		read    = `preview.sh mock-token "$PR"`
-		mask    = `::add-mask::$mock`
-		export  = `MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"`
-		nightly = "if: needs.changes.outputs.nightly == 'true'"
+		read   = `preview.sh mock-token "$PR"`
+		mask   = `::add-mask::$mock`
+		export = `MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"`
 	)
 	has := func(lines []string, sub string) bool {
 		return slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, sub) })
@@ -46,7 +45,7 @@ func TestDevEnvMockIssuerToken_NotUnmaskedOrExportedToAnOutput(t *testing.T) {
 		if strings.Contains(text, "GITHUB_OUTPUT") || strings.Contains(text, "GITHUB_STEP_SUMMARY") {
 			t.Errorf("%s: the token step writes to GITHUB_OUTPUT or GITHUB_STEP_SUMMARY", name)
 		}
-		if gated := has(s, "if:"); name == "nightly-ai" && gated || name != "nightly-ai" && !slices.Contains(s, nightly) {
+		if has(s, "if:") {
 			t.Errorf("%s: wrong if on the token step: %v", name, s)
 		}
 		install := first(steps, func(s []string) bool { return has(s, "pnpm install") })

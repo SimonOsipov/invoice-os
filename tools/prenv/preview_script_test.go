@@ -477,12 +477,11 @@ func TestPreviewSecretsNeverPrintsTheKey(t *testing.T) {
 			if strings.Contains(r.file(t, "calls"), d) {
 				t.Fatal("the key's d member reached gcloud argv")
 			}
-			if name == "nightly" {
-				tok := r.file(t, "created-nightly-mock-issuer-token")
-				if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
-					t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
-				}
+			tok := r.file(t, "created-"+previewSuffix(name)+"-mock-issuer-token")
+			if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
+				t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
 			}
+
 		})
 	}
 }
@@ -976,12 +975,12 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 		if svc == "notifications" || svc == "worker" {
 			want += "," + strings.Join(nlContactKeys, ",")
 		}
-		if svc == "gateway" {
-			want += ",GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest"
-		}
 		got := flagValue(ni[svc], "--set-secrets")
 		if got != want {
 			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
+		}
+		if svc == "gateway" && !strings.Contains(got, "GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest") {
+			t.Errorf("nightly gateway lacks its mock issuer token mount: %q", got)
 		}
 		if has := strings.Contains(got, "mock-issuer-token"); has != (svc == "gateway") {
 			t.Errorf("%s mounts the mock issuer token = %v", svc, has)
@@ -1071,7 +1070,7 @@ func TestPreviewCapAllowsNoMixOverTheBudget(t *testing.T) {
 	}
 }
 
-func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
+func TestPreviewSecretsNightlyMakesThePRSet(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "secrets", "nightly")
 	if r.code != 0 {
@@ -1081,7 +1080,6 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 	for _, n := range previewList(t, "PR_SECRETS") {
 		want["created-nightly-"+n] = true
 	}
-	want["created-nightly-mock-issuer-token"] = true
 	entries, _ := os.ReadDir(r.dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "created-") {
@@ -1095,7 +1093,7 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 		t.Errorf("secret %s not created", n)
 	}
 	calls := r.file(t, "calls")
-	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS"))+1 || strings.Count(calls, "--labels preview-pr=nightly ") != n {
+	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS")) || strings.Count(calls, "--labels preview-pr=nightly ") != n {
 		t.Errorf("creates or labels wrong:\n%s", calls)
 	}
 	if tok := r.file(t, "created-nightly-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {
@@ -1410,7 +1408,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mock-token", "mail-blog-ids"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -2498,7 +2496,7 @@ func nightlyBindLine(secret string) string {
 // nightlySecretNames is every secret `secrets nightly` makes.
 func nightlySecretNames(t *testing.T) []string {
 	t.Helper()
-	return append(previewList(t, "PR_SECRETS"), "mock-issuer-token")
+	return previewList(t, "PR_SECRETS")
 }
 
 func TestPreviewNightlyRunsAsRunNightly(t *testing.T) {
@@ -2702,5 +2700,90 @@ func TestPreviewInvariantsFailClosedOnADenialThatIsNotTheSecretRead(t *testing.T
 	}
 	if strings.Contains(r.stdout, imgHeld) {
 		t.Errorf("success line printed:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewSecretsPRMakesItsMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "7")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	if tok := r.file(t, "created-pr-7-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {
+		t.Errorf("mock issuer token = %q, want 64 lowercase hex and no newline", tok)
+	}
+	var create bool
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets create pr-7-mock-issuer-token ") {
+			create = true
+			if !strings.Contains(l, "--labels preview-pr=7 ") {
+				t.Errorf("create is not labelled preview-pr=7: %s", l)
+			}
+		}
+		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "pr-7-mock-issuer-token") {
+			t.Errorf("the PR token is bound: %s", l)
+		}
+	}
+	if !create {
+		t.Errorf("no create call for pr-7-mock-issuer-token:\n%s", r.file(t, "calls"))
+	}
+}
+
+func TestPreviewOnlyTheGatewayMountsTheMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	for svc, line := range argvBySvc(prGolden(t, "deploy-argv"), "pr-7") {
+		got := flagValue(line, "--set-secrets")
+		if svc == "gateway" {
+			if !strings.Contains(got, "GATEWAY_MOCK_ISSUER_TOKEN=pr-7-mock-issuer-token:latest") {
+				t.Errorf("gateway --set-secrets = %q, want the mock issuer token", got)
+			}
+		} else if strings.Contains(got, "mock-issuer-token") {
+			t.Errorf("%s mounts the mock issuer token: %q", svc, got)
+		}
+	}
+}
+
+func TestPreviewTeardownDeletesTheTokenSecretsMade(t *testing.T) {
+	t.Parallel()
+	sec := runPreview(t, nil, "secrets", "7")
+	var have strings.Builder
+	entries, _ := os.ReadDir(sec.dir)
+	for _, e := range entries {
+		if n, ok := strings.CutPrefix(e.Name(), "created-"); ok {
+			have.WriteString(n + "\n")
+		}
+	}
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have", have.String()) }, "teardown", "7")
+	c := r.file(t, "calls")
+	for _, w := range []string{"--filter labels.preview-pr=7 ", "secrets delete pr-7-mock-issuer-token "} {
+		if !strings.Contains(c, w) {
+			t.Errorf("calls lack %q:\n%s", w, c)
+		}
+	}
+}
+
+func TestPreviewMockTokenReadsThePreviewsSecret(t *testing.T) {
+	t.Parallel()
+	const value = "shim-output"
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "access-pr-7-mock-issuer-token", value) }, "mock-token", "7")
+	calls := nonBlankLines(r.file(t, "calls"))
+	if r.code != 0 || r.stdout != value || len(calls) != 1 || !strings.HasPrefix(calls[0], "secrets versions access latest --secret pr-7-mock-issuer-token ") {
+		t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+	}
+}
+
+func TestPreviewMockTokenRefusesABadName(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"", "07"} {
+		t.Run("name="+bad, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, nil, "mock-token", bad)
+			if r.code == 0 {
+				t.Errorf("mock-token %q exited 0", bad)
+			}
+			if _, err := os.Stat(filepath.Join(r.dir, "calls")); err == nil {
+				t.Errorf("mock-token %q called gcloud", bad)
+			}
+		})
 	}
 }

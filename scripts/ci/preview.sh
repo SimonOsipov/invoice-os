@@ -19,7 +19,7 @@
 #   preview.sh check-mail-off nightly     unmount them from the worker
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
-#   preview.sh mock-token nightly         print the nightly mock issuer token
+#   preview.sh mock-token <pr|nightly>   print the preview's mock issuer token
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
@@ -44,7 +44,7 @@ BACKENDS=(gateway auth tenancy portfolio invoice validation dashboard submission
 SITES=(app landing library blog check ops-console support-console)
 # The secrets each PR generates or composes; preview.tf holds the shared ones.
 PR_SECRETS=(gateway-token s2s-token gotrue-jwt-keys gotrue-jwt-secret database-superuser-url database-migration-url
-  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key)
+  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key mock-issuer-token)
 
 die() {
   echo "::error::$*" >&2
@@ -148,7 +148,6 @@ cmd_secrets() {
   dsn() { printf 'postgres://%s:%s@%s:5432/%s?sslmode=require%s' "$1" "$2" "$ip" "$db" "$3"; }
 
   local names=("${PR_SECRETS[@]}")
-  [ "$pr" != nightly ] || names+=(mock-issuer-token)
   for name in "${names[@]}"; do
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
@@ -287,7 +286,7 @@ secrets_of() {
   local pr=$1 s=()
   case "$2" in
     gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url DATABASE_MIGRATION_URL=database-migration-url
-      GATEWAY_MOCK_ISSUER_KEY=mock-issuer-key) ;;
+      GATEWAY_MOCK_ISSUER_KEY=mock-issuer-key GATEWAY_MOCK_ISSUER_TOKEN=mock-issuer-token) ;;
     auth) s=(DATABASE_URL=database-auth-url GOTRUE_JWT_KEYS=gotrue-jwt-keys GOTRUE_JWT_SECRET=gotrue-jwt-secret) ;;
     tenancy | portfolio | dashboard | notifications) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token) ;;
     validation) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
@@ -297,7 +296,6 @@ secrets_of() {
   esac
   local out=() kv
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done
-  [ "$pr$2" != nightlygateway ] || out+=(GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest)
   case "$2" in
     invoice | submission | worker)
       out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
@@ -715,7 +713,7 @@ case "${1:-}" in
   check-mail-on) mail_arg "${2:-}"; cmd_check_mail_on ;;
   check-mail-off) mail_arg "${2:-}"; cmd_check_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
-  mock-token) mail_arg "${2:-}"; read_secret latest --secret nightly-mock-issuer-token --project "$PROJECT" ;;
+  mock-token) name_arg "${2:-}"; read_secret latest --secret "$(secret "$2" mock-issuer-token)" --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;

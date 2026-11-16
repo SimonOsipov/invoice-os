@@ -1827,7 +1827,7 @@ test('the emailed link opens one bounded set-password form, invite or not, and a
     const label = invite ? 'invite link' : 'plain link'
     const errorsFrom = errors.length
     const postsFrom = posts.length
-    // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
+    // One bounce mints the state; the loop resizes the rendered page, so no width re-requests the link.
     const pageUrl = await openMailedLink(page, invite)
     const state = pageUrl.searchParams.get('state')
     expect(state, `${label}: the set-password page state`).toMatch(STATE_43)
@@ -1836,7 +1836,7 @@ test('the emailed link opens one bounded set-password form, invite or not, and a
     for (const width of widths) {
       const height = 1080
       await page.setViewportSize({ width, height })
-      await page.goto(pageUrl.href)
+      await settleAnimations(page.locator('main'))
       await expect(page.locator('form'), `${label}: one form at ${width}px`).toHaveCount(1)
       await expect(password, `${label}: one password input at ${width}px`).toHaveCount(1)
       await expect(button, `${label}: one button at ${width}px`).toHaveCount(1)

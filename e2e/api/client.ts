@@ -95,29 +95,34 @@ const MOCK_ISSUER_HEADER = 'X-Mock-Issuer-Token'
 
 const previewMockTokens = new Map<string, string>()
 
-// The mock-route header: MOCK_ISSUER_TOKEN, else on a preview gateway (pr-<N> or nightly) that preview's
-// mock-issuer-token secret (read once per preview, kept in memory). Off a preview with no variable: none. Never logs the value.
+// The mock-route header. On a preview gateway (pr-<N> or nightly) MOCK_ISSUER_TOKEN counts only when
+// MOCK_ISSUER_TOKEN_FOR names that preview; else that preview's mock-issuer-token secret (read once per
+// preview, kept in memory). Off a preview: MOCK_ISSUER_TOKEN, else none. Never logs the value.
 export function mockIssuerHeaders(): Record<string, string> {
-  let token = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
-  if (!token) {
-    let suffix: string | undefined
-    try {
-      suffix = previewSuffix()
-    } catch {
-      // not a preview gateway
-    }
-    if (suffix) {
-      if (!previewMockTokens.has(suffix)) {
-        try {
-          previewMockTokens.set(suffix, previewSecret('mock-issuer-token').trim())
-        } catch {
-          throw new Error(`mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read ${suffix}-mock-issuer-token`)
-        }
-      }
-      token = previewMockTokens.get(suffix) ?? ''
-    }
+  const env = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
+  let suffix: string | undefined
+  try {
+    suffix = previewSuffix()
+  } catch {
+    // not a preview gateway
   }
-  return token ? { [MOCK_ISSUER_HEADER]: token } : {}
+  if (!suffix) return env ? { [MOCK_ISSUER_HEADER]: env } : {}
+  if (env && process.env.MOCK_ISSUER_TOKEN_FOR?.trim() === suffix) return { [MOCK_ISSUER_HEADER]: env }
+  let token = previewMockTokens.get(suffix)
+  if (!token) {
+    try {
+      token = previewSecret('mock-issuer-token').trim()
+    } catch {
+      token = ''
+    }
+    if (!token) {
+      throw new Error(
+        `mock issuer token: set MOCK_ISSUER_TOKEN with MOCK_ISSUER_TOKEN_FOR=${suffix}, or sign in with gcloud to read ${suffix}-mock-issuer-token`,
+      )
+    }
+    previewMockTokens.set(suffix, token)
+  }
+  return { [MOCK_ISSUER_HEADER]: token }
 }
 
 // login(): the only way to mint a Bearer token (mock issuer, ephemeral ES256

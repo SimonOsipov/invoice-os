@@ -56,7 +56,9 @@ test.describe('the preview environment posture (F-242)', () => {
       })
 
       test(`${route} refuses a wrong mock issuer token`, async () => {
-        const [name, value] = Object.entries(mockIssuerHeaders())[0]
+        const entries = Object.entries(mockIssuerHeaders())
+        expect(entries, 'a mock issuer token for this gateway').toHaveLength(1)
+        const [name, value] = entries[0]
         const res = await rawFetch(route, { method: 'POST', headers: { [name]: `${value}x` }, body: {} })
         expect(res.status).toBe(401)
         expect(noToken(res.body)).toBe(true)

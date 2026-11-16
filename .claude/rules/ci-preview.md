@@ -47,7 +47,7 @@ paths:
 - Bake `VITE_CHECK_URL` (the check address from `preview.sh urls`) into the landing, library and check images.
 - Send `X-Gateway-Token` to `/healthz/fleet` and to the gateway `/health` detail. `preview.sh token <N>` prints the PR's token.
 - Generate `<pr-N|nightly>-mock-issuer-token` in `preview.sh secrets`. The gateway mounts it as `GATEWAY_MOCK_ISSUER_TOKEN`. `preview.sh mock-token <pr|nightly>` prints it.
-- Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN` in the `e2e` and `topology` jobs, and in the nightly `nightly-ai` job.
+- Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN`, with `MOCK_ISSUER_TOKEN_FOR` naming its preview, in the `e2e` and `topology` jobs, and in the nightly `nightly-ai` job.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
 - Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.

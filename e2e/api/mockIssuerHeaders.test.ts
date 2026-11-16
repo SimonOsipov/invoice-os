@@ -54,6 +54,7 @@ const headerOf = (s: Seen) => s.headers[HEADER]
 describe('mockIssuerHeaders', () => {
   it('each mock-route helper sends X-Mock-Issuer-Token from MOCK_ISSUER_TOKEN', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-1')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'nightly')
     const c = await load(NIGHTLY)
     await c.login(PERSONA)
     await c.grantMembership(GRANT)
@@ -69,6 +70,7 @@ describe('mockIssuerHeaders', () => {
 
   it('MOCK_ISSUER_TOKEN is sent trimmed, and a blank one falls back to the preview secret', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', ' \ttok-7\n ')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'nightly')
     const c = await load(NIGHTLY)
     await c.login(PERSONA)
     vi.stubEnv('MOCK_ISSUER_TOKEN', '  \n')
@@ -88,6 +90,7 @@ describe('mockIssuerHeaders', () => {
 
   it('MOCK_ISSUER_TOKEN is read on every call', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-a')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'nightly')
     const c = await load(NIGHTLY)
     await c.login(PERSONA)
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-b')
@@ -152,6 +155,7 @@ describe('mockIssuerHeaders', () => {
 
   it('MOCK_ISSUER_TOKEN set on a PR preview is sent and no secret is read', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-9')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'pr-7')
     const c = await load(PR)
     await c.login(PERSONA)
     expect(seen.map(headerOf)).toEqual(['tok-9'])
@@ -211,6 +215,34 @@ describe('mockIssuerHeaders', () => {
     expect(seen.map(headerOf)).toEqual(['tok-6'])
   })
 
+  it('a token set for another preview is not sent; the target preview\'s secret is', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-nightly')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'nightly')
+    exec.mockReturnValue('tok-pr7\n')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-pr7'])
+  })
+
+  it('an unbound token on a preview is not sent', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-loose')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', '')
+    exec.mockReturnValue('tok-pr7')
+    const c = await load(PR)
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-pr7'])
+  })
+
+  it('an empty secret read throws the clear error and is not remembered', async () => {
+    vi.stubEnv('MOCK_ISSUER_TOKEN', '')
+    exec.mockReturnValueOnce('  \n').mockReturnValue('tok-6\n')
+    const c = await load(PR)
+    await expect(c.login(PERSONA)).rejects.toThrow(/MOCK_ISSUER_TOKEN.*gcloud/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await c.login(PERSONA)
+    expect(seen.map(headerOf)).toEqual(['tok-6'])
+  })
+
   it('a failed secret read names both sources and is retried', async () => {
     vi.stubEnv('MOCK_ISSUER_TOKEN', '')
     exec.mockImplementationOnce(() => {
@@ -230,6 +262,7 @@ describe('mockIssuerHeaders', () => {
       vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void lines.push(a.map(String).join(' ')))
     }
     vi.stubEnv('MOCK_ISSUER_TOKEN', 'tok-4')
+    vi.stubEnv('MOCK_ISSUER_TOKEN_FOR', 'nightly')
     const c = await load(NIGHTLY)
     await c.login(PERSONA)
     status = 401

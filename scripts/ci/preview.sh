@@ -147,8 +147,7 @@ cmd_secrets() {
   [ -n "$ip" ] || die "the preview Cloud SQL instance has no private IP"
   dsn() { printf 'postgres://%s:%s@%s:5432/%s?sslmode=require%s' "$1" "$2" "$ip" "$db" "$3"; }
 
-  local names=("${PR_SECRETS[@]}")
-  for name in "${names[@]}"; do
+  for name in "${PR_SECRETS[@]}"; do
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
       [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"

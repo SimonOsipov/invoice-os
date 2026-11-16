@@ -970,6 +970,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, document.ErrHeldElsewhere):
+		return http.StatusConflict, document.HeldElsewhereMessage
 	case errors.Is(err, ErrUndoForbidden):
 		return http.StatusForbidden, "only the uploader, an admin or a full-access member can undo an import"
 	case errors.Is(err, ErrNotUndoable):

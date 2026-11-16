@@ -155,6 +155,9 @@ type documentStore func(ctx context.Context, filename, contentType string, size 
 func newDocumentStorer(store documentStore) func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
 	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
 		doc, reused, err := store(ctx, filename, contentType, size, body)
+		if errors.Is(err, document.ErrHeldElsewhere) {
+			return extraction.StoredDocument{}, extraction.ErrDocumentHeldElsewhere
+		}
 		if err != nil {
 			return extraction.StoredDocument{}, err
 		}

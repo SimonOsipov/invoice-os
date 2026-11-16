@@ -148,7 +148,7 @@ func writeEntityStages(ctx context.Context, tx pgx.Tx, bw *bundleWriter, dir str
 // resolveGeneratedBy names the acting user for manifest.json through the same
 // actor.Resolve status_history.csv uses, inside the same tx (D-39).
 func resolveGeneratedBy(ctx context.Context, tx pgx.Tx, subject string) (manifestActor, error) {
-	labels, err := actor.Resolve(ctx, tx, []string{subject})
+	labels, err := actor.Resolve(ctx, tx, subject, []string{subject})
 	if err != nil {
 		return manifestActor{}, fmt.Errorf("archive: resolve generated_by: %w", err)
 	}

@@ -177,7 +177,7 @@ func TestHolderName_FallsBackDisplayNameThenEmailThenSubject(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := holderName(c.displayName, c.email, c.userID)
+			got := holderName(c.displayName, c.email, c.userID, false)
 			if got != c.want {
 				t.Errorf("holderName(%v, %v, %q) = %q, want %q", c.displayName, c.email, c.userID, got, c.want)
 			}
@@ -332,7 +332,7 @@ func TestResolveHolder_AllHoldersSuspended(t *testing.T) {
 // roles.ts/members.ts use `??` (nullish coalescing): only null/undefined falls through, an
 // empty string does not. The Go port must agree -- a non-nil pointer to "" stops the ladder.
 func TestHolderName_EmptyStringDisplayNameDoesNotFallThrough(t *testing.T) {
-	got := holderName(ptr(""), ptr("halima@example.com"), "user-2")
+	got := holderName(ptr(""), ptr("halima@example.com"), "user-2", false)
 	want := ""
 	if got != want {
 		t.Errorf("holderName(ptr(\"\"), ...) = %q, want %q (empty string must not fall through to email)", got, want)

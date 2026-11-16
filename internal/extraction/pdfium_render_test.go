@@ -751,12 +751,15 @@ func TestPDFiumReader_CommonPaperSizesRenderAsToday(t *testing.T) {
 
 func TestPDFiumReader_TheSizeCapReadsTheCropBox(t *testing.T) {
 	raw := fxBuildSizedPages(fxSizedPage{W: 14400, H: 14400, CropW: 612, CropH: 792})
-	pages, _, _, err := sizedRead(t, extraction.NewPDFiumReader(), raw)
+	pages, cleanups, _, err := sizedRead(t, extraction.NewPDFiumReader(), raw)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if len(pages) != 1 || pages[0].ImageWidth != 1275 || pages[0].ImageHeight != 1651 {
-		t.Errorf("pages = %+v, want one 1275x1651 page: the cap reads the rendered box, not the MediaBox", len(pages))
+	if len(pages) != 1 || pages[0].ImageWidth != 1275 || pages[0].ImageHeight != 1651 || cleanups != 1 {
+		t.Errorf("pages = %d, cleanups = %d, want one 1275x1651 page and one cleanup: the cap reads the rendered box, not the MediaBox", len(pages), cleanups)
+		for _, p := range pages {
+			t.Errorf("page %d grid = %dx%d", p.Number, p.ImageWidth, p.ImageHeight)
+		}
 	}
 }
 
@@ -801,6 +804,10 @@ func TestPDFiumEndsReader_SkipsAnOversizedMiddlePage(t *testing.T) {
 
 func TestPDFiumReader_RendersAfterARefusal(t *testing.T) {
 	r := extraction.NewPDFiumReader()
+	// Warm the pool outside the deadline: the cold wasm compile is slow.
+	if _, err := r.Read(context.Background(), extraction.Document{Bytes: fxBuildSizedPages(fxSizedPage{W: 612, H: 792}), ContentType: "application/pdf"}, func(extraction.Page) error { return nil }); err != nil {
+		t.Fatalf("warm-up Read: %v", err)
+	}
 	before := extraction.PDFiumCleanupsForTest()
 	// More refusals than pool instances: a refusal that leaks its instance starves a later Read,
 	// so every Read shares one short deadline and a leak surfaces as a deadline error.

@@ -28,7 +28,7 @@ paths:
 - Treat `v1` as the render profile. A change of DPI, colour model or format mints `v2` keys.
 - Never overwrite `v1` objects. Decide what happens to the rows that name them.
 - Fail a document over `MaxPages` with a stated reason. Never truncate it.
-- Refuse a page whose render grid is over `maxRenderPx` on either side as unreadable, before the render. Never render it at a lower DPI.
+- Refuse a page whose render grid is over `maxRenderPx` or under 1 px on either side (the amd64 overflow guard) as unreadable, before the render. Never render it at a lower DPI.
 - Derive `MaxPages` from the 10-minute job timeout, a 120-second reserve, 300 ms per page and a safety factor of 2.
 - Re-derive `MaxPages` when a measured per-page cost exceeds 300 ms. Never raise it from the arithmetic alone.
 - Assume one render per job. Re-derive `MaxPages` before you wire `PDFiumExtractor` beside `PageStore`.

@@ -117,6 +117,8 @@ var d3Env = map[string]string{
 	"GOTRUE_MAILER_OTP_LENGTH":                "10",
 	"GOTRUE_MAILER_OTP_EXP":                   "3600",
 	"GOTRUE_PASSWORD_MIN_LENGTH":              "10",
+	"GOTRUE_SESSIONS_TIMEBOX":                 "720h",
+	"GOTRUE_SESSIONS_INACTIVITY_TIMEOUT":      "168h",
 	"GOTRUE_RATE_LIMIT_HEADER":                "X-User-Address",
 }
 

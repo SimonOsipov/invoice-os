@@ -322,3 +322,54 @@ func TestAuditRead_SearchMatchStillResolvesActorName(t *testing.T) {
 			e.ActorName, e.ActorKind)
 	}
 }
+
+// A nameless member's email is the actor label for an admin and for that member, never for
+// another non-admin; the actor facet carries the same label.
+func TestAuditRead_ActorNameEmailLeak_NonAdminReadsUnnamedMemberNotAnotherMembersEmail(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	p := pageSeedTenant(t, f)
+
+	admin := csMemberUser(t, super, uuid.NewString(), p.tenant, "admin", true)
+	selfID, otherID := uuid.NewString(), uuid.NewString()
+	self := csMemberUser(t, super, selfID, p.tenant, "preparer", true)
+	csMemberUser(t, super, otherID, p.tenant, "reviewer", true)
+	selfEmail, otherEmail := "self-"+selfID[:8]+"@example.com", "other-"+otherID[:8]+"@example.com"
+	for id, email := range map[string]string{selfID: selfEmail, otherID: otherEmail} {
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET email = $3 WHERE tenant_id = $1 AND user_id = $2`, p.tenant, id, email); err != nil {
+			t.Fatalf("set email: %v", err)
+		}
+	}
+	filtInsert(t, f, p, []filtRow{
+		{event: "approval_policy.published", actor: otherID, payload: "{}", ageSeconds: 20},
+		{event: "approval_policy.published", actor: selfID, payload: "{}", ageSeconds: 10},
+	})
+
+	names := func(ctx context.Context) map[string]string {
+		got := csList(t, f, ctx, audit.Filter{Limit: 20})
+		out := map[string]string{}
+		for _, e := range got.Events {
+			out[e.Actor] = e.ActorName
+		}
+		for _, b := range got.Facets.Actor {
+			if b.Value != nil && b.Name != nil && out[*b.Value] != *b.Name {
+				t.Errorf("actor facet names %s %q, its row %q", *b.Value, *b.Name, out[*b.Value])
+			}
+		}
+		if len(out) != 2 {
+			t.Fatalf("read %d actors, want 2: %v", len(out), out)
+		}
+		return out
+	}
+	if got := names(admin); got[otherID] != otherEmail || got[selfID] != selfEmail {
+		t.Errorf("admin reads %v, want both emails (admins keep them)", got)
+	}
+	got := names(self)
+	if got[otherID] != "Unnamed member" {
+		t.Errorf("non-admin reads %q for another member, want %q", got[otherID], "Unnamed member")
+	}
+	if got[selfID] != selfEmail {
+		t.Errorf("non-admin reads %q for their own row, want %q", got[selfID], selfEmail)
+	}
+}

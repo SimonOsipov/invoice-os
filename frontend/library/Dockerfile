@@ -38,11 +38,9 @@ ARG VITE_REGISTRATION_OPEN
 ENV VITE_REGISTRATION_OPEN=$VITE_REGISTRATION_OPEN
 ARG BUILD_SHA
 ENV VITE_BUILD_SHA=${BUILD_SHA}
-# Build stage only, never ENV; empty skips the source-map upload.
-ARG SENTRY_AUTH_TOKEN
-RUN pnpm --filter @invoice-os/library build
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/library build
 # The landing not-found page answers a /library 404.
-RUN pnpm --filter @invoice-os/landing exec vite build --base=/library/_landing/ --outDir=dist/library-404
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/landing exec vite build --base=/library/_landing/ --outDir=dist/library-404
 
 # ---- Serve: Caddy static server + /health ----
 FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve

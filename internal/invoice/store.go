@@ -730,7 +730,8 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 		for _, sc := range result {
 			subjects = append(subjects, sc.Actor)
 		}
-		labels, err := actor.Resolve(ctx, tx, subjects)
+		callerID, _ := auth.IdentityFromContext(ctx) // staff carry none: unrestricted
+		labels, err := actor.Resolve(ctx, tx, callerID.Subject, subjects)
 		if err != nil {
 			return err
 		}

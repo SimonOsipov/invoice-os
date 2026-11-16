@@ -144,7 +144,7 @@ jobs:
             echo "::add-mask::$token"
             export SENTRY_AUTH_TOKEN="$token"
             args+=(
-              --build-arg SENTRY_AUTH_TOKEN
+              --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN
               --build-arg VITE_GATEWAY_URL=https://api.ascomply.com
               --build-arg VITE_APP_URL=https://app.ascomply.com
               --build-arg VITE_LANDING_URL=https://www.ascomply.com

@@ -304,9 +304,14 @@ export function deletedFallback(src: string = readSource('internal/actor/actor.g
   return found(/Label\{Text: "([^"]+)", Kind/.exec(removedName(src))?.[1], 'the RemovedName fallback')
 }
 
-// Resolve labels a removed membership with RemovedName and every other with Name.
+// Resolve labels a removed membership with RemovedName before any other naming branch.
 export function resolveMarksRemovedMembers(src: string = readSource('internal/actor/resolve.go')): boolean {
-  return /if status == "removed" \{\s*out\[subject\] = RemovedName\(displayName\)\s*continue\s*\}\s*out\[subject\] = Name\(/.test(src)
+  const body = goFunc(src, /func Resolve\b/, 'actor.Resolve')
+  const removed = /if status == "removed" \{\s*out\[subject\] = RemovedName\(displayName\)\s*continue\s*\}/.exec(body)
+  if (!removed) return false
+  const loop = body.slice(body.lastIndexOf('for _, subject := range'))
+  const first = /out\[subject\] = (\w+)\(/.exec(loop)
+  return first?.[1] === 'RemovedName' && loop.includes('out[subject] = Name(')
 }
 
 export function endMembershipDropsEmail(src: string = readSource('internal/tenancy/store.go')): boolean {

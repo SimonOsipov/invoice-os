@@ -25,6 +25,6 @@ paths:
 - Treat `VITE_SENTRY_TEST_DIGEST` as the SHA-256 hex of a passphrase. The client accepts exactly 64 hex characters, trimmed and lowercased.
 - Never store the passphrase. The digest stays in the bundle until you delete the variable and rebuild the SPA.
 - Rebuild an SPA to change its digest or DSN. A new revision of the same image re-serves the old bundle.
-- Pass `SENTRY_AUTH_TOKEN` as a build `ARG`, never as `ENV`. Use an organisation token, because a user token makes the upload skip.
+- Pass `SENTRY_AUTH_TOKEN` only as the BuildKit secret `sentry_auth_token`, mounted with `env=SENTRY_AUTH_TOKEN` on each SPA build `RUN`. Never `ARG` or `ENV`. Use an organisation token, because a user token makes the upload skip.
 - Sample traces below `1.0` before spans pass about 2.5 million a month. The ceiling comment on `TracesSampleRate` states it.
 - Treat a change to a trace sample rate or a scrubber as a privacy-page change.

@@ -389,7 +389,7 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 			subjects = append(subjects, *b.Value)
 		}
 	}
-	labels, err := actor.Resolve(ctx, tx, subjects)
+	labels, err := actor.Resolve(ctx, tx, f.scope.self, subjects)
 	if err != nil {
 		return Response{}, fmt.Errorf("audit: resolve actors: %w", err)
 	}

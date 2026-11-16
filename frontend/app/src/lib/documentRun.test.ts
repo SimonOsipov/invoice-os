@@ -1837,7 +1837,7 @@ describe('startDocumentRun — a refused file in a batch (SECAUD-52)', () => {
   it('HELD-11: a held file beside a failed-status or zero-invoice report claims nothing about the others', async () => {
     const bad = (id: string, over: Partial<ImportReport>) => ({ ...report(id), ...over })
     for (const over of [
-      { status: 'failed' as const, rows_valid: 0, ready_invoices: 0 },
+      { status: 'failed' as const },
       { rows_valid: 0, ready_invoices: 0 },
     ]) {
       const outcomes = await startDocumentRun(

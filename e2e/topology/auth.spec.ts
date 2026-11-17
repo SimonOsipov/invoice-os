@@ -3272,7 +3272,7 @@ function freshRegistration(kind: TenantKind): RealAccount {
 
 // frontend/landing/src/passwordReset.ts RESET_SENT and RESET_FAILED.
 const RESET_SENT = 'If this address has an account, a reset link is on its way.'
-const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_LINK_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 const RESET_REQUEST_PATH = '/auth/request-password-reset'
 const RESET_PAGE_PATH = '/auth/reset-password'
 
@@ -3417,6 +3417,9 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     await reset.getByRole('button', { name: 'Set new password', exact: true }).dblclick()
     await reset.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
     await expect(reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })).toBeVisible()
+    const notice = reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+    await expect(notice).toContainText('new reset mail')
+    await expect(notice).not.toContainText('old password')
     await expect.poll(() => new URL(reset.url()).searchParams.has('reset'), { message: 'the landing strips ?reset' }).toBe(false)
     expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
     for (const width of [1280, 375]) {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -735,6 +736,47 @@ func TestResetPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T) {
 				t.Errorf("sign-out calls = %d, want 0", n)
 			}
 			rpRequireWarn(t, buf, c.warn, c.attrs)
+		})
+	}
+}
+
+// The gateway never reads the account's confirmation state, so a refused password set answers the same
+// whether GoTrue's verify cleared an unconfirmed user's password or not.
+func TestResetPassword_RefusedPasswordIsTheSameFailedNoticeForConfirmedAndUnconfirmed(t *testing.T) {
+	verifyWith := func(confirmedAt any) http.HandlerFunc {
+		b, _ := json.Marshal(map[string]any{
+			"access_token": rpAccess, "refresh_token": rpRefresh,
+			"user": map[string]any{"id": subjectS1, "email": rpEmail, "email_confirmed_at": confirmedAt},
+		})
+		return answer(http.StatusOK, string(b))
+	}
+	refusals := map[string]http.HandlerFunc{
+		"PUT 422 weak_password": answer(http.StatusUnprocessableEntity, rpWeakPassword),
+		"PUT 500":               answer(http.StatusInternalServerError, gtInternal),
+	}
+	for name, refuse := range refusals {
+		t.Run(name, func(t *testing.T) {
+			run := func(confirmedAt any) (*httptest.ResponseRecorder, []string) {
+				f := newResetGoTrue(t)
+				f.verify, f.user = verifyWith(confirmedAt), refuse
+				rec := rpPost(t, newResetHandler(t, f, nil), rpValues(rpToken, "recovery", rpPass))
+				return rec, f.names()
+			}
+			unconfirmed, unconfirmedCalls := run(nil)
+			confirmed, confirmedCalls := run("2026-01-02T03:04:05Z")
+
+			rpRequireRedirect(t, unconfirmed, rpFailed)
+			rpRequireRedirect(t, confirmed, rpFailed)
+			if unconfirmed.Body.String() != confirmed.Body.String() {
+				t.Errorf("bodies differ: %q vs %q", unconfirmed.Body.String(), confirmed.Body.String())
+			}
+			if !reflect.DeepEqual(unconfirmed.Header(), confirmed.Header()) {
+				t.Errorf("headers differ: %v vs %v", unconfirmed.Header(), confirmed.Header())
+			}
+			want := []string{"POST /verify", "PUT /user"}
+			if !slices.Equal(unconfirmedCalls, want) || !slices.Equal(confirmedCalls, want) {
+				t.Errorf("GoTrue calls = %v and %v, want %v in both", unconfirmedCalls, confirmedCalls, want)
+			}
 		})
 	}
 }

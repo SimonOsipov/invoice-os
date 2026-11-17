@@ -27,7 +27,8 @@ const BLOG_SUBJECT = 'Confirm your ASComply blog subscription'
 const BLOG_LINK = 'https://www.ascomply.com/blog/subscribe/confirm?token='
 const BLOG_SUBSCRIBED = 'You are subscribed.'
 const RESET_SUBJECT = 'Reset your ASComply password'
-const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+// RESET_FAILED in frontend/landing/src/passwordReset.ts.
+const RESET_LINK_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 // COPY.verified in VerifyNotice.tsx
 const VERIFIED_NOTICE = 'Your email address is verified. Please sign in.'
 const CONTINUE_ONLY = 'Continue only if this is your address.'

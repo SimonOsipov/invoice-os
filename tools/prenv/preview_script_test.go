@@ -22,7 +22,12 @@ echo gcloud >> "$D/order"
 [ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo PARTIAL; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
 runfound() {
   if grep -qxF -- "$4" "$D/describe-run-error" 2>/dev/null; then echo "ERROR: (gcloud.run.describe) UNAVAILABLE: backend error" >&2; return 1; fi
-  if [ -e "$D/exists" ] && ! grep -qxF -- "$4" "$D/exists"; then echo "ERROR: (gcloud.run.describe) NOT_FOUND: $4 not found." >&2; return 1; fi
+  # gcloud run prints no NOT_FOUND for an absent resource (googlecloudsdk surface/run/{services,jobs}/describe.py).
+  if [ -e "$D/exists" ] && ! grep -qxF -- "$4" "$D/exists"; then
+    if [ "$2" = jobs ]; then echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [$4]." >&2
+    else echo "ERROR: (gcloud.run.services.describe) Cannot find service [$4]" >&2; fi
+    return 1
+  fi
 }
 case "$1 $2 $3" in
 "run deploy "*)
@@ -3294,7 +3299,7 @@ func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) 
 	}
 }
 
-// A describe that fails for any reason but NOT_FOUND may hide a running service: the claim stays.
+// A describe that fails for any reason but "resource absent" may hide a running service: the claim stays.
 func TestPreviewTeardownKeepsTheClaimWhenADescribeFails(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"gateway-pr-7", "migrate-pr-7"} {

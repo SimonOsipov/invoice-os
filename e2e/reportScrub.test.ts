@@ -303,6 +303,16 @@ describe('static viewer assets', () => {
     expect(residuals(dir)).toEqual([])
   })
 
+  // The skip is by directory name: a run-written text file there must still be scrubbed or fail the run.
+  it('does not let a run-written text file under trace/ carry an opaque token out', () => {
+    const dir = tmp()
+    const secret = ['opaque', 'Token', '9z8y7x'].join('-')
+    put(dir, 'trace/data/run.network', `{"access_token":"${secret}"}\nrefresh_token=${secret}\n`)
+    const r = run(dir)
+    expect(readFileSync(join(dir, 'trace/data/run.network'), 'utf8')).toContain('access_token')
+    expect(r.status === 1 || !readFileSync(join(dir, 'trace/data/run.network'), 'utf8').includes(secret)).toBe(true)
+  })
+
   it('still scrubs a trace zip that sits under trace/', () => {
     const dir = tmp()
     put(dir, 'trace/t.zip', zipSync({ 'a.network': enc(`{"password":"${pwTag()}"}`) }))

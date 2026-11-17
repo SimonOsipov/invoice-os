@@ -313,6 +313,16 @@ describe('static viewer assets', () => {
     expect(r.status === 1 || !readFileSync(join(dir, 'trace/data/run.network'), 'utf8').includes(secret)).toBe(true)
   })
 
+  // A file at a path that exists in the viewer but differs must not be skipped.
+  it('scrubs a file at a real viewer path when its bytes differ from the viewer asset', () => {
+    const dir = tmp()
+    const rel = jsFiles(join(pwCore(), 'lib/vite/traceViewer'))[0].slice(join(pwCore(), 'lib/vite/traceViewer').length + 1)
+    const secret = ['opaque', 'Token', '4k3j2h'].join('-')
+    put(dir, join('trace', rel), `${readFileSync(join(pwCore(), 'lib/vite/traceViewer', rel), 'latin1')}\nAuthorization: Bearer ${secret}\n`)
+    scrubDir(dir)
+    expect(readFileSync(join(dir, 'trace', rel), 'latin1')).not.toContain(secret)
+  })
+
   it('still scrubs a trace zip that sits under trace/', () => {
     const dir = tmp()
     put(dir, 'trace/t.zip', zipSync({ 'a.network': enc(`{"password":"${pwTag()}"}`) }))

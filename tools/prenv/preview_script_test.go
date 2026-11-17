@@ -45,6 +45,7 @@ case "$1 $2 $3" in
 "secrets create "*)
   if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) ALREADY_EXISTS: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
   cat > "$D/created-$3" ;;
+"secrets set-iam-policy "*) cp "$4" "$D/setpolicy-$3" ;;
 "secrets describe "*) if grep -qxF -- "$3" "$D/describe-error" 2>/dev/null; then echo "ERROR: (gcloud.secrets.describe) UNAVAILABLE: backend error" >&2; exit 1; fi
   cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
 "storage ls "*)
@@ -548,6 +549,8 @@ var (
 	goldenMu    sync.Mutex
 	goldenCache = map[string]map[string]string{}
 	tmpEnvFile  = regexp.MustCompile(`--env-vars-file \S+`)
+	// bind_slot's mktemp path; secrets-calls stays unsorted, so only the path is masked.
+	tmpPolicyFile = regexp.MustCompile(`(secrets set-iam-policy \S+) \S+`)
 )
 
 // normCalls sorts the gcloud calls (deploys run four at a time) and masks the temp env-file path.
@@ -599,7 +602,7 @@ func nameGoldens(t *testing.T, name string) map[string]string {
 		}
 	}
 	out["secrets-created"] = b.String()
-	out["secrets-calls"] = sec.file(t, "calls")
+	out["secrets-calls"] = tmpPolicyFile.ReplaceAllString(sec.file(t, "calls"), "$1 POLICY")
 	out["secrets-stdout"] = sec.stdout
 
 	td := runPreview(t, func(dir string) {
@@ -2539,7 +2542,8 @@ func TestPreviewInvariantsReportTheNightlyAndTheImageProblemsTogether(t *testing
 
 const (
 	runNightlySA = "run-nightly@ascomply-preview.iam.gserviceaccount.com"
-	runPreviewSA = "run-preview@ascomply-preview.iam.gserviceaccount.com"
+	runSlot1SA   = "run-slot-1@ascomply-preview.iam.gserviceaccount.com"
+	runSlot2SA   = "run-slot-2@ascomply-preview.iam.gserviceaccount.com"
 )
 
 func nightlyBindLine(secret string) string {
@@ -2577,6 +2581,43 @@ func TestPreviewNightlyRunsAsRunNightly(t *testing.T) {
 	}
 }
 
+func TestPreviewPRRunsAsItsSlotsRuntime(t *testing.T) {
+	t.Parallel()
+	svcs := prAll(t)
+	for name, c := range map[string]struct {
+		setup func(dir string)
+		want  string
+	}{
+		"slot-1": {nil, runSlot1SA},
+		"slot-2": {slots(t, map[string]string{"slot-2": "7"}, nil), runSlot2SA},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dep := runPreview(t, c.setup, append([]string{"deploy", "7", "abc123"}, svcs...)...)
+			mig := runPreview(t, c.setup, "migrate", "7", "abc123")
+			if dep.code != 0 || mig.code != 0 {
+				t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+			}
+			n := 0
+			for _, l := range append(callLines(dep), callLines(mig)...) {
+				if strings.Contains(l, "run-preview") {
+					t.Errorf("a call names run-preview:\n%s", l)
+				}
+				if !strings.HasPrefix(l, "run deploy ") && !strings.HasPrefix(l, "run jobs deploy ") {
+					continue
+				}
+				n++
+				if got := flagValue(l, "--service-account"); got != c.want {
+					t.Errorf("--service-account = %q, want %q:\n%s", got, c.want, l)
+				}
+			}
+			if n != len(svcs)+1 {
+				t.Errorf("%d deploy lines, want %d services + the migrate job", n, len(svcs))
+			}
+		})
+	}
+}
+
 func TestPreviewPRNeverRunsAsRunNightly(t *testing.T) {
 	t.Parallel()
 	svcs := prAll(t)
@@ -2595,8 +2636,8 @@ func TestPreviewPRNeverRunsAsRunNightly(t *testing.T) {
 		}
 		if got := flagValue(l, "--service-account"); got != "" {
 			sa++
-			if got != runPreviewSA {
-				t.Errorf("--service-account = %q, want %q", got, runPreviewSA)
+			if got != runSlot1SA {
+				t.Errorf("--service-account = %q, want %q", got, runSlot1SA)
 			}
 		}
 	}
@@ -2638,6 +2679,12 @@ func TestPreviewSecretsNightlyBindsRunNightlyOnEachSecret(t *testing.T) {
 		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "run-preview") {
 			t.Errorf("a binding names run-preview:\n%s", l)
 		}
+		if strings.Contains(l, "set-iam-policy") {
+			t.Errorf("the nightly replaced a policy (it keeps bind_nightly):\n%s", l)
+		}
+	}
+	if n := strings.Count(strings.Join(lines, "\n"), "secrets add-iam-policy-binding "); n != len(names) {
+		t.Errorf("%d add-iam-policy-binding calls, want %d (one per secret)", n, len(names))
 	}
 }
 
@@ -2681,23 +2728,119 @@ func TestPreviewSecretsNightlyFailsWhenABindingFails(t *testing.T) {
 	}
 }
 
-func TestPreviewSecretsPRMakesNoIAMCall(t *testing.T) {
+// slotPolicy parses the policy that bind_slot handed to set-iam-policy for a secret.
+type slotPolicy struct {
+	Bindings []struct {
+		Role    string   `json:"role"`
+		Members []string `json:"members"`
+	} `json:"bindings"`
+}
+
+// wantSlotPolicy fails unless the secret's policy is exactly one secretAccessor binding for sa.
+func wantSlotPolicy(t *testing.T, r previewRun, secret, sa string) {
+	t.Helper()
+	if !r.exists("setpolicy-" + secret) {
+		t.Errorf("%s: no policy was set", secret)
+		return
+	}
+	var p slotPolicy
+	if err := json.Unmarshal([]byte(r.file(t, "setpolicy-"+secret)), &p); err != nil {
+		t.Errorf("%s: policy is not JSON: %v", secret, err)
+		return
+	}
+	if len(p.Bindings) != 1 {
+		t.Errorf("%s: %d bindings, want 1: %+v", secret, len(p.Bindings), p.Bindings)
+		return
+	}
+	if b := p.Bindings[0]; b.Role != "roles/secretmanager.secretAccessor" || !slices.Equal(b.Members, []string{"serviceAccount:" + sa}) {
+		t.Errorf("%s: binding %+v, want secretAccessor for serviceAccount:%s only", secret, b, sa)
+	}
+}
+
+func TestPreviewSecretsPRSetsEachPolicyToItsSlotsRuntime(t *testing.T) {
 	t.Parallel()
 	for name, setup := range map[string]func(dir string){
 		"new":      nil,
 		"existing": func(dir string) { writeIn(t, dir, "have", allPRSecrets(t)) },
 	} {
-		r := runPreview(t, setup, "secrets", "7")
-		if r.code != 0 {
-			t.Fatalf("%s: secrets exited %d: %s", name, r.code, r.stderr)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, setup, "secrets", "7")
+			if r.code != 0 {
+				t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+			}
+			lines := callLines(r)
+			names := previewList(t, "PR_SECRETS")
+			if len(names) != 13 {
+				t.Fatalf("%d PR secrets, want 13", len(names))
+			}
+			for _, n := range names {
+				sec := "pr-7-" + n
+				var sets []int
+				for i, l := range lines {
+					if strings.HasPrefix(l, "secrets set-iam-policy "+sec+" ") {
+						sets = append(sets, i)
+					}
+				}
+				if len(sets) != 1 {
+					t.Errorf("%s: %d set-iam-policy calls, want 1", sec, len(sets))
+					continue
+				}
+				if create := callIdx(lines, "secrets create "+sec+" "); name == "new" && (create < 0 || sets[0] < create) {
+					t.Errorf("%s: policy (call %d) is not after its create (call %d)", sec, sets[0], create)
+				}
+				wantSlotPolicy(t, r, sec, runSlot1SA)
+			}
+			if i := callIdx(lines, "add-iam-policy-binding"); i >= 0 {
+				t.Errorf("a PR secret got an additive binding: %s", lines[i])
+			}
+		})
+	}
+}
+
+func TestPreviewSecretsPRReplacesAStaleSlotBinding(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, map[string]string{"have": allPRSecrets(t)}), "secrets", "7")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	names := previewList(t, "PR_SECRETS")
+	if len(names) == 0 {
+		t.Fatal("no PR secrets")
+	}
+	for _, n := range names {
+		sec := "pr-7-" + n
+		wantSlotPolicy(t, r, sec, runSlot2SA)
+		if r.exists("setpolicy-"+sec) && strings.Contains(r.file(t, "setpolicy-"+sec), "run-slot-1") {
+			t.Errorf("%s: the policy still names run-slot-1", sec)
 		}
-		calls := r.file(t, "calls")
-		if name == "new" && !strings.Contains(calls, "secrets create pr-7-") {
-			t.Errorf("%s: no secret was created:\n%s", name, calls)
+	}
+}
+
+func TestPreviewSecretsPRDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "secrets", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "::error::PR 7 holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "::error::PR 7 holds no preview slot")
+	}
+	for _, bad := range []string{"secrets create", "set-iam-policy"} {
+		if i := callIdx(callLines(r), bad); i >= 0 {
+			t.Errorf("a PR without a slot ran %q: %s", bad, callLines(r)[i])
 		}
-		if strings.Contains(calls, "add-iam-policy-binding") {
-			t.Errorf("%s: a PR secret got an IAM call:\n%s", name, calls)
-		}
+	}
+}
+
+func TestPreviewSecretsPRFailsWhenAPolicyCannotBeSet(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-set-iam-policy", "") }, "secrets", "7")
+	if r.code == 0 {
+		t.Errorf("secrets exited 0 after a failed set-iam-policy")
+	}
+	if !strings.Contains(r.stderr, "::error::cannot give run-slot-1 access to pr-7-") {
+		t.Errorf("stderr lacks the binding error:\n%s", r.stderr)
+	}
+	if n := strings.Count(strings.Join(callLines(r), "\n"), "secrets set-iam-policy"); n != 1 {
+		t.Errorf("%d set-iam-policy attempts, want 1 (the run stops at the first failure)", n)
 	}
 }
 
@@ -3249,6 +3392,27 @@ func TestPreviewTeardownEmptiesTheSlotThenReleasesIt(t *testing.T) {
 		if i := callIdx(calls, bad); i >= 0 {
 			t.Errorf("teardown ran %q: %s", bad, calls[i])
 		}
+	}
+}
+
+// A surviving pr-<N>-* secret is bound to the slot's runtime, so the next PR must not inherit the slot.
+func TestPreviewTeardownKeepsTheClaimWhenASecretDeleteFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\npr-7-s2s-token\nslot-1-claim\n")
+		writeIn(t, dir, "fail-secrets-delete", "")
+	}, "teardown", "7")
+	calls := callLines(r)
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	for _, sec := range []string{"pr-7-gateway-token", "pr-7-s2s-token"} {
+		if callIdx(calls, "secrets delete "+sec+" ") < 0 {
+			t.Errorf("no delete was attempted for %s:\n%s", sec, strings.Join(calls, "\n"))
+		}
+	}
+	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+		t.Errorf("the claim was released over a surviving secret: %s", calls[i])
 	}
 }
 

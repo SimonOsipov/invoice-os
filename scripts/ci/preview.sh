@@ -805,7 +805,11 @@ cmd_reach() {
       fi
       continue
     fi
-    members=$(jq -r '.bindings[]? | select(.role=="roles/secretmanager.secretAccessor") | .members[]' <<<"$pol") || members=
+    if ! members=$(jq -r '.bindings[]? | select(.role=="roles/secretmanager.secretAccessor") | .members[]' <<<"$pol" 2>"$errf"); then
+      echo "::error::could not read the policy of $n: $(tail -n 1 "$errf")"
+      bad=1
+      continue
+    fi
     if in_list "$n" "$allowed"; then
       in_list "serviceAccount:$sa" "$members" || { echo "::error::${sa%%@*} cannot read $n, which this preview mounts."; bad=1; }
     elif in_list "serviceAccount:$sa" "$members"; then

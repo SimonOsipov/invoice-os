@@ -3936,6 +3936,13 @@ func TestPreviewReachFailsClosedWhenAListingOrPolicyReadFails(t *testing.T) {
 	})
 }
 
+func TestPreviewReachFailsClosedOnAnUnparsablePolicy(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-9-gateway-token"] = "not json" })
+	reachFails(t, r)
+	onlyError(t, r, "could not read the policy of pr-9-gateway-token")
+}
+
 func TestPreviewReachSkipsASecretThatVanished(t *testing.T) {
 	t.Parallel()
 	r := runReach(t, func(f map[string]string) {

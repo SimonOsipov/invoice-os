@@ -387,6 +387,19 @@ func TestRemoveMember_BlankEmailRevokesNothing(t *testing.T) {
 	requireNoRevokeAudit(t, w)
 }
 
+func TestRemoveMember_TabEmailIsNotBlank(t *testing.T) {
+	w := newInvWorld(t, "SECAUD-27 tab email", "Ada Obi")
+	m := w.addMember(t, "preparer", "active", "Grace Eze")
+	setMemberEmail(t, w, m, strp("\t"))
+	inv := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "\t"})
+
+	if _, err := w.store.RemoveMember(w.adminCtx(), m); err != nil {
+		t.Fatalf("RemoveMember of a tab-email member: %v", err)
+	}
+
+	requireInviteStatus(t, w, inv.ID, "revoked")
+}
+
 func TestRemoveMember_OldInviteAnswersTheExisting404(t *testing.T) {
 	rw := newReinviteWorld(t, "SECAUD-27 404")
 	mux := realAcceptMux(rw.store)

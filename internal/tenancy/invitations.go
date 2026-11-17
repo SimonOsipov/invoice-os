@@ -283,8 +283,8 @@ func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
 // revokeInvitesForAddressTx revokes every pending invite in the bound tenant for the
 // address, expired ones included, and audits each. A nil or blank address revokes nothing.
 func revokeInvitesForAddressTx(ctx context.Context, tx pgx.Tx, actor string, email *string) error {
-	// ceiling: a NULL or blank address matches no invite; the removed row's email is already NULL.
-	if email == nil || strings.TrimSpace(*email) == "" {
+	// ceiling: blank means empty after trimming spaces only, as the btrim match does; revisit if addresses are ever normalised on write.
+	if email == nil || strings.Trim(*email, " ") == "" {
 		return nil
 	}
 	rows, err := tx.Query(ctx,
@@ -295,24 +295,15 @@ func revokeInvitesForAddressTx(ctx context.Context, tx pgx.Tx, actor string, ema
 	if err != nil {
 		return err
 	}
-	type revoked struct{ id, role string }
-	var got []revoked
-	for rows.Next() {
-		var r revoked
-		if err := rows.Scan(&r.id, &r.role); err != nil {
-			rows.Close()
-			return err
-		}
-		got = append(got, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	type revoked struct{ ID, Role string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[revoked])
+	if err != nil {
 		return err
 	}
 	for _, r := range got {
 		if err := audit.Record(ctx, tx, actor, "invitation.revoked", map[string]any{
-			"invitation_id": r.id,
-			"role":          r.role,
+			"invitation_id": r.ID,
+			"role":          r.Role,
 		}); err != nil {
 			return err
 		}

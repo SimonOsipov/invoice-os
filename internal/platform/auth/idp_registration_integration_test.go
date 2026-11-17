@@ -877,6 +877,15 @@ func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
 			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
 		}
 	}
+	names, _ := um[accountmail.MailNamesMetadataKey].(map[string]any)
+	for k, want := range accountmail.MailNames("First Co", "First") {
+		if names[k] != want {
+			t.Errorf("user_metadata.mail_names[%q] = %v, want %q", k, names[k], want)
+		}
+	}
+	if strings.Contains(fmt.Sprint(um[accountmail.MailNamesMetadataKey]), "Second") {
+		t.Errorf("user_metadata.mail_names = %v, holds the repeat registrant's answers", um[accountmail.MailNamesMetadataKey])
+	}
 }
 
 func TestIdP_ConfirmationMailCarriesTheAddressUnsubscribeLink(t *testing.T) {

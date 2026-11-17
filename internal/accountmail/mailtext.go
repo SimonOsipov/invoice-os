@@ -8,6 +8,9 @@ import (
 // NameChars is the most runes of a visitor-written name a branded mail shows.
 const NameChars = 60
 
+// MailNamesMetadataKey is the GoTrue user_metadata key the confirmation mail reads.
+const MailNamesMetadataKey = "mail_names"
+
 const zws = "​"
 
 // Unlinked puts U+200B at each link start (domain dot, address @, ://) so clients do not auto-link; stripping the marks gives back the input.
@@ -32,6 +35,11 @@ func Unlinked(s string) string {
 // MailName strips marks, cuts to NameChars runes, then unlinks: the form a visitor-written name takes in a mail.
 func MailName(s string) string {
 	return Unlinked(cutRunes(strings.ReplaceAll(s, zws, ""), NameChars))
+}
+
+// MailNames is the user_metadata.mail_names value: both names in the form the confirmation mail shows.
+func MailNames(workspace, display string) map[string]string {
+	return map[string]string{"workspace_name": MailName(workspace), "display_name": MailName(display)}
 }
 
 // cutRunes shortens s to n runes, with … as the last one.

@@ -1,6 +1,7 @@
 package accountmail
 
 import (
+	"maps"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -113,5 +114,20 @@ func TestMailName_CutEdges(t *testing.T) {
 		if got := MailName(c.in); got != c.want {
 			t.Errorf("MailName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestMailNames_NeutralisesBothNames(t *testing.T) {
+	got := MailNames("pay@evil.com", "Ada https://evil.com")
+	want := map[string]string{"workspace_name": "pay@" + mark + "evil." + mark + "com", "display_name": "Ada https" + mark + "://evil." + mark + "com"}
+	if !maps.Equal(got, want) {
+		t.Errorf("MailNames = %q, want %q", got, want)
+	}
+}
+
+func TestMailNames_EmptyNameStaysEmpty(t *testing.T) {
+	got := MailNames("Obi Partners", "")
+	if want := map[string]string{"workspace_name": "Obi Partners", "display_name": ""}; !maps.Equal(got, want) {
+		t.Errorf("MailNames = %q, want %q", got, want)
 	}
 }

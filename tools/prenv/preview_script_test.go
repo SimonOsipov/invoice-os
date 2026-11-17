@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-const previewGcloudShim = `echo "$*" >> "$D/calls"
+const previewGcloudShim = `echo "${REACH_JOB:+job: }$*" >> "$D/calls"
 echo gcloud >> "$D/order"
 [ ! -e "$D/fail-$1-$2-$3" ] || { echo "ERROR: gcloud $1 $2 $3 failed" >&2; exit 1; }
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
@@ -46,6 +46,9 @@ case "$1 $2 $3" in
   if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) ALREADY_EXISTS: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
   cat > "$D/created-$3" ;;
 "secrets set-iam-policy "*) cp "$4" "$D/setpolicy-$3" ;;
+"secrets get-iam-policy "*)
+  if grep -qxF -- "$3" "$D/missing" 2>/dev/null; then echo "ERROR: (gcloud.secrets.get-iam-policy) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; fi
+  cat "$D/iam-$3" 2>/dev/null || echo '{}' ;;
 "secrets describe "*) if grep -qxF -- "$3" "$D/describe-error" 2>/dev/null; then echo "ERROR: (gcloud.secrets.describe) UNAVAILABLE: backend error" >&2; exit 1; fi
   cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
 "storage ls "*)
@@ -112,6 +115,12 @@ case "$1 $2 $3" in
     echo $((n - 1)) >"$D/execfails"
     printf 'ERROR: (gcloud.run.jobs.execute) The execution failed.\nView details about this execution by running:\ngcloud run jobs executions describe %s-x%s\n' "$4" "$n" >&2
     exit 1
+  fi
+  # A reach job runs its probe under this shim, as Cloud Run would; its stdout is the job's log.
+  jf="$D/env-job-$4"
+  if grep -q '^PROBE:' "$jf" 2>/dev/null && [ ! -e "$D/noprobe" ]; then
+    ev() { sed -n "s/^$1: '\(.*\)'\$/\1/p" "$jf"; }
+    PROJECT=$(ev PROJECT) NAMES=$(ev NAMES) NONCE=$(ev NONCE) PROBE=$(ev PROBE) REACH_JOB=1 bash -c 'eval "$(printf %s "$PROBE" | base64 -d)"' >>"$D/logs"
   fi ;;
 "logging read "*) cat "$D/logs" 2>/dev/null || : ;;
 esac
@@ -3388,6 +3397,9 @@ func TestPreviewTeardownEmptiesTheSlotThenReleasesIt(t *testing.T) {
 	if n := strings.Count(strings.Join(calls, "\n"), "secrets delete slot-1-claim "); n != 1 {
 		t.Errorf("slot-1-claim deleted %d times, want once (the label loop skips it)", n)
 	}
+	if reach := callIdx(calls, "run jobs delete reach-pr-7 "); reach < 0 || reach > claim {
+		t.Errorf("want the reach job deleted before slot-1-claim (indexes reach %d, claim %d):\n%s", reach, claim, strings.Join(calls, "\n"))
+	}
 	for _, bad := range []string{"buckets delete", "rm --recursive gs://ascomply-preview-docs-", "slot-2"} {
 		if i := callIdx(calls, bad); i >= 0 {
 			t.Errorf("teardown ran %q: %s", bad, calls[i])
@@ -3441,15 +3453,23 @@ func TestPreviewTeardownKeepsTheClaimWhenEmptyingFails(t *testing.T) {
 // A service or job that stays behind still mounts the slot's key and bucket: the sweeper retries, so the claim stays.
 func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) {
 	t.Parallel()
-	for _, fail := range []string{"fail-run-services-delete", "fail-run-jobs-delete"} {
-		t.Run(fail, func(t *testing.T) {
+	for _, c := range []struct{ fail, exists string }{
+		{"fail-run-services-delete", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n"},
+		{"fail-run-jobs-delete", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n"},
+		{"fail-run-jobs-delete", "gateway-pr-7\nreach-pr-7\n"}, // only the reach job's delete fails
+	} {
+		fail, exists := c.fail, c.exists
+		t.Run(fail+"/"+strings.ReplaceAll(strings.TrimSpace(exists), "\n", ","), func(t *testing.T) {
 			t.Parallel()
 			r := runPreview(t, func(dir string) {
 				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
 				writeIn(t, dir, fail, "")
-				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+				writeIn(t, dir, "exists", exists)
 			}, "teardown", "7")
 			calls := callLines(r)
+			if callIdx(calls, "run jobs delete reach-pr-7 ") < 0 {
+				t.Errorf("a present reach-pr-7 was not deleted:\n%s", strings.Join(calls, "\n"))
+			}
 			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
 				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
 			}
@@ -3466,13 +3486,13 @@ func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) 
 // A describe that fails for any reason but "resource absent" may hide a running service: the claim stays.
 func TestPreviewTeardownKeepsTheClaimWhenADescribeFails(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"gateway-pr-7", "migrate-pr-7"} {
+	for _, name := range []string{"gateway-pr-7", "migrate-pr-7", "reach-pr-7"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := runPreview(t, func(dir string) {
 				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
 				writeIn(t, dir, "describe-run-error", name+"\n")
-				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n")
 			}, "teardown", "7")
 			calls := callLines(r)
 			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
@@ -3620,5 +3640,463 @@ func TestPreviewTeardownKeepsTheClaimWhenItCannotBeRead(t *testing.T) {
 	}
 	if !strings.Contains(calls, "secrets delete pr-7-gateway-token") {
 		t.Errorf("a read error stopped the other secrets going:\n%s", calls)
+	}
+}
+
+// reach: a PR run proves its slot runtime reads only its own secrets (SECAUD-55-03).
+
+const reachOK = "Runtime reach holds for PR 7"
+
+func linesOf(names []string) string { return strings.Join(names, "\n") + "\n" }
+
+// notDenied lists the fixture's denied names without drop: the shim answers `denied` before `missing` and `accesserr`.
+func notDenied(t *testing.T, drop ...string) string {
+	t.Helper()
+	_, denied := reachNames(t)
+	return linesOf(slices.DeleteFunc(denied, func(d string) bool { return slices.Contains(drop, d) }))
+}
+
+// hasName reports whether text holds name as a whole secret name, not inside a longer one.
+func hasName(text, name string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9-])` + regexp.QuoteMeta(name) + `($|[^A-Za-z0-9-])`).MatchString(text)
+}
+
+// iamPolicy is a policy with one secretAccessor binding for the named service accounts.
+func iamPolicy(sas ...string) string {
+	ms := make([]string, len(sas))
+	for i, s := range sas {
+		ms[i] = `"serviceAccount:` + s + `@ascomply-preview.iam.gserviceaccount.com"`
+	}
+	return `{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":[` + strings.Join(ms, ",") + `]}]}`
+}
+
+// reachNames are the secrets PR 7 on slot-1 may read, and the listed ones it may not (claims aside).
+func reachNames(t *testing.T) (allowed, denied []string) {
+	t.Helper()
+	for _, n := range previewList(t, "PR_SECRETS") {
+		allowed = append(allowed, "pr-7-"+n)
+	}
+	allowed = append(allowed, "slot-1-document-access-key-id", "slot-1-document-secret-key")
+	allowed = append(allowed, previewList(t, "SHARED_SECRETS")...)
+	denied = []string{"pr-9-gateway-token", "pr-9-database-app-url", "slot-2-document-secret-key", "postgres-password",
+		"database-superuser-url", "nightly-hubspot-token", "nightly-gateway-token"}
+	return allowed, denied
+}
+
+// reachFixture lays out a listing where only the allowed set is bound and every other read is denied. tweak edits the shim files.
+func reachFixture(t *testing.T, tweak func(files map[string]string)) func(dir string) {
+	t.Helper()
+	allowed, denied := reachNames(t)
+	shared := previewList(t, "SHARED_SECRETS")
+	files := map[string]string{"denied": linesOf(denied)}
+	have := slices.Concat(allowed, denied, []string{"slot-1-claim", "slot-2-claim"})
+	files["have"] = linesOf(have)
+	mine := []string{"slot-1-claim"}
+	for _, n := range allowed {
+		if strings.HasPrefix(n, "pr-7-") {
+			mine = append(mine, n)
+		}
+		files["iam-"+n] = iamPolicy("run-slot-1")
+		if slices.Contains(shared, n) {
+			files["iam-"+n] = iamPolicy("run-nightly", "run-slot-1", "run-slot-2")
+		}
+	}
+	files["have-7"] = linesOf(mine)
+	if tweak != nil {
+		tweak(files)
+	}
+	return func(dir string) {
+		for name, body := range files {
+			writeIn(t, dir, name, body)
+		}
+	}
+}
+
+// runReach runs `reach 7` on the fixture with a fixed run id, so a seeded nonce can differ from it.
+func runReach(t *testing.T, tweak func(files map[string]string), env ...string) previewRun {
+	t.Helper()
+	env = append([]string{"GITHUB_RUN_ID=555", "GITHUB_RUN_ATTEMPT=1", "GITHUB_STEP_SUMMARY="}, env...)
+	return runPreviewEnv(t, env, reachFixture(t, tweak), "reach", "7")
+}
+
+func probeImage(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PROBE_IMAGE=(\S+)`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("no PROBE_IMAGE in preview.sh")
+	}
+	return string(m[1])
+}
+
+// callsWith are the gcloud calls that start with prefix.
+func callsWith(r previewRun, prefix string) []string {
+	return slices.DeleteFunc(callLines(r), func(l string) bool { return !strings.HasPrefix(l, prefix) })
+}
+
+// reachFails fails unless the run exited non-zero without the success line.
+func reachFails(t *testing.T, r previewRun) {
+	t.Helper()
+	if r.code == 0 {
+		t.Errorf("reach exited 0, want non-zero:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if strings.Contains(r.stdout+r.stderr, reachOK) {
+		t.Errorf("reach printed the success line:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+// onlyError fails unless the run printed exactly one ::error:: line and it holds every want.
+func onlyError(t *testing.T, r previewRun, want ...string) {
+	t.Helper()
+	all := errLines(r)
+	if len(all) != 1 || len(errLines(r, want...)) != 1 {
+		t.Errorf("want exactly one ::error:: line holding %q, got %q", want, all)
+	}
+}
+
+func TestPreviewReachPassesWhenOnlyItsOwnSecretsAreBound(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, nil)
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	allowed, denied := reachNames(t)
+	if want := "run-slot-1 reads " + strconv.Itoa(len(previewList(t, "PR_SECRETS"))+2+5) + " secrets"; len(allowed) != 20 || !strings.Contains(r.stdout, want) {
+		t.Errorf("stdout lacks %q (%d allowed):\n%s", want, len(allowed), r.stdout)
+	}
+	if want := strconv.Itoa(len(denied)) + " others denied"; !strings.Contains(r.stdout, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
+	}
+	calls := callLines(r)
+	deploys := callsWith(r, "run jobs deploy reach-pr-7 ")
+	if len(deploys) != 1 {
+		t.Fatalf("%d deploys of reach-pr-7, want 1:\n%s", len(deploys), strings.Join(calls, "\n"))
+	}
+	if got := flagValue(deploys[0], "--service-account"); got != "run-slot-1@ascomply-preview.iam.gserviceaccount.com" {
+		t.Errorf("--service-account = %q, want run-slot-1", got)
+	}
+	if got := flagValue(deploys[0], "--image"); got != probeImage(t) {
+		t.Errorf("--image = %q, want PROBE_IMAGE %q", got, probeImage(t))
+	}
+	if got := flagValue(deploys[0], "--labels"); got != "preview-pr=7" {
+		t.Errorf("--labels = %q, want preview-pr=7", got)
+	}
+	dep, exe := callIdx(calls, "run jobs deploy reach-pr-7 "), callIdx(calls, "run jobs execute reach-pr-7 ")
+	rd, del := callIdx(calls, "logging read "), callIdx(calls, "run jobs delete reach-pr-7 ")
+	if dep < 0 || exe < dep || rd < exe || del < rd {
+		t.Errorf("want deploy, execute, log read, delete in order (indexes %d %d %d %d):\n%s", dep, exe, rd, del, strings.Join(calls, "\n"))
+	}
+	read := map[string]bool{}
+	for _, l := range calls {
+		if !strings.Contains(l, "secrets versions access") {
+			continue
+		}
+		if !strings.HasPrefix(l, "job: ") {
+			t.Errorf("a secret was read from the runner: %s", l)
+		}
+		read[flagValue(l, "--secret")] = true
+	}
+	wantRead := append([]string{"pr-7-gateway-token"}, denied...)
+	if len(read) != len(wantRead) {
+		t.Errorf("the job read %v, want the control and the non-allowed names %v", read, wantRead)
+	}
+	for _, n := range wantRead {
+		if !read[n] {
+			t.Errorf("the job never read %s", n)
+		}
+	}
+	policy := map[string]bool{}
+	for _, l := range callsWith(r, "secrets get-iam-policy ") {
+		policy[strings.Fields(l)[2]] = true
+	}
+	for _, n := range slices.Concat(allowed, denied) {
+		if strings.HasPrefix(n, "nightly-") == policy[n] {
+			t.Errorf("policy read of %s = %v, want %v (never a nightly-* secret)", n, policy[n], !strings.HasPrefix(n, "nightly-"))
+		}
+	}
+	for _, l := range calls {
+		if strings.Contains(l, "-claim ") && (strings.Contains(l, "get-iam-policy") || strings.Contains(l, "versions access")) {
+			t.Errorf("reach touched a claim: %s", l)
+		}
+	}
+}
+
+func TestPreviewReachRefusesABindingOnAnotherPreviewsSecret(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-9-gateway-token"] = iamPolicy("run-slot-1") })
+	reachFails(t, r)
+	onlyError(t, r, "pr-9-gateway-token", "can read")
+	if callIdx(callLines(r), "job: secrets versions access", "--secret postgres-password") < 0 {
+		t.Errorf("a policy finding skipped the read pass:\n%s", strings.Join(callLines(r), "\n"))
+	}
+}
+
+func TestPreviewReachRefusesAForeignMemberOnItsOwnSecret(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = iamPolicy("run-slot-1", "run-slot-2") })
+	reachFails(t, r)
+	onlyError(t, r, "pr-7-gateway-token", "run-slot-2")
+}
+
+func TestPreviewReachRefusesAnOwnSecretItCannotRead(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-7-s2s-token"] = "{}" })
+	reachFails(t, r)
+	onlyError(t, r, "pr-7-s2s-token", "which this preview mounts")
+}
+
+func TestPreviewReachFailsClosedWhenAListingOrPolicyReadFails(t *testing.T) {
+	t.Parallel()
+	t.Run("fail-secrets-list", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["fail-secrets-list"] = "" })
+		reachFails(t, r)
+		if len(errLines(r, "could not list the secrets")) == 0 {
+			t.Errorf("no ::error::could not list the secrets:\n%s\n%s", r.stdout, r.stderr)
+		}
+		for _, p := range []string{"job: secrets versions access", "secrets versions access", "run jobs deploy"} {
+			if l := callsWith(r, p); len(l) > 0 {
+				t.Errorf("a failed listing went on to %s: %v", p, l)
+			}
+		}
+	})
+	t.Run("fail-secrets-get-iam-policy", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["fail-secrets-get-iam-policy"] = "" })
+		reachFails(t, r)
+		for _, n := range []string{"pr-7-gateway-token", "postgres-password"} {
+			if len(errLines(r, "could not read the policy of "+n)) == 0 {
+				t.Errorf("no ::error::could not read the policy of %s:\n%s\n%s", n, r.stdout, r.stderr)
+			}
+		}
+	})
+}
+
+func TestPreviewReachSkipsASecretThatVanished(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) {
+		f["missing"] = "pr-9-database-app-url\n"
+		f["denied"] = notDenied(t, "pr-9-database-app-url")
+	})
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if n := len(annLines(r, "::notice::", "pr-9-database-app-url is gone")); n != 2 {
+		t.Errorf("%d notices that pr-9-database-app-url is gone, want 2 (policy pass and job verdict):\n%s\n%s", n, r.stdout, r.stderr)
+	}
+	if e := errLines(r); len(e) > 0 {
+		t.Errorf("a vanished secret raised %q", e)
+	}
+	t.Run("an allowed name that is gone is an error", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["missing"] = "pr-7-s2s-token\n" })
+		reachFails(t, r)
+		if len(errLines(r, "could not read the policy of pr-7-s2s-token")) == 0 {
+			t.Errorf("no ::error::could not read the policy of pr-7-s2s-token:\n%s\n%s", r.stdout, r.stderr)
+		}
+	})
+}
+
+func TestPreviewReachRefusesAReadableSecretOfAnotherPreview(t *testing.T) {
+	t.Parallel()
+	for _, n := range []string{"pr-9-gateway-token", "slot-2-document-secret-key", "nightly-hubspot-token", "postgres-password"} {
+		t.Run(n, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["denied"] = notDenied(t, n) })
+			reachFails(t, r)
+			onlyError(t, r, n)
+		})
+	}
+}
+
+func TestPreviewReachFailsWhenItCannotReadItsOwnToken(t *testing.T) {
+	t.Parallel()
+	_, denied := reachNames(t)
+	r := runReach(t, func(f map[string]string) { f["denied"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...)) })
+	reachFails(t, r)
+	if len(errLines(r, "run-slot-1 cannot read its own pr-7-gateway-token: denied")) != 1 {
+		t.Errorf("no ::error::run-slot-1 cannot read its own pr-7-gateway-token: denied:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewReachFailsClosedWhenTheJobFails(t *testing.T) {
+	t.Parallel()
+	_, denied := reachNames(t)
+	sent := len(denied) + 1
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+		check func(t *testing.T, r previewRun)
+	}{
+		{"deploy", map[string]string{"fail-run-jobs-deploy": ""}, "could not deploy the reach job", func(t *testing.T, r previewRun) {
+			for _, p := range []string{"run jobs execute", "run jobs delete reach-pr-7"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("a failed deploy went on to %s: %v", p, l)
+				}
+			}
+		}},
+		{"execute", map[string]string{"execfails": "1"}, "the reach job failed", func(t *testing.T, r previewRun) {
+			if l := callsWith(r, "logging read"); len(l) > 0 {
+				t.Errorf("a failed execution read the log: %v", l)
+			}
+			if len(callsWith(r, "run jobs delete reach-pr-7 ")) != 1 {
+				t.Errorf("a failed execution left the job:\n%s", strings.Join(callLines(r), "\n"))
+			}
+		}},
+		{"log read", map[string]string{"fail-logging-read": ""}, "could not read the reach job's log", nil},
+		{"no verdict", map[string]string{"noprobe": ""}, "no verdict for", func(t *testing.T, r previewRun) {
+			if n := len(errLines(r, "no verdict for")); n != sent {
+				t.Errorf("%d no-verdict errors, want one per sent name (%d)", n, sent)
+			}
+			calls, order := callLines(r), orderOf(r)
+			reads, gi := 0, 0
+			for i, o := range order {
+				if o != "gcloud" {
+					continue
+				}
+				if strings.HasPrefix(calls[gi], "logging read") {
+					reads++
+					if i == 0 || order[i-1] != "sleep 10" {
+						t.Errorf("log read %d was not preceded by sleep 10: %v", reads, order)
+					}
+				}
+				gi++
+			}
+			if reads != 3 {
+				t.Errorf("%d log reads, want 3", reads)
+			}
+		}},
+		{"error verdict", map[string]string{"accesserr": "pr-9-gateway-token\n", "denied": notDenied(t, "pr-9-gateway-token")}, "could not check pr-9-gateway-token", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) {
+				for k, v := range c.files {
+					f[k] = v
+				}
+			})
+			reachFails(t, r)
+			if len(errLines(r, c.want)) == 0 {
+				t.Errorf("no ::error:: holding %q:\n%s\n%s", c.want, r.stdout, r.stderr)
+			}
+			if c.check != nil {
+				c.check(t, r)
+			}
+		})
+	}
+}
+
+func TestPreviewReachIgnoresAVerdictFromAnotherRun(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["logs"] = "reach 1-1-1 pr-9-gateway-token readable\n" })
+	if r.code != 0 || len(errLines(r)) > 0 {
+		t.Errorf("exit %d, errors %q, want a pass: another run's line must be ignored", r.code, errLines(r))
+	}
+	if !strings.Contains(r.stdout, reachOK) {
+		t.Errorf("no success line:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewReachWarnsWhenTheJobDeleteFails(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["fail-run-jobs-delete"] = "" })
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0 (teardown deletes the job):\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(annLines(r, "::warning::", "could not delete reach-pr-7")) != 1 {
+		t.Errorf("no ::warning::could not delete reach-pr-7:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewReachRefusesTheNightlyAndAPRWithoutASlot(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		setup func(dir string)
+		arg   string
+		want  string
+	}{
+		{"nightly", nil, "nightly", "reach checks a PR runtime; run-nightly is read by the owner"},
+		{"no claim", slots(t, nil, nil), "7", "holds no preview slot"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, c.setup, "reach", c.arg)
+			reachFails(t, r)
+			if len(errLines(r, c.want)) == 0 {
+				t.Errorf("no ::error:: holding %q:\n%s\n%s", c.want, r.stdout, r.stderr)
+			}
+			for _, p := range []string{"secrets versions access", "secrets get-iam-policy", "run jobs deploy"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("a refused reach called %s: %v", p, l)
+				}
+			}
+		})
+	}
+}
+
+// reachSections splits a step summary at its `reads` and `denied` headings.
+func reachSections(s string) (reads, denied string, ok bool) {
+	lines := strings.Split(s, "\n")
+	ri, di := -1, -1
+	for i, l := range lines {
+		h := strings.ToLower(strings.TrimLeft(l, "#*-_` \t|"))
+		if ri < 0 && strings.HasPrefix(h, "reads") {
+			ri = i
+		}
+		if di < 0 && strings.HasPrefix(h, "denied") {
+			di = i
+		}
+	}
+	if ri < 0 || di < 0 {
+		return "", "", false
+	}
+	if ri < di {
+		return strings.Join(lines[ri:di], "\n"), strings.Join(lines[di:], "\n"), true
+	}
+	return strings.Join(lines[ri:], "\n"), strings.Join(lines[di:ri], "\n"), true
+}
+
+func TestPreviewReachWritesTheSummaryWithoutValues(t *testing.T) {
+	t.Parallel()
+	sentinel := "canary-" + strings.Repeat("q7", 6) // built at runtime, not a literal credential
+	summary := filepath.Join(t.TempDir(), "summary")
+	r := runReach(t, func(f map[string]string) { f["access-pr-7-gateway-token"] = sentinel }, "GITHUB_STEP_SUMMARY="+summary)
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	b, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("no step summary: %v", err)
+	}
+	reads, denied, ok := reachSections(string(b))
+	if !ok {
+		t.Fatalf("the summary has no reads and denied lists:\n%s", b)
+	}
+	allowed, deniedNames := reachNames(t)
+	for _, n := range allowed {
+		if !hasName(reads, n) || hasName(denied, n) {
+			t.Errorf("%s is not under reads only:\n%s", n, b)
+		}
+	}
+	for _, n := range deniedNames {
+		if !hasName(denied, n) || hasName(reads, n) {
+			t.Errorf("%s is not under denied only:\n%s", n, b)
+		}
+	}
+	if !r.exists("logs") || !r.exists("env-job-reach-pr-7") {
+		t.Fatalf("the job never ran: logs %v, env file %v", r.exists("logs"), r.exists("env-job-reach-pr-7"))
+	}
+	for name, text := range map[string]string{"stdout": r.stdout, "stderr": r.stderr, "summary": string(b), "job log": r.file(t, "logs"),
+		"job env file": r.file(t, "env-job-reach-pr-7"), "calls": r.file(t, "calls")} {
+		if strings.Contains(text, sentinel) {
+			t.Errorf("the secret value reached the %s", name)
+		}
 	}
 }

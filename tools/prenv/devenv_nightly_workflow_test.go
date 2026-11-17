@@ -308,7 +308,32 @@ func devEnvNightlyProblems(yml string) []string {
 	p = append(p, contactProblems(jobs)...)
 	p = append(p, aiCheckProblems(jobs)...)
 	p = append(p, e2eMailWindowProblems(jobs)...)
-	return append(p, emailProblems(jobs)...)
+	p = append(p, emailProblems(jobs)...)
+	return append(p, reachStepProblems(jobs)...)
+}
+
+// reachStepProblems names each clause of the deploy job's runtime-reach step (SECAUD-55-03) that the text breaks.
+func reachStepProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	const name = "Prove the runtime reads only its own secrets"
+	steps := jobs["deploy"].steps()
+	at := func(n string) int {
+		return slices.IndexFunc(steps, func(s workflowStep) bool { return s.keys["name"] == n })
+	}
+	i := at(name)
+	if i < 0 {
+		return []string{"deploy lacks the step " + name}
+	}
+	if got := strings.TrimSpace(nlCode(steps[i].keys["run"])); got != `bash scripts/ci/preview.sh reach "$PR"` {
+		p = append(p, "deploy "+name+" runs "+got+", not bash scripts/ci/preview.sh reach \"$PR\"")
+	}
+	if steps[i].keys["if"] != "github.event_name == 'pull_request'" {
+		p = append(p, "deploy "+name+" is not pull_request only")
+	}
+	if sites := at("Deploy the sites"); sites < 0 || i < sites {
+		p = append(p, "deploy "+name+" does not follow Deploy the sites")
+	}
+	return p
 }
 
 const (

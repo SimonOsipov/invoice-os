@@ -283,8 +283,7 @@ export function runFailures(run: ImportRun): { name: string; message: string; do
 // 'imported' carries `count` -- the server's OWN ready_invoices, read back AFTER the
 // fact once the file has settled, never a client guess made WHILE the request is in
 // flight (that is exactly what the no-row-counter constraint forbids; this is a
-// different moment in the lifecycle). 'failed' carries `reason` verbatim, never
-// re-worded.
+// different moment in the lifecycle). 'failed' carries `reason`.
 export type RunFileRow =
   | { name: string; kind: 'queued' }
   | { name: string; kind: 'sending' }

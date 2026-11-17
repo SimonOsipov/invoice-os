@@ -2,6 +2,8 @@
 // the budget arithmetic. No DOM, no network: App.tsx injects the transport, matching
 // importRun.ts's own node-testable discipline. Pinned by documentRun.test.ts.
 
+import { ApiError } from '@invoice-os/api-client'
+
 import type { FileOutcome, ImportRun, RunFileRow } from './importRun'
 import type { ExtractionJob, ImportReport } from './importApi'
 import { LIVE_POLL_MS } from './invoices'
@@ -163,6 +165,36 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+// Mirrors extraction.DocumentHeldElsewhereMessage (internal/extraction/handlers_upload.go), which POST /v1/documents sends; a scan test pins it.
+export const HELD_ELSEWHERE_SENTENCE = 'this file already belongs to a client you cannot see; remove it to continue'
+export const HELD_NOT_IMPORTED = 'Not imported: this file already belongs to a client you cannot see.'
+export const HELD_OTHERS_IMPORTED = ' The other files were imported.'
+
+// Exact 409 + sentence only: anything else keeps the server text, so a reword fails safe.
+function isHeldElsewhere(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.message === HELD_ELSEWHERE_SENTENCE
+}
+
+// Appends the suffix only where it is true: another file exists and every other one really
+// imported (same rows_valid rule as the review screen's batchReason, never status alone).
+// Re-reports the stage so the progress row keeps equalling the outcome (RUN-13).
+function withBatchContext(outcomes: DocumentRunOutcome[], deps: DocumentPipelineDeps): DocumentRunOutcome[] {
+  const imported = outcomes.filter(
+    (x) => x.outcome.kind === 'imported' && x.outcome.report.status !== 'failed' && x.outcome.report.rows_valid > 0,
+  ).length
+  const othersImported = outcomes.length > 1 && imported === outcomes.length - 1
+  return outcomes.map((o) => {
+    if (o.outcome.kind !== 'failed' || o.outcome.message !== HELD_NOT_IMPORTED || !othersImported) return o
+    const reason = HELD_NOT_IMPORTED + HELD_OTHERS_IMPORTED
+    try {
+      deps.onStage(o.id, { kind: 'failed', reason })
+    } catch {
+      // a throwing sink must not lose the outcome (RUN-15)
+    }
+    return { ...o, outcome: { ...o.outcome, message: reason } }
+  })
+}
+
 // N pipelines, each upload -> poll -> import, all started before any of them is awaited
 // (Core AC #9). One file's failure settles that file and nothing else — every pipeline
 // catches its own, so Promise.all can never reject. Pinned by RUN-1 / RUN-4.
@@ -170,7 +202,7 @@ export function startDocumentRun(
   files: readonly DocumentRunFile[],
   deps: DocumentPipelineDeps,
 ): Promise<DocumentRunOutcome[]> {
-  return Promise.all(
+  const settled = Promise.all(
     files.map(async (f): Promise<DocumentRunOutcome> => {
       // Declared OUTSIDE the try so the catch can carry it: a document that dead-letters
       // is the one CreateFlow's hand-off hands to manual entry. Stays undefined only when
@@ -179,7 +211,6 @@ export function startDocumentRun(
       try {
         documentId = await deps.upload(f.file)
         const verdict = await deps.poll(documentId, f.id)
-        // Carried VERBATIM: the poll owns the wording, this only relays it.
         if (verdict.kind !== 'succeeded') {
           const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
           deps.onStage(f.id, { kind: 'failed', reason })
@@ -190,10 +221,11 @@ export function startDocumentRun(
         deps.onStage(f.id, { kind: 'imported', count: report.ready_invoices })
         return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report, jobId: verdict.jobId } }
       } catch (err) {
-        const message = messageOf(err)
+        const message = isHeldElsewhere(err) ? HELD_NOT_IMPORTED : messageOf(err)
         deps.onStage(f.id, { kind: 'failed', reason: message })
         return { id: f.id, name: f.name, outcome: { kind: 'failed', message, documentId } }
       }
     }),
   )
+  return settled.then((outcomes) => withBatchContext(outcomes, deps))
 }

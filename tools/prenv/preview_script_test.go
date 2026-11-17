@@ -43,7 +43,7 @@ case "$1 $2 $3" in
     prev=$a
   done ;;
 "secrets create "*)
-  if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) ALREADY_EXISTS: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
+  if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) Resource in projects [ascomply-preview] is the subject of a conflict: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
   cat > "$D/created-$3" ;;
 "secrets set-iam-policy "*) cp "$4" "$D/setpolicy-$3" ;;
 "secrets get-iam-policy "*)
@@ -3227,7 +3227,7 @@ func TestPreviewClaimDiesOnACreateError(t *testing.T) {
 	r := runPreview(t, slots(t, nil, map[string]string{"fail-secrets-create": ""}), "claim", "7")
 	calls := callLines(r)
 	if n := strings.Count(strings.Join(calls, "\n"), "secrets create"); n != 1 {
-		t.Errorf("%d create calls, want exactly 1: an error that is not ALREADY_EXISTS is no reason to try the next slot:\n%s", n, strings.Join(calls, "\n"))
+		t.Errorf("%d create calls, want exactly 1: an error that is not a conflict is no reason to try the next slot:\n%s", n, strings.Join(calls, "\n"))
 	}
 	if r.code == 0 || !strings.Contains(r.stderr, "slot-1-claim") || strings.Contains(r.stdout, "slot=") || strings.Contains(r.stdout, "full=") {
 		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero naming slot-1-claim, with no verdict", r.code, r.stdout, r.stderr)

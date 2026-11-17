@@ -229,7 +229,8 @@ cmd_claim() {
         slot=$s
         break
       fi
-      grep -q ALREADY_EXISTS <<<"$err" || die "could not create the claim $s-claim: $err"
+      # gcloud prints "...is the subject of a conflict: Secret [...] already exists."; older ones ALREADY_EXISTS.
+      grep -qiE 'already exists|ALREADY_EXISTS|subject of a conflict' <<<"$err" || die "could not create the claim $s-claim: $err"
     done
   fi
   if [ -z "${slot:-}" ]; then

@@ -3,7 +3,8 @@
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { unzipSync, zipSync } from 'fflate'
 import type { Zippable } from 'fflate'
@@ -97,10 +98,27 @@ function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]))
 }
 
-// Playwright's static trace-viewer bundle (`trace/` in an HTML report) holds no run data and breaks if rewritten; its zips still do.
-const isViewerAsset = (root: string, file: string) => {
+// Playwright's static trace-viewer bundle (`trace/` in an HTML report) holds no run data and breaks if rewritten.
+// A file is skipped only when byte-identical to the same path in the installed playwright-core viewer.
+let viewerDir: string | null | undefined
+const viewerRoot = (): string | null => {
+  if (viewerDir !== undefined) return viewerDir
+  try {
+    const req = createRequire(import.meta.url)
+    const core = dirname(createRequire(req.resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
+    viewerDir = join(core, 'lib/vite/traceViewer')
+  } catch {
+    viewerDir = null
+  }
+  return viewerDir
+}
+const isViewerAsset = (root: string, file: string, bytes: Uint8Array): boolean => {
   const rel = relative(root, file).split(sep)
-  return rel.slice(0, -1).includes('trace') && !/\.zip$/i.test(file)
+  const at = rel.indexOf('trace')
+  const base = viewerRoot()
+  if (at < 0 || at === rel.length - 1 || !base) return false
+  const ref = join(base, ...rel.slice(at + 1))
+  return existsSync(ref) && statSync(ref).isFile() && Buffer.from(bytes).equals(readFileSync(ref))
 }
 
 function scrubFile(file: string): void {
@@ -112,8 +130,8 @@ function scrubFile(file: string): void {
 /** scrubDir rewrites every file under dir in place. Throws, naming the file, when one cannot be scrubbed. */
 export function scrubDir(dir: string): void {
   for (const f of files(dir)) {
-    if (isViewerAsset(dir, f)) continue
     try {
+      if (isViewerAsset(dir, f, new Uint8Array(readFileSync(f)))) continue
       scrubFile(f)
     } catch {
       throw new Error(`${f}: cannot be scrubbed`)

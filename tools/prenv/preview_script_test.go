@@ -75,7 +75,7 @@ case "$1 $2 $3" in
 "run revisions delete") if grep -qxF -- "$4" "$D/faildelete" 2>/dev/null; then echo "ERROR: delete $4 failed" >&2; exit 1; fi
   echo "$4" >> "$D/deleted" ;;
 "run jobs describe") runfound "$@" ;;
-"storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" || { echo "ERROR: (gcloud.storage.buckets.describe) $4 not found: 404." >&2; exit 1; } ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "services list "*) cat "$D/enabled-services" 2>/dev/null || : ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
@@ -3319,6 +3319,30 @@ func TestPreviewTeardownKeepsTheClaimWhenADescribeFails(t *testing.T) {
 			}
 			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
 				t.Errorf("a failed describe stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// A failed secrets list or bucket describe may hide leftovers: exit non-zero and keep the claim.
+func TestPreviewTeardownFailsWhenAListOrBucketDescribeFails(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []string{"fail-secrets-list", "fail-storage-buckets-describe"} {
+		t.Run(fail, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, fail, "")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released after a failed listing: %s", calls[i])
+			}
+			if fail == "fail-storage-buckets-describe" && !strings.Contains(r.stderr, "could not describe") {
+				t.Errorf("stderr %q, want the describe failure named", r.stderr)
 			}
 		})
 	}

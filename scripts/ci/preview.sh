@@ -443,17 +443,19 @@ cmd_grant() {
   job_execute "migrate-$(suffix "$1")" --update-env-vars GATEWAY_DB_BOOTSTRAP=false
 }
 
-# present <gcloud run describe args>: 0 present, 1 absent (NOT_FOUND), 2 when the describe fails otherwise.
+# present <gcloud run describe args>: 0 present, 1 absent, 2 when the describe fails otherwise.
+# gcloud run prints no NOT_FOUND for an absent resource: "Cannot find service [x]" / "Cannot find job [x]."
+# (googlecloudsdk surface/run/{services,jobs}/describe.py).
 present() {
   local out
   out=$(gcloud run "$@" "${gc[@]}" 2>&1) && return 0
-  grep -q NOT_FOUND <<<"$out" && return 1
-  echo "ERROR: could not describe $2 $3: $(tail -n 1 <<<"$out")" >&2
+  grep -qE "Cannot find (service|job) \\[" <<<"$out" && return 1
+  echo "ERROR: could not describe $1 $3: $(tail -n 1 <<<"$out")" >&2
   return 2
 }
 
 cmd_teardown() {
-  local pr=$1 svc name slot failed=0 slotfail=0 rc=0
+  local pr=$1 svc name names out slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     rc=0
     present services describe "$svc-$(suffix "$pr")" || rc=$?
@@ -473,8 +475,13 @@ cmd_teardown() {
     slotfail=1
   fi
   database "$pr" drop || failed=1
-  if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
+  # an absent bucket prints "gs://<b> not found: 404." (googlecloudsdk api_lib/storage/errors.py)
+  if out=$(gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" 2>&1); then
     gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
+  elif ! grep -qE 'not found: 404|HTTPError 404' <<<"$out"; then
+    echo "ERROR: could not describe $(bucket "$pr"): $(tail -n 1 <<<"$out")" >&2
+    failed=1
+    slotfail=1
   fi
   rc=0
   slot=$(slot_of "$pr") || rc=$?
@@ -484,7 +491,8 @@ cmd_teardown() {
   elif [ "$rc" = 0 ]; then
     empty_slot "$slot" || { failed=1; slotfail=1; }
   fi
-  for name in $(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)'); do
+  names=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)') || { failed=1; slotfail=1; names=; }
+  for name in $names; do
     [[ $name != slot-*-claim ]] || continue
     gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
   done

@@ -131,20 +131,24 @@ func TestIsIdPMailCap_Classifies(t *testing.T) {
 }
 
 func TestMailAlert_SpentShareAlerts(t *testing.T) {
-	_, rec, want := sentrytest.Boot(t, "gateway")
-	swapMailAlerts(t, time.Now)
-	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-	log := slog.New(slog.DiscardHandler)
-
-	doRegisterWith(t, registerWithShare(fake.URL, nil, nil, spentShare(t)), registerBody(regEmail, regPassword))
-	resend := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log, spentShare(t))
-	serveResend(t.Context(), resend, resendBody("ada@corp.example"))
-
-	if v := alertValue(rec.One(t, want)); v != "registration mail share spent" {
-		t.Errorf("exception = %q", v)
-	}
-	if n := len(fake.Calls()); n != 0 {
-		t.Errorf("GoTrue saw %d calls, want 0", n)
+	for _, route := range []string{"register", "resend"} {
+		t.Run(route, func(t *testing.T) {
+			_, rec, want := sentrytest.Boot(t, "gateway")
+			swapMailAlerts(t, time.Now)
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			if route == "register" {
+				doRegisterWith(t, registerWithShare(fake.URL, nil, nil, spentShare(t)), registerBody(regEmail, regPassword))
+			} else {
+				resend := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), spentShare(t))
+				serveResend(t.Context(), resend, resendBody("ada@corp.example"))
+			}
+			if v := alertValue(rec.One(t, want)); v != "registration mail share spent" {
+				t.Errorf("exception = %q", v)
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
+			}
+		})
 	}
 }
 

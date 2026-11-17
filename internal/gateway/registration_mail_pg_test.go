@@ -69,6 +69,15 @@ func TestRLS_GatewayRegistrationMail_SharedHourWindowTurns(t *testing.T) {
 	if spent, _ := m.Admit(); spent != "hour" {
 		t.Fatalf("11th Admit = %q, want hour", spent)
 	}
+	for scopeSuffix, want := range map[string]time.Duration{"-hour": time.Hour, "-day": 24 * time.Hour} {
+		var left time.Duration
+		if err := d.super.QueryRow(context.Background(), `SELECT expires_at - now() FROM gateway_throttle_counts WHERE scope = $1`, scope+scopeSuffix).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left <= want-2*time.Minute || left > want {
+			t.Errorf("%s row expires in %v, want about %v", scopeSuffix, left, want)
+		}
+	}
 	if _, err := d.super.Exec(context.Background(), `UPDATE gateway_throttle_counts SET expires_at = now() - interval '1 second' WHERE scope = $1`, scope+"-hour"); err != nil {
 		t.Fatal(err)
 	}

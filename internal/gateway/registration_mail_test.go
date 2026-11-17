@@ -106,11 +106,11 @@ func TestRegistrationMail_HourWindowAdmitsTenThenRefuses(t *testing.T) {
 func TestRegistrationMail_DayWindowRefusesTheThirtyFirst(t *testing.T) {
 	c := newMailClock(time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC))
 	m := shareAt(RegistrationMailPerHour, RegistrationMailPerDay, c)
-	for i := 1; i <= RegistrationMailPerDay; i++ {
+	for i := 1; i <= 30; i++ {
 		if spent, err := m.Admit(); spent != "" || err != nil {
 			t.Fatalf("Admit %d = (%q, %v), want admitted", i, spent, err)
 		}
-		if i%RegistrationMailPerHour == 0 {
+		if i%10 == 0 {
 			c.Add(61 * time.Minute)
 		}
 	}
@@ -161,8 +161,8 @@ func TestRegistrationMail_ResetStillMailsAfterTheShareIsSpent(t *testing.T) {
 	rec, _ := serveResend(t.Context(), reset, resendBody("ada@corp.example"))
 	requireAccepted(t, rec, "reset after the share is spent")
 
-	if n := gt.sends(0, "/signup"); n != RegistrationMailPerHour {
-		t.Errorf("GoTrue counted %d /signup sends, want %d", n, RegistrationMailPerHour)
+	if n := gt.sends(0, "/signup"); n != 10 {
+		t.Errorf("GoTrue counted %d /signup sends, want 10", n)
 	}
 	if got := gt.lastStatus("/recover"); got != http.StatusOK {
 		t.Errorf("/recover answered %d, want 200 (send %d of 30)", got, RegistrationMailPerHour+1)

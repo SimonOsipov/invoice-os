@@ -828,6 +828,19 @@ func TestResendVerification_SpendsTheRegistrationShare(t *testing.T) {
 	}
 }
 
+func TestResendVerification_A4xxRefundsTheShare(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusTooManyRequests, gtOverEmailSendRateLimit)
+	share := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), share)
+	for _, addr := range []string{"ada@corp.example", "bob@corp.example"} {
+		rec, _ := serveResend(t.Context(), h, resendBody(addr))
+		requireAccepted(t, rec, "resend")
+	}
+	if n := len(fake.Calls()); n != 2 {
+		t.Errorf("GoTrue saw %d calls, want 2: a 4xx refunds the share", n)
+	}
+}
+
 func TestResendVerification_ShareRefusalIsTheSame202AfterTheFloor(t *testing.T) {
 	const floor = 150 * time.Millisecond
 	control, _ := serveResend(t.Context(), newResend(newFakeGoTrue(t, http.StatusOK, `{}`).URL, testClient(), floor, nil), resendBody("ada@corp.example"))

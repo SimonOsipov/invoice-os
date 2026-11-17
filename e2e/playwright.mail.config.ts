@@ -2,6 +2,8 @@ import { defineConfig } from '@playwright/test'
 
 // Sends real mail and holds tokens: no retry (a retry sends more), nothing recorded. The result is the section file.
 export default defineConfig({
+  // On CI Playwright writes the PR diff into the report by default; the diff holds test credentials.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './mail',
   // Keeps the vitest files in ./mail out of the run.
   testMatch: '**/*.spec.ts',

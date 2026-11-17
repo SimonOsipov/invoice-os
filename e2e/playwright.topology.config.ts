@@ -18,6 +18,8 @@ if (partition.length > 0) throw new Error(`topology shard map: ${partition.join(
 // is intentionally unset. Timeouts are a touch longer than smoke's: the topology run
 // brings the fleet up from zero, so a cold-started backend can be slow on first contact.
 export default defineConfig({
+  // On CI Playwright writes the PR diff into the report by default; the diff holds test credentials.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './topology',
   // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
   testMatch: '**/*.spec.ts',

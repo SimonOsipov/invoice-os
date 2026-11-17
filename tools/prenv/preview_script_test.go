@@ -17,6 +17,7 @@ import (
 
 const previewGcloudShim = `echo "$*" >> "$D/calls"
 echo gcloud >> "$D/order"
+[ ! -e "$D/fail-$1-$2-$3" ] || { echo "ERROR: gcloud $1 $2 $3 failed" >&2; exit 1; }
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
 [ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo PARTIAL; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
 case "$1 $2 $3" in
@@ -2856,7 +2857,7 @@ func TestPreviewMockTokenRefusesABadName(t *testing.T) {
 	}
 }
 
-// SECAUD-48-04: each preview claims one of two document slots (secret <slot>-claim, label preview-pr=<N>) and mounts that slot's key.
+// Each preview claims one of two document slots (secret <slot>-claim, label preview-pr=<N>) and mounts that slot's key.
 
 // slots sets the claim state of a runPreview dir: owners maps a slot to the PR whose claim carries the label.
 // runPreviewEnv gives PR 7 slot-1 by default; slots removes it first. files are extra shim switches (taken, no-objects, fail-storage-rm, ...).
@@ -3260,6 +3261,52 @@ func TestPreviewTeardownKeepsTheClaimWhenEmptyingFails(t *testing.T) {
 	}
 	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
 		t.Errorf("the claim was released over a bucket that still holds objects: %s", calls[i])
+	}
+}
+
+// A service or job that stays behind still mounts the slot's key and bucket: the sweeper retries, so the claim stays.
+func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []string{"fail-run-services-delete", "fail-run-jobs-delete"} {
+		t.Run(fail, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, fail, "")
+				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released over a leftover service or job: %s", calls[i])
+			}
+			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+				t.Errorf("a failed delete stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// An empty slot would name ascomply-preview-docs- and -document-access-key-id.
+func TestPreviewServiceConfigRefusesAnEmptySlot(t *testing.T) {
+	t.Parallel()
+	const prog = `source "$0" budget >/dev/null; set +e; unset SLOT
+(env_file 7 invoice "$1"); echo "env=$?"
+(secrets_of 7 invoice); echo "secrets=$?"
+SLOT=slot-1; (secrets_of 7 invoice); echo "claimed=$?"`
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "-c", prog, filepath.Join(repoRoot(t), "scripts/ci/preview.sh"), filepath.Join(dir, "env.yaml"))
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "claimed=0") || strings.Contains(stdout, "env=0") || strings.Contains(stdout, "secrets=0") {
+		t.Errorf("want both calls to fail without a slot and to pass with one: stdout %q, stderr %q", stdout, stderr)
+	}
+	if strings.Contains(stdout, "ascomply-preview-docs-\n") || strings.Contains(stdout, "=-document-") {
+		t.Errorf("an empty slot reached the output: %q", stdout)
 	}
 }
 

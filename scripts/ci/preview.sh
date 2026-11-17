@@ -322,7 +322,7 @@ env_file() {
         [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
         # OpenRouter groups usage by this referrer URL; the nightly's own app URL is stable across nights.
         [ "$pr" != nightly ] || { echo "OPENROUTER_APP_NAME: Nightly App"; echo "OPENROUTER_APP_URL: $(url app "$pr")"; }
-        echo "DOCUMENT_BUCKET: ascomply-preview-docs-${SLOT:-}"
+        echo "DOCUMENT_BUCKET: ascomply-preview-docs-${SLOT:?no slot claimed}"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
         ;;
@@ -347,7 +347,7 @@ secrets_of() {
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done
   case "$2" in
     invoice | submission | worker)
-      out+=(DOCUMENT_ACCESS_KEY_ID="${SLOT:-}-document-access-key-id:latest" DOCUMENT_SECRET_ACCESS_KEY="${SLOT:-}-document-secret-key:latest")
+      out+=(DOCUMENT_ACCESS_KEY_ID="${SLOT:?no slot claimed}-document-access-key-id:latest" DOCUMENT_SECRET_ACCESS_KEY="$SLOT-document-secret-key:latest")
       [ "$pr" != nightly ] || out+=(OPENROUTER_API_KEY=nightly-openrouter-api-key:latest)
       ;;
   esac
@@ -447,11 +447,11 @@ cmd_teardown() {
   local pr=$1 svc name slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
-      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || failed=1
+      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
     fi
   done
   if gcloud run jobs describe "migrate-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
-    gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || failed=1
+    gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
   fi
   database "$pr" drop || failed=1
   if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
@@ -468,7 +468,7 @@ cmd_teardown() {
     [[ $name != slot-*-claim ]] || continue
     gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
   done
-  # the claim outlives a bucket that still holds objects
+  # the claim outlives a bucket that still holds objects and a service or job that still mounts the slot
   if [ "$pr" != nightly ] && [ -n "${slot:-}" ] && [ "$slotfail" = 0 ]; then
     gcloud secrets delete "$slot-claim" --project "$PROJECT" --quiet || failed=1
   fi
@@ -645,7 +645,7 @@ cmd_cap() {
 
 # budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
 cmd_budget() {
-  local svc kv name pool n leader total=0
+  local svc kv name pool n leader total=0 SLOT=budget # secrets_of needs a slot; the document keys carry no pool
   for svc in "${BACKENDS[@]}"; do
     for kv in $(secrets_of 0 "$svc" | tr , ' '); do
       name=${kv#*=pr-0-}

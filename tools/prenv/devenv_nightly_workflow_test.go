@@ -1684,7 +1684,7 @@ func TestDevEnvNightly_E2EWorkerMailWindow(t *testing.T) {
 	}
 }
 
-// SECAUD-48-04: `Claim a preview slot` takes a document slot (preview.sh claim) before anything is created.
+// `Claim a preview slot` takes a document slot (preview.sh claim) before anything is created.
 
 const claimStepName = "Claim a preview slot"
 

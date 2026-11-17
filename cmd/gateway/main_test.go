@@ -27,6 +27,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/net/html"
 )
 
@@ -1656,5 +1657,57 @@ func TestHandoffHandlers_LinkRedeemIsEnforcedOffPreviewOnly(t *testing.T) {
 				t.Errorf("GoTrue /verify calls after one over-limit POST on each of the %d routes = %d, want %d (DEPLOY_ENV=%q)", len(routes), got, want, c.env)
 			}
 		})
+	}
+}
+
+func registerOnce(h http.Handler) *httptest.ResponseRecorder {
+	return serveRegistration(h, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+}
+
+func TestRegistrationHandlers_MailShareOnlyOnHosted(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	for _, c := range []struct {
+		env  string
+		want int
+	}{{"production", gateway.RegistrationMailPerHour}, {"pr-7", 11}, {"nightly", 11}, {"", 11}} {
+		t.Run("DEPLOY_ENV="+c.env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", c.env)
+			authURL, calls := fakeAuth(t)
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
+			for range 11 {
+				registerOnce(reg.Register)
+			}
+			n := 0
+			for _, call := range calls() {
+				if call == "POST /signup" {
+					n++
+				}
+			}
+			if n != c.want {
+				t.Errorf("GoTrue saw %d signups, want %d", n, c.want)
+			}
+		})
+	}
+}
+
+func TestRegistrationHandlers_HostedShareCountsThroughThePool(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	// A local copy of gateway's deadPool: it refuses every connection at once.
+	pool, err := pgxpool.New(context.Background(), "postgres://invoice_gateway:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, pool)
+
+	rec := registerOnce(reg.Register)
+
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "verification_pending") {
+		t.Errorf("register = %d %s, want 202 verification_pending", rec.Code, rec.Body.String())
+	}
+	if n := len(calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0: the share must count through the pool", n)
 	}
 }

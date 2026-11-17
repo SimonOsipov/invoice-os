@@ -302,7 +302,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		if !first {
 			// A repeat waits the same floor and mails nobody.
-			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "")
+			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "", nil)
 			return
 		}
 		body := map[string]any{
@@ -311,7 +311,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			"data":     map[string]any{"invited": true},
 		}
 		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
-		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists, tokens, email); !mayExist {
+		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists, tokens, email, nil); !mayExist {
 			if err := registrations.Release(context.WithoutCancel(r.Context()), in.Token); err != nil {
 				log.WarnContext(r.Context(), "invitation: release failed", slog.String("error", err.Error()))
 			}

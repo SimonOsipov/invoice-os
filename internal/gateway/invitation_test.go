@@ -768,7 +768,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 			regReq.Header.Set("Content-Type", "application/json")
-			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(reg, regReq)
+			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false, nil).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
 			inv, _ := postInvitee(inviteeHandler(authURL, 0, p, claiming(regEmail, true, nil)), tokenBody(inviteToken))
@@ -1956,5 +1956,24 @@ func TestInvitationResend_AGoTrueAddressLimitAnswers429(t *testing.T) {
 			}
 			requireInviteAnswer(t, rec, c.status, c.want, c.name)
 		})
+	}
+}
+
+func TestInvitationRoutes_IgnoreASpentShare(t *testing.T) {
+	_ = spentShare(t) // the invitation handlers take no share, so a spent one cannot reach them
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
+	rec, _ := postInvitee(inviteeHandler(fake.URL, 0, p, claiming(regEmail, true, nil)), tokenBody(inviteToken))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("invitation register = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if calls := fake.Calls(); len(calls) != 1 || calls[0].Path != "/signup" {
+		t.Errorf("invitation register: GoTrue saw %+v, want one /signup", calls)
+	}
+
+	resendFake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	serveInviteResend(newInviteResend(resendFake.URL, invitePreviewing("unconfirmed"), nil), http.MethodPost, tokenBody(inviteToken))
+	if n := len(resendFake.Calls()); n != 1 {
+		t.Errorf("invitation resend: GoTrue saw %d calls, want 1", n)
 	}
 }

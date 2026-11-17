@@ -100,17 +100,23 @@ function files(dir: string): string[] {
 
 // Playwright's static trace-viewer bundle (`trace/` in an HTML report) holds no run data and breaks if rewritten.
 // A file is skipped only when byte-identical to the same path in the installed playwright-core viewer.
-let viewerDir: string | null | undefined
+let coreDir: string | null | undefined
 const viewerRoot = (): string | null => {
-  if (viewerDir !== undefined) return viewerDir
-  try {
-    const req = createRequire(import.meta.url)
-    const core = dirname(createRequire(req.resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
-    viewerDir = join(core, 'lib/vite/traceViewer')
-  } catch {
-    viewerDir = null
+  if (coreDir === undefined) {
+    try {
+      const req = createRequire(import.meta.url)
+      coreDir = dirname(createRequire(req.resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
+    } catch {
+      coreDir = null
+    }
   }
-  return viewerDir
+  return coreDir && join(coreDir, 'lib/vite/traceViewer')
+}
+// The report viewer's code (report.js, report.css) is inlined into index.html; it holds no run data.
+let reportAssets: string[] | undefined
+const reportViewer = (): string[] => {
+  reportAssets ??= (viewerRoot() ? ['report.js', 'report.css'] : []).map((f) => join(coreDir!, 'lib/vite/htmlReport', f)).filter((f) => existsSync(f)).map((f) => readFileSync(f, 'latin1')).filter(Boolean)
+  return reportAssets
 }
 const isViewerAsset = (root: string, file: string, bytes: Uint8Array): boolean => {
   const rel = relative(root, file).split(sep)
@@ -148,6 +154,8 @@ function dirty(name: string, data: Uint8Array): boolean {
       if (dirty('payload.zip', decodePayload(m[2]))) return true
       text = text.replace(PAYLOAD, '$1')
     }
+    // Blank only text byte-identical to the installed viewer code; anything else in the file is still checked.
+    for (const asset of reportViewer()) text = text.split(asset).join('')
   }
   return RESIDUALS.some((re) => re.test(text))
 }

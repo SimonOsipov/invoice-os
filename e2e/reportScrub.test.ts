@@ -323,6 +323,39 @@ describe('static viewer assets', () => {
     expect(readFileSync(join(dir, 'trace', rel), 'latin1')).not.toContain(secret)
   })
 
+  // Playwright inlines report.js/report.css into index.html, ahead of the base64 payload.
+  describe('the inlined report viewer', () => {
+    const asset = (f: string) => readFileSync(join(pwCore(), 'lib/vite/htmlReport', f), 'latin1')
+    // latin1 on both sides keeps the viewer bytes exact, as Playwright wrote them.
+    const page = (json: string, extra = '') =>
+      Buffer.from(`<html><style>${asset('report.css')}</style><script type="module">${asset('report.js')}</script>${extra}<template id="playwrightReportBase64">data:application/zip;base64,${Buffer.from(zipSync({ 'report.json': enc(json) })).toString('base64')}</template></html>`, 'latin1')
+
+    it('passes the real viewer code when the payload is clean', () => {
+      const dir = tmp()
+      put(dir, 'index.html', page('{"files":[]}'))
+      expect(residuals(dir)).toEqual([])
+      expect(run(dir).status).toBe(0)
+    })
+
+    it('still catches a credential in the payload beside the real viewer code', () => {
+      const dir = tmp()
+      put(dir, 'index.html', page(`{"password":"${pwTag()}"}`))
+      expect(residuals(dir)).toEqual([join(dir, 'index.html')])
+    })
+
+    it('still catches a credential in the page outside the viewer code', () => {
+      const dir = tmp()
+      put(dir, 'index.html', page('{}', `<script>var t="${jwt()}"</script>`))
+      expect(residuals(dir)).toEqual([join(dir, 'index.html')])
+    })
+
+    it('still catches a credential appended inside a modified viewer script', () => {
+      const dir = tmp()
+      put(dir, 'index.html', Buffer.from(page('{}').toString('latin1').replace(asset('report.js'), `${asset('report.js')}\nvar t="${jwt()}"`), 'latin1'))
+      expect(residuals(dir)).toEqual([join(dir, 'index.html')])
+    })
+  })
+
   it('still scrubs a trace zip that sits under trace/', () => {
     const dir = tmp()
     put(dir, 'trace/t.zip', zipSync({ 'a.network': enc(`{"password":"${pwTag()}"}`) }))

@@ -2,7 +2,7 @@
 // Usage: node e2e/reportScrub.ts <dir>...
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,9 +47,9 @@ export function scrubText(s: string): string {
 
 const BINARY = /\.(png|jpe?g|gif|webp|ico|webm|mp4|woff2?|ttf|otf|pdf)$/i
 const PAYLOAD = /(data:application\/zip;base64,)([^"'<\s]*)/
-const RESIDUALS = [/eyJ[A-Za-z0-9_-]{10,}/, /e2e-member-pw-/, new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
-  new RegExp(`${Q}(?:proxy-)?${HDR}${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
-  new RegExp(`${LINE}(?!\\[redacted\\])[^\\s"\\\\]`, 'i'),
+const RESIDUALS: [string, RegExp][] = [['jwt', /eyJ[A-Za-z0-9_-]{10,}/], ['member-password', /e2e-member-pw-/], ['password-field', new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i')],
+  ['credential-header-key', new RegExp(`${Q}(?:proxy-)?${HDR}${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i')],
+  ['credential-header-line', new RegExp(`${LINE}(?!\\[redacted\\])[^\\s"\\\\]`, 'i')],
 ]
 
 // latin1 keeps every byte, so an unchanged file round-trips exactly.
@@ -101,11 +101,12 @@ function files(dir: string): string[] {
 // Playwright's static trace-viewer bundle (`trace/` in an HTML report) holds no run data and breaks if rewritten.
 // A file is skipped only when byte-identical to the same path in the installed playwright-core viewer.
 let coreDir: string | null | undefined
-const viewerRoot = (): string | null => {
+export const viewerRoot = (): string | null => {
   if (coreDir === undefined) {
     try {
-      const req = createRequire(import.meta.url)
-      coreDir = dirname(createRequire(req.resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
+      // Follow the reporter's own chain: pnpm also holds other playwright-core copies, and a hoisted one is not the reporter's.
+      const hop = (from: string, pkg: string) => realpathSync(createRequire(from).resolve(`${pkg}/package.json`))
+      coreDir = dirname(hop(hop(hop(import.meta.url, '@playwright/test'), 'playwright'), 'playwright-core'))
     } catch {
       coreDir = null
     }
@@ -113,9 +114,16 @@ const viewerRoot = (): string | null => {
   return coreDir && join(coreDir, 'lib/vite/traceViewer')
 }
 // The report viewer's code (report.js, report.css) is inlined into index.html; it holds no run data.
+// Throws when the installed copy cannot be read: a silent miss would check the viewer code as run data.
 let reportAssets: string[] | undefined
 const reportViewer = (): string[] => {
-  reportAssets ??= (viewerRoot() ? ['report.js', 'report.css'] : []).map((f) => join(coreDir!, 'lib/vite/htmlReport', f)).filter((f) => existsSync(f)).map((f) => readFileSync(f, 'latin1')).filter(Boolean)
+  if (reportAssets) return reportAssets
+  if (!viewerRoot()) throw new Error('playwright-core not found from @playwright/test; the report viewer code cannot be told from run data (pnpm install?)')
+  reportAssets = ['report.js', 'report.css'].map((f) => {
+    const path = join(coreDir!, 'lib/vite/htmlReport', f)
+    if (!existsSync(path)) throw new Error(`report viewer asset missing: ${path}`)
+    return readFileSync(path, 'latin1')
+  })
   return reportAssets
 }
 const isViewerAsset = (root: string, file: string, bytes: Uint8Array): boolean => {
@@ -145,30 +153,51 @@ export function scrubDir(dir: string): void {
   }
 }
 
-function dirty(name: string, data: Uint8Array): boolean {
-  if (/\.zip$/i.test(name)) return Object.entries(unzipSync(data)).some(([n, d]) => dirty(n, d))
+type Hit = { file: string; rule: string; offset: number; region: string }
+
+// The first match in data (zip contents included), located but never quoted.
+function firstHit(name: string, data: Uint8Array, region: string): Omit<Hit, 'file'> | null {
+  if (/\.zip$/i.test(name)) {
+    for (const [n, d] of Object.entries(unzipSync(data))) {
+      const hit = firstHit(n, d, `${region} > ${n}`)
+      if (hit) return hit
+    }
+    return null
+  }
   let text = toText(data)
   if (/\.html?$/i.test(name)) {
     const m = PAYLOAD.exec(text)
     if (m) {
-      if (dirty('payload.zip', decodePayload(m[2]))) return true
-      text = text.replace(PAYLOAD, '$1')
+      const hit = firstHit('payload.zip', decodePayload(m[2]), 'payload')
+      if (hit) return hit
+      text = text.replace(PAYLOAD, (_, head: string) => head + ' '.repeat(m[2].length))
     }
-    // Blank only text byte-identical to the installed viewer code; anything else in the file is still checked.
-    for (const asset of reportViewer()) text = text.split(asset).join('')
+    // Blank (same length, so offsets hold) only text byte-identical to the viewer code; the rest is still checked.
+    for (const asset of reportViewer()) text = text.split(asset).join(' '.repeat(asset.length))
+    region = 'page text'
   }
-  return RESIDUALS.some((re) => re.test(text))
+  for (const [rule, re] of RESIDUALS) {
+    const at = text.search(re)
+    if (at >= 0) return { rule, offset: at, region }
+  }
+  return null
 }
 
-/** residuals lists the files under dir (zip contents included) that still hold a credential. */
-export function residuals(dir: string): string[] {
-  return files(dir).filter((f) => {
+/** residualHits locates, per file under dir, the first credential left: rule, byte offset, region. Never the value. */
+export function residualHits(dir: string): Hit[] {
+  return files(dir).flatMap((f) => {
     try {
-      return dirty(f, new Uint8Array(readFileSync(f)))
+      const hit = firstHit(f, new Uint8Array(readFileSync(f)), 'file')
+      return hit ? [{ file: f, ...hit }] : []
     } catch {
       throw new Error(`${f}: cannot be checked`)
     }
   })
+}
+
+/** residuals lists the files under dir (zip contents included) that still hold a credential. */
+export function residuals(dir: string): string[] {
+  return residualHits(dir).map((h) => h.file)
 }
 
 function main(dirs: string[]): number {
@@ -178,10 +207,11 @@ function main(dirs: string[]): number {
   }
   const present = dirs.filter((d) => existsSync(d) && statSync(d).isDirectory())
   try {
+    if (present.some((d) => files(d).some((f) => /\.html?$/i.test(f)))) reportViewer()
     present.forEach(scrubDir)
-    const left = present.flatMap((d) => residuals(d))
+    const left = present.flatMap((d) => residualHits(d))
     if (left.length === 0) return 0
-    for (const f of left) console.error(`::error::${f}: a credential survived the scrub`)
+    for (const h of left) console.error(`::error::${h.file}: a credential survived the scrub (rule ${h.rule}, offset ${h.offset}, in ${h.region})`)
   } catch (err) {
     console.error(`::error::${err instanceof Error ? err.message : 'scrub failed'}`)
   }

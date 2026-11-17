@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, realpathSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { Script } from 'node:vm'
 import { unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
-import { residuals, scrubDir, scrubText } from './reportScrub'
+import { residualHits, residuals, scrubDir, scrubText, viewerRoot } from './reportScrub'
 
 const b64u = (s: string) => Buffer.from(s).toString('base64url')
 // Built from parts so no literal token sits in the source.
@@ -225,6 +225,37 @@ describe('reportScrub CLI', () => {
     expect(r.stderr).not.toContain(pwTag())
   })
 
+  it('names the rule, offset and region of a residual, never its value', () => {
+    const dir = tmp()
+    const pre = '<p>head</p>'
+    put(dir, 'index.html', `${pre}<script>var t="${jwt()}"</script>`)
+    put(dir, 'run.txt', `k=${pwTag()}`)
+    const err = run(dir).stderr
+    expect(err).toContain(`index.html: a credential survived the scrub (rule jwt, offset ${pre.length + '<script>var t="'.length}, in page text)`)
+    expect(err).toContain('run.txt: a credential survived the scrub (rule member-password, offset 2, in file)')
+    expect(err).not.toContain(pwTag())
+    expect(err).not.toContain(jwt())
+  })
+
+  it('names the payload entry of a residual in the embedded report', () => {
+    const dir = tmp()
+    const inner = zipSync({ 'a.json': enc(`{"x":"${pwTag()}"}`) })
+    put(dir, 'index.html', `<template>data:application/zip;base64,${Buffer.from(zipSync({ 'n.zip': inner })).toString('base64')}</template>`)
+    expect(residualHits(dir).map((h) => [h.rule, h.offset, h.region])).toEqual([['member-password', 6, 'payload > n.zip > a.json']])
+  })
+
+  it('errors loudly when the report viewer cannot be located, instead of checking it as run data', () => {
+    const root = realpathSync(tmp())
+    mkdirSync(join(root, 'node_modules'))
+    symlinkSync(join(import.meta.dirname, 'node_modules/fflate'), join(root, 'node_modules/fflate'))
+    cpSync(CLI, join(root, 'reportScrub.ts'))
+    put(root, 'out/index.html', '<html></html>')
+    const r = spawnSync(process.execPath, [join(root, 'reportScrub.ts'), join(root, 'out')], { encoding: 'utf8', cwd: root, env: { ...process.env, NODE_PATH: '' } })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('playwright-core not found')
+    expect(r.stderr).not.toContain('survived')
+  })
+
   it('skips a missing directory', () => {
     expect(run(join(tmp(), 'nope')).status).toBe(0)
   })
@@ -284,7 +315,13 @@ describe('reportScrub CLI', () => {
 })
 
 describe('static viewer assets', () => {
-  const pwCore = () => dirname(createRequire(createRequire(import.meta.url).resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
+  // The reporter's chain: @playwright/test -> playwright -> playwright-core. pnpm also hoists other cores.
+  const hop = (from: string, pkg: string) => realpathSync(createRequire(from).resolve(`${pkg}/package.json`))
+  const pwCore = () => dirname(hop(hop(hop(import.meta.url, '@playwright/test'), 'playwright'), 'playwright-core'))
+
+  it('reads the viewer from the playwright-core the reporter runs, not a hoisted copy', () => {
+    expect(viewerRoot()).toBe(join(pwCore(), 'lib/vite/traceViewer'))
+  })
   const jsFiles = (d: string): string[] =>
     readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? jsFiles(join(d, e.name)) : /\.js$/.test(e.name) ? [join(d, e.name)] : []))
 

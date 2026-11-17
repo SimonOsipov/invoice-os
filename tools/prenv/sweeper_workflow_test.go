@@ -9,8 +9,16 @@ import (
 )
 
 // runSweep runs the Sweep step of dev-env-sweeper.yml against a stub preview.sh, a gh shim and a date shim.
+// sweepCase: prs and dbs are what the stub preview.sh prints for `prs` and `databases`; prsAgain answers later `prs` calls.
 // states maps a PR to what `gh pr view` prints.
-func runSweep(t *testing.T, states map[string]string) (summary, calls string) {
+type sweepCase struct {
+	prs, prsAgain, dbs string
+	failDatabases      bool
+	failTeardown       []string
+	states             map[string]string
+}
+
+func runSweep(t *testing.T, sw sweepCase) (summary, calls string, code int) {
 	t.Helper()
 	var run string
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env-sweeper.yml")) {
@@ -27,14 +35,26 @@ func runSweep(t *testing.T, states map[string]string) (summary, calls string) {
 	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", `case "$1" in
-prs) printf 'nightly old\n7 old\n' ;;
-*) echo "preview $*" >> '`+dir+`/calls' ;;
+	writeIn(t, dir, "prs", sw.prs)
+	writeIn(t, dir, "dbs", sw.dbs)
+	if sw.prsAgain != "" {
+		writeIn(t, dir, "prs-again", sw.prsAgain)
+	}
+	if sw.failDatabases {
+		writeIn(t, dir, "fail-databases", "")
+	}
+	writeIn(t, dir, "fail-teardown", strings.Join(sw.failTeardown, "\n")+"\n")
+	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", `d='`+dir+`'
+case "$1" in
+prs) if [ -e "$d/prs-seen" ] && [ -e "$d/prs-again" ]; then cat "$d/prs-again"; else touch "$d/prs-seen"; cat "$d/prs"; fi ;;
+databases) [ ! -e "$d/fail-databases" ] || exit 1; cat "$d/dbs" ;;
+teardown) echo "preview $*" >> "$d/calls"; ! grep -qxF -- "$2" "$d/fail-teardown" ;;
+*) echo "preview $*" >> "$d/calls" ;;
 esac
 `)
 	var gh strings.Builder
 	gh.WriteString("echo \"gh $*\" >> '" + dir + "/calls'\ncase \"$3\" in\n")
-	for pr, st := range states {
+	for pr, st := range sw.states {
 		gh.WriteString(pr + ") echo " + st + " ;;\n")
 	}
 	gh.WriteString("*) exit 1 ;;\nesac\n")
@@ -50,19 +70,29 @@ esac
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GITHUB_STEP_SUMMARY="+filepath.Join(dir, "summary"), "GITHUB_REPOSITORY=o/r", "GH_TOKEN=x")
-	if _, stderr, err := runToFiles(t, cmd, false); err != nil {
-		t.Fatalf("sweep failed: %v\n%s", err, stderr)
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("sweep did not run: %v", err)
+		}
+		code = ee.ExitCode()
 	}
 	read := func(n string) string {
 		b, _ := os.ReadFile(filepath.Join(dir, n))
 		return string(b)
 	}
-	return read("summary"), read("calls")
+	return read("summary") + stdout + stderr, read("calls"), code
 }
+
+const oldPRs = "nightly old\n7 old\n"
 
 func TestSweeperKeepsTheNightlyByName(t *testing.T) {
 	t.Parallel()
-	summary, calls := runSweep(t, map[string]string{"7": "CLOSED"})
+	summary, calls, code := runSweep(t, sweepCase{prs: oldPRs, states: map[string]string{"7": "CLOSED"}})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, summary)
+	}
 	if !strings.Contains(summary, "| #nightly | old | kept: the Nightly run deletes it |") {
 		t.Errorf("no kept row for the nightly:\n%s", summary)
 	}
@@ -76,8 +106,68 @@ func TestSweeperKeepsTheNightlyByName(t *testing.T) {
 
 func TestSweeperStillKeepsAnOpenPR(t *testing.T) {
 	t.Parallel()
-	summary, calls := runSweep(t, map[string]string{"7": "OPEN"})
+	summary, calls, code := runSweep(t, sweepCase{prs: oldPRs, states: map[string]string{"7": "OPEN"}})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, summary)
+	}
 	if !strings.Contains(summary, "| #7 | old | kept: PR open |") || strings.Contains(calls, "teardown") {
 		t.Errorf("open PR not kept:\n%s\n%s", summary, calls)
+	}
+}
+
+func TestSweeperDropsADatabaseOnlyMergedPR(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", dbs: "672\n", states: map[string]string{"672": "MERGED"}})
+	if code != 0 || !strings.Contains(calls, "preview teardown 672") || !strings.Contains(summary, "| #672 | - | deleted: PR MERGED |") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperKeepsADatabaseOnlyOpenPR(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", dbs: "8\n", states: map[string]string{"8": "OPEN"}})
+	if code != 0 || strings.Contains(calls, "teardown") || !strings.Contains(summary, "| #8 | - | kept: PR open |") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperKeepsTheNightlyDatabase(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "7 old\n", dbs: "nightly\n", states: map[string]string{"7": "OPEN"}})
+	if code != 0 || strings.Count(summary, "| #nightly |") != 1 || !strings.Contains(summary, "| #nightly | - | kept: the Nightly run deletes it |") ||
+		strings.Contains(calls, "gh pr view nightly") || strings.Contains(calls, "teardown") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperListsAPRInBothOnce(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "7 old\n", dbs: "7\n", states: map[string]string{"7": "CLOSED"}})
+	if code != 0 || strings.Count(summary, "| #7 |") != 1 || strings.Count(calls, "preview teardown 7") != 1 {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperKeepsADatabaseOnlyPRThatCameBack(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", prsAgain: "nightly old\n672 now\n", dbs: "672\n", states: map[string]string{"672": "CLOSED"}})
+	if code != 0 || strings.Contains(calls, "preview teardown 672") || !strings.Contains(summary, "| #672 | - | kept: preview came back |") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperStopsWhenDatabasesCannotBeListed(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: oldPRs, failDatabases: true, states: map[string]string{"7": "CLOSED"}})
+	if code != 1 || !strings.Contains(summary, "Could not list the preview databases") || strings.Contains(calls, "teardown") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperFailsOnAFailedDatabaseDrop(t *testing.T) {
+	t.Parallel()
+	summary, _, code := runSweep(t, sweepCase{prs: "nightly old\n", dbs: "672\n", failTeardown: []string{"672"}, states: map[string]string{"672": "MERGED"}})
+	if code != 1 || !strings.Contains(summary, "| #672 | - | DELETE FAILED: PR MERGED |") || !strings.Contains(summary, "1 preview(s) could not be deleted") {
+		t.Errorf("exit %d:\n%s", code, summary)
 	}
 }

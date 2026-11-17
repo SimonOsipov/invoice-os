@@ -50,7 +50,7 @@ paths:
 - Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN`, with `MOCK_ISSUER_TOKEN_FOR` naming its preview, in the `e2e` and `topology` jobs, and in the nightly `nightly-ai` job.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
-- Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
+- Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed. It also drops a `pr_<N>` database whose PR reads closed, at any age (`preview.sh databases`).
 - Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and hold at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Past the cap, any open preview's services can fail with 53300.
 - PR previews hold at most 2 slots. The third is the nightly's. A new PR past 2 polls in `preview cap for a PR` like the nightly step below, then fails with one `::error::`, before it creates anything. A PR that already holds a preview is not refused. A nightly entry never counts against a PR. `preview.sh cap <pr|nightly>` decides (`TestDevEnvNightly_PRsLeaveTheNightlyItsSlot`, `TestPreviewCapAllowsNoMixOverTheBudget`).
 - In a nightly run, `preview cap reached` polls `preview.sh cap nightly` and fails only if 3 PR previews stay open (`TestDevEnvNightly_CapStepWaitsForASlot`).

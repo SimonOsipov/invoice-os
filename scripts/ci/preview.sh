@@ -26,6 +26,7 @@
 #   preview.sh contact-token-version nightly print the number of the token's latest version
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
+#   preview.sh databases                  print <pr|nightly> for each pr_<N> database (pr_0 is nightly)
 #   preview.sh cap <pr|nightly>           print open=<other PR previews> and full=true|false (a new PR is full at 2, the nightly at 3)
 #   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images or reach the nightly's keys
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
@@ -559,6 +560,12 @@ cmd_prs() {
   } | sort -k1,1n -k2,2 | awk '!seen[$1]++ {print $1, $2}'
 }
 
+# databases: the preview the pr_<N> databases belong to. A database outlives a teardown that failed mid-way, and prs does not see it.
+cmd_databases() {
+  gcloud sql databases list --instance preview --project "$PROJECT" --format 'value(name)' \
+    | sed -nE 's/^pr_0$/nightly/p; s/^pr_([1-9][0-9]*)$/\1/p'
+}
+
 # cap: PR previews open besides the caller's (a nightly entry never counts) and whether the caller is refused (ci-preview.md).
 cmd_cap() {
   name_arg "${1:-}"
@@ -720,8 +727,9 @@ case "${1:-}" in
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
   deal-stage) deal_stage ;;
   prs) cmd_prs ;;
+  databases) cmd_databases ;;
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

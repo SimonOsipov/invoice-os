@@ -63,6 +63,7 @@ case "$1 $2 $3" in
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
+"sql databases list") cat "$D/list-databases" 2>/dev/null || : ;;
 "secrets versions describe")
   prev=
   for a in "$@"; do
@@ -1187,6 +1188,45 @@ func TestPreviewPrsListsTheNightly(t *testing.T) {
 	}, "prs")
 	if want := "nightly 2026-10-29T00:30:00Z\n7 2026-10-28T02:00:00Z\n"; r.code != 0 || r.stdout != want {
 		t.Fatalf("exit %d, prs = %q, want %q", r.code, r.stdout, want)
+	}
+}
+
+func TestPreviewDatabasesMapsNames(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "postgres\npr_0\npr_672\npr_x\n") }, "databases")
+	if want := "nightly\n672\n"; r.code != 0 || r.stdout != want {
+		t.Fatalf("exit %d, databases = %q, want %q", r.code, r.stdout, want)
+	}
+}
+
+func TestPreviewDatabasesFailsWhenGcloudFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "list-databases", "pr_672\n")
+		writeIn(t, dir, "fail-sql-databases", "")
+	}, "databases")
+	if r.code == 0 {
+		t.Fatalf("exit 0, stdout %q", r.stdout)
+	}
+}
+
+func TestPreviewCapIgnoresDatabases(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "pr_9\n") }, "prs")
+	if r.code != 0 || r.stdout != "" {
+		t.Fatalf("exit %d, prs = %q, want empty", r.code, r.stdout)
+	}
+	r = runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "pr_9\n") }, "cap", "5")
+	if !strings.Contains(r.stdout, "open=0") {
+		t.Fatalf("cap = %q, want open=0", r.stdout)
+	}
+}
+
+func TestPreviewTeardownFailsWhenTheDropFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "execfails", "1") }, "teardown", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") || strings.Count(r.file(t, "calls"), "run jobs execute preview-db") != 1 {
+		t.Errorf("exit %d, stderr %q, calls %q", r.code, r.stderr, r.file(t, "calls"))
 	}
 }
 

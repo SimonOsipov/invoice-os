@@ -14,12 +14,17 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
+import { ApiError } from '@invoice-os/api-client'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it, vi } from 'vitest'
 
 import * as documentRunModule from './documentRun'
 import {
   AI_UNAVAILABLE_REFUSAL,
   EXTRACTION_POLL_BUDGET_MS,
+  HELD_ELSEWHERE_SENTENCE,
+  HELD_NOT_IMPORTED,
+  HELD_OTHERS_IMPORTED,
   deadLetterRefusal,
   documentRunRows,
   isTerminalExtractionState,
@@ -32,9 +37,10 @@ import {
 } from './documentRun'
 import type { DocumentPipelineDeps, DocumentRowState, DocumentRunFile } from './documentRun'
 import type { ExtractionJob, ImportReport } from './importApi'
-import { routeAfterRun } from './importRun'
+import { routeAfterRun, runFailures } from './importRun'
 import type { FileOutcome, ImportRun, RunFile } from './importRun'
 import { LIVE_POLL_MS } from './invoices'
+import { filesStrip } from './reviewBatch'
 
 function job(over: Partial<ExtractionJob>): ExtractionJob {
   return {
@@ -1677,5 +1683,168 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
     expect(contentsOf('was read, but no invoice number')).toEqual([])
     expect(contentsOf('too poor to read, so no invoice fields')).toEqual([])
     expect(contentsOf('unavailable when this document was imported')).toEqual([])
+  })
+})
+
+// --- a refused upload in a batch ---------------------------------
+
+const HELD_LITERAL =
+  'Not imported: this file already belongs to a client you cannot see. The other files were imported.'
+
+const heldError = () => new ApiError('http', HELD_ELSEWHERE_SENTENCE, 409, { error: HELD_ELSEWHERE_SENTENCE })
+
+// Files whose names are in `held` are refused on upload; `failPoll` names dead-lettered ones.
+function heldDeps(
+  held: string[],
+  over: Partial<DocumentPipelineDeps> & { failPoll?: string[]; err?: () => Error } = {},
+): DocumentPipelineDeps {
+  const { failPoll = [], err = heldError, ...rest } = over
+  return {
+    upload: async (file) => {
+      if (held.includes(file.name)) throw err()
+      return `doc-${file.name}`
+    },
+    poll: async (documentId) =>
+      failPoll.includes(documentId.slice(4))
+        ? { kind: 'failed', reason: 'dead-lettered: no text' }
+        : { kind: 'succeeded', jobId: `job-${documentId}` },
+    importDocument: async (documentId) => report(`batch-${documentId}`),
+    onStage: () => {},
+    ...rest,
+  }
+}
+
+function failedMessage(o: { outcome: FileOutcome }): string {
+  if (o.outcome.kind !== 'failed') throw new Error(`expected failed, got ${o.outcome.kind}`)
+  return o.outcome.message
+}
+
+function lastFailedReason(onStage: ReturnType<typeof vi.fn>, id: string): string | undefined {
+  const calls = onStage.mock.calls.filter(([fid, s]) => fid === id && s.kind === 'failed')
+  return calls.length === 0 ? undefined : calls[calls.length - 1][1].reason
+}
+
+describe('startDocumentRun — a refused file in a batch (SECAUD-52)', () => {
+  it('HELD-1: a refused file in a batch reads Not imported plus the other files were imported', async () => {
+    const outcomes = await startDocumentRun(docFiles(['a.pdf', 'b.pdf', 'c.pdf']), heldDeps(['b.pdf']))
+    expect(outcomes.map((o) => o.outcome.kind)).toEqual(['imported', 'failed', 'imported'])
+    const msg = failedMessage(outcomes[1])
+    expect(msg).toBe(HELD_NOT_IMPORTED + HELD_OTHERS_IMPORTED)
+    expect(msg).toBe(HELD_LITERAL)
+    expect(msg).not.toMatch(/remove/i)
+  })
+
+  it('HELD-2: a refusal body carrying a document id and a filename leaks neither', async () => {
+    const uuid = '3f2c0a1e-1111-4222-8333-444455556666'
+    const body = { error: HELD_ELSEWHERE_SENTENCE, document_id: uuid, filename: 'original-name.pdf' }
+    const files = docFiles(['picked-name.pdf', 'ok.pdf'])
+    const outcomes = await startDocumentRun(
+      files,
+      heldDeps(['picked-name.pdf'], { err: () => new ApiError('http', HELD_ELSEWHERE_SENTENCE, 409, body) }),
+    )
+    const msg = failedMessage(outcomes[0])
+    expect(msg).toBe(HELD_LITERAL)
+    expect(msg).not.toContain(uuid)
+    expect(msg).not.toContain('original-name.pdf')
+    expect(msg).not.toContain('picked-name.pdf')
+  })
+
+  it('HELD-3: a one-file run (a single PDF) reads Not imported with no claim about other files', async () => {
+    const outcomes = await startDocumentRun(docFiles(['only.pdf']), heldDeps(['only.pdf']))
+    const msg = failedMessage(outcomes[0])
+    expect(msg).toBe(HELD_NOT_IMPORTED)
+    expect(msg).not.toMatch(/other files/i)
+    expect(msg).not.toMatch(/remove/i)
+  })
+
+  it('HELD-4: when every file is refused no file claims the others were imported', async () => {
+    const all = await startDocumentRun(docFiles(['a.pdf', 'b.pdf']), heldDeps(['a.pdf', 'b.pdf']))
+    expect(all.map(failedMessage)).toEqual([HELD_NOT_IMPORTED, HELD_NOT_IMPORTED])
+  })
+
+  it('HELD-5: the in-flight row never claims an import that has not happened', async () => {
+    let open!: () => void
+    const gate = new Promise<void>((r) => (open = r))
+    const onStage = vi.fn()
+    const files = docFiles(['a.pdf', 'b.pdf'])
+    const run = startDocumentRun(
+      files,
+      heldDeps(['a.pdf'], {
+        onStage,
+        importDocument: async (documentId) => {
+          await gate
+          return report(`batch-${documentId}`)
+        },
+      }),
+    )
+    await vi.waitFor(() => expect(lastFailedReason(onStage, 'f1')).toBe(HELD_NOT_IMPORTED))
+    open()
+    const outcomes = await run
+    expect(lastFailedReason(onStage, 'f1')).toBe(failedMessage(outcomes[0]))
+    expect(lastFailedReason(onStage, 'f1')).toBe(HELD_LITERAL)
+  })
+
+  it('HELD-6: only the exact held refusal is rewritten', async () => {
+    const table: [string, () => Error][] = [
+      ['409 other text', () => new ApiError('http', 'this invoice can no longer be corrected', 409)],
+      ['500 held sentence', () => new ApiError('http', HELD_ELSEWHERE_SENTENCE, 500)],
+      ['plain Error', () => new Error(HELD_ELSEWHERE_SENTENCE)],
+      ['409 trailing space', () => new ApiError('http', HELD_ELSEWHERE_SENTENCE + ' ', 409)],
+    ]
+    for (const [name, err] of table) {
+      const outcomes = await startDocumentRun(docFiles(['a.pdf', 'b.pdf']), heldDeps(['a.pdf'], { err }))
+      expect(failedMessage(outcomes[0]), name).toBe(err().message)
+      expect(failedMessage(outcomes[0]), name).not.toContain('Not imported')
+    }
+  })
+
+  it('HELD-7: the screens per-file result carries the batch text', async () => {
+    const outcomes = await startDocumentRun(docFiles(['a.pdf', 'b.pdf', 'c.pdf']), heldDeps(['b.pdf']))
+    const files: RunFile[] = outcomes.map((o) => ({ id: o.id, name: o.name, groupId: '', outcome: o.outcome }))
+    const run: ImportRun = { files, cursor: files.length, status: 'finished' }
+    const failures = runFailures(run)
+    expect(failures).toHaveLength(1)
+    expect(failures[0].message).toBe(HELD_LITERAL)
+    expect(filesStrip([], run, 'document').map((r) => r.reason)).toContain(HELD_LITERAL)
+  })
+
+  it('HELD-8: a Go reword of DocumentHeldElsewhereMessage would silently bring back "remove it to continue" in the batch', () => {
+    // Comments stripped and only the declaration read: a comment keeping the old sentence must not pass.
+    const src = stripComments(readRepoFile('../../internal/extraction/handlers_upload.go', 'DocumentHeldElsewhereMessage'))
+    const decl = src.split('\n').filter((l) => /^const DocumentHeldElsewhereMessage = /.test(l))
+    expect(decl).toEqual([`const DocumentHeldElsewhereMessage = "${HELD_ELSEWHERE_SENTENCE}"`])
+  })
+
+  it('HELD-9: a held file beside an imported file and a failed file claims nothing about the others', async () => {
+    const onStage = vi.fn()
+    const outcomes = await startDocumentRun(
+      docFiles(['a.pdf', 'b.pdf', 'c.pdf']),
+      heldDeps(['a.pdf'], { failPoll: ['c.pdf'], onStage }),
+    )
+    expect(outcomes.map((o) => o.outcome.kind)).toEqual(['failed', 'imported', 'failed'])
+    expect(failedMessage(outcomes[0])).toBe(HELD_NOT_IMPORTED)
+    expect(lastFailedReason(onStage, 'f1')).toBe(HELD_NOT_IMPORTED)
+    expect(failedMessage(outcomes[2])).toBe('dead-lettered: no text')
+  })
+
+  it('HELD-10: two held files beside one imported file each read the no-suffix form', async () => {
+    const outcomes = await startDocumentRun(docFiles(['a.pdf', 'b.pdf', 'c.pdf']), heldDeps(['a.pdf', 'c.pdf']))
+    expect(failedMessage(outcomes[0])).toBe(HELD_NOT_IMPORTED)
+    expect(failedMessage(outcomes[2])).toBe(HELD_NOT_IMPORTED)
+    expect(outcomes[1].outcome.kind).toBe('imported')
+  })
+
+  it('HELD-11: a held file beside a failed-status or zero-invoice report claims nothing about the others', async () => {
+    const bad = (id: string, over: Partial<ImportReport>) => ({ ...report(id), ...over })
+    for (const over of [
+      { status: 'failed' as const },
+      { rows_valid: 0, ready_invoices: 0 },
+    ]) {
+      const outcomes = await startDocumentRun(
+        docFiles(['a.pdf', 'b.pdf', 'c.pdf']),
+        heldDeps(['a.pdf'], { importDocument: async (d) => (d === 'doc-b.pdf' ? bad(d, over) : report(d)) }),
+      )
+      expect(failedMessage(outcomes[0])).toBe(HELD_NOT_IMPORTED)
+    }
   })
 })

@@ -1188,7 +1188,7 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 	if n < 8 {
 		t.Errorf("control: only %d jobs call preview.sh", n)
 	}
-	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
+	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 25\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
 }
 
 // The contacts step of fleet-gate, trimmed per line.

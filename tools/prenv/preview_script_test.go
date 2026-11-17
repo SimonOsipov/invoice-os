@@ -3202,7 +3202,11 @@ func TestPreviewNightlyMountsItsOwnSlotKey(t *testing.T) {
 	if dep.code != 0 || mig.code != 0 {
 		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
 	}
-	for name, line := range map[string]string{"invoice": deployCalls(t, dep, "nightly")["invoice"], "migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-nightly ")]} {
+	svcs := deployCalls(t, dep, "nightly") // nightly services carry no -pr- suffix: keys are invoice-nightly, ...
+	if _, ok := svcs["invoice-nightly"]; !ok || len(svcs) == 0 {
+		t.Fatalf("no invoice-nightly deploy call: %v", svcs)
+	}
+	for name, line := range map[string]string{"invoice": svcs["invoice-nightly"], "migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-nightly ")]} {
 		set := flagValue(line, "--set-secrets")
 		for _, w := range []string{"DOCUMENT_ACCESS_KEY_ID=nightly-document-access-key-id:latest", "DOCUMENT_SECRET_ACCESS_KEY=nightly-document-secret-key:latest"} {
 			if !strings.Contains(","+set+",", ","+w+",") {

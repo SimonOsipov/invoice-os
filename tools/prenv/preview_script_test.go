@@ -126,7 +126,12 @@ case "$1 $2 $3" in
     ev() { sed -n "s/^$1: '\(.*\)'\$/\1/p" "$jf"; }
     PROJECT=$(ev PROJECT) NAMES=$(ev NAMES) NONCE=$(ev NONCE) PROBE=$(ev PROBE) REACH_JOB=1 bash -c 'eval "$(printf %s "$PROBE" | base64 -d)"' >>"$D/logs"
   fi ;;
-"logging read "*) cat "$D/logs" 2>/dev/null || : ;;
+"logging read "*)
+  # logs-late=N: the first N-1 reads miss every line of the names in logs-hide, as under ingestion lag
+  n=$(( $(cat "$D/nreads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$D/nreads"
+  if [ -e "$D/logs-late" ] && [ "$n" -lt "$(cat "$D/logs-late")" ]; then
+    awk 'NR == FNR {h[$1]; next} !($3 in h)' "$D/logs-hide" "$D/logs" 2>/dev/null || :
+  else cat "$D/logs" 2>/dev/null || :; fi ;;
 esac
 `
 
@@ -1167,6 +1172,17 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 	}
 	if c := runPreview(t, nil, "token", "nightly").file(t, "calls"); !strings.Contains(c, "--secret nightly-gateway-token ") {
 		t.Errorf("token calls:\n%s", c)
+	}
+}
+
+func TestPreviewTeardownNightlyDescribesNoReachJob(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "teardown", "nightly")
+	if c := r.file(t, "calls"); strings.Contains(c, "reach-nightly") {
+		t.Errorf("the nightly's teardown asked for a reach job:\n%s", c)
+	}
+	if r2 := runPreview(t, nil, "teardown", "7"); !strings.Contains(r2.file(t, "calls"), "run jobs describe reach-pr-7 ") {
+		t.Errorf("a PR's teardown skipped its reach job:\n%s", r2.file(t, "calls"))
 	}
 }
 
@@ -3652,7 +3668,7 @@ func TestPreviewTeardownKeepsTheClaimWhenItCannotBeRead(t *testing.T) {
 	}
 }
 
-// reach: a PR run proves its slot runtime reads only its own secrets (SECAUD-55-03).
+// reach: a PR run proves its slot runtime reads only its own secrets.
 
 const reachOK = "Runtime reach holds for PR 7"
 
@@ -3968,6 +3984,58 @@ func TestPreviewReachSkipsASecretThatVanished(t *testing.T) {
 	})
 }
 
+func TestPreviewReachExistingSecretThatAnswersNotFoundIsNotADenial(t *testing.T) {
+	t.Parallel()
+	const n = "pr-9-database-app-url"
+	gone := func(f map[string]string) {
+		f["missing"] = n + "\n"
+		f["denied"] = notDenied(t, n)
+	}
+	t.Run("the secret exists", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { gone(f); f["owner-"+n] = "9" })
+		reachFails(t, r)
+		onlyError(t, r, "run-slot-1 may read "+n, "answered NOT_FOUND, not a denial, and the secret exists")
+	})
+	t.Run("the check fails", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { gone(f); f["describe-error"] = n + "\n" })
+		reachFails(t, r)
+		onlyError(t, r, "could not check "+n, "UNAVAILABLE")
+	})
+}
+
+func TestPreviewReachPollsTheLogUntilEveryNameHasAVerdict(t *testing.T) {
+	t.Parallel()
+	t.Run("a verdict that lands on the fourth read", func(t *testing.T) {
+		t.Parallel()
+		_, denied := reachNames(t)
+		r := runReach(t, func(f map[string]string) { f["logs-late"] = "4"; f["logs-hide"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...)) })
+		if r.code != 0 || len(errLines(r)) > 0 {
+			t.Errorf("exit %d, errors %q, want a pass once the verdicts land", r.code, errLines(r))
+		}
+		if n := len(callsWith(r, "logging read")); n != 4 {
+			t.Errorf("%d log reads, want 4: the poll must stop as soon as every name has a verdict", n)
+		}
+	})
+	t.Run("a name that ends another name is not logged by it", func(t *testing.T) {
+		t.Parallel()
+		longer := "pr-9-database-superuser-url"
+		r := runReach(t, func(f map[string]string) {
+			f["have"] += longer + "\n"
+			f["denied"] += longer + "\n"
+			f["logs-late"] = "2"
+			f["logs-hide"] = "database-superuser-url\n"
+		})
+		if r.code != 0 || len(errLines(r)) > 0 {
+			t.Errorf("exit %d, errors %q, want a pass: %s is not a verdict for its suffix", r.code, errLines(r), longer)
+		}
+		if n := len(callsWith(r, "logging read")); n != 2 {
+			t.Errorf("%d log reads, want 2", n)
+		}
+	})
+}
+
 func TestPreviewReachRefusesAReadableSecretOfAnotherPreview(t *testing.T) {
 	t.Parallel()
 	for _, n := range []string{"pr-9-gateway-token", "slot-2-document-secret-key", "nightly-hubspot-token", "postgres-password"} {
@@ -4037,14 +4105,14 @@ func TestPreviewReachFailsClosedWhenTheJobFails(t *testing.T) {
 				}
 				if strings.HasPrefix(calls[gi], "logging read") {
 					reads++
-					if i == 0 || order[i-1] != "sleep 10" {
-						t.Errorf("log read %d was not preceded by sleep 10: %v", reads, order)
+					if want := "sleep " + []string{"5", "10", "15", "20", "30", "40"}[min(reads-1, 5)]; i == 0 || order[i-1] != want {
+						t.Errorf("log read %d was not preceded by %s: %v", reads, want, order)
 					}
 				}
 				gi++
 			}
-			if reads != 3 {
-				t.Errorf("%d log reads, want 3", reads)
+			if reads != 6 {
+				t.Errorf("%d log reads, want 6", reads)
 			}
 		}},
 		{"error verdict", map[string]string{"accesserr": "pr-9-gateway-token\n", "denied": notDenied(t, "pr-9-gateway-token")}, "could not check pr-9-gateway-token", nil},

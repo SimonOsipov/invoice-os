@@ -483,6 +483,7 @@ cmd_teardown() {
     fi
   done
   for job in migrate reach; do
+    [ "$job$pr" != reachnightly ] || continue # the nightly runs no reach job
     rc=0
     present jobs describe "$job-$(suffix "$pr")" || rc=$?
     if [ "$rc" = 0 ]; then
@@ -722,7 +723,7 @@ read_verdict() {
 
 # reach_job <pr> <slot> <name>...: reads each name as run-<slot> in a Cloud Run job; sets REACH_VERDICTS to "<name> <verdict>" lines.
 reach_job() {
-  local pr=$1 slot=$2 job nonce envf errf probe try rc=0 lines='' n
+  local pr=$1 slot=$2 job nonce envf errf probe try rc=0 lines='' logged n
   shift 2
   job="reach-$(suffix "$pr")"
   nonce="${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-$RANDOM"
@@ -751,8 +752,9 @@ reach_job() {
     echo "::error::the reach job failed: $(tail -n 1 "$errf")"
     rc=1
   else
-    for try in 1 2 3; do
-      sleep 10 # log ingestion lag
+    # ceiling: 120 s of log ingestion lag in all (5+10+15+20+30+40); a name still unlogged then is an error
+    for try in ${REACH_POLL_SLEEPS:-5 10 15 20 30 40}; do
+      sleep "$try" # log ingestion lag
       if ! lines=$(gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$job\" AND textPayload:\"reach $nonce \"" \
         --project "$PROJECT" --freshness 1h --format 'value(textPayload)' 2>"$errf"); then
         echo "::error::could not read the reach job's log: $(tail -n 1 "$errf")"
@@ -760,14 +762,15 @@ reach_job() {
         break
       fi
       REACH_VERDICTS=$(awk -v p="reach $nonce " 'index($0, p) == 1 && !seen[$0]++ {print substr($0, length(p) + 1)}' <<<"$lines")
+      logged=$(awk '{print $1}' <<<"$REACH_VERDICTS")
       for n in "$@"; do
-        grep -qF -- "$n " <<<"$REACH_VERDICTS" || continue 2
+        grep -qxF -- "$n" <<<"$logged" || continue 2
       done
       break
     done
     if [ "$rc" = 0 ]; then
       for n in "$@"; do
-        grep -qxF -- "$n" < <(awk '{print $1}' <<<"$REACH_VERDICTS") || { echo "::error::no verdict for $n in the reach job's log"; rc=1; }
+        grep -qxF -- "$n" <<<"$logged" || { echo "::error::no verdict for $n in the reach job's log"; rc=1; }
       done
     fi
   fi
@@ -781,7 +784,7 @@ in_list() { grep -qxF -- "$1" <<<"$2"; }
 
 # cmd_reach <pr>: the PR's runtime reads only its own secrets, its slot's keys and the shared passwords.
 cmd_reach() {
-  local pr=$1 slot sa all mine allowed names='' send n errf pol members foreign v bad=0 reads=0 denied='' ndenied=0 reads_list=''
+  local pr=$1 slot sa all mine allowed names='' send n errf err pol members foreign v bad=0 reads=0 denied='' ndenied=0 reads_list=''
   [ "$pr" != nightly ] || die "reach checks a PR runtime; run-nightly is read by the owner"
   slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   sa="$(runtime "$pr" "$slot")"
@@ -836,7 +839,18 @@ cmd_reach() {
     fi
     case "$v" in
       readable) echo "::error::${sa%%@*} can read $n."; bad=1 ;;
-      gone) echo "::notice::$n is gone; skipped." ;;
+      gone)
+        # Secret Manager checks IAM first: NOT_FOUND to a caller means it had access, so only a missing secret is gone
+        if err=$(gcloud secrets describe "$n" --project "$PROJECT" 2>&1 >/dev/null </dev/null); then
+          echo "::error::${sa%%@*} may read $n: it answered NOT_FOUND, not a denial, and the secret exists."
+          bad=1
+        elif grep -q NOT_FOUND <<<"$err"; then
+          echo "::notice::$n is gone; skipped."
+        else
+          echo "::error::could not check $n: $(tail -n 1 <<<"$err")"
+          bad=1
+        fi
+        ;;
       denied) denied+="- $n"$'\n'; ndenied=$((ndenied + 1)) ;;
       *) echo "::error::could not check $n: ${v#error }"; bad=1 ;;
     esac

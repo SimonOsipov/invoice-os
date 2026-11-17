@@ -312,7 +312,7 @@ func devEnvNightlyProblems(yml string) []string {
 	return append(p, reachStepProblems(jobs)...)
 }
 
-// reachStepProblems names each clause of the deploy job's runtime-reach step (SECAUD-55-03) that the text breaks.
+// reachStepProblems names each clause of the deploy job's runtime-reach step that the text breaks.
 func reachStepProblems(jobs map[string]workflowJob) []string {
 	var p []string
 	const name = "Prove the runtime reads only its own secrets"

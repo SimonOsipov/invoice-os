@@ -32,7 +32,13 @@ case "$1 $2 $3" in
     [ "$prev" = --env-vars-file ] && cp "$a" "$D/env-job-$4"
     prev=$a
   done ;;
-"secrets create "*) cat > "$D/created-$3" ;;
+"secrets create "*)
+  if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) ALREADY_EXISTS: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
+  cat > "$D/created-$3" ;;
+"secrets describe "*) cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
+"storage ls "*)
+  if [ -e "$D/no-objects" ]; then echo "ERROR: (gcloud.storage.ls) One or more URLs matched no objects." >&2; exit 1; fi
+  echo "$3" ;;
 "secrets list "*)
   f=
   prev=
@@ -152,6 +158,7 @@ func runPreview(t *testing.T, setup func(dir string), args ...string) previewRun
 func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...string) previewRun {
 	t.Helper()
 	dir, shims := t.TempDir(), t.TempDir()
+	writeIn(t, dir, "owner-slot-1-claim", "7") // PR 7 holds slot-1 unless a test removes it
 	if setup != nil {
 		setup(dir)
 	}
@@ -651,9 +658,9 @@ func prGolden(t *testing.T, name string) string {
 	return string(b)
 }
 
-// asNightly rewrites a PR 7 output into what the nightly must print.
+// asNightly rewrites a PR 7 output into what the nightly must print: PR 7 holds slot-1, the nightly the fixed slot "nightly".
 func asNightly(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "ascomply-preview-pr-7", "ascomply-preview-nightly"), "pr-7", "nightly")
+	return strings.ReplaceAll(strings.ReplaceAll(s, "slot-1", "nightly"), "pr-7", "nightly")
 }
 
 func TestPreviewNameArgRefusesNearMisses(t *testing.T) {
@@ -968,7 +975,7 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 	t.Parallel()
 	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
 	for _, svc := range prAll(t) {
-		want := strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-")
+		want := strings.ReplaceAll(strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-"), "slot-1-", "nightly-")
 		if nlRealAI[svc] {
 			want += "," + nlKey
 		}
@@ -1016,7 +1023,7 @@ func TestPreviewNightlyRealAIOnThreeServices(t *testing.T) {
 		}
 		if nlRealAI[svc] {
 			real++
-			if !strings.Contains(env, "DOCUMENT_BUCKET: ascomply-preview-nightly\n") {
+			if !strings.Contains(env, "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n") {
 				t.Errorf("nightly env-%s lost its document settings:\n%s", svc, env)
 			}
 		}
@@ -1111,14 +1118,7 @@ func TestPreviewSecretsNightlyMakesThePRSet(t *testing.T) {
 
 func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 	t.Parallel()
-	absent := func(dir string) { writeIn(t, dir, "exists", "none\n") }
-	b := runPreview(t, absent, "bucket", "nightly")
-	bc := b.file(t, "calls")
-	for _, w := range []string{"storage buckets create gs://ascomply-preview-nightly ", "storage buckets update gs://ascomply-preview-nightly ", "--update-labels preview-pr=nightly"} {
-		if !strings.Contains(bc, w) {
-			t.Errorf("bucket calls lack %q:\n%s", w, bc)
-		}
-	}
+	// The nightly's bucket is the Terraform slot: TestPreviewBucketNightlyUsesItsFixedSlot.
 	if c := runPreview(t, nil, "database", "nightly").file(t, "calls"); !strings.Contains(c, "run jobs execute preview-db ") || !strings.HasSuffix(strings.TrimSpace(c), "--update-env-vars PR_DB=pr_0,ACTION=recreate") {
 		t.Errorf("database calls:\n%s", c)
 	}
@@ -1129,7 +1129,7 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 		}
 	}
 	env := m.file(t, "env-job-migrate-nightly")
-	for _, w := range []string{"DEPLOY_ENV: nightly\n", "DOCUMENT_BUCKET: ascomply-preview-nightly\n"} {
+	for _, w := range []string{"DEPLOY_ENV: nightly\n", "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n"} {
 		if !strings.Contains(env, w) {
 			t.Errorf("migrate env lacks %q:\n%s", w, env)
 		}
@@ -1142,7 +1142,7 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 	}
 }
 
-func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
+func TestPreviewTeardownNightlyEmptiesItsSlot(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, func(dir string) {
 		writeIn(t, dir, "exists", "gateway-nightly\ngateway-pr-7\nmigrate-nightly\nmigrate-pr-7\ngs://ascomply-preview-nightly\n")
@@ -1160,7 +1160,7 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 		}
 	}
 	want := []string{"run services delete gateway-nightly", "run jobs delete migrate-nightly", "storage rm --recursive gs://ascomply-preview-nightly",
-		"secrets delete nightly-gateway-token", "secrets delete nightly-s2s-token"}
+		"storage rm gs://ascomply-preview-docs-nightly/**", "secrets delete nightly-gateway-token", "secrets delete nightly-s2s-token"}
 	if got := strings.Join(deletes, "|"); got != strings.Join(want, "|") {
 		t.Errorf("deletes = %v, want %v", deletes, want)
 	}
@@ -1169,6 +1169,9 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 		if !strings.Contains(c, w) {
 			t.Errorf("calls lack %q", w)
 		}
+	}
+	if strings.Contains(c, "slot-1") || strings.Contains(c, "slot-2") {
+		t.Errorf("the nightly's teardown reached a PR slot:\n%s", c)
 	}
 	if strings.Contains(c, "secrets delete nightly-hubspot-token") {
 		t.Error("teardown deleted a secret without the preview-pr label")
@@ -2849,5 +2852,456 @@ func TestPreviewMockTokenRefusesABadName(t *testing.T) {
 				t.Errorf("mock-token %q called gcloud", bad)
 			}
 		})
+	}
+}
+
+// SECAUD-48-04: each preview claims one of two document slots (secret <slot>-claim, label preview-pr=<N>) and mounts that slot's key.
+
+// slots sets the claim state of a runPreview dir: owners maps a slot to the PR whose claim carries the label.
+// runPreviewEnv gives PR 7 slot-1 by default; slots removes it first. files are extra shim switches (taken, no-objects, fail-storage-rm, ...).
+func slots(t *testing.T, owners, files map[string]string) func(dir string) {
+	t.Helper()
+	return func(dir string) {
+		if err := os.Remove(filepath.Join(dir, "owner-slot-1-claim")); err != nil {
+			t.Fatal(err)
+		}
+		for slot, pr := range owners {
+			writeIn(t, dir, "owner-"+slot+"-claim", pr)
+		}
+		for name, body := range files {
+			writeIn(t, dir, name, body)
+		}
+	}
+}
+
+// callLines are the gcloud calls of a run; a script that died before any gcloud call has none.
+func callLines(r previewRun) []string {
+	b, _ := os.ReadFile(filepath.Join(r.dir, "calls"))
+	return nonBlankLines(string(b))
+}
+
+// callIdx is the index of the first call holding every part, or -1.
+func callIdx(calls []string, parts ...string) int {
+	return slices.IndexFunc(calls, func(l string) bool {
+		for _, p := range parts {
+			if !strings.Contains(l, p) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+const (
+	slot1Docs = "gs://ascomply-preview-docs-slot-1"
+	slot2Docs = "gs://ascomply-preview-docs-slot-2"
+)
+
+func TestPreviewClaimTakesTheFirstFreeSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "claim", "7")
+	calls := callLines(r)
+	create := callIdx(calls, "secrets create slot-1-claim ", "--labels preview-pr=7")
+	ls, rm := callIdx(calls, "storage ls "+slot1Docs+"/**"), callIdx(calls, "storage rm "+slot1Docs+"/**")
+	if r.code != 0 || r.stdout != "slot=slot-1\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and slot=slot-1", r.code, r.stdout, r.stderr)
+	}
+	if create < 0 || ls < create || rm < ls {
+		t.Errorf("want create slot-1-claim, then ls, then rm of %s (indexes %d, %d, %d):\n%s", slot1Docs, create, ls, rm, strings.Join(calls, "\n"))
+	}
+	if callIdx(calls, "secrets create slot-2-claim") >= 0 {
+		t.Errorf("claim 7 also took slot-2:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+func TestPreviewClaimSkipsASlotAnotherPreviewHolds(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "5"}, map[string]string{"taken": "slot-1-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "secrets create slot-2-claim ", "--labels preview-pr=7") < 0 || callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 {
+		t.Errorf("slot-2 was not claimed and emptied:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "ascomply-preview-docs-slot-1"); i >= 0 {
+		t.Errorf("PR 5's bucket was touched: %s", calls[i])
+	}
+}
+
+// Race: both describes read NOT_FOUND, then slot-1's create loses to another PR's.
+func TestPreviewClaimLosesARaceToTheNextSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, map[string]string{"taken": "slot-1-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	first, second := callIdx(calls, "secrets create slot-1-claim "), callIdx(calls, "secrets create slot-2-claim ")
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if first < 0 || second < first {
+		t.Errorf("want create slot-1-claim, then create slot-2-claim (indexes %d, %d):\n%s", first, second, strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "ascomply-preview-docs-slot-1"); i >= 0 {
+		t.Errorf("the loser touched the winner's bucket: %s", calls[i])
+	}
+}
+
+// Boundary: the pool is two slots. The nightly's slot is never a PR's, so a third PR waits.
+func TestPreviewClaimReportsFullWhenBothSlotsAreHeld(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "5", "slot-2": "6"}, map[string]string{"taken": "slot-1-claim\nslot-2-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "full=true\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and full=true", r.code, r.stdout, r.stderr)
+	}
+	if len(calls) == 0 {
+		t.Fatal("claim made no gcloud call: it never looked at the claims")
+	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "storage ") || strings.Contains(c, "nightly") || strings.HasPrefix(c, "secrets delete") {
+			t.Errorf("a full pool still ran %q", c)
+		}
+	}
+}
+
+func TestPreviewClaimPoolIsTwoPRSlots(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if m := regexp.MustCompile(`(?m)^PR_SLOTS=\(([^)]*)\)`).FindSubmatch(b); m != nil {
+		got = strings.Fields(string(m[1]))
+	}
+	if !slices.Equal(got, []string{"slot-1", "slot-2"}) {
+		t.Errorf("PR_SLOTS = %q, want [slot-1 slot-2]: the cap is 2 PRs, and the nightly's slot is fixed", got)
+	}
+}
+
+func TestPreviewClaimKeepsItsSlotAndEmptiesIt(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, nil), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 {
+		t.Errorf("a re-claim did not empty its bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "secrets create"); i >= 0 {
+		t.Errorf("a PR that holds a slot made a claim: %s", calls[i])
+	}
+}
+
+// Boundary: "matched no objects" is an empty bucket, not an error.
+func TestPreviewClaimTreatsNoObjectsAsEmpty(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "no-objects", "") }, "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-1\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and slot=slot-1", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "storage ls "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never listed the bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "storage rm"); i >= 0 {
+		t.Errorf("an empty bucket was emptied: %s", calls[i])
+	}
+}
+
+func TestPreviewClaimDiesWhenEmptyingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-storage-rm", "") }, "claim", "7")
+	if callIdx(callLines(r), "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never tried to empty the bucket:\n%s", strings.Join(callLines(r), "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, slot1Docs) || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero, %s named, no slot=", r.code, r.stdout, r.stderr, slot1Docs)
+	}
+}
+
+func TestPreviewClaimDiesWhenTheListingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-storage-ls", "") }, "claim", "7")
+	calls := callLines(r)
+	if callIdx(calls, "storage ls "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never listed the bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "storage rm"); i >= 0 {
+		t.Errorf("an unreadable bucket was emptied blind: %s", calls[i])
+	}
+	if r.code == 0 || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, want non-zero and no slot=", r.code, r.stdout)
+	}
+}
+
+func TestPreviewClaimDiesOnACreateError(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, map[string]string{"fail-secrets-create": ""}), "claim", "7")
+	calls := callLines(r)
+	if n := strings.Count(strings.Join(calls, "\n"), "secrets create"); n != 1 {
+		t.Errorf("%d create calls, want exactly 1: an error that is not ALREADY_EXISTS is no reason to try the next slot:\n%s", n, strings.Join(calls, "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, "slot-1-claim") || strings.Contains(r.stdout, "slot=") || strings.Contains(r.stdout, "full=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero naming slot-1-claim, with no verdict", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewClaimRefusesTheNightly(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "claim", "nightly")
+	if r.code == 0 || !strings.Contains(r.stderr, "nightly") || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want a refusal that names the nightly", r.code, r.stdout, r.stderr)
+	}
+	if i := callIdx(callLines(r), "secrets"); i >= 0 {
+		t.Errorf("claim nightly reached Secret Manager: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewUsageListsClaim(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := runPreview(t, nil)
+	if !strings.Contains(r.stderr, "claim") || !strings.Contains(string(b), "#   preview.sh claim <pr>") {
+		t.Errorf("usage line %q and header lack claim", r.stderr)
+	}
+}
+
+func TestPreviewBucketNeedsAClaim(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "bucket", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	if i := callIdx(callLines(r), "buckets create"); i >= 0 {
+		t.Errorf("a PR without a slot got a bucket: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewBucketChecksTheSlotsBucketAndMakesNone(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", slot1Docs+"\n") }, "bucket", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage buckets describe "+slot1Docs) < 0 {
+		t.Errorf("exit %d, stderr %q, want a describe of %s:\n%s", r.code, r.stderr, slot1Docs, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"buckets create", "buckets update", "--update-labels"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("bucket made or relabelled a bucket: %s", calls[i])
+		}
+	}
+}
+
+func TestPreviewBucketDiesWhenTheSlotBucketIsMissing(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "none\n") }, "bucket", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "ascomply-preview-docs-slot-1") || !strings.Contains(r.stderr, "preview.tf") {
+		t.Errorf("exit %d, stderr %q, want non-zero naming the slot bucket and invoice-os-infra preview.tf", r.code, r.stderr)
+	}
+	if i := callIdx(callLines(r), "buckets create"); i >= 0 {
+		t.Errorf("a missing slot bucket was created: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewBucketNightlyUsesItsFixedSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "gs://ascomply-preview-docs-nightly\n") }, "bucket", "nightly")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage buckets describe gs://ascomply-preview-docs-nightly") < 0 {
+		t.Errorf("exit %d, stderr %q, want a describe of the nightly slot bucket:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"secrets describe", "buckets create", "--update-labels"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("bucket nightly ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+func TestPreviewDeployDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "deploy", "7", "abc123", "invoice")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	if i := callIdx(callLines(r), "run deploy"); i >= 0 {
+		t.Errorf("a PR without a slot deployed: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewMigrateDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "migrate", "7", "abc123")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	for _, bad := range []string{"run jobs deploy", "run jobs execute"} {
+		if i := callIdx(callLines(r), bad); i >= 0 {
+			t.Errorf("a PR without a slot ran %q: %s", bad, callLines(r)[i])
+		}
+	}
+}
+
+func TestPreviewServicesMountTheirSlotsKey(t *testing.T) {
+	t.Parallel()
+	svcs := []string{"invoice", "submission", "worker"}
+	for _, c := range []struct {
+		name   string
+		owners map[string]string
+		slot   string
+	}{
+		{"the default slot-1", map[string]string{"slot-1": "7"}, "slot-1"},
+		{"slot-2, with slot-1 held by PR 5", map[string]string{"slot-1": "5", "slot-2": "7"}, "slot-2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			setup := slots(t, c.owners, nil)
+			dep := runPreview(t, setup, append([]string{"deploy", "7", "abc123"}, svcs...)...)
+			mig := runPreview(t, setup, "migrate", "7", "abc123")
+			if dep.code != 0 || mig.code != 0 {
+				t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+			}
+			wantKeys := []string{"DOCUMENT_ACCESS_KEY_ID=" + c.slot + "-document-access-key-id:latest", "DOCUMENT_SECRET_ACCESS_KEY=" + c.slot + "-document-secret-key:latest"}
+			wantBucket := "DOCUMENT_BUCKET: ascomply-preview-docs-" + c.slot + "\n"
+			argv := deployCalls(t, dep, "7")
+			mounts := map[string]string{"migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-pr-7 ")]}
+			envs := map[string]string{"migrate": mig.file(t, "env-job-migrate-pr-7")}
+			for _, svc := range svcs {
+				mounts[svc], envs[svc] = argv[svc], dep.file(t, "env-"+svc+"-pr-7")
+			}
+			if len(mounts) != len(svcs)+1 {
+				t.Fatalf("%d mounts seen, want %d", len(mounts), len(svcs)+1)
+			}
+			for name, line := range mounts {
+				set := flagValue(line, "--set-secrets")
+				for _, w := range wantKeys {
+					if !strings.Contains(","+set+",", ","+w+",") {
+						t.Errorf("%s --set-secrets lacks %s: %s", name, w, set)
+					}
+				}
+				if strings.Contains(set, "=document-access-key-id:") || strings.Contains(set, "=document-secret-key:") {
+					t.Errorf("%s still mounts the shared key: %s", name, set)
+				}
+				if !strings.Contains(envs[name], wantBucket) {
+					t.Errorf("%s env lacks %q:\n%s", name, wantBucket, envs[name])
+				}
+			}
+		})
+	}
+}
+
+// Boundary: the nightly takes no claim, so it reads no secret to find its slot.
+func TestPreviewNightlyMountsItsOwnSlotKey(t *testing.T) {
+	t.Parallel()
+	env := []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	dep := runPreviewEnv(t, env, nil, "deploy", "nightly", "abc123", "invoice")
+	mig := runPreviewEnv(t, env, nil, "migrate", "nightly", "abc123")
+	if dep.code != 0 || mig.code != 0 {
+		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+	}
+	for name, line := range map[string]string{"invoice": deployCalls(t, dep, "nightly")["invoice"], "migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-nightly ")]} {
+		set := flagValue(line, "--set-secrets")
+		for _, w := range []string{"DOCUMENT_ACCESS_KEY_ID=nightly-document-access-key-id:latest", "DOCUMENT_SECRET_ACCESS_KEY=nightly-document-secret-key:latest"} {
+			if !strings.Contains(","+set+",", ","+w+",") {
+				t.Errorf("%s --set-secrets lacks %s: %s", name, w, set)
+			}
+		}
+	}
+	for name, e := range map[string]string{"invoice": dep.file(t, "env-invoice-nightly"), "migrate": mig.file(t, "env-job-migrate-nightly")} {
+		if !strings.Contains(e, "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n") {
+			t.Errorf("%s env lacks the nightly slot bucket:\n%s", name, e)
+		}
+	}
+	for _, r := range []previewRun{dep, mig} {
+		if i := callIdx(callLines(r), "secrets describe"); i >= 0 {
+			t.Errorf("the nightly looked up a claim: %s", callLines(r)[i])
+		}
+	}
+}
+
+func TestPreviewTeardownEmptiesTheSlotThenReleasesIt(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n") }, "teardown", "7")
+	calls := callLines(r)
+	rm, tok := callIdx(calls, "storage rm "+slot1Docs+"/**"), callIdx(calls, "secrets delete pr-7-gateway-token")
+	claim := callIdx(calls, "secrets delete slot-1-claim ")
+	if r.code != 0 || r.stdout != "PR 7: preview deleted\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if rm < 0 || tok < 0 || claim < 0 || rm > claim || tok > claim {
+		t.Errorf("want the slot emptied and every other secret deleted before slot-1-claim (indexes rm %d, token %d, claim %d):\n%s", rm, tok, claim, strings.Join(calls, "\n"))
+	}
+	if n := strings.Count(strings.Join(calls, "\n"), "secrets delete slot-1-claim "); n != 1 {
+		t.Errorf("slot-1-claim deleted %d times, want once (the label loop skips it)", n)
+	}
+	for _, bad := range []string{"buckets delete", "rm --recursive gs://ascomply-preview-docs-", "slot-2"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("teardown ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+func TestPreviewTeardownKeepsTheClaimWhenEmptyingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+		writeIn(t, dir, "fail-storage-rm", "")
+		writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n") // no legacy bucket: its rm would fail too
+	}, "teardown", "7")
+	calls := callLines(r)
+	if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("teardown never tried to empty the slot:\n%s", strings.Join(calls, "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	if callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+		t.Errorf("a failed empty stopped the other secrets going:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+		t.Errorf("the claim was released over a bucket that still holds objects: %s", calls[i])
+	}
+}
+
+// Boundary: a PR that never claimed leaves every slot alone.
+func TestPreviewTeardownWithoutAClaimTouchesNoSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 {
+		t.Errorf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(strings.Join(calls, "\n"), "slot-1-claim") {
+		t.Errorf("teardown never looked for the PR's claim:\n%s", strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"secrets delete slot-", "ascomply-preview-docs-"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("teardown ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+// Legacy: a preview built before this change still has its own bucket ([S8]).
+func TestPreviewTeardownStillDeletesALegacyBucket(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "gs://ascomply-preview-pr-7\n") }, "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage rm --recursive gs://ascomply-preview-pr-7") < 0 {
+		t.Errorf("exit %d, stderr %q, want the legacy bucket deleted:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("the slot was not emptied beside the legacy bucket:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+// The sweeper finds a closed PR's slot through its label: a PR whose only resource is the claim is still listed, so a failed empty is retried.
+func TestPreviewPrsListsAPRThatHoldsOnlyItsClaim(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", "7 2026-11-17T00:00:00\n") }, "prs")
+	if r.code != 0 || !strings.HasPrefix(r.stdout, "7 ") {
+		t.Errorf("exit %d, stdout %q, want PR 7 listed", r.code, r.stdout)
 	}
 }

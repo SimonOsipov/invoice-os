@@ -5544,7 +5544,7 @@ func TestEditHandler_LineItemsUnknownFieldIgnored200(t *testing.T) {
 	}
 }
 
-// TestEditHandler_LineItemsLargeArrayMapped (task-266 Part F): PATCH caps line_items
+// TestEditHandler_LineItemsLargeArrayMapped: PATCH caps line_items
 // at maxLineItems and the body at LineItemsLimit; an array under both must still
 // decode and map completely, not truncate or error partway.
 func TestEditHandler_LineItemsLargeArrayMapped(t *testing.T) {

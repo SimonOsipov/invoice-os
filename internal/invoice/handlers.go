@@ -1318,6 +1318,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 
 		id := r.PathValue("id")
 
+		if req.LineItems != nil && len(*req.LineItems) > maxLineItems {
+			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
+			return
+		}
+
 		// Carry the three line_items states across into EditInput unchanged
 		// ([line-items-optional]). make(..., len) rather than a var+append loop is
 		// load-bearing: append to a nil slice leaves a NIL slice when the array is
@@ -1327,11 +1332,6 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		// No all-nil guard here: a body carrying ONLY "line_items":[] must still
 		// reach the store. Store.Edit owns that check and needs to see the
 		// non-nil-but-empty pointer.
-		if req.LineItems != nil && len(*req.LineItems) > maxLineItems {
-			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
-			return
-		}
-
 		var lines *[]LineItemInput
 		if req.LineItems != nil {
 			mapped := make([]LineItemInput, len(*req.LineItems))

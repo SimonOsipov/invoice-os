@@ -136,8 +136,8 @@ func writeAccepted(w http.ResponseWriter, tenant Tenant, subject, role string) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode
-// (400), accept, 200 `{tenant, user:{id, role}}`. The caller check is the
+// AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode,
+// accept, 200 `{tenant, user:{id, role}}`. The caller check is the
 // store's: the handler cannot see a tenant-less caller.
 func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {

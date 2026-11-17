@@ -22,7 +22,7 @@ const (
 	bcNoBody       = "no-body"
 )
 
-// Capped reads measured 63 at the end of SECAUD-32; floors are the measured count less 5.
+// Capped reads measured 63; floors are the measured count less 5.
 const (
 	bcRouteFloor      = 70
 	bcCapped413Floor  = 54

@@ -47,6 +47,7 @@ SITES=(app landing library blog check ops-console support-console)
 # The secrets each PR generates or composes; preview.tf holds the shared ones.
 PR_SECRETS=(gateway-token s2s-token gotrue-jwt-keys gotrue-jwt-secret database-superuser-url database-migration-url
   database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key mock-issuer-token)
+SHARED_SECRETS=(migrator-password app-password reader-password gateway-password auth-admin-password) # preview.tf preview_runtime_shared_secrets
 
 die() {
   echo "::error::$*" >&2
@@ -72,8 +73,9 @@ deal_stage() { echo appointmentscheduled; }
 
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
-# runtime <name>: the service account a preview runs as; only run-nightly reads nightly-* secrets.
-runtime() { if [ "$1" = nightly ]; then echo run-nightly@ascomply-preview.iam.gserviceaccount.com; else echo run-preview@ascomply-preview.iam.gserviceaccount.com; fi; }
+# runtime <name> <slot>: a PR runs as its slot's identity; only run-nightly reads nightly-* secrets.
+# ceiling: no wait for IAM propagation (P12 3.5-4.3 min passed); add a poll as run-<slot> if a migrate fails on a secret permission
+runtime() { if [ "$1" = nightly ]; then echo run-nightly@ascomply-preview.iam.gserviceaccount.com; else echo "run-${2:?no slot claimed}@ascomply-preview.iam.gserviceaccount.com"; fi; }
 dbname() { if [ "$1" = nightly ]; then echo pr_0; else echo "pr_$1"; fi; }
 
 url() { printf 'https://%s-%s-%s.%s.run.app' "$1" "$(suffix "$2")" "$PROJECT_NUMBER" "$REGION"; }
@@ -141,8 +143,18 @@ bind_nightly() {
     --role roles/secretmanager.secretAccessor --condition=None >/dev/null || die "cannot give run-nightly access to $1"
 }
 
+# bind_slot <secret> <sa>: authoritative, so a binding from an earlier slot cannot survive.
+bind_slot() {
+  local f
+  f=$(mktemp)
+  printf '{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:%s"]}]}' "$2" >"$f"
+  gcloud secrets set-iam-policy "$1" "$f" --project "$PROJECT" >/dev/null || { rm -f "$f"; die "cannot give ${2%%@*} access to $1"; }
+  rm -f "$f"
+}
+
 cmd_secrets() {
-  local pr=$1 db have name ip pool
+  local pr=$1 db have name ip pool slot=
+  [ "$pr" = nightly ] || slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   db=$(dbname "$pr")
   have=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)')
   ip=$(gcloud sql instances describe preview --project "$PROJECT" --format 'value(ipAddresses[0].ipAddress)')
@@ -153,7 +165,7 @@ cmd_secrets() {
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
       [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"
-      [ "$pr" != nightly ] || bind_nightly "$(secret "$pr" "$name")"
+      if [ "$pr" = nightly ]; then bind_nightly "$(secret "$pr" "$name")"; else bind_slot "$(secret "$pr" "$name")" "$(runtime "$pr" "$slot")"; fi
       continue
     fi
     case "$name" in
@@ -167,7 +179,7 @@ cmd_secrets() {
       database-gateway-url) dsn invoice_gateway "$(shared gateway-password)" "&pool_max_conns=$(pool_conns database-gateway-url)" ;;
       database-auth-url) dsn supabase_auth_admin "$(shared auth-admin-password)" '' ;;
     esac | put "$(secret "$pr" "$name")" "$pr"
-    [ "$pr" != nightly ] || bind_nightly "$(secret "$pr" "$name")"
+    if [ "$pr" = nightly ]; then bind_nightly "$(secret "$pr" "$name")"; else bind_slot "$(secret "$pr" "$name")" "$(runtime "$pr" "$slot")"; fi
   done
 }
 
@@ -371,7 +383,7 @@ deploy_one() {
   esac
   envf=$(mktemp)
   env_file "$pr" "$svc" "$envf"
-  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$(runtime "$pr")" --labels "$LABEL=$pr"
+  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$(runtime "$pr" "$SLOT")" --labels "$LABEL=$pr"
     --env-vars-file "$envf" --min-instances "$min" --max-instances "$(max_instances "$svc")" --cpu "$cpu" --memory "$memory"
     --no-cpu-boost --ingress all)
   secrets=$(secrets_of "$pr" "$svc")
@@ -418,8 +430,9 @@ cmd_deploy() {
 
 # migrate_job <name> <sha>: the per-preview migrate job; it bootstraps, migrates and seeds the database.
 migrate_job() {
-  local pr=$1 sha=$2 envf slot
+  local pr=$1 sha=$2 envf slot shared= n
   slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  for n in "${SHARED_SECRETS[@]}"; do shared+="${shared:+,}$(tr 'a-z-' 'A-Z_' <<<"$n")=$n:latest"; done
   envf=$(mktemp)
   {
     echo "DEPLOY_ENV: $(suffix "$pr")"
@@ -430,9 +443,9 @@ migrate_job() {
     echo "DOCUMENT_REGION: auto"
   } >"$envf"
   gcloud run jobs deploy "migrate-$(suffix "$pr")" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
-    --service-account "$(runtime "$pr")" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
+    --service-account "$(runtime "$pr" "$slot")" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
     --network preview --subnet run --vpc-egress private-ranges-only \
-    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=$slot-document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=$slot-document-secret-key:latest"
+    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,$shared,DOCUMENT_ACCESS_KEY_ID=$slot-document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=$slot-document-secret-key:latest"
   rm -f "$envf"
   gcloud run jobs execute "migrate-$(suffix "$pr")" "${gc[@]}" --wait
 }
@@ -494,7 +507,7 @@ cmd_teardown() {
   names=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)') || { failed=1; slotfail=1; names=; }
   for name in $names; do
     [[ $name != slot-*-claim ]] || continue
-    gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
+    gcloud secrets delete "$name" --project "$PROJECT" --quiet || { failed=1; slotfail=1; }
   done
   # the claim outlives a bucket that still holds objects and a service or job that still mounts the slot
   if [ "$pr" != nightly ] && [ -n "${slot:-}" ] && [ "$slotfail" = 0 ]; then

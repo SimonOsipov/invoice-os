@@ -13,6 +13,7 @@
 #   preview.sh deploy <pr|nightly> <sha> <svc>... deploy services, four at a time
 #   preview.sh token <pr|nightly>                 print the preview's gateway token
 #   preview.sh teardown <pr|nightly>              delete everything this preview owns
+#   preview.sh reach <pr>                         fail unless the PR's runtime reads only its own secrets, its slot's keys and the shared passwords
 #   preview.sh mail-preflight nightly     fail when a nightly mail secret is missing or not enabled
 #   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
@@ -37,6 +38,8 @@ PROJECT=ascomply-preview
 PROJECT_NUMBER=944095690109
 REGION=africa-south1
 REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/previews
+# The public gcloud image, pinned by digest as preview-db's; Cloud Run pulls it from Docker Hub.
+PROBE_IMAGE=docker.io/google/cloud-sdk:593.0.0-alpine@sha256:6a44d67ac4bf78a27a72166cec3aac6678b7601fddb74bf7d56f294de8fe0f4e
 # The repository deploy-prod.yml deploys from; preview must not write to it.
 PROD_IMAGES=images
 LABEL=preview-pr
@@ -468,7 +471,7 @@ present() {
 }
 
 cmd_teardown() {
-  local pr=$1 svc name names out slot failed=0 slotfail=0 rc=0
+  local pr=$1 svc job name names out slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     rc=0
     present services describe "$svc-$(suffix "$pr")" || rc=$?
@@ -479,14 +482,16 @@ cmd_teardown() {
       slotfail=1
     fi
   done
-  rc=0
-  present jobs describe "migrate-$(suffix "$pr")" || rc=$?
-  if [ "$rc" = 0 ]; then
-    gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
-  elif [ "$rc" = 2 ]; then
-    failed=1
-    slotfail=1
-  fi
+  for job in migrate reach; do
+    rc=0
+    present jobs describe "$job-$(suffix "$pr")" || rc=$?
+    if [ "$rc" = 0 ]; then
+      gcloud run jobs delete "$job-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+    elif [ "$rc" = 2 ]; then
+      failed=1
+      slotfail=1
+    fi
+  done
   database "$pr" drop || failed=1
   # an absent bucket prints "gs://<b> not found: 404." (googlecloudsdk api_lib/storage/errors.py)
   if out=$(gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" 2>&1); then
@@ -706,9 +711,143 @@ cmd_budget() {
   echo "fleet $((total + leader + n))"
 }
 
+# read_verdict <secret>: readable | gone | denied | error <last stderr line>. The value goes to /dev/null; also runs in the reach job.
+read_verdict() {
+  local err
+  if err=$(gcloud secrets versions access latest --secret "$1" --project "$PROJECT" 2>&1 >/dev/null </dev/null); then echo readable
+  elif grep -q NOT_FOUND <<<"$err"; then echo gone
+  elif grep -q PERMISSION_DENIED <<<"$err" && grep -q secretmanager.versions.access <<<"$err"; then echo denied
+  else echo "error $(tail -n 1 <<<"$err")"; fi
+}
+
+# reach_job <pr> <slot> <name>...: reads each name as run-<slot> in a Cloud Run job; sets REACH_VERDICTS to "<name> <verdict>" lines.
+reach_job() {
+  local pr=$1 slot=$2 job nonce envf errf probe try rc=0 lines='' n
+  shift 2
+  job="reach-$(suffix "$pr")"
+  nonce="${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-$RANDOM"
+  # the job's script: one line per name, never a value
+  # shellcheck disable=SC2016 # expanded in the job, not here
+  probe="$(declare -f read_verdict)"$'\n''for n in $NAMES; do printf "reach %s %s %s\n" "$NONCE" "$n" "$(read_verdict "$n")"; done'
+  envf=$(mktemp)
+  errf=$(mktemp)
+  REACH_VERDICTS=
+  {
+    echo "PROJECT: '$PROJECT'"
+    echo "NONCE: '$nonce'"
+    echo "NAMES: '$*'"
+    echo "PROBE: '$(base64 <<<"$probe" | tr -d '\n')'"
+  } >"$envf"
+  # shellcheck disable=SC2016 # the job expands PROBE
+  if ! gcloud run jobs deploy "$job" "${gc[@]}" --image "$PROBE_IMAGE" --service-account "$(runtime "$pr" "$slot")" \
+    --labels "$LABEL=$pr" --env-vars-file "$envf" --command bash --args '-c,eval "$(printf %s "$PROBE" | base64 -d)"' \
+    --max-retries 0 --task-timeout 600s >/dev/null 2>"$errf"; then
+    echo "::error::could not deploy the reach job: $(tail -n 1 "$errf")"
+    rm -f "$envf" "$errf"
+    return 1
+  fi
+  rm -f "$envf"
+  if ! gcloud run jobs execute "$job" "${gc[@]}" --wait >/dev/null 2>"$errf"; then
+    echo "::error::the reach job failed: $(tail -n 1 "$errf")"
+    rc=1
+  else
+    for try in 1 2 3; do
+      sleep 10 # log ingestion lag
+      if ! lines=$(gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$job\" AND textPayload:\"reach $nonce \"" \
+        --project "$PROJECT" --freshness 1h --format 'value(textPayload)' 2>"$errf"); then
+        echo "::error::could not read the reach job's log: $(tail -n 1 "$errf")"
+        rc=1
+        break
+      fi
+      REACH_VERDICTS=$(awk -v p="reach $nonce " 'index($0, p) == 1 && !seen[$0]++ {print substr($0, length(p) + 1)}' <<<"$lines")
+      for n in "$@"; do
+        grep -qF -- "$n " <<<"$REACH_VERDICTS" || continue 2
+      done
+      break
+    done
+    if [ "$rc" = 0 ]; then
+      for n in "$@"; do
+        grep -qxF -- "$n" < <(awk '{print $1}' <<<"$REACH_VERDICTS") || { echo "::error::no verdict for $n in the reach job's log"; rc=1; }
+      done
+    fi
+  fi
+  gcloud run jobs delete "$job" "${gc[@]}" >/dev/null 2>&1 || echo "::warning::could not delete $job; teardown deletes it"
+  rm -f "$errf"
+  return "$rc"
+}
+
+# in_list <name> <newline list>
+in_list() { grep -qxF -- "$1" <<<"$2"; }
+
+# cmd_reach <pr>: the PR's runtime reads only its own secrets, its slot's keys and the shared passwords.
+cmd_reach() {
+  local pr=$1 slot sa all mine allowed names='' send n errf pol members foreign v bad=0 reads=0 denied='' ndenied=0 reads_list=''
+  [ "$pr" != nightly ] || die "reach checks a PR runtime; run-nightly is read by the owner"
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  sa="$(runtime "$pr" "$slot")"
+  errf=$(mktemp)
+  all=$(gcloud secrets list --project "$PROJECT" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
+  mine=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
+  all=$(grep -vE '^slot-.*-claim$' <<<"$all" || true)
+  mine=$(grep -vE '^slot-.*-claim$' <<<"$mine" || true)
+  allowed="$mine"$'\n'"$slot-document-access-key-id"$'\n'"$slot-document-secret-key"
+  for n in "${SHARED_SECRETS[@]}"; do allowed+=$'\n'"$n"; done
+  allowed=$(grep -v '^$' <<<"$allowed" | sort -u)
+  # policy pass
+  for n in $all; do
+    [[ $n != nightly-* ]] || continue
+    if ! pol=$(gcloud secrets get-iam-policy "$n" --project "$PROJECT" --format json 2>"$errf"); then
+      if ! in_list "$n" "$allowed" && grep -q NOT_FOUND "$errf"; then
+        echo "::notice::$n is gone; skipped."
+      else
+        echo "::error::could not read the policy of $n: $(tail -n 1 "$errf")"
+        bad=1
+      fi
+      continue
+    fi
+    members=$(jq -r '.bindings[]? | select(.role=="roles/secretmanager.secretAccessor") | .members[]' <<<"$pol") || members=
+    if in_list "$n" "$allowed"; then
+      in_list "serviceAccount:$sa" "$members" || { echo "::error::${sa%%@*} cannot read $n, which this preview mounts."; bad=1; }
+    elif in_list "serviceAccount:$sa" "$members"; then
+      echo "::error::${sa%%@*} can read $n, which is not this preview's."
+      bad=1
+    fi
+    if in_list "$n" "$mine"; then
+      foreign=$(jq -r --arg m "serviceAccount:$sa" '[.bindings[]? | .role as $r | .members[]? | select($r != "roles/secretmanager.secretAccessor" or . != $m)] | join(", ")' <<<"$pol")
+      [ -z "$foreign" ] || { echo "::error::$n is readable by someone other than ${sa%%@*}: $foreign"; bad=1; }
+    fi
+  done
+  rm -f "$errf"
+  # read pass: the control, then every name that is not allowed
+  send=$(secret "$pr" gateway-token)
+  for n in $all; do in_list "$n" "$allowed" || send+=" $n"; done
+  # shellcheck disable=SC2086 # names are space-separated
+  reach_job "$pr" "$slot" $send || bad=1
+  for n in $send; do
+    v=$(awk -v n="$n" '$1 == n {sub(/^[^ ]+ /, ""); print; exit}' <<<"$REACH_VERDICTS")
+    [ -n "$v" ] || continue
+    if [ "$n" = "$(secret "$pr" gateway-token)" ]; then
+      [ "$v" = readable ] || { echo "::error::${sa%%@*} cannot read its own $n: $v"; bad=1; }
+      continue
+    fi
+    case "$v" in
+      readable) echo "::error::${sa%%@*} can read $n."; bad=1 ;;
+      gone) echo "::notice::$n is gone; skipped." ;;
+      denied) denied+="- $n"$'\n'; ndenied=$((ndenied + 1)) ;;
+      *) echo "::error::could not check $n: ${v#error }"; bad=1 ;;
+    esac
+  done
+  [ "$bad" = 0 ] || exit 1
+  for n in $allowed; do reads=$((reads + 1)); reads_list+="- $n"$'\n'; done
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '### Runtime reach for PR %s (%s)\n\n#### reads\n\n%s\n#### denied\n\n%s' "$pr" "${sa%%@*}" "$reads_list" "$denied" >>"$GITHUB_STEP_SUMMARY"
+  fi
+  echo "Runtime reach holds for PR $pr: ${sa%%@*} reads $reads secrets (its own, its slot's keys, the shared passwords); $ndenied others denied."
+}
+
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 readable=0 rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
+  local bad=0 readable=0 v rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
   [ "$closed" = true ] && mode='(enforced)'
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
@@ -757,20 +896,24 @@ cmd_invariants() {
   # A nightly-* secret must be unreadable to the preview deployer. A secret deleted since the listing
   # is gone, not a finding; only a denial of secretmanager.versions.access on it passes.
   while read -r n; do
-    if gcloud secrets versions access latest --secret "$n" --project "$PROJECT" </dev/null >/dev/null 2>"$RUNNER_TEMP/nightly-read.err"; then
-      readable=$((readable + 1))
-      if [ "$closed" = true ]; then
-        echo "::error::the preview deployer can read $n."
+    v=$(read_verdict "$n")
+    case "$v" in
+      readable)
+        readable=$((readable + 1))
+        if [ "$closed" = true ]; then
+          echo "::error::the preview deployer can read $n."
+          bad=1
+        else
+          echo "::warning::the preview deployer can read $n; the PR side keeps it until invoice-os-infra closes it and NIGHTLY_KEYS_CLOSED is true."
+        fi
+        ;;
+      gone) echo "::notice::$n is gone or has no version; skipped." ;;
+      denied) ;;
+      *)
+        echo "::error::could not check $n: ${v#error }"
         bad=1
-      else
-        echo "::warning::the preview deployer can read $n; the PR side keeps it until invoice-os-infra closes it and NIGHTLY_KEYS_CLOSED is true."
-      fi
-    elif grep -q NOT_FOUND "$RUNNER_TEMP/nightly-read.err"; then
-      echo "::notice::$n is gone or has no version; skipped."
-    elif ! grep -q PERMISSION_DENIED "$RUNNER_TEMP/nightly-read.err" || ! grep -q secretmanager.versions.access "$RUNNER_TEMP/nightly-read.err"; then
-      echo "::error::could not check $n: $(tail -n 1 "$RUNNER_TEMP/nightly-read.err")"
-      bad=1
-    fi
+        ;;
+    esac
   done < <(grep '^nightly-' <<<"$names" || true)
   for email in run-nightly@ascomply-preview.iam.gserviceaccount.com deploy-nightly@ascomply-preview.iam.gserviceaccount.com; do
     rc=0
@@ -818,6 +961,7 @@ case "${1:-}" in
   deploy) name_arg "${2:-}"; [ "$#" -ge 4 ] || die "usage: preview.sh deploy <pr|nightly> <sha> <svc>..."; shift; cmd_deploy "$@" ;;
   token) name_arg "${2:-}"; gcloud secrets versions access latest --secret "$(secret "$2" gateway-token)" --project "$PROJECT" ;;
   teardown) name_arg "${2:-}"; cmd_teardown "$2" ;;
+  reach) name_arg "${2:-}"; cmd_reach "$2" ;;
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
@@ -836,5 +980,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

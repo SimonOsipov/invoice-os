@@ -75,6 +75,7 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 				}
 				if merr == nil {
 					log.WarnContext(r.Context(), name+": mail share spent", slog.String("share", spent))
+					alertMail(r.Context(), ErrRegistrationMailSpent)
 				}
 				refused = true
 			}
@@ -99,6 +100,9 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			case gt.ErrorCode == "over_email_send_rate_limit":
+				if isIdPMailCap(gt) {
+					alertMail(r.Context(), ErrIdPMailCap)
+				}
 				log.WarnContext(r.Context(), name+": gotrue email send rate limit", slog.Int("upstream_status", status))
 			default:
 				log.WarnContext(r.Context(), name+": gotrue "+verb+" failed",

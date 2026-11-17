@@ -170,6 +170,7 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	if spent, merr := mail.Admit(); spent != "" || merr != nil {
 		if merr == nil {
 			log.WarnContext(r.Context(), "registration: mail share spent", slog.String("share", spent))
+			alertMail(r.Context(), ErrRegistrationMailSpent)
 		}
 		if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
@@ -216,7 +217,10 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send = pending
 		mayExist = true
 	case gt.ErrorCode == "over_email_send_rate_limit":
-		// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
+		// The instance cap and the per-address cooldown share this code; isIdPMailCap tells them apart (TestMailAlert_InstanceCapOnEveryMailRoute).
+		if isIdPMailCap(gt) {
+			alertMail(r.Context(), ErrIdPMailCap)
+		}
 		log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
 		send = pending
 	case status >= http.StatusInternalServerError && gt.Code == "23505":

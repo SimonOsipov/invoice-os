@@ -20,6 +20,10 @@ echo gcloud >> "$D/order"
 [ ! -e "$D/fail-$1-$2-$3" ] || { echo "ERROR: gcloud $1 $2 $3 failed" >&2; exit 1; }
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
 [ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo PARTIAL; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
+runfound() {
+  if grep -qxF -- "$4" "$D/describe-run-error" 2>/dev/null; then echo "ERROR: (gcloud.run.describe) UNAVAILABLE: backend error" >&2; return 1; fi
+  if [ -e "$D/exists" ] && ! grep -qxF -- "$4" "$D/exists"; then echo "ERROR: (gcloud.run.describe) NOT_FOUND: $4 not found." >&2; return 1; fi
+}
 case "$1 $2 $3" in
 "run deploy "*)
   prev=
@@ -56,7 +60,7 @@ case "$1 $2 $3" in
 "run services describe") case "$*" in *latestReadyRevisionName*)
   [ ! -e "$D/faildescribe" ] || { echo "ERROR: describe $4 failed" >&2; exit 1; }
   cat "$D/latest-$4"; exit 0 ;; esac
-  [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+  runfound "$@" ;;
 "run revisions list")
   prev=
   for a in "$@"; do
@@ -65,7 +69,8 @@ case "$1 $2 $3" in
   done ;;
 "run revisions delete") if grep -qxF -- "$4" "$D/faildelete" 2>/dev/null; then echo "ERROR: delete $4 failed" >&2; exit 1; fi
   echo "$4" >> "$D/deleted" ;;
-"run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run jobs describe") runfound "$@" ;;
+"storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "services list "*) cat "$D/enabled-services" 2>/dev/null || : ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
@@ -3284,6 +3289,31 @@ func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) 
 			}
 			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
 				t.Errorf("a failed delete stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// A describe that fails for any reason but NOT_FOUND may hide a running service: the claim stays.
+func TestPreviewTeardownKeepsTheClaimWhenADescribeFails(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"gateway-pr-7", "migrate-pr-7"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, "describe-run-error", name+"\n")
+				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released over an unreadable service or job: %s", calls[i])
+			}
+			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+				t.Errorf("a failed describe stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
 			}
 		})
 	}

@@ -443,20 +443,40 @@ cmd_grant() {
   job_execute "migrate-$(suffix "$1")" --update-env-vars GATEWAY_DB_BOOTSTRAP=false
 }
 
+# present <gcloud run describe args>: 0 present, 1 absent (NOT_FOUND), 2 when the describe fails otherwise.
+present() {
+  local out
+  out=$(gcloud run "$@" "${gc[@]}" 2>&1) && return 0
+  grep -q NOT_FOUND <<<"$out" && return 1
+  echo "ERROR: could not describe $2 $3: $(tail -n 1 <<<"$out")" >&2
+  return 2
+}
+
 cmd_teardown() {
   local pr=$1 svc name slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
-    if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
+    rc=0
+    present services describe "$svc-$(suffix "$pr")" || rc=$?
+    if [ "$rc" = 0 ]; then
       gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+    elif [ "$rc" = 2 ]; then
+      failed=1
+      slotfail=1
     fi
   done
-  if gcloud run jobs describe "migrate-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
+  rc=0
+  present jobs describe "migrate-$(suffix "$pr")" || rc=$?
+  if [ "$rc" = 0 ]; then
     gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+  elif [ "$rc" = 2 ]; then
+    failed=1
+    slotfail=1
   fi
   database "$pr" drop || failed=1
   if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
   fi
+  rc=0
   slot=$(slot_of "$pr") || rc=$?
   if [ "$rc" = 2 ]; then
     failed=1

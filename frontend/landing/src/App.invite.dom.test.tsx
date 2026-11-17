@@ -19,7 +19,7 @@ const OUTCOMES = [
 const VERIFIED = 'Your email address is verified. Please sign in.'
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 const RESET_DONE = 'Your password is changed. Sign in with your new password.'
-const RESET_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 const REQUEST_NEW = 'Request a new link'
 
 let container: HTMLDivElement

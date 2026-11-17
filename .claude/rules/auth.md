@@ -86,10 +86,18 @@ paths:
 - Expect Cloud Armor to limit `POST /auth/sign-in`, `/auth/refresh` and `/auth/exchange` per IP per 10 minutes, each in its own budget. Expect it to ban an IP over a budget from that route. The numbers are in `security-threat-model.md`, Network.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
-- Spend one instance-wide registration mail share on `/auth/register` and `/auth/resend-verification`, on a hosted gateway only: `registration-mail-hour` (10 an hour) and `registration-mail-day` (30 per UTC day) in `gateway_throttle_counts`. Spend it after the invited check and the per-address count, before the unsubscribe token and GoTrue. Refund it on a GoTrue 4xx.
-- Answer a request the share refuses with the same 202 after the floor, without a GoTrue call. Reset and the invitation routes neither spend nor read the share.
-- Treat GoTrue's `over_email_send_rate_limit` as the instance mail cap unless its `msg` starts with `For security purposes, you can only request this after `.
-- Report the instance mail cap and a spent registration share to Sentry through `platform.CaptureErrorGrouped`, as a fixed error with no address, at most once per error per 6 hours per instance, fingerprinted by the 6-hour UTC bucket so each capture opens a new issue and emails staff. Keep the answer, its timing and the WARN line unchanged.
+- Spend one instance-wide registration mail share on `/auth/register` and `/auth/resend-verification`. Do this on a hosted gateway only.
+- Keep the share in `gateway_throttle_counts` as `registration-mail-hour` (10 an hour) and `registration-mail-day` (30 per UTC day).
+- Spend the share after the invited check and the per-address count. Spend it before the unsubscribe token and GoTrue.
+- Refund the share on a GoTrue 4xx.
+- Answer a request the share refuses with the same 202 after the floor. Make no GoTrue call for it.
+- Never spend or read the share on reset or the invitation routes.
+- Treat GoTrue's `over_email_send_rate_limit` as the instance mail cap. The exception is a `msg` that starts with `For security purposes, you can only request this after `.
+- Report the instance mail cap and a spent registration share to Sentry through `platform.CaptureErrorGrouped`.
+- Send a fixed error with no address.
+- Send each error at most once per 6 hours per instance.
+- Fingerprint it by the 6-hour UTC bucket. Each capture then opens a new issue and emails staff.
+- Keep the answer, its timing and the WARN line unchanged.
 - Log no email address, password, token, code or client IP.
 - Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a sign-in session mint (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
 - Count a session mint as `POST /auth/sign-in` only. The gateway writes no `FirstSession` row. The worker still records the device of a queued one and writes no audit row for it.

@@ -199,6 +199,17 @@ func TestMailAlert_OncePerWindowPerError(t *testing.T) {
 	}
 }
 
+// A cooldown message on a non-429 status is no cap: the invitation resend must not alert on it.
+func TestMailAlert_InvitationResendIgnoresACooldownMessage(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "gateway")
+	swapMailAlerts(t, time.Now)
+	h := newInviteResend(newFakeGoTrue(t, http.StatusBadRequest, gtOverEmailSendRateLimit).URL, invitePreviewing("unconfirmed"), slog.New(slog.DiscardHandler))
+	serveInviteResend(h, http.MethodPost, tokenBody(inviteToken))
+	if n := len(rec.Events()); n != 0 {
+		t.Errorf("events = %d, want 0", n)
+	}
+}
+
 func TestMailAlert_EachEpisodeIsANewIssue(t *testing.T) {
 	_, rec, _ := sentrytest.Boot(t, "gateway")
 	c := newMailClock(time.Date(2026, 11, 17, 5, 59, 0, 0, time.UTC))

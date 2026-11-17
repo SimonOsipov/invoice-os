@@ -389,7 +389,7 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 		case status == http.StatusTooManyRequests && gt.ErrorCode == "over_request_rate_limit":
 			writeError(w, http.StatusTooManyRequests, "too many requests")
 			return
-		case gt.ErrorCode == "over_email_send_rate_limit":
+		case isIdPMailCap(gt):
 			alertMail(r.Context(), ErrIdPMailCap)
 			log.WarnContext(r.Context(), "invitation-resend: gotrue email send rate limit", slog.Int("upstream_status", status))
 		default:

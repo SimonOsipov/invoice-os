@@ -1,0 +1,29 @@
+# SECAUD-19 throwaway probe: prints the pull_request OIDC claims and the STS status. Never merge.
+name: secaud-19-oidc-probe
+on: pull_request
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print claims and STS status (never the token)
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          tok=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "https://iam.googleapis.com/$WIF_PROVIDER" '$a|@uri')" | jq -r .value)
+          echo "::add-mask::$tok"
+          part=$(cut -d. -f2 <<<"$tok" | tr '_-' '/+')
+          while [ $(( ${#part} % 4 )) -ne 0 ]; do part="$part="; done
+          base64 -d <<<"$part" | jq -S '{repository, repository_id, ref, event_name, workflow_ref, job_workflow_ref}'
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST https://sts.googleapis.com/v1/token \
+            --data-urlencode grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+            --data-urlencode "audience=//iam.googleapis.com/$WIF_PROVIDER" \
+            --data-urlencode scope=https://www.googleapis.com/auth/cloud-platform \
+            --data-urlencode requested_token_type=urn:ietf:params:oauth:token-type:access_token \
+            --data-urlencode subject_token_type=urn:ietf:params:oauth:token-type:jwt \
+            --data-urlencode "subject_token=$tok")
+          echo "STS HTTP status: $status"

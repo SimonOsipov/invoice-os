@@ -388,7 +388,7 @@ func lockTargetAndAdmins(ctx context.Context, tx pgx.Tx, userID string) (locked 
 
 // RemoveMember ends a member's access: active-admin caller, target exists, already removed
 // (idempotent), last admin; then endMembership, approval.ErrRoleInUse when a waiting role is left with no signer,
-// and a membership.removed audit row in one transaction. The tenant lock is taken right after the admin check.
+// revokes the address's pending invites, and a membership.removed audit row in one transaction. The tenant lock is taken right after the admin check.
 func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
 	var removed MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -433,6 +433,9 @@ func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, 
 			return err
 		}
 		if err := approval.RefuseUnsignedWaitingRolesTx(ctx, tx, keys, signed); err != nil {
+			return err
+		}
+		if err := revokeInvitesForAddressTx(ctx, tx, caller.Subject, target.Email); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{

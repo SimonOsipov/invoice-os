@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -277,6 +278,46 @@ func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
 			"role":          role,
 		})
 	})
+}
+
+// revokeInvitesForAddressTx revokes every pending invite in the bound tenant for the
+// address, expired ones included, and audits each. A nil or blank address revokes nothing.
+func revokeInvitesForAddressTx(ctx context.Context, tx pgx.Tx, actor string, email *string) error {
+	// ceiling: a NULL or blank address matches no invite; the removed row's email is already NULL.
+	if email == nil || strings.TrimSpace(*email) == "" {
+		return nil
+	}
+	rows, err := tx.Query(ctx,
+		`UPDATE invitations SET status = 'revoked'
+		  WHERE status = 'pending'
+		    AND pg_catalog.lower(pg_catalog.btrim(invitee_email)) = pg_catalog.lower(pg_catalog.btrim($1))
+		  RETURNING id::text, role`, *email)
+	if err != nil {
+		return err
+	}
+	type revoked struct{ id, role string }
+	var got []revoked
+	for rows.Next() {
+		var r revoked
+		if err := rows.Scan(&r.id, &r.role); err != nil {
+			rows.Close()
+			return err
+		}
+		got = append(got, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range got {
+		if err := audit.Record(ctx, tx, actor, "invitation.revoked", map[string]any{
+			"invitation_id": r.id,
+			"role":          r.role,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListInvitations returns the tenant's pending invites that carry a token.

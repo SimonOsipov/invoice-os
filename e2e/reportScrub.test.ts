@@ -88,6 +88,25 @@ describe('scrubText', () => {
     expect(residuals(dir)).toEqual([join(dir, 'h.txt')])
   })
 
+  // The raw-line rule skips a name that follows a word char or a quote, so these slip past the scrub and the residual check alike.
+  it('redacts a header line inside a JSON string: after an escaped newline, or at the string start', () => {
+    const opaque = ['op', 'aque', Date.now()].join('')
+    const bodies = [
+      `GET /x\\nAuthorization: Bearer ${opaque}\\nAccept: */*`,
+      `HTTP/1.1 200\\r\\nSet-Cookie: rt=${opaque}; Path=/\\r\\n`,
+      `cookie: sid=${opaque}`,
+    ]
+    for (const body of bodies) {
+      const json = `{"m":"${body}"}`
+      const out = scrubText(json)
+      expect(out, body).not.toContain(opaque)
+      expect(() => JSON.parse(out)).not.toThrow()
+      const dir = tmp()
+      put(dir, 'h.json', json)
+      expect(residuals(dir), body).toEqual([join(dir, 'h.json')])
+    }
+  })
+
   it('redacts a password key in any letter case', () => {
     const pw = ['Pw', 'x', Date.now()].join('-')
     const out = scrubText(`{"Password":"${pw}","PASSWORD":"${pw}","x":"{\\"Password\\":\\"${pw}\\"}"}`)

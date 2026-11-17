@@ -39,6 +39,12 @@ import (
 // do wrap: getResponse adds qr_png_base64 and the action flags, listItem adds
 // approval -- both EMBED Invoice, so its keys keep their names and order.
 
+// maxLineItems matches the extraction route's maxPostedLines.
+const (
+	maxLineItems        = 999
+	msgTooManyLineItems = "line_items must not exceed 999"
+)
+
 // lineItemReq is one entry of createRequest.LineItems AND of editReq.LineItems
 // (INVED-01-05): the create and edit line shapes are deliberately ONE type, not
 // two byte-identical twins that could drift apart. LineNo is deliberately
@@ -332,6 +338,11 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 
 		if req.IssueTime != nil && !ValidIssueTime(*req.IssueTime) {
 			writeError(w, http.StatusBadRequest, IssueTimeMsg)
+			return
+		}
+
+		if len(req.LineItems) > maxLineItems {
+			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
 			return
 		}
 
@@ -1316,6 +1327,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		// No all-nil guard here: a body carrying ONLY "line_items":[] must still
 		// reach the store. Store.Edit owns that check and needs to see the
 		// non-nil-but-empty pointer.
+		if req.LineItems != nil && len(*req.LineItems) > maxLineItems {
+			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
+			return
+		}
+
 		var lines *[]LineItemInput
 		if req.LineItems != nil {
 			mapped := make([]LineItemInput, len(*req.LineItems))

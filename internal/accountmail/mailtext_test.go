@@ -34,6 +34,18 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 		"evil.\u00adcom":       "evil." + mark + "\u00adcom",
 		"cafe\u0301.com":       "cafe\u0301." + mark + "com",
 		"pay\u00ad@evil.com":   "pay\u00ad@" + mark + "evil." + mark + "com",
+		"evil⁠.com":            "evil⁠." + mark + "com",
+		"evil\uFEFF.com":       "evil\uFEFF." + mark + "com",
+		"evil᠎.com":            "evil᠎." + mark + "com",
+		"evil­‍⁠.com":          "evil­‍⁠." + mark + "com",
+		"evil.­‍⁠com":          "evil." + mark + "­‍⁠com",
+		"evil.c⁠om":            "evil." + mark + "c⁠om",
+		"­evil.com":            "­evil." + mark + "com",
+		"evil.com­":            "evil." + mark + "com­",
+		"evil.ćom":            "evil." + mark + "ćom",
+		"pay⁠@evil.com":        "pay⁠@" + mark + "evil." + mark + "com",
+		"pay@⁠evil.com":        "pay@" + mark + "⁠evil." + mark + "com",
+		"pay­­@­­evil.com":     "pay­­@" + mark + "­­evil." + mark + "com",
 	}
 	for in, want := range cases {
 		if got := Unlinked(in); got != want {
@@ -43,7 +55,7 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 }
 
 var unlinkedNoMark = []string{
-	"Adaeze Okafor", "Okafor & Sons Ltd", "Okafor & Sons Ltd.", "Dr. Okafor", "J.R. Okafor", "J\u00ad.R. Okafor", "U.S.A. Ltd",
+	"Adaeze Okafor", "Okafor & Sons Ltd", "Okafor & Sons Ltd.", "Dr. Okafor", "J.R. Okafor", "J\u00ad.R. Okafor", "U.S.A. Ltd", "\u00ad.com", "evil.\u00ad", "@\u00adevil", "J.\u00adR. Okafor", "a@\u00ad b", "Acme @\u00adHome", "evil\u00ad.\u00ad",
 	"e.g. Okafor", "Acme @ Home", "Acme @Home", "visit .com", "7.5% VAT", "INV-2026.01", "a@ b", "",
 }
 

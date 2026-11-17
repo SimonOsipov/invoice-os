@@ -18,6 +18,9 @@ const BODY_ESC = String.raw`(?:\\{3}"|[^"\\]|\\[^"])*`
 const FIELDS = 'password|new_password|current_password|access_token|refresh_token|id_token|provider_token|token'
 const HEADER_NAME = String.raw`(?:authorization|cookie|set-cookie|__Host-[^"\\]*|[^"\\]*(?:token|secret|key|session)[^"\\]*)`
 
+// Raw header line up to its value: a name not glued to a word, or right after a JSON-escaped `\n`; an optional opening quote.
+const LINE = String.raw`(?:(?<![\w-])|(?<=\\[nrt]))(?:proxy-)?(?:authorization|cookie|set-cookie)[ \t]*:[ \t]*(?:\\*")?`
+
 const RULES: [RegExp, string][] = [
   [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, R],
   [/eyJ[A-Za-z0-9_-]{10,}/g, R],
@@ -27,8 +30,8 @@ const RULES: [RegExp, string][] = [
   [new RegExp(`("(?:${FIELDS})"\\s*:\\s*")${BODY_PLAIN}`, 'gi'), `$1${R}`],
   [new RegExp(`(\\\\"(?:${FIELDS})\\\\"\\s*:\\s*\\\\")${BODY_ESC}`, 'gi'), `$1${R}`],
   // Raw header line: Authorization: Bearer <opaque>
-  [/(?<![\w"\\-])((?:authorization|cookie|set-cookie)[ \t]*:[ \t]*)[^\r\n"\\]+/gi, `$1${R}`],
-  [new RegExp(`(?<![A-Za-z0-9])((?:${FIELDS})=)[^&"'\\\\\\s]*`, 'g'), `$1${R}`],
+  [new RegExp(`(${LINE})[^\\r\\n"\\\\]+`, 'gi'), `$1${R}`],
+  [new RegExp(`(?<![A-Za-z0-9])((?:${FIELDS})=)[^&"'\\\\\\s]*`, 'gi'), `$1${R}`],
   // Step title `Fill "x"`, log line `fill("x")`.
   [new RegExp(`\\b((?:fill|type)[ (]${Q})${BODY}`, 'gi'), `$1${R}`],
   // Trace action: "method":"fill" ... "value":"x"
@@ -42,7 +45,7 @@ export function scrubText(s: string): string {
 const BINARY = /\.(png|jpe?g|gif|webp|ico|webm|mp4|woff2?|ttf|otf|pdf)$/i
 const PAYLOAD = /(data:application\/zip;base64,)([^"'<\s]*)/
 const RESIDUALS = [/eyJ[A-Za-z0-9_-]{10,}/, /e2e-member-pw-/, new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
-  /(?<![\w"\\-])(?:authorization|cookie|set-cookie)[ \t]*:[ \t]*(?!\[redacted\])[^\s"\\]/i,
+  new RegExp(`${LINE}(?!\\[redacted\\])[^\\s"\\\\]`, 'i'),
 ]
 
 // latin1 keeps every byte, so an unchanged file round-trips exactly.

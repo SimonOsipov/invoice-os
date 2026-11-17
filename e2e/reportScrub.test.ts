@@ -107,6 +107,19 @@ describe('scrubText', () => {
     }
   })
 
+  it('redacts a quoted header value, Proxy-Authorization and a capitalised token=', () => {
+    const v = ['qv', Date.now()].join('')
+    const lines = [`Authorization: "Bearer ${v}"`, `Proxy-Authorization: Basic ${v}`, `{"m":"Proxy-Authorization: \\"Bearer ${v}\\""}`, `GET /cb?Token=${v}&x=1`]
+    for (const line of lines) {
+      const out = scrubText(line)
+      expect(out, line).not.toContain(v)
+      if (line.includes('Token=')) continue
+      const dir = tmp()
+      put(dir, 'h.txt', line)
+      expect(residuals(dir), line).toEqual([join(dir, 'h.txt')])
+    }
+  })
+
   it('redacts a password key in any letter case', () => {
     const pw = ['Pw', 'x', Date.now()].join('-')
     const out = scrubText(`{"Password":"${pw}","PASSWORD":"${pw}","x":"{\\"Password\\":\\"${pw}\\"}"}`)

@@ -701,10 +701,10 @@ func TestApprovalHandler_ApproveAcceptsAnAbsentReason(t *testing.T) {
 }
 
 // AC-2: the over-cap body is VALID JSON (padded via "reason"), so a handler with no
-// MaxBytesReader would still decode successfully rather than tripping the
+// cap would still decode successfully rather than tripping the
 // malformed-JSON branch by accident (TestWorkflowRoleHandlers_BodyOverCapRejected's
-// precedent, handlers_test.go:220-221).
-func TestApprovalHandler_OversizedBodyIs400(t *testing.T) {
+// precedent).
+func TestApprovalHandler_OversizedBodyIs413(t *testing.T) {
 	id := caller()
 	decide := failClosedDecide(t)
 	pad := strings.Repeat("x", maxDecisionBodyBytes)
@@ -714,11 +714,11 @@ func TestApprovalHandler_OversizedBodyIs400(t *testing.T) {
 	}
 	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (not 413, not 500): %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
 	}
-	if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
-		t.Errorf("error = %q, want %q", got, "invalid request body")
+	if got := errorMessage(t, rec.Body.Bytes()); got != "request body exceeds the size limit" {
+		t.Errorf("error = %q, want %q", got, "request body exceeds the size limit")
 	}
 }
 

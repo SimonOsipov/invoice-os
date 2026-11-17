@@ -94,7 +94,7 @@ func TestAcceptHandler_Contract(t *testing.T) {
 		{"no caller", okBody, failing(db.ErrNoTenant), http.StatusUnauthorized, "unauthorized", 1},
 		{"malformed JSON", `{`, granted, http.StatusBadRequest, "invalid request body", 0},
 		{"empty body", ``, granted, http.StatusBadRequest, "invalid request body", 0},
-		{"over 4 KiB", bodyOf(4097), granted, http.StatusBadRequest, "invalid request body", 0},
+		{"over 4 KiB", bodyOf(4097), granted, http.StatusRequestEntityTooLarge, "request body too large", 0},
 		{"invite not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"invite not valid, wrapped", okBody, failing(fmt.Errorf("accept: %w", ErrInvitationNotValid)), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"already a member", okBody, failing(ErrAlreadyMember), http.StatusConflict, "you already belong to a workspace", 1},
@@ -447,7 +447,7 @@ func TestAcceptHandlers_AcceptA200RuneName(t *testing.T) {
 			}
 			spy = &nameSpy{}
 			rec = apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, sized(4097))
-			assertErrorBody(t, rec, http.StatusBadRequest, "invalid request body")
+			assertErrorBody(t, rec, http.StatusRequestEntityTooLarge, "request body too large")
 			if len(spy.names) != 0 {
 				t.Errorf("accept called %d time(s) for an over-cap body, want 0", len(spy.names))
 			}

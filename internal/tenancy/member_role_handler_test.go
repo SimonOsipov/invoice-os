@@ -83,7 +83,6 @@ func TestSetMemberRoleHandler_BodyAndPath(t *testing.T) {
 		"a number for the role": `{"role":1}`,
 		"a top-level array":     `["reviewer"]`,
 		"an array for the role": `{"role":["reviewer"]}`,
-		"over 4 KiB":            strings.Repeat(" ", 5*1024) + `{"role":"reviewer"}`,
 	} {
 		t.Run("400 invalid request body: "+name, func(t *testing.T) {
 			var r roleRig
@@ -93,6 +92,14 @@ func TestSetMemberRoleHandler_BodyAndPath(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("413 request body too large: over 4 KiB", func(t *testing.T) {
+		var r roleRig
+		rec := r.patch(t, callerID(), target, strings.Repeat(" ", 5*1024)+`{"role":"reviewer"}`)
+		if rec.Code != http.StatusRequestEntityTooLarge || errorOf(t, rec) != "request body too large" || len(r.calls) != 0 {
+			t.Errorf("status %d %q with %d calls, want 413 request body too large and 0", rec.Code, rec.Body.String(), len(r.calls))
+		}
+	})
 
 	for name, body := range map[string]string{
 		"owner":              `{"role":"owner"}`,
@@ -133,7 +140,7 @@ func TestSetMemberRoleHandler_BodyAndPath(t *testing.T) {
 			code int
 		}{
 			"4096 bytes": {strings.Repeat(" ", 4096-len(doc)) + doc, 200},
-			"4097 bytes": {strings.Repeat(" ", 4097-len(doc)) + doc, 400},
+			"4097 bytes": {strings.Repeat(" ", 4097-len(doc)) + doc, 413},
 		} {
 			var r roleRig
 			if rec := r.patch(t, callerID(), target, tc.body); rec.Code != tc.code {

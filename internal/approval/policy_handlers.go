@@ -1,11 +1,11 @@
 package approval
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // The seven approval-policy handlers. Same division as the workflow-role layer: this
@@ -74,7 +74,7 @@ func GetPolicyHandler(get PolicyGetter, log *slog.Logger) http.HandlerFunc {
 }
 
 // CreatePolicyHandler returns POST /v1/approval-policies: identity (401) -> capped
-// decode (400) -> create -> 201. Name and scopes reach the store verbatim; the store
+// decode -> create -> 201. Name and scopes reach the store verbatim; the store
 // validates them. A legacy "scope" key is ignored.
 func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -86,9 +86,12 @@ func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFun
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req createPolicyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -107,7 +110,7 @@ func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFun
 }
 
 // PutDraftHandler returns PUT /v1/approval-policies/{id}/draft: identity (401) ->
-// capped decode (400) -> steps presence (400) -> path id -> whole-tree replace.
+// capped decode -> steps presence (400) -> path id -> whole-tree replace.
 //
 // The presence check is this layer's ONE semantic 400 and it must exist: a nil slice
 // at the store means clear-the-tree, so without it {} would silently wipe a policy's
@@ -122,9 +125,12 @@ func PutDraftHandler(put PolicyDrafter, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req putDraftRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -198,7 +204,7 @@ func DeletePolicyHandler(del PolicyDeleter, log *slog.Logger) http.HandlerFunc {
 }
 
 // ReorderPoliciesHandler returns PUT /v1/approval-policies/order: identity (401) ->
-// capped decode (400) -> policy_ids presence (400) -> reorder -> 200 with the list.
+// capped decode -> policy_ids presence (400) -> reorder -> 200 with the list.
 func ReorderPoliciesHandler(reorder PolicyReorderer, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -209,9 +215,12 @@ func ReorderPoliciesHandler(reorder PolicyReorderer, log *slog.Logger) http.Hand
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req reorderRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

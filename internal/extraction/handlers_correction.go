@@ -5,7 +5,6 @@ package extraction
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // ApplyFieldToInvoice writes one corrected field onto the invoice filed from documentID, on the
@@ -106,6 +106,7 @@ const (
 const (
 	msgMalformedJobID   = "id must be a well-formed uuid"
 	msgInvalidBody      = "invalid request body"
+	msgBodyTooLarge     = "request body exceeds the size limit"
 	msgBlankValue       = "value must not be blank"
 	msgUnknownMethod    = "method must be one of typed, chosen, pointed, undone"
 	msgRegionDisagrees  = "only a pointed correction carries a region"
@@ -253,7 +254,11 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 		}
 
 		var req CorrectionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, msgBodyTooLarge)
+				return
+			}
 			writeError(w, http.StatusBadRequest, msgInvalidBody)
 			return
 		}

@@ -314,7 +314,7 @@ func TestInvitationsAPI_ValidationRefusals(t *testing.T) {
 	)
 	cases := []struct{ name, body, want string }{
 		{"malformed JSON", `{`, "invalid request body"},
-		{"body over 16 KiB", oversize, "invalid request body"},
+		{"body over 16 KiB", oversize, "request body too large"},
 		{"no role", `{"emails":["ok@x.test"]}`, badRole},
 		{"unknown role", `{"emails":["ok@x.test"],"role":"owner"}`, badRole},
 		{"no addresses", `{"emails":[],"role":"preparer"}`, badCount},
@@ -324,7 +324,11 @@ func TestInvitationsAPI_ValidationRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", c.body), http.StatusBadRequest, c.want)
+			status := http.StatusBadRequest
+			if c.want == "request body too large" {
+				status = http.StatusRequestEntityTooLarge
+			}
+			assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", c.body), status, c.want)
 			if n := countInvitations(t, a.super, a.tenant); n != 0 {
 				t.Errorf("invitations rows after a refusal = %d, want 0", n)
 			}

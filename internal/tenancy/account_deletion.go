@@ -2,7 +2,6 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -18,6 +17,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // AccountDeletionOutcome is what deleting the caller's account does to the workspace.
@@ -245,10 +245,14 @@ func DeleteMyAccountHandler(del DeleteMyAccountFunc, log *slog.Logger) http.Hand
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxDeleteAccountBodyBytes)
 		var req deleteMyAccountRequest
 		heir, ok := "", false
-		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+		err := jsonbody.Decode(w, r, maxDeleteAccountBodyBytes, &req)
+		if jsonbody.TooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		if err == nil {
 			heir, ok = deleteBodyHeir(req)
 		}
 		if !ok {

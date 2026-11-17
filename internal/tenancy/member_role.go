@@ -2,7 +2,6 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 var (
@@ -131,11 +131,14 @@ func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (Me
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
 		var req struct {
 			Role string `json:"role"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxSetStatusBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

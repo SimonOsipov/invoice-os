@@ -21,6 +21,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // Tenant is a caller's tenant as read from the tenants table under RLS.
@@ -296,9 +297,12 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
 		var req setMembershipStatusRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxSetStatusBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -420,9 +424,12 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxProvisionBodyBytes)
 		var req provisionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxProvisionBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

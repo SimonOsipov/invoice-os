@@ -1771,9 +1771,7 @@ func TestMembership_InvalidStatusRejected(t *testing.T) {
 }
 
 // TestMembership_BodyOverCapRejected (AC-14): a request body over the cap
-// maps to 400, not 413 -- the invoice handlers.go shape, not the
-// validation/importer "house pattern". The plan's cap is 4 KiB; a legitimate
-// body is ~30 bytes.
+// maps to 413. The cap is 4 KiB; a legitimate body is ~30 bytes.
 func TestMembership_BodyOverCapRejected(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 	set := func(context.Context, string, string) (MemberAccess, error) {
@@ -1785,8 +1783,8 @@ func TestMembership_BodyOverCapRejected(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
 	SetMembershipStatusHandler(set, nil).ServeHTTP(rec, r)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (not 413): %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413: %s", rec.Code, rec.Body.String())
 	}
 }
 

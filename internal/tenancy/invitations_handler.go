@@ -2,7 +2,6 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +17,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 const (
@@ -177,9 +177,12 @@ func InvitationsCreateHandler(invite InviteFunc, log *slog.Logger) http.HandlerF
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxInviteBodyBytes)
 		var req inviteRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxInviteBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			if errors.Is(err, ErrInvalidClientAccess) {
 				invitationFailure(w, r, log, "tenancy: create invitations", err)
 				return

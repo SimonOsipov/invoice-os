@@ -23,6 +23,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -302,7 +303,11 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 		}
 
 		var req createRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.LineItemsLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1162,7 +1167,11 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 		}
 
 		var req transitionReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1282,7 +1291,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		}
 
 		var req editReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.LineItemsLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1422,7 +1435,11 @@ func KeepAsIsHandler(keep func(ctx context.Context, id, reason string) (Invoice,
 		}
 
 		var req keepAsIsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1496,7 +1513,11 @@ func ResolveOutsideHandler(resolve func(ctx context.Context, id, reason string) 
 		}
 
 		var req keepAsIsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

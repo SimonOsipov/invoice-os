@@ -173,3 +173,21 @@ func TestExtractionHandlers_EmptyBodyIs400(t *testing.T) {
 		})
 	}
 }
+
+// A 2 MiB body is over DefaultLimit and under LineItemsLimit. A body that clears the cap would
+// reach the nil pool, so LineItemsHandler is driven with 1,000 lines: the count clause answers
+// first and proves the cap let the body through.
+func TestExtractionHandlers_BodySizeFollowsTheHandlersOwnLimit(t *testing.T) {
+	thousand := `{"lines":[` + strings.TrimSuffix(strings.Repeat(`{"description":"x"},`, 1000), ",") + `]}`
+	pad := func(n int64) string { return thousand + strings.Repeat(" ", int(n)-len(thousand)) }
+
+	h, calls := bcapCases()[0].build()
+	rec, _ := bcapServe(h, uuid.NewString(), strings.NewReader(`{"value":"Acme","method":"typed"}`+strings.Repeat(" ", 2<<20)), true)
+	bcapAssert(t, rec, http.StatusRequestEntityTooLarge, bcapEnvelope, *calls)
+
+	for _, size := range []int64{2 << 20, jsonbody.LineItemsLimit} {
+		h, calls = bcapCases()[1].build()
+		rec, _ = bcapServe(h, uuid.NewString(), strings.NewReader(pad(size)), true)
+		bcapAssert(t, rec, http.StatusBadRequest, `{"error":"lines must not exceed 999"}`, *calls)
+	}
+}

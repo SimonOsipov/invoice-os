@@ -223,3 +223,20 @@ func TestInvoiceHandlers_EmptyBodyIs400(t *testing.T) {
 		})
 	}
 }
+
+// A 2 MiB body is over DefaultLimit and under LineItemsLimit: only create and edit take it.
+func TestInvoiceHandlers_TwoMiBBodyFollowsTheHandlersOwnLimit(t *testing.T) {
+	for _, c := range bodyCapCases() {
+		t.Run(c.name, func(t *testing.T) {
+			h, calls := c.build()
+			rec, _ := serveBodyCap(h, strings.NewReader(padded(c.valid, 2<<20)), true)
+			if c.limit == jsonbody.LineItemsLimit {
+				if rec.Code == http.StatusRequestEntityTooLarge || rec.Code == http.StatusBadRequest || *calls != 1 {
+					t.Fatalf("status = %d calls = %d, want the store reached once (body=%s)", rec.Code, *calls, rec.Body.String())
+				}
+				return
+			}
+			assertBodyCap413(t, rec, *calls)
+		})
+	}
+}

@@ -112,7 +112,7 @@ func bcVerdictOf(fns map[string]*ast.FuncDecl, fd *ast.FuncDecl) string {
 					reads = true
 				case "Decode":
 					if id, ok := e.X.(*ast.Ident); ok && id.Name == "jsonbody" {
-						capped, s413, reads = true, true, true
+						capped, reads = true, true
 					}
 				}
 			}

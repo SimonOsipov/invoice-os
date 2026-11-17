@@ -1786,6 +1786,24 @@ func TestMembership_BodyOverCapRejected(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413: %s", rec.Code, rec.Body.String())
 	}
+
+	// One byte over the 4 KiB cap is refused; a body of exactly the cap is not.
+	valid := `{"status":"suspended"}`
+	for _, c := range []struct {
+		size int
+		want int
+	}{{maxSetStatusBodyBytes + 1, http.StatusRequestEntityTooLarge}, {maxSetStatusBodyBytes, http.StatusOK}} {
+		called := false
+		ok := func(context.Context, string, string) (MemberAccess, error) { called = true; return MemberAccess{}, nil }
+		r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(valid+strings.Repeat(" ", c.size-len(valid))))
+		r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		r.SetPathValue("user_id", uuid.NewString())
+		rec := httptest.NewRecorder()
+		SetMembershipStatusHandler(ok, nil).ServeHTTP(rec, r)
+		if rec.Code != c.want || (c.want == http.StatusOK) != called {
+			t.Errorf("%d bytes: status = %d called = %v, want %d", c.size, rec.Code, called, c.want)
+		}
+	}
 }
 
 // TestMembership_InvitedTargetNotTransitionable (AC-3): a target still

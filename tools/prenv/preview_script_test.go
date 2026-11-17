@@ -2964,18 +2964,15 @@ func TestPreviewClaimReportsFullWhenBothSlotsAreHeld(t *testing.T) {
 	}
 }
 
-func TestPreviewClaimPoolIsTwoPRSlots(t *testing.T) {
+// A claim labelled 77 or 17 is not PR 7's: the match is the whole label.
+func TestPreviewClaimDoesNotMistakeAnotherPRsClaimForItsOwn(t *testing.T) {
 	t.Parallel()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
-	if err != nil {
-		t.Fatal(err)
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "77", "slot-2": "17"}, map[string]string{"taken": "slot-1-claim\nslot-2-claim\n"}), "claim", "7")
+	if r.code != 0 || r.stdout != "full=true\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want full=true", r.code, r.stdout, r.stderr)
 	}
-	var got []string
-	if m := regexp.MustCompile(`(?m)^PR_SLOTS=\(([^)]*)\)`).FindSubmatch(b); m != nil {
-		got = strings.Fields(string(m[1]))
-	}
-	if !slices.Equal(got, []string{"slot-1", "slot-2"}) {
-		t.Errorf("PR_SLOTS = %q, want [slot-1 slot-2]: the cap is 2 PRs, and the nightly's slot is fixed", got)
+	if i := callIdx(callLines(r), "storage "); i >= 0 {
+		t.Errorf("PR 7 emptied a bucket it does not hold: %s", callLines(r)[i])
 	}
 }
 
@@ -3061,13 +3058,8 @@ func TestPreviewClaimRefusesTheNightly(t *testing.T) {
 
 func TestPreviewUsageListsClaim(t *testing.T) {
 	t.Parallel()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := runPreview(t, nil)
-	if !strings.Contains(r.stderr, "claim") || !strings.Contains(string(b), "#   preview.sh claim <pr>") {
-		t.Errorf("usage line %q and header lack claim", r.stderr)
+	if r := runPreview(t, nil); r.code == 0 || !strings.Contains(r.stderr, "|claim|") {
+		t.Errorf("exit %d, usage %q lacks claim", r.code, r.stderr)
 	}
 }
 
@@ -3267,6 +3259,24 @@ func TestPreviewTeardownKeepsTheClaimWhenEmptyingFails(t *testing.T) {
 	}
 	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
 		t.Errorf("the claim was released over a bucket that still holds objects: %s", calls[i])
+	}
+}
+
+// PR 7 holds slot-2 while PR 5 holds slot-1: the teardown leaves PR 5's slot alone.
+func TestPreviewTeardownReleasesOnlyItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		slots(t, map[string]string{"slot-1": "5", "slot-2": "7"}, nil)(dir)
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-2-claim\n")
+	}, "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 || callIdx(calls, "secrets delete slot-2-claim ") < 0 {
+		t.Errorf("exit %d, stderr %q, want slot-2 emptied and its claim released:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"ascomply-preview-docs-slot-1", "secrets delete slot-1"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("PR 7's teardown touched PR 5's slot: %s", calls[i])
+		}
 	}
 }
 

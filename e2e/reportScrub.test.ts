@@ -25,6 +25,7 @@ describe('scrubText', () => {
     const t = jwt()
     const out = scrubText(`{"msg":"got ${t} back","h":"Bearer ${t}"}`)
     expect(out).not.toMatch(/eyJ[A-Za-z0-9_-]{10,}/)
+    expect(out).not.toContain(t.split('.')[2])
     expect(out).toContain('[redacted]')
   })
 
@@ -96,7 +97,8 @@ describe('scrubDir', () => {
 
   it('rewrites a nested trace zip and keeps binaries', () => {
     const dir = tmp()
-    const png = new Uint8Array([137, 80, 78, 71, 0, 255, 1, 2, 3, 200])
+    // A binary entry that reads like a typed value: the scrubber must not touch it.
+    const png = new Uint8Array([137, 80, 78, 71, 0, 255, ...enc('Fill "keep"'), 200])
     const net = `{"headers":[{"name":"x","value":"Bearer ${jwt()}"}]}`
     put(dir, 'data/t.zip', zipSync({ '0-trace.network': enc(net), 'p.png': png }))
     scrubDir(dir)
@@ -104,6 +106,26 @@ describe('scrubDir', () => {
     expect(dec(e['0-trace.network'])).not.toMatch(/eyJ/)
     expect(dec(e['0-trace.network'])).toContain('[redacted]')
     expect(Array.from(e['p.png'])).toEqual(Array.from(png))
+  })
+
+  it('keeps non-ASCII text intact while redacting', () => {
+    const dir = tmp()
+    put(dir, 'r.json', '{"name":"Zoë — ok","title":"Fill \\"pw\\""}')
+    scrubDir(dir)
+    expect(readFileSync(join(dir, 'r.json'), 'utf8')).toBe('{"name":"Zoë — ok","title":"Fill \\"[redacted]\\""}')
+  })
+
+  it('scrubs an extensionless resource and a zip nested in a zip', () => {
+    const dir = tmp()
+    const inner = zipSync({ 'resources/abc123': enc(`{"access_token":"${jwt()}","email":"a@b"}`), 'notes.md': enc('"password":"Ab12cd34Ef56gh78"') })
+    put(dir, 'data/t.zip', zipSync({ 'outer.trace': enc('{"method":"click"}'), 'inner.zip': inner }))
+    scrubDir(dir)
+    const outer = unzipSync(new Uint8Array(readFileSync(join(dir, 'data/t.zip'))))
+    expect(Object.keys(outer).sort()).toEqual(['inner.zip', 'outer.trace'])
+    const e = unzipSync(outer['inner.zip'])
+    expect(dec(e['resources/abc123'])).toBe('{"access_token":"[redacted]","email":"a@b"}')
+    expect(dec(e['notes.md'])).toBe('"password":"[redacted]"')
+    expect(residuals(dir)).toEqual([])
   })
 
   it('leaves a clean tree unchanged', () => {
@@ -156,11 +178,44 @@ describe('reportScrub CLI', () => {
     expect(r.stderr).not.toContain(jwt())
   })
 
-  it('fails closed on a bad embedded payload', () => {
+  it('fails closed on a credential outside the embedded payload', () => {
     const dir = tmp()
-    put(dir, 'index.html', '<script>data:application/zip;base64,AAAA!!notzip</script>')
+    put(dir, 'index.html', `<script>var t="${jwt()}"</script><script>data:application/zip;base64,${Buffer.from(zipSync({ 'a.json': enc('{}') })).toString('base64')}</script>`)
     const r = run(dir)
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('index.html')
+    expect(r.stderr).not.toContain(jwt())
+  })
+
+  it('fails closed on a truncated trace zip', () => {
+    const dir = tmp()
+    const whole = zipSync({ 'a.network': enc('{"a":1}'), 'b.trace': enc('{"b":2}') })
+    put(dir, 'data/t.zip', whole.slice(0, whole.length - 30))
+    const r = run(dir)
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain(join('data', 't.zip'))
+  })
+
+  it('scrubs and exits 0 on a tree whose only credentials are redactable', () => {
+    const dir = tmp()
+    put(dir, 'r.json', `{"headers":[{"name":"authorization","value":"Bearer ${jwt()}"}],"body":{"password":"${pwTag()}"}}`)
+    const r = run(dir)
+    expect(r.status).toBe(0)
+    const out = readFileSync(join(dir, 'r.json'), 'utf8')
+    expect(out).not.toContain(pwTag())
+    expect(out).not.toMatch(/eyJ/)
+    expect(JSON.parse(out).body.password).toBe('[redacted]')
+  })
+
+  it('fails closed on a bad embedded payload', () => {
+    const good = Buffer.from(zipSync({ 'a.json': enc('{}') })).toString('base64')
+    // The second payload decodes under a lenient reader: only the strict check refuses it.
+    for (const payload of ['AAAA!!notzip', `${good}!!`]) {
+      const dir = tmp()
+      put(dir, 'index.html', `<script>data:application/zip;base64,${payload}</script>`)
+      const r = run(dir)
+      expect(r.status).toBe(1)
+      expect(r.stderr).toContain('index.html')
+    }
   })
 })

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -27,12 +28,18 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 				steps[len(steps)-1] = append(steps[len(steps)-1], line)
 			}
 		}
-		scrubAt, uploads := -1, 0
+		scrubAt, uploads, scrubRun := -1, 0, ""
+		var paths []string
 		for i, lines := range steps {
 			block := strings.Join(lines, "\n")
 			switch {
 			case strings.Contains(block, "id: scrub"):
 				scrubAt = i
+				for _, l := range lines {
+					if strings.HasPrefix(strings.TrimSpace(l), "run: ") {
+						scrubRun = l
+					}
+				}
 				if strings.Contains(block, "continue-on-error") {
 					t.Errorf("%s: the scrub step must not set continue-on-error", jobName)
 				}
@@ -41,6 +48,11 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 				}
 			case strings.Contains(block, "uses: actions/upload-artifact@") && uploadsOutput(block):
 				uploads++
+				for _, l := range lines {
+					if p, ok := strings.CutPrefix(strings.TrimSpace(l), "path: "); ok {
+						paths = append(paths, strings.TrimSuffix(p, "/"))
+					}
+				}
 				if scrubAt < 0 {
 					t.Errorf("%s: %q uploads before the scrub step", jobName, lines[0])
 				}
@@ -51,6 +63,14 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 		}
 		if scrubAt < 0 {
 			t.Errorf("%s has no scrub step", jobName)
+		}
+		for _, p := range paths {
+			if !slices.Contains(strings.Fields(scrubRun), p) {
+				t.Errorf("%s: the scrub step %q does not scrub the uploaded %s", jobName, scrubRun, p)
+			}
+		}
+		if len(paths) != uploads {
+			t.Errorf("%s: %d upload paths read for %d uploads", jobName, len(paths), uploads)
 		}
 		if want := map[string]int{"e2e": 4, "topology": 3}[jobName]; uploads != want {
 			t.Errorf("%s: %d gated uploads, want %d", jobName, uploads, want)

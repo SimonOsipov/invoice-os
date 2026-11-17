@@ -62,6 +62,8 @@ esac
 	writeShim(t, filepath.Join(shims, "date"), `case "$*" in
 *"24 hours ago"*) echo 1000 ;;
 *"-d old"*) echo 10 ;;
+*"-d young"*) echo 99999 ;;
+*"-d -"*) echo 99999 ;;
 *) echo now ;;
 esac
 `)
@@ -169,5 +171,22 @@ func TestSweeperFailsOnAFailedDatabaseDrop(t *testing.T) {
 	summary, _, code := runSweep(t, sweepCase{prs: "nightly old\n", dbs: "672\n", failTeardown: []string{"672"}, states: map[string]string{"672": "MERGED"}})
 	if code != 1 || !strings.Contains(summary, "| #672 | - | DELETE FAILED: PR MERGED |") || !strings.Contains(summary, "1 preview(s) could not be deleted") {
 		t.Errorf("exit %d:\n%s", code, summary)
+	}
+}
+
+// The age guard still holds for a preview that owns resources, whatever its database says.
+func TestSweeperKeepsAYoungPRThatAlsoHasADatabase(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "7 young\n", dbs: "7\n", states: map[string]string{"7": "CLOSED"}})
+	if code != 0 || strings.Count(summary, "| #7 |") != 1 || !strings.Contains(summary, "| #7 | young | kept: younger than 24 h |") || strings.Contains(calls, "teardown") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperSkipsADatabaseOnlyPRWhoseStateIsUnreadable(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", dbs: "9\n"})
+	if code != 0 || !strings.Contains(summary, "| #9 | - | skipped: PR state unreadable |") || strings.Contains(calls, "teardown") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
 	}
 }

@@ -430,3 +430,12 @@ func TestRenderInvite_EmptyInviterFallbackIsUnmarked(t *testing.T) {
 		t.Error("the fallback got a mark")
 	}
 }
+
+func TestRenderInvite_ZeroWidthOnlyInviterFallsBack(t *testing.T) {
+	m := obiInvite
+	m.Inviter = "​​"
+	_, out := renderInvite(t, m)
+	if _, got := mustRow(t, out, "Invited by"); got != "A workspace admin" {
+		t.Errorf("Invited by = %q", got)
+	}
+}

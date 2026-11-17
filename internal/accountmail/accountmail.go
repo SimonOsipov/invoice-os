@@ -67,7 +67,7 @@ func RenderInvite(m InviteMail) (subject, html string, err error) {
 	if !ok {
 		return "", "", fmt.Errorf("accountmail: unknown invite role %q", m.Role)
 	}
-	inviter := m.Inviter
+	inviter := MailName(m.Inviter)
 	if inviter == "" {
 		inviter = "A workspace admin"
 	}
@@ -81,7 +81,7 @@ func RenderInvite(m InviteMail) (subject, html string, err error) {
 	}
 	var buf bytes.Buffer
 	err = tpl.Execute(&buf, inviteView{
-		Workspace: MailName(m.Workspace), Inviter: MailName(inviter), Email: m.Email, RoleLabel: label,
+		Workspace: MailName(m.Workspace), Inviter: inviter, Email: m.Email, RoleLabel: label,
 		AcceptURL: InviteAcceptURL + "#token=" + url.QueryEscape(m.Token), ValidDays: InviteValidDays,
 	})
 	if err != nil {

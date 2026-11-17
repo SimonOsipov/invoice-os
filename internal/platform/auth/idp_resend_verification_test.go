@@ -208,3 +208,45 @@ func TestIdP_ResentLinkVerifiesAndEarlierLinksStop(t *testing.T) {
 	}
 	accessToken(t, base, r)
 }
+
+func TestIdP_ResendRendersTheStoredMailNames(t *testing.T) {
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
+	u := registrant(t, gw, map[string]string{"display_name": "Ada https://evil.test/pay", "workspace_name": "www.evil.test"})
+	backdateCooldown(t, u.email)
+	status, body, _ := resend(t, gw, u.email)
+	requireResendAccepted(t, "resend", status, body)
+
+	msg := mailsFor(t, u.email, 2)[1]
+	if strings.Contains(msg.HTML, "evil.test") || strings.Contains(msg.HTML, "https://evil") {
+		t.Error("resent mail carries the registrant's link unmarked")
+	}
+	if !strings.Contains(msg.HTML, "evil.\u200btest") {
+		t.Error("resent mail lacks the marked domain")
+	}
+}
+
+// A pre-deploy account holds only user_metadata.registration; the resend must not render it.
+func TestIdP_LegacyAccountResendLeavesTheNamesOut(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	u := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
+	conn := superConn(t)
+	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, u.email) })
+	status, out := postJSON(t, base+"/signup", map[string]any{"email": u.email, "password": u.password,
+		"data": map[string]any{"registration": map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}}})
+	if status != http.StatusOK {
+		t.Fatalf("POST /signup: status %d, body %v", status, out)
+	}
+	backdateCooldown(t, u.email)
+	rstatus, body, _ := resend(t, gw, u.email)
+	requireResendAccepted(t, "resend", rstatus, body)
+
+	for i, msg := range mailsFor(t, u.email, 2) {
+		if !strings.Contains(msg.HTML, "Hi, your ASComply account has been created") {
+			t.Errorf("mail %d lacks the nameless greeting", i)
+		}
+		if strings.Contains(msg.HTML, "Ada Obi") || strings.Contains(msg.HTML, "Obi Partners") {
+			t.Errorf("mail %d renders names from user_metadata.registration alone", i)
+		}
+	}
+}

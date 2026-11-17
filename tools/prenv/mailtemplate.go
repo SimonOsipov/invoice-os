@@ -108,7 +108,8 @@ func checkMailImage(client *http.Client, src string) error {
 func mailSampleData() []map[string]any {
 	registration := map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}
 	variants := []map[string]any{
-		{"Data": map[string]any{"registration": registration}},
+		{"Data": map[string]any{"registration": registration, accountmail.MailNamesMetadataKey: accountmail.MailNames("Obi Partners", "Ada Obi")}},
+		{"Data": map[string]any{"registration": registration}}, // pre-mail_names accounts
 		{"Data": map[string]any{}},
 		{},
 	}

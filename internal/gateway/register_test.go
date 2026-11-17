@@ -711,6 +711,14 @@ func registerBodyWithAnswers(email string, answers map[string]any) string {
 	return string(b)
 }
 
+// wantData is the signup data for the answers reg: as typed, plus the neutralised mail_names (JSON-decoded).
+func wantData(reg map[string]any) map[string]any {
+	ws, _ := reg["workspace_name"].(string)
+	dn, _ := reg["display_name"].(string)
+	return map[string]any{"registration": reg, accountmail.MailNamesMetadataKey: map[string]any{
+		"workspace_name": accountmail.MailName(ws), "display_name": accountmail.MailName(dn)}}
+}
+
 // signupData decodes the single recorded /signup body and returns its "data" value (nil when absent).
 func signupData(t *testing.T, fake *fakeGoTrue) any {
 	t.Helper()
@@ -732,7 +740,7 @@ func TestRegister_AnswersReachGoTrueAsRegistrationData(t *testing.T) {
 		map[string]any{"workspace_name": "  Acme Ltd ", "display_name": " Ada ", "kind": "firm"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+	want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want %v", got, want)
 	}
@@ -745,7 +753,7 @@ func TestRegister_AnswersWithoutKindOmitKind(t *testing.T) {
 		map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}}
+	want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want %v (no kind key)", got, want)
 	}
@@ -804,7 +812,7 @@ func TestRegister_AnswerAt200RunesIsAccepted(t *testing.T) {
 		map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}}
+	want := wantData(map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want the 200-rune names forwarded intact", got)
 	}
@@ -855,7 +863,7 @@ func TestRegister_MarketingConsentStoredInMetadata(t *testing.T) {
 
 	after := time.Now().Add(time.Second)
 	data, _ := sent["data"].(map[string]any)
-	if got, want := slices.Sorted(maps.Keys(data)), []string{"marketing_consent", "registration"}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(data)), []string{"mail_names", "marketing_consent", "registration"}; !slices.Equal(got, want) {
 		t.Fatalf("signup data keys = %v, want %v: %v", got, want, sent["data"])
 	}
 	consent, _ := data["marketing_consent"].(map[string]any)
@@ -911,7 +919,7 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 
 		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 
-		want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+		want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 		if !reflect.DeepEqual(sent["data"], want) {
 			t.Errorf("signup data = %v, want %v", sent["data"], want)
 		}
@@ -930,7 +938,7 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 
 		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm", "marketing_consent_text": nil})
 
-		want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+		want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 		if !reflect.DeepEqual(sent["data"], want) {
 			t.Errorf("signup data = %v, want %v", sent["data"], want)
 		}
@@ -1352,7 +1360,7 @@ func TestRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
 
 	requirePending202(t, rec)
 	data, _ := signupData(t, fake).(map[string]any)
-	if got, want := slices.Sorted(maps.Keys(data)), []string{"marketing_consent", "registration", accountmail.UnsubscribeMetadataKey}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(data)), []string{accountmail.MailNamesMetadataKey, "marketing_consent", "registration", accountmail.UnsubscribeMetadataKey}; !slices.Equal(got, want) {
 		t.Fatalf("signup data keys = %v, want %v", got, want)
 	}
 	if data[accountmail.UnsubscribeMetadataKey] != "tok-1" {
@@ -1765,5 +1773,39 @@ func TestRegister_NoPasswordReachesALogLine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRegister_StoredAnswersStayAsTypedAndMailNamesAreNeutralised(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
+		map[string]any{"display_name": " Ada https://evil.com ", "workspace_name": "www.evil.com Ltd"}))
+
+	requirePending202(t, rec)
+	data, _ := signupData(t, fake).(map[string]any)
+	wantReg := map[string]any{"display_name": "Ada https://evil.com", "workspace_name": "www.evil.com Ltd"}
+	if !reflect.DeepEqual(data["registration"], wantReg) {
+		t.Errorf("registration = %v, want %v", data["registration"], wantReg)
+	}
+	wantNames := map[string]any{}
+	for k, v := range accountmail.MailNames("www.evil.com Ltd", "Ada https://evil.com") {
+		wantNames[k] = v
+	}
+	// The literal key is what confirmation.html reads.
+	if !reflect.DeepEqual(data["mail_names"], wantNames) {
+		t.Errorf("mail_names = %v, want %v", data["mail_names"], wantNames)
+	}
+}
+
+func TestRegister_NoAnswersSendNoMailNames(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	requirePending202(t, doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail, nil)))
+
+	if data, _ := signupData(t, fake).(map[string]any); data != nil {
+		if _, has := data[accountmail.MailNamesMetadataKey]; has {
+			t.Errorf("signup data %v carries mail_names without answers", data)
+		}
 	}
 }

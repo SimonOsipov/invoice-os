@@ -379,6 +379,11 @@ func TestRenderInvite_ALinkInANameIsNotLinkable(t *testing.T) {
 			t.Errorf("mail no longer reads %q once the marks are removed", v)
 		}
 	}
+	// The mark sits in the text, so html/template's escaping leaves it beside the entities.
+	m.Workspace = "Tom & Co <evil.com>"
+	if _, out := renderInvite(t, m); !strings.Contains(out, "Tom &amp; Co &lt;evil."+mark+"com&gt;") {
+		t.Errorf("escaped name lacks the mark beside the entities: %q", out)
+	}
 }
 
 func TestRenderInvite_CutsNamesToSixtyRunes(t *testing.T) {

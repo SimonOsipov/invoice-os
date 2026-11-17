@@ -1792,8 +1792,9 @@ func TestRegister_StoredAnswersStayAsTypedAndMailNamesAreNeutralised(t *testing.
 	for k, v := range accountmail.MailNames("www.evil.com Ltd", "Ada https://evil.com") {
 		wantNames[k] = v
 	}
-	if !reflect.DeepEqual(data[accountmail.MailNamesMetadataKey], wantNames) {
-		t.Errorf("mail_names = %v, want %v", data[accountmail.MailNamesMetadataKey], wantNames)
+	// The literal key is what confirmation.html reads.
+	if !reflect.DeepEqual(data["mail_names"], wantNames) {
+		t.Errorf("mail_names = %v, want %v", data["mail_names"], wantNames)
 	}
 }
 

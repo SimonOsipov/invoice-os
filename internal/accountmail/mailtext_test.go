@@ -23,6 +23,12 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 		"bücher.de":            "bücher." + mark + "de",
 		"shop.中国":              "shop." + mark + "中国",
 		"St.Mary":              "St." + mark + "Mary",
+		"ÉVIL.COM":             "ÉVIL." + mark + "COM",
+		"ｅｖｉｌ.ｃｏｍ":             "ｅｖｉｌ." + mark + "ｃｏｍ",
+		"a.b.co":               "a.b." + mark + "co",
+		"shop1.com":            "shop1." + mark + "com",
+		"(evil.com)":           "(evil." + mark + "com)",
+		"http:///x":            "http" + mark + ":///x",
 	}
 	for in, want := range cases {
 		if got := Unlinked(in); got != want {
@@ -33,7 +39,7 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 
 var unlinkedNoMark = []string{
 	"Adaeze Okafor", "Okafor & Sons Ltd", "Okafor & Sons Ltd.", "Dr. Okafor", "J.R. Okafor", "U.S.A. Ltd",
-	"e.g. Okafor", "Acme @ Home", "Acme @Home", "visit .com", "7.5% VAT", "INV-2026.01", "",
+	"e.g. Okafor", "Acme @ Home", "Acme @Home", "visit .com", "7.5% VAT", "INV-2026.01", "a@ b", "",
 }
 
 func TestUnlinked_LeavesTextWithNoLinkStart(t *testing.T) {
@@ -75,6 +81,7 @@ func TestMailName_CutsToSixtyRunes(t *testing.T) {
 		{strings.Repeat("a", 61), strings.Repeat("a", 59) + "…"},
 		{strings.Repeat("a", 60), strings.Repeat("a", 60)},
 		{strings.Repeat("é", 200), strings.Repeat("é", 59) + "…"},
+		{strings.Repeat("😀", 61), strings.Repeat("😀", 59) + "…"},
 		{"", ""},
 	}
 	for _, c := range cases {

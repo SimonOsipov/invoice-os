@@ -179,9 +179,9 @@ func TestRenderReadinessCheck_WarningsHeadingFollowsTheWarnings(t *testing.T) {
 
 func linkyMail() ReadinessCheckMail {
 	return ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{
-		Number:   "INV-1 www.evil.com",
+		Number: "INV-1 www.evil.com", IssueDate: "2026-01-01 evil.com", Currency: "EUR www.evil.com",
 		Buyer:    []MailField{{"Buyer name", "https://evil.com/pay"}},
-		Failures: []MailField{{"Currency", "see evil.com"}},
+		Failures: []MailField{{"Seller name", "see evil.com"}},
 		Warnings: []MailField{{"Buyer email", "a@evil.com"}},
 	}}}
 }
@@ -193,7 +193,7 @@ func TestRenderReadinessCheck_ALinkInFileTextIsNotLinkable(t *testing.T) {
 			t.Errorf("mail holds %q unmarked", bad)
 		}
 	}
-	for _, label := range []string{"Invoice", "Buyer name", "Currency", "Buyer email"} {
+	for _, label := range []string{"Invoice", "Issue date", "Currency", "Buyer name", "Seller name", "Buyer email"} {
 		if _, got := mustRow(t, out, label); !strings.Contains(got, mark) {
 			t.Errorf("%s cell %q has no mark", label, got)
 		}
@@ -203,7 +203,7 @@ func TestRenderReadinessCheck_ALinkInFileTextIsNotLinkable(t *testing.T) {
 func TestRenderReadinessCheck_FileTextStaysReadable(t *testing.T) {
 	_, out := renderReadiness(t, linkyMail())
 	text := strings.ReplaceAll(html.UnescapeString(out), mark, "")
-	for _, v := range []string{"INV-1 www.evil.com", "https://evil.com/pay", "see evil.com", "a@evil.com"} {
+	for _, v := range []string{"INV-1 www.evil.com", "2026-01-01 evil.com", "EUR www.evil.com", "https://evil.com/pay", "see evil.com", "a@evil.com"} {
 		if !strings.Contains(text, v) {
 			t.Errorf("mail no longer reads %q once the marks are removed", v)
 		}

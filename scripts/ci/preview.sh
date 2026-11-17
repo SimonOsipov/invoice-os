@@ -5,7 +5,8 @@
 #   preview.sh urls <pr|nightly>                  print <name>_url=<address> for each public site
 #   preview.sh image <pr|nightly> <image> <sha>   print the image reference
 #   preview.sh secrets <pr|nightly>               create this preview's secrets that do not exist yet
-#   preview.sh bucket <pr|nightly>                create this preview's documents bucket if it does not exist
+#   preview.sh claim <pr>                         take this PR's preview slot (or the lowest free one), empty its bucket; print slot=<slot> or full=true
+#   preview.sh bucket <pr|nightly>                check that this preview's slot documents bucket exists
 #   preview.sh database <pr|nightly>              drop and recreate its database (pr_<pr>, pr_0 for nightly)
 #   preview.sh migrate <pr|nightly> <sha>         deploy the migrate job and run it
 #   preview.sh grant <pr|nightly>                 run the migrate job for the auth.users grant only
@@ -172,15 +173,56 @@ cmd_secrets() {
 
 bucket() { printf 'gs://ascomply-preview-%s' "$(suffix "$1")"; }
 
-cmd_bucket() {
-  local pr=$1
-  if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
+PR_SLOTS=(slot-1 slot-2) # the nightly's slot is fixed; see preview.tf
+docs_bucket() { printf 'gs://ascomply-preview-docs-%s' "$1"; }
+
+# slot_of <pr>: the slot whose claim carries the PR's label.
+slot_of() {
+  local s
+  [ "$1" != nightly ] || { echo nightly; return; }
+  for s in "${PR_SLOTS[@]}"; do
+    [ "$(gcloud secrets describe "$s-claim" --project "$PROJECT" --format "value(labels.$LABEL)" 2>/dev/null)" != "$1" ] || { echo "$s"; return; }
+  done
+  return 1
+}
+
+# empty_slot <slot>: no object may outlive its preview in a reused bucket.
+empty_slot() {
+  local err
+  if err=$(gcloud storage ls "$(docs_bucket "$1")/**" --project "$PROJECT" 2>&1 >/dev/null); then
+    gcloud storage rm "$(docs_bucket "$1")/**" --project "$PROJECT" --quiet
+  else
+    grep -q 'matched no objects' <<<"$err"
+  fi
+}
+
+# claim <pr>: the PR's slot, else the lowest free one; the create of its claim secret is atomic.
+cmd_claim() {
+  local pr=$1 slot s err
+  [ "$pr" != nightly ] || die "the nightly's slot is fixed; it takes no claim"
+  if ! slot=$(slot_of "$pr"); then
+    for s in "${PR_SLOTS[@]}"; do
+      if err=$(gcloud secrets create "$s-claim" --project "$PROJECT" --replication-policy user-managed --locations "$REGION" \
+        --labels "$LABEL=$pr" 2>&1 >/dev/null); then
+        slot=$s
+        break
+      fi
+      grep -q ALREADY_EXISTS <<<"$err" || die "could not create the claim $s-claim: $err"
+    done
+  fi
+  if [ -z "${slot:-}" ]; then
+    echo "full=true"
     return
   fi
-  gcloud storage buckets create "$(bucket "$pr")" --project "$PROJECT" --location "$REGION" \
-    --uniform-bucket-level-access --public-access-prevention --soft-delete-duration 0 >/dev/null
-  gcloud storage buckets update "$(bucket "$pr")" --project "$PROJECT" --update-labels "$LABEL=$pr" >/dev/null
-  echo "created $(bucket "$pr")"
+  empty_slot "$slot" || die "could not empty $(docs_bucket "$slot")"
+  echo "slot=$slot"
+}
+
+cmd_bucket() {
+  local pr=$1 slot
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  gcloud storage buckets describe "$(docs_bucket "$slot")" --project "$PROJECT" >/dev/null 2>&1 \
+    || die "$(docs_bucket "$slot") does not exist; invoice-os-infra preview.tf makes it"
 }
 
 # too_many_connections <execution>: its log shows SQLSTATE 53300; psql prints only the message text.
@@ -273,7 +315,7 @@ env_file() {
         [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
         # OpenRouter groups usage by this referrer URL; the nightly's own app URL is stable across nights.
         [ "$pr" != nightly ] || { echo "OPENROUTER_APP_NAME: Nightly App"; echo "OPENROUTER_APP_URL: $(url app "$pr")"; }
-        echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
+        echo "DOCUMENT_BUCKET: ascomply-preview-docs-${SLOT:-}"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
         ;;
@@ -298,7 +340,7 @@ secrets_of() {
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done
   case "$2" in
     invoice | submission | worker)
-      out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
+      out+=(DOCUMENT_ACCESS_KEY_ID="${SLOT:-}-document-access-key-id:latest" DOCUMENT_SECRET_ACCESS_KEY="${SLOT:-}-document-secret-key:latest")
       [ "$pr" != nightly ] || out+=(OPENROUTER_API_KEY=nightly-openrouter-api-key:latest)
       ;;
   esac
@@ -345,6 +387,7 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
+  SLOT=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   # The token version is pinned at deploy time; deploy_one's child bash has no die.
   if [ "$pr" = nightly ]; then
     for svc in "$@"; do
@@ -354,7 +397,7 @@ cmd_deploy() {
     done
   fi
   export -f deploy_one env_file secrets_of url image secret suffix runtime dbname max_instances gotrue_pool deal_stage
-  export PROJECT PROJECT_NUMBER REGION REGISTRY LABEL HUBSPOT_TOKEN_SECRET
+  export SLOT PROJECT PROJECT_NUMBER REGION REGISTRY LABEL HUBSPOT_TOKEN_SECRET
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
   printf '%s\n' "$@" | xargs -P 4 -I{} bash -c 'gc=(--project "$PROJECT" --region "$REGION" --quiet); deploy_one "$0" "$1" "$2" >"deploy-$2.log" 2>&1' \
@@ -368,20 +411,21 @@ cmd_deploy() {
 
 # migrate_job <name> <sha>: the per-preview migrate job; it bootstraps, migrates and seeds the database.
 migrate_job() {
-  local pr=$1 sha=$2 envf
+  local pr=$1 sha=$2 envf slot
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   envf=$(mktemp)
   {
     echo "DEPLOY_ENV: $(suffix "$pr")"
     echo "ENVIRONMENT: development"
     echo "GATEWAY_DB_BOOTSTRAP: 'true'"
-    echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
+    echo "DOCUMENT_BUCKET: ascomply-preview-docs-$slot"
     echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
     echo "DOCUMENT_REGION: auto"
   } >"$envf"
   gcloud run jobs deploy "migrate-$(suffix "$pr")" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
     --service-account "$(runtime "$pr")" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
     --network preview --subnet run --vpc-egress private-ranges-only \
-    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest"
+    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=$slot-document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=$slot-document-secret-key:latest"
   rm -f "$envf"
   gcloud run jobs execute "migrate-$(suffix "$pr")" "${gc[@]}" --wait
 }
@@ -393,7 +437,7 @@ cmd_grant() {
 }
 
 cmd_teardown() {
-  local pr=$1 svc name failed=0
+  local pr=$1 svc name slot failed=0 slotfail=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
       gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || failed=1
@@ -406,9 +450,17 @@ cmd_teardown() {
   if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
   fi
+  if slot=$(slot_of "$pr"); then
+    empty_slot "$slot" || { failed=1; slotfail=1; }
+  fi
   for name in $(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)'); do
+    [ "$name" != "${slot:-}-claim" ] || continue
     gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
   done
+  # the claim outlives a bucket that still holds objects
+  if [ "$pr" != nightly ] && [ -n "${slot:-}" ] && [ "$slotfail" = 0 ]; then
+    gcloud secrets delete "$slot-claim" --project "$PROJECT" --quiet || failed=1
+  fi
   [ "$failed" = 0 ] || die "teardown of PR $pr left something behind; the errors are above"
   echo "PR $pr: preview deleted"
 }
@@ -706,6 +758,7 @@ case "${1:-}" in
   urls) name_arg "${2:-}"; cmd_urls "$2" ;;
   image) name_arg "${2:-}"; image "$2" "${3:?image}" "${4:?sha}" ;;
   secrets) name_arg "${2:-}"; cmd_secrets "$2" ;;
+  claim) name_arg "${2:-}"; cmd_claim "$2" ;;
   bucket) name_arg "${2:-}"; cmd_bucket "$2" ;;
   database) name_arg "${2:-}"; database "$2" recreate ;;
   migrate) name_arg "${2:-}"; migrate_job "$2" "${3:?sha}" ;;
@@ -731,5 +784,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

@@ -259,7 +259,7 @@ jobs:
     needs: [changes, commit-authors]
     if: needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -331,6 +331,21 @@ jobs:
             ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
           done
           echo "::error::preview cap reached: two PR previews are open, the third slot is the nightly's (.claude/rules/ci-preview.md)"
+          exit 1
+      - name: Claim a preview slot
+        if: needs.changes.outputs.nightly != 'true'
+        env:
+          CAP_TRIES: 15
+          CAP_SLEEP: 30
+        run: |
+          set -euo pipefail
+          for ((i = 1; i <= CAP_TRIES; i++)); do
+            out=$(bash scripts/ci/preview.sh claim "$PR")
+            echo "$out"
+            grep -q '^slot=' <<<"$out" && exit 0
+            ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
+          done
+          echo "::error::no free preview slot: both PR slots are claimed (.claude/rules/ci-preview.md)"
           exit 1
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'

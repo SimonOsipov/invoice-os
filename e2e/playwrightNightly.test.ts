@@ -50,3 +50,14 @@ describe('mail config', () => {
     expect(reporter).toEqual([['list']])
   })
 })
+
+describe('git info in reports', () => {
+  it.each([
+    ['./playwright.config'],
+    ['./playwright.api.config'],
+    ['./playwright.mail.config'],
+    ['./playwright.topology.config'],
+  ])('%s never writes the git diff into a report', async (file) => {
+    expect((await load(file, 'nightly')).captureGitInfo).toEqual({ commit: true, diff: false })
+  })
+})

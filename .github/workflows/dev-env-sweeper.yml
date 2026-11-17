@@ -1,7 +1,6 @@
 name: Preview Sweeper (delete previews whose PR is closed)
 
-# Teardown is the fast path; a close event that never fired leaves a preview behind. This deletes
-# a preview older than 24 h whose PR reads closed or merged. An unreadable PR state is skipped.
+# Teardown is the fast path. This deletes a preview older than 24 h, or a leftover database at any age, whose PR reads closed.
 on:
   schedule:
     - cron: '17 4 * * *'
@@ -40,6 +39,13 @@ jobs:
             echo "::error::Could not list the previews; the sweep did not run."
             exit 1
           fi
+          if ! dbs=$(bash scripts/ci/preview.sh databases); then
+            echo "::error::Could not list the preview databases; the sweep did not run."
+            exit 1
+          fi
+          for db in $dbs; do
+            awk -v p="$db" '$1==p{f=1} END{exit !f}' <<<"$prs" || prs+=$'\n'"$db -"
+          done
           cutoff=$(date -u -d '24 hours ago' +%s)
           failures=0
           {
@@ -53,13 +59,18 @@ jobs:
             decision=""
             if [ "$pr" = nightly ]; then
               decision="kept: the Nightly run deletes it"
-            elif [ "$(date -u -d "$created" +%s 2>/dev/null || echo 0)" -gt "$cutoff" ]; then
+            elif [ "$created" != - ] && [ "$(date -u -d "$created" +%s 2>/dev/null || echo 0)" -gt "$cutoff" ]; then
               decision="kept: younger than 24 h"
             elif ! state=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state --jq .state 2>/dev/null); then
               decision="skipped: PR state unreadable"
               echo "::warning::PR #$pr: state unreadable; its preview is left alone."
             elif [ "$state" = OPEN ]; then
               decision="kept: PR open"
+            elif [ "$created" = - ] && ! again=$(bash scripts/ci/preview.sh prs); then
+              decision="kept: recheck failed"
+              echo "::warning::PR #$pr: could not re-list the previews; its database is left alone."
+            elif [ "$created" = - ] && awk -v p="$pr" '$1==p{f=1} END{exit !f}' <<<"$again"; then
+              decision="kept: preview came back"
             elif bash scripts/ci/preview.sh teardown "$pr"; then
               decision="deleted: PR $state"
             else

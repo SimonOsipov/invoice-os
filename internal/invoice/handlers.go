@@ -1702,9 +1702,12 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxBatchSubmitBodyBytes)
 		var req batchSubmitReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxBatchSubmitBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

@@ -1,11 +1,11 @@
 package approval
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // The seven approval-policy handlers. Same division as the workflow-role layer: this
@@ -86,9 +86,12 @@ func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFun
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req createPolicyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -122,9 +125,12 @@ func PutDraftHandler(put PolicyDrafter, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req putDraftRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -209,9 +215,12 @@ func ReorderPoliciesHandler(reorder PolicyReorderer, log *slog.Logger) http.Hand
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxPolicyBodyBytes)
 		var req reorderRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxPolicyBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

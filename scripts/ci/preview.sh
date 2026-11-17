@@ -77,7 +77,7 @@ deal_stage() { echo appointmentscheduled; }
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
 # runtime <name> <slot>: a PR runs as its slot's identity; only run-nightly reads nightly-* secrets.
-# ceiling: no wait for IAM propagation (P12 3.5-4.3 min passed); add a poll as run-<slot> if a migrate fails on a secret permission
+# ceiling: no wait for IAM propagation; add a poll as run-<slot> if a migrate fails on a secret permission
 runtime() { if [ "$1" = nightly ]; then echo run-nightly@ascomply-preview.iam.gserviceaccount.com; else echo "run-${2:?no slot claimed}@ascomply-preview.iam.gserviceaccount.com"; fi; }
 dbname() { if [ "$1" = nightly ]; then echo pr_0; else echo "pr_$1"; fi; }
 

@@ -63,8 +63,12 @@ case "$1 $2 $3" in
   done
   case "$f" in
   *:\*) cat "$D/list-secrets" 2>/dev/null || : ;;
-  labels.preview-pr=*) cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
-  *) cat "$D/have" 2>/dev/null || : ;;
+  labels.preview-pr=*)
+    [ ! -e "$D/fail-list-labelled" ] || { echo "ERROR: gcloud secrets list (labelled) failed" >&2; exit 1; }
+    cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
+  *)
+    [ ! -e "$D/fail-list-unfiltered" ] || { echo "ERROR: gcloud secrets list (unfiltered) failed" >&2; exit 1; }
+    cat "$D/have" 2>/dev/null || : ;;
   esac ;;
 "run services describe") case "$*" in *latestReadyRevisionName*)
   [ ! -e "$D/faildescribe" ] || { echo "ERROR: describe $4 failed" >&2; exit 1; }
@@ -2809,20 +2813,25 @@ func TestPreviewSecretsPRSetsEachPolicyToItsSlotsRuntime(t *testing.T) {
 
 func TestPreviewSecretsPRReplacesAStaleSlotBinding(t *testing.T) {
 	t.Parallel()
-	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, map[string]string{"have": allPRSecrets(t)}), "secrets", "7")
-	if r.code != 0 {
-		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
-	}
-	names := previewList(t, "PR_SECRETS")
-	if len(names) == 0 {
-		t.Fatal("no PR secrets")
-	}
-	for _, n := range names {
-		sec := "pr-7-" + n
-		wantSlotPolicy(t, r, sec, runSlot2SA)
-		if r.exists("setpolicy-"+sec) && strings.Contains(r.file(t, "setpolicy-"+sec), "run-slot-1") {
-			t.Errorf("%s: the policy still names run-slot-1", sec)
-		}
+	for name, files := range map[string]map[string]string{"existing": {"have": allPRSecrets(t)}, "new": nil} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, files), "secrets", "7")
+			if r.code != 0 {
+				t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+			}
+			names := previewList(t, "PR_SECRETS")
+			if len(names) == 0 {
+				t.Fatal("no PR secrets")
+			}
+			for _, n := range names {
+				sec := "pr-7-" + n
+				wantSlotPolicy(t, r, sec, runSlot2SA)
+				if r.exists("setpolicy-"+sec) && strings.Contains(r.file(t, "setpolicy-"+sec), "run-slot-1") {
+					t.Errorf("%s: the policy still names run-slot-1", sec)
+				}
+			}
+		})
 	}
 }
 
@@ -3671,14 +3680,18 @@ func iamPolicy(sas ...string) string {
 }
 
 // reachNames are the secrets PR 7 on slot-1 may read, and the listed ones it may not (claims aside).
-func reachNames(t *testing.T) (allowed, denied []string) {
+func reachNames(t *testing.T) (allowed, denied []string) { return reachNamesFor(t, 1) }
+
+// reachNamesFor is reachNames for PR 7 holding slot-<k>; pr-70-gateway-token only resembles PR 7's names.
+func reachNamesFor(t *testing.T, k int) (allowed, denied []string) {
 	t.Helper()
+	slot, other := "slot-"+strconv.Itoa(k), "slot-"+strconv.Itoa(3-k)
 	for _, n := range previewList(t, "PR_SECRETS") {
 		allowed = append(allowed, "pr-7-"+n)
 	}
-	allowed = append(allowed, "slot-1-document-access-key-id", "slot-1-document-secret-key")
+	allowed = append(allowed, slot+"-document-access-key-id", slot+"-document-secret-key")
 	allowed = append(allowed, previewList(t, "SHARED_SECRETS")...)
-	denied = []string{"pr-9-gateway-token", "pr-9-database-app-url", "slot-2-document-secret-key", "postgres-password",
+	denied = []string{"pr-9-gateway-token", "pr-9-database-app-url", "pr-70-gateway-token", other + "-document-secret-key", "postgres-password",
 		"database-superuser-url", "nightly-hubspot-token", "nightly-gateway-token"}
 	return allowed, denied
 }
@@ -3686,17 +3699,24 @@ func reachNames(t *testing.T) (allowed, denied []string) {
 // reachFixture lays out a listing where only the allowed set is bound and every other read is denied. tweak edits the shim files.
 func reachFixture(t *testing.T, tweak func(files map[string]string)) func(dir string) {
 	t.Helper()
-	allowed, denied := reachNames(t)
+	return reachFixtureFor(t, 1, tweak)
+}
+
+// reachFixtureFor is reachFixture for PR 7 holding slot-<k>; the caller moves the claim.
+func reachFixtureFor(t *testing.T, k int, tweak func(files map[string]string)) func(dir string) {
+	t.Helper()
+	allowed, denied := reachNamesFor(t, k)
 	shared := previewList(t, "SHARED_SECRETS")
+	runtime := "run-slot-" + strconv.Itoa(k)
 	files := map[string]string{"denied": linesOf(denied)}
 	have := slices.Concat(allowed, denied, []string{"slot-1-claim", "slot-2-claim"})
 	files["have"] = linesOf(have)
-	mine := []string{"slot-1-claim"}
+	mine := []string{"slot-" + strconv.Itoa(k) + "-claim"}
 	for _, n := range allowed {
 		if strings.HasPrefix(n, "pr-7-") {
 			mine = append(mine, n)
 		}
-		files["iam-"+n] = iamPolicy("run-slot-1")
+		files["iam-"+n] = iamPolicy(runtime)
 		if slices.Contains(shared, n) {
 			files["iam-"+n] = iamPolicy("run-nightly", "run-slot-1", "run-slot-2")
 		}
@@ -3781,6 +3801,9 @@ func TestPreviewReachPassesWhenOnlyItsOwnSecretsAreBound(t *testing.T) {
 	if got := flagValue(deploys[0], "--image"); got != probeImage(t) {
 		t.Errorf("--image = %q, want PROBE_IMAGE %q", got, probeImage(t))
 	}
+	if got := flagValue(deploys[0], "--image"); !regexp.MustCompile(`@sha256:[0-9a-f]{64}$`).MatchString(got) {
+		t.Errorf("--image = %q, want an image pinned by digest (a tag can change under the proof)", got)
+	}
 	if got := flagValue(deploys[0], "--labels"); got != "preview-pr=7" {
 		t.Errorf("--labels = %q, want preview-pr=7", got)
 	}
@@ -3826,19 +3849,34 @@ func TestPreviewReachPassesWhenOnlyItsOwnSecretsAreBound(t *testing.T) {
 
 func TestPreviewReachRefusesABindingOnAnotherPreviewsSecret(t *testing.T) {
 	t.Parallel()
-	r := runReach(t, func(f map[string]string) { f["iam-pr-9-gateway-token"] = iamPolicy("run-slot-1") })
-	reachFails(t, r)
-	onlyError(t, r, "pr-9-gateway-token", "can read")
-	if callIdx(callLines(r), "job: secrets versions access", "--secret postgres-password") < 0 {
-		t.Errorf("a policy finding skipped the read pass:\n%s", strings.Join(callLines(r), "\n"))
+	for _, n := range []string{"pr-9-gateway-token", "pr-70-gateway-token", "slot-2-document-secret-key", "postgres-password"} {
+		t.Run(n, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["iam-"+n] = iamPolicy("run-slot-1") })
+			reachFails(t, r)
+			onlyError(t, r, n, "can read")
+			if callIdx(callLines(r), "job: secrets versions access", "--secret postgres-password") < 0 {
+				t.Errorf("a policy finding skipped the read pass:\n%s", strings.Join(callLines(r), "\n"))
+			}
+		})
 	}
 }
 
 func TestPreviewReachRefusesAForeignMemberOnItsOwnSecret(t *testing.T) {
 	t.Parallel()
-	r := runReach(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = iamPolicy("run-slot-1", "run-slot-2") })
-	reachFails(t, r)
-	onlyError(t, r, "pr-7-gateway-token", "run-slot-2")
+	for name, c := range map[string]struct{ policy, want string }{
+		"the other slot's runtime": {iamPolicy("run-slot-1", "run-slot-2"), "run-slot-2"},
+		"everyone":                 {`{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com","allUsers"]}]}`, "allUsers"},
+		"its own runtime in a second role": {`{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com"]},` +
+			`{"role":"roles/secretmanager.admin","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com"]}]}`, "run-slot-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = c.policy })
+			reachFails(t, r)
+			onlyError(t, r, "pr-7-gateway-token", "someone other than run-slot-1", c.want)
+		})
+	}
 }
 
 func TestPreviewReachRefusesAnOwnSecretItCannotRead(t *testing.T) {
@@ -3861,6 +3899,29 @@ func TestPreviewReachFailsClosedWhenAListingOrPolicyReadFails(t *testing.T) {
 			if l := callsWith(r, p); len(l) > 0 {
 				t.Errorf("a failed listing went on to %s: %v", p, l)
 			}
+		}
+	})
+	for _, hook := range []string{"fail-list-unfiltered", "fail-list-labelled"} {
+		t.Run("only "+hook, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f[hook] = "" })
+			reachFails(t, r)
+			if len(errLines(r, "could not list the secrets")) == 0 {
+				t.Errorf("no ::error::could not list the secrets:\n%s\n%s", r.stdout, r.stderr)
+			}
+			for _, p := range []string{"job: secrets versions access", "secrets versions access", "run jobs deploy"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("one failed listing went on to %s: %v", p, l)
+				}
+			}
+		})
+	}
+	t.Run("the PR's own secrets are not listed", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["have-7"] = "slot-1-claim\n" })
+		reachFails(t, r)
+		if len(errLines(r, "pr-7-s2s-token")) == 0 {
+			t.Errorf("an unlisted own secret that run-slot-1 can read raised no ::error:: naming it:\n%s\n%s", r.stdout, r.stderr)
 		}
 	})
 	t.Run("fail-secrets-get-iam-policy", func(t *testing.T) {
@@ -3922,6 +3983,15 @@ func TestPreviewReachFailsWhenItCannotReadItsOwnToken(t *testing.T) {
 	}
 }
 
+// otherRunVerdicts is a log where an earlier run's job answered for the control and every denied name.
+func otherRunVerdicts(denied []string) string {
+	out := "reach 1-1-1 pr-7-gateway-token readable\n"
+	for _, n := range denied {
+		out += "reach 1-1-1 " + n + " denied\n"
+	}
+	return out
+}
+
 func TestPreviewReachFailsClosedWhenTheJobFails(t *testing.T) {
 	t.Parallel()
 	_, denied := reachNames(t)
@@ -3971,6 +4041,11 @@ func TestPreviewReachFailsClosedWhenTheJobFails(t *testing.T) {
 			}
 		}},
 		{"error verdict", map[string]string{"accesserr": "pr-9-gateway-token\n", "denied": notDenied(t, "pr-9-gateway-token")}, "could not check pr-9-gateway-token", nil},
+		{"only another run's verdicts", map[string]string{"noprobe": "", "logs": otherRunVerdicts(denied)}, "no verdict for", func(t *testing.T, r previewRun) {
+			if n := len(errLines(r, "no verdict for")); n != sent {
+				t.Errorf("%d no-verdict errors, want one per sent name (%d): another run's denials stood in for this run's", n, sent)
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -4098,5 +4173,77 @@ func TestPreviewReachWritesTheSummaryWithoutValues(t *testing.T) {
 		if strings.Contains(text, sentinel) {
 			t.Errorf("the secret value reached the %s", name)
 		}
+	}
+}
+
+// The runtime is the claimed slot's, whichever slot that is: the other slot's keys are the foreign ones.
+func TestPreviewReachFollowsTheSlotThePRHolds(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, tweak func(files map[string]string)) previewRun {
+		t.Helper()
+		return runPreviewEnv(t, []string{"GITHUB_RUN_ID=555", "GITHUB_RUN_ATTEMPT=1", "GITHUB_STEP_SUMMARY="}, func(dir string) {
+			slots(t, map[string]string{"slot-2": "7"}, nil)(dir)
+			reachFixtureFor(t, 2, tweak)(dir)
+		}, "reach", "7")
+	}
+	t.Run("passes as run-slot-2", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, nil)
+		if r.code != 0 {
+			t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+		}
+		if !strings.Contains(r.stdout, "run-slot-2 reads 20 secrets") {
+			t.Errorf("stdout lacks run-slot-2 reads 20 secrets:\n%s", r.stdout)
+		}
+		deploys := callsWith(r, "run jobs deploy reach-pr-7 ")
+		if len(deploys) != 1 || flagValue(deploys[0], "--service-account") != "run-slot-2@ascomply-preview.iam.gserviceaccount.com" {
+			t.Fatalf("reach job deploys %q, want one as run-slot-2", deploys)
+		}
+		read := map[string]bool{}
+		for _, l := range callsWith(r, "job: secrets versions access") {
+			read[flagValue(l, "--secret")] = true
+		}
+		if !read["slot-1-document-secret-key"] || read["slot-2-document-secret-key"] {
+			t.Errorf("the job read %v, want slot-1's key (foreign) and not slot-2's (own)", read)
+		}
+	})
+	t.Run("a binding left from the earlier slot", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = iamPolicy("run-slot-1") })
+		reachFails(t, r)
+		if len(errLines(r, "pr-7-gateway-token", "run-slot-2 cannot read")) != 1 || len(errLines(r, "pr-7-gateway-token", "run-slot-1")) == 0 {
+			t.Errorf("want the missing run-slot-2 binding and the stale run-slot-1 member named:\n%s\n%s", r.stdout, r.stderr)
+		}
+	})
+	t.Run("the other slot's key is bound", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, func(f map[string]string) { f["iam-slot-1-document-secret-key"] = iamPolicy("run-slot-2") })
+		reachFails(t, r)
+		onlyError(t, r, "slot-1-document-secret-key", "can read")
+	})
+}
+
+// A refused secret's value never reaches a stream, the job's log or the env file, even on the failing path.
+func TestPreviewReachNeverPrintsTheValueOfASecretItRefuses(t *testing.T) {
+	t.Parallel()
+	sentinel := "canary-" + strings.Repeat("z4", 6) // built at runtime, not a literal credential
+	summary := filepath.Join(t.TempDir(), "summary")
+	r := runReach(t, func(f map[string]string) {
+		f["denied"] = notDenied(t, "pr-9-gateway-token")
+		f["access-pr-9-gateway-token"] = sentinel
+	}, "GITHUB_STEP_SUMMARY="+summary)
+	reachFails(t, r)
+	onlyError(t, r, "pr-9-gateway-token", "can read")
+	if !r.exists("logs") || !r.exists("env-job-reach-pr-7") {
+		t.Fatalf("the job never ran: logs %v, env file %v", r.exists("logs"), r.exists("env-job-reach-pr-7"))
+	}
+	for name, text := range map[string]string{"stdout": r.stdout, "stderr": r.stderr, "job log": r.file(t, "logs"),
+		"job env file": r.file(t, "env-job-reach-pr-7"), "calls": r.file(t, "calls")} {
+		if strings.Contains(text, sentinel) {
+			t.Errorf("the value reached the %s", name)
+		}
+	}
+	if b, err := os.ReadFile(summary); err == nil && strings.Contains(string(b), sentinel) {
+		t.Errorf("the value reached the step summary")
 	}
 }

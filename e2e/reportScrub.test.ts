@@ -77,6 +77,35 @@ describe('scrubText', () => {
     expect(out).toContain('"selector":"s"')
     for (const l of out.split('\n').slice(0, 2)) expect(() => JSON.parse(l)).not.toThrow()
   })
+
+  it('redacts raw non-JSON auth and cookie header lines', () => {
+    const opaque = ['op', 'aque', Date.now()].join('')
+    const out = scrubText(`GET /x\nAuthorization: Bearer ${opaque}\ncookie: sid=${opaque}\nSet-Cookie: rt=${opaque}; Path=/\nAccept: */*`)
+    expect(out).not.toContain(opaque)
+    expect(out).toContain('Accept: */*')
+    const dir = tmp()
+    put(dir, 'h.txt', `Authorization: Bearer ${opaque}`)
+    expect(residuals(dir)).toEqual([join(dir, 'h.txt')])
+  })
+
+  it('redacts a password key in any letter case', () => {
+    const pw = ['Pw', 'x', Date.now()].join('-')
+    const out = scrubText(`{"Password":"${pw}","PASSWORD":"${pw}","x":"{\\"Password\\":\\"${pw}\\"}"}`)
+    expect(out).not.toContain(pw)
+    const dir = tmp()
+    put(dir, 'p.json', `{"PASSWORD":"${pw}"}`)
+    expect(residuals(dir)).toEqual([join(dir, 'p.json')])
+  })
+
+  it('redacts a password value that holds an escaped quote', () => {
+    const tail = ['tail', Date.now()].join('')
+    const plain = scrubText(`{"password":"ab\\"${tail}","email":"a@b"}`)
+    expect(plain).not.toContain(tail)
+    expect(JSON.parse(plain).email).toBe('a@b')
+    const esc = scrubText(`{"b":"{\\"password\\":\\"ab\\\\\\"${tail}\\",\\"email\\":\\"a@b\\"}"}`)
+    expect(esc).not.toContain(tail)
+    expect(esc).toContain('a@b')
+  })
 })
 
 describe('scrubDir', () => {

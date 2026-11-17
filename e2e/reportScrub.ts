@@ -12,6 +12,9 @@ const R = '[redacted]'
 // A JSON string body, plain or backslash-escaped; stops at the closing quote or backslash-quote.
 const BODY = String.raw`(?:[^"\\]|\\[^"])*`
 const Q = String.raw`\\*"`
+// Typed-value bodies that also take an escaped quote inside the value: `\"` plain, `\\\"` in escaped JSON.
+const BODY_PLAIN = String.raw`(?:[^"\\]|\\.)*`
+const BODY_ESC = String.raw`(?:\\{3}"|[^"\\]|\\[^"])*`
 const FIELDS = 'password|new_password|current_password|access_token|refresh_token|id_token|provider_token|token'
 const HEADER_NAME = String.raw`(?:authorization|cookie|set-cookie|__Host-[^"\\]*|[^"\\]*(?:token|secret|key|session)[^"\\]*)`
 
@@ -21,7 +24,10 @@ const RULES: [RegExp, string][] = [
   // HAR shape: "name":"<header>","value":"<secret>"
   [new RegExp(`(${Q}name${Q}\\s*:\\s*${Q}${HEADER_NAME}${Q}\\s*,\\s*${Q}value${Q}\\s*:\\s*${Q})${BODY}`, 'gi'), `$1${R}`],
   [new RegExp(`(${Q}(?:authorization|cookie|set-cookie)${Q}\\s*:\\s*${Q})${BODY}`, 'gi'), `$1${R}`],
-  [new RegExp(`(${Q}(?:${FIELDS})${Q}\\s*:\\s*${Q})${BODY}`, 'g'), `$1${R}`],
+  [new RegExp(`("(?:${FIELDS})"\\s*:\\s*")${BODY_PLAIN}`, 'gi'), `$1${R}`],
+  [new RegExp(`(\\\\"(?:${FIELDS})\\\\"\\s*:\\s*\\\\")${BODY_ESC}`, 'gi'), `$1${R}`],
+  // Raw header line: Authorization: Bearer <opaque>
+  [/(?<![\w"\\-])((?:authorization|cookie|set-cookie)[ \t]*:[ \t]*)[^\r\n"\\]+/gi, `$1${R}`],
   [new RegExp(`(?<![A-Za-z0-9])((?:${FIELDS})=)[^&"'\\\\\\s]*`, 'g'), `$1${R}`],
   // Step title `Fill "x"`, log line `fill("x")`.
   [new RegExp(`\\b((?:fill|type)[ (]${Q})${BODY}`, 'gi'), `$1${R}`],
@@ -35,7 +41,9 @@ export function scrubText(s: string): string {
 
 const BINARY = /\.(png|jpe?g|gif|webp|ico|webm|mp4|woff2?|ttf|otf|pdf)$/i
 const PAYLOAD = /(data:application\/zip;base64,)([^"'<\s]*)/
-const RESIDUALS = [/eyJ[A-Za-z0-9_-]{10,}/, /e2e-member-pw-/, new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`)]
+const RESIDUALS = [/eyJ[A-Za-z0-9_-]{10,}/, /e2e-member-pw-/, new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
+  /(?<![\w"\\-])(?:authorization|cookie|set-cookie)[ \t]*:[ \t]*(?!\[redacted\])[^\s"\\]/i,
+]
 
 // latin1 keeps every byte, so an unchanged file round-trips exactly.
 const toText = (b: Uint8Array) => Buffer.from(b).toString('latin1')

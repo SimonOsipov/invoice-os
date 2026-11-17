@@ -57,7 +57,7 @@ func mailKey(scope, key string) string {
 	return scope + "/" + hex.EncodeToString(h[:])
 }
 
-func TestRegistrationMail_SharedHourWindowTurns(t *testing.T) {
+func TestRLS_GatewayRegistrationMail_SharedHourWindowTurns(t *testing.T) {
 	d := requireHandoffDB(t)
 	scope := mailScope(t, d)
 	m := sharedMail(d, scope, 10, 100, time.Now, false)
@@ -80,7 +80,7 @@ func TestRegistrationMail_SharedHourWindowTurns(t *testing.T) {
 	}
 }
 
-func TestRegistrationMail_SharedDayKeyTurnsAtUTCMidnight(t *testing.T) {
+func TestRLS_GatewayRegistrationMail_SharedDayKeyTurnsAtUTCMidnight(t *testing.T) {
 	d := requireHandoffDB(t)
 	scope := mailScope(t, d)
 	c := newMailClock(time.Date(2026, 11, 17, 23, 59, 0, 0, time.UTC))
@@ -103,7 +103,7 @@ func TestRegistrationMail_SharedDayKeyTurnsAtUTCMidnight(t *testing.T) {
 	}
 }
 
-func TestRegistrationMail_TwoInstancesShareOneCount(t *testing.T) {
+func TestRLS_GatewayRegistrationMail_TwoInstancesShareOneCount(t *testing.T) {
 	d := requireHandoffDB(t)
 	scope := mailScope(t, d)
 	a, b := sharedMail(d, scope, 10, 100, time.Now, false), sharedMail(d, scope, 10, 100, time.Now, true)
@@ -126,7 +126,7 @@ func TestRegistrationMail_TwoInstancesShareOneCount(t *testing.T) {
 	}
 }
 
-func TestRegistrationMail_SharedRowsHoldNoAddress(t *testing.T) {
+func TestRLS_GatewayRegistrationMail_SharedRowsHoldNoAddress(t *testing.T) {
 	d := requireHandoffDB(t)
 	scope := mailScope(t, d)
 	c := newMailClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))

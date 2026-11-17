@@ -26,7 +26,7 @@ func shareAt(perHour, perDay int, c *mailClock) *RegistrationMail {
 	return NewRegistrationMail("registration-mail", perHour, perDay, c.Now)
 }
 
-// limiterGoTrue models GoTrue's mail limiter (interval.go:54-63): cap sends per fixed hour from boot,
+// limiterGoTrue models GoTrue's mail limiter (ratelimit.IntervalLimiter at GoTrue v2.198.0): cap sends per fixed hour from boot,
 // counting /signup, /resend and /recover. Past the cap it answers 429 over_email_send_rate_limit.
 type limiterGoTrue struct {
 	URL    *url.URL

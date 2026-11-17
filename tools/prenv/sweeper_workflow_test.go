@@ -14,6 +14,7 @@ import (
 type sweepCase struct {
 	prs, prsAgain, dbs string
 	failDatabases      bool
+	failRecheck        bool // a `prs` call after the first fails
 	failTeardown       []string
 	states             map[string]string
 }
@@ -43,10 +44,14 @@ func runSweep(t *testing.T, sw sweepCase) (summary, calls string, code int) {
 	if sw.failDatabases {
 		writeIn(t, dir, "fail-databases", "")
 	}
+	if sw.failRecheck {
+		writeIn(t, dir, "fail-recheck", "")
+	}
 	writeIn(t, dir, "fail-teardown", strings.Join(sw.failTeardown, "\n")+"\n")
 	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", `d='`+dir+`'
 case "$1" in
-prs) if [ -e "$d/prs-seen" ] && [ -e "$d/prs-again" ]; then cat "$d/prs-again"; else touch "$d/prs-seen"; cat "$d/prs"; fi ;;
+prs) if [ -e "$d/prs-seen" ] && [ -e "$d/fail-recheck" ]; then exit 1; fi
+  if [ -e "$d/prs-seen" ] && [ -e "$d/prs-again" ]; then cat "$d/prs-again"; else touch "$d/prs-seen"; cat "$d/prs"; fi ;;
 databases) [ ! -e "$d/fail-databases" ] || exit 1; cat "$d/dbs" ;;
 teardown) echo "preview $*" >> "$d/calls"; ! grep -qxF -- "$2" "$d/fail-teardown" ;;
 *) echo "preview $*" >> "$d/calls" ;;
@@ -154,6 +159,14 @@ func TestSweeperKeepsADatabaseOnlyPRThatCameBack(t *testing.T) {
 	t.Parallel()
 	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", prsAgain: "nightly old\n672 now\n", dbs: "672\n", states: map[string]string{"672": "CLOSED"}})
 	if code != 0 || strings.Contains(calls, "preview teardown 672") || !strings.Contains(summary, "| #672 | - | kept: preview came back |") {
+		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
+	}
+}
+
+func TestSweeperKeepsADatabaseOnlyPRWhenTheRecheckFails(t *testing.T) {
+	t.Parallel()
+	summary, calls, code := runSweep(t, sweepCase{prs: "nightly old\n", failRecheck: true, dbs: "672\n", states: map[string]string{"672": "CLOSED"}})
+	if strings.Contains(calls, "preview teardown 672") || !strings.Contains(summary, "| #672 | - | kept: recheck failed |") {
 		t.Errorf("exit %d:\n%s\n%s", code, summary, calls)
 	}
 }

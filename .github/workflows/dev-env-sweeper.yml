@@ -66,7 +66,10 @@ jobs:
               echo "::warning::PR #$pr: state unreadable; its preview is left alone."
             elif [ "$state" = OPEN ]; then
               decision="kept: PR open"
-            elif [ "$created" = - ] && awk -v p="$pr" '$1==p{f=1} END{exit !f}' <<<"$(bash scripts/ci/preview.sh prs)"; then
+            elif [ "$created" = - ] && ! again=$(bash scripts/ci/preview.sh prs); then
+              decision="kept: recheck failed"
+              echo "::warning::PR #$pr: could not re-list the previews; its database is left alone."
+            elif [ "$created" = - ] && awk -v p="$pr" '$1==p{f=1} END{exit !f}' <<<"$again"; then
               decision="kept: preview came back"
             elif bash scripts/ci/preview.sh teardown "$pr"; then
               decision="deleted: PR $state"

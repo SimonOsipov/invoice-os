@@ -3291,7 +3291,7 @@ func TestPreviewTeardownWithoutAClaimTouchesNoSlot(t *testing.T) {
 	if !strings.Contains(strings.Join(calls, "\n"), "slot-1-claim") {
 		t.Errorf("teardown never looked for the PR's claim:\n%s", strings.Join(calls, "\n"))
 	}
-	for _, bad := range []string{"secrets delete slot-", "ascomply-preview-docs-"} {
+	for _, bad := range []string{"secrets delete slot-", "secrets delete -claim", "ascomply-preview-docs-"} {
 		if i := callIdx(calls, bad); i >= 0 {
 			t.Errorf("teardown ran %q: %s", bad, calls[i])
 		}

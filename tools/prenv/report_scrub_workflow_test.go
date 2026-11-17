@@ -33,7 +33,7 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 		for i, lines := range steps {
 			block := strings.Join(lines, "\n")
 			switch {
-			case strings.Contains(block, "id: scrub"):
+			case slices.ContainsFunc(lines, func(l string) bool { return strings.TrimSpace(l) == "id: scrub" }):
 				scrubAt = i
 				for _, l := range lines {
 					if strings.HasPrefix(strings.TrimSpace(l), "run: ") {

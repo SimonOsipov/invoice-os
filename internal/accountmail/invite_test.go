@@ -345,7 +345,8 @@ func TestRenderInvite_LongValuesWrap(t *testing.T) {
 	inviter := strings.Repeat("I", 200)
 	email := strings.Repeat("e", 111) + "@obi.test" // 120 characters
 	_, out := renderInvite(t, InviteMail{Workspace: long, Inviter: inviter, Email: email, Role: "admin", Token: "t0k"})
-	for _, v := range []string{long, inviter, email} {
+	// Names are cut to NameChars; the email is not a name and stays whole.
+	for _, v := range []string{MailName(long), MailName(inviter), email} {
 		if !strings.Contains(out, v) {
 			t.Fatalf("mail does not hold the long value %.20s...", v)
 		}
@@ -357,5 +358,70 @@ func TestRenderInvite_LongValuesWrap(t *testing.T) {
 				t.Errorf("%s value cell style %q lacks %s", label, s, w)
 			}
 		}
+	}
+}
+
+func TestRenderInvite_ALinkInANameIsNotLinkable(t *testing.T) {
+	m := obiInvite
+	m.Workspace, m.Inviter = "Okafor https://evil.com/pay", "pay@evil.com"
+	_, out := renderInvite(t, m)
+	for _, bad := range []string{"evil.com", "https://evil"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("mail holds %q unmarked", bad)
+		}
+	}
+	if !strings.Contains(out, "evil."+mark+"com") {
+		t.Error("mail lacks the marked domain")
+	}
+	text := strings.ReplaceAll(html.UnescapeString(out), mark, "")
+	for _, v := range []string{m.Workspace, m.Inviter} {
+		if !strings.Contains(text, v) {
+			t.Errorf("mail no longer reads %q once the marks are removed", v)
+		}
+	}
+}
+
+func TestRenderInvite_CutsNamesToSixtyRunes(t *testing.T) {
+	m := obiInvite
+	m.Workspace, m.Inviter = strings.Repeat("W", 200), strings.Repeat("I", 200)
+	_, out := renderInvite(t, m)
+	if _, got := mustRow(t, out, "Organisation"); got != strings.Repeat("W", 59)+"…" {
+		t.Errorf("Organisation = %q", got)
+	}
+	if _, got := mustRow(t, out, "Invited by"); got != strings.Repeat("I", 59)+"…" {
+		t.Errorf("Invited by = %q", got)
+	}
+	if strings.Contains(out, strings.Repeat("W", 60)) {
+		t.Error("mail holds a 60-rune run of the workspace name")
+	}
+}
+
+func TestRenderInvite_NormalNamesRenderUnchanged(t *testing.T) {
+	m := obiInvite
+	m.Workspace, m.Inviter = "Okafor & Sons Ltd", "Adaeze Okafor"
+	_, out := renderInvite(t, m)
+	if _, got := mustRow(t, out, "Organisation"); got != "Okafor &amp; Sons Ltd" {
+		t.Errorf("Organisation = %q", got)
+	}
+	if _, got := mustRow(t, out, "Invited by"); got != "Adaeze Okafor" {
+		t.Errorf("Invited by = %q", got)
+	}
+	if got := inviteIntro(t, out); !strings.Contains(got, "Adaeze Okafor invited you to join Okafor & Sons Ltd") {
+		t.Errorf("intro = %q", got)
+	}
+	if strings.Contains(out, mark) {
+		t.Error("a normal name got a mark")
+	}
+}
+
+func TestRenderInvite_EmptyInviterFallbackIsUnmarked(t *testing.T) {
+	m := obiInvite
+	m.Inviter = ""
+	_, out := renderInvite(t, m)
+	if _, got := mustRow(t, out, "Invited by"); got != "A workspace admin" {
+		t.Errorf("Invited by = %q", got)
+	}
+	if strings.Contains(out, mark) {
+		t.Error("the fallback got a mark")
 	}
 }

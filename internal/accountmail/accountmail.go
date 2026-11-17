@@ -81,7 +81,7 @@ func RenderInvite(m InviteMail) (subject, html string, err error) {
 	}
 	var buf bytes.Buffer
 	err = tpl.Execute(&buf, inviteView{
-		Workspace: m.Workspace, Inviter: inviter, Email: m.Email, RoleLabel: label,
+		Workspace: MailName(m.Workspace), Inviter: MailName(inviter), Email: m.Email, RoleLabel: label,
 		AcceptURL: InviteAcceptURL + "#token=" + url.QueryEscape(m.Token), ValidDays: InviteValidDays,
 	})
 	if err != nil {
@@ -358,8 +358,30 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// unlinkedInvoices returns a copy with the file-text fields unlinked; the caller's slices are not touched.
+func unlinkedInvoices(in []ReadinessCheckInvoice) []ReadinessCheckInvoice {
+	fields := func(fs []MailField) []MailField {
+		if fs == nil {
+			return nil
+		}
+		out := make([]MailField, len(fs))
+		for i, f := range fs {
+			out[i] = MailField{f.Label, Unlinked(f.Value)}
+		}
+		return out
+	}
+	out := make([]ReadinessCheckInvoice, len(in))
+	for i, inv := range in {
+		inv.Number, inv.IssueDate, inv.Currency = Unlinked(inv.Number), Unlinked(inv.IssueDate), Unlinked(inv.Currency)
+		inv.Buyer, inv.Failures, inv.Warnings = fields(inv.Buyer), fields(inv.Failures), fields(inv.Warnings)
+		out[i] = inv
+	}
+	return out
+}
+
 // RenderReadinessCheck renders the results mail; the subject is fixed so it never carries file text.
 func RenderReadinessCheck(m ReadinessCheckMail) (subject, html string, err error) {
+	m.Invoices = unlinkedInvoices(m.Invoices)
 	v := readinessCheckView{ReadinessCheckMail: m, SignUpURL: ReadinessCheckSignUpURL,
 		Heading: "Here is what we found.", Accent: "Fix it before you submit."}
 	switch {

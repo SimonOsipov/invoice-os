@@ -1,6 +1,8 @@
 package accountmail
 
 import (
+	"html"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,5 +174,75 @@ func TestRenderReadinessCheck_WarningsHeadingFollowsTheWarnings(t *testing.T) {
 	_, out = renderReadiness(t, ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{Number: "A", Failures: fail}}})
 	if strings.Contains(out, "Warnings") {
 		t.Error("a failure with no warning renders a Warnings heading")
+	}
+}
+
+func linkyMail() ReadinessCheckMail {
+	return ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{
+		Number:   "INV-1 www.evil.com",
+		Buyer:    []MailField{{"Buyer name", "https://evil.com/pay"}},
+		Failures: []MailField{{"Currency", "see evil.com"}},
+		Warnings: []MailField{{"Buyer email", "a@evil.com"}},
+	}}}
+}
+
+func TestRenderReadinessCheck_ALinkInFileTextIsNotLinkable(t *testing.T) {
+	_, out := renderReadiness(t, linkyMail())
+	for _, bad := range []string{"evil.com", "https://evil"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("mail holds %q unmarked", bad)
+		}
+	}
+	for _, label := range []string{"Invoice", "Buyer name", "Currency", "Buyer email"} {
+		if _, got := mustRow(t, out, label); !strings.Contains(got, mark) {
+			t.Errorf("%s cell %q has no mark", label, got)
+		}
+	}
+}
+
+func TestRenderReadinessCheck_FileTextStaysReadable(t *testing.T) {
+	_, out := renderReadiness(t, linkyMail())
+	text := strings.ReplaceAll(html.UnescapeString(out), mark, "")
+	for _, v := range []string{"INV-1 www.evil.com", "https://evil.com/pay", "see evil.com", "a@evil.com"} {
+		if !strings.Contains(text, v) {
+			t.Errorf("mail no longer reads %q once the marks are removed", v)
+		}
+	}
+}
+
+func TestRenderReadinessCheck_AmountsAndLabelsAreNotMarked(t *testing.T) {
+	_, out := renderReadiness(t, ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{
+		Number: "A1", Subtotal: "1075.00", Total: "1075.50", Failures: []MailField{{"Supplier TIN", "is required"}},
+	}}})
+	for label, want := range map[string]string{"Subtotal": "1075.00", "Total": "1075.50"} {
+		if _, got := mustRow(t, out, label); got != want {
+			t.Errorf("%s = %q, want %q", label, got, want)
+		}
+	}
+	if !strings.Contains(out, ">Supplier TIN<") {
+		t.Error("the Supplier TIN label is not rendered exactly")
+	}
+}
+
+func TestRenderReadinessCheck_LeavesTheCallersMailUnchanged(t *testing.T) {
+	m, keep := linkyMail(), linkyMail()
+	renderReadiness(t, m)
+	if !reflect.DeepEqual(m, keep) {
+		t.Errorf("render changed the caller's mail: %+v", m)
+	}
+}
+
+func TestRenderReadinessCheck_NormalBuyerRendersUnchanged(t *testing.T) {
+	_, out := renderReadiness(t, ReadinessCheckMail{Checked: 1, Total: 1, Invoices: []ReadinessCheckInvoice{{
+		Number: "INV-001", Buyer: []MailField{{"Buyer name", "Okafor & Sons Ltd"}},
+	}}})
+	if _, got := mustRow(t, out, "Buyer name"); got != "Okafor &amp; Sons Ltd" {
+		t.Errorf("Buyer name = %q", got)
+	}
+	if _, got := mustRow(t, out, "Invoice"); got != "INV-001" {
+		t.Errorf("Invoice = %q", got)
+	}
+	if strings.Contains(out, mark) {
+		t.Error("a normal value got a mark")
 	}
 }

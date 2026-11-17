@@ -77,7 +77,7 @@ func TestRegister_AnswerEdges(t *testing.T) {
 		}
 		return m
 	}
-	wantReg := func(m map[string]any) map[string]any { return map[string]any{"registration": m} }
+	wantReg := wantData
 	acme := strings.Repeat("é", 200)
 	cases := []struct {
 		name     string
@@ -153,7 +153,7 @@ func TestRegister_ClientSuppliedDataNeverReachesGoTrue(t *testing.T) {
 	}{
 		{"no answers", forged, nil},
 		{"with answers", forged + `,"workspace_name":"Acme","display_name":"Ada"`,
-			map[string]any{"registration": map[string]any{"workspace_name": "Acme", "display_name": "Ada"}}},
+			wantData(map[string]any{"workspace_name": "Acme", "display_name": "Ada"})},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)

@@ -18,14 +18,21 @@ const (
 // jsonMap mirrors GoTrue's models.JSONMap, the typed map it passes as .Data.
 type jsonMap map[string]interface{}
 
-// reg is the shape GoTrue hands the template after JSON decoding (register.go data["registration"]).
+// reg is the shape GoTrue hands the template after JSON decoding: register.go sets data["registration"]
+// as typed and data[MailNamesMetadataKey] from it, empty names included.
 func reg(kv ...string) jsonMap {
 	m := map[string]interface{}{}
 	for i := 0; i+1 < len(kv); i += 2 {
 		m[kv[i]] = kv[i+1]
 	}
-	return jsonMap{"registration": m}
+	names := map[string]interface{}{}
+	for k, v := range MailNames(kv0(m, "workspace_name"), kv0(m, "display_name")) {
+		names[k] = v
+	}
+	return jsonMap{"registration": m, MailNamesMetadataKey: names}
 }
+
+func kv0(m map[string]interface{}, k string) string { s, _ := m[k].(string); return s }
 
 // gotrueData is the map ConfirmationMail executes the template with (templatemailer.go).
 func gotrueData(email string, data jsonMap, withDataKey bool) map[string]any {
@@ -399,10 +406,11 @@ func TestLayout_ContainerKeepsSixHundredPixelsWithoutMSO(t *testing.T) {
 
 func TestLayout_LongAnswersWrap(t *testing.T) {
 	long := strings.Repeat("W", 200)
+	cut := strings.Repeat("W", NameChars-1) + "…"   // cutRunes: NameChars runes, … last
 	email := strings.Repeat("e", 111) + "@obi.test" // 120 characters
 	out := renderConfirmation(t, email, reg("display_name", long, "workspace_name", long))
-	if !strings.Contains(out, long) || !strings.Contains(out, email) {
-		t.Fatal("long answers or address are missing from the mail")
+	if !strings.Contains(out, cut) || strings.Contains(out, long) || !strings.Contains(out, email) {
+		t.Fatal("cut answers or address are missing from the mail")
 	}
 	wrap := []string{"word-break:break-word", "overflow-wrap:anywhere"}
 	check := func(what, style string) {
@@ -733,5 +741,61 @@ func TestTemplates_AMetadataTokenIsEscaped(t *testing.T) {
 		if got := as[len(as)-1].href; got != UnsubscribeURL+"?t=a%22%3e%3cscript%3e" {
 			t.Errorf("%s: href = %q, want the query-escaped token", name, got)
 		}
+	}
+}
+
+func TestConfirmation_RawRegistrationIsNeverRendered(t *testing.T) {
+	data := jsonMap{"registration": map[string]interface{}{"display_name": "Ada evil.com", "workspace_name": "Obi evil.com"}}
+	out := renderSrc(t, confirmationSrc(t), gotrueData(adaEmail, data, true))
+	for _, bad := range []string{"Ada", "Obi", "evil"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("mail renders %q from registration alone", bad)
+		}
+	}
+	if !strings.Contains(text(out), "Hi, your ASComply account has been created") {
+		t.Error("nameless greeting missing")
+	}
+	if strings.Contains(text(out), "Organisation") {
+		t.Error("Organisation row renders without mail_names")
+	}
+}
+
+func TestConfirmation_ALinkInTheAnswersIsNotLinkable(t *testing.T) {
+	out := renderConfirmation(t, adaEmail, reg("display_name", "Ada https://evil.com/pay", "workspace_name", "pay@evil.com"))
+	if strings.Contains(out, "evil.com") || strings.Contains(out, "https://evil") {
+		t.Errorf("a link-shaped answer is rendered unmarked:\n%s", out)
+	}
+	_, in := intro(t, out)
+	_, org := mustRow(t, out, "Organisation")
+	for what, got := range map[string]string{"intro": in, "Organisation": org} {
+		if !strings.Contains(got, "evil.\u200bcom") {
+			t.Errorf("%s = %q, want the marked domain", what, got)
+		}
+	}
+}
+
+func TestConfirmation_NamesAreCutToSixtyRunes(t *testing.T) {
+	out := renderConfirmation(t, adaEmail, reg("display_name", strings.Repeat("D", 200), "workspace_name", strings.Repeat("W", 200)))
+	_, in := intro(t, out)
+	for _, c := range []string{"D", "W"} {
+		if !strings.Contains(in, strings.Repeat(c, 59)+"…") {
+			t.Errorf("intro lacks 59 x %s and …: %q", c, in)
+		}
+		if strings.Contains(in, strings.Repeat(c, 60)) {
+			t.Errorf("intro holds a run of 60 x %s", c)
+		}
+	}
+}
+
+func TestConfirmation_NormalNamesRenderUnchanged(t *testing.T) {
+	out := renderConfirmation(t, adaEmail, reg("display_name", "Adaeze Okafor", "workspace_name", "Okafor & Sons Ltd"))
+	if !strings.Contains(out, "Hi Adaeze Okafor, your ASComply account for Okafor &amp; Sons Ltd has been created") {
+		t.Errorf("greeting changed:\n%s", out)
+	}
+	if _, v := mustRow(t, out, "Organisation"); v != "Okafor &amp; Sons Ltd" {
+		t.Errorf("Organisation = %q", v)
+	}
+	if strings.Contains(out, "\u200b") {
+		t.Error("a normal name carries U+200B")
 	}
 }

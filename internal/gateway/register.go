@@ -85,6 +85,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 				return
 			}
 			data["registration"] = reg
+			addMailNames(data, reg)
 		}
 		if t := in.ConsentText; t != nil {
 			// Stored as sent: the text is what the person was shown.
@@ -226,6 +227,11 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
+}
+
+// addMailNames sets data.mail_names, the neutralised names the confirmation mail renders; reg stays as typed.
+func addMailNames(data map[string]any, reg map[string]string) {
+	data[accountmail.MailNamesMetadataKey] = accountmail.MailNames(reg["workspace_name"], reg["display_name"])
 }
 
 // addUnsubscribeToken sets data.unsubscribe, creating data when absent. The WARN holds no address.

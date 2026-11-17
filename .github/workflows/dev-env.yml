@@ -825,10 +825,14 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts e2e/report-smoke e2e/report-api e2e/flaky-results nightly-results
       # always(): a spec that fails then passes on retry leaves the job green, and its trace is
       # the only evidence.
       - name: Upload smoke Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: smoke-playwright-report
@@ -836,7 +840,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload API Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
@@ -844,7 +848,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-e2e-${{ github.run_attempt }}
@@ -852,7 +856,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-e2e
@@ -977,8 +981,12 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
-      - name: Upload topology Playwright report
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts e2e/report-topology e2e/flaky-results nightly-results
+      - name: Upload topology Playwright report
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: topology-playwright-report-${{ matrix.shard }}
@@ -986,7 +994,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
@@ -994,7 +1002,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-topology-${{ matrix.shard }}

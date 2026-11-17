@@ -231,7 +231,7 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	for j, art := range map[string]string{"e2e": "results-e2e", "topology": "results-topology-${{ matrix.shard }}"} {
 		raw := nlRaw(jobs[j], "Upload the nightly results")
-		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+		for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
 			if !slices.Contains(raw, w) {
 				bad(j + " results upload lacks " + w)
 			}
@@ -1111,7 +1111,7 @@ func TestDevEnvNightly_ResultsUploaded(t *testing.T) {
 		{nlJSONFile("playwright-api.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "API E2E"},
 		{"name: results-e2e", "name: results", "results upload lacks name: results-e2e"},
 		{"name: results-topology-${{ matrix.shard }}", "name: results-topology", "topology results upload lacks"},
-		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
 		{"          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 14", "          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 7", "retention-days: 14"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), c.old, c.repl))

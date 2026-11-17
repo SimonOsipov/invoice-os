@@ -35,7 +35,8 @@ case "$1 $2 $3" in
 "secrets create "*)
   if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) ALREADY_EXISTS: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
   cat > "$D/created-$3" ;;
-"secrets describe "*) cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
+"secrets describe "*) if grep -qxF -- "$3" "$D/describe-error" 2>/dev/null; then echo "ERROR: (gcloud.secrets.describe) UNAVAILABLE: backend error" >&2; exit 1; fi
+  cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
 "storage ls "*)
   if [ -e "$D/no-objects" ]; then echo "ERROR: (gcloud.storage.ls) One or more URLs matched no objects." >&2; exit 1; fi
   echo "$3" ;;
@@ -3317,5 +3318,37 @@ func TestPreviewPrsListsAPRThatHoldsOnlyItsClaim(t *testing.T) {
 	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", "7 2026-11-17T00:00:00\n") }, "prs")
 	if r.code != 0 || !strings.HasPrefix(r.stdout, "7 ") {
 		t.Errorf("exit %d, stdout %q, want PR 7 listed", r.code, r.stdout)
+	}
+}
+
+// A describe error is not "no claim": a holder must not take a second slot, nor lose its claim over a full bucket.
+func TestPreviewClaimDiesWhenAClaimCannotBeRead(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, map[string]string{"describe-error": "slot-1-claim\n"}), "claim", "7")
+	calls := strings.Join(callLines(r), "\n")
+	if r.code == 0 || strings.Contains(r.stdout, "slot=") || strings.Contains(r.stdout, "full=") || !strings.Contains(r.stderr, "slot-1-claim") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero naming slot-1-claim, with no verdict", r.code, r.stdout, r.stderr)
+	}
+	if strings.Contains(calls, "secrets create") || strings.Contains(calls, "storage rm") {
+		t.Errorf("claim acted on an unreadable claim:\n%s", calls)
+	}
+}
+
+func TestPreviewTeardownKeepsTheClaimWhenItCannotBeRead(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+		writeIn(t, dir, "describe-error", "slot-1-claim\n")
+		writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+	}, "teardown", "7")
+	calls := strings.Join(callLines(r), "\n")
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	if strings.Contains(calls, "secrets delete slot-1-claim") {
+		t.Errorf("the claim was released over a read error:\n%s", calls)
+	}
+	if !strings.Contains(calls, "secrets delete pr-7-gateway-token") {
+		t.Errorf("a read error stopped the other secrets going:\n%s", calls)
 	}
 }

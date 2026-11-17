@@ -176,12 +176,17 @@ bucket() { printf 'gs://ascomply-preview-%s' "$(suffix "$1")"; }
 PR_SLOTS=(slot-1 slot-2) # the nightly's slot is fixed; see preview.tf
 docs_bucket() { printf 'gs://ascomply-preview-docs-%s' "$1"; }
 
-# slot_of <pr>: the slot whose claim carries the PR's label.
+# slot_of <pr>: the slot whose claim carries the PR's label. Returns 1 for no claim, 2 when a claim cannot be read.
 slot_of() {
-  local s
+  local s out
   [ "$1" != nightly ] || { echo nightly; return; }
   for s in "${PR_SLOTS[@]}"; do
-    [ "$(gcloud secrets describe "$s-claim" --project "$PROJECT" --format "value(labels.$LABEL)" 2>/dev/null)" != "$1" ] || { echo "$s"; return; }
+    if out=$(gcloud secrets describe "$s-claim" --project "$PROJECT" --format "value(labels.$LABEL)" 2>&1); then
+      [ "$(tail -n 1 <<<"$out")" != "$1" ] || { echo "$s"; return; }
+    elif ! grep -q NOT_FOUND <<<"$out"; then
+      echo "ERROR: could not read the claim $s-claim: $(tail -n 1 <<<"$out")" >&2
+      return 2
+    fi
   done
   return 1
 }
@@ -198,9 +203,11 @@ empty_slot() {
 
 # claim <pr>: the PR's slot, else the lowest free one; the create of its claim secret is atomic.
 cmd_claim() {
-  local pr=$1 slot s err
+  local pr=$1 slot s err rc=0
   [ "$pr" != nightly ] || die "the nightly's slot is fixed; it takes no claim"
-  if ! slot=$(slot_of "$pr"); then
+  slot=$(slot_of "$pr") || rc=$?
+  [ "$rc" != 2 ] || die "could not read the claims; no slot taken for PR $pr"
+  if [ "$rc" != 0 ]; then
     for s in "${PR_SLOTS[@]}"; do
       if err=$(gcloud secrets create "$s-claim" --project "$PROJECT" --replication-policy user-managed --locations "$REGION" \
         --labels "$LABEL=$pr" 2>&1 >/dev/null); then
@@ -437,7 +444,7 @@ cmd_grant() {
 }
 
 cmd_teardown() {
-  local pr=$1 svc name slot failed=0 slotfail=0
+  local pr=$1 svc name slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
       gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || failed=1
@@ -450,11 +457,15 @@ cmd_teardown() {
   if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
   fi
-  if slot=$(slot_of "$pr"); then
+  slot=$(slot_of "$pr") || rc=$?
+  if [ "$rc" = 2 ]; then
+    failed=1
+    slotfail=1
+  elif [ "$rc" = 0 ]; then
     empty_slot "$slot" || { failed=1; slotfail=1; }
   fi
   for name in $(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)'); do
-    [ "$name" != "${slot:-}-claim" ] || continue
+    [[ $name != slot-*-claim ]] || continue
     gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
   done
   # the claim outlives a bucket that still holds objects

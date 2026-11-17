@@ -4010,7 +4010,10 @@ func TestPreviewReachPollsTheLogUntilEveryNameHasAVerdict(t *testing.T) {
 	t.Run("a verdict that lands on the fourth read", func(t *testing.T) {
 		t.Parallel()
 		_, denied := reachNames(t)
-		r := runReach(t, func(f map[string]string) { f["logs-late"] = "4"; f["logs-hide"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...)) })
+		r := runReach(t, func(f map[string]string) {
+			f["logs-late"] = "4"
+			f["logs-hide"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...))
+		})
 		if r.code != 0 || len(errLines(r)) > 0 {
 			t.Errorf("exit %d, errors %q, want a pass once the verdicts land", r.code, errLines(r))
 		}

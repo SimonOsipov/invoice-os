@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // uploadsOutput reports whether an upload step publishes a Playwright or nightly output.
@@ -75,5 +77,55 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 		if want := map[string]int{"e2e": 4, "topology": 3}[jobName]; uploads != want {
 			t.Errorf("%s: %d gated uploads, want %d", jobName, uploads, want)
 		}
+	}
+}
+
+// TestEveryPlaywrightUploadFollowsAGatedScrub parses each workflow: an upload of Playwright
+// output must come after a scrub step that covers its path, and be gated on that step's success.
+func TestEveryPlaywrightUploadFollowsAGatedScrub(t *testing.T) {
+	t.Parallel()
+	type step struct {
+		ID              string            `yaml:"id"`
+		Name            string            `yaml:"name"`
+		If              string            `yaml:"if"`
+		Uses            string            `yaml:"uses"`
+		Run             string            `yaml:"run"`
+		With            map[string]string `yaml:"with"`
+		ContinueOnError any               `yaml:"continue-on-error"`
+	}
+	var doc struct {
+		Jobs map[string]struct {
+			Steps []step `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(readWorkflow(t, "dev-env.yml")), &doc); err != nil {
+		t.Fatal(err)
+	}
+	uploads := 0
+	for name, job := range doc.Jobs {
+		var scrub *step
+		for i := range job.Steps {
+			st := &job.Steps[i]
+			if st.ID == "scrub" {
+				scrub = st
+				continue
+			}
+			if !strings.HasPrefix(st.Uses, "actions/upload-artifact@") || !uploadsOutput("path: "+st.With["path"]) {
+				continue
+			}
+			uploads++
+			path := strings.TrimSuffix(st.With["path"], "/")
+			switch {
+			case scrub == nil:
+				t.Errorf("%s: %q uploads %s before any scrub step", name, st.Name, path)
+			case !strings.HasPrefix(scrub.Run, "node e2e/reportScrub.ts ") || !slices.Contains(strings.Fields(scrub.Run), path) || scrub.ContinueOnError != nil:
+				t.Errorf("%s: scrub step %q does not strictly scrub %s", name, scrub.Run, path)
+			case !strings.Contains(st.If, "steps.scrub.outcome == 'success'"):
+				t.Errorf("%s: %q is not gated on the scrub", name, st.Name)
+			}
+		}
+	}
+	if uploads != 10 {
+		t.Errorf("%d Playwright uploads parsed, want 10", uploads)
 	}
 }

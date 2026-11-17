@@ -1188,8 +1188,12 @@ jobs:
           if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
       - name: Check the AI features and accuracy
         run: pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-ai-check
@@ -1285,8 +1289,12 @@ jobs:
       - name: Turn real mail off
         if: always() && steps.mailon.outcome != 'skipped'
         run: bash scripts/ci/preview.sh mail-off "$PR"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-email
@@ -1340,10 +1348,17 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install the e2e dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -1372,8 +1387,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
           HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
             go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -prepare "${{ needs.prepare-env.result }}" -out nightly-results/hubspot.json
-      - name: Upload the nightly results
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts nightly-results
+      - name: Upload the nightly results
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-hubspot

@@ -517,7 +517,7 @@ func aiCheckProblems(jobs map[string]workflowJob) []string {
 		bad("e2e-gate needs nightly-ai")
 	}
 	raw := nlRaw(ai, "Upload the nightly results")
-	for _, w := range []string{"if: always() && " + nlOn, "name: results-ai-check", "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+	for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "name: results-ai-check", "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
 		if !slices.Contains(raw, w) {
 			bad("nightly-ai results upload lacks " + w)
 		}
@@ -629,7 +629,7 @@ func emailProblems(jobs map[string]workflowJob) []string {
 		bad("email spec step timeout-minutes is not 16")
 	}
 	raw := nlRaw(em, "Upload the nightly results")
-	for _, w := range []string{"if: always() && " + nlOn, "name: results-email", "path: nightly-results/", "retention-days: 14"} {
+	for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "name: results-email", "path: nightly-results/", "retention-days: 14"} {
 		if !slices.Contains(raw, w) {
 			bad("email results upload lacks " + w)
 		}
@@ -1304,7 +1304,7 @@ func TestDevEnvNightly_EmailJobRunsInNightlyModeOnly(t *testing.T) {
 		{"    name: Real invite and reset mail\n", "    name: Mail\n", "email name"},
 		{"    timeout-minutes: 25\n    permissions:\n      contents: read\n      actions: read", "    timeout-minutes: 40\n    permissions:\n      contents: read\n      actions: read", "email timeout-minutes"},
 		{"        timeout-minutes: 16\n", "        timeout-minutes: 30\n", "timeout-minutes is not 16"},
-		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
 	})
 }
 
@@ -1535,7 +1535,7 @@ func TestDevEnvNightly_AICheckJobIsNightlyOnly(t *testing.T) {
 		{nlAINeeds, strings.Replace(nlAINeeds, ", topology", "", 1), "nightly-ai needs"},
 		{nlAINeeds, strings.Replace(nlAINeeds, ", contacts", "", 1), "nightly-ai needs"},
 		{"      needs.changes.outputs.nightly == 'true' &&\n", "", "nightly-ai if"},
-		{"        if: always() && " + nlOn + "\n", "        if: always()\n", "nightly-ai results upload lacks"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n", "        if: always()\n", "nightly-ai results upload lacks"},
 		{"name: results-ai-check", "name: results-ai", "name: results-ai-check"},
 	}
 	for _, v := range []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL"} {

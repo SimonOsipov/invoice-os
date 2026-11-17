@@ -33,7 +33,7 @@ func Unlinked(s string) string {
 	}
 	var b strings.Builder
 	for i, c := range r {
-		if c == ':' && i+2 < len(r) && r[i+1] == '/' && r[i+2] == '/' {
+		if c == ':' && near(i, 1, 1) == '/' && near(i, 1, 2) == '/' {
 			b.WriteString(zws)
 		}
 		b.WriteRune(c)

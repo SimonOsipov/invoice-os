@@ -517,6 +517,9 @@ jobs:
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" gateway tenancy portfolio invoice validation dashboard submission notifications docling worker
       - name: Deploy the sites
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog check ops-console support-console
+      - name: Prove the runtime reads only its own secrets
+        if: github.event_name == 'pull_request'
+        run: bash scripts/ci/preview.sh reach "$PR"
 
   # The PR gateway serves the mock issuer and trusts it and its own GoTrue.
   health-gate:

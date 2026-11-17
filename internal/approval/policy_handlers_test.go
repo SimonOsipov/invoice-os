@@ -304,7 +304,7 @@ func TestPublishAndDeleteHandlers_ReadNoBody(t *testing.T) {
 
 // --- the body cap ----------------------------------------------------------
 
-func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
+func TestPolicyHandlers_OversizeBodyIs413(t *testing.T) {
 	draftPath := "/v1/approval-policies/" + policyHandlerTestID + "/draft"
 	over := strings.Repeat("x", maxPolicyBodyBytes+1)
 	under := strings.Repeat("x", maxPolicyBodyBytes/2)
@@ -324,11 +324,11 @@ func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
 			t.Run(c.name, func(t *testing.T) {
 				id := caller()
 				rec := servePolicy(t, failClosedPolicySeam(t), nil, c.method, c.path, c.body, &id)
-				if rec.Code != http.StatusBadRequest {
-					t.Fatalf("status = %d, want 400 (not 413, not 500): %s", rec.Code, rec.Body.String())
+				if rec.Code != http.StatusRequestEntityTooLarge {
+					t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
 				}
-				if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
-					t.Errorf("error = %q, want %q", got, "invalid request body")
+				if got := errorMessage(t, rec.Body.Bytes()); got != "request body exceeds the size limit" {
+					t.Errorf("error = %q, want %q", got, "request body exceeds the size limit")
 				}
 			})
 		}

@@ -21,6 +21,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // Tenant is a caller's tenant as read from the tenants table under RLS.
@@ -266,8 +267,7 @@ type MembershipStatusSetter func(ctx context.Context, userID, status string) (Me
 // maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
 // platform server applies no request body limit of its own. A legitimate body
 // is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
-// unbounded allocation. Over-cap is a 400, not a 413
-// (TestMembership_BodyOverCapRejected).
+// unbounded allocation.
 const maxSetStatusBodyBytes = 4 * 1024
 
 // setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.
@@ -276,7 +276,7 @@ type setMembershipStatusRequest struct {
 }
 
 // SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
-// (401, before anything else) -> capped decode (400 on any decode error) ->
+// (401, before anything else) -> capped decode ->
 // status vocabulary (400) -> path user_id -> set -> 200 with the updated
 // membership in the same six-key shape as a list element, or 409 (approval.WriteRoleInUse)
 // when a suspension leaves a waiting role with no signer.
@@ -296,9 +296,12 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
 		var req setMembershipStatusRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxSetStatusBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -420,9 +423,12 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxProvisionBodyBytes)
 		var req provisionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxProvisionBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

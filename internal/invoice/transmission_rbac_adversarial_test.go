@@ -207,7 +207,7 @@ func TestTransmitGate_RefusalOutranksBodyGuards(t *testing.T) {
 			{"over the 200 cap", probe(marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: overCap, IdempotencyKey: uuid.NewString()}))},
 			{"blank idempotency_key", probe(marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{uuid.NewString()}, IdempotencyKey: ""}))},
 			{"over-long idempotency_key", probe(marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{uuid.NewString()}, IdempotencyKey: strings.Repeat("k", maxBatchSubmitIdempotencyKeyLen+1)}))},
-			// Past maxBatchSubmitBodyBytes: MaxBytesReader is installed after
+			// Past maxBatchSubmitBodyBytes: the body cap is applied after
 			// the gate, so the body is never read at all.
 			{"over the 64 KiB body cap", probe(marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{uuid.NewString()}, IdempotencyKey: strings.Repeat("k", maxBatchSubmitBodyBytes*2)}))},
 			{"empty body", probe("")},

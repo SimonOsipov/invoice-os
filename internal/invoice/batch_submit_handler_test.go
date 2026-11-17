@@ -229,12 +229,12 @@ func TestBatchSubmitHandler_EmptyResultsMarshalsEmptyArrayNotNull(t *testing.T) 
 // --- CodeRabbit PR #92 (handlers.go:547) --------------------------------------
 
 // TestBatchSubmitHandler_BodySizeCap: regression test for maxBatchSubmitBodyBytes'
-// http.MaxBytesReader wrap. An over-cap body must be rejected 400 before it can be fully
+// body cap. An over-cap body must be rejected 413 before it can be fully
 // decoded (submit never reached); a full 200-id batch with a 218-char idempotency_key --
 // the endpoint's own legitimate maximum, ~8.1 KB -- must still succeed comfortably inside
 // the 64 KiB cap.
 func TestBatchSubmitHandler_BodySizeCap(t *testing.T) {
-	t.Run("body over the cap is rejected 400 before decode succeeds", func(t *testing.T) {
+	t.Run("body over the cap is rejected 413 before decode succeeds", func(t *testing.T) {
 		submitCalled := false
 		submit := func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
 			submitCalled = true
@@ -246,11 +246,11 @@ func TestBatchSubmitHandler_BodySizeCap(t *testing.T) {
 
 		rec, resp := doBatchSubmit(t, submit, identity, body)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want 413 (body=%s)", rec.Code, rec.Body.String())
 		}
-		if resp.Error == "" {
-			t.Errorf("body error = %q, want a non-empty {\"error\":...} message", resp.Error)
+		if resp.Error != "request body exceeds the size limit" {
+			t.Errorf("body error = %q, want the 413 message", resp.Error)
 		}
 		if submitCalled {
 			t.Errorf("submit was called, want it NEVER reached for an over-cap body")

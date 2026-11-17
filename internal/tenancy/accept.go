@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -60,11 +61,14 @@ type acceptRequest struct {
 }
 
 // readAccept decodes the capped accept body and validates display_name; it
-// answers 400 itself on failure. An empty body decodes as no fields when allowEmpty.
+// answers 413/400 itself on failure. An empty body decodes as no fields when allowEmpty.
 func readAccept(w http.ResponseWriter, r *http.Request, allowEmpty bool) (acceptRequest, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAcceptBodyBytes)
 	var req acceptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !(allowEmpty && errors.Is(err, io.EOF)) {
+	if err := jsonbody.Decode(w, r, maxAcceptBodyBytes, &req); err != nil && !(allowEmpty && errors.Is(err, io.EOF)) {
+		if jsonbody.TooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return req, false
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return req, false
 	}
@@ -132,8 +136,8 @@ func writeAccepted(w http.ResponseWriter, tenant Tenant, subject, role string) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode
-// (400), accept, 200 `{tenant, user:{id, role}}`. The caller check is the
+// AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode,
+// accept, 200 `{tenant, user:{id, role}}`. The caller check is the
 // store's: the handler cannot see a tenant-less caller.
 func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {

@@ -5544,11 +5544,9 @@ func TestEditHandler_LineItemsUnknownFieldIgnored200(t *testing.T) {
 	}
 }
 
-// TestEditHandler_LineItemsLargeArrayMapped (task-266 Part F): no
-// http.MaxBytesReader/line-count cap applies to PATCH (documented,
-// traceable-to-no-AC non-goal in the Implementation Plan, mirroring
-// CreateHandler which has none either) -- a large line_items array must
-// still decode and map completely, not truncate or error partway.
+// TestEditHandler_LineItemsLargeArrayMapped: PATCH caps line_items
+// at maxLineItems and the body at LineItemsLimit; an array under both must still
+// decode and map completely, not truncate or error partway.
 func TestEditHandler_LineItemsLargeArrayMapped(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()

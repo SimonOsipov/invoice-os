@@ -36,7 +36,6 @@ func TestProvision_Adversarial400(t *testing.T) {
 		{"type error then a valid duplicate", `{"workspace_name":1,"workspace_name":"Acme","display_name":"Ada"}`},
 		{"empty body", ``},
 		{"JSON null", `null`},
-		{"over the 4 KiB cap", `{"workspace_name":"Acme","display_name":"Ada","pad":"` + strings.Repeat("x", 5000) + `"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spy.calls = nil
@@ -50,6 +49,20 @@ func TestProvision_Adversarial400(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("over the 4 KiB cap", func(t *testing.T) {
+		spy.calls = nil
+		rec, body := doProvision(t, spy.provision, `{"workspace_name":"Acme","display_name":"Ada","pad":"`+strings.Repeat("x", 5000)+`"}`)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want 413 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if msg := provisionErrorBody(t, body); msg != "request body too large" {
+			t.Errorf("error = %q, want %q", msg, "request body too large")
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+		}
+	})
 }
 
 func TestProvision_AdversarialAccepted(t *testing.T) {

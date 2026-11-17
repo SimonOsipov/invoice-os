@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -17,6 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 var (
@@ -233,7 +233,7 @@ type MemberClientsSetter func(ctx context.Context, userID string, access ClientA
 const maxSetClientsBodyBytes = 64 * 1024
 
 // SetMemberClientsHandler returns PUT /v1/memberships/{user_id}/clients: identity
-// (401) -> capped decode and id grammar (400) -> path uuid (404) -> store -> 200.
+// (401) -> capped decode and id grammar -> path uuid (404) -> store -> 200.
 // The body is checked before the path, as PATCH does.
 func SetMemberClientsHandler(set MemberClientsSetter, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -244,13 +244,13 @@ func SetMemberClientsHandler(set MemberClientsSetter, log *slog.Logger) http.Han
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetClientsBodyBytes)
 		var req struct {
 			ClientAccess *ClientAccess `json:"client_access"`
 		}
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err == nil {
-			_, err = io.Copy(io.Discard, r.Body) // errors when the whole body exceeds the cap
+		err := jsonbody.Decode(w, r, maxSetClientsBodyBytes, &req)
+		if jsonbody.TooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
 		}
 		if err != nil || req.ClientAccess == nil {
 			status, msg := statusForErr(ErrInvalidClientAccess)

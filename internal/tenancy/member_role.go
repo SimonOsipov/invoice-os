@@ -2,7 +2,6 @@ package tenancy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 var (
@@ -119,7 +119,7 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 }
 
 // SetMemberRoleHandler returns PATCH /v1/memberships/{user_id}/role: identity (401) -> capped
-// decode (400) -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row,
+// decode -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row,
 // 409 (approval.WriteRoleInUse) when the change leaves a waiting role with no signer.
 // A 500 logs err only, never a name or an email.
 func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
@@ -131,11 +131,14 @@ func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (Me
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
 		var req struct {
 			Role string `json:"role"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxSetStatusBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

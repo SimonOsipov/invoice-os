@@ -259,7 +259,7 @@ jobs:
     needs: [changes, commit-authors]
     if: needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -331,6 +331,21 @@ jobs:
             ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
           done
           echo "::error::preview cap reached: two PR previews are open, the third slot is the nightly's (.claude/rules/ci-preview.md)"
+          exit 1
+      - name: Claim a preview slot
+        if: needs.changes.outputs.nightly != 'true'
+        env:
+          CAP_TRIES: 15
+          CAP_SLEEP: 30
+        run: |
+          set -euo pipefail
+          for ((i = 1; i <= CAP_TRIES; i++)); do
+            out=$(bash scripts/ci/preview.sh claim "$PR")
+            echo "$out"
+            grep -q '^slot=' <<<"$out" && exit 0
+            ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
+          done
+          echo "::error::no free preview slot: both PR slots are claimed (.claude/rules/ci-preview.md)"
           exit 1
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'
@@ -825,10 +840,14 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts e2e/report-smoke e2e/report-api e2e/flaky-results nightly-results
       # always(): a spec that fails then passes on retry leaves the job green, and its trace is
       # the only evidence.
       - name: Upload smoke Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: smoke-playwright-report
@@ -836,7 +855,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload API Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
@@ -844,7 +863,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-e2e-${{ github.run_attempt }}
@@ -852,7 +871,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-e2e
@@ -977,8 +996,12 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
-      - name: Upload topology Playwright report
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts e2e/report-topology e2e/flaky-results nightly-results
+      - name: Upload topology Playwright report
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: topology-playwright-report-${{ matrix.shard }}
@@ -986,7 +1009,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
@@ -994,7 +1017,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-topology-${{ matrix.shard }}
@@ -1165,8 +1188,12 @@ jobs:
           if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
       - name: Check the AI features and accuracy
         run: pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-ai-check
@@ -1262,8 +1289,12 @@ jobs:
       - name: Turn real mail off
         if: always() && steps.mailon.outcome != 'skipped'
         run: bash scripts/ci/preview.sh mail-off "$PR"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-email
@@ -1317,10 +1348,17 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install the e2e dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -1349,8 +1387,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
           HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
             go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -prepare "${{ needs.prepare-env.result }}" -out nightly-results/hubspot.json
-      - name: Upload the nightly results
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts nightly-results
+      - name: Upload the nightly results
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-hubspot

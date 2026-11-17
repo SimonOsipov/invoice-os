@@ -13,6 +13,8 @@ import { nightlyTarget } from './targets'
 // workers: 1): every spec shares one deployed DB, so parallel workers would race
 // (entity-namespace contention) — see the story's Decision A8.
 export default defineConfig({
+  // On CI Playwright writes the PR diff into the report by default; the diff holds test credentials.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './api',
   // Playwright's default testMatch also matches *.test.ts, which are this package's
   // vitest unit tests (see vitest.config.ts for the mirror-image exclusion). Collecting

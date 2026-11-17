@@ -24,7 +24,7 @@ paths:
 - A Dependabot PR that was reopened or marked ready runs the full chain. Send `@dependabot recreate` to get the skip back.
 - Keep the shared preview resources in invoice-os-infra `preview.tf`. Create and delete the per-PR resources only with `preview.sh`.
 - Label every per-PR resource `preview-pr=<N>`. The sweeper finds a preview by that label.
-- `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, bucket `ascomply-preview-nightly`, secrets `nightly-<name>`, label `preview-pr=nightly`.
+- `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, documents slot `nightly` (bucket `ascomply-preview-docs-nightly`), secrets `nightly-<name>`, label `preview-pr=nightly`.
 - A dispatched `dev-env.yml` run creates the nightly preview and deletes it in `Delete the nightly preview`. The sweeper skips it.
 - Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
 - The nightly's `nightly-ai` job runs after `contacts` and before `email`.
@@ -50,7 +50,9 @@ paths:
 - Mask the mock issuer token and export it as `MOCK_ISSUER_TOKEN`, with `MOCK_ISSUER_TOKEN_FOR` naming its preview, in the `e2e` and `topology` jobs, and in the nightly `nightly-ai` job.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
-- Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
+- Teardown deletes the PR's services, migrate job, database, the slot bucket's objects, and secrets on close, releasing the slot claim last. The nightly sweep deletes a preview older than 24 h whose PR reads closed. It also drops a `pr_<N>` database whose PR reads closed, at any age (`preview.sh databases`).
 - Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and hold at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Past the cap, any open preview's services can fail with 53300.
 - PR previews hold at most 2 slots. The third is the nightly's. A new PR past 2 polls in `preview cap for a PR` like the nightly step below, then fails with one `::error::`, before it creates anything. A PR that already holds a preview is not refused. A nightly entry never counts against a PR. `preview.sh cap <pr|nightly>` decides (`TestDevEnvNightly_PRsLeaveTheNightlyItsSlot`, `TestPreviewCapAllowsNoMixOverTheBudget`).
+- A PR preview claims one of 2 document slots (`preview.sh claim`, the secret `slot-<k>-claim` labelled `preview-pr=<N>`) in `Claim a preview slot`. It mounts that slot's key, made by invoice-os-infra. Teardown empties the slot bucket before it releases the claim. A failed empty, a failed service or job delete and a describe that fails for any reason but absence keep the claim, so the sweeper retries.
+- Scrub every Playwright or nightly-results upload in `dev-env.yml` first: a step `id: scrub` runs `node e2e/reportScrub.ts <dirs>`, and the upload runs `if: always() && steps.scrub.outcome == 'success'` (`TestEveryPlaywrightUploadFollowsAGatedScrub`).
 - In a nightly run, `preview cap reached` polls `preview.sh cap nightly` and fails only if 3 PR previews stay open (`TestDevEnvNightly_CapStepWaitsForASlot`).

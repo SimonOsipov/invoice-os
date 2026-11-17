@@ -6,6 +6,8 @@ import { nightlyTarget } from './targets'
 // `webServer` block. URLs are resolved per-app from env vars with live-dev
 // defaults, which is why `baseURL` is intentionally left unset.
 export default defineConfig({
+  // On CI Playwright writes the PR diff into the report by default; the diff holds test credentials.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './smoke',
   // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
   testMatch: '**/*.spec.ts',

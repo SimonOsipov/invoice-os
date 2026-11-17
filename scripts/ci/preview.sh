@@ -430,7 +430,7 @@ cmd_deploy() {
 
 # migrate_job <name> <sha>: the per-preview migrate job; it bootstraps, migrates and seeds the database.
 migrate_job() {
-  local pr=$1 sha=$2 envf slot shared= n
+  local pr=$1 sha=$2 envf slot shared='' n
   slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   for n in "${SHARED_SECRETS[@]}"; do shared+="${shared:+,}$(tr 'a-z-' 'A-Z_' <<<"$n")=$n:latest"; done
   envf=$(mktemp)

@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { Script } from 'node:vm'
 import { unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { residuals, scrubDir, scrubText } from './reportScrub'
@@ -278,5 +280,54 @@ describe('reportScrub CLI', () => {
       expect(r.status).toBe(1)
       expect(r.stderr).toContain('index.html')
     }
+  })
+})
+
+describe('static viewer assets', () => {
+  const pwCore = () => dirname(createRequire(createRequire(import.meta.url).resolve('@playwright/test/package.json')).resolve('playwright-core/package.json'))
+  const jsFiles = (d: string): string[] =>
+    readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? jsFiles(join(d, e.name)) : /\.js$/.test(e.name) ? [join(d, e.name)] : []))
+
+  it('leaves the real trace-viewer bundle byte-identical and residual-free', () => {
+    const dir = tmp()
+    cpSync(join(pwCore(), 'lib/vite/traceViewer'), join(dir, 'trace'), { recursive: true })
+    const before = new Map(jsFiles(dir).map((f) => [f, readFileSync(f, 'latin1')]))
+    expect(before.size).toBeGreaterThan(3)
+    scrubDir(dir)
+    for (const [f, text] of before) {
+      expect(readFileSync(f, 'latin1') === text, f).toBe(true)
+      if (!f.endsWith('sw.bundle.js')) continue
+      // Modules fail to parse as scripts for their import/export; the service worker bundle is a plain script.
+      expect(() => new Script(text)).not.toThrow()
+    }
+    expect(residuals(dir)).toEqual([])
+  })
+
+  it('still scrubs a trace zip that sits under trace/', () => {
+    const dir = tmp()
+    put(dir, 'trace/t.zip', zipSync({ 'a.network': enc(`{"password":"${pwTag()}"}`) }))
+    scrubDir(dir)
+    expect(dec(unzipSync(new Uint8Array(readFileSync(join(dir, 'trace/t.zip'))))['a.network'])).not.toContain(pwTag())
+  })
+})
+
+describe('credential headers beyond auth and cookie', () => {
+  const name = () => ['X', 'Gateway', 'Token'].join('-')
+  it('redacts a raw X-Gateway-Token / apikey / X-Mock-Issuer-Token line and clears the residual check', () => {
+    for (const h of [name(), 'apikey', 'X-Mock-Issuer-Token', 'X-Serverless-Authorization']) {
+      expect(scrubText(`${h}: abc123`), h).toBe(`${h}: [redacted]`)
+      const dir = tmp()
+      put(dir, 'r.txt', `  ${h}: abc123\n`)
+      expect(residuals(dir), h).toHaveLength(1)
+    }
+  })
+
+  it('redacts them as JSON object keys', () => {
+    const out = scrubText(`{"${name()}":"abc123","apikey":"k9","x-request-id":"r1"}`)
+    expect(out).not.toMatch(/abc123|k9/)
+    expect(out).toContain('"x-request-id":"r1"')
+    const dir = tmp()
+    put(dir, 'r.json', `{"${name()}":"abc123"}`)
+    expect(residuals(dir)).toHaveLength(1)
   })
 })

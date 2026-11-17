@@ -3,7 +3,7 @@
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { unzipSync, zipSync } from 'fflate'
 import type { Zippable } from 'fflate'
@@ -16,17 +16,19 @@ const Q = String.raw`\\*"`
 const BODY_PLAIN = String.raw`(?:[^"\\]|\\.)*`
 const BODY_ESC = String.raw`(?:\\{3}"|[^"\\]|\\[^"])*`
 const FIELDS = 'password|new_password|current_password|access_token|refresh_token|id_token|provider_token|token'
+// Credential header names: the standard three plus every `x-*-token|key|secret|authorization` the e2e clients send.
+const HDR = String.raw`(?:authorization|cookie|set-cookie|apikey|api-key|x-[\w-]*(?:token|key|secret|authorization))`
 const HEADER_NAME = String.raw`(?:authorization|cookie|set-cookie|__Host-[^"\\]*|[^"\\]*(?:token|secret|key|session)[^"\\]*)`
 
 // Raw header line up to its value: a name not glued to a word, or right after a JSON-escaped `\n`; an optional opening quote.
-const LINE = String.raw`(?:(?<![\w-])|(?<=\\[nrt]))(?:proxy-)?(?:authorization|cookie|set-cookie)[ \t]*:[ \t]*(?:\\*")?`
+const LINE = String.raw`(?:(?<![\w-])|(?<=\\[nrt]))(?:proxy-)?${HDR}[ \t]*:[ \t]*(?:\\*")?`
 
 const RULES: [RegExp, string][] = [
   [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, R],
   [/eyJ[A-Za-z0-9_-]{10,}/g, R],
   // HAR shape: "name":"<header>","value":"<secret>"
   [new RegExp(`(${Q}name${Q}\\s*:\\s*${Q}${HEADER_NAME}${Q}\\s*,\\s*${Q}value${Q}\\s*:\\s*${Q})${BODY}`, 'gi'), `$1${R}`],
-  [new RegExp(`(${Q}(?:authorization|cookie|set-cookie)${Q}\\s*:\\s*${Q})${BODY}`, 'gi'), `$1${R}`],
+  [new RegExp(`(${Q}(?:proxy-)?${HDR}${Q}\\s*:\\s*${Q})${BODY}`, 'gi'), `$1${R}`],
   [new RegExp(`("(?:${FIELDS})"\\s*:\\s*")${BODY_PLAIN}`, 'gi'), `$1${R}`],
   [new RegExp(`(\\\\"(?:${FIELDS})\\\\"\\s*:\\s*\\\\")${BODY_ESC}`, 'gi'), `$1${R}`],
   // Raw header line: Authorization: Bearer <opaque>
@@ -45,6 +47,7 @@ export function scrubText(s: string): string {
 const BINARY = /\.(png|jpe?g|gif|webp|ico|webm|mp4|woff2?|ttf|otf|pdf)$/i
 const PAYLOAD = /(data:application\/zip;base64,)([^"'<\s]*)/
 const RESIDUALS = [/eyJ[A-Za-z0-9_-]{10,}/, /e2e-member-pw-/, new RegExp(`${Q}password${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
+  new RegExp(`${Q}(?:proxy-)?${HDR}${Q}\\s*:\\s*${Q}(?!\\[redacted\\]\\\\*")`, 'i'),
   new RegExp(`${LINE}(?!\\[redacted\\])[^\\s"\\\\]`, 'i'),
 ]
 
@@ -94,6 +97,12 @@ function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]))
 }
 
+// Playwright's static trace-viewer bundle (`trace/` in an HTML report) holds no run data and breaks if rewritten; its zips still do.
+const isViewerAsset = (root: string, file: string) => {
+  const rel = relative(root, file).split(sep)
+  return rel.slice(0, -1).includes('trace') && !/\.zip$/i.test(file)
+}
+
 function scrubFile(file: string): void {
   const bytes = new Uint8Array(readFileSync(file))
   const next = /\.html?$/i.test(file) ? scrubHtml(bytes) : scrubEntry(file, bytes)
@@ -103,6 +112,7 @@ function scrubFile(file: string): void {
 /** scrubDir rewrites every file under dir in place. Throws, naming the file, when one cannot be scrubbed. */
 export function scrubDir(dir: string): void {
   for (const f of files(dir)) {
+    if (isViewerAsset(dir, f)) continue
     try {
       scrubFile(f)
     } catch {

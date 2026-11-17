@@ -283,7 +283,7 @@ type listItem struct {
 // --- handlers ----------------------------------------------------------------
 
 // CreateHandler returns POST /v1/invoices. Identity-first-401, then decodes
-// the snake_case wire body (400 on decode error), 400 if entity_id or
+// the snake_case wire body, 400 if entity_id or
 // invoice_number is blank (before create ever runs -- Store.Create's own
 // pre-tx guard is the defense-in-depth backstop for the importer-reuse path,
 // [D3]), calls create, maps errors via statusForErr, 201 + Invoice (with
@@ -1282,7 +1282,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 
 // EditHandler returns PATCH /v1/invoices/{id} (M4-05-03). Same
 // identity-first-401 order as every other handler here, then decodes the
-// snake_case wire body (400 on decode error -- including a line_items whose
+// snake_case wire body (including a line_items whose
 // JSON SHAPE is wrong, which is a decode-time 400, never a 500) into the 9
 // optional header MBS-content fields, the optional line_items array and the
 // optional invoice_number (trimmed; blank is a 400), builds EditInput from the
@@ -1434,7 +1434,7 @@ const maxKeepAsIsReasonLen = 1000
 
 // KeepAsIsHandler returns POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
 // task-291). Same identity-first-401 order as every handler above, then decodes the
-// body (400 on decode error), trims the reason and 400s on empty/oversized BEFORE
+// body, trims the reason and 400s on empty/oversized BEFORE
 // keep is ever called ([must-not-allow-empty-reason], mirrors BatchSubmitHandler's own
 // pre-tx idempotency_key guard) -- keep itself never sees an empty or over-length
 // reason. Errors map via statusForErr, including the new ErrNotKeepable->409 case
@@ -1676,7 +1676,7 @@ const maxBatchSubmitIdempotencyKeyLen = 218
 const maxBatchSubmitBodyBytes = 64 * 1024
 
 // BatchSubmitHandler returns POST /v1/invoices/submissions (task-231, [trigger-surface]).
-// Identity-first-401 (same order as every handler above) -> decode (400 on malformed JSON)
+// Identity-first-401 (same order as every handler above) -> decode
 // -> pre-tx validation, ALL before submit is ever called ([T07-8 non-uuid handling]): empty
 // invoice_ids -> 400; >200 ids -> 400; blank or >218-char idempotency_key -> 400; any
 // non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->

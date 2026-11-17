@@ -138,7 +138,7 @@ type createEntityRequest struct {
 
 // CreateHandler returns POST /v1/entities. It checks the verified identity is
 // present (401 before decode/create, exactly like tenancy.MeHandler's order),
-// decodes the request body (400 on decode error), calls create,
+// decodes the request body, calls create,
 // maps errors via statusForErr (403 for a non-admin, Store.Create), and
 // answers 201 + Entity on success.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
@@ -334,7 +334,7 @@ type updateEntityRequest struct {
 
 // UpdateHandler returns PATCH /v1/entities/{id} (M3-03-04, task-37). Same
 // identity-first-401 order as Create/GetHandler, then decodes the PATCH body
-// into updateEntityRequest (400 on decode error), rejects an all-nil body
+// into updateEntityRequest rejects an all-nil body
 // as 400 ("no fields to update") before ever calling update, maps store
 // errors via statusForChangeErr, and answers 200 + updated Entity on success.
 func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {

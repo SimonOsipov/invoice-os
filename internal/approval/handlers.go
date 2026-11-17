@@ -79,7 +79,7 @@ type createRoleRequest struct {
 }
 
 // CreateRoleHandler returns POST /v1/workflow-roles: identity (401) -> capped decode
-// (400) -> create -> 201. No empty-title check here; that is the store's, on the
+// -> create -> 201. No empty-title check here; that is the store's, on the
 // trimmed value it actually stores.
 func CreateRoleHandler(create RoleCreator, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -123,7 +123,7 @@ type updateRoleRequest struct {
 }
 
 // UpdateRoleHandler returns PATCH /v1/workflow-roles/{key}: identity (401) -> capped
-// decode (400) -> path key -> update -> 200. Body before path, so a malformed request
+// decode -> path key -> update -> 200. Body before path, so a malformed request
 // reads as 400 rather than 404. The key reaches the store verbatim — normalising it
 // would make Tax-Reviewer address tax-reviewer, an alias newRoleKey never mints.
 func UpdateRoleHandler(update RoleUpdater, log *slog.Logger) http.HandlerFunc {
@@ -224,7 +224,7 @@ type setRoleMembersRequest struct {
 }
 
 // SetRoleMembersHandler returns PUT /v1/workflow-roles/{key}/members: identity (401)
-// -> capped decode (400) -> members presence (400) -> path key -> whole-set replace, or 409
+// -> capped decode -> members presence (400) -> path key -> whole-set replace, or 409
 // (WriteRoleInUse) when it would leave a role an open run waits on with no signer.
 //
 // The presence check is this layer's ONE semantic 400 and it must exist: a nil slice
@@ -315,7 +315,7 @@ type decisionRequest struct {
 }
 
 // DecideHandler returns POST /v1/invoices/{id}/approvals: identity (401) -> capped
-// decode (400) -> decision vocabulary (400) -> reason rules (400) -> decide -> 200.
+// decode -> decision vocabulary (400) -> reason rules (400) -> decide -> 200.
 // The actor is always auth.Identity.Subject, never a wire field
 // (TestApprovalHandler_ActorIsIdentityNotBody) -- Decider's own signature carries no
 // actor parameter, so a client-supplied one has nowhere to land.

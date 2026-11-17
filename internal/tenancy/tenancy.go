@@ -267,8 +267,7 @@ type MembershipStatusSetter func(ctx context.Context, userID, status string) (Me
 // maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
 // platform server applies no request body limit of its own. A legitimate body
 // is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
-// unbounded allocation. Over-cap is a 400, not a 413
-// (TestMembership_BodyOverCapRejected).
+// unbounded allocation.
 const maxSetStatusBodyBytes = 4 * 1024
 
 // setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.
@@ -277,7 +276,7 @@ type setMembershipStatusRequest struct {
 }
 
 // SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
-// (401, before anything else) -> capped decode (400 on any decode error) ->
+// (401, before anything else) -> capped decode ->
 // status vocabulary (400) -> path user_id -> set -> 200 with the updated
 // membership in the same six-key shape as a list element, or 409 (approval.WriteRoleInUse)
 // when a suspension leaves a waiting role with no signer.

@@ -293,7 +293,7 @@ type scheduleDeletionRequest struct {
 	WorkspaceName string `json:"workspace_name"`
 }
 
-// ScheduleDeletionHandler returns POST /v1/workspace/deletion: identity (401), capped decode (400),
+// ScheduleDeletionHandler returns POST /v1/workspace/deletion: identity (401), capped decode,
 // schedule, 200 with the due time. The typed name reaches the store unchanged.
 func ScheduleDeletionHandler(schedule ScheduleDeletionFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -354,7 +354,7 @@ type cancelByLinkRequest struct {
 }
 
 // CancelDeletionByLinkHandler returns POST /v1/workspace/deletion/cancel-by-link: identity (401),
-// capped decode (400), cancel, 200 `{"deletion_due_at": null}`.
+// capped decode, cancel, 200 `{"deletion_due_at": null}`.
 func CancelDeletionByLinkHandler(cancel CancelDeletionByLinkFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

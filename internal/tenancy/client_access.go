@@ -233,7 +233,7 @@ type MemberClientsSetter func(ctx context.Context, userID string, access ClientA
 const maxSetClientsBodyBytes = 64 * 1024
 
 // SetMemberClientsHandler returns PUT /v1/memberships/{user_id}/clients: identity
-// (401) -> capped decode and id grammar (400) -> path uuid (404) -> store -> 200.
+// (401) -> capped decode and id grammar -> path uuid (404) -> store -> 200.
 // The body is checked before the path, as PATCH does.
 func SetMemberClientsHandler(set MemberClientsSetter, log *slog.Logger) http.HandlerFunc {
 	if log == nil {

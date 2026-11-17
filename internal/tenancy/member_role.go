@@ -119,7 +119,7 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 }
 
 // SetMemberRoleHandler returns PATCH /v1/memberships/{user_id}/role: identity (401) -> capped
-// decode (400) -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row,
+// decode -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row,
 // 409 (approval.WriteRoleInUse) when the change leaves a waiting role with no signer.
 // A 500 logs err only, never a name or an email.
 func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {

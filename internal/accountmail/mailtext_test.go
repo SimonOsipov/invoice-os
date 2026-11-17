@@ -29,6 +29,11 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 		"shop1.com":            "shop1." + mark + "com",
 		"(evil.com)":           "(evil." + mark + "com)",
 		"http:///x":            "http" + mark + ":///x",
+		"evil\u00ad.com":       "evil\u00ad." + mark + "com",
+		"evil\u200d.com":       "evil\u200d." + mark + "com",
+		"evil.\u00adcom":       "evil." + mark + "\u00adcom",
+		"cafe\u0301.com":       "cafe\u0301." + mark + "com",
+		"pay\u00ad@evil.com":   "pay\u00ad@" + mark + "evil." + mark + "com",
 	}
 	for in, want := range cases {
 		if got := Unlinked(in); got != want {
@@ -38,7 +43,7 @@ func TestUnlinked_BreaksEachLinkStart(t *testing.T) {
 }
 
 var unlinkedNoMark = []string{
-	"Adaeze Okafor", "Okafor & Sons Ltd", "Okafor & Sons Ltd.", "Dr. Okafor", "J.R. Okafor", "U.S.A. Ltd",
+	"Adaeze Okafor", "Okafor & Sons Ltd", "Okafor & Sons Ltd.", "Dr. Okafor", "J.R. Okafor", "J\u00ad.R. Okafor", "U.S.A. Ltd",
 	"e.g. Okafor", "Acme @ Home", "Acme @Home", "visit .com", "7.5% VAT", "INV-2026.01", "a@ b", "",
 }
 

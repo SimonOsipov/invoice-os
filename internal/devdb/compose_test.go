@@ -22,22 +22,29 @@ type composeProject struct {
 }
 
 func (p composeProject) run(timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return p.runCtx(context.Background(), timeout, args...)
+}
+
+func (p composeProject) runCtx(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	full := append([]string{"compose", "-p", p.name, "-f", p.file}, args...)
 	cmd := exec.CommandContext(ctx, "docker", full...)
 	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DEV_DB_PORT=%d", p.port))
+	cmd.WaitDelay = 5 * time.Second // the compose plugin child can hold the pipe after docker is killed
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// left lists the project's containers and volumes; a failed query counts as "still there".
-func (p composeProject) left() string {
+// left lists the project's containers, volumes and networks; a failed query counts as "still there".
+func (p composeProject) left(ctx context.Context) string {
 	var left []string
-	for _, q := range [][]string{{"ps", "-aq"}, {"volume", "ls", "-q"}} {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	for _, q := range [][]string{{"ps", "-aq"}, {"volume", "ls", "-q"}, {"network", "ls", "-q"}} {
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		args := append(q, "--filter", "label="+composeLabel+"="+p.name)
-		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd.WaitDelay = 5 * time.Second
+		out, err := cmd.Output()
 		cancel()
 		if err != nil {
 			left = append(left, q[0]+" query failed: "+err.Error())
@@ -52,9 +59,15 @@ func (p composeProject) left() string {
 // are only logged and the next run's sweepStale removes them.
 func (p composeProject) down(t *testing.T) {
 	t.Helper()
-	for deadline := time.Now().Add(2 * time.Minute); ; {
-		_, _ = p.run(60*time.Second, "down", "-v", "--timeout", "10", "--remove-orphans")
-		left := p.left()
+	deadline := time.Now().Add(2 * time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline) // bounds each attempt too
+	defer cancel()
+	for {
+		_, _ = p.runCtx(ctx, 60*time.Second, "down", "-v", "--timeout", "10", "--remove-orphans")
+		// the budget may be spent; query on a fresh short context so leftovers are still logged
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		left := p.left(qctx)
+		qcancel()
 		if left == "" {
 			return
 		}
@@ -74,7 +87,9 @@ func requireDocker(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
+	info := exec.CommandContext(ctx, "docker", "info")
+	info.WaitDelay = 5 * time.Second
+	if err := info.Run(); err != nil {
 		t.Skipf("docker unavailable: %v", err)
 	}
 }
@@ -100,7 +115,9 @@ func sweepStale(t *testing.T, file string) {
 	for _, q := range [][]string{{"ps", "-a"}, {"volume", "ls"}, {"network", "ls"}} {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		args := append(q, "--filter", "label="+composeLabel, "--format", `{{.Label "`+composeLabel+`"}}`)
-		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd.WaitDelay = 5 * time.Second
+		out, err := cmd.Output()
 		cancel()
 		if err != nil {
 			t.Logf("sweep: docker %s: %v", strings.Join(q, " "), err)

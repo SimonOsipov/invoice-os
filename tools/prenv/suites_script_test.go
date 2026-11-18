@@ -22,7 +22,7 @@ type suitesRun struct {
 	noCores               bool   // getconf prints nothing
 	setup                 func(t *testing.T, tree string)
 	gap                   string // DOCKER_GAP: start, go or db; "" means Docker never stops answering
-	dockerMode            string // DOCKER_MODE: fail, missing or slow; "" answers at once
+	dockerMode            string // DOCKER_MODE: fail, missing, slow or deaf (ignores TERM); "" answers at once
 	dbOut                 string // test-rls output
 	dbRC                  int    // test-rls exit code once Docker is not in a gap
 	probe                 string // DOCKER_PROBE_SECS; "" sets 1, "unset" leaves it out
@@ -61,6 +61,7 @@ case "$DOCKER_MODE" in
   fail) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
   missing) echo "docker: command not found" >&2; exit 127 ;;
   slow) /bin/sleep 1; echo 29.1.3 ;;
+  deaf) trap '' TERM; while :; do /bin/sleep 1; done ;;
   *) echo 29.1.3 ;;
 esac
 `
@@ -511,14 +512,19 @@ func TestSuites_WithoutADBPortDockerIsNotAsked(t *testing.T) {
 
 func TestSuites_TheDockerProbeGivesUpAfterThirtySeconds(t *testing.T) {
 	t.Parallel()
-	for _, probe := range []string{"unset", "abc", "0"} {
+	for _, probe := range []string{"unset", "abc", "0", "00", "08", "010"} {
 		t.Run(probe, func(t *testing.T) {
 			t.Parallel()
 			res := runSuites(t, suitesRun{port: "5466", gap: "start", probe: probe, sleepStub: true})
 			if res.stdout != "docker=unreachable: docker info failed or gave no answer in 30s; no suite ran\n" || res.code != 3 {
 				t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
 			}
-			sl := sleepsIn(t, res.bin)
+			var sl []string
+			for _, a := range sleepsIn(t, res.bin) {
+				if a != "0.1" { // the grace wait after TERM
+					sl = append(sl, a)
+				}
+			}
 			if len(sl) != 150 {
 				t.Fatalf("%d sleeps, want 150", len(sl))
 			}
@@ -528,6 +534,18 @@ func TestSuites_TheDockerProbeGivesUpAfterThirtySeconds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSuites_ADockerThatIgnoresTermIsKilledAtTheLimit(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "deaf", probe: "1"})
+	if want := "docker=unreachable: docker info failed or gave no answer in 1s; no suite ran\n"; res.stdout != want || res.code != 3 {
+		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("took %s", d)
 	}
 }
 

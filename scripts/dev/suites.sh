@@ -23,13 +23,20 @@ fi
 
 # docker hangs, not fails, while the Docker Desktop VM is unreachable; macOS has no timeout(1).
 probe=${DOCKER_PROBE_SECS:-30}
-case $probe in '' | *[!0-9]* | 0) probe=30 ;; esac
+case $probe in '' | *[!0-9]* | 0*) probe=30 ;; esac # leading zeros read as octal
 docker_up() {
   local p t=0
   docker info --format '{{.ServerVersion}}' > /dev/null 2>&1 &
   p=$!
   while kill -0 "$p" 2> /dev/null; do
-    if [ "$t" -ge $((probe * 5)) ]; then kill "$p" 2> /dev/null; wait "$p" 2> /dev/null; return 1; fi
+    if [ "$t" -ge $((probe * 5)) ]; then
+      # docker may ignore TERM while blocked on its socket, so KILL after 2 s.
+      kill "$p" 2> /dev/null
+      for _ in {1..20}; do kill -0 "$p" 2> /dev/null || break; sleep 0.1; done
+      kill -9 "$p" 2> /dev/null
+      wait "$p" 2> /dev/null
+      return 1
+    fi
     sleep 0.2
     t=$((t + 1))
   done

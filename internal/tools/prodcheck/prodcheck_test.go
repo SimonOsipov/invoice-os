@@ -55,6 +55,7 @@ type fakeProd struct {
 	// consoleHSTS answers /console-hsts/<i> and gets the request's Authorization; guard answers /guard/<i>
 	consoleHSTS func(id, auth string) (int, http.Header)
 	guard       func(id string) (int, http.Header)
+	noGuardURLs bool
 
 	// the probe: signIn and exchange get the decoded JSON body, reads gets the path
 	signIn   func(in map[string]string) (int, string)
@@ -314,6 +315,13 @@ func (r result) want(t *testing.T, i int, status, detail string) {
 	}
 }
 
+func (r result) wantNot(t *testing.T, i int, detail string) {
+	t.Helper()
+	if s := r.step(t, i); strings.Contains(s.Detail, detail) {
+		t.Errorf("step %d %q: detail %q holds %q", i, s.Name, s.Detail, detail)
+	}
+}
+
 func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) result {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "prod_check.json")
@@ -328,6 +336,9 @@ func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) resu
 	for i := range consoleHSTSURLs {
 		consoleHSTS = append(consoleHSTS, f.consoleHSTSURL(i))
 		consoleGuard = append(consoleGuard, f.guardURL(i))
+	}
+	if f.noGuardURLs {
+		consoleGuard = nil
 	}
 	cfg := config{
 		targets: targets{
@@ -1776,13 +1787,28 @@ func TestSites_TheIAPTokenReachesNoOtherHost(t *testing.T) {
 func TestSites_ConsolesFailWithoutTheIAPToken(t *testing.T) {
 	f := newFake(t)
 	r := f.run(t, noIAP())
-	r.want(t, 2, "failed", "ops.ascomply.com=no IAP token")
-	r.want(t, 2, "failed", "sup.ascomply.com=no IAP token")
+	r.want(t, 2, "failed", "ops.ascomply.com no IAP token")
+	r.want(t, 2, "failed", "sup.ascomply.com no IAP token")
+	r.wantNot(t, 2, "behind main")
 	for _, h := range []string{"ops", "sup"} {
 		if got := f.requested("/site/" + h + ".ascomply.com"); len(got) != 0 {
 			t.Errorf("console read sent: %v", got)
 		}
 	}
+}
+
+func TestSites_ARefusedIAPTokenIsNotReportedAsBehindMain(t *testing.T) {
+	f := newFake(t)
+	f.site = func(s string) (int, string, http.Header) {
+		if s == "ops.ascomply.com" {
+			return 401, "", nil
+		}
+		return 200, good + "\n", nil
+	}
+	r := f.run(t, nil)
+	r.want(t, 2, "failed", "ops.ascomply.com")
+	r.want(t, 2, "failed", "IAP refused the token")
+	r.wantNot(t, 2, "behind main")
 }
 
 func TestTestHook_ConsolesFailWithoutTheIAPToken(t *testing.T) {
@@ -1884,6 +1910,20 @@ func TestConsoleGuard_FailsOnARedirectWithoutLocation(t *testing.T) {
 	if strings.Contains(r.step(t, lastStep).Detail, "ops.ascomply.com") {
 		t.Errorf("detail names ops: %q", r.step(t, lastStep).Detail)
 	}
+}
+
+func TestConsoleGuard_FailsOnANonHTTPSSignInLocation(t *testing.T) {
+	for _, loc := range []string{"http://accounts.google.com/o/oauth2/v2/auth", "//accounts.google.com/o/oauth2/v2/auth"} {
+		f := newFake(t)
+		guardAnswers(f, status(302, loc), status(302, googleAuth))
+		f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com")
+	}
+}
+
+func TestConsoleGuard_FailsWithNoGuardURLs(t *testing.T) {
+	f := newFake(t)
+	f.noGuardURLs = true
+	f.run(t, nil).want(t, lastStep, "failed", "guard URLs")
 }
 
 func TestConsoleGuard_FailsOnALookalikeHost(t *testing.T) {

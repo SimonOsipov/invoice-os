@@ -49,7 +49,7 @@ var workspaceReads = []string{"/api/tenancy/v1/me", "/api/portfolio/v1/entities"
 var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "www.ascomply.com/check", "ops.ascomply.com", "sup.ascomply.com"}
-	// consoleSites sit behind IAP: reads carry PROD_IAP_TOKEN, and the last step reads them without it.
+	// consoleSites are the staff consoles: reads carry PROD_IAP_TOKEN, and the guard step reads them without it.
 	consoleSites = []string{"ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog|/check)?/assets/[^"]*\.js)"`)
@@ -70,9 +70,17 @@ var (
 		"https://library.ascomply.com/",
 		"https://library.ascomply.com/library/rules",
 	}
-	// consoleHSTSURLs are read with the IAP token; the spec's HTTPS_URLS leaves them out.
-	consoleHSTSURLs = []string{"https://ops.ascomply.com/", "https://sup.ascomply.com/"}
+	// consoleHSTSURLs are read with the IAP token and, without it, by the guard step; the spec's HTTPS_URLS leaves them out.
+	consoleHSTSURLs = consoleURLs()
 )
+
+func consoleURLs() []string {
+	urls := make([]string, len(consoleSites))
+	for i, h := range consoleSites {
+		urls[i] = "https://" + h + "/"
+	}
+	return urls
+}
 
 // targets holds every address and the retry pause, so a test points the tool at httptest.
 type targets struct {
@@ -490,16 +498,21 @@ func (c *checker) sitesStep() (string, string) {
 	if c.expected == "" {
 		return "failed", "main's head was not resolved"
 	}
-	var behind []string
+	var behind, token []string
 	worst := 1
 	noToken := c.getenv("PROD_IAP_TOKEN") == ""
 	for _, site := range sites {
-		if noToken && slices.Contains(consoleSites, site) {
-			behind = append(behind, site+"="+noIAPToken)
+		console := slices.Contains(consoleSites, site)
+		if noToken && console {
+			token = append(token, site+" "+noIAPToken)
 			continue
 		}
 		code, body, try := c.get(c.t.siteURL(site), c.consoleAuth(site))
 		worst = max(worst, try)
+		if console && (code == http.StatusUnauthorized || code == http.StatusForbidden) {
+			token = append(token, site+" "+answered(code)+": IAP refused the token")
+			continue
+		}
 		seen := "none"
 		if code == http.StatusOK {
 			seen = shaOrNone(strings.TrimSpace(string(body)))
@@ -508,8 +521,15 @@ func (c *checker) sitesStep() (string, string) {
 			behind = append(behind, site+"="+short(seen))
 		}
 	}
-	if len(behind) > 0 {
-		return "failed", c.behind(behind)
+	if len(behind) > 0 || len(token) > 0 {
+		var parts []string
+		if len(behind) > 0 {
+			parts = append(parts, c.behind(behind))
+		}
+		if len(token) > 0 {
+			parts = append(parts, "console token problem, not a deploy lag: "+strings.Join(token, ", "))
+		}
+		return "failed", strings.Join(parts, "; ")
 	}
 	return "passed", passedOn(worst)
 }
@@ -814,6 +834,9 @@ func (c *checker) workspaceStep() (string, string) {
 // consoleGuardStep reads each console with no credential; only IAP's own redirect to Google sign-in passes,
 // so a Cloud Armor 403 or a served page cannot stand in for it.
 func (c *checker) consoleGuardStep() (string, string) {
+	if len(c.t.consoleGuard) != len(consoleSites) {
+		return "failed", fmt.Sprintf("%d guard URLs for %d console hosts", len(c.t.consoleGuard), len(consoleSites))
+	}
 	var problems []string
 	worst := 1
 	for i, u := range c.t.consoleGuard {
@@ -831,6 +854,8 @@ func (c *checker) consoleGuardStep() (string, string) {
 				problems = append(problems, host+" "+answered(code)+" with no Location")
 			case err != nil:
 				problems = append(problems, host+" "+answered(code)+" to an unparsable Location")
+			case l.Scheme != "https":
+				problems = append(problems, fmt.Sprintf("%s %s to a non-https Location (scheme %q)", host, answered(code), l.Scheme))
 			case l.Hostname() != signInHost:
 				problems = append(problems, fmt.Sprintf("%s %s to %q, not %s", host, answered(code), l.Hostname(), signInHost))
 			}

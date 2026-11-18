@@ -2,6 +2,7 @@
 # Runs Ralph's local suites in this worktree, one log per suite in .ralph/.
 # Ralph runs it through `hm suite run`, which runs one worktree's suites at a time on the machine.
 # Usage: [DEV_DB_PORT=<port>] scripts/dev/suites.sh   (no DEV_DB_PORT: the DB suites are skipped)
+# Exit 0 green, 1 a suite failed, 3 Docker did not answer and no suite failed.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 L=.ralph
@@ -20,15 +21,44 @@ if ! scripts/dev/wait-go-test-idle.sh . > "$L/wait.log" 2>&1; then
   exit 1
 fi
 
+# docker hangs, not fails, while the Docker Desktop VM is unreachable; macOS has no timeout(1).
+probe=${DOCKER_PROBE_SECS:-30}
+case $probe in '' | *[!0-9]* | 0) probe=30 ;; esac
+docker_up() {
+  local p t=0
+  docker info --format '{{.ServerVersion}}' > /dev/null 2>&1 &
+  p=$!
+  while kill -0 "$p" 2> /dev/null; do
+    if [ "$t" -ge $((probe * 5)) ]; then kill "$p" 2> /dev/null; wait "$p" 2> /dev/null; return 1; fi
+    sleep 0.2
+    t=$((t + 1))
+  done
+  wait "$p"
+}
+infra=0
+unreachable() { echo "docker=unreachable: $1"; infra=1; }
+if [ -n "${DEV_DB_PORT:-}" ] && ! docker_up; then
+  echo "docker=unreachable: docker info failed or gave no answer in ${probe}s; no suite ran"
+  exit 3
+fi
+
 failed=0
 fs=
-suite() { # suite <name> <command...>
-  local name=$1 rc
+rc=0
+run_suite() { # run_suite <name> <command...>; sets rc
+  local name=$1
   shift
   "$@" > "$L/$name.log" 2>&1
   rc=$?
-  echo "$name=$rc"
-  [ "$rc" -eq 0 ] || { failed=1; fs="$fs $name"; }
+}
+report() { # report <name> <rc>
+  echo "$1=$2"
+  [ "$2" -eq 0 ] || { failed=1; fs="$fs $1"; }
+}
+suite() { # suite <name> <command...>
+  local name=$1
+  run_suite "$@"
+  report "$name" "$rc"
 }
 
 # CI diffs against the PR base; origin/main stands in for it here.
@@ -58,10 +88,19 @@ else
   echo "gates=skipped: no origin/main"
 fi
 if [ -n "${DEV_DB_PORT:-}" ]; then
-  suite db sh -c 'rc=0
-    make test-rls test-queue test-audit test-approvals DEV_DB_PORT="$1" || rc=1
-    [ -z "$2" ] || make test-db PKGS="$2" DEV_DB_PORT="$1" || rc=1
-    exit $rc' sh "$DEV_DB_PORT" "$(db_pkgs)"
+  if ! docker_up; then
+    unreachable "docker info failed or gave no answer in ${probe}s; the db suite did not run"
+  else
+    run_suite db sh -c 'rc=0
+      make test-rls test-queue test-audit test-approvals DEV_DB_PORT="$1" || rc=1
+      [ -z "$2" ] || make test-db PKGS="$2" DEV_DB_PORT="$1" || rc=1
+      exit $rc' sh "$DEV_DB_PORT" "$(db_pkgs)"
+    if [ "$rc" -ne 0 ] && ! docker_up; then
+      unreachable "docker stopped answering during the db suite; its failures are not counted, see $L/db.log"
+    else
+      report db "$rc"
+    fi
+  fi
 else
   echo "db=skipped: no DEV_DB_PORT"
 fi
@@ -73,4 +112,5 @@ case $cores in ''|*[!0-9]*) workers=1 ;; *) workers=$(( cores / 4 )); [ "$worker
 suite unit sh -c "rc=0; pnpm -r --no-bail --filter '!@invoice-os/e2e' test --maxWorkers=$workers || rc=1; pnpm --filter @invoice-os/e2e test:unit || rc=1; exit \$rc"
 
 [ -z "$fs" ] || scripts/dev/suite-summary.sh "$L" $fs
+[ "$failed" -ne 0 ] || [ "$infra" -eq 0 ] || exit 3
 exit "$failed"

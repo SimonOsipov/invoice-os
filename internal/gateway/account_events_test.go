@@ -205,7 +205,7 @@ func TestAccountEvents_RefusedSignOutRecordsNothing(t *testing.T) {
 
 func aeRequestReset(t *testing.T, fake *fakeGoTrue, floor time.Duration, th *SignInThrottle, enforce bool, rec AccountEvents, email string) (*httptest.ResponseRecorder, time.Duration) {
 	t.Helper()
-	h := RequestPasswordResetHandler(fake.URL, testClient(), floor, th, enforce, nopLog(), rec)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), floor, th, enforce, nopLog(), rec, nil)
 	return serveReset(t.Context(), h, resendBody(email))
 }
 
@@ -412,7 +412,7 @@ func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
 			return doSignOut(SignOutHandler(f.URL, testClient(), liveSessions(t), log, rec, nil), `{"refresh_token":"`+signOutR0+`"}`)
 		}},
 		{"reset request", EventPasswordResetRequested, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
-			h := RequestPasswordResetHandler(newFakeGoTrue(t, 200, `{}`).URL, testClient(), 0, resendThrottle(time.Now), true, log, rec)
+			h := RequestPasswordResetHandler(newFakeGoTrue(t, 200, `{}`).URL, testClient(), 0, resendThrottle(time.Now), true, log, rec, nil)
 			resp, _ := serveReset(t.Context(), h, resendBody(aeEmail))
 			return resp
 		}},

@@ -53,7 +53,7 @@ func mailRoutes() []mailRoute {
 			return rec
 		}},
 		{"reset", http.StatusAccepted, func(t *testing.T, u *url.URL) *httptest.ResponseRecorder {
-			h := RequestPasswordResetHandler(u, testClient(), 0, resendThrottle(time.Now), true, log, nil)
+			h := RequestPasswordResetHandler(u, testClient(), 0, resendThrottle(time.Now), true, log, nil, nil)
 			rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 			return rec
 		}},
@@ -253,10 +253,11 @@ func TestMailAlert_EventsCarryNoAddress(t *testing.T) {
 	}
 	post(RegisterHandler(newFakeGoTrue(t, http.StatusTooManyRequests, gtInstanceMailCap).URL, testClient(), 0, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, nil))
 	post(registerWithShare(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, nil, nil, spentShare(t)))
+	post(resetHandlerOn(newFakeGoTrue(t, http.StatusOK, "{}").URL, resendThrottle(time.Now), spentResetShare(t, 1, 10, newMailClock(resetT0))))
 
 	events := rec.Events()
-	if len(events) != 2 {
-		t.Fatalf("events = %d, want 2", len(events))
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want 3", len(events))
 	}
 	sentrytest.AssertNoLeak(t, events)
 	for _, e := range events {
@@ -266,5 +267,57 @@ func TestMailAlert_EventsCarryNoAddress(t *testing.T) {
 				t.Errorf("event carries %q: %s", s, raw)
 			}
 		}
+	}
+}
+
+func TestMailAlert_SpentResetShareAlerts(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "gateway")
+	c := newMailClock(time.Date(2026, 11, 17, 5, 59, 0, 0, time.UTC))
+	swapMailAlerts(t, c.Now)
+	fake := newFakeGoTrue(t, http.StatusOK, "{}")
+	h := resetHandlerOn(fake.URL, resendThrottle(c.Now), spentResetShare(t, 1, 10, c))
+
+	postResetFrom(t, h, testIP(1), "a@corp.example")
+	postResetFrom(t, h, testIP(2), "b@corp.example")
+
+	e := rec.One(t, want)
+	if v := alertValue(e); v != "reset mail share spent" {
+		t.Errorf("exception = %q", v)
+	}
+	if !slices.Equal(e.Fingerprint, []string{"gateway-mail-alert", "reset mail share spent", "2026-11-17T00:00:00Z"}) {
+		t.Errorf("fingerprint = %q", e.Fingerprint)
+	}
+}
+
+func TestMailAlert_AnIPRefusalDoesNotAlert(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "gateway")
+	c := newMailClock(resetT0)
+	swapMailAlerts(t, c.Now)
+	m := resetShareAt(10, 100, 1, 100, c)
+	m.Hold(testIP(1))
+	h := resetHandlerOn(newFakeGoTrue(t, http.StatusOK, "{}").URL, resendThrottle(c.Now), m)
+
+	postResetFrom(t, h, testIP(1), "a@corp.example")
+	postResetFrom(t, h, testIP(1), "b@corp.example")
+
+	rec.None(t)
+}
+
+func TestMailAlert_ResetAndRegistrationSharesHaveTheirOwnGates(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "gateway")
+	c := newMailClock(resetT0)
+	swapMailAlerts(t, c.Now)
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	doRegisterWith(t, registerWithShare(fake.URL, nil, nil, spentShare(t)), registerBody(regEmail, regPassword))
+	postResetFrom(t, resetHandlerOn(fake.URL, resendThrottle(c.Now), spentResetShare(t, 1, 10, c)), testIP(1), "a@corp.example")
+
+	var got []string
+	for _, e := range rec.Events() {
+		got = append(got, alertValue(e))
+	}
+	slices.Sort(got)
+	if want := []string{"registration mail share spent", "reset mail share spent"}; !slices.Equal(got, want) {
+		t.Errorf("events = %q, want %q", got, want)
 	}
 }

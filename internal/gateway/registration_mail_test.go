@@ -157,7 +157,7 @@ func TestRegistrationMail_ResetStillMailsAfterTheShareIsSpent(t *testing.T) {
 	for range 50 {
 		doRegisterWith(t, register, registerBody(regEmail, regPassword))
 	}
-	reset := RequestPasswordResetHandler(gt.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil)
+	reset := RequestPasswordResetHandler(gt.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil, nil)
 	rec, _ := serveResend(t.Context(), reset, resendBody("ada@corp.example"))
 	requireAccepted(t, rec, "reset after the share is spent")
 
@@ -188,7 +188,7 @@ func TestRegistrationMail_ShareWindowsStraddlingOneGoTrueHourLeaveTheReserve(t *
 		reg()
 	}
 	c.Set(tb.Add(59 * time.Minute))
-	reset := RequestPasswordResetHandler(gt.URL, testClient(), 0, resendThrottle(c.Now), true, log, nil)
+	reset := RequestPasswordResetHandler(gt.URL, testClient(), 0, resendThrottle(c.Now), true, log, nil, nil)
 	rec, _ := serveResend(t.Context(), reset, resendBody("ada@corp.example"))
 	requireAccepted(t, rec, "reset")
 

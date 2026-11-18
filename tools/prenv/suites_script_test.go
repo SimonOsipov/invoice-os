@@ -2,11 +2,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -21,12 +23,13 @@ type suitesRun struct {
 	cores                 string // getconf _NPROCESSORS_ONLN output; "" means 12
 	noCores               bool   // getconf prints nothing
 	setup                 func(t *testing.T, tree string)
-	gap                   string // DOCKER_GAP: start, go or db; "" means Docker never stops answering
-	dockerMode            string // DOCKER_MODE: fail, missing, slow or deaf (ignores TERM); "" answers at once
-	dbOut                 string // test-rls output
-	dbRC                  int    // test-rls exit code once Docker is not in a gap
-	probe                 string // DOCKER_PROBE_SECS; "" sets 1, "unset" leaves it out
-	sleepStub             bool   // a sleep stub that logs its argv
+	gap                   string        // DOCKER_GAP: start, go or db; "" means Docker never stops answering
+	dockerMode            string        // DOCKER_MODE: fail, missing, slow or deaf (ignores TERM); "" answers at once
+	dbOut                 string        // test-rls output
+	dbRC                  int           // test-rls exit code once Docker is not in a gap
+	probe                 string        // DOCKER_PROBE_SECS; "" sets 1, "unset" leaves it out
+	sleepStub             bool          // a sleep stub that logs its argv
+	deadline              time.Duration // fail the test, not hang, if the script runs longer; 0 means none
 }
 
 type suitesResult struct {
@@ -124,7 +127,17 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		bash = "/bin/bash"
 	}
-	cmd := exec.Command(bash, filepath.Join(tree, "scripts/dev/suites.sh"))
+	ctx := context.Background()
+	if r.deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.deadline)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, bash, filepath.Join(tree, "scripts/dev/suites.sh"))
+	// Own process group: on the deadline, kill the shims and their sleeps too, not only bash.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = tree
 	cmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -146,6 +159,9 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		cmd.Env = append(cmd.Env, "GETCONF_N="+cores)
 	}
 	stdout, _, err := runToFiles(t, cmd, false)
+	if ctx.Err() != nil {
+		t.Fatalf("suites.sh still running after %s (timeout); stdout so far:\n%s", r.deadline, stdout)
+	}
 	code := 0
 	if err != nil {
 		ee, ok := err.(*exec.ExitError)
@@ -540,7 +556,7 @@ func TestSuites_TheDockerProbeGivesUpAfterThirtySeconds(t *testing.T) {
 func TestSuites_ADockerThatIgnoresTermIsKilledAtTheLimit(t *testing.T) {
 	t.Parallel()
 	start := time.Now()
-	res := runSuites(t, suitesRun{port: "5466", dockerMode: "deaf", probe: "1"})
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "deaf", probe: "1", deadline: 10 * time.Second})
 	if want := "docker=unreachable: docker info failed or gave no answer in 1s; no suite ran\n"; res.stdout != want || res.code != 3 {
 		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
 	}

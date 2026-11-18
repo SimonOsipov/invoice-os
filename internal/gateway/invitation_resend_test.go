@@ -249,7 +249,7 @@ func TestInvitationResend_SharesTheResendBudgets(t *testing.T) {
 	log, buf := captureLog()
 	perAddress := resendThrottle(time.Now)
 	invite := InvitationResendHandler(fake.URL, testClient(), perAddress, true, log, invitePreviewing("unconfirmed").preview)
-	anonymous := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
+	anonymous := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 
 	for i := 1; i <= ResendPerAddress; i++ {
 		rec := serveInviteResend(invite, http.MethodPost, tokenBody(inviteToken))

@@ -15,5 +15,5 @@ func RequestPasswordResetHandler(authURL *url.URL, client *http.Client, minRespo
 		client, minResponse, perAddress, enforce, log,
 		func(r *http.Request, email string) {
 			recordAccountEvent(r, events, log, AccountEvent{Event: EventPasswordResetRequested, Email: email})
-		})
+		}, nil)
 }

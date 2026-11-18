@@ -298,7 +298,8 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		nc := gateway.RegistrationNotConfigured()
 		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
-	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
+	posture := platform.Posture(platform.DeployEnv())
+	enforce := posture != platform.PosturePreview
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -307,10 +308,16 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	// Resend and reset share one budget per address.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perAddress.Shared(pool, log)
+	// Only a hosted gateway mails through Resend; other postures count nothing.
+	var mail *gateway.RegistrationMail
+	if posture == platform.PostureHosted {
+		mail = gateway.NewRegistrationMail("registration-mail", gateway.RegistrationMailPerHour, gateway.RegistrationMailPerDay, time.Now)
+		mail.Shared(pool, log)
+	}
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool), platform.Posture(platform.DeployEnv()).Ephemeral()),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool), posture.Ephemeral(), mail),
 		ResendByAddress:      perAddress,
-		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
+		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log, mail),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}

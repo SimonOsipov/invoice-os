@@ -106,6 +106,11 @@ func taggedHub(ctx context.Context) *sentry.Hub {
 	return hub
 }
 
+// CaptureErrorGrouped is CaptureError with the given Sentry fingerprint.
+func CaptureErrorGrouped(ctx context.Context, err error, fingerprint ...string) {
+	capture(ctx, err, fingerprint)
+}
+
 // capturePanic reports a recovered handler panic with its request; scrubEvent
 // strips the query, body, cookies and non-allowlisted headers. A no-op when disabled.
 func capturePanic(r *http.Request, rec any) {
@@ -118,10 +123,17 @@ func capturePanic(r *http.Request, rec any) {
 // CaptureError reports a non-fatal error to Sentry, tagged with the request and
 // tenant ids from the context. Safe to call when Sentry is disabled.
 func CaptureError(ctx context.Context, err error) {
+	capture(ctx, err, nil)
+}
+
+func capture(ctx context.Context, err error, fingerprint []string) {
 	if err == nil {
 		return
 	}
 	if hub := taggedHub(ctx); hub != nil {
+		if fingerprint != nil {
+			hub.ConfigureScope(func(scope *sentry.Scope) { scope.SetFingerprint(fingerprint) })
+		}
 		hub.CaptureException(err)
 	}
 }

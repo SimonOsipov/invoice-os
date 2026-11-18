@@ -174,7 +174,7 @@ var errGuardRefused = errors.New("upstream refused the gateway token")
 // upstream and overwrite the identity headers from the verified token.
 func newReverseProxy(service string, target *url.URL, gatewayToken string, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		Transport: platform.TraceTransport(nil),
+		Transport: platform.TraceTransport(platform.ResetRetryTransport(nil)),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.SetXForwarded()

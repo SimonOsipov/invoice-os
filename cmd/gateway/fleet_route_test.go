@@ -25,7 +25,7 @@ func TestSessionCheckerCarriesTheIDToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	want := `gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(nil)}`
+	want := `gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(platform.ResetRetryTransport(nil))}`
 	if !strings.Contains(string(src), want) {
 		t.Errorf("main.go builds the session checker without %s", want)
 	}

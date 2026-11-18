@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/net/html"
 )
@@ -1770,5 +1772,46 @@ func TestRegistrationHandlers_HostedResetCountsThroughThePool(t *testing.T) {
 	}
 	if n := len(calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0: the reset share must count through the pool", n)
+	}
+}
+
+// Without reset.Shared a hosted gateway counts the reset share per process, so N instances admit N times the share.
+func TestRegistrationHandlers_HostedResetShareLandsInTheSharedTable(t *testing.T) {
+	gw, super := os.Getenv("DATABASE_GATEWAY_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
+	if gw == "" || super == "" {
+		t.Skip("set DATABASE_GATEWAY_URL and DATABASE_SUPERUSER_URL (or run `make test-db PKGS=./cmd/gateway/...`)")
+	}
+	t.Setenv("DEPLOY_ENV", "production")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, gw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	superPool, err := pgxpool.New(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(superPool.Close)
+	// A fresh address: the shared per-address count would refuse a repeated one before the reset share is reached.
+	addr := "qa-" + uuid.NewString() + "@corp.example"
+	sum := sha256.Sum256([]byte(addr))
+	clean := func() { // the reset scopes are fixed, so clear all their rows; unique-scope tests are untouched
+		_, _ = superPool.Exec(ctx, `DELETE FROM gateway_throttle_counts WHERE scope LIKE 'reset-mail-%' OR (scope = 'resend-address' AND key_hash = $1)`, sum[:])
+	}
+	clean()
+	t.Cleanup(clean)
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, pool)
+
+	resetFromIP(reg.RequestPasswordReset, addr, "198.51.100.1")
+
+	var n int
+	if err := superPool.QueryRow(ctx, `SELECT count(*) FROM gateway_throttle_counts WHERE scope = 'reset-mail-hour'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("%d reset-mail-hour rows, want 1: the hosted reset share must count in gateway_throttle_counts", n)
 	}
 }

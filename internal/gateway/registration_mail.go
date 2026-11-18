@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ceiling: 2 × RegistrationMailPerHour plus the reset and invite reserve must stay under GOTRUE_RATE_LIMIT_EMAIL_SENT (invoice-os-infra terraform/run.tf).
+// ceiling: 2 × RegistrationMailPerHour must stay under GOTRUE_RATE_LIMIT_EMAIL_SENT (invoice-os-infra terraform/run.tf).
 // ceiling: RegistrationMailPerDay fits Resend Free's 100 a day; drop it on a plan with no daily limit.
 const (
 	RegistrationMailPerHour = 10

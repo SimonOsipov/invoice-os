@@ -130,7 +130,7 @@ function makeDeps(L: Login, root: string, calls: string[], over: Partial<LoginDe
     regrant: spy(calls, 'regrant', async () => {}),
     signInFresh: spy(calls, 'signInFresh', async (k: AccountKey) => ({ role: accountFor(k).role })),
     checkSavedState: spy(calls, 'checkSavedState', async (k: AccountKey) => ({ ok: true, role: accountFor(k).role })),
-    // A preview login must never reach these (SECAUD-35-10 AC 9).
+    // A preview login must never reach these.
     productionStaff: spy(calls, 'productionStaff', (): Record<'developer' | 'support', Account> => {
       throw new Error('a preview login read the production staff file')
     }),
@@ -166,7 +166,7 @@ const meOk = (role: string): Answer => ({ status: 200, body: { tenant: { id: TEN
 const FORBIDDEN: Answer = { status: 403, body: { error: 'no active membership' } }
 
 // Stubs the gateway at global fetch; every request lands on `log` as "METHOD /path".
-function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; accessToken?: string; failMemberGrantAt?: number } = {}): Gateway {
+function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; accessToken?: string; failMemberGrantAt?: number; signOutStatus?: number } = {}): Gateway {
   const gw: Gateway = { requests: [] }
   const me = [...(opts.me ?? [meOk('admin')])]
   let memberGrants = 0
@@ -185,6 +185,8 @@ function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; acc
           return answer(opts.signIn ?? { status: 200, body: { code: 'code-1' } })
         case '/auth/exchange':
           return answer({ status: 200, body: { access_token: opts.accessToken ?? ACCESS_TOKEN, refresh_token: 'refresh-1' } })
+        case '/auth/sign-out':
+          return answer({ status: opts.signOutStatus ?? 204 })
         case '/auth/mock/member':
           return answer(++memberGrants === opts.failMemberGrantAt ? { status: 500, body: { error: 'boom' } } : { status: 204 })
         case '/api/tenancy/v1/me':
@@ -1236,7 +1238,7 @@ describe('ctl login on a PR preview', () => {
   })
 })
 
-// SECAUD-35-10: ctl login developer|support --env production.
+// ctl login developer|support --env production.
 const DEV_PW = 'pw-dev-7f3a'
 const SUP_PW = 'pw-sup-9c1e'
 const IAP_TOKEN = 'ya29.sentinel-iap'
@@ -1500,6 +1502,23 @@ describe('staffClaim against a stubbed gateway', () => {
     const signIn = gw.requests.filter((r) => r.path === '/auth/sign-in')
     expect(signIn).toHaveLength(1)
     expect(signIn[0].body).toMatchObject({ email: DEV.email, password: DEV.password })
+    // The claim-check session is revoked with its own refresh token, after the exchange.
+    const order = gw.requests.map((r) => r.path)
+    expect(order.filter((p) => p === '/auth/sign-out')).toHaveLength(1)
+    expect(order.indexOf('/auth/sign-out')).toBeGreaterThan(order.indexOf('/auth/exchange'))
+    expect(gw.requests.find((r) => r.path === '/auth/sign-out')!.body).toEqual({ refresh_token: 'refresh-1' })
+  })
+
+  it('a non-staff claim-check session is revoked too, and a failed revoke is an error', async () => {
+    const L = await load()
+    env()
+    const gw = stubGateway({ accessToken: tokenWith({ app_metadata: {} }) })
+    expect(await L.staffClaim(DEV)).toBe('not-staff')
+    expect(gw.requests.filter((r) => r.path === '/auth/sign-out')).toHaveLength(1)
+
+    stubGateway({ accessToken: tokenWith({ app_metadata: { staff: true } }), signOutStatus: 500 })
+    const err = await refused(L.staffClaim(DEV))
+    expect(err.message).toContain('sign-out answered 500')
   })
 
   it('a token without a boolean true staff claim is not staff', async () => {

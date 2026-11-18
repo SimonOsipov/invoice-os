@@ -139,12 +139,13 @@ export function readProductionStaff(file = productionStaffFile()): Record<'devel
   return out
 }
 
-// Answers from the access token's staff claim; the session is dropped.
+// Answers from the access token's staff claim; the session is signed out before the answer returns.
 export async function staffClaim(account: Account): Promise<StaffClaim> {
-  const { signInSession, claimsOf, ApiError } = await import('../api/client')
+  const { signInSession, signOutSession, claimsOf, ApiError } = await import('../api/client')
   let token: string
+  let refresh: string
   try {
-    token = (await signInSession(account.email, account.password)).access_token
+    ;({ access_token: token, refresh_token: refresh } = await signInSession(account.email, account.password))
   } catch (e) {
     if (!(e instanceof ApiError)) throw e
     if (e.status === 401) return 'refused'
@@ -152,6 +153,8 @@ export async function staffClaim(account: Account): Promise<StaffClaim> {
     throw e
   }
   const meta = claimsOf(token).app_metadata as { staff?: unknown } | undefined
+  const out = await signOutSession(refresh)
+  if (out !== 204) throw new CtlError(`API sign-out answered ${out}`, 'The claim-check session may still be live; the user revokes it, then retries.', 1)
   return meta?.staff === true ? 'staff' : 'not-staff'
 }
 

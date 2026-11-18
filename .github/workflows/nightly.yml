@@ -62,7 +62,7 @@ jobs:
           svc=$(retry gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format=json)
           commit=$(jq -r '. as $s | ([.status.traffic[]? | select(.percent == 100)] | if length == 1 then (.[0] | if .latestRevision then $s.status.latestReadyRevisionName else .revisionName end) // "" else "" end) as $rev | if $rev != "" and $rev == $s.status.latestCreatedRevisionName then ($s.spec.template.metadata.labels.commit // "") else "" end' <<<"$svc")
           if [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then echo "AUTH_BUILD=$commit" >>"$GITHUB_ENV"; fi
-      # IAP admits deploy-prod on ops/sup (SECAUD-35); gcloud creds stay as set above.
+      # The nightly mints an IAP token for its console reads; gcloud creds stay as set above.
       - id: iap
         continue-on-error: true
         uses: google-github-actions/auth@v3

@@ -6,7 +6,7 @@ import { resolveTarget } from '../targets'
 const LANDING_URL = resolveTarget('LANDING_URL')
 const HSTS = 'max-age=63072000; includeSubDomains; preload'
 
-// ops and sup sit behind IAP; prodcheck reads them with a token.
+// ops and sup are guarded by IAP once enabled (the prodcheck guard step reports it); prodcheck reads them with a token.
 const HTTPS_URLS = [
   'https://ascomply.com/',
   'https://ascomply.com/blog/x?q=1',

@@ -309,7 +309,7 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
-      # IAP admits deploy-prod on ops/sup (SECAUD-35). A failed mint stops the job before traffic moves.
+      # deploy-prod mints an IAP token for its console reads. A failed mint stops the job before traffic moves.
       - id: iap
         uses: google-github-actions/auth@v3
         with:

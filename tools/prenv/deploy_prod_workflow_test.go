@@ -1026,7 +1026,7 @@ func TestDeployProd_IAPTokenStepPrecedesTraffic(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "deploy-prod.yml")
 	requireNoProblems(t, "deploy-prod.yml", siteStepProblems(yml))
-	start := strings.Index(yml, "      # IAP admits deploy-prod on ops/sup (SECAUD-35). A failed")
+	start := strings.Index(yml, "      # deploy-prod mints an IAP token for its console reads. A failed")
 	end := start + strings.Index(yml[start:], "      - uses: actions/download-artifact@v4")
 	if start < 0 || end < start {
 		t.Fatal("cannot find the iap step block")

@@ -7,25 +7,129 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// An orphaned child that exits non-zero must not crash-restart the dev Postgres.
-func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
+const composeLabel = "com.docker.compose.project"
+
+// composeProject is one throwaway compose project of the dev Postgres.
+type composeProject struct {
+	name, file string
+	port       int
+}
+
+func (p composeProject) run(timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	full := append([]string{"compose", "-p", p.name, "-f", p.file}, args...)
+	cmd := exec.CommandContext(ctx, "docker", full...)
+	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DEV_DB_PORT=%d", p.port))
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// left lists the project's containers and volumes; a failed query counts as "still there".
+func (p composeProject) left() string {
+	var left []string
+	for _, q := range [][]string{{"ps", "-aq"}, {"volume", "ls", "-q"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		args := append(q, "--filter", "label="+composeLabel+"="+p.name)
+		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		cancel()
+		if err != nil {
+			left = append(left, q[0]+" query failed: "+err.Error())
+		} else if s := strings.TrimSpace(string(out)); s != "" {
+			left = append(left, s)
+		}
+	}
+	return strings.Join(left, "\n")
+}
+
+// down retries for 2 minutes, since a Docker VM gap makes single attempts fail; leftovers
+// are only logged and the next run's sweepStale removes them.
+func (p composeProject) down(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Minute); ; {
+		_, _ = p.run(60*time.Second, "down", "-v", "--timeout", "10", "--remove-orphans")
+		left := p.left()
+		if left == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("compose project %s not removed, left for the next sweep:\n%s", p.name, left)
+			return
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// requireDocker skips when docker is missing or gives no answer in 30s (it hangs in a VM gap).
+func requireDocker(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not on PATH")
 	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
 		t.Skipf("docker unavailable: %v", err)
 	}
+}
+
+// staleComposeProject reports a devcomposetest<UnixNano> project older than 30 minutes, so a
+// parallel test in another worktree is never swept.
+func staleComposeProject(name string, now time.Time) bool {
+	digits, ok := strings.CutPrefix(name, "devcomposetest")
+	if !ok {
+		return false
+	}
+	ns, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return false
+	}
+	return now.Sub(time.Unix(0, ns)) > 30*time.Minute
+}
+
+// sweepStale removes the containers, volumes and networks of stale projects left by killed runs.
+func sweepStale(t *testing.T, file string) {
+	t.Helper()
+	stale := map[string]bool{}
+	for _, q := range [][]string{{"ps", "-a"}, {"volume", "ls"}, {"network", "ls"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		args := append(q, "--filter", "label="+composeLabel, "--format", `{{.Label "`+composeLabel+`"}}`)
+		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		cancel()
+		if err != nil {
+			t.Logf("sweep: docker %s: %v", strings.Join(q, " "), err)
+			continue
+		}
+		for _, name := range strings.Fields(string(out)) {
+			if staleComposeProject(name, time.Now()) {
+				stale[name] = true
+			}
+		}
+	}
+	for name := range stale {
+		p := composeProject{name: name, file: file}
+		if out, err := p.run(60*time.Second, "down", "-v", "--timeout", "0", "--remove-orphans"); err != nil {
+			t.Logf("sweep %s: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// An orphaned child that exits non-zero must not crash-restart the dev Postgres.
+func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
+	requireDocker(t)
 
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
 	compose := filepath.Join(wd, "..", "..", "docker-compose.yml")
+	sweepStale(t, compose)
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -34,18 +138,9 @@ func TestDevComposePostgres_OrphanedChildDoesNotCrashServer(t *testing.T) {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 
-	project := fmt.Sprintf("devcomposetest%d", time.Now().UnixNano())
-	run := func(timeout time.Duration, args ...string) (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		full := append([]string{"compose", "-p", project, "-f", compose}, args...)
-		cmd := exec.CommandContext(ctx, "docker", full...)
-		cmd.Env = append(cmd.Environ(), fmt.Sprintf("DEV_DB_PORT=%d", port))
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
-
-	t.Cleanup(func() { _, _ = run(90*time.Second, "down", "-v", "--timeout", "10") })
+	p := composeProject{name: fmt.Sprintf("devcomposetest%d", time.Now().UnixNano()), file: compose, port: port}
+	run := p.run
+	t.Cleanup(func() { p.down(t) })
 
 	if out, err := run(180*time.Second, "up", "-d", "--wait", "--wait-timeout", "120", "postgres"); err != nil {
 		t.Fatalf("compose up: %v\n%s", err, out)

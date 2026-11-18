@@ -215,8 +215,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
           await expect(rows.first(), `${at}: no client row after the entities response`).toBeVisible({ timeout: 30_000 })
           await expect(rows.filter({ hasNotText: HEALTH_LABEL }), `${at}: a row still shows the neutral health cell`).toHaveCount(0, { timeout: 30_000 })
           await framesPaint()
-          await settleAnimations(notice(page))
-          await measure(`${at} settled`)
+          await scrollAndMeasure(`${at} settled`, width)
         } else {
           await scrollAndMeasure(at, width)
         }

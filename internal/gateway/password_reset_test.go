@@ -289,7 +289,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 	// pair builds both handlers over one fake; shared passes one throttle to both.
 	pair := func(fake *fakeGoTrue, log *slog.Logger, shared bool) (resend, reset http.Handler) {
 		perAddress := resendThrottle(time.Now)
-		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
+		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 		if !shared {
 			perAddress = resendThrottle(time.Now)
 		}

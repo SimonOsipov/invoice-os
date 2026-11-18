@@ -86,6 +86,18 @@ paths:
 - Expect Cloud Armor to limit `POST /auth/sign-in`, `/auth/refresh` and `/auth/exchange` per IP per 10 minutes, each in its own budget. Expect it to ban an IP over a budget from that route. The numbers are in `security-threat-model.md`, Network.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
+- Spend one instance-wide registration mail share on `/auth/register` and `/auth/resend-verification`. Do this on a hosted gateway only.
+- Keep the share in `gateway_throttle_counts` as `registration-mail-hour` (10 an hour) and `registration-mail-day` (30 per UTC day).
+- Spend the share after the invited check and the per-address count. Spend it before the unsubscribe token and GoTrue.
+- Refund the share on a GoTrue 4xx.
+- Answer a request the share refuses with the same 202 after the floor. Make no GoTrue call for it.
+- Never spend or read the share on reset or the invitation routes.
+- Treat GoTrue's `over_email_send_rate_limit` as the instance mail cap. The exception is a `msg` that starts with `For security purposes, you can only request this after `.
+- Report the instance mail cap and a spent registration share to Sentry through `platform.CaptureErrorGrouped`.
+- Send a fixed error with no address.
+- Send each error at most once per 6 hours per instance.
+- Fingerprint it by the 6-hour UTC bucket. Each capture then opens a new issue and emails staff.
+- Keep the answer, its timing and the WARN line unchanged.
 - Log no email address, password, token, code or client IP.
 - Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a sign-in session mint (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
 - Count a session mint as `POST /auth/sign-in` only. The gateway writes no `FirstSession` row. The worker still records the device of a queued one and writes no audit row for it.
@@ -121,7 +133,7 @@ paths:
 - Keep `GOTRUE_PASSWORD_MIN_LENGTH` in `sidecar/auth/Dockerfile` equal to `resetPasswordMin` in `internal/gateway/reset_password.go`. The reset and set-password pages and their alert take the number from that constant (`TestResetPassword_MinimumMatchesTheIdP`).
 - Write `GOTRUE_SESSIONS_TIMEBOX` and `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT` in `sidecar/auth/Dockerfile` as Go durations (`720h`). `TestDockerfileCommitsTheD3EnvBlockAndNoSecret` pins the values; `idp-up.sh` fails at boot on a value GoTrue cannot parse.
 - In `idp-up.sh`, `idp-mail`, `idp-es256`, `idp-short` and `idp-session` raise GoTrue's per-IP rates: gateway-backed IdP tests there share one local key. `idp-hs256` keeps the defaults; it carries the limiter proof.
-- Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429.
+- Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429. Answer a register or resend whose share cannot be read with the same 202.
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
 - Bind that code to the `state` in the request body.

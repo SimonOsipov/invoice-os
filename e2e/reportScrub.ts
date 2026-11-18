@@ -25,6 +25,8 @@ const HEADER_NAME = String.raw`(?:authorization|cookie|set-cookie|__Host-[^"\\]*
 const LINE = String.raw`(?:(?<![\w-])|(?<=\\[nrt]))(?:proxy-)?${HDR}[ \t]*:[ \t]*(?:\\*")?`
 
 const RULES: [RegExp, string][] = [
+  // The e2e member password wherever it lands (trace params, logs, titles, request bodies); keeps the residual check satisfiable.
+  [/e2e-member-pw-[\w-]*/g, R],
   [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, R],
   [/eyJ[A-Za-z0-9_-]{10,}/g, R],
   // HAR shape: "name":"<header>","value":"<secret>"

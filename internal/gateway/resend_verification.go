@@ -22,13 +22,14 @@ const (
 func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, mail *RegistrationMail) http.Handler {
 	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
 		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
-		client, minResponse, perAddress, enforce, log, nil, mail)
+		client, minResponse, perAddress, enforce, log, nil, mail, nil)
 }
 
 // mailLinkHandler serves the mail-link routes (resend, reset); both share one per-address throttle.
 // A non-nil mail is spent before GoTrue; a spent or unreadable share refunds the address and answers the same 202 without a call.
+// A non-nil reset is held per client IP and for the shared reset share after the address count; a refusal refunds the address and answers the same 202 without a call.
 // name prefixes every log line; verb names the GoTrue call in the failure line.
-func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string), mail *RegistrationMail) http.Handler {
+func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string), mail *RegistrationMail, reset *ResetMail) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
@@ -81,6 +82,26 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			}
 		}
 
+		var hold ResetHold
+		if !refused && reset != nil {
+			h, spent, rerr := reset.Hold(gotrueAddress(r))
+			hold = h
+			if spent != "" || rerr != nil {
+				if addrHeld {
+					perAddress.Refund(email)
+				}
+				switch {
+				case rerr != nil:
+				case spent == "hour" || spent == "day":
+					log.WarnContext(r.Context(), name+": mail share spent", slog.String("share", spent))
+					alertMail(r.Context(), ErrResetMailSpent)
+				default:
+					log.WarnContext(r.Context(), name+": limit reached", slog.String("limit", spent))
+				}
+				refused = true
+			}
+		}
+
 		var upstream time.Duration
 		if !refused {
 			status, gt, err := postGoTrue(r, client, endpoint, payload(email), nil)
@@ -91,6 +112,7 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 					perAddress.Refund(email)
 				}
 				mail.Refund()
+				hold.Refund()
 			}
 			switch {
 			case err != nil:

@@ -92,8 +92,13 @@ paths:
 - Refund the share on a GoTrue 4xx.
 - Answer a request the share refuses with the same 202 after the floor. Make no GoTrue call for it.
 - Never spend or read the share on reset or the invitation routes.
+- Spend one instance-wide reset mail share on `/auth/request-password-reset`, on a hosted gateway only: `reset-mail-hour` (3 an hour) and `reset-mail-day` (20 per UTC day) in `gateway_throttle_counts`.
+- Bound each client IP inside it: `reset-mail-ip-hour` (1 an hour) and `reset-mail-ip-day` (3 per 24 h), per `checkIPKey(clientIP)`.
+- Spend them after the per-address count and before GoTrue, for every address. Never read whether the address has an account.
+- On a GoTrue 4xx, refund exactly what the request took, on the UTC day it took it. Answer a request they refuse with the same 202 after the floor, without a GoTrue call.
+- Never spend or read the reset share on register, resend or the invitation routes.
 - Treat GoTrue's `over_email_send_rate_limit` as the instance mail cap. The exception is a `msg` that starts with `For security purposes, you can only request this after `.
-- Report the instance mail cap and a spent registration share to Sentry through `platform.CaptureErrorGrouped`.
+- Report the instance mail cap, a spent registration share and a spent reset share to Sentry through `platform.CaptureErrorGrouped`.
 - Send a fixed error with no address.
 - Send each error at most once per 6 hours per instance.
 - Fingerprint it by the 6-hour UTC bucket. Each capture then opens a new issue and emails staff.

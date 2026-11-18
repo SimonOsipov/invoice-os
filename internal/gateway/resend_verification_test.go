@@ -793,7 +793,7 @@ func TestResendAndReset_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
 			return ResendVerificationHandler(u, testClient(), 0, th, true, log, nil)
 		}},
 		{"reset", resetLimitMsg, func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler {
-			return RequestPasswordResetHandler(u, testClient(), 0, th, true, log, nil)
+			return RequestPasswordResetHandler(u, testClient(), 0, th, true, log, nil, nil)
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

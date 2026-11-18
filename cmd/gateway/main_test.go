@@ -1300,6 +1300,16 @@ func resetFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// resetFromIP posts one reset request as the load balancer would forward it: <client>, <rule IP>.
+func resetFromIP(h http.Handler, email, ip string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", ip+", 35.191.0.1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 // The reset page and its form need AUTH_SITE_URL, the form also AUTH_URL: unset, they answer 503 and call nothing.
 func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
@@ -1367,8 +1377,8 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 			var logs bytes.Buffer
 			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite, nil)
 
-			for range 4 {
-				resetFrom(reg.RequestPasswordReset, "ada@corp.example")
+			for i := range 4 {
+				resetFromIP(reg.RequestPasswordReset, "ada@corp.example", fmt.Sprintf("198.51.100.%d", i+1))
 			}
 			if got := countCalls(calls(), "POST /recover"); got != c.wantCalls {
 				t.Errorf("GoTrue /recover calls = %d, want %d", got, c.wantCalls)
@@ -1457,7 +1467,12 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 				var logs bytes.Buffer
 				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite, nil)
 
-				for range 4 {
+				for i := range 4 {
+					if rt.name == "reset" {
+						// Each request from its own client IP: the hosted reset bounds one IP to one send an hour.
+						resetFromIP(rt.handler(reg), "ada@corp.example", fmt.Sprintf("198.51.100.%d", i+1))
+						continue
+					}
 					rt.send(rt.handler(reg), "ada@corp.example")
 				}
 				if got := countCalls(calls(), rt.path); got != c.wantCalls {
@@ -1709,5 +1724,51 @@ func TestRegistrationHandlers_HostedShareCountsThroughThePool(t *testing.T) {
 	}
 	if n := len(calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0: the share must count through the pool", n)
+	}
+}
+
+func TestRegistrationHandlers_ResetShareOnlyOnHosted(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	for _, c := range []struct {
+		env     string
+		want    int
+		wantLog bool
+	}{{"production", gateway.ResetMailPerHour, true}, {"pr-7", 4, false}, {"nightly", 4, false}, {"", 4, false}} {
+		t.Run("DEPLOY_ENV="+c.env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", c.env)
+			authURL, calls := fakeAuth(t)
+			var logs bytes.Buffer
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite, nil)
+			for i := range 4 {
+				resetFromIP(reg.RequestPasswordReset, fmt.Sprintf("user%d@corp.example", i), fmt.Sprintf("198.51.100.%d", i+1))
+			}
+			if got := countCalls(calls(), "POST /recover"); got != c.want {
+				t.Errorf("GoTrue saw %d /recover, want %d", got, c.want)
+			}
+			if got := strings.Count(logs.String(), `"msg":"reset-request: mail share on"`); (got == 1) != c.wantLog || got > 1 {
+				t.Errorf("boot line count = %d, want present=%v", got, c.wantLog)
+			}
+		})
+	}
+}
+
+func TestRegistrationHandlers_HostedResetCountsThroughThePool(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	pool, err := pgxpool.New(context.Background(), "postgres://invoice_gateway:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, pool)
+
+	rec := resetFromIP(reg.RequestPasswordReset, "ada@corp.example", "198.51.100.1")
+
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "accepted") {
+		t.Errorf("reset = %d %s, want 202 accepted", rec.Code, rec.Body.String())
+	}
+	if n := len(calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0: the reset share must count through the pool", n)
 	}
 }

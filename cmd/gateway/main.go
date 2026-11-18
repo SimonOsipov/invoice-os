@@ -314,11 +314,18 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		mail = gateway.NewRegistrationMail("registration-mail", gateway.RegistrationMailPerHour, gateway.RegistrationMailPerDay, time.Now)
 		mail.Shared(pool, log)
 	}
+	// Same hosted-only rule as the registration share: other postures count nothing.
+	var reset *gateway.ResetMail
+	if posture == platform.PostureHosted {
+		reset = gateway.NewResetMail("reset-mail", gateway.ResetMailPerHour, gateway.ResetMailPerDay, gateway.ResetMailPerIPHour, gateway.ResetMailPerIPDay, time.Now)
+		reset.Shared(pool, log)
+		log.Info("reset-request: mail share on")
+	}
 	return registration{
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending, poolTokens(pool), posture.Ephemeral(), mail),
 		ResendByAddress:      perAddress,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log, mail),
-		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),
+		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log), reset),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}
 }

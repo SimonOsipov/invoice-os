@@ -13,6 +13,7 @@ import (
 var (
 	ErrIdPMailCap            = errors.New("identity provider mail cap reached")
 	ErrRegistrationMailSpent = errors.New("registration mail share spent")
+	ErrResetMailSpent        = errors.New("reset mail share spent")
 )
 
 // MailAlertEvery is the least time between two captures of one error.
@@ -24,7 +25,7 @@ type mailAlertGate struct {
 	now  func() time.Time
 }
 
-// ceiling: one capture per error per 6 h per instance keeps an attack under ~500 Sentry events a month; revisit on a paid Sentry plan
+// ceiling: one capture per error per 6 h per instance keeps an attack under ~750 Sentry events a month; revisit on a paid Sentry plan
 var mailAlerts = &mailAlertGate{last: map[error]time.Time{}, now: time.Now}
 
 // isIdPMailCap reports whether a 429 over_email_send_rate_limit is the instance cap, not the per-address cooldown.

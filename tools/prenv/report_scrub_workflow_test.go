@@ -18,6 +18,9 @@ func uploadsOutput(block string) bool {
 	return false
 }
 
+// isScrubID reports whether a step id names a scrub step: `scrub` or `scrub-*`.
+func isScrubID(id string) bool { return id == "scrub" || strings.HasPrefix(id, "scrub-") }
+
 func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 	t.Parallel()
 	for _, jobName := range []string{"e2e", "topology"} {
@@ -30,16 +33,22 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 				steps[len(steps)-1] = append(steps[len(steps)-1], line)
 			}
 		}
-		scrubAt, uploads, scrubRun := -1, 0, ""
-		var paths []string
-		for i, lines := range steps {
+		uploads := 0
+		scrubs := map[string]string{} // scrub step id -> its run line, for scrubs seen so far
+		for _, lines := range steps {
 			block := strings.Join(lines, "\n")
 			switch {
-			case slices.ContainsFunc(lines, func(l string) bool { return strings.TrimSpace(l) == "id: scrub" }):
-				scrubAt = i
+			case slices.ContainsFunc(lines, func(l string) bool {
+				id, ok := strings.CutPrefix(strings.TrimSpace(l), "id: ")
+				return ok && isScrubID(id)
+			}):
+				id := ""
 				for _, l := range lines {
+					if v, ok := strings.CutPrefix(strings.TrimSpace(l), "id: "); ok {
+						id = v
+					}
 					if strings.HasPrefix(strings.TrimSpace(l), "run: ") {
-						scrubRun = l
+						scrubs[id] = l
 					}
 				}
 				if strings.Contains(block, "continue-on-error") {
@@ -50,29 +59,34 @@ func TestDevEnvScrubsBeforeEveryPlaywrightUpload(t *testing.T) {
 				}
 			case strings.Contains(block, "uses: actions/upload-artifact@") && uploadsOutput(block):
 				uploads++
+				gated := false
+				path := ""
 				for _, l := range lines {
 					if p, ok := strings.CutPrefix(strings.TrimSpace(l), "path: "); ok {
-						paths = append(paths, strings.TrimSuffix(p, "/"))
+						path = strings.TrimSuffix(p, "/")
 					}
 				}
-				if scrubAt < 0 {
-					t.Errorf("%s: %q uploads before the scrub step", jobName, lines[0])
+				covered := false
+				for id, run := range scrubs {
+					if slices.Contains(strings.Fields(run), path) {
+						covered = true
+						if strings.Contains(block, "&& steps."+id+".outcome == 'success'") {
+							gated = true
+						}
+					}
 				}
-				if !strings.Contains(block, "&& steps.scrub.outcome == 'success'") {
-					t.Errorf("%s: %q is not gated on steps.scrub.outcome == 'success'", jobName, lines[0])
+				switch {
+				case path == "":
+					t.Errorf("%s: no upload path read for %q", jobName, lines[0])
+				case !covered:
+					t.Errorf("%s: no earlier scrub step scrubs the uploaded %s (%q)", jobName, path, lines[0])
+				case !gated:
+					t.Errorf("%s: %q is not gated on the outcome of the scrub step that scrubs %s", jobName, lines[0], path)
 				}
 			}
 		}
-		if scrubAt < 0 {
+		if len(scrubs) == 0 {
 			t.Errorf("%s has no scrub step", jobName)
-		}
-		for _, p := range paths {
-			if !slices.Contains(strings.Fields(scrubRun), p) {
-				t.Errorf("%s: the scrub step %q does not scrub the uploaded %s", jobName, scrubRun, p)
-			}
-		}
-		if len(paths) != uploads {
-			t.Errorf("%s: %d upload paths read for %d uploads", jobName, len(paths), uploads)
 		}
 		if want := map[string]int{"e2e": 4, "topology": 3}[jobName]; uploads != want {
 			t.Errorf("%s: %d gated uploads, want %d", jobName, uploads, want)
@@ -103,11 +117,11 @@ func TestEveryPlaywrightUploadFollowsAGatedScrub(t *testing.T) {
 	}
 	uploads := 0
 	for name, job := range doc.Jobs {
-		var scrub *step
+		scrubs := map[string]*step{}
 		for i := range job.Steps {
 			st := &job.Steps[i]
-			if st.ID == "scrub" {
-				scrub = st
+			if isScrubID(st.ID) {
+				scrubs[st.ID] = st
 				continue
 			}
 			if !strings.HasPrefix(st.Uses, "actions/upload-artifact@") || !uploadsOutput("path: "+st.With["path"]) {
@@ -115,13 +129,18 @@ func TestEveryPlaywrightUploadFollowsAGatedScrub(t *testing.T) {
 			}
 			uploads++
 			path := strings.TrimSuffix(st.With["path"], "/")
+			strict, gated := false, false
+			for id, sc := range scrubs {
+				if strings.HasPrefix(sc.Run, "node e2e/reportScrub.ts ") && slices.Contains(strings.Fields(sc.Run), path) && sc.ContinueOnError == nil {
+					strict = true
+					gated = gated || strings.Contains(st.If, "steps."+id+".outcome == 'success'")
+				}
+			}
 			switch {
-			case scrub == nil:
-				t.Errorf("%s: %q uploads %s before any scrub step", name, st.Name, path)
-			case !strings.HasPrefix(scrub.Run, "node e2e/reportScrub.ts ") || !slices.Contains(strings.Fields(scrub.Run), path) || scrub.ContinueOnError != nil:
-				t.Errorf("%s: scrub step %q does not strictly scrub %s", name, scrub.Run, path)
-			case !strings.Contains(st.If, "steps.scrub.outcome == 'success'"):
-				t.Errorf("%s: %q is not gated on the scrub", name, st.Name)
+			case !strict:
+				t.Errorf("%s: no earlier scrub step strictly scrubs %s for %q", name, path, st.Name)
+			case !gated:
+				t.Errorf("%s: %q is not gated on the scrub step that scrubs %s", name, st.Name, path)
 			}
 		}
 	}

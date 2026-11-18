@@ -46,7 +46,7 @@ async function save(context: BrowserContext, statePath: string): Promise<void> {
   chmodSync(statePath, 0o600)
 }
 
-export async function signInFresh(key: AccountKey, account: Account, _urls: Urls, statePath: string): Promise<{ role?: string }> {
+export async function signInFresh(key: AccountKey, account: Account, _urls: Urls, statePath: string, _iap?: string): Promise<{ role?: string }> {
   const dest = destinationOf(key)
   const { DESTINATION_READY, passFrontDoor } = await import('../personaSession')
   return withContext(undefined, async (context, page) => {

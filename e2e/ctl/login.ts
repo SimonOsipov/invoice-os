@@ -107,9 +107,15 @@ export function readProductionStaff(file = productionStaffFile()): Record<'devel
   if ((st.mode & 0o177) !== 0) {
     throw new CtlError(`${file} is mode 0${(st.mode & 0o777).toString(8)}: it holds production staff passwords, so it must be 0600`, `Run: chmod 600 ${file}`, 1)
   }
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (e) {
+    throw new CtlError(`could not read ${file}: ${(e as NodeJS.ErrnoException).code}`, `Run: chmod 600 ${file}`, 1)
+  }
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8'))
+    parsed = JSON.parse(text)
   } catch {
     // V8's parse message quotes the input, so it is dropped.
     throw new CtlError(`${file} is not valid JSON`, shapeHint, 1)

@@ -1403,6 +1403,17 @@ describe('readProductionStaff', () => {
     }
   })
 
+  it('an owner write-only file says it could not be read and names the fix', async () => {
+    const file = fileWith(JSON.stringify(GOOD), 0o200)
+
+    const err = await failOf(file)
+
+    expect(err.code).toBe(1)
+    expect(err.message).toBe(`could not read ${file}: EACCES`)
+    expect(err.hint).toBe(`Run: chmod 600 ${file}`)
+    expect(err.message).not.toContain('valid JSON')
+  })
+
   it('bad JSON gets a fixed message that quotes nothing', async () => {
     const file = fileWith('{"developer":{"password":"pw-dev-123"')
 

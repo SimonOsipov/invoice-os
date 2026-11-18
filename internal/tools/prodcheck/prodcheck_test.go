@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ const (
 	other    = "060dc803aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	headSHA  = "1111111111111111111111111111111111111111"
 	token    = "gw-token-value"
+	iapToken = "iap-x"
 	email    = "probe@example.test"
 	password = "probe-pass-value"
 	authCode = "exchange-code-value"
@@ -50,6 +52,12 @@ type fakeProd struct {
 	hsts func(id string) (int, http.Header)
 	apex func() (int, http.Header)
 
+	// consoleHSTS answers /console-hsts/<i> and gets the request's Authorization; guard answers /guard/<i>
+	consoleHSTS func(id, auth string) (int, http.Header)
+	guard       func(id string) (int, http.Header)
+	noGuardURLs bool
+	oneGuardURL bool
+
 	// the probe: signIn and exchange get the decoded JSON body, reads gets the path
 	signIn   func(in map[string]string) (int, string)
 	exchange func(in map[string]string) (int, string)
@@ -70,7 +78,7 @@ func jwtWith(claims map[string]any) string {
 }
 
 func probeEnv() map[string]string {
-	return map[string]string{"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_EMAIL": email, "PROD_PROBE_PASSWORD": password}
+	return map[string]string{"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_EMAIL": email, "PROD_PROBE_PASSWORD": password, "PROD_IAP_TOKEN": iapToken}
 }
 
 func (f *fakeProd) posted() []string {
@@ -135,6 +143,10 @@ func newFake(t *testing.T) *fakeProd {
 	f.fleet = func(int) (int, string) { return 200, fleetBody(nil) }
 	f.site = func(string) (int, string, http.Header) { return 200, good + "\n", nil }
 	f.hsts = func(string) (int, http.Header) { return 200, hstsHeader() }
+	f.consoleHSTS = func(string, string) (int, http.Header) { return 200, hstsHeader() }
+	f.guard = func(string) (int, http.Header) {
+		return 302, http.Header{"Location": {"https://accounts.google.com/o/oauth2/v2/auth?client_id=x"}}
+	}
 	f.apex = func() (int, http.Header) {
 		return 301, http.Header{"Location": {"https://ascomply.com:443/hsts-check?q=1"}}
 	}
@@ -212,6 +224,12 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(body))
 	case strings.HasPrefix(r.URL.Path, "/hsts/"):
 		f.answer(w, func() (int, http.Header) { return f.hsts(strings.TrimPrefix(r.URL.Path, "/hsts/")) })
+	case strings.HasPrefix(r.URL.Path, "/console-hsts/"):
+		f.answer(w, func() (int, http.Header) {
+			return f.consoleHSTS(strings.TrimPrefix(r.URL.Path, "/console-hsts/"), r.Header.Get("Authorization"))
+		})
+	case strings.HasPrefix(r.URL.Path, "/guard/"):
+		f.answer(w, func() (int, http.Header) { return f.guard(strings.TrimPrefix(r.URL.Path, "/guard/")) })
 	case r.URL.Path == "/apex":
 		f.answer(w, f.apex)
 	case r.URL.Path == "/":
@@ -255,6 +273,11 @@ func hstsHeader() http.Header {
 
 func (f *fakeProd) hstsURL(i int) string { return f.srv.URL + "/hsts/" + strconv.Itoa(i) }
 
+func (f *fakeProd) consoleHSTSURL(i int) string {
+	return f.srv.URL + "/console-hsts/" + strconv.Itoa(i)
+}
+func (f *fakeProd) guardURL(i int) string { return f.srv.URL + "/guard/" + strconv.Itoa(i) }
+
 func (f *fakeProd) count(path string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -293,6 +316,13 @@ func (r result) want(t *testing.T, i int, status, detail string) {
 	}
 }
 
+func (r result) wantNot(t *testing.T, i int, detail string) {
+	t.Helper()
+	if s := r.step(t, i); strings.Contains(s.Detail, detail) {
+		t.Errorf("step %d %q: detail %q holds %q", i, s.Name, s.Detail, detail)
+	}
+}
+
 func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) result {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "prod_check.json")
@@ -303,14 +333,27 @@ func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) resu
 	for i := range hstsURLs {
 		hsts = append(hsts, f.hstsURL(i))
 	}
+	var consoleHSTS, consoleGuard []string
+	for i := range consoleHSTSURLs {
+		consoleHSTS = append(consoleHSTS, f.consoleHSTSURL(i))
+		consoleGuard = append(consoleGuard, f.guardURL(i))
+	}
+	if f.noGuardURLs {
+		consoleGuard = nil
+	}
+	if f.oneGuardURL {
+		consoleGuard = consoleGuard[:1]
+	}
 	cfg := config{
 		targets: targets{
-			hsts:      hsts,
-			api:       f.srv.URL,
-			landing:   f.srv.URL,
-			siteURL:   func(s string) string { return f.srv.URL + "/site/" + s + "/build.txt" },
-			apexHTTP:  f.srv.URL + "/apex",
-			retryWait: 0,
+			hsts:         hsts,
+			consoleHSTS:  consoleHSTS,
+			consoleGuard: consoleGuard,
+			api:          f.srv.URL,
+			landing:      f.srv.URL,
+			siteURL:      func(s string) string { return f.srv.URL + "/site/" + s + "/build.txt" },
+			apexHTTP:     f.srv.URL + "/apex",
+			retryWait:    0,
 		},
 		getenv: func(k string) string { return env[k] },
 	}
@@ -717,7 +760,7 @@ func TestSection_ShapeAndOrder(t *testing.T) {
 	for _, s := range r.sec.Steps {
 		names = append(names, s.Name)
 	}
-	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "every service reports Sentry on", "landing carries the production GA4 id", "no production page ships the Sentry test digest", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
+	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "every service reports Sentry on", "landing carries the production GA4 id", "no production page ships the Sentry test digest", "probe signs in", "probe has no registration metadata", "probe loads its workspace", "console hosts refuse a read without Google sign-in"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Errorf("steps %v", names)
 	}
@@ -897,6 +940,10 @@ func TestAllowedCalls_WholeRunListsEveryCall(t *testing.T) {
 	}
 	for i := range hstsURLs {
 		want["GET /hsts/"+strconv.Itoa(i)]++
+	}
+	for i := range consoleHSTSURLs {
+		want["GET /console-hsts/"+strconv.Itoa(i)]++
+		want["GET /guard/"+strconv.Itoa(i)]++
 	}
 	want["GET /apex"]++
 	got := map[string]int{}
@@ -1079,7 +1126,7 @@ func TestProbe_WorkspaceReadsCarryTheBearer(t *testing.T) {
 		}
 	}
 	for p, a := range f.auth {
-		if a != "" && !strings.HasPrefix(p, "/api/") {
+		if a == "Bearer "+f.access && !strings.HasPrefix(p, "/api/") {
 			t.Errorf("the bearer reached %s", p)
 		}
 	}
@@ -1117,9 +1164,9 @@ func TestProbe_MeWithoutTenantFails(t *testing.T) {
 
 func TestProbe_SecretsAbsent(t *testing.T) {
 	cases := map[string]map[string]string{
-		"both unset":    {"PROD_GATEWAY_TOKEN": token},
-		"only email":    {"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_EMAIL": email},
-		"only password": {"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_PASSWORD": password},
+		"both unset":    {"PROD_GATEWAY_TOKEN": token, "PROD_IAP_TOKEN": iapToken},
+		"only email":    {"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_EMAIL": email, "PROD_IAP_TOKEN": iapToken},
+		"only password": {"PROD_GATEWAY_TOKEN": token, "PROD_PROBE_PASSWORD": password, "PROD_IAP_TOKEN": iapToken},
 	}
 	for name, env := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1128,7 +1175,7 @@ func TestProbe_SecretsAbsent(t *testing.T) {
 			r.want(t, 7, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
 			r.want(t, 8, "skipped", "")
 			r.want(t, 9, "skipped", "")
-			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 10 {
+			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 11 {
 				t.Errorf("code %d ok %v steps %d", r.code, r.sec.OK, len(r.sec.Steps))
 			}
 			for i := 0; i < 7; i++ {
@@ -1143,8 +1190,8 @@ func TestProbe_SecretsAbsent(t *testing.T) {
 }
 
 func TestNoSecretInAnyOutput(t *testing.T) {
-	echo := "echo " + email + " " + password + " " + token + " " + authCode + " " + refresh
-	secrets := []string{email, password, token, authCode, refresh}
+	echo := "echo " + email + " " + password + " " + token + " " + authCode + " " + refresh + " " + iapToken
+	secrets := []string{email, password, token, authCode, refresh, iapToken}
 
 	green := newFake(t)
 	r := green.run(t, nil)
@@ -1678,4 +1725,297 @@ func TestTestHook_BodyAtTheLimitFails(t *testing.T) {
 		}
 		f.run(t, nil).want(t, 6, "failed", "ops.ascomply.com page larger than 8 MiB")
 	})
+}
+
+// consolePages makes each console page name its own bundle, so a console path is told from any other.
+func consolePages(f *fakeProd) {
+	prev := f.page
+	f.page = func(site string) (int, string) {
+		if name, ok := strings.CutSuffix(site, ".ascomply.com"); ok && slices.Contains(consoleSites, site) {
+			return 200, `<html><script type="module" src="/assets/` + name + `.js"></script></html>`
+		}
+		return prev(site)
+	}
+	f.bundles["/assets/ops.js"] = "Km(e,``)"
+	f.bundles["/assets/sup.js"] = "Km(e,``)"
+}
+
+func noIAP() map[string]string {
+	env := probeEnv()
+	delete(env, "PROD_IAP_TOKEN")
+	return env
+}
+
+func (f *fakeProd) requested(prefix string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.requests {
+		if strings.HasPrefix(r, "GET "+prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestSites_ConsoleReadsCarryTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	consolePages(f)
+	f.run(t, nil)
+	for _, p := range []string{
+		"/site/ops.ascomply.com/build.txt", "/site/sup.ascomply.com/build.txt",
+		"/site/ops.ascomply.com/", "/site/sup.ascomply.com/", "/assets/ops.js", "/assets/sup.js",
+	} {
+		if f.auth[p] != "Bearer "+iapToken {
+			t.Errorf("%s saw %q", p, f.auth[p])
+		}
+	}
+}
+
+func TestSites_TheIAPTokenReachesNoOtherHost(t *testing.T) {
+	f := newFake(t)
+	consolePages(f)
+	f.run(t, nil)
+	for p, a := range f.auth {
+		console := strings.Contains(p, "ops.ascomply.com") || strings.Contains(p, "sup.ascomply.com") ||
+			p == "/assets/ops.js" || p == "/assets/sup.js" || strings.HasPrefix(p, "/console-hsts/")
+		if a == "Bearer "+iapToken && !console {
+			t.Errorf("the IAP token reached %s", p)
+		}
+	}
+	if f.auth["/api/tenancy/v1/me"] != "Bearer "+f.access {
+		t.Errorf("the probe bearer changed: %q", f.auth["/api/tenancy/v1/me"])
+	}
+}
+
+func TestSites_ConsolesFailWithoutTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	r := f.run(t, noIAP())
+	r.want(t, 2, "failed", "ops.ascomply.com no IAP token")
+	r.want(t, 2, "failed", "sup.ascomply.com no IAP token")
+	r.wantNot(t, 2, "behind main")
+	for _, h := range []string{"ops", "sup"} {
+		if got := f.requested("/site/" + h + ".ascomply.com"); len(got) != 0 {
+			t.Errorf("console read sent: %v", got)
+		}
+	}
+}
+
+func TestSites_ARefusedIAPTokenIsNotReportedAsBehindMain(t *testing.T) {
+	for _, refused := range []int{401, 403} {
+		f := newFake(t)
+		f.site = func(s string) (int, string, http.Header) {
+			if s == "ops.ascomply.com" {
+				return refused, "", nil
+			}
+			return 200, good + "\n", nil
+		}
+		r := f.run(t, nil)
+		r.want(t, 2, "failed", "ops.ascomply.com")
+		r.want(t, 2, "failed", "IAP refused the token")
+		r.want(t, 2, "failed", "not a deploy lag")
+		r.wantNot(t, 2, "behind main")
+	}
+}
+
+func TestSites_ANonConsole4xxIsStillBehindMain(t *testing.T) {
+	f := newFake(t)
+	f.site = func(s string) (int, string, http.Header) {
+		if s == "www.ascomply.com" {
+			return 403, "", nil
+		}
+		return 200, good + "\n", nil
+	}
+	r := f.run(t, nil)
+	r.want(t, 2, "failed", "www.ascomply.com=none")
+	r.wantNot(t, 2, "IAP refused")
+}
+
+func TestTestHook_ConsolesFailWithoutTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	r := f.run(t, noIAP())
+	r.want(t, 6, "failed", "ops.ascomply.com no IAP token")
+	r.want(t, 6, "failed", "sup.ascomply.com no IAP token")
+}
+
+func TestHSTS_ConsoleURLsFailWithoutTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	r := f.run(t, noIAP())
+	r.want(t, 3, "failed", f.consoleHSTSURL(0)+" no IAP token")
+	r.want(t, 3, "failed", f.consoleHSTSURL(1)+" no IAP token")
+	if got := f.requested("/console-hsts/"); len(got) != 0 {
+		t.Errorf("console HSTS read sent: %v", got)
+	}
+}
+
+func TestHSTS_ConsoleURLsAreReadWithTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	f.consoleHSTS = func(_, auth string) (int, http.Header) {
+		if auth != "Bearer "+iapToken {
+			return 302, nil
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "passed", "")
+}
+
+func TestHSTS_AConsoleURLWithoutTheHeaderFails(t *testing.T) {
+	f := newFake(t)
+	f.consoleHSTS = func(id, _ string) (int, http.Header) {
+		if id == "1" {
+			return 200, nil
+		}
+		return 200, hstsHeader()
+	}
+	r := f.run(t, nil)
+	r.want(t, 3, "failed", f.consoleHSTSURL(1)+" has no HSTS header")
+	if strings.Contains(r.step(t, 3).Detail, f.consoleHSTSURL(0)) {
+		t.Errorf("detail names the ops URL: %q", r.step(t, 3).Detail)
+	}
+}
+
+const (
+	lastStep   = 10
+	googleAuth = "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"
+)
+
+func guardAnswers(f *fakeProd, ops, sup func() (int, http.Header)) {
+	f.guard = func(id string) (int, http.Header) {
+		if id == "0" {
+			return ops()
+		}
+		return sup()
+	}
+}
+
+func status(code int, loc string) func() (int, http.Header) {
+	return func() (int, http.Header) {
+		if loc == "" {
+			return code, nil
+		}
+		return code, http.Header{"Location": {loc}}
+	}
+}
+
+func TestConsoleGuard_PassesOnARedirectToGoogleSignIn(t *testing.T) {
+	f := newFake(t)
+	f.run(t, nil).want(t, lastStep, "passed", "")
+}
+
+func TestConsoleGuard_PassesOnA303ToGoogleSignIn(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(303, "https://accounts.google.com/x"), status(302, googleAuth))
+	f.run(t, nil).want(t, lastStep, "passed", "")
+}
+
+func TestConsoleGuard_FailsOn401And403(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(401, ""), status(403, ""))
+	r := f.run(t, nil)
+	r.want(t, lastStep, "failed", "ops.ascomply.com answered 401")
+	r.want(t, lastStep, "failed", "sup.ascomply.com answered 403")
+}
+
+func TestConsoleGuard_FailsOnAnyOther4xx(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(404, ""), status(302, googleAuth))
+	f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com answered 404")
+}
+
+func TestConsoleGuard_FailsOnARedirectWithoutLocation(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(302, googleAuth), status(302, ""))
+	r := f.run(t, nil)
+	r.want(t, lastStep, "failed", "sup.ascomply.com answered 302 with no Location")
+	if strings.Contains(r.step(t, lastStep).Detail, "ops.ascomply.com") {
+		t.Errorf("detail names ops: %q", r.step(t, lastStep).Detail)
+	}
+}
+
+func TestConsoleGuard_FailsOnANonHTTPSSignInLocation(t *testing.T) {
+	for _, loc := range []string{"http://accounts.google.com/o/oauth2/v2/auth", "//accounts.google.com/o/oauth2/v2/auth"} {
+		f := newFake(t)
+		guardAnswers(f, status(302, loc), status(302, googleAuth))
+		f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com")
+	}
+}
+
+func TestConsoleGuard_FailsWithNoGuardURLs(t *testing.T) {
+	f := newFake(t)
+	f.noGuardURLs = true
+	f.run(t, nil).want(t, lastStep, "failed", "guard URLs")
+}
+
+func TestConsoleGuard_FailsWhenTheGuardListIsShorterThanTheConsoles(t *testing.T) {
+	f := newFake(t)
+	f.oneGuardURL = true
+	f.run(t, nil).want(t, lastStep, "failed", "1 guard URLs for 2 console hosts")
+}
+
+func TestConsoleGuard_FailsOnALookalikeHost(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(302, "https://accounts.google.com.evil.example/"), status(302, googleAuth))
+	f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com")
+	// Userinfo, a relative Location and a suffix-only match are not Google's host either.
+	for _, loc := range []string{"https://accounts.google.com@evil.example/", "/o/oauth2/v2/auth", "https://evilaccounts.google.com/", "https://google.com/", "https://accounts.google.com.:evil/"} {
+		g := newFake(t)
+		guardAnswers(g, status(302, googleAuth), status(302, loc))
+		g.run(t, nil).want(t, lastStep, "failed", "sup.ascomply.com")
+	}
+	// The positive control: the same fake with Google's host passes.
+	ok := newFake(t)
+	guardAnswers(ok, status(302, googleAuth), status(302, "https://accounts.google.com/signin"))
+	ok.run(t, nil).want(t, lastStep, "passed", "")
+}
+
+func TestConsoleGuard_FailsOnEveryRedirectStatusButFoundAndSeeOther(t *testing.T) {
+	for _, code := range []int{301, 307, 308} {
+		f := newFake(t)
+		guardAnswers(f, status(code, googleAuth), status(302, googleAuth))
+		f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com answered "+strconv.Itoa(code))
+	}
+}
+
+func TestConsoleGuard_RunsWithoutTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(200, ""), status(302, googleAuth))
+	f.run(t, noIAP()).want(t, lastStep, "failed", "ops.ascomply.com served its page without sign-in")
+	if f.count("/guard/0") == 0 || f.count("/guard/1") == 0 {
+		t.Errorf("the guard reads were skipped: %d, %d", f.count("/guard/0"), f.count("/guard/1"))
+	}
+}
+
+func TestConsoleGuard_FailsWhenAConsoleServesWithoutSignIn(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(200, ""), status(302, googleAuth))
+	f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com served its page without sign-in")
+}
+
+func TestConsoleGuard_FailsOnARedirectAwayFromGoogle(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(302, googleAuth), status(302, "https://evil.example/"))
+	r := f.run(t, nil)
+	r.want(t, lastStep, "failed", "sup.ascomply.com")
+	r.want(t, lastStep, "failed", "evil.example")
+}
+
+func TestConsoleGuard_FailsOnNoAnswerAnd5xx(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(0, ""), status(502, ""))
+	r := f.run(t, nil)
+	r.want(t, lastStep, "failed", "ops.ascomply.com did not answer")
+	r.want(t, lastStep, "failed", "sup.ascomply.com answered 502")
+}
+
+func TestConsoleGuard_SendsNoCredential(t *testing.T) {
+	f := newFake(t)
+	f.run(t, nil)
+	for _, p := range []string{"/guard/0", "/guard/1"} {
+		if f.count(p) == 0 {
+			t.Errorf("%s not requested", p)
+		}
+		if a, ok := f.auth[p]; !ok || a != "" {
+			t.Errorf("%s saw Authorization %q", p, a)
+		}
+	}
 }

@@ -64,6 +64,17 @@ jobs:
           commit=
           if [ -n "$rev" ]; then commit=$(retry gcloud run revisions describe "$rev" --project "$PROJECT" --region "$REGION" --format=json | jq -r '.metadata.labels.commit // ""'); fi
           if [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then echo "AUTH_BUILD=$commit" >>"$GITHUB_ENV"; fi
+      # The nightly mints an IAP token for its console reads; gcloud creds stay as set above.
+      - id: iap
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: openid, https://www.googleapis.com/auth/userinfo.email
+          create_credentials_file: false
+          export_environment_variables: false
       - name: Resolve main
         id: main
         continue-on-error: true
@@ -74,6 +85,7 @@ jobs:
           EXPECTED: ${{ steps.main.outputs.expected }}
           PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}
           PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}
+          PROD_IAP_TOKEN: ${{ steps.iap.outputs.access_token }}
         run: go run ./internal/tools/prodcheck -head "$HEAD" -expected "$EXPECTED" -auth-build "${AUTH_BUILD:-}" -out "$RUNNER_TEMP/prod_check.json"
       - name: Upload prod-check
         if: always()

@@ -39,6 +39,7 @@ var (
 		"EXPECTED: ${{ steps.main.outputs.expected }}",
 		"PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}",
 		"PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}",
+		"PROD_IAP_TOKEN: ${{ steps.iap.outputs.access_token }}",
 	}
 	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
 	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@v4", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}
@@ -307,6 +308,17 @@ func nightlyProdCheckProblems(j workflowJob, all []string) []string {
 	for _, want := range nightlyProdToolLines {
 		if !slices.Contains(tool, want) {
 			p = append(p, "prod-check tool step lacks "+want)
+		}
+	}
+	// A failed mint must not stop the report: the console steps then fail with "no IAP token". The mint keeps the gcloud credentials.
+	if iap := nightlyStepLines(j, "id: iap"); iap == nil {
+		p = append(p, "prod-check has no iap step")
+	} else {
+		if !slices.Contains(iap, "continue-on-error: true") {
+			p = append(p, "prod-check iap step is not continue-on-error")
+		}
+		if !slices.Contains(iap, "create_credentials_file: false") || !slices.Contains(iap, "export_environment_variables: false") {
+			p = append(p, "prod-check iap step replaces the gcloud credentials")
 		}
 	}
 	if !strings.Contains(strings.Join(tool, "\n"), nightlyProdOutFlag) {
@@ -610,6 +622,12 @@ func TestNightly_ProdCheckJobMutations(t *testing.T) {
 		{"auth commit read from the template, not the serving revision", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, ".status.traffic", ".status.other")
 		}, []string{"not the service template"}},
+		{"iap mint made fatal", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "      - id: iap\n        continue-on-error: true\n", "      - id: iap\n")
+		}, []string{"prod-check iap step is not continue-on-error"}},
+		{"iap mint replaces the credentials", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "          create_credentials_file: false\n", "")
+		}, []string{"prod-check iap step replaces the gcloud credentials"}},
 		{"gateway token read in summary", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      T: gateway-token\n")
 		}, []string{"gateway-token is named outside prod-check"}},

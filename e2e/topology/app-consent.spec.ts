@@ -130,6 +130,8 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   const entry = page.viewportSize()
   const measured: unknown[] = []
   const isEntities = (u: URL) => u.pathname === '/api/portfolio/v1/entities'
+  const isRollup = (u: URL) => u.pathname === '/api/dashboard/v1/rollup'
+  const HEALTH_LABEL = /NO INVOICES YET|NEEDS? ATTENTION|ALL CLEAR/
   const isTenantListUrl = (u: URL) => u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
   const isTenantList = (r: Response) => r.request().method() === 'GET' && isTenantListUrl(new URL(r.url()))
   const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
@@ -153,12 +155,16 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
     await scrollToEnd(width)
     await measure(at)
   }
-  // Holds a GET until its gate opens.
-  const holdUntil = (gate: Promise<void>) => async (r: Route): Promise<void> => {
+  // Holds a GET until its gate opens; each held request pushes a promise to `served` once fulfilled.
+  const holdUntil = (gate: Promise<void>, served: Promise<void>[] = []) => async (r: Route): Promise<void> => {
     if (r.request().method() !== 'GET') return r.fallback()
-    const res = await r.fetch()
+    let done = (): void => {}
+    served.push(new Promise<void>((resolve) => { done = resolve }))
+    const res = await r.fetch().catch(() => null)
+    if (!res) { await r.abort().catch(() => undefined); return done() }
     await gate
     await r.fulfill({ response: res }).catch(() => undefined)
+    done()
   }
   try {
     for (const { route, width, height } of cases) {
@@ -169,14 +175,17 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
       let releaseList = (): void => {}
       const entitiesGate = new Promise<void>((done) => { releaseEntities = done })
       const listGate = new Promise<void>((done) => { releaseList = done })
-      const holdEntities = holdUntil(entitiesGate)
+      const served: Promise<void>[] = []
+      const holdEntities = holdUntil(entitiesGate, served)
       const holdList = holdUntil(listGate)
+      const holdRollup = holdUntil(entitiesGate, served)
+      const clients = route === '/clients'
+      const held: [(u: URL) => boolean, (r: Route) => Promise<void>][] = list
+        ? [[isEntities, holdEntities], [isTenantListUrl, holdList]]
+        : clients ? [[isEntities, holdEntities], [isRollup, holdRollup]] : []
       const listed = list ? page.waitForResponse(isTenantList, { timeout: 60_000 }) : undefined
       listed?.catch(() => undefined)
-      if (list) {
-        await page.route(isEntities, holdEntities)
-        await page.route(isTenantListUrl, holdList)
-      }
+      for (const [match, handler] of held) await page.route(match, handler)
       try {
         await page.setViewportSize({ width, height })
         await page.goto(`${APP_URL}${route}`)
@@ -197,16 +206,24 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
           await expect(settled, `${at}: the list never settled after the entities response`).toBeVisible({ timeout: 30_000 })
           await framesPaint()
           await scrollAndMeasure(`${at} settled`, width)
+        } else if (clients) {
+          // BUG-151: scroll while the list is loading, then measure only once rows and health pills have drawn.
+          await scrollToEnd(width)
+          releaseEntities()
+          await Promise.all(served)
+          const rows = page.getByTestId('client-row')
+          await expect(rows.first(), `${at}: no client row after the entities response`).toBeVisible({ timeout: 30_000 })
+          await expect(rows.filter({ hasNotText: HEALTH_LABEL }), `${at}: a row still shows the neutral health cell`).toHaveCount(0, { timeout: 30_000 })
+          await framesPaint()
+          await settleAnimations(notice(page))
+          await measure(`${at} settled`)
         } else {
           await scrollAndMeasure(at, width)
         }
       } finally {
         releaseEntities()
         releaseList()
-        if (list) {
-          await page.unroute(isEntities, holdEntities)
-          await page.unroute(isTenantListUrl, holdList)
-        }
+        for (const [match, handler] of held) await page.unroute(match, handler)
       }
     }
   } finally {

@@ -91,7 +91,7 @@ paths:
 - Spend the share after the invited check and the per-address count. Spend it before the unsubscribe token and GoTrue.
 - Refund the share on a GoTrue 4xx.
 - Answer a request the share refuses with the same 202 after the floor. Make no GoTrue call for it.
-- Never spend or read the share on reset or the invitation routes.
+- Never spend or read the registration share on reset or the invitation routes.
 - Spend one instance-wide reset mail share on `/auth/request-password-reset`, on a hosted gateway only: `reset-mail-hour` (3 an hour) and `reset-mail-day` (20 per UTC day) in `gateway_throttle_counts`.
 - Bound each client IP inside it: `reset-mail-ip-hour` (1 an hour) and `reset-mail-ip-day` (3 per 24 h), per `checkIPKey(clientIP)`.
 - Spend them after the per-address count and before GoTrue, for every address. Never read whether the address has an account.

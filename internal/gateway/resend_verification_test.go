@@ -888,3 +888,20 @@ func TestResendVerification_ShareRefusalRefundsTheAddress(t *testing.T) {
 		t.Errorf("GoTrue saw %d calls, want 1: the address must have kept its %d", n, ResendPerAddress)
 	}
 }
+
+func TestMailLinkHandler_ResetRefusalRefundsTheRegistrationShare(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	reg := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+	reset := spentResetShare(t, 1, 10, newMailClock(resetT0))
+	h := mailLinkHandler("reset", "recover", fake.URL.JoinPath("recover").String(),
+		func(email string) map[string]string { return map[string]string{"email": email} },
+		testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), nil, reg, reset)
+	rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
+	requireAccepted(t, rec, "reset refused")
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	if spent, err := reg.Admit(); spent != "" || err != nil {
+		t.Errorf("registration share Admit = (%q, %v), want it refunded", spent, err)
+	}
+}

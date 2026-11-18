@@ -215,8 +215,7 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
 
   test('a reset request past the per-mailbox limit answers the same 202 and leaves no row', async () => {
     // The fork's GoTrue answers 500 for an account while mail is off, which keeps the per-address count,
-    // and the gateway records a row only for an admitted request. Pins the per-mailbox bound; passes at head
-    // because the reset share is hosted-only.
+    // and the gateway records a row only for an admitted request.
     const m = await member(tenantId, 'acct-events-r')
     const sent = await Promise.all(
       Array.from({ length: RESEND_PER_ADDRESS + 1 }, async () => {

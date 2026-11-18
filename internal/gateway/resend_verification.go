@@ -27,7 +27,7 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 
 // mailLinkHandler serves the mail-link routes (resend, reset); both share one per-address throttle.
 // A non-nil mail is spent before GoTrue; a spent or unreadable share refunds the address and answers the same 202 without a call.
-// A non-nil reset is held per client IP and for the shared reset share after the address count; a refusal refunds the address and answers the same 202 without a call.
+// A non-nil reset is held per client IP and for the shared reset share after the address count; a refusal refunds the address and the registration share and answers the same 202 without a call.
 // name prefixes every log line; verb names the GoTrue call in the failure line.
 func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string), mail *RegistrationMail, reset *ResetMail) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +90,7 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 				if addrHeld {
 					perAddress.Refund(email)
 				}
+				mail.Refund()
 				switch {
 				case rerr != nil:
 				case spent == "hour" || spent == "day":

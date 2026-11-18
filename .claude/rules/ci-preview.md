@@ -13,7 +13,7 @@ paths:
 - `changes` fails a PR whose head does not contain `origin/main`, or `origin/<base>` for another base. No preview job runs.
 - `preview.sh` retries a `preview-db` or `grant` execution up to 3 times only when its log shows SQLSTATE 53300 (`TestPreviewJobRetriesOnlyOnTooManyConnections`).
 - Push preview images only to `africa-south1-docker.pkg.dev/ascomply-preview/previews` (`preview.sh image`). From invoice-os-infra #43 on, `deploy-preview` holds no write on `images` (before it, still a writer); `Preview invariants` fails when it does.
-- Authenticate a `pull_request` run as `deploy-preview` and a dispatched (nightly) run as `deploy-nightly` (`DEPLOYER` in `dev-env.yml`). Workload Identity admits `deploy-preview` from `pull_request` and `main`, and `deploy-nightly` from `main` only. Neither holds a role in `ascomply-prod`. `Preview invariants` always authenticates as `deploy-preview`.
+- Authenticate a `pull_request` run as `deploy-preview` and a dispatched (nightly) run as `deploy-nightly` (`DEPLOYER` in `dev-env.yml`). Who may assume each is in `ci-gcp.md`. Neither holds a role in `ascomply-prod`. `Preview invariants` always authenticates as `deploy-preview`.
 - A PR's services and `migrate-pr-<N>` run as its slot's runtime, `run-slot-1` or `run-slot-2`. `preview-db` runs as `run-preview`. `<svc>-nightly` and `migrate-nightly` run as `run-nightly` (`preview.sh runtime`).
 - `preview.sh secrets <N>` sets each `pr-<N>-*` secret's policy to one `secretAccessor` binding, for its slot's runtime.
 - A slot runtime holds no project secret role. invoice-os-infra binds it to its slot's document keys and to the shared passwords in `SHARED_SECRETS`, mirrored by `preview_runtime_shared_secrets` in `preview.tf`; change both together.

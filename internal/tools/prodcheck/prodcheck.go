@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,10 @@ const (
 	secretsUnset = "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set"
 	// rawLocation holds a 3xx Location the guard hid from net/http, so a bad one cannot fail the read.
 	rawLocation = "X-Prodcheck-Location"
+
+	// noIAPToken is the detail of a console read that PROD_IAP_TOKEN being empty kept us from sending.
+	noIAPToken = "no IAP token"
+	signInHost = "accounts.google.com"
 
 	// hstsValue, hstsURLs and the apex request mirror e2e/smoke/transport-security.spec.ts (TestHSTS_URLsMatchTheSpec).
 	hstsValue = "max-age=63072000; includeSubDomains; preload"
@@ -44,6 +49,8 @@ var workspaceReads = []string{"/api/tenancy/v1/me", "/api/portfolio/v1/entities"
 var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "www.ascomply.com/check", "ops.ascomply.com", "sup.ascomply.com"}
+	// consoleSites sit behind IAP: reads carry PROD_IAP_TOKEN, and the last step reads them without it.
+	consoleSites = []string{"ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog|/check)?/assets/[^"]*\.js)"`)
 	// ceiling: an unrelated quoted 64-hex string in a bundle fails the step, narrow the pattern then
@@ -58,23 +65,26 @@ var (
 		"https://api.ascomply.com/",
 		"https://api.ascomply.com/health",
 		"https://app.ascomply.com/",
-		"https://ops.ascomply.com/",
-		"https://sup.ascomply.com/",
 		"https://blog.ascomply.com/",
 		"https://blog.ascomply.com/x?q=1",
 		"https://library.ascomply.com/",
 		"https://library.ascomply.com/library/rules",
 	}
+	// consoleHSTSURLs are read with the IAP token; the spec's HTTPS_URLS leaves them out.
+	consoleHSTSURLs = []string{"https://ops.ascomply.com/", "https://sup.ascomply.com/"}
 )
 
 // targets holds every address and the retry pause, so a test points the tool at httptest.
 type targets struct {
-	api       string
-	landing   string
-	siteURL   func(site string) string
-	hsts      []string
-	apexHTTP  string
-	retryWait time.Duration
+	api     string
+	landing string
+	siteURL func(site string) string
+	hsts    []string
+	// consoleHSTS and consoleGuard are index-matched to consoleSites in the guard step's detail.
+	consoleHSTS  []string
+	consoleGuard []string
+	apexHTTP     string
+	retryWait    time.Duration
 }
 
 type config struct {
@@ -85,12 +95,15 @@ type config struct {
 func prodConfig() config {
 	return config{
 		targets: targets{
-			api:       "https://api.ascomply.com",
-			landing:   "https://www.ascomply.com",
-			siteURL:   func(s string) string { return "https://" + s + "/build.txt" },
-			hsts:      hstsURLs,
-			apexHTTP:  apexHTTP,
-			retryWait: 20 * time.Second,
+			api:     "https://api.ascomply.com",
+			landing: "https://www.ascomply.com",
+			siteURL: func(s string) string { return "https://" + s + "/build.txt" },
+			hsts:    hstsURLs,
+
+			consoleHSTS:  consoleHSTSURLs,
+			consoleGuard: consoleHSTSURLs,
+			apexHTTP:     apexHTTP,
+			retryWait:    20 * time.Second,
 		},
 		getenv: os.Getenv,
 	}
@@ -205,6 +218,7 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("probe signs in", c.signInStep)
 	c.step("probe has no registration metadata", c.registrationStep)
 	c.step("probe loads its workspace", c.workspaceStep)
+	c.step("console hosts refuse a read without Google sign-in", c.consoleGuardStep)
 
 	sec := sectionOut{OK: true, Failures: []failureEntry{}, Steps: c.steps}
 	for _, s := range c.steps {
@@ -286,9 +300,9 @@ func (c *checker) readOnce(u string, headers map[string]string) (int, http.Heade
 }
 
 // getAny reads u with up to three tries. Any status below 500 is an answer; only no answer or a 5xx is retried.
-func (c *checker) getAny(u string) (code int, hdr http.Header, try int) {
+func (c *checker) getAny(u string, headers map[string]string) (code int, hdr http.Header, try int) {
 	for try = 1; try <= attempts; try++ {
-		code, hdr, _ = c.readOnce(u, nil)
+		code, hdr, _ = c.readOnce(u, headers)
 		if code != 0 && code < 500 {
 			return code, hdr, try
 		}
@@ -297,6 +311,18 @@ func (c *checker) getAny(u string) (code int, hdr http.Header, try int) {
 		}
 	}
 	return code, hdr, attempts
+}
+
+// consoleAuth is the IAP bearer for a console site and nil for any other site.
+func (c *checker) consoleAuth(site string) map[string]string {
+	if !slices.Contains(consoleSites, site) {
+		return nil
+	}
+	return c.iapHeaders()
+}
+
+func (c *checker) iapHeaders() map[string]string {
+	return map[string]string{"Authorization": "Bearer " + c.getenv("PROD_IAP_TOKEN")}
 }
 
 func answered(code int) string {
@@ -466,8 +492,13 @@ func (c *checker) sitesStep() (string, string) {
 	}
 	var behind []string
 	worst := 1
+	noToken := c.getenv("PROD_IAP_TOKEN") == ""
 	for _, site := range sites {
-		code, body, try := c.get(c.t.siteURL(site), nil)
+		if noToken && slices.Contains(consoleSites, site) {
+			behind = append(behind, site+"="+noIAPToken)
+			continue
+		}
+		code, body, try := c.get(c.t.siteURL(site), c.consoleAuth(site))
 		worst = max(worst, try)
 		seen := "none"
 		if code == http.StatusOK {
@@ -484,19 +515,29 @@ func (c *checker) sitesStep() (string, string) {
 }
 
 func (c *checker) hstsStep() (string, string) {
-	n := len(c.t.hsts)
+	urls := append(append([]string{}, c.t.hsts...), c.t.consoleHSTS...)
+	n := len(urls)
+	noToken := c.getenv("PROD_IAP_TOKEN") == ""
 	codes, hdrs, tries := make([]int, n+1), make([]http.Header, n+1), make([]int, n+1)
 	inParallel(n+1, func(i int) {
-		u := c.t.apexHTTP
-		if i < n {
-			u = c.t.hsts[i]
+		switch {
+		case i == n:
+			codes[i], hdrs[i], tries[i] = c.getAny(c.t.apexHTTP, nil)
+		case i >= len(c.t.hsts) && noToken:
+		case i >= len(c.t.hsts):
+			codes[i], hdrs[i], tries[i] = c.getAny(urls[i], c.iapHeaders())
+		default:
+			codes[i], hdrs[i], tries[i] = c.getAny(urls[i], nil)
 		}
-		codes[i], hdrs[i], tries[i] = c.getAny(u)
 	})
 	var problems []string
 	worst := 1
-	for i, u := range c.t.hsts {
+	for i, u := range urls {
 		code, hdr := codes[i], hdrs[i]
+		if i >= len(c.t.hsts) && noToken {
+			problems = append(problems, u+" "+noIAPToken)
+			continue
+		}
 		worst = max(worst, tries[i])
 		if code == 0 || code >= 500 {
 			problems = append(problems, u+" "+answered(code))
@@ -611,9 +652,13 @@ func tooBig(body []byte) bool { return len(body) >= maxBody }
 
 func (c *checker) siteHook(site string) (problems []string, worst int) {
 	worst = 1
+	if slices.Contains(consoleSites, site) && c.getenv("PROD_IAP_TOKEN") == "" {
+		return []string{site + " " + noIAPToken}, worst
+	}
+	auth := c.consoleAuth(site)
 	tooBigText := fmt.Sprintf("larger than %d MiB", maxBody>>20)
 	pageURL := strings.TrimSuffix(c.t.siteURL(site), "build.txt")
-	code, page, try := c.get(pageURL, nil)
+	code, page, try := c.get(pageURL, auth)
 	worst = max(worst, try)
 	if code != http.StatusOK {
 		return append(problems, site+" page "+answered(code)), worst
@@ -633,7 +678,7 @@ func (c *checker) siteHook(site string) (problems []string, worst int) {
 			problems = append(problems, site+" names a bad script address")
 			continue
 		}
-		code, js, try := c.get(base.ResolveReference(ref).String(), nil)
+		code, js, try := c.get(base.ResolveReference(ref).String(), auth)
 		worst = max(worst, try)
 		if code != http.StatusOK {
 			problems = append(problems, site+" bundle "+answered(code))
@@ -758,6 +803,39 @@ func (c *checker) workspaceStep() (string, string) {
 			if json.Unmarshal(body, &me) != nil || me.Tenant == nil || me.Tenant.ID == "" {
 				problems = append(problems, "/me has no tenant")
 			}
+		}
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
+}
+
+// consoleGuardStep reads each console with no credential; only IAP's own redirect to Google sign-in passes,
+// so a Cloud Armor 403 or a served page cannot stand in for it.
+func (c *checker) consoleGuardStep() (string, string) {
+	var problems []string
+	worst := 1
+	for i, u := range c.t.consoleGuard {
+		host := consoleSites[i]
+		code, hdr, try := c.getAny(u, nil)
+		worst = max(worst, try)
+		switch {
+		case code >= 200 && code < 300:
+			problems = append(problems, host+" served its page without sign-in")
+		case code == http.StatusFound || code == http.StatusSeeOther:
+			loc := hdr.Get(rawLocation)
+			l, err := url.Parse(loc)
+			switch {
+			case loc == "":
+				problems = append(problems, host+" "+answered(code)+" with no Location")
+			case err != nil:
+				problems = append(problems, host+" "+answered(code)+" to an unparsable Location")
+			case l.Hostname() != signInHost:
+				problems = append(problems, fmt.Sprintf("%s %s to %q, not %s", host, answered(code), l.Hostname(), signInHost))
+			}
+		default:
+			problems = append(problems, host+" "+answered(code))
 		}
 	}
 	if len(problems) > 0 {

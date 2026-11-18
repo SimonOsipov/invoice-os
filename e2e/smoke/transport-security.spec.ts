@@ -6,6 +6,7 @@ import { resolveTarget } from '../targets'
 const LANDING_URL = resolveTarget('LANDING_URL')
 const HSTS = 'max-age=63072000; includeSubDomains; preload'
 
+// ops and sup sit behind IAP; prodcheck reads them with a token.
 const HTTPS_URLS = [
   'https://ascomply.com/',
   'https://ascomply.com/blog/x?q=1',
@@ -16,8 +17,6 @@ const HTTPS_URLS = [
   'https://api.ascomply.com/',
   'https://api.ascomply.com/health',
   'https://app.ascomply.com/',
-  'https://ops.ascomply.com/',
-  'https://sup.ascomply.com/',
   'https://blog.ascomply.com/',
   'https://blog.ascomply.com/x?q=1',
   'https://library.ascomply.com/',

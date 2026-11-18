@@ -38,6 +38,7 @@ var (
 		"EXPECTED: ${{ steps.main.outputs.expected }}",
 		"PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}",
 		"PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}",
+		"PROD_IAP_TOKEN: ${{ steps.iap.outputs.access_token }}",
 	}
 	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
 	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@v4", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}

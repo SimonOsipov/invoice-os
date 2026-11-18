@@ -1037,3 +1037,82 @@ func TestNightly_ProdCheckAuthStepIgnoresTheImageTag(t *testing.T) {
 		t.Errorf("GITHUB_ENV = %q, want no AUTH_BUILD from an image tag", env)
 	}
 }
+
+// The serving revision's own label decides: a template label does not stand in for a revision without one.
+func TestNightly_ProdCheckAuthStepIgnoresTheTemplateLabelWhenTheServingRevisionHasNone(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	svc := authSvcJSON("auth-1", "auth-2", `{"commit":"`+sha+`"}`, "r/auth@sha256:D")
+	env, _ := runAuthStepWith(t, svc, map[string]string{"auth-1": `{"metadata":{"name":"auth-1","labels":{}}}`})
+	if env != "PROD_GATEWAY_TOKEN=tok\n" {
+		t.Errorf("GITHUB_ENV = %q, want only the token", env)
+	}
+}
+
+// 100 % on "latest" describes latestReadyRevisionName, not the newest created one.
+func TestNightly_ProdCheckAuthStepDescribesTheLatestReadyRevision(t *testing.T) {
+	t.Parallel()
+	ready, created := strings.Repeat("a", 40), strings.Repeat("e", 40)
+	svc := authSvcTraffic(`[{"latestRevision":true,"percent":100}]`, "auth-3", "auth-2", `{}`)
+	env, calls := runAuthStepWith(t, svc, map[string]string{
+		"auth-2": `{"metadata":{"labels":{"commit":"` + ready + `"}}}`,
+		"auth-3": `{"metadata":{"labels":{"commit":"` + created + `"}}}`,
+	})
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+ready+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want AUTH_BUILD=%s", env, ready)
+	}
+	if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe auth-3 ") }) {
+		t.Errorf("gcloud calls %q, want no describe of the unready newest revision", calls)
+	}
+}
+
+// Without a single 100 % revision there is nothing to describe.
+func TestNightly_ProdCheckAuthStepDescribesNoRevisionWithoutASingleServingOne(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	for name, traffic := range map[string]string{
+		"split": `[{"revisionName":"auth-2","percent":50},{"revisionName":"auth-1","percent":50}]`,
+		"none":  `[]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, calls := runAuthStep(t, authSvcTraffic(traffic, "auth-2", "auth-2", `{"commit":"`+sha+`"}`))
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe") }) {
+				t.Errorf("gcloud calls %q, want no revision describe", calls)
+			}
+		})
+	}
+}
+
+// A failed revision describe (all tries) leaves the token set and AUTH_BUILD unset; the step is continue-on-error.
+func TestNightly_ProdCheckAuthStepKeepsTheTokenWhenTheRevisionDescribeFails(t *testing.T) {
+	t.Parallel()
+	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
+	b, envFile := authStepBox(t, authSvcJSON("auth-9", "auth-9", `{"commit":"`+strings.Repeat("b", 40)+`"}`, "r/auth@sha256:D"))
+	if err := os.Remove(filepath.Join(b.root, "rev.json")); err != nil {
+		t.Fatal(err)
+	}
+	b.step(step)
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "PROD_GATEWAY_TOKEN=tok\n" {
+		t.Errorf("GITHUB_ENV = %q, want only the token", raw)
+	}
+	n := 0
+	for _, c := range b.lines("gcloud.log") {
+		if strings.HasPrefix(c, "run revisions describe auth-9 ") {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("revision describe tried %d times, want 3", n)
+	}
+	// Source scan: continue-on-error is a runner attribute no shell run can observe.
+	nightly, _, _ := nightlyFiles(t)
+	_, after, _ := strings.Cut(nightly, "- name: "+nightlyAuthStep+"\n")
+	if head, _, _ := strings.Cut(after, "run:"); !strings.Contains(head, "continue-on-error: true") {
+		t.Error("the auth step is not continue-on-error, so a failed read would fail the job")
+	}
+}

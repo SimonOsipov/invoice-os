@@ -194,7 +194,7 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty body mints under a non-nightly DEPLOY_ENV", func(t *testing.T) {
+	t.Run("an empty body mints under a hosted DEPLOY_ENV", func(t *testing.T) {
 		t.Setenv("DEPLOY_ENV", "production")
 		_, hosted := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 		if hosted == nil {
@@ -214,8 +214,8 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	})
 }
 
-// The mint serves any identity wherever MockIssuerEnabled is set; a non-nightly DEPLOY_ENV must not gate it.
-func TestTaggedMockLoginIgnoresANonNightlyDeployEnv(t *testing.T) {
+// The mint serves any identity wherever MockIssuerEnabled is set; a hosted DEPLOY_ENV must not gate it.
+func TestTaggedMockLoginIgnoresAHostedDeployEnv(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
 	t.Setenv("DEPLOY_ENV", "production")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -487,6 +487,9 @@ func TestTaggedNewMockIssuerRejectsABadKey(t *testing.T) {
 
 const unauthorizedBody = `{"error":"unauthorized"}`
 
+// The gate holds on the nightly and on every PR preview (any ephemeral posture).
+var gateEnvs = []string{"nightly", "pr-7"}
+
 var gateToken = strings.Repeat("0a1b2c3d", 8)
 
 type gateRoute struct {
@@ -564,81 +567,10 @@ func wantRefused(t *testing.T, r gateRoute, rec *httptest.ResponseRecorder, logs
 }
 
 func TestTaggedMockRoutesRefuseWithoutTheToken(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "nightly")
-	t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
-	var logs strings.Builder
-	routes := gateRoutes(t, &logs)
-	if len(routes) != 5 {
-		t.Fatalf("%d routes under test, want 5", len(routes))
-	}
-	for _, r := range routes {
-		t.Run(r.name, func(t *testing.T) {
-			wantRefused(t, r, serveGate(t, r, r.method, r.body, nil), &logs)
-			wantRefused(t, r, serveGate(t, r, r.method, r.body, map[string]string{"X-Mock-Issuer-Token": ""}), &logs)
-		})
-	}
-}
-
-func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "nightly")
-	t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
-	var logs strings.Builder
-	routes := gateRoutes(t, &logs)
-	if len(routes) != 5 {
-		t.Fatalf("%d routes under test, want 5", len(routes))
-	}
-	wrong := map[string]map[string]string{
-		"last character changed": {"X-Mock-Issuer-Token": gateToken[:len(gateToken)-1] + "e"},
-		"one character longer":   {"X-Mock-Issuer-Token": gateToken + "0"},
-		"upper case":             {"X-Mock-Issuer-Token": strings.ToUpper(gateToken)},
-		"X-Gateway-Token":        {"X-Gateway-Token": gateToken},
-		"Authorization Bearer":   {"Authorization": "Bearer " + gateToken},
-		"leading space":          {"X-Mock-Issuer-Token": " " + gateToken},
-		"trailing space":         {"X-Mock-Issuer-Token": gateToken + " "},
-		"trailing newline":       {"X-Mock-Issuer-Token": gateToken + "\n"},
-		"one character shorter":  {"X-Mock-Issuer-Token": gateToken[:len(gateToken)-1]},
-		"the token twice":        {"X-Mock-Issuer-Token": gateToken + gateToken},
-		"a single space":         {"X-Mock-Issuer-Token": " "},
-		"one MiB":                {"X-Mock-Issuer-Token": strings.Repeat("0a1b2c3d", 1<<17)},
-	}
-	for _, r := range routes {
-		for name, hdr := range wrong {
-			t.Run(r.name+"/"+name, func(t *testing.T) {
-				wantRefused(t, r, serveGate(t, r, r.method, r.body, hdr), &logs)
-			})
-		}
-		// Header.Get reads the first value, so a right value after a wrong one must not open the route.
-		t.Run(r.name+"/a wrong value then the right one", func(t *testing.T) {
-			hdr := http.Header{}
-			hdr.Add("X-Mock-Issuer-Token", gateToken+"x")
-			hdr.Add("X-Mock-Issuer-Token", gateToken)
-			wantRefused(t, r, serveGateHeader(t, r, r.method, r.body, hdr), &logs)
-		})
-	}
-}
-
-// An OPTIONS with no Origin passes gateway.CORS and would otherwise reach the minting handler.
-func TestTaggedMockLoginRefusesAPreflightWithoutAnOrigin(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "nightly")
-	t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
-	var logs strings.Builder
-	login := gateRoutes(t, &logs)[0]
-	if login.name != "login" {
-		t.Fatalf("first route is %q, want login", login.name)
-	}
-	wantRefused(t, login, serveGate(t, login, http.MethodOptions, "", nil), &logs)
-}
-
-func TestTaggedMockRoutesRefuseEverythingWhenTheTokenIsUnset(t *testing.T) {
-	for _, state := range []string{"empty", "unset"} {
-		t.Run(state, func(t *testing.T) {
-			t.Setenv("DEPLOY_ENV", "nightly")
-			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", "")
-			if state == "unset" {
-				if err := os.Unsetenv("GATEWAY_MOCK_ISSUER_TOKEN"); err != nil {
-					t.Fatal(err)
-				}
-			}
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
 			var logs strings.Builder
 			routes := gateRoutes(t, &logs)
 			if len(routes) != 5 {
@@ -646,8 +578,110 @@ func TestTaggedMockRoutesRefuseEverythingWhenTheTokenIsUnset(t *testing.T) {
 			}
 			for _, r := range routes {
 				t.Run(r.name, func(t *testing.T) {
-					for _, hdr := range []map[string]string{nil, {"X-Mock-Issuer-Token": ""}, {"X-Mock-Issuer-Token": "anything"}} {
+					wantRefused(t, r, serveGate(t, r, r.method, r.body, nil), &logs)
+					wantRefused(t, r, serveGate(t, r, r.method, r.body, map[string]string{"X-Mock-Issuer-Token": ""}), &logs)
+				})
+			}
+		})
+	}
+}
+
+func TestTaggedMockRoutesRefuseAWrongToken(t *testing.T) {
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			var logs strings.Builder
+			routes := gateRoutes(t, &logs)
+			if len(routes) != 5 {
+				t.Fatalf("%d routes under test, want 5", len(routes))
+			}
+			wrong := map[string]map[string]string{
+				"last character changed": {"X-Mock-Issuer-Token": gateToken[:len(gateToken)-1] + "e"},
+				"one character longer":   {"X-Mock-Issuer-Token": gateToken + "0"},
+				"upper case":             {"X-Mock-Issuer-Token": strings.ToUpper(gateToken)},
+				"X-Gateway-Token":        {"X-Gateway-Token": gateToken},
+				"Authorization Bearer":   {"Authorization": "Bearer " + gateToken},
+				"leading space":          {"X-Mock-Issuer-Token": " " + gateToken},
+				"trailing space":         {"X-Mock-Issuer-Token": gateToken + " "},
+				"trailing newline":       {"X-Mock-Issuer-Token": gateToken + "\n"},
+				"one character shorter":  {"X-Mock-Issuer-Token": gateToken[:len(gateToken)-1]},
+				"the token twice":        {"X-Mock-Issuer-Token": gateToken + gateToken},
+				"a single space":         {"X-Mock-Issuer-Token": " "},
+				"one MiB":                {"X-Mock-Issuer-Token": strings.Repeat("0a1b2c3d", 1<<17)},
+				"without the X- prefix":  {"Mock-Issuer-Token": gateToken},
+				"in a cookie":            {"Cookie": "X-Mock-Issuer-Token=" + gateToken},
+			}
+			for _, r := range routes {
+				for name, hdr := range wrong {
+					t.Run(r.name+"/"+name, func(t *testing.T) {
 						wantRefused(t, r, serveGate(t, r, r.method, r.body, hdr), &logs)
+					})
+				}
+				t.Run(r.name+"/the token in the query string", func(t *testing.T) {
+					q := r
+					q.path += "?X-Mock-Issuer-Token=" + gateToken
+					wantRefused(t, q, serveGate(t, q, q.method, q.body, nil), &logs)
+				})
+				// Header.Get reads the first value, so a right value after a wrong one must not open the route.
+				t.Run(r.name+"/a wrong value then the right one", func(t *testing.T) {
+					hdr := http.Header{}
+					hdr.Add("X-Mock-Issuer-Token", gateToken+"x")
+					hdr.Add("X-Mock-Issuer-Token", gateToken)
+					wantRefused(t, r, serveGateHeader(t, r, r.method, r.body, hdr), &logs)
+				})
+			}
+		})
+	}
+}
+
+// An OPTIONS with no Origin passes gateway.CORS and would otherwise reach the minting handler.
+func TestTaggedMockLoginRefusesAPreflightWithoutAnOrigin(t *testing.T) {
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			var logs strings.Builder
+			login := gateRoutes(t, &logs)[0]
+			if login.name != "login" {
+				t.Fatalf("first route is %q, want login", login.name)
+			}
+			for name, hdr := range map[string]map[string]string{
+				"no header":             nil,
+				"a wrong token":         {"X-Mock-Issuer-Token": gateToken + "0"},
+				"an empty Origin value": {"Origin": ""},
+			} {
+				t.Run(name, func(t *testing.T) {
+					wantRefused(t, login, serveGate(t, login, http.MethodOptions, "", hdr), &logs)
+				})
+			}
+		})
+	}
+}
+
+func TestTaggedMockRoutesRefuseEverythingWhenTheTokenIsUnset(t *testing.T) {
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			for _, state := range []string{"empty", "unset"} {
+				t.Run(state, func(t *testing.T) {
+					t.Setenv("DEPLOY_ENV", env)
+					t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", "")
+					if state == "unset" {
+						if err := os.Unsetenv("GATEWAY_MOCK_ISSUER_TOKEN"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					var logs strings.Builder
+					routes := gateRoutes(t, &logs)
+					if len(routes) != 5 {
+						t.Fatalf("%d routes under test, want 5", len(routes))
+					}
+					for _, r := range routes {
+						t.Run(r.name, func(t *testing.T) {
+							for _, hdr := range []map[string]string{nil, {"X-Mock-Issuer-Token": ""}, {"X-Mock-Issuer-Token": "anything"}} {
+								wantRefused(t, r, serveGate(t, r, r.method, r.body, hdr), &logs)
+							}
+						})
 					}
 				})
 			}
@@ -656,112 +690,138 @@ func TestTaggedMockRoutesRefuseEverythingWhenTheTokenIsUnset(t *testing.T) {
 }
 
 func TestTaggedMockIssuerWarnsWhenTheTokenIsUnset(t *testing.T) {
-	boot := func(t *testing.T, token string) []string {
-		t.Helper()
-		t.Setenv("AUTH_ISSUER", mountTestIssuer)
-		t.Setenv("DEPLOY_ENV", "nightly")
-		t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", token)
-		var logs strings.Builder
-		logger := slog.New(slog.NewTextHandler(&logs, nil))
-		if _, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger); login == nil {
-			t.Fatal("mockIssuerRoutes returned no login handler")
-		}
-		return strings.Split(strings.TrimSpace(logs.String()), "\n")
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			boot := func(t *testing.T, token string) []string {
+				t.Helper()
+				t.Setenv("AUTH_ISSUER", mountTestIssuer)
+				t.Setenv("DEPLOY_ENV", env)
+				t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", token)
+				var logs strings.Builder
+				logger := slog.New(slog.NewTextHandler(&logs, nil))
+				if _, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger); login == nil {
+					t.Fatal("mockIssuerRoutes returned no login handler")
+				}
+				return strings.Split(strings.TrimSpace(logs.String()), "\n")
+			}
+
+			t.Run("unset", func(t *testing.T) {
+				lines := boot(t, "")
+				if len(lines) != 1 || !strings.Contains(lines[0], "GATEWAY_MOCK_ISSUER_TOKEN") {
+					t.Errorf("boot log %q, want one line naming GATEWAY_MOCK_ISSUER_TOKEN", lines)
+				}
+				if strings.Contains(strings.Join(lines, "\n"), "unauthenticated login is live") {
+					t.Errorf("boot log %q says login is live while every route refuses", lines)
+				}
+			})
+
+			t.Run("set", func(t *testing.T) {
+				lines := boot(t, gateToken)
+				joined := strings.Join(lines, "\n")
+				if len(lines) != 1 || !strings.Contains(joined, "X-Mock-Issuer-Token") {
+					t.Errorf("boot log %q, want one line naming X-Mock-Issuer-Token", lines)
+				}
+				if strings.Contains(joined, gateToken) {
+					t.Errorf("boot log carries the token: %s", joined)
+				}
+				if strings.Contains(joined, "unauthenticated login is live") {
+					t.Errorf("boot log %q says login is unauthenticated while the gate is on", lines)
+				}
+			})
+		})
 	}
-
-	t.Run("unset", func(t *testing.T) {
-		lines := boot(t, "")
-		if len(lines) != 1 || !strings.Contains(lines[0], "GATEWAY_MOCK_ISSUER_TOKEN") {
-			t.Errorf("boot log %q, want one line naming GATEWAY_MOCK_ISSUER_TOKEN", lines)
-		}
-		if strings.Contains(strings.Join(lines, "\n"), "unauthenticated login is live") {
-			t.Errorf("boot log %q says login is live while every route refuses", lines)
-		}
-	})
-
-	t.Run("set", func(t *testing.T) {
-		lines := boot(t, gateToken)
-		joined := strings.Join(lines, "\n")
-		if len(lines) != 1 || !strings.Contains(joined, "X-Mock-Issuer-Token") {
-			t.Errorf("boot log %q, want one line naming X-Mock-Issuer-Token", lines)
-		}
-		if strings.Contains(joined, gateToken) {
-			t.Errorf("boot log carries the token: %s", joined)
-		}
-		if strings.Contains(joined, "unauthenticated login is live") {
-			t.Errorf("boot log %q says login is unauthenticated while the gate is on", lines)
-		}
-	})
 }
 
 func TestTaggedMockRoutesServeWithTheToken(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "nightly")
-	t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
-	var logs strings.Builder
-	routes := gateRoutes(t, &logs)
-	if len(routes) != 5 {
-		t.Fatalf("%d routes under test, want 5", len(routes))
-	}
-	hdr := map[string]string{"X-Mock-Issuer-Token": gateToken}
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			var logs strings.Builder
+			routes := gateRoutes(t, &logs)
+			if len(routes) != 5 {
+				t.Fatalf("%d routes under test, want 5", len(routes))
+			}
+			hdr := map[string]string{"X-Mock-Issuer-Token": gateToken}
 
-	t.Run("login mints a token that verifies against the served JWKS", func(t *testing.T) {
-		t.Setenv("AUTH_ISSUER", mountTestIssuer)
-		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
-		if jwks == nil || login == nil {
-			t.Fatal("mockIssuerRoutes returned no handlers")
-		}
-		srv := httptest.NewServer(jwks)
-		t.Cleanup(srv.Close)
-		verifier, err := auth.NewVerifier(auth.Config{Issuer: mountTestIssuer, JWKSURL: srv.URL, Logger: logger})
-		if err != nil {
-			t.Fatalf("verifier: %v", err)
-		}
-		r := gateRoute{name: "login", path: "/auth/login", h: login}
-		rec := serveGate(t, r, http.MethodPost, `{}`, hdr)
-		var tok struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || rec.Code != http.StatusOK || tok.AccessToken == "" {
-			t.Fatalf("login with the right header = %d %s, want 200 and an access_token (decode err %v)", rec.Code, rec.Body.String(), err)
-		}
-		if _, err := verifier.Verify(t.Context(), tok.AccessToken); err != nil {
-			t.Errorf("the minted token does not verify against the served JWKS: %v", err)
-		}
-	})
+			t.Run("login mints a token that verifies against the served JWKS", func(t *testing.T) {
+				t.Setenv("AUTH_ISSUER", mountTestIssuer)
+				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+				jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
+				if jwks == nil || login == nil {
+					t.Fatal("mockIssuerRoutes returned no handlers")
+				}
+				srv := httptest.NewServer(jwks)
+				t.Cleanup(srv.Close)
+				verifier, err := auth.NewVerifier(auth.Config{Issuer: mountTestIssuer, JWKSURL: srv.URL, Logger: logger})
+				if err != nil {
+					t.Fatalf("verifier: %v", err)
+				}
+				r := gateRoute{name: "login", path: "/auth/login", h: login}
+				rec := serveGate(t, r, http.MethodPost, `{}`, hdr)
+				var tok struct {
+					AccessToken string `json:"access_token"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || rec.Code != http.StatusOK || tok.AccessToken == "" {
+					t.Fatalf("login with the right header = %d %s, want 200 and an access_token (decode err %v)", rec.Code, rec.Body.String(), err)
+				}
+				if _, err := verifier.Verify(t.Context(), tok.AccessToken); err != nil {
+					t.Errorf("the minted token does not verify against the served JWKS: %v", err)
+				}
+			})
 
-	// HTTP header names are case-insensitive: the server canonicalises a lower-case name before the gate reads it.
-	t.Run("header name in lower case over HTTP", func(t *testing.T) {
-		srv := httptest.NewServer(routes[1].h)
-		t.Cleanup(srv.Close)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+routes[1].path, strings.NewReader(`{`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header["x-mock-issuer-token"] = []string{gateToken}
-		res, err := srv.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != http.StatusBadRequest {
-			t.Errorf("POST { with a lower-case header name and the right value = %d, want 400 (the gate passed)", res.StatusCode)
-		}
-	})
+			// HTTP header names are case-insensitive: the server canonicalises a lower-case name before the gate reads it.
+			t.Run("header name in lower case over HTTP", func(t *testing.T) {
+				srv := httptest.NewServer(routes[1].h)
+				t.Cleanup(srv.Close)
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+routes[1].path, strings.NewReader(`{`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header["x-mock-issuer-token"] = []string{gateToken}
+				res, err := srv.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer res.Body.Close()
+				if res.StatusCode != http.StatusBadRequest {
+					t.Errorf("POST { with a lower-case header name and the right value = %d, want 400 (the gate passed)", res.StatusCode)
+				}
+			})
 
-	// A malformed body is refused by the handler itself, so the gate let the request in.
-	for _, r := range routes[1:] {
-		t.Run(r.name, func(t *testing.T) {
-			rec := serveGate(t, r, r.method, `{`, hdr)
-			if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusBadRequest || got != `{"error":"invalid request body"}` {
-				t.Errorf("POST { with the right header = %d %s, want 400 invalid request body", rec.Code, got)
+			// A malformed body is refused by the handler itself, so the gate let the request in.
+			for _, r := range routes[1:] {
+				t.Run(r.name, func(t *testing.T) {
+					rec := serveGate(t, r, r.method, `{`, hdr)
+					if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusBadRequest || got != `{"error":"invalid request body"}` {
+						t.Errorf("POST { with the right header = %d %s, want 400 invalid request body", rec.Code, got)
+					}
+				})
 			}
 		})
 	}
 }
 
-func TestTaggedMockRoutesStayOpenOffTheNightly(t *testing.T) {
-	for _, env := range []string{"pr-7", ""} {
+// Every name platform.Posture reads as a preview gates the routes, not only pr-7.
+func TestTaggedMockGateCoversEveryPreviewName(t *testing.T) {
+	for _, env := range []string{"pr-12", "feature-pr-3"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			var logs strings.Builder
+			routes := gateRoutes(t, &logs)
+			if len(routes) != 5 {
+				t.Fatalf("%d routes under test, want 5", len(routes))
+			}
+			for _, r := range routes {
+				wantRefused(t, r, serveGate(t, r, r.method, r.body, nil), &logs)
+			}
+		})
+	}
+}
+
+func TestTaggedMockRoutesStayOpenOffAPreview(t *testing.T) {
+	for _, env := range []string{"", "production", "staging"} {
 		t.Run("DEPLOY_ENV="+env, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", env)
 			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", "")
@@ -792,33 +852,37 @@ func TestTaggedMockRoutesStayOpenOffTheNightly(t *testing.T) {
 
 // The verifier fetches JWKS with no header, and a browser preflight carries an Origin.
 func TestTaggedMockGateLeavesJWKSAndPreflightOpen(t *testing.T) {
-	const origin = "https://app.ascomply.test"
-	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	t.Setenv("DEPLOY_ENV", "nightly")
-	t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
-	if jwks == nil || login == nil {
-		t.Fatalf("mockIssuerRoutes = (jwks %v, login %v), want both handlers", jwks, login)
-	}
+	for _, env := range gateEnvs {
+		t.Run(env, func(t *testing.T) {
+			const origin = "https://app.ascomply.test"
+			t.Setenv("AUTH_ISSUER", mountTestIssuer)
+			t.Setenv("DEPLOY_ENV", env)
+			t.Setenv("GATEWAY_MOCK_ISSUER_TOKEN", gateToken)
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
+			if jwks == nil || login == nil {
+				t.Fatalf("mockIssuerRoutes = (jwks %v, login %v), want both handlers", jwks, login)
+			}
 
-	rec := httptest.NewRecorder()
-	jwks.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil))
-	var set struct {
-		Keys []struct {
-			Kty string `json:"kty"`
-		} `json:"keys"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil || rec.Code != http.StatusOK || len(set.Keys) != 1 || set.Keys[0].Kty != "EC" {
-		t.Errorf("GET jwks with no header = %d %s, want 200 with one EC key (decode err %v)", rec.Code, rec.Body.String(), err)
-	}
+			rec := httptest.NewRecorder()
+			jwks.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil))
+			var set struct {
+				Keys []struct {
+					Kty string `json:"kty"`
+				} `json:"keys"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil || rec.Code != http.StatusOK || len(set.Keys) != 1 || set.Keys[0].Kty != "EC" {
+				t.Errorf("GET jwks with no header = %d %s, want 200 with one EC key (decode err %v)", rec.Code, rec.Body.String(), err)
+			}
 
-	r := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
-	r.Header.Set("Origin", origin)
-	r.Header.Set("Access-Control-Request-Method", "POST")
-	rec = httptest.NewRecorder()
-	login.ServeHTTP(rec, r)
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); rec.Code != http.StatusNoContent || got != origin {
-		t.Errorf("preflight with an allowed Origin and no header = %d with Access-Control-Allow-Origin %q, want 204 and %q", rec.Code, got, origin)
+			r := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
+			r.Header.Set("Origin", origin)
+			r.Header.Set("Access-Control-Request-Method", "POST")
+			rec = httptest.NewRecorder()
+			login.ServeHTTP(rec, r)
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); rec.Code != http.StatusNoContent || got != origin {
+				t.Errorf("preflight with an allowed Origin and no header = %d with Access-Control-Allow-Origin %q, want 204 and %q", rec.Code, got, origin)
+			}
+		})
 	}
 }

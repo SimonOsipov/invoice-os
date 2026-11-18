@@ -62,7 +62,7 @@ func newResend(authURL *url.URL, client *http.Client, floor time.Duration, log *
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return ResendVerificationHandler(authURL, client, floor, resendThrottle(time.Now), true, log)
+	return ResendVerificationHandler(authURL, client, floor, resendThrottle(time.Now), true, log, nil)
 }
 
 func resendBody(email string) string {
@@ -315,6 +315,7 @@ func TestResendVerification_NonPostIs405AtOnce(t *testing.T) {
 			defer cancel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/resend-verification", nil).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
 
 			start := time.Now()
 			h.ServeHTTP(rec, req)
@@ -399,7 +400,7 @@ func TestResendVerification_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
 		{"over the address limit", func(t *testing.T) (http.Handler, *fakeGoTrue) {
 			f := newFakeGoTrue(t, http.StatusOK, `{}`)
-			return ResendVerificationHandler(f.URL, testClient(), floor, spentAddress(), true, slog.New(slog.DiscardHandler)), f
+			return ResendVerificationHandler(f.URL, testClient(), floor, spentAddress(), true, slog.New(slog.DiscardHandler), nil), f
 		}, 0},
 		{"refused connection", func(t *testing.T) (http.Handler, *fakeGoTrue) {
 			return newResend(closedURL(t), testClient(), floor, nil), nil
@@ -450,6 +451,7 @@ func TestResendVerification_ClientGoneWritesNothing(t *testing.T) {
 	defer cancel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 
 	done := make(chan struct{})
 	go func() {
@@ -490,7 +492,7 @@ func TestResendVerification_PerAddressLimit(t *testing.T) {
 	clock := newTestClock()
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
-	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(clock.Now), true, log)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(clock.Now), true, log, nil)
 	post := func(email string) *httptest.ResponseRecorder {
 		rec, _ := serveResend(t.Context(), h, resendBody(email))
 		return rec
@@ -525,7 +527,7 @@ func TestResendVerification_CooldownRefusalsAreRefunded(t *testing.T) {
 	run := func(t *testing.T, perAddress *SignInThrottle, log *slog.Logger, n int, answers ...gtAnswer) *fakeGoTrue {
 		t.Helper()
 		fake := sequenceGoTrue(t, answers...)
-		h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
+		h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 		for range n {
 			rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 			requireAccepted(t, rec, "resend")
@@ -562,7 +564,7 @@ func TestResendVerification_LogsCarryNoAddress(t *testing.T) {
 	log, buf := captureLog()
 	run := func(auth *url.URL, perAddress *SignInThrottle) {
 		t.Helper()
-		serveResend(t.Context(), ResendVerificationHandler(auth, testClient(), floor, perAddress, true, log), resendBody(email))
+		serveResend(t.Context(), ResendVerificationHandler(auth, testClient(), floor, perAddress, true, log, nil), resendBody(email))
 	}
 
 	run(newFakeGoTrue(t, http.StatusOK, echo("ok")).URL, resendThrottle(time.Now))
@@ -597,7 +599,7 @@ func TestResendVerification_UnenforcedLimitOnlyLogs(t *testing.T) {
 	t.Run("address", func(t *testing.T) {
 		fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 		log, buf := captureLog()
-		h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log)
+		h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log, nil)
 		for range ResendPerAddress + 1 {
 			rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 			requireAccepted(t, rec, "resend")
@@ -612,7 +614,7 @@ func TestResendVerification_UnenforcedLimitOnlyLogs(t *testing.T) {
 		fake := sequenceGoTrue(t, ok, ok, cooldown, ok)
 		log, buf := captureLog()
 		perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
-		h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, false, log)
+		h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, false, log, nil)
 		for range 4 {
 			rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 			requireAccepted(t, rec, "resend")
@@ -657,7 +659,7 @@ func TestResendVerification_OnlyA4xxAnswerIsRefunded(t *testing.T) {
 			auth, client := c.build(t)
 			log, buf := captureLog()
 			perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
-			h := ResendVerificationHandler(auth, client, 0, perAddress, true, log)
+			h := ResendVerificationHandler(auth, client, 0, perAddress, true, log, nil)
 
 			for range 3 {
 				serveResend(t.Context(), h, resendBody("ada@corp.example"))
@@ -750,7 +752,7 @@ func TestResendVerification_FullMapFailsClosed(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", ResendPerAddress, 1, ResendWindow, time.Now)
-	h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 
 	first, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 	newAddress, _ := serveResend(t.Context(), h, resendBody("bob@corp.example"))
@@ -771,7 +773,7 @@ func TestResendVerification_AnUnreadableThrottleIsTheSame202AndSendsNothing(t *t
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	th := resendThrottle(time.Now)
 	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
-	h := ResendVerificationHandler(fake.URL, testClient(), 0, th, true, slog.New(slog.DiscardHandler))
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, th, true, slog.New(slog.DiscardHandler), nil)
 
 	rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
 
@@ -788,7 +790,7 @@ func TestResendAndReset_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
 		build     func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler
 	}{
 		{"resend", resendLimitMsg, func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler {
-			return ResendVerificationHandler(u, testClient(), 0, th, true, log)
+			return ResendVerificationHandler(u, testClient(), 0, th, true, log, nil)
 		}},
 		{"reset", resetLimitMsg, func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler {
 			return RequestPasswordResetHandler(u, testClient(), 0, th, true, log, nil)
@@ -810,5 +812,79 @@ func TestResendAndReset_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
 				t.Errorf("%q records = %d, want 0 (a database error is not a reached limit)", c.msg, n)
 			}
 		})
+	}
+}
+
+func TestResendVerification_SpendsTheRegistrationShare(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	share := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), share)
+	for _, addr := range []string{"ada@corp.example", "bob@corp.example"} {
+		rec, _ := serveResend(t.Context(), h, resendBody(addr))
+		requireAccepted(t, rec, "resend")
+	}
+	if calls := fake.Calls(); len(calls) != 1 || calls[0].Path != "/resend" {
+		t.Errorf("GoTrue saw %+v, want one /resend", calls)
+	}
+}
+
+func TestResendVerification_A4xxRefundsTheShare(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusTooManyRequests, gtOverEmailSendRateLimit)
+	share := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), share)
+	for _, addr := range []string{"ada@corp.example", "bob@corp.example"} {
+		rec, _ := serveResend(t.Context(), h, resendBody(addr))
+		requireAccepted(t, rec, "resend")
+	}
+	if n := len(fake.Calls()); n != 2 {
+		t.Errorf("GoTrue saw %d calls, want 2: a 4xx refunds the share", n)
+	}
+}
+
+func TestResendVerification_ShareRefusalIsTheSame202AfterTheFloor(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	control, _ := serveResend(t.Context(), newResend(newFakeGoTrue(t, http.StatusOK, `{}`).URL, testClient(), floor, nil), resendBody("ada@corp.example"))
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	log, buf := captureLog()
+	h := ResendVerificationHandler(fake.URL, testClient(), floor, resendThrottle(time.Now), true, log, spentShare(t))
+
+	rec, elapsed := serveResend(t.Context(), h, resendBody("ada@corp.example"))
+
+	requireAccepted(t, rec, "share refused")
+	requireSameAnswer(t, "refused resend vs 200 answer", rec, control)
+	if elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	if recs := recordsNamed(t, buf, "resend-verification: mail share spent"); len(recs) != 1 || recs[0]["share"] != "hour" {
+		t.Errorf("share records = %v, want one with share=hour", recs)
+	}
+	if strings.Contains(buf.String(), "@") {
+		t.Errorf("log holds an address: %s", buf.String())
+	}
+}
+
+func TestResendVerification_ShareRefusalRefundsTheAddress(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	clockB := newMailClock(time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC))
+	share := NewRegistrationMail("registration-mail", 1, 100, clockB.Now)
+	if spent, _ := share.Admit(); spent != "" {
+		t.Fatal("priming Admit refused")
+	}
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), share)
+	for range ResendPerAddress {
+		rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
+		requireAccepted(t, rec, "share-refused resend")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Fatalf("GoTrue saw %d calls while the share was spent, want 0", n)
+	}
+	clockB.Add(61 * time.Minute)
+	rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
+	requireAccepted(t, rec, "resend after the share turned")
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("GoTrue saw %d calls, want 1: the address must have kept its %d", n, ResendPerAddress)
 	}
 }

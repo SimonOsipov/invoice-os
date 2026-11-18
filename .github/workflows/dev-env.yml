@@ -25,7 +25,8 @@ env:
   PR: ${{ github.event.pull_request.number || 'nightly' }}
   WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
   HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
-  DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
+  # The nightly (dispatch from main) deploys as deploy-nightly; Workload Identity admits it from main only.
+  DEPLOYER: ${{ github.event_name == 'workflow_dispatch' && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}
 
 jobs:
   # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant or a Dependabot PR whose every commit is Dependabot's.
@@ -226,8 +227,12 @@ jobs:
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.DEPLOYER }}
+          # Checks the PR deployer on every run.
+          service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
       - run: bash scripts/ci/preview.sh invariants
+        env:
+          # The owner sets it to true once the PR side has lost the nightly secrets.
+          NIGHTLY_KEYS_CLOSED: ${{ vars.NIGHTLY_KEYS_CLOSED }}
       # Proves a push by digest lands in previews as one untagged image manifest, before production relies on it.
       - name: Push a probe image by digest
         if: ${{ !cancelled() }}
@@ -254,7 +259,7 @@ jobs:
     needs: [changes, commit-authors]
     if: needs.changes.outputs.preview == 'true' && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -326,6 +331,21 @@ jobs:
             ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
           done
           echo "::error::preview cap reached: two PR previews are open, the third slot is the nightly's (.claude/rules/ci-preview.md)"
+          exit 1
+      - name: Claim a preview slot
+        if: needs.changes.outputs.nightly != 'true'
+        env:
+          CAP_TRIES: 15
+          CAP_SLEEP: 30
+        run: |
+          set -euo pipefail
+          for ((i = 1; i <= CAP_TRIES; i++)); do
+            out=$(bash scripts/ci/preview.sh claim "$PR")
+            echo "$out"
+            grep -q '^slot=' <<<"$out" && exit 0
+            ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
+          done
+          echo "::error::no free preview slot: both PR slots are claimed (.claude/rules/ci-preview.md)"
           exit 1
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'
@@ -497,6 +517,9 @@ jobs:
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" gateway tenancy portfolio invoice validation dashboard submission notifications docling worker
       - name: Deploy the sites
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog check ops-console support-console
+      - name: Prove the runtime reads only its own secrets
+        if: github.event_name == 'pull_request'
+        run: bash scripts/ci/preview.sh reach "$PR"
 
   # The PR gateway serves the mock issuer and trusts it and its own GoTrue.
   health-gate:
@@ -505,9 +528,23 @@ jobs:
     if: "!cancelled() && needs.deploy.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      # The gateway /health shows its detail only to X-Gateway-Token.
+      - name: Read the PR's gateway token
+        run: |
+          token=$(bash scripts/ci/preview.sh token "$PR")
+          echo "::add-mask::$token"
+          echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
       - name: Wait for gateway /health 200 on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -518,7 +555,7 @@ jobs:
           mock=""
           issuers=""
           for _ in $(seq 1 60); do
-            body=$(curl -fsS --connect-timeout 5 --max-time 10 "$GATEWAY_URL/health" 2>/dev/null || echo '')
+            body=$(curl -fsS --connect-timeout 5 --max-time 10 -H "X-Gateway-Token: $GATEWAY_TOKEN" "$GATEWAY_URL/health" 2>/dev/null || echo '')
             seen=$(printf '%s' "$body" | jq -r '.build // empty' 2>/dev/null || echo '')
             if [ -n "$seen" ] && [ "$seen" = "$EXPECTED_BUILD" ]; then
               # Read the fields out of the SAME body that carried the matching build.
@@ -545,7 +582,6 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -727,12 +763,12 @@ jobs:
           echo "::add-mask::$token"
           echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
       - name: Read the mock issuer token
-        if: needs.changes.outputs.nightly == 'true'
         run: |
           set -euo pipefail
           mock=$(bash scripts/ci/preview.sh mock-token "$PR")
           echo "::add-mask::$mock"
           echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
+          if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -807,10 +843,14 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts e2e/report-smoke e2e/report-api e2e/flaky-results nightly-results
       # always(): a spec that fails then passes on retry leaves the job green, and its trace is
       # the only evidence.
       - name: Upload smoke Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: smoke-playwright-report
@@ -818,7 +858,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload API Playwright report
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
@@ -826,7 +866,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-e2e-${{ github.run_attempt }}
@@ -834,7 +874,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-e2e
@@ -926,12 +966,12 @@ jobs:
           echo "::add-mask::$token"
           echo "GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
       - name: Read the mock issuer token
-        if: needs.changes.outputs.nightly == 'true'
         run: |
           set -euo pipefail
           mock=$(bash scripts/ci/preview.sh mock-token "$PR")
           echo "::add-mask::$mock"
           echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
+          if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
       - name: Topology (${{ matrix.shard }})
         env:
           SHARD: ${{ matrix.shard }}
@@ -959,8 +999,12 @@ jobs:
           # The comment-only exemption diffs base...head; without the history no spec is exempt.
           git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA" || echo "::warning::history fetch failed; no comment-only exemption"
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt" "$BASE_SHA" "$HEAD_SHA"
-      - name: Upload topology Playwright report
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts e2e/report-topology e2e/flaky-results nightly-results
+      - name: Upload topology Playwright report
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: topology-playwright-report-${{ matrix.shard }}
@@ -968,7 +1012,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload the flaky JSON
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
@@ -976,7 +1020,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-topology-${{ matrix.shard }}
@@ -1144,10 +1188,15 @@ jobs:
           mock=$(bash scripts/ci/preview.sh mock-token "$PR")
           echo "::add-mask::$mock"
           echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
+          if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
       - name: Check the AI features and accuracy
         run: pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-ai-check
@@ -1243,8 +1292,12 @@ jobs:
       - name: Turn real mail off
         if: always() && steps.mailon.outcome != 'skipped'
         run: bash scripts/ci/preview.sh mail-off "$PR"
+      - name: Scrub the Playwright outputs
+        id: scrub
+        if: always()
+        run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
-        if: always() && needs.changes.outputs.nightly == 'true'
+        if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-email
@@ -1298,10 +1351,17 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install the e2e dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -1330,8 +1390,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
           HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
             go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -prepare "${{ needs.prepare-env.result }}" -out nightly-results/hubspot.json
-      - name: Upload the nightly results
+      - name: Scrub the Playwright outputs
+        id: scrub
         if: always()
+        run: node e2e/reportScrub.ts nightly-results
+      - name: Upload the nightly results
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: results-hubspot

@@ -52,6 +52,8 @@ func RefreshHandler(authURL *url.URL, client *http.Client, log *slog.Logger, coo
 			AccessToken  string `json:"access_token"`
 			RefreshToken string `json:"refresh_token"`
 		}
+		// ceiling: GoTrue answers the active token's parent with the active token, so its holder follows each rotation; revisit when a GoTrue setting can refuse it. A token two rotations old ends the session family; the 720 h session timebox is the outer bound.
+		// Pinned by TestIdP_RefreshRotationAndReuse, TestIdP_ParentTokenPastTheTimeboxIsRefused.
 		status, _, err := postGoTrue(r, client, token, map[string]string{"refresh_token": in.RefreshToken}, &sess)
 		switch {
 		case err != nil:

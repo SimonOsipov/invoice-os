@@ -1,9 +1,8 @@
-# syntax=docker/dockerfile:1
 # Build context MUST be the repo root: the pnpm workspace shares one root
 # lockfile and @invoice-os/design-tokens is resolved via workspace:*.
 
 # ---- Build: install the whole workspace, build just this app ----
-FROM node:22-alpine AS build
+FROM mirror.gcr.io/library/node:22.23.5-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS build
 WORKDIR /repo
 # Use the pnpm version pinned in root package.json#packageManager.
 RUN corepack enable
@@ -27,12 +26,13 @@ ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
 # The release fallback when no release is stamped.
 ARG BUILD_SHA
 ENV VITE_BUILD_SHA=${BUILD_SHA}
-# Build stage only, never ENV; empty skips the source-map upload.
-ARG SENTRY_AUTH_TOKEN
-RUN pnpm --filter @invoice-os/support-console build
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/support-console build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----
 FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve
+# 8080 needs no capability; a non-root exec of a file-capable binary fails under --cap-drop ALL.
+RUN setcap -r /usr/bin/caddy
+USER nobody:nobody
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/support-console/csp.txt /etc/caddy/csp.txt
 COPY --from=build /repo/frontend/support-console/dist /srv

@@ -7,7 +7,7 @@ const FAILED_VALUE = 'failed'
 
 export const RESET_SENT = 'If this address has an account, a reset link is on its way.'
 export const RESET_DONE = 'Your password is changed. Sign in with your new password.'
-export const RESET_FAILED = 'That reset link did not work. It may have expired or already been used.'
+export const RESET_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 
 export type ResetOutcome = 'reset' | 'reset-failed' | null
 

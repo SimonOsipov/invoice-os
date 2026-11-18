@@ -84,7 +84,6 @@ func TestDeleteMyAccountHandler_MapsEveryOutcome(t *testing.T) {
 			{"hand_on with a too-long heir", `{"outcome":"hand_on","heir_user_id":"` + heirID + `0"}`},
 			{"leave with a heir", `{"outcome":"leave","heir_user_id":"` + heirID + `"}`},
 			{"leave with an empty heir", `{"outcome":"leave","heir_user_id":""}`},
-			{"over 4 KiB", bodyOf(4097)},
 		} {
 			stub := &deleteStub{}
 			status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, tc.body)
@@ -94,6 +93,17 @@ func TestDeleteMyAccountHandler_MapsEveryOutcome(t *testing.T) {
 			if stub.calls != 0 {
 				t.Errorf("%s: the store was called %d times, want 0", tc.name, stub.calls)
 			}
+		}
+	})
+
+	t.Run("an over-cap body is 413 before the store", func(t *testing.T) {
+		stub := &deleteStub{}
+		status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, bodyOf(4097))
+		if status != http.StatusRequestEntityTooLarge || errorSentence(body) != "request body too large" {
+			t.Errorf("status = %d %v, want 413 request body too large", status, body)
+		}
+		if stub.calls != 0 {
+			t.Errorf("the store was called %d times, want 0", stub.calls)
 		}
 	})
 

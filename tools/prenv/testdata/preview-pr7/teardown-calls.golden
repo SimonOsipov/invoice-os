@@ -36,9 +36,14 @@ run services describe support-console-pr-7 --project ascomply-preview --region a
 run services delete support-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run jobs describe migrate-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run jobs delete migrate-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run jobs describe reach-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run jobs delete reach-pr-7 --project ascomply-preview --region africa-south1 --quiet
 run jobs execute preview-db --project ascomply-preview --region africa-south1 --quiet --wait --update-env-vars PR_DB=pr_7,ACTION=drop
 storage buckets describe gs://ascomply-preview-pr-7 --project ascomply-preview
 storage rm --recursive gs://ascomply-preview-pr-7 --project ascomply-preview --quiet
+secrets describe slot-1-claim --project ascomply-preview --format value(labels.preview-pr)
+storage ls gs://ascomply-preview-docs-slot-1/** --project ascomply-preview
+storage rm gs://ascomply-preview-docs-slot-1/** --project ascomply-preview --quiet
 secrets list --project ascomply-preview --filter labels.preview-pr=7 --format value(name)
 secrets delete pr-7-gateway-token --project ascomply-preview --quiet
 secrets delete pr-7-s2s-token --project ascomply-preview --quiet
@@ -52,3 +57,5 @@ secrets delete pr-7-database-reader-url --project ascomply-preview --quiet
 secrets delete pr-7-database-gateway-url --project ascomply-preview --quiet
 secrets delete pr-7-database-auth-url --project ascomply-preview --quiet
 secrets delete pr-7-mock-issuer-key --project ascomply-preview --quiet
+secrets delete pr-7-mock-issuer-token --project ascomply-preview --quiet
+secrets delete slot-1-claim --project ascomply-preview --quiet

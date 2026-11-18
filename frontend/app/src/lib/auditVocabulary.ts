@@ -44,6 +44,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'invoice.resolved_outside': { label: 'Resolved outside the system', domain: 'invoices' },
   'invoice.unresolved_outside': { label: 'Outside resolution withdrawn', domain: 'invoices' },
   'invoice_register.exported': { label: 'Invoice register exported', domain: 'invoices' },
+  'import.undone': { label: 'Import undone', domain: 'invoices' },
   'evidence_bundle.exported': { label: 'Evidence bundle downloaded', domain: 'invoices' },
   'evidence_bundle.export_failed': { label: 'Evidence bundle download failed', domain: 'invoices', outcome: 'bad' },
 
@@ -84,6 +85,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'workspace.deletion_scheduled': { label: 'Workspace deletion scheduled', domain: 'memberships', outcome: 'neutral' },
   'workspace.deletion_cancelled': { label: 'Workspace deletion cancelled', domain: 'memberships', outcome: 'neutral' },
   'workspace.purge_started': { label: 'Workspace purge started', domain: 'memberships', outcome: 'neutral' },
+  'workspace.purge_refused': { label: 'Workspace purge refused', domain: 'memberships', outcome: 'neutral' },
   'workspace.exported': { label: 'Workspace exported', domain: 'memberships', outcome: 'neutral' },
   'workspace.export_failed': { label: 'Workspace export failed', domain: 'memberships', outcome: 'bad' },
   'membership.account_deleted': { label: 'Account deleted', domain: 'memberships', outcome: 'neutral' },
@@ -142,7 +144,8 @@ export function auditEventView(event: string, payload?: unknown, actorName?: str
     return { label: 'Self-approved', domain: def.domain, tone: TONE.good }
   }
   if (!def) return { label: humanise(event), domain: null, tone: null }
-  const p = payload as { as_delegate?: unknown; acted_for_role_title?: unknown } | null | undefined
+  const p = payload as { as_delegate?: unknown; acted_for_role_title?: unknown; approved_as?: unknown } | null | undefined
+  const repeat = event === 'invoice.approval_approved' && p?.approved_as === 'repeat_approved'
   const title = p?.acted_for_role_title
   if (
     (event === 'invoice.approval_approved' || event === 'invoice.approval_rejected') &&
@@ -150,9 +153,10 @@ export function auditEventView(event: string, payload?: unknown, actorName?: str
     typeof title === 'string' && title !== '' &&
     actorName
   ) {
-    const verb = event === 'invoice.approval_approved' ? 'Approved' : 'Rejected'
+    const verb = repeat ? 'Repeat approval' : event === 'invoice.approval_approved' ? 'Approved' : 'Rejected'
     return { label: `${verb} by ${actorName} as delegate for ${title}`, domain: def.domain, tone: TONE[def.outcome!] }
   }
+  if (repeat) return { label: 'Repeat approval', domain: def.domain, tone: TONE.good }
   return { label: def.label, domain: def.domain, tone: def.outcome ? TONE[def.outcome] : null }
 }
 

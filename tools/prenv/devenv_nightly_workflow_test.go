@@ -20,6 +20,7 @@ const (
 	nlTeardown  = "always() && " + nlOn + " && " + authorCond
 	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
+	nlDeployer  = "DEPLOYER: ${{ github.event_name == 'workflow_dispatch' && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}"
 	nlFlakyStep = "Fail on a retry-pass in a spec this PR changed"
 	nlArgosFlag = "ARGOS_SHOTS: ${{ " + nlOn + " && secrets.ARGOS_TOKEN != '' && '1' || '' }}"
 )
@@ -33,6 +34,17 @@ func nlJSONFile(name string) string {
 // nlCode drops the comments of a run block, so a commented command does not count.
 func nlCode(run string) string {
 	return strings.Join(stripHashComments(strings.Split(run, "\n")), "\n")
+}
+
+// blockSet maps the keys of env block lines (`KEY: value`) to their values.
+func blockSet(lines []string) map[string]string {
+	m := map[string]string{}
+	for _, l := range lines {
+		if k, v, ok := strings.Cut(l, ":"); ok {
+			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return m
 }
 
 func nlJobs(yml string) map[string]workflowJob {
@@ -86,6 +98,37 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	if !slices.Contains(top, "  "+nlPRVar) {
 		bad("env.PR is not " + nlPRVar)
+	}
+	// Neither the PR's own run nor the pre-cutover nightly shows a wrong deployer; only the source does.
+	if !slices.Contains(top, "  "+nlDeployer) {
+		bad("env.DEPLOYER does not send the nightly to deploy-nightly")
+	}
+	authSteps := 0
+	for _, j := range workflowJobsOf(yml) {
+		if j.name == "invariants" {
+			continue
+		}
+		for _, st := range rawSteps(j) {
+			if len(st) == 0 || !strings.HasPrefix(st[0], "uses: google-github-actions/auth@") {
+				continue
+			}
+			authSteps++
+			if !slices.Contains(st, "service_account: ${{ env.DEPLOYER }}") {
+				bad(j.name + ": auth step does not use env.DEPLOYER")
+			}
+		}
+		_, jobSets := blockSet(blockLines(j.lines, 4, "env"))["DEPLOYER"]
+		for _, st := range j.steps() {
+			if _, ok := st.env["DEPLOYER"]; ok {
+				jobSets = true
+			}
+		}
+		if jobSets {
+			bad(j.name + " overrides DEPLOYER")
+		}
+	}
+	if authSteps == 0 {
+		bad("no auth step outside invariants")
 	}
 
 	ch, ok := jobs["changes"]
@@ -188,7 +231,7 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	for j, art := range map[string]string{"e2e": "results-e2e", "topology": "results-topology-${{ matrix.shard }}"} {
 		raw := nlRaw(jobs[j], "Upload the nightly results")
-		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+		for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
 			if !slices.Contains(raw, w) {
 				bad(j + " results upload lacks " + w)
 			}
@@ -265,7 +308,32 @@ func devEnvNightlyProblems(yml string) []string {
 	p = append(p, contactProblems(jobs)...)
 	p = append(p, aiCheckProblems(jobs)...)
 	p = append(p, e2eMailWindowProblems(jobs)...)
-	return append(p, emailProblems(jobs)...)
+	p = append(p, emailProblems(jobs)...)
+	return append(p, reachStepProblems(jobs)...)
+}
+
+// reachStepProblems names each clause of the deploy job's runtime-reach step that the text breaks.
+func reachStepProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	const name = "Prove the runtime reads only its own secrets"
+	steps := jobs["deploy"].steps()
+	at := func(n string) int {
+		return slices.IndexFunc(steps, func(s workflowStep) bool { return s.keys["name"] == n })
+	}
+	i := at(name)
+	if i < 0 {
+		return []string{"deploy lacks the step " + name}
+	}
+	if got := strings.TrimSpace(nlCode(steps[i].keys["run"])); got != `bash scripts/ci/preview.sh reach "$PR"` {
+		p = append(p, "deploy "+name+" runs "+got+", not bash scripts/ci/preview.sh reach \"$PR\"")
+	}
+	if steps[i].keys["if"] != "github.event_name == 'pull_request'" {
+		p = append(p, "deploy "+name+" is not pull_request only")
+	}
+	if sites := at("Deploy the sites"); sites < 0 || i < sites {
+		p = append(p, "deploy "+name+" does not follow Deploy the sites")
+	}
+	return p
 }
 
 const (
@@ -474,7 +542,7 @@ func aiCheckProblems(jobs map[string]workflowJob) []string {
 		bad("e2e-gate needs nightly-ai")
 	}
 	raw := nlRaw(ai, "Upload the nightly results")
-	for _, w := range []string{"if: always() && " + nlOn, "name: results-ai-check", "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+	for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "name: results-ai-check", "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
 		if !slices.Contains(raw, w) {
 			bad("nightly-ai results upload lacks " + w)
 		}
@@ -586,7 +654,7 @@ func emailProblems(jobs map[string]workflowJob) []string {
 		bad("email spec step timeout-minutes is not 16")
 	}
 	raw := nlRaw(em, "Upload the nightly results")
-	for _, w := range []string{"if: always() && " + nlOn, "name: results-email", "path: nightly-results/", "retention-days: 14"} {
+	for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "name: results-email", "path: nightly-results/", "retention-days: 14"} {
 		if !slices.Contains(raw, w) {
 			bad("email results upload lacks " + w)
 		}
@@ -1068,7 +1136,7 @@ func TestDevEnvNightly_ResultsUploaded(t *testing.T) {
 		{nlJSONFile("playwright-api.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "API E2E"},
 		{"name: results-e2e", "name: results", "results upload lacks name: results-e2e"},
 		{"name: results-topology-${{ matrix.shard }}", "name: results-topology", "topology results upload lacks"},
-		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
 		{"          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 14", "          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 7", "retention-days: 14"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), c.old, c.repl))
@@ -1082,10 +1150,26 @@ func TestDevEnvNightly_HealthGateHasNoModeBranch(t *testing.T) {
 	t.Parallel()
 	hg := devEnvJob(t, "health-gate")
 	s, _ := nlStep(hg, "Wait for gateway /health 200 on the commit under test")
-	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`} {
+	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`, `-H "X-Gateway-Token: $GATEWAY_TOKEN"`} {
 		if !strings.Contains(s.keys["run"], w) {
 			t.Errorf("health gate lacks %q", w)
 		}
+	}
+	tok, ok := nlStep(hg, "Read the PR's gateway token")
+	if !ok {
+		t.Fatal("health-gate has no step that reads the PR's gateway token")
+	}
+	if tok.index >= s.index {
+		t.Error("health-gate reads the token after the wait step")
+	}
+	for _, w := range []string{`preview.sh token "$PR"`, `GATEWAY_TOKEN=`, `>>"$GITHUB_ENV"`} {
+		if !strings.Contains(tok.keys["run"], w) {
+			t.Errorf("health-gate token step lacks %q", w)
+		}
+	}
+	// The token read needs a Google login and the OIDC permission; only a deployed run observes their loss.
+	if joined := strings.Join(hg.lines, "\n"); !strings.Contains(joined, "id-token: write") || !strings.Contains(joined, "uses: google-github-actions/auth@") {
+		t.Error("health-gate lacks id-token: write or the Google auth step")
 	}
 	if strings.Contains(strings.Join(hg.lines, "\n"), "nightly") {
 		t.Error("health-gate names the nightly mode")
@@ -1129,7 +1213,7 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 	if n < 8 {
 		t.Errorf("control: only %d jobs call preview.sh", n)
 	}
-	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
+	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 25\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
 }
 
 // The contacts step of fleet-gate, trimmed per line.
@@ -1245,7 +1329,7 @@ func TestDevEnvNightly_EmailJobRunsInNightlyModeOnly(t *testing.T) {
 		{"    name: Real invite and reset mail\n", "    name: Mail\n", "email name"},
 		{"    timeout-minutes: 25\n    permissions:\n      contents: read\n      actions: read", "    timeout-minutes: 40\n    permissions:\n      contents: read\n      actions: read", "email timeout-minutes"},
 		{"        timeout-minutes: 16\n", "        timeout-minutes: 30\n", "timeout-minutes is not 16"},
-		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
 	})
 }
 
@@ -1476,7 +1560,7 @@ func TestDevEnvNightly_AICheckJobIsNightlyOnly(t *testing.T) {
 		{nlAINeeds, strings.Replace(nlAINeeds, ", topology", "", 1), "nightly-ai needs"},
 		{nlAINeeds, strings.Replace(nlAINeeds, ", contacts", "", 1), "nightly-ai needs"},
 		{"      needs.changes.outputs.nightly == 'true' &&\n", "", "nightly-ai if"},
-		{"        if: always() && " + nlOn + "\n", "        if: always()\n", "nightly-ai results upload lacks"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n", "        if: always()\n", "nightly-ai results upload lacks"},
 		{"name: results-ai-check", "name: results-ai", "name: results-ai-check"},
 	}
 	for _, v := range []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL"} {
@@ -1622,5 +1706,119 @@ func TestDevEnvNightly_E2EWorkerMailWindow(t *testing.T) {
 	moved := mutateOnce(t, mutateOnce(t, yml, "          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY"), "          } >>\"$GITHUB_ENV\"\n      - name: Turn real check mail on", "          } >>\"$GITHUB_ENV\"\n          echo \"::add-mask::$domain\"\n      - name: Turn real check mail on")
 	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "masks the key and domain after") }) {
 		t.Errorf("late mask: problems %q", got)
+	}
+}
+
+// `Claim a preview slot` takes a document slot (preview.sh claim) before anything is created.
+
+const claimStepName = "Claim a preview slot"
+
+func TestDevEnvClaimsASlotBeforeItCreatesAnything(t *testing.T) {
+	t.Parallel()
+	pe := devEnvJob(t, "prepare-env")
+	var names []string
+	for _, s := range pe.steps() {
+		names = append(names, s.keys["name"]+s.keys["uses"])
+	}
+	idx := func(prefix string) int {
+		return slices.IndexFunc(names, func(n string) bool { return strings.HasPrefix(n, prefix) })
+	}
+	auth, capPR, claim := idx("google-github-actions/auth"), idx("preview cap for a PR"), idx(claimStepName)
+	secrets, bucket := idx("Create the PR's secrets"), idx("Create the PR's documents bucket")
+	if auth < 0 || capPR < 0 || claim < 0 || secrets < 0 || bucket < 0 || !(auth < capPR && capPR < claim && claim < secrets && claim < bucket) {
+		t.Errorf("step order wrong (auth %d, PR cap %d, claim %d, secrets %d, bucket %d): %q", auth, capPR, claim, secrets, bucket, names)
+	}
+	st, ok := nlStep(pe, claimStepName)
+	if !ok {
+		t.Fatalf("prepare-env has no step %q", claimStepName)
+	}
+	if st.keys["if"] != nlOff {
+		t.Errorf("claim step if = %q, want %q", st.keys["if"], nlOff)
+	}
+	if !strings.Contains(nlCode(st.keys["run"]), "preview.sh claim") {
+		t.Errorf("claim step does not call preview.sh claim: %q", st.keys["run"])
+	}
+}
+
+// The cap wait and the claim wait are both full in the worst case; prepare-env must outlast the two.
+func TestDevEnvClaimWaitAndCapWaitFitThePrepareEnvTimeout(t *testing.T) {
+	t.Parallel()
+	pe := devEnvJob(t, "prepare-env")
+	limit, _ := jobKey(pe, "timeout-minutes")
+	mins, err := strconv.Atoi(limit)
+	if err != nil {
+		t.Fatalf("timeout-minutes %q does not parse", limit)
+	}
+	const restOfJob = 180
+	total := restOfJob
+	for name, callSecs := range map[string]int{"preview cap for a PR": 8, claimStepName: 20} {
+		s, ok := nlStep(pe, name)
+		if !ok {
+			t.Errorf("no step %q", name)
+			continue
+		}
+		tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
+		sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
+		if err1 != nil || err2 != nil {
+			t.Errorf("%s: CAP_TRIES %q, CAP_SLEEP %q do not parse", name, s.env["CAP_TRIES"], s.env["CAP_SLEEP"])
+			continue
+		}
+		total += (tries-1)*sleep + tries*callSecs
+	}
+	if total > mins*60 {
+		t.Errorf("worst case %d s for both waits plus the rest of the job exceeds the %d min prepare-env timeout", total, mins)
+	}
+}
+
+// runClaimStep runs the claim step with a stub preview.sh whose nth `claim` call prints line n of replies (the last repeats; "EXIT1" fails the call).
+func runClaimStep(t *testing.T, replies string, tries int) (out string, code, calls int) {
+	t.Helper()
+	st, ok := nlStep(devEnvJob(t, "prepare-env"), claimStepName)
+	if !ok {
+		t.Errorf("prepare-env has no step %q", claimStepName)
+		return "", -1, 0
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, dir, "replies", replies)
+	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", `d='`+dir+`'
+[ "$1 $2" = "claim 9" ] || exit 2
+echo x >>"$d/calls"
+n=$(wc -l <"$d/calls")
+line=$(sed -n "${n}p" "$d/replies")
+[ -n "$line" ] || line=$(tail -n 1 "$d/replies")
+[ "$line" != EXIT1 ] || exit 1
+echo "$line"
+`)
+	o, e, code := runBashScript(t, "cd '"+dir+"'\nexport PR=9 CAP_TRIES="+strconv.Itoa(tries)+" CAP_SLEEP=0\n"+st.keys["run"])
+	if b, err := os.ReadFile(filepath.Join(dir, "calls")); err == nil {
+		calls = strings.Count(string(b), "\n")
+	}
+	return o + e, code, calls
+}
+
+func TestDevEnvClaimStepWaitsThenFails(t *testing.T) {
+	t.Parallel()
+	out, code, calls := runClaimStep(t, "full=true\n", 2)
+	if code == 0 || calls != 2 || strings.Count(out, "::error::") != 1 || !strings.Contains(out, "preview slot") {
+		t.Errorf("exit %d after %d claim calls, output %q, want non-zero after 2 calls with exactly one ::error:: naming the preview slot", code, calls, out)
+	}
+}
+
+func TestDevEnvClaimStepPassesOnASlot(t *testing.T) {
+	t.Parallel()
+	out, code, calls := runClaimStep(t, "full=true\nslot=slot-2\n", 3)
+	if code != 0 || calls != 2 {
+		t.Errorf("exit %d after %d claim calls, want exit 0 after 2; output %q", code, calls, out)
+	}
+}
+
+func TestDevEnvClaimStepStopsOnAClaimError(t *testing.T) {
+	t.Parallel()
+	out, code, calls := runClaimStep(t, "EXIT1\n", 3)
+	if code == 0 || calls != 1 {
+		t.Errorf("exit %d after %d claim calls, want non-zero after 1; output %q", code, calls, out)
 	}
 }

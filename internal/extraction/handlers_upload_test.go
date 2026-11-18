@@ -440,6 +440,30 @@ func TestUploadHandler_SuspendedMemberIs403(t *testing.T) {
 	}
 }
 
+// TestUploadHandler_AHeldElsewhereRefusalIs409WithNoDocumentAndNoEnqueue: a dedupe hit on a
+// document the caller cannot read answers one 409 sentence, never the document's id or name.
+func TestUploadHandler_AHeldElsewhereRefusalIs409WithNoDocumentAndNoEnqueue(t *testing.T) {
+	spy := newUpSpy()
+	spy.storeErr = extraction.ErrDocumentHeldElsewhere
+	rec, raw, decoded := upPost(t, spy, "scan.pdf", upPDF, []byte("%PDF-1.7 fake"))
+
+	if spy.calls("store") != 1 {
+		t.Fatalf("store ran %d time(s), want 1; the refusal below is not this call's", spy.calls("store"))
+	}
+	const want = `{"error":"this file already belongs to a client you cannot see; remove it to continue"}` + "\n"
+	if rec.Code != http.StatusConflict || string(raw) != want {
+		t.Errorf("answer = %d %q, want 409 %q", rec.Code, raw, want)
+	}
+	for _, key := range []string{"document_id", "filename", "reused"} {
+		if _, ok := decoded[key]; ok {
+			t.Errorf("the refusal carries %q (body=%s), want none", key, raw)
+		}
+	}
+	if spy.calls("enqueue") != 0 {
+		t.Errorf("enqueue ran %d time(s) after the refusal, want 0", spy.calls("enqueue"))
+	}
+}
+
 // TestUploadHandler_ALockedEnqueueIs403: the enqueuer returns the seam's refusal raw, so the
 // handler's own statusForErr must map it; an unmapped lock reads as a 500.
 func TestUploadHandler_ALockedEnqueueIs403(t *testing.T) {

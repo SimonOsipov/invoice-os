@@ -81,6 +81,7 @@ func (rg *consoleRig) post(bearer, body string) *httptest.ResponseRecorder {
 func (rg *consoleRig) redeem(code, state string) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(map[string]string{"code": code, "state": state})
 	r := httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	rg.exchange.ServeHTTP(rec, r)
 	return rec

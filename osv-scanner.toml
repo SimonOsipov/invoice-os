@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-17
+reason = "No patched picomatch release exists; it is reached only through build and test tools (vite, vitest, tinyglobby, fast-glob via @argos-ci/core) with repo-fixed globs; bump picomatch and delete this entry when a fix ships."

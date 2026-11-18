@@ -87,8 +87,8 @@ func TestApprovalGate_EveryNonApproverRoleIsRefused(t *testing.T) {
 // decideTx's own `status != "validated"` -- not a legalTransitions lookup. Every
 // status but validated refuses, whatever the run says.
 func TestApprovalGate_NotValidated(t *testing.T) {
-	if len(allStatuses) != 7 {
-		t.Fatalf("allStatuses covers %d statuses, want 7 -- a new status needs a row here", len(allStatuses))
+	if len(allStatuses) != 8 {
+		t.Fatalf("allStatuses covers %d statuses, want 8 -- a new status needs a row here", len(allStatuses))
 	}
 	for _, s := range allStatuses {
 		if s == StatusValidated {
@@ -558,6 +558,47 @@ func TestGetHandler_ApproveFlagsOnTheRealStore(t *testing.T) {
 	}
 	if !strings.Contains(body, `"can_submit":false`) {
 		t.Errorf("want the literal \"can_submit\":false on an open run (body=%s)", body)
+	}
+}
+
+// wantApproveEditorReason is approval.EditorRefusedReason restated, so it compiles on head.
+const wantApproveEditorReason = "You changed this invoice, so another approver must approve it."
+
+// B edited A's invoice (an invoice.updated row, no history row) and holds the role; C is a non-author holder.
+func TestApprovalBypass_GetShowsTheEditorRefusal(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := seedApprovalFactsFixture(t, super, "SECAUD-18-GETEDITOR", true)
+	fx.armInvoice(t, super, app, "secaud-18-geteditor")
+
+	var roleID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT id FROM workflow_roles WHERE tenant_id = $1 AND key = 'finance-lead'`, fx.tenantID).Scan(&roleID); err != nil {
+		t.Fatalf("read the step's role: %v", err)
+	}
+	b, c := uuid.NewString(), uuid.NewString()
+	for i, u := range []string{b, c} {
+		seedMembership(t, super, fx.tenantID, u, "reviewer")
+		staffWorkflowRoleFor(t, super, fx.tenantID, roleID, u, i+1)
+	}
+	mustExec(t, super, `INSERT INTO audit_log (tenant_id, actor, event, payload) VALUES ($1, $2, 'invoice.updated', jsonb_build_object('id', $3::text))`,
+		fx.tenantID, b, fx.invID)
+
+	store := NewStore(app)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: b, Role: "authenticated", TenantID: fx.tenantID})
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
+	r.SetPathValue("id", fx.invID)
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r.WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeApproveBody(t, rec)
+	assertApprovalGate(t, got.CanApprove, got.ApproveBlockedReason, false, wantApproveEditorReason)
+	if !got.ApproveBlockedByCreator {
+		t.Error("approve_blocked_by_creator = false, want true")
+	}
+	if !got.CanReject {
+		t.Errorf("can_reject = false, want true: an editor may reject (body=%s)", rec.Body.String())
 	}
 }
 

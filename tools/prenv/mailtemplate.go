@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// GoTrue v2.197.0 conf/configuration.go TemplateMaxSize: the bytes its io.LimitReader reads.
+	// GoTrue v2.198.0 conf/configuration.go TemplateMaxSize: the bytes its io.LimitReader reads.
 	templateMaxSize = 1_000_000
 	// GoTrue fetches a template with a 10 s timeout.
 	mailRequestTimeout = 10 * time.Second
@@ -108,7 +108,8 @@ func checkMailImage(client *http.Client, src string) error {
 func mailSampleData() []map[string]any {
 	registration := map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}
 	variants := []map[string]any{
-		{"Data": map[string]any{"registration": registration}},
+		{"Data": map[string]any{"registration": registration, accountmail.MailNamesMetadataKey: accountmail.MailNames("Obi Partners", "Ada Obi")}},
+		{"Data": map[string]any{"registration": registration}}, // pre-mail_names accounts
 		{"Data": map[string]any{}},
 		{},
 	}

@@ -35,10 +35,11 @@ const tokenLookupTimeout = time.Second
 const DefaultRegisterMinResponse = 2 * time.Second
 
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
-// Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
+// Every answer except a 400 or 415 arrives no earlier than minResponse after the request; 0 means no wait.
 // A nil tokens signs up without the unsubscribe token.
+// A non-nil mail is spent per signup; a spent or unreadable share answers as for a new address without calling GoTrue.
 // It sends the caller's password only when forward is true and GoTrue's GET /settings reports mailer_autoconfirm true; otherwise a random one.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc, forward bool) http.Handler {
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup, tokens accountmail.TokenFunc, forward bool, mail *RegistrationMail) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	settings := authURL.JoinPath("settings").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +47,9 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		if pending == nil {
@@ -82,6 +86,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 				return
 			}
 			data["registration"] = reg
+			addMailNames(data, reg)
 		}
 		if t := in.ConsentText; t != nil {
 			// Stored as sent: the text is what the person was shown.
@@ -101,7 +106,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		}
 
 		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
-		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil, tokens, in.Email)
+		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil, tokens, in.Email, mail)
 	})
 }
 
@@ -143,9 +148,10 @@ func idpAutoconfirms(r *http.Request, client *http.Client, settings string, log 
 // RegisterHandler and InvitationRegisterHandler share it.
 // When invited reports true, it answers as for a new address without calling GoTrue.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
-// After that check it adds the address's unsubscribe token to body's data; a nil tokens, an error or a lookup slower than tokenLookupTimeout leaves it out.
+// After that check it spends mail's share; a refusal or error answers as for a new address, with no token lookup or GoTrue call, and a GoTrue 4xx refunds it.
+// Then it adds the address's unsubscribe token to body's data; a nil tokens, an error or a lookup slower than tokenLookupTimeout leaves it out.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, log *slog.Logger, invited func(context.Context) (bool, error), existing func(), tokens accountmail.TokenFunc, email string) (accountMayExist bool) {
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, log *slog.Logger, invited func(context.Context) (bool, error), existing func(), tokens accountmail.TokenFunc, email string, mail *RegistrationMail) (accountMayExist bool) {
 	if invited != nil {
 		yes, lerr := invited(r.Context())
 		if lerr != nil || yes {
@@ -161,6 +167,17 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		}
 	}
 
+	if spent, merr := mail.Admit(); spent != "" || merr != nil {
+		if merr == nil {
+			log.WarnContext(r.Context(), "registration: mail share spent", slog.String("share", spent))
+			alertMail(r.Context(), ErrRegistrationMailSpent)
+		}
+		if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+		}
+		return false
+	}
+
 	if tokens != nil && body != nil {
 		addUnsubscribeToken(r.Context(), log, body, tokens, email)
 	}
@@ -174,6 +191,10 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	}
 	status, gt, err := postGoTrue(r, client, signup, body, created)
 	upstream := time.Since(start)
+	// GoTrue mails nothing on a 4xx.
+	if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		mail.Refund()
+	}
 	// Sent only on the invite route: the public route cannot tell an existing address from a new one.
 	existingAccount := existing != nil && status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0
 	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
@@ -196,7 +217,10 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send = pending
 		mayExist = true
 	case gt.ErrorCode == "over_email_send_rate_limit":
-		// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
+		// The instance cap and the per-address cooldown share this code; isIdPMailCap tells them apart (TestMailAlert_InstanceCapOnEveryMailRoute).
+		if isIdPMailCap(gt) {
+			alertMail(r.Context(), ErrIdPMailCap)
+		}
 		log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
 		send = pending
 	case status >= http.StatusInternalServerError && gt.Code == "23505":
@@ -223,6 +247,11 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
+}
+
+// addMailNames sets data.mail_names, the neutralised names the confirmation mail renders; reg stays as typed.
+func addMailNames(data map[string]any, reg map[string]string) {
+	data[accountmail.MailNamesMetadataKey] = accountmail.MailNames(reg["workspace_name"], reg["display_name"])
 }
 
 // addUnsubscribeToken sets data.unsubscribe, creating data when absent. The WARN holds no address.

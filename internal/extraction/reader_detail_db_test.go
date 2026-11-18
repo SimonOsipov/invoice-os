@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // rvdWireStructs is the wire contract this package's handlers and the SPA/e2e TypeScript
@@ -46,7 +47,7 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.
-	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "ai_text_truncated", "document", "pages", "fields"}},
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "ai_text_truncated", "document", "pages", "fields", "import_batch_id"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
 }
 
@@ -1887,7 +1888,7 @@ func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
 		gotKeys = append(gotKeys, k)
 	}
 	slices.Sort(gotKeys)
-	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "import_batch_id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -1907,7 +1908,7 @@ func TestExtractionDetail_DocumentTypeMarshalsAsExplicitNull(t *testing.T) {
 		t.Fatalf("unmarshal the detail: %v", err)
 	}
 	gotKeys := slices.Sorted(maps.Keys(decoded))
-	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"ai_text_truncated", "document", "document_id", "document_type", "failure_kind", "fields", "id", "import_batch_id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
@@ -2158,5 +2159,107 @@ func TestExtractionDetail_LegacyDeadLetteredJobCarriesANullFailureKind(t *testin
 	}
 	if resp.Jobs[0].LastError == nil {
 		t.Error("the legacy job's list entry reports a nil last_error; the row was seeded with one")
+	}
+}
+
+// rvdBatchID reads import_batch_id off the marshalled detail: present reports whether the key is on the wire.
+func rvdBatchID(t *testing.T, d extraction.ExtractionDetail) (id *string, present bool) {
+	t.Helper()
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("decode the detail: %v", err)
+	}
+	v, ok := m["import_batch_id"]
+	if !ok {
+		return nil, false
+	}
+	if string(v) == "null" {
+		return nil, true
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil {
+		t.Fatalf("import_batch_id %s is neither a string nor null: %v", v, err)
+	}
+	return &s, true
+}
+
+// rvdBatch files one import batch of doc for entity: inserted processing, then moved to status, as an import ends.
+func rvdBatch(t *testing.T, ctx context.Context, tenantID, entityID, documentID, status string, createdAt time.Time) string {
+	t.Helper()
+	super := stRequire(t).super
+	var id string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, created_at)
+		 VALUES ($1, $2, $3, 'processing', $4) RETURNING id`, tenantID, entityID, documentID, createdAt).Scan(&id); err != nil {
+		t.Fatalf("seed %s batch: %v", status, err)
+	}
+	if status != "processing" {
+		if _, err := super.Exec(ctx, `UPDATE import_batches SET status = $2 WHERE id = $1`, id, status); err != nil {
+			t.Fatalf("move batch to %s: %v", status, err)
+		}
+	}
+	return id
+}
+
+func TestDetail_ImportBatchIDIsTheNewestCompletedBatch(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	tenant, docD := stTenant(t, ctx)
+	rdaPurge(t, tenant)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	entA, entB := cxEntity(t, ctx, tenant), cxEntity(t, ctx, tenant)
+	admin := cseMember(t, ctx, tenant, "admin")
+	limitedA := cseMember(t, ctx, tenant, "reviewer", entA)
+	limitedID, _ := auth.IdentityFromContext(limitedA)
+	super := stRequire(t).super
+	// A-limited uploads the document, so the member reads the job whoever holds the binding.
+	if _, err := super.Exec(ctx, `INSERT INTO document_uploaders (tenant_id, document_id, user_id) VALUES ($1, $2, $3)`,
+		tenant, docD, limitedID.Subject); err != nil {
+		t.Fatalf("seed uploader: %v", err)
+	}
+	jobD := rdSeedJob(t, ctx, tenant, docD, "succeeded", now, nil)
+
+	// A failed and an undone A batch release the document; two completed B batches follow, then a newer failed one.
+	rvdBatch(t, ctx, tenant, entA, docD, "failed", now.Add(-5*time.Hour))
+	rvdBatch(t, ctx, tenant, entA, docD, "undone", now.Add(-4*time.Hour))
+	rvdBatch(t, ctx, tenant, entB, docD, "completed", now.Add(-3*time.Hour))
+	newest := rvdBatch(t, ctx, tenant, entB, docD, "completed", now.Add(-2*time.Hour))
+	rvdBatch(t, ctx, tenant, entB, docD, "failed", now.Add(-1*time.Hour))
+
+	got, err := r.Detail(admin, jobD)
+	if err != nil {
+		t.Fatalf("admin Detail: %v", err)
+	}
+	id, present := rvdBatchID(t, got)
+	if !present {
+		t.Fatal("the detail carries no import_batch_id key")
+	}
+	if id == nil || *id != newest {
+		t.Errorf("admin import_batch_id = %v, want the newest completed batch %s", id, newest)
+	}
+
+	got, err = r.Detail(limitedA, jobD)
+	if err != nil {
+		t.Fatalf("A-limited uploader Detail: %v", err)
+	}
+	if id, present := rvdBatchID(t, got); !present || id != nil {
+		t.Errorf("A-limited import_batch_id = %v (present %v), want an explicit null: B's batch is out of scope", id, present)
+	}
+
+	// Only dead batches of A: nothing completed, so null.
+	docE := rvdSeedDocumentMeta(t, ctx, tenant, nil, nil, 1024, strings.Repeat("e", 64), now)
+	jobE := rdSeedJob(t, ctx, tenant, docE, "succeeded", now, nil)
+	rvdBatch(t, ctx, tenant, entA, docE, "failed", now.Add(-2*time.Hour))
+	rvdBatch(t, ctx, tenant, entA, docE, "undone", now.Add(-1*time.Hour))
+	got, err = r.Detail(admin, jobE)
+	if err != nil {
+		t.Fatalf("admin Detail of the dead-batch document: %v", err)
+	}
+	if id, present := rvdBatchID(t, got); !present || id != nil {
+		t.Errorf("import_batch_id with no completed batch = %v (present %v), want an explicit null", id, present)
 	}
 }

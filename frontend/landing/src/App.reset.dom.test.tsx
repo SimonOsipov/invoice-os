@@ -14,7 +14,7 @@ const DIALOG = '[role="dialog"]'
 const STATUS = '[role="status"]'
 // Pinned here, not imported: a wording change is a deliberate edit (story D15).
 const RESET_DONE = 'Your password is changed. Sign in with your new password.'
-const RESET_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 const VERIFIED = 'Your email address is verified. Please sign in.'
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in. If you cannot, use Forgot password to choose a new password.'
 const REQUEST_NEW = 'Request a new link'
@@ -114,6 +114,10 @@ describe('reset notice: the landing after the emailed reset link', () => {
     await rebootAt('/?reset=failed#top')
     const failed = onlyNotice(RESET_FAILED)
     expect(failed.textContent).not.toContain(RESET_DONE)
+    expect(failed.textContent).toMatch(/new reset mail/)
+    expect(failed.textContent).not.toMatch(/old password/i)
+    expect(failed.textContent).not.toMatch(/sign in/i)
+    expect(failed.textContent).not.toMatch(/@/)
     expect(buttonByText(failed, REQUEST_NEW)).toBeDefined()
     expect(window.location.search).toBe('')
     expect(window.location.hash).toBe('#top')

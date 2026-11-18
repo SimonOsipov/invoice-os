@@ -24,10 +24,10 @@ export function apiBase(): string {
   return resolveTarget('GATEWAY_URL')
 }
 
-// fleetHeaders(): /healthz/fleet answers only with the gateway token (GKE-08); CI reads the PR's token.
+// fleetHeaders(): /healthz/fleet and the gateway /health detail need the gateway token; CI reads the PR's token.
 export function fleetHeaders(): Record<string, string> {
   const token = process.env.GATEWAY_TOKEN
-  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet needs X-Gateway-Token')
+  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet and the gateway /health detail need X-Gateway-Token')
   return { 'X-Gateway-Token': token }
 }
 
@@ -90,34 +90,39 @@ export const PERSONAS: { A: Persona; B: Persona } = {
   },
 }
 
-// mockIssuerTokenHeader in cmd/gateway/mockissuer.go. On the nightly the mock routes refuse a request without it.
+// mockIssuerTokenHeader in cmd/gateway/mockissuer.go. A preview's mock routes refuse a request without it.
 const MOCK_ISSUER_HEADER = 'X-Mock-Issuer-Token'
 
-let nightlyMockToken: string | undefined
+const previewMockTokens = new Map<string, string>()
 
-// The mock-route header: MOCK_ISSUER_TOKEN, else on the nightly gateway the nightly-mock-issuer-token secret
-// (read once, kept in memory). Off the nightly with no variable: none. Never logs the value.
+// The mock-route header. On a preview gateway (pr-<N> or nightly) MOCK_ISSUER_TOKEN counts only when
+// MOCK_ISSUER_TOKEN_FOR names that preview; else that preview's mock-issuer-token secret (read once per
+// preview, kept in memory). Off a preview: MOCK_ISSUER_TOKEN, else none. Never logs the value.
 export function mockIssuerHeaders(): Record<string, string> {
-  let token = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
-  if (!token) {
-    let nightly = false
-    try {
-      nightly = previewSuffix() === 'nightly'
-    } catch {
-      // not a preview gateway
-    }
-    if (nightly) {
-      if (nightlyMockToken === undefined) {
-        try {
-          nightlyMockToken = previewSecret('mock-issuer-token').trim()
-        } catch {
-          throw new Error('mock issuer token: set MOCK_ISSUER_TOKEN, or sign in with gcloud to read nightly-mock-issuer-token')
-        }
-      }
-      token = nightlyMockToken
-    }
+  const env = process.env.MOCK_ISSUER_TOKEN?.trim() ?? ''
+  let suffix: string | undefined
+  try {
+    suffix = previewSuffix()
+  } catch {
+    // not a preview gateway
   }
-  return token ? { [MOCK_ISSUER_HEADER]: token } : {}
+  if (!suffix) return env ? { [MOCK_ISSUER_HEADER]: env } : {}
+  if (env && process.env.MOCK_ISSUER_TOKEN_FOR?.trim() === suffix) return { [MOCK_ISSUER_HEADER]: env }
+  let token = previewMockTokens.get(suffix)
+  if (!token) {
+    try {
+      token = previewSecret('mock-issuer-token').trim()
+    } catch {
+      token = ''
+    }
+    if (!token) {
+      throw new Error(
+        `mock issuer token: set MOCK_ISSUER_TOKEN with MOCK_ISSUER_TOKEN_FOR=${suffix}, or sign in with gcloud to read ${suffix}-mock-issuer-token`,
+      )
+    }
+    previewMockTokens.set(suffix, token)
+  }
+  return { [MOCK_ISSUER_HEADER]: token }
 }
 
 // login(): the only way to mint a Bearer token (mock issuer, ephemeral ES256
@@ -771,7 +776,7 @@ export interface Invoice {
   entity_id: string
   import_batch_id: string | null
   invoice_number: string
-  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed'
+  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed' | 'discarded'
   issue_date: string | null
   supplier_tin: string | null
   supplier_name: string | null
@@ -862,6 +867,7 @@ export interface ListInvoicesQuery {
   q?: string
   entity_id?: string
   awaiting_approval?: boolean
+  import_batch_id?: string
 }
 
 export interface ListInvoicesResponse {
@@ -880,6 +886,7 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
   if (query?.awaiting_approval !== undefined) params.set('awaiting_approval', String(query.awaiting_approval))
+  if (query?.import_batch_id !== undefined) params.set('import_batch_id', query.import_batch_id)
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }
@@ -926,8 +933,8 @@ export interface GetInvoiceResult extends Invoice {
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
   // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
-  // no-omitempty convention. The pairs agree except at the creator rung: the creator
-  // may reject but not approve (approve_blocked_by_creator).
+  // no-omitempty convention. The pairs agree except at the person rung: an author or
+  // an earlier approver may reject but not approve (approve_blocked_by_creator).
   can_approve: boolean
   approve_blocked_reason: string | null
   approve_blocked_by_creator: boolean
@@ -1424,6 +1431,30 @@ export async function importFetch(token: string, form: FormData): Promise<{ stat
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// GET /v1/imports/{id}; raw status and body, never throws on a status.
+export async function getImportBatch(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// POST /v1/imports/{id}/undo; raw status and body, never throws on a status.
+export async function undoImport(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/${id}/undo`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
   let body: unknown
   try {
     body = await res.json()
@@ -2282,6 +2313,7 @@ export interface ExtractionDetail {
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
+  import_batch_id: string | null
 }
 
 export function getExtractionDetail(token: string, jobId: string): Promise<ExtractionDetail> {

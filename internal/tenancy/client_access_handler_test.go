@@ -109,8 +109,6 @@ func TestSetMemberClientsHandler_BodyAndPath(t *testing.T) {
 		"a null in the list":                `{"client_access":[null]}`,
 		"a duplicate":                       `{"client_access":["` + e1 + `","` + e1 + `"]}`,
 		"a duplicate, any case":             `{"client_access":["` + strings.ToUpper(e1) + `","` + e1 + `"]}`,
-		"over 64 KiB":                       over,
-		"a valid value then padding":        `{"client_access":"all"}` + strings.Repeat(" ", 64*1024),
 		"a top-level array":                 `["` + e1 + `"]`,
 		"the right key spelled differently": `{"clientAccess":"all"}`,
 	}
@@ -120,6 +118,22 @@ func TestSetMemberClientsHandler_BodyAndPath(t *testing.T) {
 			rec := r.put(t, callerID(), target, body)
 			if rec.Code != http.StatusBadRequest || errorOf(t, rec) != grammarMsg {
 				t.Errorf("status %d %q, want 400 %q", rec.Code, rec.Body.String(), grammarMsg)
+			}
+			if len(r.calls) != 0 {
+				t.Errorf("the store was called %d time(s) for a refused body", len(r.calls))
+			}
+		})
+	}
+
+	for name, body := range map[string]string{
+		"over 64 KiB":                over,
+		"a valid value then padding": `{"client_access":"all"}` + strings.Repeat(" ", 64*1024),
+	} {
+		t.Run("413: "+name, func(t *testing.T) {
+			var r putRig
+			rec := r.put(t, callerID(), target, body)
+			if rec.Code != http.StatusRequestEntityTooLarge || errorOf(t, rec) != "request body too large" {
+				t.Errorf("status %d %q, want 413 request body too large", rec.Code, rec.Body.String())
 			}
 			if len(r.calls) != 0 {
 				t.Errorf("the store was called %d time(s) for a refused body", len(r.calls))

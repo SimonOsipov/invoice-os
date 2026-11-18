@@ -696,6 +696,10 @@ func TestStoreUpdate_PreparerCanCorrect(t *testing.T) {
 	h := newMux(store)
 	tenantA := seedTenant(t, super, "customer preparer")
 	_, ctxPreparer := seedMember(t, super, tenantA, "preparer", "active")
+	// Role test, not scope: the preparer reaches every buyer (a scoped preparer: client_scope_db_test.go).
+	if _, err := super.Exec(context.Background(), `UPDATE memberships SET all_clients = true WHERE tenant_id = $1`, tenantA); err != nil {
+		t.Fatalf("grant all_clients: %v", err)
+	}
 	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("Old Name")})
 
 	rec := do(t, h, ctxPreparer, http.MethodPatch, "/v1/customers/"+id, `{"name":"New Name"}`)

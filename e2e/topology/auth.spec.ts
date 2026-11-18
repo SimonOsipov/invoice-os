@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response, type Route } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { setExactMapping, shardPersonas } from './importWizardShared'
 import { shoot } from '../argos'
@@ -1678,6 +1678,50 @@ test("the verified notice's Sign in opens the sign-in window", async ({ page }) 
   await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
 })
 
+// The Manrope swap lands right after the 375px text read; a font wait in expectFailedNotice moves it earlier.
+test("the verified notice's boxes do not race the Manrope swap", async ({ page }) => {
+  test.setTimeout(120_000)
+  let held: Route | undefined
+  let arrive!: () => void
+  const arrived = new Promise<void>((resolve) => (arrive = resolve))
+  const release = async () => {
+    const route = held
+    held = undefined
+    await route?.continue()
+  }
+  // The timer frees a font that a helper waits on before it reads any box.
+  await page.route(/fonts\.gstatic\.com\/s\/manrope\//, (route) => {
+    held = route
+    arrive()
+    setTimeout(() => void release().catch(() => {}), 4_000)
+  })
+  const proto = Object.getPrototypeOf(page.locator('body')) as { boundingBox: Locator['boundingBox'] }
+  const readBox = proto.boundingBox
+  let reads = 0
+  proto.boundingBox = async function (this: Locator, ...args: Parameters<Locator['boundingBox']>) {
+    const box = await readBox.apply(this, args)
+    if (page.viewportSize()?.width === 375 && ++reads === 2) {
+      await Promise.race([arrived, page.waitForTimeout(10_000)])
+      await release()
+      await page.evaluate(() => document.fonts.load('14px Manrope'))
+    }
+    return box
+  }
+  try {
+    await seedConsent(page, false)
+    await page.goto(`${LANDING_URL}/?verified=1`)
+    // A wide fallback behind Manrope, as on the Linux runner, so the pre-swap text wraps on any host.
+    await page.addStyleTag({ content: '* { font-family: Manrope, Verdana, "DejaVu Sans", sans-serif !important }' })
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 800 })
+      await expectFailedNotice(page, width, VERIFIED_NOTICE, 'Sign in')
+    }
+  } finally {
+    proto.boundingBox = readBox
+  }
+  expect(reads, 'boxes read at 375px').toBeGreaterThan(0)
+})
+
 // Fixture check: `?verified=1` stands in for the set-password POST's answer, because a fork mails no link.
 test('a live session survives the verified landing', async ({ page }) => {
   test.setTimeout(180_000)
@@ -1783,7 +1827,7 @@ test('the emailed link opens one bounded set-password form, invite or not, and a
     const label = invite ? 'invite link' : 'plain link'
     const errorsFrom = errors.length
     const postsFrom = posts.length
-    // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
+    // One bounce mints the state; the loop resizes the rendered page, so no width re-requests the link.
     const pageUrl = await openMailedLink(page, invite)
     const state = pageUrl.searchParams.get('state')
     expect(state, `${label}: the set-password page state`).toMatch(STATE_43)
@@ -1792,7 +1836,7 @@ test('the emailed link opens one bounded set-password form, invite or not, and a
     for (const width of widths) {
       const height = 1080
       await page.setViewportSize({ width, height })
-      await page.goto(pageUrl.href)
+      await settleAnimations(page.locator('main'))
       await expect(page.locator('form'), `${label}: one form at ${width}px`).toHaveCount(1)
       await expect(password, `${label}: one password input at ${width}px`).toHaveCount(1)
       await expect(button, `${label}: one button at ${width}px`).toHaveCount(1)
@@ -3228,7 +3272,7 @@ function freshRegistration(kind: TenantKind): RealAccount {
 
 // frontend/landing/src/passwordReset.ts RESET_SENT and RESET_FAILED.
 const RESET_SENT = 'If this address has an account, a reset link is on its way.'
-const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_LINK_FAILED = 'That reset link did not work. Request a new reset mail and try again.'
 const RESET_REQUEST_PATH = '/auth/request-password-reset'
 const RESET_PAGE_PATH = '/auth/reset-password'
 
@@ -3294,6 +3338,11 @@ async function expectFailedNotice(page: Page, width: number, text: string, actio
     [action, notice.getByRole('button', { name: action, exact: true })],
     ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
   ]
+  // fonts.ready can resolve before the woff2 request starts; load the faces the notice uses before any box read.
+  await notice.evaluate(async (el) => {
+    const faces = [el, ...el.querySelectorAll('*')].map((n) => getComputedStyle(n).font)
+    await Promise.all(faces.map((f) => document.fonts.load(f)))
+  })
   const noticeBox = await boxOf('the notice', notice, width)
   const boxes: [string, Awaited<ReturnType<typeof boxOf>>][] = []
   for (const [name, el] of parts) boxes.push([name, await boxOf(name, el, width)])
@@ -3368,6 +3417,9 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     await reset.getByRole('button', { name: 'Set new password', exact: true }).dblclick()
     await reset.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
     await expect(reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })).toBeVisible()
+    const notice = reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+    await expect(notice).toContainText('new reset mail')
+    await expect(notice).not.toContainText('old password')
     await expect.poll(() => new URL(reset.url()).searchParams.has('reset'), { message: 'the landing strips ?reset' }).toBe(false)
     expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
     for (const width of [1280, 375]) {

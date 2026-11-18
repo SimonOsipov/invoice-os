@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +35,7 @@ const (
 	rpGrantRefresh = "grant-rt-4e9b"
 	rpFailed       = "https://site.example/?reset=failed"
 	rpOK           = "https://site.example/?reset=1"
-	rpAlert        = "Use a password of 6 to 72 characters."
+	rpAlert        = "Use a password of 10 to 72 characters."
 	rpFormType     = "application/x-www-form-urlencoded"
 
 	rpMsgSignOutFailed = "reset-password: global sign-out failed"
@@ -269,6 +272,21 @@ func rpPage(t *testing.T, token string) (*httptest.ResponseRecorder, *html.Node)
 	return rec, vpParse(t, rec.Body.String())
 }
 
+// rpRequireHint fails unless the page's p.hint reads "10 to 72 characters.".
+func rpRequireHint(t *testing.T, doc *html.Node) {
+	t.Helper()
+	hints := vpFind(doc, func(n *html.Node) bool {
+		c, _ := vpAttr(n, "class")
+		return n.Data == "p" && c == "hint"
+	})
+	if len(hints) != 1 {
+		t.Fatalf("p.hint elements = %d, want 1", len(hints))
+	}
+	if got, want := vpText(hints[0]), "10 to 72 characters."; got != want {
+		t.Errorf("hint = %q, want %q", got, want)
+	}
+}
+
 func rpInputs(doc *html.Node) map[string]*html.Node {
 	out := map[string]*html.Node{}
 	for _, in := range vpFind(doc, vpTag("input")) {
@@ -325,7 +343,7 @@ func TestResetPasswordPage_RendersOneFormWithTheToken(t *testing.T) {
 	if pw == nil {
 		t.Fatal("no password input")
 	}
-	for k, want := range map[string]string{"type": "password", "autocomplete": "new-password", "minlength": "6", "maxlength": "72"} {
+	for k, want := range map[string]string{"type": "password", "autocomplete": "new-password", "minlength": "10", "maxlength": "72"} {
 		if got, ok := vpAttr(pw, k); !ok || got != want {
 			t.Errorf("password input %s = %q (present %v), want %q", k, got, ok, want)
 		}
@@ -333,6 +351,7 @@ func TestResetPasswordPage_RendersOneFormWithTheToken(t *testing.T) {
 	if _, ok := vpAttr(pw, "required"); !ok {
 		t.Error("password input is not required")
 	}
+	rpRequireHint(t, doc)
 	id, _ := vpAttr(pw, "id")
 	labels := vpFind(doc, func(n *html.Node) bool {
 		f, _ := vpAttr(n, "for")
@@ -721,10 +740,53 @@ func TestResetPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T) {
 	}
 }
 
+// The gateway never reads the account's confirmation state, so a refused password set answers the same
+// whether GoTrue's verify cleared an unconfirmed user's password or not.
+func TestResetPassword_RefusedPasswordIsTheSameFailedNoticeForConfirmedAndUnconfirmed(t *testing.T) {
+	verifyWith := func(confirmedAt any) http.HandlerFunc {
+		b, _ := json.Marshal(map[string]any{
+			"access_token": rpAccess, "refresh_token": rpRefresh,
+			"user": map[string]any{"id": subjectS1, "email": rpEmail, "email_confirmed_at": confirmedAt},
+		})
+		return answer(http.StatusOK, string(b))
+	}
+	refusals := map[string]http.HandlerFunc{
+		"PUT 422 weak_password": answer(http.StatusUnprocessableEntity, rpWeakPassword),
+		"PUT 500":               answer(http.StatusInternalServerError, gtInternal),
+	}
+	for name, refuse := range refusals {
+		t.Run(name, func(t *testing.T) {
+			run := func(confirmedAt any) (*httptest.ResponseRecorder, []string) {
+				f := newResetGoTrue(t)
+				f.verify, f.user = verifyWith(confirmedAt), refuse
+				rec := rpPost(t, newResetHandler(t, f, nil), rpValues(rpToken, "recovery", rpPass))
+				return rec, f.names()
+			}
+			unconfirmed, unconfirmedCalls := run(nil)
+			confirmed, confirmedCalls := run("2026-01-02T03:04:05Z")
+
+			rpRequireRedirect(t, unconfirmed, rpFailed)
+			rpRequireRedirect(t, confirmed, rpFailed)
+			if unconfirmed.Body.String() != confirmed.Body.String() {
+				t.Errorf("bodies differ: %q vs %q", unconfirmed.Body.String(), confirmed.Body.String())
+			}
+			if !reflect.DeepEqual(unconfirmed.Header(), confirmed.Header()) {
+				t.Errorf("headers differ: %v vs %v", unconfirmed.Header(), confirmed.Header())
+			}
+			want := []string{"POST /verify", "PUT /user"}
+			if !slices.Equal(unconfirmedCalls, want) || !slices.Equal(confirmedCalls, want) {
+				t.Errorf("GoTrue calls = %v and %v, want %v in both", unconfirmedCalls, confirmedCalls, want)
+			}
+		})
+	}
+}
+
 func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 	rows := map[string]string{
-		"5 bytes": "abcde", "73 bytes": strings.Repeat("a", 73), "empty": "",
-		"5 bytes in 3 runes":   "éé" + "a",
+		"9 bytes": "abcdefghi", "73 bytes": strings.Repeat("a", 73), "empty": "",
+		"9 bytes in 5 runes":   "éééé" + "a",
+		"5 runes in 10 bytes":  "ééééé",
+		"3 emoji":              "😀😀😀",
 		"75 bytes in 25 runes": strings.Repeat("€", 25),
 	}
 	pageCSP := rpGet(rpPageHandler(t), http.MethodGet, rpQuery(rpToken)).Header().Get("Content-Security-Policy")
@@ -756,6 +818,12 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 			if n := len(vpFind(doc, func(n *html.Node) bool { r, _ := vpAttr(n, "role"); return r == "alert" })); n != 1 {
 				t.Errorf("alert elements = %d, want 1", n)
 			}
+			if strings.HasPrefix(name, "9 bytes") {
+				if got, _ := vpAttr(rpInputs(doc)["password"], "minlength"); got != "10" {
+					t.Errorf("re-rendered minlength = %q, want 10", got)
+				}
+				rpRequireHint(t, doc)
+			}
 			for header, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": pageCSP} {
 				if got := rec.Header().Get(header); got != want {
 					t.Errorf("%s = %q, want %q", header, got, want)
@@ -768,7 +836,7 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 	}
 	t.Run("hostile token is escaped in the re-render", func(t *testing.T) {
 		raw := `"><script>alert(1)</script>`
-		rec := rpPost(t, newResetHandler(t, newResetGoTrue(t), nil), rpValues(raw, "recovery", "abcde"))
+		rec := rpPost(t, newResetHandler(t, newResetGoTrue(t), nil), rpValues(raw, "recovery", "abcdefghi"))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", rec.Code)
 		}
@@ -783,8 +851,8 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 
 func TestResetPassword_PasswordAtTheBoundsIsSent(t *testing.T) {
 	for name, pw := range map[string]string{
-		"6 bytes": "abcdef", "72 bytes": strings.Repeat("a", 72),
-		"6 bytes in 3 runes":       "ééé",
+		"10 bytes": "abcdefghij", "72 bytes": strings.Repeat("a", 72),
+		"10 runes, multi-byte":     "ééééééééé" + "a",
 		"72 bytes in 24 runes":     strings.Repeat("€", 24),
 		"quotes, spaces and signs": ` p"a\ss&w+o%rd=` + "\t ",
 	} {
@@ -811,22 +879,22 @@ func TestResetPassword_PasswordAtTheBoundsIsSent(t *testing.T) {
 }
 
 func TestResetPassword_BadFormsAreTheFailedNoticeWithoutACall(t *testing.T) {
-	good := rpValues(rpToken, "recovery", "newpass1").Encode()
+	good := rpValues(rpToken, "recovery", rpPass).Encode()
 	const bound = "BOUND"
 	multipart := "--" + bound + "\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\n" + rpToken +
 		"\r\n--" + bound + "\r\nContent-Disposition: form-data; name=\"type\"\r\n\r\nrecovery" +
-		"\r\n--" + bound + "\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nnewpass1\r\n--" + bound + "--\r\n"
+		"\r\n--" + bound + "\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\n" + rpPass + "\r\n--" + bound + "--\r\n"
 	big := good + "&pad=" + strings.Repeat("a", 2049-len(good)-len("&pad="))
 	rows := []struct{ name, target, contentType, body string }{
 		{"parse error", rpPath, rpFormType, "%zz"},
 		{"multipart", rpPath, "multipart/form-data; boundary=" + bound, multipart},
-		{"JSON", rpPath, "application/json", `{"token":"` + rpToken + `","type":"recovery","password":"newpass1"}`},
+		{"JSON", rpPath, "application/json", `{"token":"` + rpToken + `","type":"recovery","password":"` + rpPass + `"}`},
 		{"2049-byte body", rpPath, rpFormType, big},
-		{"empty token", rpPath, rpFormType, rpValues("", "recovery", "newpass1").Encode()},
-		{"257-byte token", rpPath, rpFormType, rpValues(strings.Repeat("a", 257), "recovery", "newpass1").Encode()},
-		{"type signup", rpPath, rpFormType, rpValues(rpToken, "signup", "newpass1").Encode()},
-		{"token only in the query", rpPath + "?token=" + rpToken, rpFormType, "type=recovery&password=newpass1"},
-		{"type only in the query", rpPath + "?type=recovery", rpFormType, "token=" + rpToken + "&password=newpass1"},
+		{"empty token", rpPath, rpFormType, rpValues("", "recovery", rpPass).Encode()},
+		{"257-byte token", rpPath, rpFormType, rpValues(strings.Repeat("a", 257), "recovery", rpPass).Encode()},
+		{"type signup", rpPath, rpFormType, rpValues(rpToken, "signup", rpPass).Encode()},
+		{"token only in the query", rpPath + "?token=" + rpToken, rpFormType, "type=recovery&password=" + rpPass},
+		{"type only in the query", rpPath + "?type=recovery", rpFormType, "token=" + rpToken + "&password=" + rpPass},
 		{"no body", rpPath + "?token=" + rpToken + "&type=recovery", rpFormType, ""},
 	}
 	if len(big) != 2049 {
@@ -1015,8 +1083,26 @@ func TestResetPassword_RefusedPasswordLeavesTheSignInFailuresAlone(t *testing.T)
 	}
 }
 
+func TestResetPassword_MinimumMatchesTheIdP(t *testing.T) {
+	df, err := os.ReadFile("../../sidecar/auth/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A commented-out setting must not satisfy the scan.
+	live := regexp.MustCompile(`(?m)^\s*#.*$`).ReplaceAll(df, nil)
+	// Docker ENV is last-wins.
+	all := regexp.MustCompile(`\bGOTRUE_PASSWORD_MIN_LENGTH=(\d+)`).FindAllSubmatch(live, -1)
+	if all == nil {
+		t.Fatal("sidecar/auth/Dockerfile sets no GOTRUE_PASSWORD_MIN_LENGTH")
+	}
+	m := all[len(all)-1]
+	if got, _ := strconv.Atoi(string(m[1])); got != resetPasswordMin {
+		t.Errorf("GOTRUE_PASSWORD_MIN_LENGTH = %d, resetPasswordMin = %d; they must match", got, resetPasswordMin)
+	}
+}
+
 func TestResetPasswordPage_TokenHoldingAPlaceholderIsNotExpanded(t *testing.T) {
-	for _, tok := range []string{"{{.Script}}", "{{.Alert}}", "{{.Token}}"} {
+	for _, tok := range []string{"{{.Script}}", "{{.Alert}}", "{{.Token}}", "{{.MinLength}}"} {
 		t.Run(tok, func(t *testing.T) {
 			rec, doc := rpPage(t, tok)
 			if got := rpTokenInput(t, rec.Body.String()); got != tok {

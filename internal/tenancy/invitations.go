@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -279,6 +280,37 @@ func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
 	})
 }
 
+// revokeInvitesForAddressTx revokes every pending invite in the bound tenant for the
+// address, expired ones included, and audits each. A nil or blank address revokes nothing.
+func revokeInvitesForAddressTx(ctx context.Context, tx pgx.Tx, actor string, email *string) error {
+	// ceiling: blank means empty after trimming spaces only, as the btrim match does; revisit if addresses are ever normalised on write.
+	if email == nil || strings.Trim(*email, " ") == "" {
+		return nil
+	}
+	rows, err := tx.Query(ctx,
+		`UPDATE invitations SET status = 'revoked'
+		  WHERE status = 'pending'
+		    AND pg_catalog.lower(pg_catalog.btrim(invitee_email)) = pg_catalog.lower(pg_catalog.btrim($1))
+		  RETURNING id::text, role`, *email)
+	if err != nil {
+		return err
+	}
+	type revoked struct{ ID, Role string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[revoked])
+	if err != nil {
+		return err
+	}
+	for _, r := range got {
+		if err := audit.Record(ctx, tx, actor, "invitation.revoked", map[string]any{
+			"invitation_id": r.ID,
+			"role":          r.Role,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ListInvitations returns the tenant's pending invites that carry a token.
 func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 	out := []Invitation{}
@@ -310,6 +342,7 @@ func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 		}
 		rows.Close() // the connection is busy until the rows are closed
 		// ceiling: one savepoint round trip per pending row; batch the read above ~500 rows
+		// ceiling: an admin learns whether an address they invite has an account; revisit if invites are used as an existence probe.
 		for i := range out {
 			out[i].Account, out[i].accountErr = accountState(ctx, tx, out[i].Email)
 		}

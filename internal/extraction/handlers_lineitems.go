@@ -16,6 +16,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // LineItemInput is one posted line. A named type with a brace-free body: wireMirrors'
@@ -146,7 +147,11 @@ func LineItemsHandler(pool *pgxpool.Pool, apply ApplyLineItemsToInvoice, record 
 		}
 
 		var req LineItemsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.LineItemsLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, msgBodyTooLarge)
+				return
+			}
 			writeError(w, http.StatusBadRequest, msgInvalidBody)
 			return
 		}

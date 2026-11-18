@@ -27,7 +27,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
-// GoTrue v2.197.0 fixtures. Errors use the initial-API-version HTTPError shape
+// GoTrue v2.198.0 fixtures. Errors use the initial-API-version HTTPError shape
 // {"code","error_code","msg"} (internal/api/apierrors/apierrors.go, HTTPError).
 const (
 	// internal/api/signup.go, Signup: sendJSON(w, 200, user) with autoconfirm off.
@@ -205,7 +205,8 @@ func registerWith(t *testing.T, authURL *url.URL, p *pendingProbe, body string) 
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
-	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false).ServeHTTP(rec, req)
+	req.Header.Set("Content-Type", "application/json")
+	RegisterHandler(authURL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -217,7 +218,7 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, log, noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -710,6 +711,14 @@ func registerBodyWithAnswers(email string, answers map[string]any) string {
 	return string(b)
 }
 
+// wantData is the signup data for the answers reg: as typed, plus the neutralised mail_names (JSON-decoded).
+func wantData(reg map[string]any) map[string]any {
+	ws, _ := reg["workspace_name"].(string)
+	dn, _ := reg["display_name"].(string)
+	return map[string]any{"registration": reg, accountmail.MailNamesMetadataKey: map[string]any{
+		"workspace_name": accountmail.MailName(ws), "display_name": accountmail.MailName(dn)}}
+}
+
 // signupData decodes the single recorded /signup body and returns its "data" value (nil when absent).
 func signupData(t *testing.T, fake *fakeGoTrue) any {
 	t.Helper()
@@ -731,7 +740,7 @@ func TestRegister_AnswersReachGoTrueAsRegistrationData(t *testing.T) {
 		map[string]any{"workspace_name": "  Acme Ltd ", "display_name": " Ada ", "kind": "firm"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+	want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want %v", got, want)
 	}
@@ -744,7 +753,7 @@ func TestRegister_AnswersWithoutKindOmitKind(t *testing.T) {
 		map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}}
+	want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want %v (no kind key)", got, want)
 	}
@@ -803,7 +812,7 @@ func TestRegister_AnswerAt200RunesIsAccepted(t *testing.T) {
 		map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}))
 
 	requirePending202(t, rec)
-	want := map[string]any{"registration": map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}}
+	want := wantData(map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"})
 	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
 		t.Errorf("signup data = %v, want the 200-rune names forwarded intact", got)
 	}
@@ -854,7 +863,7 @@ func TestRegister_MarketingConsentStoredInMetadata(t *testing.T) {
 
 	after := time.Now().Add(time.Second)
 	data, _ := sent["data"].(map[string]any)
-	if got, want := slices.Sorted(maps.Keys(data)), []string{"marketing_consent", "registration"}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(data)), []string{"mail_names", "marketing_consent", "registration"}; !slices.Equal(got, want) {
 		t.Fatalf("signup data keys = %v, want %v: %v", got, want, sent["data"])
 	}
 	consent, _ := data["marketing_consent"].(map[string]any)
@@ -910,7 +919,7 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 
 		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 
-		want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+		want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 		if !reflect.DeepEqual(sent["data"], want) {
 			t.Errorf("signup data = %v, want %v", sent["data"], want)
 		}
@@ -929,7 +938,7 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 
 		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm", "marketing_consent_text": nil})
 
-		want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+		want := wantData(map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"})
 		if !reflect.DeepEqual(sent["data"], want) {
 			t.Errorf("signup data = %v, want %v", sent["data"], want)
 		}
@@ -1130,7 +1139,7 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 func TestRegister_LookupFailureIsUnavailableWithoutGoTrue(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	p := probing(lookupErr)
-	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false)
+	h := RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), p.lookup, nil, false, nil)
 
 	rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword))
 
@@ -1152,8 +1161,9 @@ func TestRegister_NilPendingLookupIsNotConfigured(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+	req.Header.Set("Content-Type", "application/json")
 
-	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(fake.URL, testClient(), 0, slog.New(slog.DiscardHandler), nil, nil, false, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
@@ -1182,8 +1192,9 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 			p := probing(c.answer)
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+			req.Header.Set("Content-Type", "application/json")
 
-			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil, false).ServeHTTP(rec, req)
+			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, log, p.lookup, nil, false, nil).ServeHTTP(rec, req)
 
 			if n := len(p.calls()); n != 1 {
 				t.Fatalf("lookup asked %d times, want 1", n)
@@ -1272,7 +1283,7 @@ func TestRegister_UnusableTenancyAnswerRefusesSignUp(t *testing.T) {
 			tenancyURL, _ := url.Parse(srv.URL)
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			log, buf := captureLog()
-			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil, false)
+			broken := RegisterHandler(fake.URL, testClient(), 0, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken), nil, false, nil)
 
 			rec, _ := serveRegisterFrom(t.Context(), broken, registerBody(regEmail, regPassword))
 
@@ -1336,7 +1347,7 @@ func registerWithTokens(t *testing.T, authURL *url.URL, floor time.Duration, log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens, false), body)
+	return serveRegisterFrom(t.Context(), RegisterHandler(authURL, testClient(), floor, log, pending, tokens, false, nil), body)
 }
 
 func TestRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
@@ -1349,7 +1360,7 @@ func TestRegister_SignupCarriesTheUnsubscribeToken(t *testing.T) {
 
 	requirePending202(t, rec)
 	data, _ := signupData(t, fake).(map[string]any)
-	if got, want := slices.Sorted(maps.Keys(data)), []string{"marketing_consent", "registration", accountmail.UnsubscribeMetadataKey}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(data)), []string{accountmail.MailNamesMetadataKey, "marketing_consent", "registration", accountmail.UnsubscribeMetadataKey}; !slices.Equal(got, want) {
 		t.Fatalf("signup data keys = %v, want %v", got, want)
 	}
 	if data[accountmail.UnsubscribeMetadataKey] != "tok-1" {
@@ -1504,7 +1515,7 @@ func TestRegister_AGoTrueAddressLimitAnswersTheSameForEveryAddress(t *testing.T)
 		}
 		answer(http.StatusOK, gtNewUser)(w, r)
 	}
-	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil, false)
+	h := RegisterHandler(f.URL, testClient(), 0, nopLog(), func(context.Context, string) (bool, error) { return false, nil }, nil, false, nil)
 	post := func(xff string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, gaRequest("/auth/register", "application/json", `{"email":"`+regEmail+`","password":"`+regPassword+`"}`, xff))
@@ -1548,7 +1559,7 @@ var randomPasswordShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // registerHandler builds RegisterHandler with forward; pass forward to RegisterHandler's new parameter, never a constant.
 func registerHandler(authURL *url.URL, client *http.Client, floor time.Duration, log *slog.Logger, forward bool) http.Handler {
-	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, forward)
+	return RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, forward, nil)
 }
 
 // signupPasswords is the password of each POST /signup the fake saw.
@@ -1762,5 +1773,178 @@ func TestRegister_NoPasswordReachesALogLine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRegister_StoredAnswersStayAsTypedAndMailNamesAreNeutralised(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
+		map[string]any{"display_name": " Ada https://evil.com ", "workspace_name": "www.evil.com Ltd"}))
+
+	requirePending202(t, rec)
+	data, _ := signupData(t, fake).(map[string]any)
+	wantReg := map[string]any{"display_name": "Ada https://evil.com", "workspace_name": "www.evil.com Ltd"}
+	if !reflect.DeepEqual(data["registration"], wantReg) {
+		t.Errorf("registration = %v, want %v", data["registration"], wantReg)
+	}
+	wantNames := map[string]any{}
+	for k, v := range accountmail.MailNames("www.evil.com Ltd", "Ada https://evil.com") {
+		wantNames[k] = v
+	}
+	// The literal key is what confirmation.html reads.
+	if !reflect.DeepEqual(data["mail_names"], wantNames) {
+		t.Errorf("mail_names = %v, want %v", data["mail_names"], wantNames)
+	}
+}
+
+func TestRegister_NoAnswersSendNoMailNames(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	requirePending202(t, doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail, nil)))
+
+	if data, _ := signupData(t, fake).(map[string]any); data != nil {
+		if _, has := data[accountmail.MailNamesMetadataKey]; has {
+			t.Errorf("signup data %v carries mail_names without answers", data)
+		}
+	}
+}
+
+func doRegisterWith(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// spentShare is a share whose hour window already holds its one send.
+func spentShare(t *testing.T) *RegistrationMail {
+	t.Helper()
+	m := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+	if spent, err := m.Admit(); spent != "" || err != nil {
+		t.Fatalf("priming Admit = (%q, %v)", spent, err)
+	}
+	return m
+}
+
+func registerWithShare(url *url.URL, log *slog.Logger, tokens accountmail.TokenFunc, m *RegistrationMail) http.Handler {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return RegisterHandler(url, testClient(), 0, log, noPendingInvite, tokens, false, m)
+}
+
+func TestRegister_ShareRefusalMakesNoGoTrueCallAndNoTokenLookup(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	lookups := 0
+	tokens := func(context.Context, string) (string, error) { lookups++; return "tok", nil }
+	h := registerWithShare(fake.URL, nil, tokens, NewRegistrationMail("registration-mail", 1, 100, time.Now))
+
+	for range 2 {
+		requirePending202(t, doRegisterWith(t, h, registerBody(regEmail, regPassword)))
+	}
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("GoTrue saw %d /signup calls, want 1", n)
+	}
+	if lookups != 1 {
+		t.Errorf("token func called %d times, want 1", lookups)
+	}
+}
+
+func TestRegister_ResendAndRegisterSpendOneShare(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	share := NewRegistrationMail("registration-mail", 2, 100, time.Now)
+	register := registerWithShare(fake.URL, nil, nil, share)
+	resend := ResendVerificationHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, slog.New(slog.DiscardHandler), share)
+
+	requirePending202(t, doRegisterWith(t, register, registerBody(regEmail, regPassword)))
+	rec, _ := serveResend(t.Context(), resend, resendBody("ada@corp.example"))
+	requireAccepted(t, rec, "resend")
+	requirePending202(t, doRegisterWith(t, register, registerBody(regEmail, regPassword)))
+
+	var paths []string
+	for _, c := range fake.Calls() {
+		paths = append(paths, c.Path)
+	}
+	if !slices.Equal(paths, []string{"/signup", "/resend"}) {
+		t.Errorf("GoTrue saw %v, want [/signup /resend]", paths)
+	}
+}
+
+func TestRegister_A4xxRefundsTheShare(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"422 user_already_exists", 422, `{"code":422,"error_code":"user_already_exists","msg":"User already registered"}`},
+		{"429 cooldown", 429, gtOverEmailSendRateLimit},
+		{"429 cap", 429, `{"code":429,"error_code":"over_email_send_rate_limit","msg":"email rate limit exceeded"}`},
+		{"400", 400, gtValidationFailed},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := sequenceGoTrue(t, gtAnswer{c.status, c.body}, gtAnswer{200, gtNewUser})
+			h := registerWithShare(fake.URL, nil, nil, NewRegistrationMail("registration-mail", 1, 100, time.Now))
+			doRegisterWith(t, h, registerBody(regEmail, regPassword))
+			doRegisterWith(t, h, registerBody(regEmail, regPassword))
+			if n := len(fake.Calls()); n != 2 {
+				t.Errorf("GoTrue saw %d calls, want 2: a 4xx must refund the share", n)
+			}
+		})
+	}
+}
+
+func TestRegister_A2xx5xxOrTransportErrorKeepsTheSpend(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		url  func(t *testing.T) *url.URL
+	}{
+		{"200", func(t *testing.T) *url.URL { return newFakeGoTrue(t, 200, gtNewUser).URL }},
+		{"500", func(t *testing.T) *url.URL { return newFakeGoTrue(t, 500, gtInternal).URL }},
+		{"transport error", closedURL},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			share := NewRegistrationMail("registration-mail", 1, 100, time.Now)
+			doRegisterWith(t, registerWithShare(c.url(t), nil, nil, share), registerBody(regEmail, regPassword))
+			second := newFakeGoTrue(t, 200, gtNewUser)
+			doRegisterWith(t, registerWithShare(second.URL, nil, nil, share), registerBody(regEmail, regPassword))
+			if n := len(second.Calls()); n != 0 {
+				t.Errorf("second register reached GoTrue %d times, want 0", n)
+			}
+		})
+	}
+}
+
+func TestRegister_AnUnreadableShareIsTheSame202AndSendsNothing(t *testing.T) {
+	const floor = 100 * time.Millisecond
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	share := NewRegistrationMail("registration-mail", 10, 30, time.Now)
+	share.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	h := RegisterHandler(fake.URL, testClient(), floor, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, share)
+
+	start := time.Now()
+	rec := doRegisterWith(t, h, registerBody(regEmail, regPassword))
+	requirePending202(t, rec)
+	if time.Since(start) < floor {
+		t.Errorf("answered before the %v floor", floor)
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+func TestRegister_ShareRefusalLogsTheWindowAndNoAddress(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	log, buf := captureLog()
+	doRegisterWith(t, registerWithShare(fake.URL, log, nil, spentShare(t)), registerBody(regEmail, regPassword))
+
+	recs := recordsNamed(t, buf, "registration: mail share spent")
+	if len(recs) != 1 || recs[0]["level"] != "WARN" || recs[0]["share"] != "hour" {
+		t.Fatalf("records = %v, want one WARN with share=hour", recs)
+	}
+	if strings.Contains(buf.String(), "@") || strings.Contains(buf.String(), regEmail) {
+		t.Errorf("log holds an address: %s", buf.String())
 	}
 }

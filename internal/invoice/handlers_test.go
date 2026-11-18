@@ -53,6 +53,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"log/slog"
@@ -2838,6 +2839,36 @@ func TestTransitionHandler_FiscalTargetsRefused409StoreNotCalled(t *testing.T) {
 	}
 }
 
+// TestTransitionHandler_DiscardedTargetIsAnIllegalTransition: discarded has no edge in, so the
+// transitions route answers 409 (never 400 unknown status) and writes nothing ([discard-edge]).
+func TestTransitionHandler_DiscardedTargetIsAnIllegalTransition(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenantID := seedTenant(t, super, "SECAUD-50-02 discard edge tenant")
+	entityID := seedEntity(t, super, tenantID, "SECAUD-50-02 discard edge entity")
+	invID := seedInvoice(t, super, tenantID, entityID, "SECAUD-EDGE")
+	if _, err := super.Exec(context.Background(), `UPDATE memberships SET role = 'admin' WHERE tenant_id = $1 AND user_id = $2`, tenantID, memberSubject); err != nil {
+		t.Fatalf("promote the caller: %v", err)
+	}
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+
+	w := csServe(TransitionHandler(store.Transition, store.CallerRole, nil), tenantCtx(tenantID), "POST", "/", invID, `{"target":"discarded"}`)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	// The handler refuses a non-draft target first; the store must refuse the edge too.
+	if _, err := store.Transition(tenantCtx(tenantID), invID, StatusDiscarded); !errors.Is(err, ErrIllegalTransition) {
+		t.Errorf("Store.Transition(draft -> discarded) err = %v, want ErrIllegalTransition", err)
+	}
+	if got := statusOf(t, super, invID); got != StatusDraft {
+		t.Errorf("stored status = %q, want draft", got)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+		t.Errorf("history rows = %d, want unchanged %d", n, beforeHistory)
+	}
+}
+
 // TestTransitionHandler_RefusesAFiscalTargetForAnUnknownId: the refusal runs
 // before any row is read, so an unknown id is 409, never 404.
 func TestTransitionHandler_RefusesAFiscalTargetForAnUnknownId(t *testing.T) {
@@ -4524,7 +4555,7 @@ func TestListHandler_FailureKindOnListRows(t *testing.T) {
 	}
 }
 
-// TestGetHandler_CanSubmitAllStatuses (INVED-02-01): table over all 7
+// TestGetHandler_CanSubmitAllStatuses (INVED-02-01): table over all 8
 // statuses; expected values are a hard-coded truth table, never canSubmit(...)
 // itself, so this cannot degrade into a tautology.
 func TestGetHandler_CanSubmitAllStatuses(t *testing.T) {
@@ -4536,6 +4567,8 @@ func TestGetHandler_CanSubmitAllStatuses(t *testing.T) {
 		StatusAccepted:  "false",
 		StatusRejected:  "false",
 		StatusFailed:    "false",
+
+		StatusDiscarded: "false",
 	}
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, s := range allStatuses {
@@ -5007,7 +5040,7 @@ const exactSubmitBlockedReasonRejected = "Only validated invoices can be submitt
 // sentence a status made editable by a widened legalTransitions must carry.
 const exactSubmitBlockedReasonDefault = "Only validated invoices can be submitted."
 
-// TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 7
+// TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 8
 // statuses; expected raw JSON is hard-coded per status, never produced by
 // calling submitBlockedReason itself, so this cannot degrade into a
 // tautology.
@@ -5020,6 +5053,8 @@ func TestGetHandler_SubmitBlockedReasonAllStatuses(t *testing.T) {
 		StatusAccepted:  "null",
 		StatusRejected:  `"` + exactSubmitBlockedReasonRejected + `"`,
 		StatusFailed:    "null",
+
+		StatusDiscarded: "null",
 	}
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, s := range allStatuses {
@@ -5509,11 +5544,9 @@ func TestEditHandler_LineItemsUnknownFieldIgnored200(t *testing.T) {
 	}
 }
 
-// TestEditHandler_LineItemsLargeArrayMapped (task-266 Part F): no
-// http.MaxBytesReader/line-count cap applies to PATCH (documented,
-// traceable-to-no-AC non-goal in the Implementation Plan, mirroring
-// CreateHandler which has none either) -- a large line_items array must
-// still decode and map completely, not truncate or error partway.
+// TestEditHandler_LineItemsLargeArrayMapped: PATCH caps line_items
+// at maxLineItems and the body at LineItemsLimit; an array under both must still
+// decode and map completely, not truncate or error partway.
 func TestEditHandler_LineItemsLargeArrayMapped(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()

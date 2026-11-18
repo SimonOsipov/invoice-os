@@ -28,7 +28,7 @@ func serveFloor(t *testing.T, authURL *url.URL, floor time.Duration, log *slog.L
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), floor, log, noPendingInvite, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), floor, log, noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 	return rec, time.Since(start)
 }
 
@@ -232,9 +232,10 @@ func TestRegister_ClientGoneEndsTheWaitWithoutWriting(t *testing.T) {
 	}()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -334,9 +335,10 @@ func TestRegister_FreeMailVariantsStayPromptUnderALargeMinimum(t *testing.T) {
 			defer cancel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(email, regPassword))).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
 
 			start := time.Now()
-			RegisterHandler(fake.URL, testClient(), time.Hour, slog.New(slog.DiscardHandler), noPendingInvite, nil, false).ServeHTTP(rec, req)
+			RegisterHandler(fake.URL, testClient(), time.Hour, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 			elapsed := time.Since(start)
 
 			if rec.Code != http.StatusBadRequest {
@@ -357,9 +359,10 @@ func TestRegister_ConcurrentRequestsWaitIndependently(t *testing.T) {
 	const floor = 300 * time.Millisecond
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
-	h := RegisterHandler(fake.URL, testClient(), floor, log, noPendingInvite, nil, false)
+	h := RegisterHandler(fake.URL, testClient(), floor, log, noPendingInvite, nil, false, nil)
 	serve := func(rec *httptest.ResponseRecorder) time.Duration {
 		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+		req.Header.Set("Content-Type", "application/json")
 		start := time.Now()
 		h.ServeHTTP(rec, req)
 		return time.Since(start)
@@ -452,9 +455,10 @@ func TestRegister_UpstreamTimeoutWaitsOutTheRestOfTheMinimum(t *testing.T) {
 	log, buf := captureLog()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, client, floor, log, noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusBadGateway {
@@ -486,9 +490,10 @@ func TestRegister_ClientGoneDuringTheUpstreamCallWritesNothing(t *testing.T) {
 	defer cancel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, nil).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -597,8 +602,9 @@ func serveFloorWith(t *testing.T, authURL *url.URL, floor time.Duration, p *pend
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), floor, slog.New(slog.DiscardHandler), p.lookup, nil, false).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), floor, slog.New(slog.DiscardHandler), p.lookup, nil, false, nil).ServeHTTP(rec, req)
 	return rec, time.Since(start)
 }
 
@@ -712,4 +718,24 @@ func TestRegister_SettingsFailureKeepsTheFloor(t *testing.T) {
 		t.Fatalf("GoTrue saw %d signups, want 1: %v", len(got), callNames(fake))
 	}
 	requireRandomPassword(t, got[0], regPassword)
+}
+
+func TestRegister_ShareRefusalIsTheSame202AfterTheFloor(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	control, _ := serveFloor(t, newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, floor, nil, registerBody(regEmail, regPassword))
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	h := RegisterHandler(fake.URL, testClient(), floor, slog.New(slog.DiscardHandler), noPendingInvite, nil, false, spentShare(t))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+	req.Header.Set("Content-Type", "application/json")
+	start := time.Now()
+	h.ServeHTTP(rec, req)
+
+	if elapsed := time.Since(start); elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+	}
+	requireSameAnswer(t, "refused register vs new address", rec, control)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
 }

@@ -34,7 +34,7 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
-      - name: Delete the services, job, database, bucket and secrets
+      - name: Delete the services, job, database and secrets
         env:
           PR: ${{ github.event.pull_request.number }}
         run: bash scripts/ci/preview.sh teardown "$PR"

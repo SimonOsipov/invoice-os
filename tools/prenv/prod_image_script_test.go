@@ -19,7 +19,8 @@ const prodRegistry = "registry.test/proj/images"
 // The docker shim logs one argv line per call to $D/docker.log. Files in $D steer it: inspect-rc (exit of
 // `buildx inspect`, 1 when absent), create-fails (the first N `buildx create` calls fail), build-fails, build-fails-late (fails
 // after writing the metadata), meta.json
-// (written to the --metadata-file path; no file = no metadata).
+// (written to the --metadata-file path; no file = no metadata). `build` records SENTRY_AUTH_TOKEN as seen in its
+// environment to $D/build-env; the gcloud shim prints $D/secret.out for `secrets versions access`.
 const prodDockerShim = `printf '%s\n' "$*" >> "$D/docker.log"
 [ "$1" = buildx ] || exit 0
 case "$2" in
@@ -29,6 +30,7 @@ create)
   [ "$n" -gt "$(cat "$D/create-fails" 2>/dev/null || echo 0)" ] || { echo "ERROR: create $n failed" >&2; exit 1; }
   exit 0 ;;
 build)
+  printf '%s' "${SENTRY_AUTH_TOKEN-}" > "$D/build-env"
   echo "#1 build noise on stdout"; echo "#1 build noise on stderr" >&2
   [ ! -e "$D/build-fails" ] || { echo "ERROR: build failed" >&2; exit 1; }
   prev=
@@ -51,6 +53,7 @@ case "$1 $2 $3" in
   n=$(cat "$D/list-n" 2>/dev/null || echo 0); echo $((n + 1)) > "$D/list-n"
   [ "$n" -ge "$(cat "$D/list-fails" 2>/dev/null || echo 0)" ] || { echo "ERROR: list failed" >&2; exit 1; }
   cat "$D/list.$n.json" 2>/dev/null || cat "$D/list.json" ;;
+"secrets versions access") cat "$D/secret.out" ;;
 "run jobs update") echo "CALL $*" ;;
 "run services describe" | "run revisions describe" | "run jobs describe")
   k="$1.$2.$3.$4"; n=$(cat "$D/n.$k" 2>/dev/null || echo 0); echo $((n + 1)) > "$D/n.$k"
@@ -62,7 +65,7 @@ esac
 
 // prodScrubbed are the variables a test sets itself; the runner's own copies never leak in.
 var prodScrubbed = []string{"D", "PATH", "REGISTRY", "PROJECT", "REGION", "SHA", "TAG", "GITHUB_SHA", "GITHUB_RUN_ID",
-	"GITHUB_RUN_ATTEMPT", "RUNNER_TEMP", "IMAGE_NAME", "SERVICE", "SPA", "DOCKERFILE", "HUBSPOT_PORTAL_ID"}
+	"GITHUB_RUN_ATTEMPT", "RUNNER_TEMP", "IMAGE_NAME", "SERVICE", "SPA", "DOCKERFILE", "HUBSPOT_PORTAL_ID", "SENTRY_AUTH_TOKEN"}
 
 type prodBox struct {
 	t    *testing.T
@@ -236,7 +239,7 @@ func sameLines(got, want []string) bool {
 
 const (
 	prodInspect = "buildx inspect prod-image"
-	prodCreate  = "buildx create --name prod-image --driver docker-container --driver-opt image=mirror.gcr.io/moby/buildkit:buildx-stable-1 --bootstrap"
+	prodCreate  = "buildx create --name prod-image --driver docker-container --driver-opt image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe --bootstrap"
 )
 
 func TestProdImagePushRecordsTheDigestItPushed(t *testing.T) {

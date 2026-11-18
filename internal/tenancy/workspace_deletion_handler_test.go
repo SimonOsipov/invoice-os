@@ -79,7 +79,7 @@ func TestScheduleDeletionHandler_MapsEveryOutcome(t *testing.T) {
 			status int
 		}{
 			{"4096 bytes", bodyOf(4096), true, http.StatusOK},
-			{"4097 bytes", bodyOf(4097), false, http.StatusBadRequest},
+			{"4097 bytes", bodyOf(4097), false, http.StatusRequestEntityTooLarge},
 			{"malformed JSON", `{"workspace_name":`, false, http.StatusBadRequest},
 			{"an empty body", ``, false, http.StatusBadRequest},
 		} {
@@ -90,8 +90,12 @@ func TestScheduleDeletionHandler_MapsEveryOutcome(t *testing.T) {
 				if status != tc.status || called != tc.called {
 					t.Fatalf("status = %d, store called = %v, want %d and %v", status, called, tc.status, tc.called)
 				}
-				if !tc.called && errorSentence(body) != "invalid request body" {
-					t.Errorf("error = %q, want %q", errorSentence(body), "invalid request body")
+				wantMsg := "invalid request body"
+				if tc.status == http.StatusRequestEntityTooLarge {
+					wantMsg = "request body too large"
+				}
+				if !tc.called && errorSentence(body) != wantMsg {
+					t.Errorf("error = %q, want %q", errorSentence(body), wantMsg)
 				}
 			})
 		}
@@ -201,7 +205,7 @@ func TestCancelDeletionByLinkHandler_MapsEveryOutcome(t *testing.T) {
 			status int
 		}{
 			{"1024 bytes", bodyOf(1024), true, http.StatusOK},
-			{"2048 bytes", bodyOf(2048), false, http.StatusBadRequest},
+			{"2048 bytes", bodyOf(2048), false, http.StatusRequestEntityTooLarge},
 			{"malformed JSON", `{"token":`, false, http.StatusBadRequest},
 			{"an empty body", ``, false, http.StatusBadRequest},
 		} {
@@ -212,8 +216,12 @@ func TestCancelDeletionByLinkHandler_MapsEveryOutcome(t *testing.T) {
 				if status != tc.status || called != tc.called {
 					t.Fatalf("status = %d, store called = %v, want %d and %v", status, called, tc.status, tc.called)
 				}
-				if !tc.called && errorSentence(body) != "invalid request body" {
-					t.Errorf("error = %q, want %q", errorSentence(body), "invalid request body")
+				wantMsg := "invalid request body"
+				if tc.status == http.StatusRequestEntityTooLarge {
+					wantMsg = "request body too large"
+				}
+				if !tc.called && errorSentence(body) != wantMsg {
+					t.Errorf("error = %q, want %q", errorSentence(body), wantMsg)
 				}
 			})
 		}

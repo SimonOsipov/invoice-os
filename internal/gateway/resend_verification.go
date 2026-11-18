@@ -18,21 +18,25 @@ const (
 )
 
 // ResendVerificationHandler answers POST /auth/resend-verification with one answer for every account state.
-// Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+// Every answer except a 400 or 415 arrives no earlier than minResponse after the request; 0 means no wait.
+func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, mail *RegistrationMail) http.Handler {
 	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
 		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
-		client, minResponse, perAddress, enforce, log, nil)
+		client, minResponse, perAddress, enforce, log, nil, mail)
 }
 
 // mailLinkHandler serves the mail-link routes (resend, reset); both share one per-address throttle.
+// A non-nil mail is spent before GoTrue; a spent or unreadable share refunds the address and answers the same 202 without a call.
 // name prefixes every log line; verb names the GoTrue call in the failure line.
-func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string)) http.Handler {
+func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string), mail *RegistrationMail) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		start := time.Now()
@@ -64,13 +68,29 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			refused = enforce
 		}
 
+		if !refused {
+			if spent, merr := mail.Admit(); spent != "" || merr != nil {
+				if addrHeld {
+					perAddress.Refund(email)
+				}
+				if merr == nil {
+					log.WarnContext(r.Context(), name+": mail share spent", slog.String("share", spent))
+					alertMail(r.Context(), ErrRegistrationMailSpent)
+				}
+				refused = true
+			}
+		}
+
 		var upstream time.Duration
 		if !refused {
 			status, gt, err := postGoTrue(r, client, endpoint, payload(email), nil)
 			upstream = time.Since(start)
 			// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
-			if addrHeld && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-				perAddress.Refund(email)
+			if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+				if addrHeld {
+					perAddress.Refund(email)
+				}
+				mail.Refund()
 			}
 			switch {
 			case err != nil:
@@ -80,6 +100,9 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			case gt.ErrorCode == "over_email_send_rate_limit":
+				if isIdPMailCap(gt) {
+					alertMail(r.Context(), ErrIdPMailCap)
+				}
 				log.WarnContext(r.Context(), name+": gotrue email send rate limit", slog.Int("upstream_status", status))
 			default:
 				log.WarnContext(r.Context(), name+": gotrue "+verb+" failed",

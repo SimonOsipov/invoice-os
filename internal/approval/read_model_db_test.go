@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/actor"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -771,7 +772,8 @@ func armTwoSteps(t *testing.T, w *warnWorld, k0, k1 string) (invoiceID, runID st
 func TestApprovalRun_PendingStepWarnFollowsTheRow(t *testing.T) {
 	w := newWarnWorld(t, "APSC-14-03 card follows row")
 	w.role("wk-first", memberSpec{role: "reviewer"})
-	away := w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})[0]
+	w.role("wk-away", memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entB}})
+	away := actor.UnnamedMember // the panel caller is a non-admin and the holder has no display name
 	inv, runID := armTwoSteps(t, w, "wk-first", "wk-away")
 	setRunStepState(t, w.super, runStepID(t, w.super, runID, 0), "satisfied")
 
@@ -788,6 +790,47 @@ func TestApprovalRun_PendingStepWarnFollowsTheRow(t *testing.T) {
 	}
 	if rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]; rf.PendingHolderWarn != s1.Warn {
 		t.Errorf("row warn = %t, card warn = %t, want equal", rf.PendingHolderWarn, s1.Warn)
+	}
+}
+
+// earlierApproverWorld arms two steps on k0, k1 with one reviewer A in both roles and A's approval of step 0.
+func earlierApproverWorld(t *testing.T, name string, withNewReviewer bool) (w *warnWorld, invoiceID string) {
+	t.Helper()
+	w = newWarnWorld(t, name)
+	a := w.role("ek0", memberSpec{role: "reviewer"})[0]
+	staffWorkflowRole(t, w.super, w.tenantID, seedWorkflowRole(t, w.super, w.tenantID, "ek1", "ek1"), a, 0)
+	if withNewReviewer {
+		seedMemberOf(t, w.super, w.tenantID, memberSpec{role: "reviewer"}) // reaches the client, holds no role
+	}
+	invoiceID, _ = armTwoSteps(t, w, "ek0", "ek1")
+	if _, err := decideAs(NewStore(w.app, stubFingerprinter, nil), w.tenantID, a, invoiceID); err != nil {
+		t.Fatalf("A approves step 0: %v", err)
+	}
+	return w, invoiceID
+}
+
+func TestApprovalRun_EarlierApproverOnlyWarnsOnTheBlockedStep(t *testing.T) {
+	w, inv := earlierApproverWorld(t, "SECAUD-40 warn", true)
+
+	h := w.panel(inv).Steps[1].Holder
+	if !h.Warn || reasonText(h.Reason) != HolderReasonNobodyCanApprove {
+		t.Errorf("step 1 holder = %+v (reason %s), want warn with %q", h, reasonText(h.Reason), HolderReasonNobodyCanApprove)
+	}
+	rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]
+	if !rf.PendingHolderWarn || reasonText(rf.PendingHolderReason) != HolderReasonNobodyCanApprove {
+		t.Errorf("row warn/reason = %t/%s, want true/%s", rf.PendingHolderWarn, reasonText(rf.PendingHolderReason), HolderReasonNobodyCanApprove)
+	}
+}
+
+func TestApprovalRun_SoleEarlierApproverRaisesNoWarning(t *testing.T) {
+	w, inv := earlierApproverWorld(t, "SECAUD-40 sole", false)
+
+	h := w.panel(inv).Steps[1].Holder
+	if h.Warn || h.Reason != nil {
+		t.Errorf("step 1 holder = %+v, want no warn and nil reason", h)
+	}
+	if rf := rowFacts(t, w.app, w.tenantID, []string{inv})[inv]; rf.PendingHolderWarn {
+		t.Error("row warns, want no warning for the sole approver")
 	}
 }
 

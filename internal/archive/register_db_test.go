@@ -272,6 +272,43 @@ func TestRegister_ExcludesDraftsAndKeepsEveryOtherStatus(t *testing.T) {
 	}
 }
 
+func TestRegister_LeavesDiscardedOut(t *testing.T) {
+	g := newRegisterRig(t)
+	g.doc(t, "INV-LIVE", "commercial_invoice", "accepted", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.doc(t, "INV-TWIN", "commercial_invoice", "discarded", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.act(t)
+
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantNumbers(t, rows, "INV-LIVE")
+	wantFooter(t, rows, "1000.00", "75.00", "1075.00")
+	var rowCount string
+	if _, err := g.tx.Exec(context.Background(), `RESET ROLE`); err != nil {
+		t.Fatalf("RESET ROLE: %v", err)
+	}
+	if err := g.tx.QueryRow(context.Background(), `SELECT payload->>'row_count' FROM audit_log WHERE event = $1 AND tenant_id = $2`, registerEvent, g.tenant).Scan(&rowCount); err != nil {
+		t.Fatalf("read the export audit row: %v", err)
+	}
+	if rowCount != "1" {
+		t.Errorf("audit row_count = %s, want 1", rowCount)
+	}
+
+	// The count the cap reads must not include the twin.
+	g.act(t)
+	if _, _, err := g.build(t, "2026-09-01", "2026-09-30", 1); err != nil {
+		t.Errorf("buildRegister(1 live + 1 discarded, cap 1): %v", err)
+	}
+}
+
+func TestRegister_AClientWithOnlyDiscardedInvoicesHasAnEmptyRegister(t *testing.T) {
+	g := newRegisterRig(t)
+	g.doc(t, "INV-GONE", "commercial_invoice", "discarded", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	if len(rows) != 1 {
+		t.Errorf("%d rows, want the header alone (no data row, no footer): %v", len(rows), numbers(t, rows))
+	}
+}
+
 func TestRegister_HeaderRowIsTheInvoicesCSVHeader(t *testing.T) {
 	g := newRegisterRig(t)
 	g.act(t)

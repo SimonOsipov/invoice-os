@@ -3,7 +3,6 @@ package tenancy
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 )
 
 // ScheduleDeletionFunc schedules the caller's workspace for deletion and returns the due time.
@@ -293,7 +293,7 @@ type scheduleDeletionRequest struct {
 	WorkspaceName string `json:"workspace_name"`
 }
 
-// ScheduleDeletionHandler returns POST /v1/workspace/deletion: identity (401), capped decode (400),
+// ScheduleDeletionHandler returns POST /v1/workspace/deletion: identity (401), capped decode,
 // schedule, 200 with the due time. The typed name reaches the store unchanged.
 func ScheduleDeletionHandler(schedule ScheduleDeletionFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -304,9 +304,12 @@ func ScheduleDeletionHandler(schedule ScheduleDeletionFunc, log *slog.Logger) ht
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxScheduleDeletionBodyBytes)
 		var req scheduleDeletionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxScheduleDeletionBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -351,7 +354,7 @@ type cancelByLinkRequest struct {
 }
 
 // CancelDeletionByLinkHandler returns POST /v1/workspace/deletion/cancel-by-link: identity (401),
-// capped decode (400), cancel, 200 `{"deletion_due_at": null}`.
+// capped decode, cancel, 200 `{"deletion_due_at": null}`.
 func CancelDeletionByLinkHandler(cancel CancelDeletionByLinkFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -361,9 +364,12 @@ func CancelDeletionByLinkHandler(cancel CancelDeletionByLinkFunc, log *slog.Logg
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxInviteTokenBodyBytes)
 		var req cancelByLinkRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxInviteTokenBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

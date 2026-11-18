@@ -129,6 +129,9 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 	if !blogPostOnly(w, r) {
 		return
 	}
+	if !jsonOnly(w, r) {
+		return
+	}
 	start := time.Now()
 	var in blogSubscribeBody
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBlogSubscribeBytes)).Decode(&in); err != nil {
@@ -182,6 +185,9 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 
 func (s *blogSubscriber) confirm(w http.ResponseWriter, r *http.Request) {
 	if !blogPostOnly(w, r) {
+		return
+	}
+	if !jsonOnly(w, r) {
 		return
 	}
 	var in struct {

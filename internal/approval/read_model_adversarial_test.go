@@ -11,6 +11,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -309,6 +310,7 @@ func TestApprovalRun_DecisionReasonDistinguishesNullFromEmptyString(t *testing.T
 // email set -- holderName's fallback ladder (display_name ?? email ?? user_id) must land
 // on the email rung, not skip straight to the raw user id.
 func TestApprovalRun_HolderNameFallsBackToEmailWhenDisplayNameIsNull(t *testing.T) {
+	// The admin control: an admin keeps the email fallback (see the _EmailLeak_ test below).
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-07 holder-email-fallback")
 	entityID := seedBusinessEntity(t, super, tenantID, "Holder Email Fallback Corp")
@@ -331,7 +333,7 @@ func TestApprovalRun_HolderNameFallsBackToEmailWhenDisplayNameIsNull(t *testing.
 		t.Fatalf("arm: %v", err)
 	}
 
-	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	c, _ := callerCtx(t, super, tenantID, "admin", "active")
 	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
@@ -345,6 +347,78 @@ func TestApprovalRun_HolderNameFallsBackToEmailWhenDisplayNameIsNull(t *testing.
 	}
 	if holder.Text != "halima@example.com" {
 		t.Errorf("Holder.Text = %q, want the email fallback %q", holder.Text, "halima@example.com")
+	}
+}
+
+// TestApprovalRun_HolderNameEmailLeak_NonAdminReadsUnnamedMemberNotAnotherMembersEmail: a
+// non-admin reads a nameless holder as "Unnamed member"; the email never reaches them.
+func TestApprovalRun_HolderNameEmailLeak_NonAdminReadsUnnamedMemberNotAnotherMembersEmail(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-42 holder-email-leak")
+	entityID := seedBusinessEntity(t, super, tenantID, "Holder Email Leak Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "holder-email-leak-invoice-1")
+
+	roleID := seedWorkflowRole(t, super, tenantID, "email-leak-role", "Email Leak Role")
+	holderUserID := uuid.NewString()
+	seedMembership(t, super, tenantID, holderUserID, "reviewer", "active")
+	setMembershipEmail(t, super, holderUserID, "halima@example.com")
+	staffWorkflowRole(t, super, tenantID, roleID, holderUserID, 0)
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Email leak policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("email-leak-role"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-email-leak", "test-actor"); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
+	if err != nil {
+		t.Fatalf("ApprovalRun: %v", err)
+	}
+	if len(run.Steps) != 1 || run.Steps[0].Holder == nil {
+		t.Fatalf("steps = %+v, want one step with a holder", run.Steps)
+	}
+	if got := run.Steps[0].Holder.Text; strings.Contains(got, "halima@example.com") || !strings.Contains(got, "Unnamed member") {
+		t.Errorf("Holder.Text = %q, want %q and no email", got, "Unnamed member")
+	}
+}
+
+// TestApprovalRun_HolderNameEmailLeak_ACallerReadsTheirOwnEmailAsHolder: the restriction is on
+// other members; a non-admin who holds the role keeps their own email.
+func TestApprovalRun_HolderNameEmailLeak_ACallerReadsTheirOwnEmailAsHolder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "SECAUD-42 holder-own-email")
+	entityID := seedBusinessEntity(t, super, tenantID, "Holder Own Email Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "holder-own-email-invoice-1")
+
+	roleID := seedWorkflowRole(t, super, tenantID, "own-email-role", "Own Email Role")
+	c, callerID := callerCtx(t, super, tenantID, "reviewer", "active")
+	setMembershipEmail(t, super, callerID, "me@example.com")
+	staffWorkflowRole(t, super, tenantID, roleID, callerID, 0)
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Own email policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("own-email-role"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-own-email", "test-actor"); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
+	if err != nil {
+		t.Fatalf("ApprovalRun: %v", err)
+	}
+	if len(run.Steps) != 1 || run.Steps[0].Holder == nil {
+		t.Fatalf("steps = %+v, want one step with a holder", run.Steps)
+	}
+	if got := run.Steps[0].Holder.Text; got != "me@example.com" {
+		t.Errorf("Holder.Text = %q, want the caller's own email", got)
 	}
 }
 

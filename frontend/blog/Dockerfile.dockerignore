@@ -28,7 +28,8 @@ sidecar
 Makefile
 docker-compose.yml
 .env
-.env.example
+.env.*
+**/.env*
 
 # Editor / OS
 .DS_Store

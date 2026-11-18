@@ -29,6 +29,9 @@ func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID stri
 	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
 }
 
+// PDFiumMaxTotalForTest is the pool size; a leak test refuses more often than this.
+const PDFiumMaxTotalForTest = pdfiumMaxTotal
+
 // DocumentTypeVerdictsForTest is every option name a verdict may carry.
 func DocumentTypeVerdictsForTest() []string {
 	var out []string
@@ -76,6 +79,9 @@ func NewExtractJobAfterErrorsForTest(riverJobID int64, attempt, maxAttempts int,
 // alignment sweep runs 100/150/200 to prove the box space and the pixel space are one space at
 // any resolution.
 func NewPDFiumReaderAtDPIForTest(dpi int) *PDFiumReader { return &PDFiumReader{dpi: dpi} }
+
+// MaxRenderPxForTest is the per-side render cap.
+const MaxRenderPxForTest = maxRenderPx
 
 // PDFiumCleanupsForTest reads the render-bitmap release counter.
 func PDFiumCleanupsForTest() int64 { return pdfiumCleanups.Load() }

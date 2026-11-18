@@ -131,6 +131,21 @@ func requireAccess(t *testing.T, who string, row map[string]json.RawMessage, wan
 	}
 }
 
+// requireEmail asserts the raw email of one row: a stored address as want, or null.
+func requireEmail(t *testing.T, who string, row map[string]json.RawMessage, want string) {
+	t.Helper()
+	if row == nil {
+		t.Errorf("%s: no row in the list", who)
+		return
+	}
+	if got := string(row["email"]); got != want {
+		t.Errorf("%s: email = %s, want %s", who, got, want)
+	}
+}
+
+// storedEmail is the raw wire form of the address addMember seeds for a member.
+func storedEmail(id string) string { return `"` + id + `@members.test"` }
+
 func inHouseWorld(t *testing.T) invWorld {
 	t.Helper()
 	super, app := dbTestPools(t)
@@ -193,6 +208,14 @@ func TestClientAccess_ListAnswersNullInAnInHouseWorkspace(t *testing.T) {
 	}
 	requireAccess(t, "admin", rows[w.admin], `null`)
 	requireAccess(t, "preparer", rows[prep], `null`)
+
+	// A non-admin in an in-house workspace reads no other member's email either.
+	asPrep := w.listAs(t, prep)
+	requireEmail(t, "in-house, as preparer: admin", asPrep[w.admin], `null`)
+	requireEmail(t, "in-house, as preparer: own", asPrep[prep], storedEmail(prep))
+	asAdmin := w.listAs(t, w.admin)
+	requireEmail(t, "in-house, as admin: admin", asAdmin[w.admin], storedEmail(w.admin))
+	requireEmail(t, "in-house, as admin: preparer", asAdmin[prep], storedEmail(prep))
 }
 
 func TestClientAccess_ListScopesOtherRowsForANonAdminCaller(t *testing.T) {
@@ -210,16 +233,26 @@ func TestClientAccess_ListScopesOtherRowsForANonAdminCaller(t *testing.T) {
 	requireAccess(t, "as P: P", asP[p], quoted(e1))
 	requireAccess(t, "as P: admin", asP[w.admin], `null`)
 	requireAccess(t, "as P: R", asP[r], `null`)
+	requireEmail(t, "as P: P", asP[p], storedEmail(p))
+	requireEmail(t, "as P: admin", asP[w.admin], `null`)
+	requireEmail(t, "as P: R", asP[r], `null`)
 
 	asR := w.listAs(t, r)
 	requireAccess(t, "as R: R", asR[r], `"all"`)
 	requireAccess(t, "as R: admin", asR[w.admin], `null`)
 	requireAccess(t, "as R: P", asR[p], `null`)
+	requireEmail(t, "as R: R", asR[r], storedEmail(r))
+	requireEmail(t, "as R: admin", asR[w.admin], `null`)
+	requireEmail(t, "as R: P", asR[p], `null`)
 
 	asAdmin := w.listAs(t, w.admin)
 	requireAccess(t, "as admin: P", asAdmin[p], quoted(e1))
 	requireAccess(t, "as admin: R", asAdmin[r], `"all"`)
 	requireAccess(t, "as admin: admin", asAdmin[w.admin], `"all"`)
+	// Control: the role check hides the address, not the row.
+	for who, id := range map[string]string{"admin": w.admin, "P": p, "R": r} {
+		requireEmail(t, "as admin: "+who, asAdmin[id], storedEmail(id))
+	}
 
 	// The caller's subject is matched in any letter case.
 	upper := w.listAs(t, strings.ToUpper(w.admin))
@@ -227,12 +260,62 @@ func TestClientAccess_ListScopesOtherRowsForANonAdminCaller(t *testing.T) {
 	upperP := w.listAs(t, strings.ToUpper(p))
 	requireAccess(t, "upper-case P: P", upperP[p], quoted(e1))
 	requireAccess(t, "upper-case P: admin", upperP[w.admin], `null`)
+	requireEmail(t, "upper-case P: P", upperP[p], storedEmail(p))
+	requireEmail(t, "upper-case P: admin", upperP[w.admin], `null`)
+	requireEmail(t, "upper-case P: R", upperP[r], `null`)
 
 	// A member with no access reads its own empty set, not null.
 	q := w.addMember(t, "preparer", "active", "Quin Preparer")
 	asQ := w.listAs(t, q)
 	requireAccess(t, "as Q: Q", asQ[q], `[]`)
 	requireAccess(t, "as Q: P", asQ[p], `null`)
+}
+
+func TestClientAccess_MemberListEmailLeak_ALimitedMemberReadsNoOtherMembersEmail(t *testing.T) {
+	w := newInvWorld(t, "member list email leak "+uuid.NewString()[:8], "Ada Admin")
+	p := w.addMember(t, "preparer", "active", "Pia Preparer")
+	r := w.addMember(t, "reviewer", "active", "Rex Reviewer")
+	s := w.addMember(t, "reviewer", "suspended", "Sue Suspended")
+	nameless := w.addMember(t, "preparer", "active", "")
+	giveClients(t, w.super, w.tenant, p, seedEntity(t, w.super, w.tenant))
+	giveAllClients(t, w.super, w.tenant, r)
+
+	adminView := w.listAs(t, w.admin)
+	if len(adminView) != 5 {
+		t.Fatalf("admin view: %d rows, want 5", len(adminView))
+	}
+	for _, id := range []string{w.admin, p, r, s, nameless} {
+		requireEmail(t, "admin view: "+id, adminView[id], storedEmail(id))
+	}
+
+	for name, caller := range map[string]string{"limited preparer": p, "all-clients reviewer": r} {
+		rows := w.listAs(t, caller)
+		if len(rows) != 5 {
+			t.Fatalf("as %s: %d rows, want 5 (a non-admin still lists everyone)", name, len(rows))
+		}
+		for id, row := range rows {
+			if id == caller {
+				requireEmail(t, name+" reading its own row", row, storedEmail(id))
+			} else {
+				requireEmail(t, name+" reading "+id, row, `null`)
+			}
+			// Names, roles and status stay readable: [member-list] hides the address only.
+			for _, k := range []string{"user_id", "display_name", "role", "status"} {
+				if string(row[k]) != string(adminView[id][k]) {
+					t.Errorf("as %s, %s of %s = %s, want %s (the admin's view)", name, k, id, row[k], adminView[id][k])
+				}
+			}
+			if len(row) != len(sixKeys) {
+				t.Errorf("as %s, row %s has %d keys, want the six-key shape", name, id, len(row))
+			}
+		}
+		// The suspended row is among the hidden ones.
+		requireEmail(t, name+" reading the suspended row", rows[s], `null`)
+		// A member with no display name reads with neither name nor address: the SPA labels it "Unnamed member".
+		if string(rows[nameless]["display_name"]) != "null" {
+			t.Errorf("as %s, the nameless member's display_name = %s, want null", name, rows[nameless]["display_name"])
+		}
+	}
 }
 
 func TestClientAccess_PatchAnswersTheTargetsStoredAccess(t *testing.T) {

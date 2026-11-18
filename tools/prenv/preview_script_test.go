@@ -15,10 +15,20 @@ import (
 	"testing"
 )
 
-const previewGcloudShim = `echo "$*" >> "$D/calls"
+const previewGcloudShim = `echo "${REACH_JOB:+job: }$*" >> "$D/calls"
 echo gcloud >> "$D/order"
+[ ! -e "$D/fail-$1-$2-$3" ] || { echo "ERROR: gcloud $1 $2 $3 failed" >&2; exit 1; }
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
 [ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo PARTIAL; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
+runfound() {
+  if grep -qxF -- "$4" "$D/describe-run-error" 2>/dev/null; then echo "ERROR: (gcloud.run.describe) UNAVAILABLE: backend error" >&2; return 1; fi
+  # gcloud run prints no NOT_FOUND for an absent resource (googlecloudsdk surface/run/{services,jobs}/describe.py).
+  if [ -e "$D/exists" ] && ! grep -qxF -- "$4" "$D/exists"; then
+    if [ "$2" = jobs ]; then echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [$4]." >&2
+    else echo "ERROR: (gcloud.run.services.describe) Cannot find service [$4]" >&2; fi
+    return 1
+  fi
+}
 case "$1 $2 $3" in
 "run deploy "*)
   prev=
@@ -32,7 +42,18 @@ case "$1 $2 $3" in
     [ "$prev" = --env-vars-file ] && cp "$a" "$D/env-job-$4"
     prev=$a
   done ;;
-"secrets create "*) cat > "$D/created-$3" ;;
+"secrets create "*)
+  if grep -qxF -- "$3" "$D/taken" 2>/dev/null; then echo "ERROR: (gcloud.secrets.create) Resource in projects [ascomply-preview] is the subject of a conflict: Secret [projects/1/secrets/$3] already exists." >&2; exit 1; fi
+  cat > "$D/created-$3" ;;
+"secrets set-iam-policy "*) cp "$4" "$D/setpolicy-$3" ;;
+"secrets get-iam-policy "*)
+  if grep -qxF -- "$3" "$D/missing" 2>/dev/null; then echo "ERROR: (gcloud.secrets.get-iam-policy) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; fi
+  cat "$D/iam-$3" 2>/dev/null || echo '{}' ;;
+"secrets describe "*) if grep -qxF -- "$3" "$D/describe-error" 2>/dev/null; then echo "ERROR: (gcloud.secrets.describe) UNAVAILABLE: backend error" >&2; exit 1; fi
+  cat "$D/owner-$3" 2>/dev/null || { echo "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/1/secrets/$3] not found." >&2; exit 1; } ;;
+"storage ls "*)
+  if [ -e "$D/no-objects" ]; then echo "ERROR: (gcloud.storage.ls) One or more URLs matched no objects." >&2; exit 1; fi
+  echo "$3" ;;
 "secrets list "*)
   f=
   prev=
@@ -42,13 +63,17 @@ case "$1 $2 $3" in
   done
   case "$f" in
   *:\*) cat "$D/list-secrets" 2>/dev/null || : ;;
-  labels.preview-pr=*) cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
-  *) cat "$D/have" 2>/dev/null || : ;;
+  labels.preview-pr=*)
+    [ ! -e "$D/fail-list-labelled" ] || { echo "ERROR: gcloud secrets list (labelled) failed" >&2; exit 1; }
+    cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
+  *)
+    [ ! -e "$D/fail-list-unfiltered" ] || { echo "ERROR: gcloud secrets list (unfiltered) failed" >&2; exit 1; }
+    cat "$D/have" 2>/dev/null || : ;;
   esac ;;
 "run services describe") case "$*" in *latestReadyRevisionName*)
   [ ! -e "$D/faildescribe" ] || { echo "ERROR: describe $4 failed" >&2; exit 1; }
   cat "$D/latest-$4"; exit 0 ;; esac
-  [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+  runfound "$@" ;;
 "run revisions list")
   prev=
   for a in "$@"; do
@@ -57,11 +82,14 @@ case "$1 $2 $3" in
   done ;;
 "run revisions delete") if grep -qxF -- "$4" "$D/faildelete" 2>/dev/null; then echo "ERROR: delete $4 failed" >&2; exit 1; fi
   echo "$4" >> "$D/deleted" ;;
-"run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run jobs describe") runfound "$@" ;;
+"storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" || { echo "ERROR: (gcloud.storage.buckets.describe) $4 not found: 404." >&2; exit 1; } ;;
 "run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
+"services list "*) cat "$D/enabled-services" 2>/dev/null || : ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
+"sql databases list") cat "$D/list-databases" 2>/dev/null || : ;;
 "secrets versions describe")
   prev=
   for a in "$@"; do
@@ -79,6 +107,10 @@ case "$1 $2 $3" in
     [ "$prev" = --secret ] && name=$a
     prev=$a
   done
+  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Permission 'secretmanager.versions.access' denied for resource 'projects/1/secrets/$name/versions/latest' (or it may not exist)." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [projects/1/secrets/$name] not found or has no versions." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/otherdenied" 2>/dev/null; then echo "ERROR: (gcloud.secrets.versions.access) PERMISSION_DENIED: Secret Manager API has not been used in project 1 or it is disabled." >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/accesserr" 2>/dev/null; then echo "ERROR: INTERNAL: backend error on $name" >&2; exit 1; fi
   cat "$D/access-$name" 2>/dev/null || printf pw ;;
 "sql instances describe") echo 10.0.0.1 ;;
 "run jobs execute")
@@ -87,8 +119,19 @@ case "$1 $2 $3" in
     echo $((n - 1)) >"$D/execfails"
     printf 'ERROR: (gcloud.run.jobs.execute) The execution failed.\nView details about this execution by running:\ngcloud run jobs executions describe %s-x%s\n' "$4" "$n" >&2
     exit 1
+  fi
+  # A reach job runs its probe under this shim, as Cloud Run would; its stdout is the job's log.
+  jf="$D/env-job-$4"
+  if grep -q '^PROBE:' "$jf" 2>/dev/null && [ ! -e "$D/noprobe" ]; then
+    ev() { sed -n "s/^$1: '\(.*\)'\$/\1/p" "$jf"; }
+    PROJECT=$(ev PROJECT) NAMES=$(ev NAMES) NONCE=$(ev NONCE) PROBE=$(ev PROBE) REACH_JOB=1 bash -c 'eval "$(printf %s "$PROBE" | base64 -d)"' >>"$D/logs"
   fi ;;
-"logging read "*) cat "$D/logs" 2>/dev/null || : ;;
+"logging read "*)
+  # logs-late=N: the first N-1 reads miss every line of the names in logs-hide, as under ingestion lag
+  n=$(( $(cat "$D/nreads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$D/nreads"
+  if [ -e "$D/logs-late" ] && [ "$n" -lt "$(cat "$D/logs-late")" ]; then
+    awk 'NR == FNR {h[$1]; next} !($3 in h)' "$D/logs-hide" "$D/logs" 2>/dev/null || :
+  else cat "$D/logs" 2>/dev/null || :; fi ;;
 esac
 `
 
@@ -107,6 +150,7 @@ done
 if [ -n "$out" ]; then
   cp "$D/curl-body-$ep" "$out" 2>/dev/null || echo '{}' > "$out"
 fi
+if [ -s "$D/curl-exit-$ep" ]; then exit "$(cat "$D/curl-exit-$ep")"; fi
 if [ -s "$D/curl-seq-$ep" ]; then
   head -n 1 "$D/curl-seq-$ep" | tr -d '\n'
   sed -i.bak 1d "$D/curl-seq-$ep"
@@ -145,6 +189,7 @@ func runPreview(t *testing.T, setup func(dir string), args ...string) previewRun
 func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...string) previewRun {
 	t.Helper()
 	dir, shims := t.TempDir(), t.TempDir()
+	writeIn(t, dir, "owner-slot-1-claim", "7") // PR 7 holds slot-1 unless a test removes it
 	if setup != nil {
 		setup(dir)
 	}
@@ -154,7 +199,7 @@ func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...s
 	writeShim(t, filepath.Join(shims, "sleep"), "echo \"sleep $*\" >> '"+dir+"/order'\n") // a retry wait costs no time, and is logged
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NIGHTLY_KEYS_CLOSED=") }), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
 	stdout, stderr, err := runToFiles(t, cmd, false)
 	r := previewRun{dir: dir, stdout: stdout, stderr: stderr}
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -471,11 +516,9 @@ func TestPreviewSecretsNeverPrintsTheKey(t *testing.T) {
 			if strings.Contains(r.file(t, "calls"), d) {
 				t.Fatal("the key's d member reached gcloud argv")
 			}
-			if name == "nightly" {
-				tok := r.file(t, "created-nightly-mock-issuer-token")
-				if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
-					t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
-				}
+			tok := r.file(t, "created-"+previewSuffix(name)+"-mock-issuer-token")
+			if tok == "" || strings.Contains(r.stdout, tok) || strings.Contains(r.stderr, tok) || strings.Contains(r.file(t, "calls"), tok) {
+				t.Fatal("the mock issuer token is empty or reached stdout, stderr or gcloud argv")
 			}
 		})
 	}
@@ -524,6 +567,8 @@ var (
 	goldenMu    sync.Mutex
 	goldenCache = map[string]map[string]string{}
 	tmpEnvFile  = regexp.MustCompile(`--env-vars-file \S+`)
+	// bind_slot's mktemp path; secrets-calls stays unsorted, so only the path is masked.
+	tmpPolicyFile = regexp.MustCompile(`(secrets set-iam-policy \S+) \S+`)
 )
 
 // normCalls sorts the gcloud calls (deploys run four at a time) and masks the temp env-file path.
@@ -575,7 +620,7 @@ func nameGoldens(t *testing.T, name string) map[string]string {
 		}
 	}
 	out["secrets-created"] = b.String()
-	out["secrets-calls"] = sec.file(t, "calls")
+	out["secrets-calls"] = tmpPolicyFile.ReplaceAllString(sec.file(t, "calls"), "$1 POLICY")
 	out["secrets-stdout"] = sec.stdout
 
 	td := runPreview(t, func(dir string) {
@@ -646,9 +691,9 @@ func prGolden(t *testing.T, name string) string {
 	return string(b)
 }
 
-// asNightly rewrites a PR 7 output into what the nightly must print.
+// asNightly rewrites a PR 7 output into what the nightly must print: PR 7 holds slot-1, the nightly the fixed slot "nightly".
 func asNightly(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "ascomply-preview-pr-7", "ascomply-preview-nightly"), "pr-7", "nightly")
+	return strings.ReplaceAll(strings.ReplaceAll(s, "slot-1", "nightly"), "pr-7", "nightly")
 }
 
 func TestPreviewNameArgRefusesNearMisses(t *testing.T) {
@@ -963,19 +1008,19 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 	t.Parallel()
 	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
 	for _, svc := range prAll(t) {
-		want := strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-")
+		want := strings.ReplaceAll(strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-"), "slot-1-", "nightly-")
 		if nlRealAI[svc] {
 			want += "," + nlKey
 		}
 		if svc == "notifications" || svc == "worker" {
 			want += "," + strings.Join(nlContactKeys, ",")
 		}
-		if svc == "gateway" {
-			want += ",GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest"
-		}
 		got := flagValue(ni[svc], "--set-secrets")
 		if got != want {
 			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
+		}
+		if svc == "gateway" && !strings.Contains(got, "GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest") {
+			t.Errorf("nightly gateway lacks its mock issuer token mount: %q", got)
 		}
 		if has := strings.Contains(got, "mock-issuer-token"); has != (svc == "gateway") {
 			t.Errorf("%s mounts the mock issuer token = %v", svc, has)
@@ -1011,7 +1056,7 @@ func TestPreviewNightlyRealAIOnThreeServices(t *testing.T) {
 		}
 		if nlRealAI[svc] {
 			real++
-			if !strings.Contains(env, "DOCUMENT_BUCKET: ascomply-preview-nightly\n") {
+			if !strings.Contains(env, "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n") {
 				t.Errorf("nightly env-%s lost its document settings:\n%s", svc, env)
 			}
 		}
@@ -1065,7 +1110,7 @@ func TestPreviewCapAllowsNoMixOverTheBudget(t *testing.T) {
 	}
 }
 
-func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
+func TestPreviewSecretsNightlyMakesThePRSet(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "secrets", "nightly")
 	if r.code != 0 {
@@ -1075,7 +1120,6 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 	for _, n := range previewList(t, "PR_SECRETS") {
 		want["created-nightly-"+n] = true
 	}
-	want["created-nightly-mock-issuer-token"] = true
 	entries, _ := os.ReadDir(r.dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "created-") {
@@ -1089,7 +1133,7 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 		t.Errorf("secret %s not created", n)
 	}
 	calls := r.file(t, "calls")
-	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS"))+1 || strings.Count(calls, "--labels preview-pr=nightly ") != n {
+	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS")) || strings.Count(calls, "--labels preview-pr=nightly ") != n {
 		t.Errorf("creates or labels wrong:\n%s", calls)
 	}
 	if tok := r.file(t, "created-nightly-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {
@@ -1107,14 +1151,7 @@ func TestPreviewSecretsNightlyMakesThePRSetAndTheMockIssuerToken(t *testing.T) {
 
 func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 	t.Parallel()
-	absent := func(dir string) { writeIn(t, dir, "exists", "none\n") }
-	b := runPreview(t, absent, "bucket", "nightly")
-	bc := b.file(t, "calls")
-	for _, w := range []string{"storage buckets create gs://ascomply-preview-nightly ", "storage buckets update gs://ascomply-preview-nightly ", "--update-labels preview-pr=nightly"} {
-		if !strings.Contains(bc, w) {
-			t.Errorf("bucket calls lack %q:\n%s", w, bc)
-		}
-	}
+	// The nightly's bucket is the Terraform slot: TestPreviewBucketNightlyUsesItsFixedSlot.
 	if c := runPreview(t, nil, "database", "nightly").file(t, "calls"); !strings.Contains(c, "run jobs execute preview-db ") || !strings.HasSuffix(strings.TrimSpace(c), "--update-env-vars PR_DB=pr_0,ACTION=recreate") {
 		t.Errorf("database calls:\n%s", c)
 	}
@@ -1125,7 +1162,7 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 		}
 	}
 	env := m.file(t, "env-job-migrate-nightly")
-	for _, w := range []string{"DEPLOY_ENV: nightly\n", "DOCUMENT_BUCKET: ascomply-preview-nightly\n"} {
+	for _, w := range []string{"DEPLOY_ENV: nightly\n", "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n"} {
 		if !strings.Contains(env, w) {
 			t.Errorf("migrate env lacks %q:\n%s", w, env)
 		}
@@ -1138,7 +1175,18 @@ func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
 	}
 }
 
-func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
+func TestPreviewTeardownNightlyDescribesNoReachJob(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "teardown", "nightly")
+	if c := r.file(t, "calls"); strings.Contains(c, "reach-nightly") {
+		t.Errorf("the nightly's teardown asked for a reach job:\n%s", c)
+	}
+	if r2 := runPreview(t, nil, "teardown", "7"); !strings.Contains(r2.file(t, "calls"), "run jobs describe reach-pr-7 ") {
+		t.Errorf("a PR's teardown skipped its reach job:\n%s", r2.file(t, "calls"))
+	}
+}
+
+func TestPreviewTeardownNightlyEmptiesItsSlot(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, func(dir string) {
 		writeIn(t, dir, "exists", "gateway-nightly\ngateway-pr-7\nmigrate-nightly\nmigrate-pr-7\ngs://ascomply-preview-nightly\n")
@@ -1156,7 +1204,7 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 		}
 	}
 	want := []string{"run services delete gateway-nightly", "run jobs delete migrate-nightly", "storage rm --recursive gs://ascomply-preview-nightly",
-		"secrets delete nightly-gateway-token", "secrets delete nightly-s2s-token"}
+		"storage rm gs://ascomply-preview-docs-nightly/**", "secrets delete nightly-gateway-token", "secrets delete nightly-s2s-token"}
 	if got := strings.Join(deletes, "|"); got != strings.Join(want, "|") {
 		t.Errorf("deletes = %v, want %v", deletes, want)
 	}
@@ -1165,6 +1213,9 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 		if !strings.Contains(c, w) {
 			t.Errorf("calls lack %q", w)
 		}
+	}
+	if strings.Contains(c, "slot-1") || strings.Contains(c, "slot-2") {
+		t.Errorf("the nightly's teardown reached a PR slot:\n%s", c)
 	}
 	if strings.Contains(c, "secrets delete nightly-hubspot-token") {
 		t.Error("teardown deleted a secret without the preview-pr label")
@@ -1184,6 +1235,45 @@ func TestPreviewPrsListsTheNightly(t *testing.T) {
 	}, "prs")
 	if want := "nightly 2026-10-29T00:30:00Z\n7 2026-10-28T02:00:00Z\n"; r.code != 0 || r.stdout != want {
 		t.Fatalf("exit %d, prs = %q, want %q", r.code, r.stdout, want)
+	}
+}
+
+func TestPreviewDatabasesMapsNames(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "postgres\npr_0\npr_672\npr_x\n") }, "databases")
+	if want := "nightly\n672\n"; r.code != 0 || r.stdout != want {
+		t.Fatalf("exit %d, databases = %q, want %q", r.code, r.stdout, want)
+	}
+}
+
+func TestPreviewDatabasesFailsWhenGcloudFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "list-databases", "pr_672\n")
+		writeIn(t, dir, "fail-sql-databases", "")
+	}, "databases")
+	if r.code == 0 {
+		t.Fatalf("exit 0, stdout %q", r.stdout)
+	}
+}
+
+func TestPreviewCapIgnoresDatabases(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "pr_9\n") }, "prs")
+	if r.code != 0 || r.stdout != "" {
+		t.Fatalf("exit %d, prs = %q, want empty", r.code, r.stdout)
+	}
+	r = runPreview(t, func(dir string) { writeIn(t, dir, "list-databases", "pr_9\n") }, "cap", "5")
+	if !strings.Contains(r.stdout, "open=0") {
+		t.Fatalf("cap = %q, want open=0", r.stdout)
+	}
+}
+
+func TestPreviewTeardownFailsWhenTheDropFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "execfails", "1") }, "teardown", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") || strings.Count(r.file(t, "calls"), "run jobs execute preview-db") != 1 {
+		t.Errorf("exit %d, stderr %q, calls %q", r.code, r.stderr, r.file(t, "calls"))
 	}
 }
 
@@ -1404,7 +1494,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mock-token", "mail-blog-ids"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -1655,7 +1745,14 @@ func runInvariants(t *testing.T, secrets []string, svcs []invSvc) previewRun {
 }
 
 // runInvariantsWith is runInvariants with extra files in the shim dir (curl-body-<endpoint>, curl-code-<endpoint>).
+// Every nightly-* secret is unreadable unless files sets denied.
 func runInvariantsWith(t *testing.T, secrets []string, svcs []invSvc, files map[string]string) previewRun {
+	t.Helper()
+	return runInvariantsEnv(t, nil, secrets, svcs, files)
+}
+
+// runInvariantsEnv is runInvariantsWith with extra KEY=value environment entries.
+func runInvariantsEnv(t *testing.T, env, secrets []string, svcs []invSvc, files map[string]string) previewRun {
 	t.Helper()
 	var list []map[string]any
 	for _, s := range svcs {
@@ -1676,9 +1773,16 @@ func runInvariantsWith(t *testing.T, secrets []string, svcs []invSvc, files map[
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runPreview(t, func(dir string) {
+	return runPreviewEnv(t, env, func(dir string) {
 		writeIn(t, dir, "have", strings.Join(secrets, "\n")+"\n")
 		writeIn(t, dir, "list-services", string(b))
+		var denied []string
+		for _, s := range secrets {
+			if strings.HasPrefix(s, "nightly-") {
+				denied = append(denied, s)
+			}
+		}
+		writeIn(t, dir, "denied", strings.Join(denied, "\n")+"\n")
 		for name, body := range files {
 			writeIn(t, dir, name, body)
 		}
@@ -2061,11 +2165,14 @@ func imgCalls(t *testing.T, r previewRun, suffix string) []string {
 }
 
 // errLines returns the ::error:: lines of both streams that contain every want.
-func errLines(r previewRun, want ...string) []string {
+func errLines(r previewRun, want ...string) []string { return annLines(r, "::error::", want...) }
+
+// annLines is errLines for any annotation prefix, such as ::warning::.
+func annLines(r previewRun, prefix string, want ...string) []string {
 	var out []string
 next:
 	for _, l := range strings.Split(r.stdout+"\n"+r.stderr, "\n") {
-		if !strings.Contains(l, "::error::") {
+		if !strings.Contains(l, prefix) {
 			continue
 		}
 		for _, w := range want {
@@ -2188,5 +2295,2033 @@ func TestPreviewInvariantsReportBothIAMProblems(t *testing.T) {
 	}
 	if len(errLines(r, "artifactregistry.tags.update", repo)) == 0 {
 		t.Errorf("the image repository problem is not reported:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+const (
+	deployNightlySA = "deploy-nightly@ascomply-preview.iam.gserviceaccount.com"
+	invSentinel     = "SENTINEL-VALUE-1"
+	invClosed       = "NIGHTLY_KEYS_CLOSED=true"
+	invWarnTail     = "(not enforced: NIGHTLY_KEYS_CLOSED is not true)"
+)
+
+func nightlyIdentityEP(email string) string { return email + ":testIamPermissions" }
+
+// nightlyPerms are the two permissions the preview deployer must not hold on a nightly identity.
+var nightlyPerms = []string{"iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"}
+
+func permBody(perm string) string { return `{"permissions":["` + perm + `"]}` }
+
+func TestPreviewInvariantsRefuseAReadableNightlySecret(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsEnv(t, []string{invClosed}, []string{"nightly-hubspot-token", "nightly-resend-read-key", "pr-7-gateway-token"}, nlGoodSvcs(),
+		map[string]string{"denied": "nightly-resend-read-key\n", "access-nightly-hubspot-token": invSentinel})
+	if r.code != 1 {
+		t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "the preview deployer can read nightly-hubspot-token")) != 1 {
+		t.Errorf("want one ::error:: line naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+	}
+	for _, l := range strings.Split(r.stdout+"\n"+r.stderr, "\n") {
+		if strings.Contains(l, "nightly-resend-read-key") {
+			t.Errorf("a denied secret is named: %q", l)
+		}
+	}
+	if strings.Contains(r.stdout+r.stderr, invSentinel) {
+		t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsWarnOnAReadableNightlySecretUntilClosed(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}, "empty": {"NIGHTLY_KEYS_CLOSED="}, "other": {"NIGHTLY_KEYS_CLOSED=1"}, "case": {"NIGHTLY_KEYS_CLOSED=True"}, "upper": {"NIGHTLY_KEYS_CLOSED=TRUE"}, "space": {"NIGHTLY_KEYS_CLOSED= true"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "pr-7-gateway-token"}, nlGoodSvcs(),
+				map[string]string{"denied": "", "access-nightly-hubspot-token": invSentinel})
+			if r.code != 0 {
+				t.Fatalf("invariants exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if n := len(annLines(r, "::warning::", "the preview deployer can read nightly-hubspot-token")); n != 1 {
+				t.Errorf("%d ::warning:: lines name nightly-hubspot-token, want 1:\n%s\n%s", n, r.stdout, r.stderr)
+			}
+			if len(errLines(r)) != 0 {
+				t.Errorf("::error:: line in warn mode:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if !strings.HasSuffix(strings.TrimSpace(r.stdout), invWarnTail) {
+				t.Errorf("stdout does not end %q:\n%s", invWarnTail, r.stdout)
+			}
+			if strings.Contains(r.stdout, "no read of a nightly-* secret") || !strings.Contains(r.stdout, "not enforced and 1 are readable") {
+				t.Errorf("success line misstates the nightly-secret read:\n%s", r.stdout)
+			}
+			if strings.Contains(r.stdout+r.stderr, invSentinel) {
+				t.Errorf("a secret value was printed:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsNameTheAccountWhenCurlFails(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"pr-7-gateway-token"}, nlGoodSvcs(), map[string]string{
+		"curl-exit-" + nightlyIdentityEP(runNightlySA):    "7",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	})
+	if r.code != 1 {
+		t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "7")) != 1 {
+		t.Errorf("want one ::error:: line naming run-nightly and curl exit 7:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run after the curl failure:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsWarnModeStillRefusesActAs(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "false": {"NIGHTLY_KEYS_CLOSED=false"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token"}, nlGoodSvcs(),
+				map[string]string{"curl-body-" + nightlyIdentityEP(runNightlySA): permBody("iam.serviceAccounts.actAs")})
+			if r.code != 1 {
+				t.Errorf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(errLines(r, "iam.serviceAccounts.actAs", "run-nightly@")) != 1 {
+				t.Errorf("want one ::error:: line naming actAs and run-nightly:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReadOnlyNightlySecrets(t *testing.T) {
+	t.Parallel()
+	// The last four are lookalikes: readable, so a loose prefix match would read them.
+	have := []string{"nightly-hubspot-token", "pr-7-gateway-token", "nightly-resend-read-key", "pr-7-s2s-token", "app-password", "not-nightly-x", "nightly", "Nightly-x", "pr-7-nightly-token"}
+	r := runInvariantsWith(t, have, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	var read []string
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets versions access ") {
+			read = append(read, "access latest --secret "+flagValue(l, "--secret"))
+		}
+	}
+	sort.Strings(read)
+	want := []string{"access latest --secret nightly-hubspot-token", "access latest --secret nightly-resend-read-key"}
+	if !slices.Equal(read, want) {
+		t.Errorf("secret reads = %v, want %v", read, want)
+	}
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets versions access ") && !strings.HasPrefix(l, "secrets versions access latest --secret ") {
+			t.Errorf("read is not of the latest version: %q", l)
+		}
+	}
+}
+
+func TestPreviewInvariantsRefuseActAsOnANightlyIdentity(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"", invClosed} {
+		for _, email := range []string{runNightlySA, deployNightlySA} {
+			for _, p := range nightlyPerms {
+				t.Run(strings.TrimPrefix(mode, "NIGHTLY_KEYS_CLOSED=")+"/"+email+"/"+p, func(t *testing.T) {
+					t.Parallel()
+					var env []string
+					if mode != "" {
+						env = []string{mode}
+					}
+					r := runInvariantsEnv(t, env, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{"curl-body-" + nightlyIdentityEP(email): permBody(p)})
+					if r.code != 1 {
+						t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+					}
+					if len(errLines(r, p, email)) != 1 {
+						t.Errorf("want one ::error:: line naming %s and %s:\n%s\n%s", p, email, r.stdout, r.stderr)
+					}
+					if strings.Contains(r.stdout, imgHeld) {
+						t.Errorf("success line printed:\n%s", r.stdout)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPreviewInvariantsAskBothNightlyIdentities(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	for _, email := range []string{runNightlySA, deployNightlySA} {
+		url := "https://iam.googleapis.com/v1/projects/ascomply-preview/serviceAccounts/" + nightlyIdentityEP(email)
+		var asked []string
+		for _, c := range imgCalls(t, r, nightlyIdentityEP(email)) {
+			if strings.HasSuffix(c, url) {
+				asked = append(asked, c)
+			}
+		}
+		if len(asked) != 1 {
+			t.Errorf("want one call to %s, got %d in:\n%s", url, len(asked), r.file(t, "curl-calls"))
+			continue
+		}
+		body := flagValue(asked[0], "-d")
+		for _, p := range nightlyPerms {
+			if !strings.Contains(body, p) {
+				t.Errorf("-d body %q lacks %s", body, p)
+			}
+		}
+	}
+}
+
+func TestPreviewInvariantsPassWhenTheNightlyIsClosed(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsEnv(t, []string{invClosed}, []string{"nightly-hubspot-token", "nightly-resend-read-key", "pr-7-gateway-token"}, nlGoodSvcs(), nil)
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	for _, w := range []string{imgHeld, "no act-as on run-nightly or deploy-nightly", "no read of a nightly-* secret"} {
+		if !strings.Contains(r.stdout, w) {
+			t.Errorf("success line lacks %q:\n%s", w, r.stdout)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(r.stdout), "(enforced)") || strings.Contains(r.stdout, "not enforced") {
+		t.Errorf("stdout does not end (enforced):\n%s", r.stdout)
+	}
+	if len(annLines(r, "::warning::")) != 0 {
+		t.Errorf("warning on a closed nightly:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnAnUnexpectedReadError(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "closed": {invClosed}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "pr-7-gateway-token"}, nlGoodSvcs(),
+				map[string]string{"denied": "", "accesserr": "nightly-hubspot-token\n"})
+			if r.code == 0 {
+				t.Fatalf("a read error passed:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if len(errLines(r, "could not check nightly-hubspot-token", "INTERNAL")) != 1 {
+				t.Errorf("want one ::error:: line with the secret name and the error:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("success line printed:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnAnIdentityAnswer(t *testing.T) {
+	t.Parallel()
+	for _, email := range []string{runNightlySA, deployNightlySA} {
+		for _, code := range []string{"403", "404", "500", "000", "401", "429", "302", "201"} {
+			t.Run(email+"/"+code, func(t *testing.T) {
+				t.Parallel()
+				r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{"curl-code-" + nightlyIdentityEP(email): code})
+				if r.code == 0 {
+					t.Fatalf("an answer of HTTP %s passed:\n%s\n%s", code, r.stdout, r.stderr)
+				}
+				if len(errLines(r, email, "HTTP "+code)) == 0 {
+					t.Errorf("no ::error:: line names %s and HTTP %s:\n%s\n%s", email, code, r.stdout, r.stderr)
+				}
+				if strings.Contains(r.stdout, imgHeld) {
+					t.Errorf("success line printed:\n%s", r.stdout)
+				}
+			})
+		}
+	}
+}
+
+func TestPreviewInvariantsReportTheNightlyAndTheImageProblemsTogether(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"denied": "",
+		"curl-body-" + nightlyIdentityEP(runNightlySA): permBody("iam.serviceAccounts.actAs"),
+		"curl-body-" + imagesEP:                        permBody("artifactregistry.tags.update"),
+	}
+	have := []string{"nightly-hubspot-token", "pr-7-gateway-token"}
+	r := runInvariantsEnv(t, []string{invClosed}, have, nlGoodSvcs(), files)
+	if r.code != 1 || len(errLines(r)) != 3 {
+		t.Errorf("enforced: exit %d with %d ::error:: lines, want exit 1 and 3:\n%s\n%s", r.code, len(errLines(r)), r.stdout, r.stderr)
+	}
+	for _, w := range [][]string{{"nightly-hubspot-token"}, {"iam.serviceAccounts.actAs", "run-nightly@"}, {"artifactregistry.tags.update", prodImagesRepo(t)}} {
+		if len(errLines(r, w...)) != 1 {
+			t.Errorf("want one ::error:: line with %v:\n%s\n%s", w, r.stdout, r.stderr)
+		}
+	}
+	// Both nightly identities are reported in one run, not just the first.
+	both := map[string]string{
+		"curl-body-" + nightlyIdentityEP(runNightlySA):    permBody("iam.serviceAccounts.actAs"),
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.getAccessToken"),
+	}
+	b := runInvariantsEnv(t, []string{invClosed}, have, nlGoodSvcs(), both)
+	if len(errLines(b, "iam.serviceAccounts.actAs", "run-nightly@")) != 1 || len(errLines(b, "iam.serviceAccounts.getAccessToken", "deploy-nightly@")) != 1 {
+		t.Errorf("want one ::error:: line per held nightly identity:\n%s\n%s", b.stdout, b.stderr)
+	}
+	// Soft mode: the read is a warning, and the other two problems still fail the run.
+	s := runInvariantsEnv(t, nil, have, nlGoodSvcs(), files)
+	if s.code != 1 || len(errLines(s)) != 2 || len(annLines(s, "::warning::", "nightly-hubspot-token")) != 1 {
+		t.Errorf("soft: exit %d, %d ::error:: lines, %d warnings; want exit 1, 2 errors, 1 warning:\n%s\n%s",
+			s.code, len(errLines(s)), len(annLines(s, "::warning::", "nightly-hubspot-token")), s.stdout, s.stderr)
+	}
+}
+
+const (
+	runNightlySA = "run-nightly@ascomply-preview.iam.gserviceaccount.com"
+	runSlot1SA   = "run-slot-1@ascomply-preview.iam.gserviceaccount.com"
+	runSlot2SA   = "run-slot-2@ascomply-preview.iam.gserviceaccount.com"
+)
+
+func nightlyBindLine(secret string) string {
+	return "secrets add-iam-policy-binding " + secret + " --project ascomply-preview --member serviceAccount:" + runNightlySA +
+		" --role roles/secretmanager.secretAccessor --condition=None"
+}
+
+// nightlySecretNames is every secret `secrets nightly` makes.
+func nightlySecretNames(t *testing.T) []string {
+	t.Helper()
+	return previewList(t, "PR_SECRETS")
+}
+
+func TestPreviewNightlyRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	env := []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	svcs := prAll(t)
+	dep := runPreviewEnv(t, env, nil, append([]string{"deploy", "nightly", "abc123"}, svcs...)...)
+	mig := runPreviewEnv(t, env, nil, "migrate", "nightly", "abc123")
+	if dep.code != 0 || mig.code != 0 {
+		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+	}
+	n := 0
+	for _, l := range append(nonBlankLines(dep.file(t, "calls")), nonBlankLines(mig.file(t, "calls"))...) {
+		if !strings.HasPrefix(l, "run deploy ") && !strings.HasPrefix(l, "run jobs deploy ") {
+			continue
+		}
+		n++
+		if got := flagValue(l, "--service-account"); got != runNightlySA {
+			t.Errorf("--service-account = %q, want %q:\n%s", got, runNightlySA, l)
+		}
+	}
+	if n != len(svcs)+1 {
+		t.Errorf("%d deploy lines, want %d services + the migrate job", n, len(svcs))
+	}
+}
+
+func TestPreviewPRRunsAsItsSlotsRuntime(t *testing.T) {
+	t.Parallel()
+	svcs := prAll(t)
+	for name, c := range map[string]struct {
+		setup func(dir string)
+		want  string
+	}{
+		"slot-1": {nil, runSlot1SA},
+		"slot-2": {slots(t, map[string]string{"slot-2": "7"}, nil), runSlot2SA},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dep := runPreview(t, c.setup, append([]string{"deploy", "7", "abc123"}, svcs...)...)
+			mig := runPreview(t, c.setup, "migrate", "7", "abc123")
+			if dep.code != 0 || mig.code != 0 {
+				t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+			}
+			n := 0
+			for _, l := range append(callLines(dep), callLines(mig)...) {
+				if strings.Contains(l, "run-preview") {
+					t.Errorf("a call names run-preview:\n%s", l)
+				}
+				if !strings.HasPrefix(l, "run deploy ") && !strings.HasPrefix(l, "run jobs deploy ") {
+					continue
+				}
+				n++
+				if got := flagValue(l, "--service-account"); got != c.want {
+					t.Errorf("--service-account = %q, want %q:\n%s", got, c.want, l)
+				}
+			}
+			if n != len(svcs)+1 {
+				t.Errorf("%d deploy lines, want %d services + the migrate job", n, len(svcs))
+			}
+		})
+	}
+}
+
+func TestPreviewPRNeverRunsAsRunNightly(t *testing.T) {
+	t.Parallel()
+	svcs := prAll(t)
+	var all []string
+	for _, args := range [][]string{append([]string{"deploy", "7", "abc123"}, svcs...), {"migrate", "7", "abc123"}, {"secrets", "7"}, {"teardown", "7"}} {
+		r := runPreview(t, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("%s exited %d: %s", args[0], r.code, r.stderr)
+		}
+		all = append(all, nonBlankLines(r.file(t, "calls"))...)
+	}
+	sa := 0
+	for _, l := range all {
+		if strings.Contains(l, "run-nightly") {
+			t.Errorf("a PR call names run-nightly:\n%s", l)
+		}
+		if got := flagValue(l, "--service-account"); got != "" {
+			sa++
+			if got != runSlot1SA {
+				t.Errorf("--service-account = %q, want %q", got, runSlot1SA)
+			}
+		}
+	}
+	if sa != len(svcs)+1 {
+		t.Errorf("%d --service-account flags, want %d", sa, len(svcs)+1)
+	}
+}
+
+func TestPreviewSecretsNightlyBindsRunNightlyOnEachSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	names := nightlySecretNames(t)
+	if len(names) != 13 {
+		t.Fatalf("%d nightly secrets, want 13", len(names))
+	}
+	for _, n := range names {
+		sec := "nightly-" + n
+		create, bind, count := -1, -1, 0
+		for i, l := range lines {
+			if strings.HasPrefix(l, "secrets create "+sec+" ") {
+				create = i
+			}
+			if l == nightlyBindLine(sec) {
+				bind = i
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, count)
+		} else if create < 0 || bind < create {
+			t.Errorf("%s: binding (line %d) is not after its create (line %d)", sec, bind, create)
+		}
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "run-preview") {
+			t.Errorf("a binding names run-preview:\n%s", l)
+		}
+		if strings.Contains(l, "set-iam-policy") {
+			t.Errorf("the nightly replaced a policy (it keeps bind_nightly):\n%s", l)
+		}
+	}
+	if n := strings.Count(strings.Join(lines, "\n"), "secrets add-iam-policy-binding "); n != len(names) {
+		t.Errorf("%d add-iam-policy-binding calls, want %d (one per secret)", n, len(names))
+	}
+}
+
+func TestPreviewSecretsNightlyBindsAnExistingSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-database-app-url\n")
+	}, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 11 {
+		t.Errorf("%d creates, want 11 (the 13 secrets less the 2 that exist)", got)
+	}
+	for _, sec := range []string{"nightly-gateway-token", "nightly-database-app-url"} {
+		if strings.Contains(calls, "secrets create "+sec+" ") {
+			t.Errorf("%s exists but was created", sec)
+		}
+		if got := strings.Count(calls, nightlyBindLine(sec)+"\n"); got != 1 {
+			t.Errorf("%s: %d binding lines, want 1", sec, got)
+		}
+	}
+}
+
+func TestPreviewSecretsNightlyFailsWhenABindingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-add-iam-policy-binding", "") }, "secrets", "nightly")
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create nightly-"); got != 1 {
+		t.Errorf("%d creates before the stop, want 1", got)
+	}
+	if r.code == 0 {
+		t.Errorf("secrets nightly exited 0 after a failed binding")
+	}
+	if !strings.Contains(r.stderr, "::error::cannot give run-nightly access to nightly-") {
+		t.Errorf("stderr lacks the binding error:\n%s", r.stderr)
+	}
+	if got := strings.Count(calls, "secrets add-iam-policy-binding"); got != 1 {
+		t.Errorf("%d binding attempts, want 1 (the run stops at the first failure)", got)
+	}
+}
+
+// slotPolicy parses the policy that bind_slot handed to set-iam-policy for a secret.
+type slotPolicy struct {
+	Bindings []struct {
+		Role    string   `json:"role"`
+		Members []string `json:"members"`
+	} `json:"bindings"`
+}
+
+// wantSlotPolicy fails unless the secret's policy is exactly one secretAccessor binding for sa.
+func wantSlotPolicy(t *testing.T, r previewRun, secret, sa string) {
+	t.Helper()
+	if !r.exists("setpolicy-" + secret) {
+		t.Errorf("%s: no policy was set", secret)
+		return
+	}
+	var p slotPolicy
+	if err := json.Unmarshal([]byte(r.file(t, "setpolicy-"+secret)), &p); err != nil {
+		t.Errorf("%s: policy is not JSON: %v", secret, err)
+		return
+	}
+	if len(p.Bindings) != 1 {
+		t.Errorf("%s: %d bindings, want 1: %+v", secret, len(p.Bindings), p.Bindings)
+		return
+	}
+	if b := p.Bindings[0]; b.Role != "roles/secretmanager.secretAccessor" || !slices.Equal(b.Members, []string{"serviceAccount:" + sa}) {
+		t.Errorf("%s: binding %+v, want secretAccessor for serviceAccount:%s only", secret, b, sa)
+	}
+}
+
+func TestPreviewSecretsPRSetsEachPolicyToItsSlotsRuntime(t *testing.T) {
+	t.Parallel()
+	for name, setup := range map[string]func(dir string){
+		"new":      nil,
+		"existing": func(dir string) { writeIn(t, dir, "have", allPRSecrets(t)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, setup, "secrets", "7")
+			if r.code != 0 {
+				t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+			}
+			lines := callLines(r)
+			names := previewList(t, "PR_SECRETS")
+			if len(names) != 13 {
+				t.Fatalf("%d PR secrets, want 13", len(names))
+			}
+			for _, n := range names {
+				sec := "pr-7-" + n
+				var sets []int
+				for i, l := range lines {
+					if strings.HasPrefix(l, "secrets set-iam-policy "+sec+" ") {
+						sets = append(sets, i)
+					}
+				}
+				if len(sets) != 1 {
+					t.Errorf("%s: %d set-iam-policy calls, want 1", sec, len(sets))
+					continue
+				}
+				if create := callIdx(lines, "secrets create "+sec+" "); name == "new" && (create < 0 || sets[0] < create) {
+					t.Errorf("%s: policy (call %d) is not after its create (call %d)", sec, sets[0], create)
+				}
+				wantSlotPolicy(t, r, sec, runSlot1SA)
+			}
+			if i := callIdx(lines, "add-iam-policy-binding"); i >= 0 {
+				t.Errorf("a PR secret got an additive binding: %s", lines[i])
+			}
+		})
+	}
+}
+
+func TestPreviewSecretsPRReplacesAStaleSlotBinding(t *testing.T) {
+	t.Parallel()
+	for name, files := range map[string]map[string]string{"existing": {"have": allPRSecrets(t)}, "new": nil} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, files), "secrets", "7")
+			if r.code != 0 {
+				t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+			}
+			names := previewList(t, "PR_SECRETS")
+			if len(names) == 0 {
+				t.Fatal("no PR secrets")
+			}
+			for _, n := range names {
+				sec := "pr-7-" + n
+				wantSlotPolicy(t, r, sec, runSlot2SA)
+				if r.exists("setpolicy-"+sec) && strings.Contains(r.file(t, "setpolicy-"+sec), "run-slot-1") {
+					t.Errorf("%s: the policy still names run-slot-1", sec)
+				}
+			}
+		})
+	}
+}
+
+func TestPreviewSecretsPRDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "secrets", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "::error::PR 7 holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "::error::PR 7 holds no preview slot")
+	}
+	for _, bad := range []string{"secrets create", "set-iam-policy"} {
+		if i := callIdx(callLines(r), bad); i >= 0 {
+			t.Errorf("a PR without a slot ran %q: %s", bad, callLines(r)[i])
+		}
+	}
+}
+
+func TestPreviewSecretsPRFailsWhenAPolicyCannotBeSet(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-set-iam-policy", "") }, "secrets", "7")
+	if r.code == 0 {
+		t.Errorf("secrets exited 0 after a failed set-iam-policy")
+	}
+	if !strings.Contains(r.stderr, "::error::cannot give run-slot-1 access to pr-7-") {
+		t.Errorf("stderr lacks the binding error:\n%s", r.stderr)
+	}
+	if n := strings.Count(strings.Join(callLines(r), "\n"), "secrets set-iam-policy"); n != 1 {
+		t.Errorf("%d set-iam-policy attempts, want 1 (the run stops at the first failure)", n)
+	}
+}
+
+func TestPreviewInvariantsPassWhenANightlySecretVanishes(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"unset": nil, "closed": {invClosed}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariantsEnv(t, env, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+				map[string]string{"denied": "nightly-resend-read-key\n", "missing": "nightly-hubspot-token\n"})
+			if r.code != 0 || len(errLines(r)) != 0 {
+				t.Fatalf("exit %d with ::error:: lines, want a pass:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if len(annLines(r, "::notice::", "nightly-hubspot-token")) != 1 {
+				t.Errorf("want one ::notice:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if !strings.Contains(r.stdout, imgHeld) {
+				t.Errorf("no success line:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsReportAnIdentityAnswerAndRunTheLaterChecks(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{nlKeySecret}, nlGoodSvcs(), map[string]string{
+		"curl-code-" + nightlyIdentityEP(runNightlySA):    "500",
+		"curl-body-" + nightlyIdentityEP(deployNightlySA): permBody("iam.serviceAccounts.actAs"),
+		"enabled-services": "cloudbuild.googleapis.com\n",
+	})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "run-nightly@", "HTTP 500")) != 1 {
+		t.Errorf("want one ::error:: naming run-nightly and HTTP 500:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "iam.serviceAccounts.actAs", "deploy-nightly@")) != 1 {
+		t.Errorf("the check on deploy-nightly did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if len(errLines(r, "Cloud Build")) != 1 {
+		t.Errorf("the Cloud Build check did not run:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsFailClosedOnADenialThatIsNotTheSecretRead(t *testing.T) {
+	t.Parallel()
+	r := runInvariantsWith(t, []string{"nightly-hubspot-token", "nightly-resend-read-key"}, nlGoodSvcs(),
+		map[string]string{"denied": "nightly-resend-read-key\n", "otherdenied": "nightly-hubspot-token\n"})
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(errLines(r, "could not check nightly-hubspot-token")) != 1 {
+		t.Errorf("want one ::error:: naming nightly-hubspot-token:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if strings.Contains(r.stdout, imgHeld) {
+		t.Errorf("success line printed:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewSecretsPRMakesItsMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "7")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	if tok := r.file(t, "created-pr-7-mock-issuer-token"); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(tok) {
+		t.Errorf("mock issuer token = %q, want 64 lowercase hex and no newline", tok)
+	}
+	var create bool
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.HasPrefix(l, "secrets create pr-7-mock-issuer-token ") {
+			create = true
+			if !strings.Contains(l, "--labels preview-pr=7 ") {
+				t.Errorf("create is not labelled preview-pr=7: %s", l)
+			}
+		}
+		if strings.Contains(l, "add-iam-policy-binding") && strings.Contains(l, "pr-7-mock-issuer-token") {
+			t.Errorf("the PR token is bound: %s", l)
+		}
+	}
+	if !create {
+		t.Errorf("no create call for pr-7-mock-issuer-token:\n%s", r.file(t, "calls"))
+	}
+}
+
+func TestPreviewSecretsPRKeepsAnExistingMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have", "pr-7-mock-issuer-token\n") }, "secrets", "7")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	calls := r.file(t, "calls")
+	if got := strings.Count(calls, "secrets create pr-7-"); got != len(previewList(t, "PR_SECRETS"))-1 {
+		t.Errorf("%d creates, want every PR secret but the token:\n%s", got, calls)
+	}
+	if strings.Contains(calls, "secrets create pr-7-mock-issuer-token ") || strings.Contains(calls, "versions add pr-7-mock-issuer-token ") {
+		t.Errorf("the existing token was recreated or re-versioned:\n%s", calls)
+	}
+}
+
+func TestPreviewOnlyTheGatewayMountsTheMockIssuerToken(t *testing.T) {
+	t.Parallel()
+	argv := argvBySvc(nameGoldens(t, "7")["deploy-argv"], "pr-7")
+	if len(argv) == 0 {
+		t.Fatal("no service deployed")
+	}
+	for svc, line := range argv {
+		got := flagValue(line, "--set-secrets")
+		if svc == "gateway" {
+			if !strings.Contains(got, "GATEWAY_MOCK_ISSUER_TOKEN=pr-7-mock-issuer-token:latest") {
+				t.Errorf("gateway --set-secrets = %q, want the mock issuer token", got)
+			}
+		} else if strings.Contains(got, "mock-issuer-token") {
+			t.Errorf("%s mounts the mock issuer token: %q", svc, got)
+		}
+	}
+}
+
+func TestPreviewTeardownDeletesTheTokenSecretsMade(t *testing.T) {
+	t.Parallel()
+	sec := runPreview(t, nil, "secrets", "7")
+	var have strings.Builder
+	entries, _ := os.ReadDir(sec.dir)
+	for _, e := range entries {
+		if n, ok := strings.CutPrefix(e.Name(), "created-"); ok {
+			have.WriteString(n + "\n")
+		}
+	}
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have", have.String()) }, "teardown", "7")
+	c := r.file(t, "calls")
+	for _, w := range []string{"--filter labels.preview-pr=7 ", "secrets delete pr-7-mock-issuer-token "} {
+		if !strings.Contains(c, w) {
+			t.Errorf("calls lack %q:\n%s", w, c)
+		}
+	}
+}
+
+func TestPreviewMockTokenReadsThePreviewsSecret(t *testing.T) {
+	t.Parallel()
+	const value = "shim-output"
+	for _, name := range []string{"7", "12", "nightly"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sec := previewSuffix(name) + "-mock-issuer-token"
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+sec, value) }, "mock-token", name)
+			calls := nonBlankLines(r.file(t, "calls"))
+			if r.code != 0 || r.stdout != value || len(calls) != 1 || !strings.HasPrefix(calls[0], "secrets versions access latest --secret "+sec+" ") {
+				t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+			}
+		})
+	}
+}
+
+func TestPreviewMockTokenRefusesABadName(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"", "07", "0", "pr-7", "7x", "-7", "7 8", "NIGHTLY", "nightly "} {
+		t.Run("name="+bad, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, nil, "mock-token", bad)
+			if r.code == 0 {
+				t.Errorf("mock-token %q exited 0", bad)
+			}
+			if _, err := os.Stat(filepath.Join(r.dir, "calls")); err == nil {
+				t.Errorf("mock-token %q called gcloud", bad)
+			}
+		})
+	}
+}
+
+// Each preview claims one of two document slots (secret <slot>-claim, label preview-pr=<N>) and mounts that slot's key.
+
+// slots sets the claim state of a runPreview dir: owners maps a slot to the PR whose claim carries the label.
+// runPreviewEnv gives PR 7 slot-1 by default; slots removes it first. files are extra shim switches (taken, no-objects, fail-storage-rm, ...).
+func slots(t *testing.T, owners, files map[string]string) func(dir string) {
+	t.Helper()
+	return func(dir string) {
+		if err := os.Remove(filepath.Join(dir, "owner-slot-1-claim")); err != nil {
+			t.Fatal(err)
+		}
+		for slot, pr := range owners {
+			writeIn(t, dir, "owner-"+slot+"-claim", pr)
+		}
+		for name, body := range files {
+			writeIn(t, dir, name, body)
+		}
+	}
+}
+
+// callLines are the gcloud calls of a run; a script that died before any gcloud call has none.
+func callLines(r previewRun) []string {
+	b, _ := os.ReadFile(filepath.Join(r.dir, "calls"))
+	return nonBlankLines(string(b))
+}
+
+// callIdx is the index of the first call holding every part, or -1.
+func callIdx(calls []string, parts ...string) int {
+	return slices.IndexFunc(calls, func(l string) bool {
+		for _, p := range parts {
+			if !strings.Contains(l, p) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+const (
+	slot1Docs = "gs://ascomply-preview-docs-slot-1"
+	slot2Docs = "gs://ascomply-preview-docs-slot-2"
+)
+
+func TestPreviewClaimTakesTheFirstFreeSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "claim", "7")
+	calls := callLines(r)
+	create := callIdx(calls, "secrets create slot-1-claim ", "--labels preview-pr=7")
+	ls, rm := callIdx(calls, "storage ls "+slot1Docs+"/**"), callIdx(calls, "storage rm "+slot1Docs+"/**")
+	if r.code != 0 || r.stdout != "slot=slot-1\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and slot=slot-1", r.code, r.stdout, r.stderr)
+	}
+	if create < 0 || ls < create || rm < ls {
+		t.Errorf("want create slot-1-claim, then ls, then rm of %s (indexes %d, %d, %d):\n%s", slot1Docs, create, ls, rm, strings.Join(calls, "\n"))
+	}
+	if callIdx(calls, "secrets create slot-2-claim") >= 0 {
+		t.Errorf("claim 7 also took slot-2:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+func TestPreviewClaimSkipsASlotAnotherPreviewHolds(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "5"}, map[string]string{"taken": "slot-1-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "secrets create slot-2-claim ", "--labels preview-pr=7") < 0 || callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 {
+		t.Errorf("slot-2 was not claimed and emptied:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "ascomply-preview-docs-slot-1"); i >= 0 {
+		t.Errorf("PR 5's bucket was touched: %s", calls[i])
+	}
+}
+
+// Race: both describes read NOT_FOUND, then slot-1's create loses to another PR's.
+func TestPreviewClaimLosesARaceToTheNextSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, map[string]string{"taken": "slot-1-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	first, second := callIdx(calls, "secrets create slot-1-claim "), callIdx(calls, "secrets create slot-2-claim ")
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if first < 0 || second < first {
+		t.Errorf("want create slot-1-claim, then create slot-2-claim (indexes %d, %d):\n%s", first, second, strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "ascomply-preview-docs-slot-1"); i >= 0 {
+		t.Errorf("the loser touched the winner's bucket: %s", calls[i])
+	}
+}
+
+// Boundary: the pool is two slots. The nightly's slot is never a PR's, so a third PR waits.
+func TestPreviewClaimReportsFullWhenBothSlotsAreHeld(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "5", "slot-2": "6"}, map[string]string{"taken": "slot-1-claim\nslot-2-claim\n"}), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "full=true\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and full=true", r.code, r.stdout, r.stderr)
+	}
+	if len(calls) == 0 {
+		t.Fatal("claim made no gcloud call: it never looked at the claims")
+	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "storage ") || strings.Contains(c, "nightly") || strings.HasPrefix(c, "secrets delete") {
+			t.Errorf("a full pool still ran %q", c)
+		}
+	}
+}
+
+// A claim labelled 77 or 17 is not PR 7's: the match is the whole label.
+func TestPreviewClaimDoesNotMistakeAnotherPRsClaimForItsOwn(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-1": "77", "slot-2": "17"}, map[string]string{"taken": "slot-1-claim\nslot-2-claim\n"}), "claim", "7")
+	if r.code != 0 || r.stdout != "full=true\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want full=true", r.code, r.stdout, r.stderr)
+	}
+	if i := callIdx(callLines(r), "storage "); i >= 0 {
+		t.Errorf("PR 7 emptied a bucket it does not hold: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewClaimKeepsItsSlotAndEmptiesIt(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, nil), "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-2\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want slot=slot-2", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 {
+		t.Errorf("a re-claim did not empty its bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "secrets create"); i >= 0 {
+		t.Errorf("a PR that holds a slot made a claim: %s", calls[i])
+	}
+}
+
+// Boundary: "matched no objects" is an empty bucket, not an error.
+func TestPreviewClaimTreatsNoObjectsAsEmpty(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "no-objects", "") }, "claim", "7")
+	calls := callLines(r)
+	if r.code != 0 || r.stdout != "slot=slot-1\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 and slot=slot-1", r.code, r.stdout, r.stderr)
+	}
+	if callIdx(calls, "storage ls "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never listed the bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "storage rm"); i >= 0 {
+		t.Errorf("an empty bucket was emptied: %s", calls[i])
+	}
+}
+
+func TestPreviewClaimDiesWhenEmptyingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-storage-rm", "") }, "claim", "7")
+	if callIdx(callLines(r), "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never tried to empty the bucket:\n%s", strings.Join(callLines(r), "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, slot1Docs) || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero, %s named, no slot=", r.code, r.stdout, r.stderr, slot1Docs)
+	}
+}
+
+func TestPreviewClaimDiesWhenTheListingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-storage-ls", "") }, "claim", "7")
+	calls := callLines(r)
+	if callIdx(calls, "storage ls "+slot1Docs+"/**") < 0 {
+		t.Errorf("claim never listed the bucket:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "storage rm"); i >= 0 {
+		t.Errorf("an unreadable bucket was emptied blind: %s", calls[i])
+	}
+	if r.code == 0 || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, want non-zero and no slot=", r.code, r.stdout)
+	}
+}
+
+func TestPreviewClaimDiesOnACreateError(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, map[string]string{"fail-secrets-create": ""}), "claim", "7")
+	calls := callLines(r)
+	if n := strings.Count(strings.Join(calls, "\n"), "secrets create"); n != 1 {
+		t.Errorf("%d create calls, want exactly 1: an error that is not a conflict is no reason to try the next slot:\n%s", n, strings.Join(calls, "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, "slot-1-claim") || strings.Contains(r.stdout, "slot=") || strings.Contains(r.stdout, "full=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero naming slot-1-claim, with no verdict", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewClaimRefusesTheNightly(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "claim", "nightly")
+	if r.code == 0 || !strings.Contains(r.stderr, "nightly") || strings.Contains(r.stdout, "slot=") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want a refusal that names the nightly", r.code, r.stdout, r.stderr)
+	}
+	if i := callIdx(callLines(r), "secrets"); i >= 0 {
+		t.Errorf("claim nightly reached Secret Manager: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewUsageListsClaim(t *testing.T) {
+	t.Parallel()
+	if r := runPreview(t, nil); r.code == 0 || !strings.Contains(r.stderr, "|claim|") {
+		t.Errorf("exit %d, usage %q lacks claim", r.code, r.stderr)
+	}
+}
+
+func TestPreviewBucketNeedsAClaim(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "bucket", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	if i := callIdx(callLines(r), "buckets create"); i >= 0 {
+		t.Errorf("a PR without a slot got a bucket: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewBucketChecksTheSlotsBucketAndMakesNone(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", slot1Docs+"\n") }, "bucket", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage buckets describe "+slot1Docs) < 0 {
+		t.Errorf("exit %d, stderr %q, want a describe of %s:\n%s", r.code, r.stderr, slot1Docs, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"buckets create", "buckets update", "--update-labels"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("bucket made or relabelled a bucket: %s", calls[i])
+		}
+	}
+}
+
+func TestPreviewBucketDiesWhenTheSlotBucketIsMissing(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "none\n") }, "bucket", "7")
+	if r.code == 0 || !strings.Contains(r.stderr, "ascomply-preview-docs-slot-1") || !strings.Contains(r.stderr, "preview.tf") {
+		t.Errorf("exit %d, stderr %q, want non-zero naming the slot bucket and invoice-os-infra preview.tf", r.code, r.stderr)
+	}
+	if i := callIdx(callLines(r), "buckets create"); i >= 0 {
+		t.Errorf("a missing slot bucket was created: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewBucketNightlyUsesItsFixedSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "gs://ascomply-preview-docs-nightly\n") }, "bucket", "nightly")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage buckets describe gs://ascomply-preview-docs-nightly") < 0 {
+		t.Errorf("exit %d, stderr %q, want a describe of the nightly slot bucket:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"secrets describe", "buckets create", "--update-labels"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("bucket nightly ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+func TestPreviewDeployDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "deploy", "7", "abc123", "invoice")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	if i := callIdx(callLines(r), "run deploy"); i >= 0 {
+		t.Errorf("a PR without a slot deployed: %s", callLines(r)[i])
+	}
+}
+
+func TestPreviewMigrateDiesWithoutASlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "migrate", "7", "abc123")
+	if r.code == 0 || !strings.Contains(r.stderr, "holds no preview slot") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "holds no preview slot")
+	}
+	for _, bad := range []string{"run jobs deploy", "run jobs execute"} {
+		if i := callIdx(callLines(r), bad); i >= 0 {
+			t.Errorf("a PR without a slot ran %q: %s", bad, callLines(r)[i])
+		}
+	}
+}
+
+func TestPreviewServicesMountTheirSlotsKey(t *testing.T) {
+	t.Parallel()
+	svcs := []string{"invoice", "submission", "worker"}
+	for _, c := range []struct {
+		name   string
+		owners map[string]string
+		slot   string
+	}{
+		{"the default slot-1", map[string]string{"slot-1": "7"}, "slot-1"},
+		{"slot-2, with slot-1 held by PR 5", map[string]string{"slot-1": "5", "slot-2": "7"}, "slot-2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			setup := slots(t, c.owners, nil)
+			dep := runPreview(t, setup, append([]string{"deploy", "7", "abc123"}, svcs...)...)
+			mig := runPreview(t, setup, "migrate", "7", "abc123")
+			if dep.code != 0 || mig.code != 0 {
+				t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+			}
+			wantKeys := []string{"DOCUMENT_ACCESS_KEY_ID=" + c.slot + "-document-access-key-id:latest", "DOCUMENT_SECRET_ACCESS_KEY=" + c.slot + "-document-secret-key:latest"}
+			wantBucket := "DOCUMENT_BUCKET: ascomply-preview-docs-" + c.slot + "\n"
+			argv := deployCalls(t, dep, "7")
+			mounts := map[string]string{"migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-pr-7 ")]}
+			envs := map[string]string{"migrate": mig.file(t, "env-job-migrate-pr-7")}
+			for _, svc := range svcs {
+				mounts[svc], envs[svc] = argv[svc], dep.file(t, "env-"+svc+"-pr-7")
+			}
+			if len(mounts) != len(svcs)+1 {
+				t.Fatalf("%d mounts seen, want %d", len(mounts), len(svcs)+1)
+			}
+			for name, line := range mounts {
+				set := flagValue(line, "--set-secrets")
+				for _, w := range wantKeys {
+					if !strings.Contains(","+set+",", ","+w+",") {
+						t.Errorf("%s --set-secrets lacks %s: %s", name, w, set)
+					}
+				}
+				if strings.Contains(set, "=document-access-key-id:") || strings.Contains(set, "=document-secret-key:") {
+					t.Errorf("%s still mounts the shared key: %s", name, set)
+				}
+				if !strings.Contains(envs[name], wantBucket) {
+					t.Errorf("%s env lacks %q:\n%s", name, wantBucket, envs[name])
+				}
+			}
+		})
+	}
+}
+
+// Boundary: the nightly takes no claim, so it reads no secret to find its slot.
+func TestPreviewNightlyMountsItsOwnSlotKey(t *testing.T) {
+	t.Parallel()
+	env := []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	dep := runPreviewEnv(t, env, nil, "deploy", "nightly", "abc123", "invoice")
+	mig := runPreviewEnv(t, env, nil, "migrate", "nightly", "abc123")
+	if dep.code != 0 || mig.code != 0 {
+		t.Fatalf("deploy exit %d (%s), migrate exit %d (%s)", dep.code, dep.stderr, mig.code, mig.stderr)
+	}
+	svcs := deployCalls(t, dep, "nightly") // nightly services carry no -pr- suffix: keys are invoice-nightly, ...
+	if _, ok := svcs["invoice-nightly"]; !ok || len(svcs) == 0 {
+		t.Fatalf("no invoice-nightly deploy call: %v", svcs)
+	}
+	for name, line := range map[string]string{"invoice": svcs["invoice-nightly"], "migrate": callLines(mig)[callIdx(callLines(mig), "run jobs deploy migrate-nightly ")]} {
+		set := flagValue(line, "--set-secrets")
+		for _, w := range []string{"DOCUMENT_ACCESS_KEY_ID=nightly-document-access-key-id:latest", "DOCUMENT_SECRET_ACCESS_KEY=nightly-document-secret-key:latest"} {
+			if !strings.Contains(","+set+",", ","+w+",") {
+				t.Errorf("%s --set-secrets lacks %s: %s", name, w, set)
+			}
+		}
+	}
+	for name, e := range map[string]string{"invoice": dep.file(t, "env-invoice-nightly"), "migrate": mig.file(t, "env-job-migrate-nightly")} {
+		if !strings.Contains(e, "DOCUMENT_BUCKET: ascomply-preview-docs-nightly\n") {
+			t.Errorf("%s env lacks the nightly slot bucket:\n%s", name, e)
+		}
+	}
+	for _, r := range []previewRun{dep, mig} {
+		if i := callIdx(callLines(r), "secrets describe"); i >= 0 {
+			t.Errorf("the nightly looked up a claim: %s", callLines(r)[i])
+		}
+	}
+}
+
+func TestPreviewTeardownEmptiesTheSlotThenReleasesIt(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n") }, "teardown", "7")
+	calls := callLines(r)
+	rm, tok := callIdx(calls, "storage rm "+slot1Docs+"/**"), callIdx(calls, "secrets delete pr-7-gateway-token")
+	claim := callIdx(calls, "secrets delete slot-1-claim ")
+	if r.code != 0 || r.stdout != "PR 7: preview deleted\n" {
+		t.Errorf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if rm < 0 || tok < 0 || claim < 0 || rm > claim || tok > claim {
+		t.Errorf("want the slot emptied and every other secret deleted before slot-1-claim (indexes rm %d, token %d, claim %d):\n%s", rm, tok, claim, strings.Join(calls, "\n"))
+	}
+	if n := strings.Count(strings.Join(calls, "\n"), "secrets delete slot-1-claim "); n != 1 {
+		t.Errorf("slot-1-claim deleted %d times, want once (the label loop skips it)", n)
+	}
+	if reach := callIdx(calls, "run jobs delete reach-pr-7 "); reach < 0 || reach > claim {
+		t.Errorf("want the reach job deleted before slot-1-claim (indexes reach %d, claim %d):\n%s", reach, claim, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"buckets delete", "rm --recursive gs://ascomply-preview-docs-", "slot-2"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("teardown ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+// A surviving pr-<N>-* secret is bound to the slot's runtime, so the next PR must not inherit the slot.
+func TestPreviewTeardownKeepsTheClaimWhenASecretDeleteFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\npr-7-s2s-token\nslot-1-claim\n")
+		writeIn(t, dir, "fail-secrets-delete", "")
+	}, "teardown", "7")
+	calls := callLines(r)
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	for _, sec := range []string{"pr-7-gateway-token", "pr-7-s2s-token"} {
+		if callIdx(calls, "secrets delete "+sec+" ") < 0 {
+			t.Errorf("no delete was attempted for %s:\n%s", sec, strings.Join(calls, "\n"))
+		}
+	}
+	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+		t.Errorf("the claim was released over a surviving secret: %s", calls[i])
+	}
+}
+
+func TestPreviewTeardownKeepsTheClaimWhenEmptyingFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+		writeIn(t, dir, "fail-storage-rm", "")
+		writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n") // no legacy bucket: its rm would fail too
+	}, "teardown", "7")
+	calls := callLines(r)
+	if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("teardown never tried to empty the slot:\n%s", strings.Join(calls, "\n"))
+	}
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	if callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+		t.Errorf("a failed empty stopped the other secrets going:\n%s", strings.Join(calls, "\n"))
+	}
+	if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+		t.Errorf("the claim was released over a bucket that still holds objects: %s", calls[i])
+	}
+}
+
+// A service or job that stays behind still mounts the slot's key and bucket: the sweeper retries, so the claim stays.
+func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ fail, exists string }{
+		{"fail-run-services-delete", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n"},
+		{"fail-run-jobs-delete", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n"},
+		{"fail-run-jobs-delete", "gateway-pr-7\nreach-pr-7\n"}, // only the reach job's delete fails
+	} {
+		fail, exists := c.fail, c.exists
+		t.Run(fail+"/"+strings.ReplaceAll(strings.TrimSpace(exists), "\n", ","), func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, fail, "")
+				writeIn(t, dir, "exists", exists)
+			}, "teardown", "7")
+			calls := callLines(r)
+			if callIdx(calls, "run jobs delete reach-pr-7 ") < 0 {
+				t.Errorf("a present reach-pr-7 was not deleted:\n%s", strings.Join(calls, "\n"))
+			}
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released over a leftover service or job: %s", calls[i])
+			}
+			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+				t.Errorf("a failed delete stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// A describe that fails for any reason but "resource absent" may hide a running service: the claim stays.
+func TestPreviewTeardownKeepsTheClaimWhenADescribeFails(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"gateway-pr-7", "migrate-pr-7", "reach-pr-7"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, "describe-run-error", name+"\n")
+				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released over an unreadable service or job: %s", calls[i])
+			}
+			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
+				t.Errorf("a failed describe stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// A failed secrets list or bucket describe may hide leftovers: exit non-zero and keep the claim.
+func TestPreviewTeardownFailsWhenAListOrBucketDescribeFails(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []string{"fail-secrets-list", "fail-storage-buckets-describe"} {
+		t.Run(fail, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, fail, "")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+				t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released after a failed listing: %s", calls[i])
+			}
+			if fail == "fail-storage-buckets-describe" && !strings.Contains(r.stderr, "could not describe") {
+				t.Errorf("stderr %q, want the describe failure named", r.stderr)
+			}
+		})
+	}
+}
+
+// An empty slot would name ascomply-preview-docs- and -document-access-key-id.
+func TestPreviewServiceConfigRefusesAnEmptySlot(t *testing.T) {
+	t.Parallel()
+	const prog = `source "$0" budget >/dev/null; set +e; unset SLOT
+(env_file 7 invoice "$1"); echo "env=$?"
+(secrets_of 7 invoice); echo "secrets=$?"
+SLOT=slot-1; (secrets_of 7 invoice); echo "claimed=$?"`
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "-c", prog, filepath.Join(repoRoot(t), "scripts/ci/preview.sh"), filepath.Join(dir, "env.yaml"))
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "claimed=0") || strings.Contains(stdout, "env=0") || strings.Contains(stdout, "secrets=0") {
+		t.Errorf("want both calls to fail without a slot and to pass with one: stdout %q, stderr %q", stdout, stderr)
+	}
+	if strings.Contains(stdout, "ascomply-preview-docs-\n") || strings.Contains(stdout, "=-document-") {
+		t.Errorf("an empty slot reached the output: %q", stdout)
+	}
+}
+
+// PR 7 holds slot-2 while PR 5 holds slot-1: the teardown leaves PR 5's slot alone.
+func TestPreviewTeardownReleasesOnlyItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		slots(t, map[string]string{"slot-1": "5", "slot-2": "7"}, nil)(dir)
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-2-claim\n")
+	}, "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage rm "+slot2Docs+"/**") < 0 || callIdx(calls, "secrets delete slot-2-claim ") < 0 {
+		t.Errorf("exit %d, stderr %q, want slot-2 emptied and its claim released:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"ascomply-preview-docs-slot-1", "secrets delete slot-1"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("PR 7's teardown touched PR 5's slot: %s", calls[i])
+		}
+	}
+}
+
+// Boundary: a PR that never claimed leaves every slot alone.
+func TestPreviewTeardownWithoutAClaimTouchesNoSlot(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, nil, nil), "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 {
+		t.Errorf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(strings.Join(calls, "\n"), "slot-1-claim") {
+		t.Errorf("teardown never looked for the PR's claim:\n%s", strings.Join(calls, "\n"))
+	}
+	for _, bad := range []string{"secrets delete slot-", "secrets delete -claim", "ascomply-preview-docs-"} {
+		if i := callIdx(calls, bad); i >= 0 {
+			t.Errorf("teardown ran %q: %s", bad, calls[i])
+		}
+	}
+}
+
+// Legacy: a preview built before this change still has its own bucket ([S8]).
+func TestPreviewTeardownStillDeletesALegacyBucket(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "exists", "gs://ascomply-preview-pr-7\n") }, "teardown", "7")
+	calls := callLines(r)
+	if r.code != 0 || callIdx(calls, "storage rm --recursive gs://ascomply-preview-pr-7") < 0 {
+		t.Errorf("exit %d, stderr %q, want the legacy bucket deleted:\n%s", r.code, r.stderr, strings.Join(calls, "\n"))
+	}
+	if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 {
+		t.Errorf("the slot was not emptied beside the legacy bucket:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+// The sweeper finds a closed PR's slot through its label: a PR whose only resource is the claim is still listed, so a failed empty is retried.
+func TestPreviewPrsListsAPRThatHoldsOnlyItsClaim(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", "7 2026-11-17T00:00:00\n") }, "prs")
+	if r.code != 0 || !strings.HasPrefix(r.stdout, "7 ") {
+		t.Errorf("exit %d, stdout %q, want PR 7 listed", r.code, r.stdout)
+	}
+}
+
+// A describe error is not "no claim": a holder must not take a second slot, nor lose its claim over a full bucket.
+func TestPreviewClaimDiesWhenAClaimCannotBeRead(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, slots(t, map[string]string{"slot-2": "7"}, map[string]string{"describe-error": "slot-1-claim\n"}), "claim", "7")
+	calls := strings.Join(callLines(r), "\n")
+	if r.code == 0 || strings.Contains(r.stdout, "slot=") || strings.Contains(r.stdout, "full=") || !strings.Contains(r.stderr, "slot-1-claim") {
+		t.Errorf("exit %d, stdout %q, stderr %q, want non-zero naming slot-1-claim, with no verdict", r.code, r.stdout, r.stderr)
+	}
+	if strings.Contains(calls, "secrets create") || strings.Contains(calls, "storage rm") {
+		t.Errorf("claim acted on an unreadable claim:\n%s", calls)
+	}
+}
+
+func TestPreviewTeardownKeepsTheClaimWhenItCannotBeRead(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+		writeIn(t, dir, "describe-error", "slot-1-claim\n")
+		writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\n")
+	}, "teardown", "7")
+	calls := strings.Join(callLines(r), "\n")
+	if r.code == 0 || !strings.Contains(r.stderr, "left something behind") {
+		t.Errorf("exit %d, stderr %q, want non-zero with %q", r.code, r.stderr, "left something behind")
+	}
+	if strings.Contains(calls, "secrets delete slot-1-claim") {
+		t.Errorf("the claim was released over a read error:\n%s", calls)
+	}
+	if !strings.Contains(calls, "secrets delete pr-7-gateway-token") {
+		t.Errorf("a read error stopped the other secrets going:\n%s", calls)
+	}
+}
+
+// reach: a PR run proves its slot runtime reads only its own secrets.
+
+const reachOK = "Runtime reach holds for PR 7"
+
+func linesOf(names []string) string { return strings.Join(names, "\n") + "\n" }
+
+// notDenied lists the fixture's denied names without drop: the shim answers `denied` before `missing` and `accesserr`.
+func notDenied(t *testing.T, drop ...string) string {
+	t.Helper()
+	_, denied := reachNames(t)
+	return linesOf(slices.DeleteFunc(denied, func(d string) bool { return slices.Contains(drop, d) }))
+}
+
+// hasName reports whether text holds name as a whole secret name, not inside a longer one.
+func hasName(text, name string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9-])` + regexp.QuoteMeta(name) + `($|[^A-Za-z0-9-])`).MatchString(text)
+}
+
+// iamPolicy is a policy with one secretAccessor binding for the named service accounts.
+func iamPolicy(sas ...string) string {
+	ms := make([]string, len(sas))
+	for i, s := range sas {
+		ms[i] = `"serviceAccount:` + s + `@ascomply-preview.iam.gserviceaccount.com"`
+	}
+	return `{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":[` + strings.Join(ms, ",") + `]}]}`
+}
+
+// reachNames are the secrets PR 7 on slot-1 may read, and the listed ones it may not (claims aside).
+func reachNames(t *testing.T) (allowed, denied []string) { return reachNamesFor(t, 1) }
+
+// reachNamesFor is reachNames for PR 7 holding slot-<k>; pr-70-gateway-token only resembles PR 7's names.
+func reachNamesFor(t *testing.T, k int) (allowed, denied []string) {
+	t.Helper()
+	slot, other := "slot-"+strconv.Itoa(k), "slot-"+strconv.Itoa(3-k)
+	for _, n := range previewList(t, "PR_SECRETS") {
+		allowed = append(allowed, "pr-7-"+n)
+	}
+	allowed = append(allowed, slot+"-document-access-key-id", slot+"-document-secret-key")
+	allowed = append(allowed, previewList(t, "SHARED_SECRETS")...)
+	denied = []string{"pr-9-gateway-token", "pr-9-database-app-url", "pr-70-gateway-token", other + "-document-secret-key", "postgres-password",
+		"database-superuser-url", "nightly-hubspot-token", "nightly-gateway-token"}
+	return allowed, denied
+}
+
+// reachFixture lays out a listing where only the allowed set is bound and every other read is denied. tweak edits the shim files.
+func reachFixture(t *testing.T, tweak func(files map[string]string)) func(dir string) {
+	t.Helper()
+	return reachFixtureFor(t, 1, tweak)
+}
+
+// reachFixtureFor is reachFixture for PR 7 holding slot-<k>; the caller moves the claim.
+func reachFixtureFor(t *testing.T, k int, tweak func(files map[string]string)) func(dir string) {
+	t.Helper()
+	allowed, denied := reachNamesFor(t, k)
+	shared := previewList(t, "SHARED_SECRETS")
+	runtime := "run-slot-" + strconv.Itoa(k)
+	files := map[string]string{"denied": linesOf(denied)}
+	have := slices.Concat(allowed, denied, []string{"slot-1-claim", "slot-2-claim"})
+	files["have"] = linesOf(have)
+	mine := []string{"slot-" + strconv.Itoa(k) + "-claim"}
+	for _, n := range allowed {
+		if strings.HasPrefix(n, "pr-7-") {
+			mine = append(mine, n)
+		}
+		files["iam-"+n] = iamPolicy(runtime)
+		if slices.Contains(shared, n) {
+			files["iam-"+n] = iamPolicy("run-nightly", "run-slot-1", "run-slot-2")
+		}
+	}
+	files["have-7"] = linesOf(mine)
+	if tweak != nil {
+		tweak(files)
+	}
+	return func(dir string) {
+		for name, body := range files {
+			writeIn(t, dir, name, body)
+		}
+	}
+}
+
+// runReach runs `reach 7` on the fixture with a fixed run id, so a seeded nonce can differ from it.
+func runReach(t *testing.T, tweak func(files map[string]string), env ...string) previewRun {
+	t.Helper()
+	env = append([]string{"GITHUB_RUN_ID=555", "GITHUB_RUN_ATTEMPT=1", "GITHUB_STEP_SUMMARY="}, env...)
+	return runPreviewEnv(t, env, reachFixture(t, tweak), "reach", "7")
+}
+
+func probeImage(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/ci/preview.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PROBE_IMAGE=(\S+)`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("no PROBE_IMAGE in preview.sh")
+	}
+	return string(m[1])
+}
+
+// callsWith are the gcloud calls that start with prefix.
+func callsWith(r previewRun, prefix string) []string {
+	return slices.DeleteFunc(callLines(r), func(l string) bool { return !strings.HasPrefix(l, prefix) })
+}
+
+// reachFails fails unless the run exited non-zero without the success line.
+func reachFails(t *testing.T, r previewRun) {
+	t.Helper()
+	if r.code == 0 {
+		t.Errorf("reach exited 0, want non-zero:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if strings.Contains(r.stdout+r.stderr, reachOK) {
+		t.Errorf("reach printed the success line:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+// onlyError fails unless the run printed exactly one ::error:: line and it holds every want.
+func onlyError(t *testing.T, r previewRun, want ...string) {
+	t.Helper()
+	all := errLines(r)
+	if len(all) != 1 || len(errLines(r, want...)) != 1 {
+		t.Errorf("want exactly one ::error:: line holding %q, got %q", want, all)
+	}
+}
+
+func TestPreviewReachPassesWhenOnlyItsOwnSecretsAreBound(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, nil)
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	allowed, denied := reachNames(t)
+	if want := "run-slot-1 reads " + strconv.Itoa(len(previewList(t, "PR_SECRETS"))+2+5) + " secrets"; len(allowed) != 20 || !strings.Contains(r.stdout, want) {
+		t.Errorf("stdout lacks %q (%d allowed):\n%s", want, len(allowed), r.stdout)
+	}
+	if want := strconv.Itoa(len(denied)) + " others denied"; !strings.Contains(r.stdout, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
+	}
+	calls := callLines(r)
+	deploys := callsWith(r, "run jobs deploy reach-pr-7 ")
+	if len(deploys) != 1 {
+		t.Fatalf("%d deploys of reach-pr-7, want 1:\n%s", len(deploys), strings.Join(calls, "\n"))
+	}
+	if got := flagValue(deploys[0], "--service-account"); got != "run-slot-1@ascomply-preview.iam.gserviceaccount.com" {
+		t.Errorf("--service-account = %q, want run-slot-1", got)
+	}
+	if got := flagValue(deploys[0], "--image"); got != probeImage(t) {
+		t.Errorf("--image = %q, want PROBE_IMAGE %q", got, probeImage(t))
+	}
+	if got := flagValue(deploys[0], "--image"); !regexp.MustCompile(`@sha256:[0-9a-f]{64}$`).MatchString(got) {
+		t.Errorf("--image = %q, want an image pinned by digest (a tag can change under the proof)", got)
+	}
+	if got := flagValue(deploys[0], "--labels"); got != "preview-pr=7" {
+		t.Errorf("--labels = %q, want preview-pr=7", got)
+	}
+	dep, exe := callIdx(calls, "run jobs deploy reach-pr-7 "), callIdx(calls, "run jobs execute reach-pr-7 ")
+	rd, del := callIdx(calls, "logging read "), callIdx(calls, "run jobs delete reach-pr-7 ")
+	if dep < 0 || exe < dep || rd < exe || del < rd {
+		t.Errorf("want deploy, execute, log read, delete in order (indexes %d %d %d %d):\n%s", dep, exe, rd, del, strings.Join(calls, "\n"))
+	}
+	read := map[string]bool{}
+	for _, l := range calls {
+		if !strings.Contains(l, "secrets versions access") {
+			continue
+		}
+		if !strings.HasPrefix(l, "job: ") {
+			t.Errorf("a secret was read from the runner: %s", l)
+		}
+		read[flagValue(l, "--secret")] = true
+	}
+	wantRead := append([]string{"pr-7-gateway-token"}, denied...)
+	if len(read) != len(wantRead) {
+		t.Errorf("the job read %v, want the control and the non-allowed names %v", read, wantRead)
+	}
+	for _, n := range wantRead {
+		if !read[n] {
+			t.Errorf("the job never read %s", n)
+		}
+	}
+	policy := map[string]bool{}
+	for _, l := range callsWith(r, "secrets get-iam-policy ") {
+		policy[strings.Fields(l)[2]] = true
+	}
+	for _, n := range slices.Concat(allowed, denied) {
+		if strings.HasPrefix(n, "nightly-") == policy[n] {
+			t.Errorf("policy read of %s = %v, want %v (never a nightly-* secret)", n, policy[n], !strings.HasPrefix(n, "nightly-"))
+		}
+	}
+	for _, l := range calls {
+		if strings.Contains(l, "-claim ") && (strings.Contains(l, "get-iam-policy") || strings.Contains(l, "versions access")) {
+			t.Errorf("reach touched a claim: %s", l)
+		}
+	}
+}
+
+func TestPreviewReachRefusesABindingOnAnotherPreviewsSecret(t *testing.T) {
+	t.Parallel()
+	for _, n := range []string{"pr-9-gateway-token", "pr-70-gateway-token", "slot-2-document-secret-key", "postgres-password"} {
+		t.Run(n, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["iam-"+n] = iamPolicy("run-slot-1") })
+			reachFails(t, r)
+			onlyError(t, r, n, "can read")
+			if callIdx(callLines(r), "job: secrets versions access", "--secret postgres-password") < 0 {
+				t.Errorf("a policy finding skipped the read pass:\n%s", strings.Join(callLines(r), "\n"))
+			}
+		})
+	}
+}
+
+func TestPreviewReachRefusesAForeignMemberOnItsOwnSecret(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ policy, want string }{
+		"the other slot's runtime": {iamPolicy("run-slot-1", "run-slot-2"), "run-slot-2"},
+		"everyone":                 {`{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com","allUsers"]}]}`, "allUsers"},
+		"its own runtime in a second role": {`{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com"]},` +
+			`{"role":"roles/secretmanager.admin","members":["serviceAccount:run-slot-1@ascomply-preview.iam.gserviceaccount.com"]}]}`, "run-slot-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = c.policy })
+			reachFails(t, r)
+			onlyError(t, r, "pr-7-gateway-token", "someone other than run-slot-1", c.want)
+		})
+	}
+}
+
+func TestPreviewReachRefusesAnOwnSecretItCannotRead(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-7-s2s-token"] = "{}" })
+	reachFails(t, r)
+	onlyError(t, r, "pr-7-s2s-token", "which this preview mounts")
+}
+
+func TestPreviewReachFailsClosedWhenAListingOrPolicyReadFails(t *testing.T) {
+	t.Parallel()
+	t.Run("fail-secrets-list", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["fail-secrets-list"] = "" })
+		reachFails(t, r)
+		if len(errLines(r, "could not list the secrets")) == 0 {
+			t.Errorf("no ::error::could not list the secrets:\n%s\n%s", r.stdout, r.stderr)
+		}
+		for _, p := range []string{"job: secrets versions access", "secrets versions access", "run jobs deploy"} {
+			if l := callsWith(r, p); len(l) > 0 {
+				t.Errorf("a failed listing went on to %s: %v", p, l)
+			}
+		}
+	})
+	for _, hook := range []string{"fail-list-unfiltered", "fail-list-labelled"} {
+		t.Run("only "+hook, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f[hook] = "" })
+			reachFails(t, r)
+			if len(errLines(r, "could not list the secrets")) == 0 {
+				t.Errorf("no ::error::could not list the secrets:\n%s\n%s", r.stdout, r.stderr)
+			}
+			for _, p := range []string{"job: secrets versions access", "secrets versions access", "run jobs deploy"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("one failed listing went on to %s: %v", p, l)
+				}
+			}
+		})
+	}
+	t.Run("the PR's own secrets are not listed", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["have-7"] = "slot-1-claim\n" })
+		reachFails(t, r)
+		if len(errLines(r, "pr-7-s2s-token")) == 0 {
+			t.Errorf("an unlisted own secret that run-slot-1 can read raised no ::error:: naming it:\n%s\n%s", r.stdout, r.stderr)
+		}
+	})
+	t.Run("fail-secrets-get-iam-policy", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["fail-secrets-get-iam-policy"] = "" })
+		reachFails(t, r)
+		for _, n := range []string{"pr-7-gateway-token", "postgres-password"} {
+			if len(errLines(r, "could not read the policy of "+n)) == 0 {
+				t.Errorf("no ::error::could not read the policy of %s:\n%s\n%s", n, r.stdout, r.stderr)
+			}
+		}
+	})
+}
+
+func TestPreviewReachFailsClosedOnAnUnparsablePolicy(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["iam-pr-9-gateway-token"] = "not json" })
+	reachFails(t, r)
+	onlyError(t, r, "could not read the policy of pr-9-gateway-token")
+}
+
+func TestPreviewReachSkipsASecretThatVanished(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) {
+		f["missing"] = "pr-9-database-app-url\n"
+		f["denied"] = notDenied(t, "pr-9-database-app-url")
+	})
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if n := len(annLines(r, "::notice::", "pr-9-database-app-url is gone")); n != 2 {
+		t.Errorf("%d notices that pr-9-database-app-url is gone, want 2 (policy pass and job verdict):\n%s\n%s", n, r.stdout, r.stderr)
+	}
+	if e := errLines(r); len(e) > 0 {
+		t.Errorf("a vanished secret raised %q", e)
+	}
+	t.Run("an allowed name that is gone is an error", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { f["missing"] = "pr-7-s2s-token\n" })
+		reachFails(t, r)
+		if len(errLines(r, "could not read the policy of pr-7-s2s-token")) == 0 {
+			t.Errorf("no ::error::could not read the policy of pr-7-s2s-token:\n%s\n%s", r.stdout, r.stderr)
+		}
+	})
+}
+
+func TestPreviewReachExistingSecretThatAnswersNotFoundIsNotADenial(t *testing.T) {
+	t.Parallel()
+	const n = "pr-9-database-app-url"
+	gone := func(f map[string]string) {
+		f["missing"] = n + "\n"
+		f["denied"] = notDenied(t, n)
+	}
+	t.Run("the secret exists", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { gone(f); f["owner-"+n] = "9" })
+		reachFails(t, r)
+		onlyError(t, r, "run-slot-1 may read "+n, "answered NOT_FOUND, not a denial, and the secret exists")
+	})
+	t.Run("the check fails", func(t *testing.T) {
+		t.Parallel()
+		r := runReach(t, func(f map[string]string) { gone(f); f["describe-error"] = n + "\n" })
+		reachFails(t, r)
+		onlyError(t, r, "could not check "+n, "UNAVAILABLE")
+	})
+}
+
+func TestPreviewReachPollsTheLogUntilEveryNameHasAVerdict(t *testing.T) {
+	t.Parallel()
+	t.Run("a verdict that lands on the fourth read", func(t *testing.T) {
+		t.Parallel()
+		_, denied := reachNames(t)
+		r := runReach(t, func(f map[string]string) {
+			f["logs-late"] = "4"
+			f["logs-hide"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...))
+		})
+		if r.code != 0 || len(errLines(r)) > 0 {
+			t.Errorf("exit %d, errors %q, want a pass once the verdicts land", r.code, errLines(r))
+		}
+		if n := len(callsWith(r, "logging read")); n != 4 {
+			t.Errorf("%d log reads, want 4: the poll must stop as soon as every name has a verdict", n)
+		}
+	})
+	t.Run("a name that ends another name is not logged by it", func(t *testing.T) {
+		t.Parallel()
+		longer := "pr-9-database-superuser-url"
+		r := runReach(t, func(f map[string]string) {
+			f["have"] += longer + "\n"
+			f["denied"] += longer + "\n"
+			f["logs-late"] = "2"
+			f["logs-hide"] = "database-superuser-url\n"
+		})
+		if r.code != 0 || len(errLines(r)) > 0 {
+			t.Errorf("exit %d, errors %q, want a pass: %s is not a verdict for its suffix", r.code, errLines(r), longer)
+		}
+		if n := len(callsWith(r, "logging read")); n != 2 {
+			t.Errorf("%d log reads, want 2", n)
+		}
+	})
+}
+
+func TestPreviewReachRefusesAReadableSecretOfAnotherPreview(t *testing.T) {
+	t.Parallel()
+	for _, n := range []string{"pr-9-gateway-token", "slot-2-document-secret-key", "nightly-hubspot-token", "postgres-password"} {
+		t.Run(n, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) { f["denied"] = notDenied(t, n) })
+			reachFails(t, r)
+			onlyError(t, r, n)
+		})
+	}
+}
+
+func TestPreviewReachFailsWhenItCannotReadItsOwnToken(t *testing.T) {
+	t.Parallel()
+	_, denied := reachNames(t)
+	r := runReach(t, func(f map[string]string) { f["denied"] = linesOf(append([]string{"pr-7-gateway-token"}, denied...)) })
+	reachFails(t, r)
+	if len(errLines(r, "run-slot-1 cannot read its own pr-7-gateway-token: denied")) != 1 {
+		t.Errorf("no ::error::run-slot-1 cannot read its own pr-7-gateway-token: denied:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+// otherRunVerdicts is a log where an earlier run's job answered for the control and every denied name.
+func otherRunVerdicts(denied []string) string {
+	out := "reach 1-1-1 pr-7-gateway-token readable\n"
+	for _, n := range denied {
+		out += "reach 1-1-1 " + n + " denied\n"
+	}
+	return out
+}
+
+func TestPreviewReachFailsClosedWhenTheJobFails(t *testing.T) {
+	t.Parallel()
+	_, denied := reachNames(t)
+	sent := len(denied) + 1
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+		check func(t *testing.T, r previewRun)
+	}{
+		{"deploy", map[string]string{"fail-run-jobs-deploy": ""}, "could not deploy the reach job", func(t *testing.T, r previewRun) {
+			for _, p := range []string{"run jobs execute", "run jobs delete reach-pr-7"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("a failed deploy went on to %s: %v", p, l)
+				}
+			}
+		}},
+		{"execute", map[string]string{"execfails": "1"}, "the reach job failed", func(t *testing.T, r previewRun) {
+			if l := callsWith(r, "logging read"); len(l) > 0 {
+				t.Errorf("a failed execution read the log: %v", l)
+			}
+			if len(callsWith(r, "run jobs delete reach-pr-7 ")) != 1 {
+				t.Errorf("a failed execution left the job:\n%s", strings.Join(callLines(r), "\n"))
+			}
+		}},
+		{"log read", map[string]string{"fail-logging-read": ""}, "could not read the reach job's log", nil},
+		{"no verdict", map[string]string{"noprobe": ""}, "no verdict for", func(t *testing.T, r previewRun) {
+			if n := len(errLines(r, "no verdict for")); n != sent {
+				t.Errorf("%d no-verdict errors, want one per sent name (%d)", n, sent)
+			}
+			calls, order := callLines(r), orderOf(r)
+			reads, gi := 0, 0
+			for i, o := range order {
+				if o != "gcloud" {
+					continue
+				}
+				if strings.HasPrefix(calls[gi], "logging read") {
+					reads++
+					if want := "sleep " + []string{"5", "10", "15", "20", "30", "40"}[min(reads-1, 5)]; i == 0 || order[i-1] != want {
+						t.Errorf("log read %d was not preceded by %s: %v", reads, want, order)
+					}
+				}
+				gi++
+			}
+			if reads != 6 {
+				t.Errorf("%d log reads, want 6", reads)
+			}
+		}},
+		{"error verdict", map[string]string{"accesserr": "pr-9-gateway-token\n", "denied": notDenied(t, "pr-9-gateway-token")}, "could not check pr-9-gateway-token", nil},
+		{"only another run's verdicts", map[string]string{"noprobe": "", "logs": otherRunVerdicts(denied)}, "no verdict for", func(t *testing.T, r previewRun) {
+			if n := len(errLines(r, "no verdict for")); n != sent {
+				t.Errorf("%d no-verdict errors, want one per sent name (%d): another run's denials stood in for this run's", n, sent)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runReach(t, func(f map[string]string) {
+				for k, v := range c.files {
+					f[k] = v
+				}
+			})
+			reachFails(t, r)
+			if len(errLines(r, c.want)) == 0 {
+				t.Errorf("no ::error:: holding %q:\n%s\n%s", c.want, r.stdout, r.stderr)
+			}
+			if c.check != nil {
+				c.check(t, r)
+			}
+		})
+	}
+}
+
+func TestPreviewReachIgnoresAVerdictFromAnotherRun(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["logs"] = "reach 1-1-1 pr-9-gateway-token readable\n" })
+	if r.code != 0 || len(errLines(r)) > 0 {
+		t.Errorf("exit %d, errors %q, want a pass: another run's line must be ignored", r.code, errLines(r))
+	}
+	if !strings.Contains(r.stdout, reachOK) {
+		t.Errorf("no success line:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewReachWarnsWhenTheJobDeleteFails(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) { f["fail-run-jobs-delete"] = "" })
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0 (teardown deletes the job):\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if len(annLines(r, "::warning::", "could not delete reach-pr-7")) != 1 {
+		t.Errorf("no ::warning::could not delete reach-pr-7:\n%s\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewReachRefusesTheNightlyAndAPRWithoutASlot(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		setup func(dir string)
+		arg   string
+		want  string
+	}{
+		{"nightly", nil, "nightly", "reach checks a PR runtime; run-nightly is read by the owner"},
+		{"no claim", slots(t, nil, nil), "7", "holds no preview slot"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, c.setup, "reach", c.arg)
+			reachFails(t, r)
+			if len(errLines(r, c.want)) == 0 {
+				t.Errorf("no ::error:: holding %q:\n%s\n%s", c.want, r.stdout, r.stderr)
+			}
+			for _, p := range []string{"secrets versions access", "secrets get-iam-policy", "run jobs deploy"} {
+				if l := callsWith(r, p); len(l) > 0 {
+					t.Errorf("a refused reach called %s: %v", p, l)
+				}
+			}
+		})
+	}
+}
+
+// reachSections splits a step summary at its `reads` and `denied` headings.
+func reachSections(s string) (reads, denied string, ok bool) {
+	lines := strings.Split(s, "\n")
+	ri, di := -1, -1
+	for i, l := range lines {
+		h := strings.ToLower(strings.TrimLeft(l, "#*-_` \t|"))
+		if ri < 0 && strings.HasPrefix(h, "reads") {
+			ri = i
+		}
+		if di < 0 && strings.HasPrefix(h, "denied") {
+			di = i
+		}
+	}
+	if ri < 0 || di < 0 {
+		return "", "", false
+	}
+	if ri < di {
+		return strings.Join(lines[ri:di], "\n"), strings.Join(lines[di:], "\n"), true
+	}
+	return strings.Join(lines[ri:], "\n"), strings.Join(lines[di:ri], "\n"), true
+}
+
+func TestPreviewReachWritesTheSummaryWithoutValues(t *testing.T) {
+	t.Parallel()
+	sentinel := "canary-" + strings.Repeat("q7", 6) // built at runtime, not a literal credential
+	summary := filepath.Join(t.TempDir(), "summary")
+	r := runReach(t, func(f map[string]string) { f["access-pr-7-gateway-token"] = sentinel }, "GITHUB_STEP_SUMMARY="+summary)
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	b, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("no step summary: %v", err)
+	}
+	reads, denied, ok := reachSections(string(b))
+	if !ok {
+		t.Fatalf("the summary has no reads and denied lists:\n%s", b)
+	}
+	allowed, deniedNames := reachNames(t)
+	for _, n := range allowed {
+		if !hasName(reads, n) || hasName(denied, n) {
+			t.Errorf("%s is not under reads only:\n%s", n, b)
+		}
+	}
+	for _, n := range deniedNames {
+		if !hasName(denied, n) || hasName(reads, n) {
+			t.Errorf("%s is not under denied only:\n%s", n, b)
+		}
+	}
+	if !r.exists("logs") || !r.exists("env-job-reach-pr-7") {
+		t.Fatalf("the job never ran: logs %v, env file %v", r.exists("logs"), r.exists("env-job-reach-pr-7"))
+	}
+	for name, text := range map[string]string{"stdout": r.stdout, "stderr": r.stderr, "summary": string(b), "job log": r.file(t, "logs"),
+		"job env file": r.file(t, "env-job-reach-pr-7"), "calls": r.file(t, "calls")} {
+		if strings.Contains(text, sentinel) {
+			t.Errorf("the secret value reached the %s", name)
+		}
+	}
+}
+
+// The runtime is the claimed slot's, whichever slot that is: the other slot's keys are the foreign ones.
+func TestPreviewReachFollowsTheSlotThePRHolds(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, tweak func(files map[string]string)) previewRun {
+		t.Helper()
+		return runPreviewEnv(t, []string{"GITHUB_RUN_ID=555", "GITHUB_RUN_ATTEMPT=1", "GITHUB_STEP_SUMMARY="}, func(dir string) {
+			slots(t, map[string]string{"slot-2": "7"}, nil)(dir)
+			reachFixtureFor(t, 2, tweak)(dir)
+		}, "reach", "7")
+	}
+	t.Run("passes as run-slot-2", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, nil)
+		if r.code != 0 {
+			t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+		}
+		if !strings.Contains(r.stdout, "run-slot-2 reads 20 secrets") {
+			t.Errorf("stdout lacks run-slot-2 reads 20 secrets:\n%s", r.stdout)
+		}
+		deploys := callsWith(r, "run jobs deploy reach-pr-7 ")
+		if len(deploys) != 1 || flagValue(deploys[0], "--service-account") != "run-slot-2@ascomply-preview.iam.gserviceaccount.com" {
+			t.Fatalf("reach job deploys %q, want one as run-slot-2", deploys)
+		}
+		read := map[string]bool{}
+		for _, l := range callsWith(r, "job: secrets versions access") {
+			read[flagValue(l, "--secret")] = true
+		}
+		if !read["slot-1-document-secret-key"] || read["slot-2-document-secret-key"] {
+			t.Errorf("the job read %v, want slot-1's key (foreign) and not slot-2's (own)", read)
+		}
+	})
+	t.Run("a binding left from the earlier slot", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, func(f map[string]string) { f["iam-pr-7-gateway-token"] = iamPolicy("run-slot-1") })
+		reachFails(t, r)
+		if len(errLines(r, "pr-7-gateway-token", "run-slot-2 cannot read")) != 1 || len(errLines(r, "pr-7-gateway-token", "run-slot-1")) == 0 {
+			t.Errorf("want the missing run-slot-2 binding and the stale run-slot-1 member named:\n%s\n%s", r.stdout, r.stderr)
+		}
+	})
+	t.Run("the other slot's key is bound", func(t *testing.T) {
+		t.Parallel()
+		r := run(t, func(f map[string]string) { f["iam-slot-1-document-secret-key"] = iamPolicy("run-slot-2") })
+		reachFails(t, r)
+		onlyError(t, r, "slot-1-document-secret-key", "can read")
+	})
+}
+
+// A refused secret's value never reaches a stream, the job's log or the env file, even on the failing path.
+func TestPreviewReachNeverPrintsTheValueOfASecretItRefuses(t *testing.T) {
+	t.Parallel()
+	sentinel := "canary-" + strings.Repeat("z4", 6) // built at runtime, not a literal credential
+	summary := filepath.Join(t.TempDir(), "summary")
+	r := runReach(t, func(f map[string]string) {
+		f["denied"] = notDenied(t, "pr-9-gateway-token")
+		f["access-pr-9-gateway-token"] = sentinel
+	}, "GITHUB_STEP_SUMMARY="+summary)
+	reachFails(t, r)
+	onlyError(t, r, "pr-9-gateway-token", "can read")
+	if !r.exists("logs") || !r.exists("env-job-reach-pr-7") {
+		t.Fatalf("the job never ran: logs %v, env file %v", r.exists("logs"), r.exists("env-job-reach-pr-7"))
+	}
+	for name, text := range map[string]string{"stdout": r.stdout, "stderr": r.stderr, "job log": r.file(t, "logs"),
+		"job env file": r.file(t, "env-job-reach-pr-7"), "calls": r.file(t, "calls")} {
+		if strings.Contains(text, sentinel) {
+			t.Errorf("the value reached the %s", name)
+		}
+	}
+	if b, err := os.ReadFile(summary); err == nil && strings.Contains(string(b), sentinel) {
+		t.Errorf("the value reached the step summary")
 	}
 }

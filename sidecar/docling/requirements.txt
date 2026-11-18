@@ -20,12 +20,9 @@ docling-parse==7.22.4
 # Pillow 12 carries 41 advisories.
 pillow==13.0.0
 
-# opencv-python-headless==5.0.0.93 (cv2, no X11/GL libs) is pinned and installed in
-# the Dockerfile instead of here -- it replaces rapidocr's transitive opencv-python
-# and needs an uninstall step between the two installs, which a requirements.txt
-# line can't express.
+# lock.sh swaps this in for rapidocr's opencv-python, which it leaves out of the lock.
+opencv-python-headless==5.0.0.93
 
-# CPU wheel index (torch is not avoidable -- layout/TableFormer need it; this avoids
-# the ~2 GB CUDA payload).
---extra-index-url https://download.pytorch.org/whl/cpu
+# torch.lock installs these from the PyTorch CPU index (the CUDA payload is ~2 GB).
 torch==2.13.0+cpu
+torchvision==0.28.0+cpu

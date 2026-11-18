@@ -730,7 +730,8 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 		for _, sc := range result {
 			subjects = append(subjects, sc.Actor)
 		}
-		labels, err := actor.Resolve(ctx, tx, subjects)
+		callerID, _ := auth.IdentityFromContext(ctx) // staff carry none: unrestricted
+		labels, err := actor.Resolve(ctx, tx, callerID.Subject, subjects)
 		if err != nil {
 			return err
 		}
@@ -844,7 +845,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 	items := []Invoice{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var conditions []string
+		// A discarded invoice is on no list and in no count.
+		conditions := []string{"status <> 'discarded'"}
 		var args []any
 
 		if f.EntityID != "" {
@@ -1040,6 +1042,7 @@ func (s *Store) ViolationSummary(ctx context.Context, importBatchIDs []string) (
 			 FROM invoices i
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
 			 WHERE i.import_batch_id = ANY($1)
+			   AND i.status <> 'discarded'
 			   AND jsonb_typeof(i.violations) = 'array'
 			   AND nullif(v->>'rule_key', '') IS NOT NULL
 			 GROUP BY 1
@@ -1732,7 +1735,7 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 // caller's transaction. Same gate, demotion and audit as Edit -- one owner, not a second
 // copy of the fix-loop rules.
 //
-// Two invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
+// Two non-discarded invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
 // picking a row: the corrected value landing on the wrong invoice is the silent-wrong
 // outcome this entry exists to prevent.
 func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentID string, in EditInput) (Invoice, error) {
@@ -1745,7 +1748,7 @@ func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentI
 
 	// LIMIT 2 is all the resolution needs: none, one, or more than one.
 	rows, err := tx.Query(ctx,
-		`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 2`,
+		`SELECT id FROM invoices WHERE source_document_id = $1 AND status <> 'discarded' ORDER BY created_at, id LIMIT 2`,
 		documentID)
 	if err != nil {
 		return Invoice{}, err

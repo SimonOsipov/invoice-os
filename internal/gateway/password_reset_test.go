@@ -264,6 +264,7 @@ func TestRequestPasswordReset_ClientGoneWritesNothing(t *testing.T) {
 	defer cancel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 
 	done := make(chan struct{})
 	go func() {
@@ -288,7 +289,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 	// pair builds both handlers over one fake; shared passes one throttle to both.
 	pair := func(fake *fakeGoTrue, log *slog.Logger, shared bool) (resend, reset http.Handler) {
 		perAddress := resendThrottle(time.Now)
-		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
+		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 		if !shared {
 			perAddress = resendThrottle(time.Now)
 		}
@@ -425,6 +426,7 @@ func TestRequestPasswordReset_NonPostIs405AtOnce(t *testing.T) {
 			defer cancel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/request-password-reset", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
 
 			start := time.Now()
 			h.ServeHTTP(rec, req)

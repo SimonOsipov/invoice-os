@@ -1,5 +1,5 @@
 # Wrapper stage. The golang tag equals go.mod; TestGoPins_RepoAgree fails when they differ.
-FROM mirror.gcr.io/library/golang:1.26.11-alpine AS wrap
+FROM mirror.gcr.io/library/golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS wrap
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/authsentry cmd/authsentry
@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -o /out/authsentry ./cmd/authsentry
 
 # The tag and digest live here only; internal/tools/idppin reads them for every other consumer.
 # ghcr.io, not Docker Hub: Docker Hub rate-limits anonymous CI pulls.
-FROM ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b
+FROM ghcr.io/supabase/auth:v2.198.0@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d
 COPY --from=wrap /out/authsentry /usr/local/bin/authsentry
 
 # Environment-independent settings. The rate-limit header is the one the gateway sends (platform.HeaderUserIP). Per-environment values and secrets are set on the Cloud Run service.
@@ -29,6 +29,11 @@ ENV GOTRUE_DB_DRIVER=postgres \
     GOTRUE_LOG_LEVEL=info \
     GOTRUE_MAILER_OTP_LENGTH=10 \
     GOTRUE_MAILER_OTP_EXP=3600 \
+    GOTRUE_PASSWORD_MIN_LENGTH=10 \
+    GOTRUE_SESSIONS_TIMEBOX=720h \
+    GOTRUE_SESSIONS_INACTIVITY_TIMEOUT=168h \
+    GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED=true \
+    GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL=0 \
     GOTRUE_RATE_LIMIT_HEADER=X-User-Address
 
 # The upstream image sets CMD ["auth"] and no ENTRYPOINT. The wrapper runs its args as GoTrue.

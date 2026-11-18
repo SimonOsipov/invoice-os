@@ -2,12 +2,12 @@ package invoice
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -55,7 +55,11 @@ func IssueNoteHandler(issue func(ctx context.Context, id string, in NoteInput) (
 		}
 
 		var req issueNoteRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

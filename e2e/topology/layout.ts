@@ -16,7 +16,7 @@
 // These helpers are deliberately NOT visual regression, which
 // .claude/rules/e2e.md bans: nothing here compares pixels or keeps a baseline.
 // They read geometry the same way an assertion reads text.
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 /**
  * Waits until web fonts have loaded and every finite animation on each element and its ancestors has finished.
@@ -281,4 +281,88 @@ export async function assertFitsNarrow(
   }
 
   return measured
+}
+
+// Settled boxes of `control` and every locator it must clear; a missing box reads as null.
+async function controlBoxes(control: Locator, container: Locator, others: Locator[]): Promise<{ c: Rect; box: Rect; others: Rect[] } | null> {
+  await settleAnimations(control, container, ...others)
+  const [c, box, ...rest] = await Promise.all([control.boundingBox(), container.boundingBox(), ...others.map((o) => o.boundingBox())])
+  if (!c || !box || rest.some((r) => !r)) return null
+  return { c, box, others: rest as Rect[] }
+}
+
+// At every width: `control` sits inside `container`, overlaps none of `others`, and (wide only) shares `centreWith`'s vertical centre.
+export async function assertControlFits(
+  page: Page,
+  control: Locator,
+  container: Locator,
+  others: Locator[],
+  centreWith: Locator | null,
+  label: string,
+): Promise<void> {
+  const entry = page.viewportSize()
+  try {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+      await page.setViewportSize({ width, height: 900 })
+      const wide = (WIDE_WIDTHS as readonly number[]).includes(width)
+      await expect
+        .poll(
+          async () => {
+            const m = await controlBoxes(control, container, centreWith && wide ? [...others, centreWith] : others)
+            if (!m) return 'an element has no box'
+            if (!enclosesRect(m.box, m.c, 1)) return 'not enclosed by its container'
+            if (m.others.slice(0, others.length).some((o) => rectsOverlap(m.c, o))) return 'overlaps a sibling'
+            if (centreWith && wide) {
+              const ref = m.others[others.length]
+              if (Math.abs(m.c.y + m.c.height / 2 - (ref.y + ref.height / 2)) > 1) return 'centre differs from its sibling'
+            }
+            return 'ok'
+          },
+          { message: `${label} at ${width}px wide`, timeout: 10_000 },
+        )
+        .toBe('ok')
+      if (wide) {
+        await assertPageDoesNotScrollSideways(page, `${label} at ${width}px wide`)
+      } else {
+        await assertControlAddsNoOverflow(page, control, `${label} at ${width}px wide`, width)
+      }
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
+/** Overflow the page column carries without the control, and what the control adds to it. */
+export function controlOverflow(shown: number, hidden: number): { hiddenOverflow: number; addedByControl: number } {
+  return { hiddenOverflow: hidden, addedByControl: shown - hidden }
+}
+
+// Phone: the page may already overflow for another reason; the control must add at most 1px. The overflow with the control hidden is attached.
+async function assertControlAddsNoOverflow(page: Page, control: Locator, label: string, width: number): Promise<void> {
+  const column = page.locator('main.pf-main .pf-scroll')
+  const read = () =>
+    column.evaluate(async (el) => {
+      await el.ownerDocument.fonts.ready
+      return el.scrollWidth - el.clientWidth
+    })
+  const shown = await read()
+  let hidden: number
+  await control.evaluate((el) => {
+    el.dataset.prevDisplay = el.style.display
+    el.style.display = 'none'
+  })
+  try {
+    hidden = await read()
+  } finally {
+    await control.evaluate((el) => {
+      el.style.display = el.dataset.prevDisplay ?? ''
+      delete el.dataset.prevDisplay
+    })
+  }
+  const { hiddenOverflow, addedByControl } = controlOverflow(shown, hidden)
+  await test.info().attach(`control-overflow-${width}.json`, {
+    body: JSON.stringify({ label, width, shownOverflow: shown, hiddenOverflow, addedByControl }, null, 2),
+    contentType: 'application/json',
+  })
+  expect(addedByControl, `${label}: showing the control widens the page column by ${addedByControl}px (shown ${shown}, hidden ${hiddenOverflow})`).toBeLessThanOrEqual(1)
 }

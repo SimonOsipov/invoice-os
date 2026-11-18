@@ -23,6 +23,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jsonbody"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -37,6 +38,12 @@ import (
 // writeJSON(w, status, entity)), so neither needs a response DTO. Get and List
 // do wrap: getResponse adds qr_png_base64 and the action flags, listItem adds
 // approval -- both EMBED Invoice, so its keys keep their names and order.
+
+// maxLineItems matches the extraction route's maxPostedLines.
+const (
+	maxLineItems        = 999
+	msgTooManyLineItems = "line_items must not exceed 999"
+)
 
 // lineItemReq is one entry of createRequest.LineItems AND of editReq.LineItems
 // (INVED-01-05): the create and edit line shapes are deliberately ONE type, not
@@ -269,14 +276,14 @@ type listItem struct {
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
 	Demotion             *Demotion          `json:"demotion"`
-	// ApproveBlockedByCreator is the creator rung's own answer, last so no key moves.
+	// ApproveBlockedByCreator is the person rung's own answer (author or earlier approver), last so no key moves.
 	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
 }
 
 // --- handlers ----------------------------------------------------------------
 
 // CreateHandler returns POST /v1/invoices. Identity-first-401, then decodes
-// the snake_case wire body (400 on decode error), 400 if entity_id or
+// the snake_case wire body, 400 if entity_id or
 // invoice_number is blank (before create ever runs -- Store.Create's own
 // pre-tx guard is the defense-in-depth backstop for the importer-reuse path,
 // [D3]), calls create, maps errors via statusForErr, 201 + Invoice (with
@@ -302,7 +309,11 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 		}
 
 		var req createRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.LineItemsLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -327,6 +338,11 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 
 		if req.IssueTime != nil && !ValidIssueTime(*req.IssueTime) {
 			writeError(w, http.StatusBadRequest, IssueTimeMsg)
+			return
+		}
+
+		if len(req.LineItems) > maxLineItems {
+			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
 			return
 		}
 
@@ -441,7 +457,7 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
 // follow the same two rules, appended last of all. The approve pair comes from
 // approveGate and the reject pair from approvalGate; they differ only at the
-// creator rung (TestApproveGate_CreatorRefused).
+// person rung (TestApproveGate_CreatorRefused, TestEarlierApproverRefusal_DetailListAndDecideAgree).
 //
 // CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
 // appended last of all, from canCorrectNumber (store.go). The reason is non-null
@@ -616,9 +632,9 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 	return true, nil
 }
 
-// approveGate is approvalGate plus decideTx's creator rung, which sits after the run
+// approveGate is approvalGate plus decideTx's person rung, which sits after the run
 // rungs and before the role-holder rung. The third result is true only when the
-// creator rung refused. A CreatorErr skips the rung, so can_approve reads as the
+// person rung refused. A CreatorErr skips the rung, so can_approve reads as the
 // other rungs answer.
 func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
 	probe := f
@@ -627,7 +643,7 @@ func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
 		return false, reason, false
 	}
 	if f.CreatorErr == nil {
-		if reason, refused := f.Creator.Refusal(); refused {
+		if reason, refused := f.Creator.RefusalFor(f.CallerHoldsRole || f.CallerIsDelegate); refused {
 			return false, &reason, true
 		}
 	}
@@ -1162,7 +1178,11 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 		}
 
 		var req transitionReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1262,7 +1282,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 
 // EditHandler returns PATCH /v1/invoices/{id} (M4-05-03). Same
 // identity-first-401 order as every other handler here, then decodes the
-// snake_case wire body (400 on decode error -- including a line_items whose
+// snake_case wire body (including a line_items whose
 // JSON SHAPE is wrong, which is a decode-time 400, never a 500) into the 9
 // optional header MBS-content fields, the optional line_items array and the
 // optional invoice_number (trimmed; blank is a 400), builds EditInput from the
@@ -1282,7 +1302,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		}
 
 		var req editReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.LineItemsLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1293,6 +1317,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		}
 
 		id := r.PathValue("id")
+
+		if req.LineItems != nil && len(*req.LineItems) > maxLineItems {
+			writeError(w, http.StatusBadRequest, msgTooManyLineItems)
+			return
+		}
 
 		// Carry the three line_items states across into EditInput unchanged
 		// ([line-items-optional]). make(..., len) rather than a var+append loop is
@@ -1405,7 +1434,7 @@ const maxKeepAsIsReasonLen = 1000
 
 // KeepAsIsHandler returns POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
 // task-291). Same identity-first-401 order as every handler above, then decodes the
-// body (400 on decode error), trims the reason and 400s on empty/oversized BEFORE
+// body, trims the reason and 400s on empty/oversized BEFORE
 // keep is ever called ([must-not-allow-empty-reason], mirrors BatchSubmitHandler's own
 // pre-tx idempotency_key guard) -- keep itself never sees an empty or over-length
 // reason. Errors map via statusForErr, including the new ErrNotKeepable->409 case
@@ -1422,7 +1451,11 @@ func KeepAsIsHandler(keep func(ctx context.Context, id, reason string) (Invoice,
 		}
 
 		var req keepAsIsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1496,7 +1529,11 @@ func ResolveOutsideHandler(resolve func(ctx context.Context, id, reason string) 
 		}
 
 		var req keepAsIsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, jsonbody.DefaultLimit, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -1639,7 +1676,7 @@ const maxBatchSubmitIdempotencyKeyLen = 218
 const maxBatchSubmitBodyBytes = 64 * 1024
 
 // BatchSubmitHandler returns POST /v1/invoices/submissions (task-231, [trigger-surface]).
-// Identity-first-401 (same order as every handler above) -> decode (400 on malformed JSON)
+// Identity-first-401 (same order as every handler above) -> decode
 // -> pre-tx validation, ALL before submit is ever called ([T07-8 non-uuid handling]): empty
 // invoice_ids -> 400; >200 ids -> 400; blank or >218-char idempotency_key -> 400; any
 // non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->
@@ -1665,9 +1702,12 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxBatchSubmitBodyBytes)
 		var req batchSubmitReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonbody.Decode(w, r, maxBatchSubmitBodyBytes, &req); err != nil {
+			if jsonbody.TooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

@@ -1,5 +1,6 @@
 import { readdirSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
+import { argosOn } from './argos'
 import { nightlyTarget } from './targets'
 import { partitionErrors, UNITS } from './topology/shards'
 
@@ -17,6 +18,8 @@ if (partition.length > 0) throw new Error(`topology shard map: ${partition.join(
 // is intentionally unset. Timeouts are a touch longer than smoke's: the topology run
 // brings the fleet up from zero, so a cold-started backend can be slow on first contact.
 export default defineConfig({
+  // On CI Playwright writes the PR diff into the report by default; the diff holds test credentials.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './topology',
   // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
   testMatch: '**/*.spec.ts',
@@ -43,6 +46,8 @@ export default defineConfig({
     headless: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Argos injects its script with addScriptTag; the PR-gate topology and smoke CSP spec keep the policy enforced.
+    bypassCSP: argosOn(),
   },
   projects: UNITS.map((u) => ({
     name: u.name,

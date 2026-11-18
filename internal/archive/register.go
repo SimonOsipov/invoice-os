@@ -23,8 +23,8 @@ import (
 const registerSheet = "Invoice register"
 
 // registerScope filters on the issue date, not created_at; a NULL issue_date never
-// matches, and drafts are not part of a register.
-const registerScope = "\n  FROM invoices WHERE entity_id = $1 AND issue_date >= $2::date AND issue_date <= $3::date AND status <> 'draft'"
+// matches, and drafts and discarded invoices are not part of a register.
+const registerScope = "\n  FROM invoices WHERE entity_id = $1 AND issue_date >= $2::date AND issue_date <= $3::date AND status NOT IN ('draft', 'discarded')"
 
 const selectRegisterSQL = "SELECT " + invoicesColumns + registerScope + " ORDER BY issue_date, invoice_number, id"
 

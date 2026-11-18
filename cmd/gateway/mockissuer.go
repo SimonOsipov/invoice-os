@@ -21,9 +21,9 @@ const mockIssuerCompiled = true
 
 const mockIssuerTokenHeader = "X-Mock-Issuer-Token"
 
-func mockGateOn() bool { return platform.Posture(platform.DeployEnv()) == platform.PostureNightly }
+func mockGateOn() bool { return platform.Posture(platform.DeployEnv()).Ephemeral() }
 
-// mockGate makes the nightly's mock routes require mockIssuerTokenHeader; an unset
+// mockGate makes a preview's or the nightly's mock routes require mockIssuerTokenHeader; an unset
 // token refuses every request, since RequireToken admits an empty header against "".
 func mockGate(next http.Handler) http.Handler {
 	if !mockGateOn() {

@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"bytes"
+	"html"
 	"html/template"
 	"regexp"
 	"strings"
@@ -117,6 +118,22 @@ func TestIdP_ConfirmationMailEscapesTheAnswers(t *testing.T) {
 	}
 }
 
+func TestIdP_ConfirmationMailUnlinksTheAnswers(t *testing.T) {
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
+	u := registrant(t, gw, map[string]string{"display_name": "Ada https://evil.test/pay", "workspace_name": "www.evil.test"})
+	msg := mailFor(t, u.email)
+
+	if strings.Contains(msg.HTML, "evil.test") || strings.Contains(msg.HTML, "https://evil") {
+		t.Error("mail HTML carries the registrant's link unmarked")
+	}
+	if !strings.Contains(msg.HTML, "evil.\u200btest") {
+		t.Error("mail HTML lacks the marked domain")
+	}
+	if got := strings.ReplaceAll(html.UnescapeString(msg.HTML), "\u200b", ""); !strings.Contains(got, "Ada https://evil.test/pay") {
+		t.Error("with the marks removed, the mail does not show the typed display name")
+	}
+}
+
 func TestConfirmationLinkSelection(t *testing.T) {
 	const link = "http://localhost:9995/auth/verify?token=t1&type=signup&redirect_to=http://localhost:3000"
 	const other = "http://localhost:9995/auth/verify?token=t2&type=signup&redirect_to=http://localhost:3000"
@@ -138,7 +155,7 @@ func TestConfirmationLinkSelection(t *testing.T) {
 	var branded bytes.Buffer
 	if err := tpl.Execute(&branded, map[string]any{
 		"ConfirmationURL": link, "Email": "ada@obi.test", "SiteURL": siteURL,
-		"Data": map[string]any{"registration": map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}},
+		"Data": map[string]any{"mail_names": accountmail.MailNames("Obi Partners", "Ada Obi")},
 	}); err != nil {
 		t.Fatalf("render the branded template: %v", err)
 	}

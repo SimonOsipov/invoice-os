@@ -224,7 +224,7 @@ func TestWorkflowRoleHandlers_IdentityCheckedBeforeBody(t *testing.T) {
 
 // --- body caps -------------------------------------------------------------
 
-// The over-cap bodies are VALID JSON, so a handler with no MaxBytesReader answers
+// The over-cap bodies are VALID JSON, so a handler with no cap answers
 // 2xx rather than tripping the malformed-JSON branch by accident.
 func TestWorkflowRoleHandlers_BodyOverCapRejected(t *testing.T) {
 	cases := []struct {
@@ -244,11 +244,11 @@ func TestWorkflowRoleHandlers_BodyOverCapRejected(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			id := caller()
 			rec := serveRole(t, failClosedSeam(t), nil, c.method, c.path, c.body, &id)
-			if rec.Code != http.StatusBadRequest {
-				t.Errorf("status = %d, want 400 (not 413, not 500): %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("status = %d, want 413: %s", rec.Code, rec.Body.String())
 			}
-			if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
-				t.Errorf("error = %q, want %q", got, "invalid request body")
+			if got := rec.Body.String(); strings.TrimSpace(got) != `{"error":"request body exceeds the size limit"}` {
+				t.Errorf("body = %q, want the 413 envelope", got)
 			}
 		})
 	}

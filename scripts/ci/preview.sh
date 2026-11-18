@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# preview.sh — one preview (a PR's, or the nightly's) in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview.
+# preview.sh — one preview (a PR's, or the nightly's) in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview, or deploy-nightly for the nightly.
 # The shared resources (network, Cloud SQL, preview-db job, shared secrets) are invoice-os-infra preview.tf.
 #
 #   preview.sh urls <pr|nightly>                  print <name>_url=<address> for each public site
 #   preview.sh image <pr|nightly> <image> <sha>   print the image reference
 #   preview.sh secrets <pr|nightly>               create this preview's secrets that do not exist yet
-#   preview.sh bucket <pr|nightly>                create this preview's documents bucket if it does not exist
+#   preview.sh claim <pr>                         take this PR's preview slot (or the lowest free one), empty its bucket; print slot=<slot> or full=true
+#   preview.sh bucket <pr|nightly>                check that this preview's slot documents bucket exists
 #   preview.sh database <pr|nightly>              drop and recreate its database (pr_<pr>, pr_0 for nightly)
 #   preview.sh migrate <pr|nightly> <sha>         deploy the migrate job and run it
 #   preview.sh grant <pr|nightly>                 run the migrate job for the auth.users grant only
 #   preview.sh deploy <pr|nightly> <sha> <svc>... deploy services, four at a time
 #   preview.sh token <pr|nightly>                 print the preview's gateway token
 #   preview.sh teardown <pr|nightly>              delete everything this preview owns
+#   preview.sh reach <pr>                         fail unless the PR's runtime reads only its own secrets, its slot's keys and the shared passwords
 #   preview.sh mail-preflight nightly     fail when a nightly mail secret is missing or not enabled
 #   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
@@ -19,15 +21,16 @@
 #   preview.sh check-mail-off nightly     unmount them from the worker
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
-#   preview.sh mock-token nightly         print the nightly mock issuer token
+#   preview.sh mock-token <pr|nightly>   print the preview's mock issuer token
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
 #   preview.sh contact-token-version nightly print the number of the token's latest version
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
+#   preview.sh databases                  print <pr|nightly> for each pr_<N> database (pr_0 is nightly)
 #   preview.sh cap <pr|nightly>           print open=<other PR previews> and full=true|false (a new PR is full at 2, the nightly at 3)
-#   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images
+#   preview.sh invariants                 fail when preview holds a production secret, reaches prod or can write production images or reach the nightly's keys
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
 
@@ -35,9 +38,10 @@ PROJECT=ascomply-preview
 PROJECT_NUMBER=944095690109
 REGION=africa-south1
 REGISTRY=africa-south1-docker.pkg.dev/ascomply-preview/previews
+# The public gcloud image, pinned by digest as preview-db's; Cloud Run pulls it from Docker Hub.
+PROBE_IMAGE=docker.io/google/cloud-sdk:593.0.0-alpine@sha256:6a44d67ac4bf78a27a72166cec3aac6678b7601fddb74bf7d56f294de8fe0f4e
 # The repository deploy-prod.yml deploys from; preview must not write to it.
 PROD_IMAGES=images
-RUNTIME=run-preview@ascomply-preview.iam.gserviceaccount.com
 LABEL=preview-pr
 gc=(--project "$PROJECT" --region "$REGION" --quiet)
 
@@ -45,7 +49,8 @@ BACKENDS=(gateway auth tenancy portfolio invoice validation dashboard submission
 SITES=(app landing library blog check ops-console support-console)
 # The secrets each PR generates or composes; preview.tf holds the shared ones.
 PR_SECRETS=(gateway-token s2s-token gotrue-jwt-keys gotrue-jwt-secret database-superuser-url database-migration-url
-  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key)
+  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key mock-issuer-token)
+SHARED_SECRETS=(migrator-password app-password reader-password gateway-password auth-admin-password) # preview.tf preview_runtime_shared_secrets
 
 die() {
   echo "::error::$*" >&2
@@ -71,6 +76,9 @@ deal_stage() { echo appointmentscheduled; }
 
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
+# runtime <name> <slot>: a PR runs as its slot's identity; only run-nightly reads nightly-* secrets.
+# ceiling: no wait for IAM propagation; add a poll as run-<slot> if a migrate fails on a secret permission
+runtime() { if [ "$1" = nightly ]; then echo run-nightly@ascomply-preview.iam.gserviceaccount.com; else echo "run-${2:?no slot claimed}@ascomply-preview.iam.gserviceaccount.com"; fi; }
 dbname() { if [ "$1" = nightly ]; then echo pr_0; else echo "pr_$1"; fi; }
 
 url() { printf 'https://%s-%s-%s.%s.run.app' "$1" "$(suffix "$2")" "$PROJECT_NUMBER" "$REGION"; }
@@ -132,20 +140,35 @@ repool() {
   echo "updated $1"
 }
 
+# bind_nightly <secret>: run-nightly alone may read a nightly secret.
+bind_nightly() {
+  gcloud secrets add-iam-policy-binding "$1" --project "$PROJECT" --member "serviceAccount:$(runtime nightly)" \
+    --role roles/secretmanager.secretAccessor --condition=None >/dev/null || die "cannot give run-nightly access to $1"
+}
+
+# bind_slot <secret> <sa>: authoritative, so a binding from an earlier slot cannot survive.
+bind_slot() {
+  local f
+  f=$(mktemp)
+  printf '{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:%s"]}]}' "$2" >"$f"
+  gcloud secrets set-iam-policy "$1" "$f" --project "$PROJECT" >/dev/null || { rm -f "$f"; die "cannot give ${2%%@*} access to $1"; }
+  rm -f "$f"
+}
+
 cmd_secrets() {
-  local pr=$1 db have name ip pool
+  local pr=$1 db have name ip pool slot=
+  [ "$pr" = nightly ] || slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   db=$(dbname "$pr")
   have=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)')
   ip=$(gcloud sql instances describe preview --project "$PROJECT" --format 'value(ipAddresses[0].ipAddress)')
   [ -n "$ip" ] || die "the preview Cloud SQL instance has no private IP"
   dsn() { printf 'postgres://%s:%s@%s:5432/%s?sslmode=require%s' "$1" "$2" "$ip" "$db" "$3"; }
 
-  local names=("${PR_SECRETS[@]}")
-  [ "$pr" != nightly ] || names+=(mock-issuer-token)
-  for name in "${names[@]}"; do
+  for name in "${PR_SECRETS[@]}"; do
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
       pool=$(pool_conns "$name")
       [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"
+      if [ "$pr" = nightly ]; then bind_nightly "$(secret "$pr" "$name")"; else bind_slot "$(secret "$pr" "$name")" "$(runtime "$pr" "$slot")"; fi
       continue
     fi
     case "$name" in
@@ -159,20 +182,70 @@ cmd_secrets() {
       database-gateway-url) dsn invoice_gateway "$(shared gateway-password)" "&pool_max_conns=$(pool_conns database-gateway-url)" ;;
       database-auth-url) dsn supabase_auth_admin "$(shared auth-admin-password)" '' ;;
     esac | put "$(secret "$pr" "$name")" "$pr"
+    if [ "$pr" = nightly ]; then bind_nightly "$(secret "$pr" "$name")"; else bind_slot "$(secret "$pr" "$name")" "$(runtime "$pr" "$slot")"; fi
   done
 }
 
 bucket() { printf 'gs://ascomply-preview-%s' "$(suffix "$1")"; }
 
-cmd_bucket() {
-  local pr=$1
-  if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
+PR_SLOTS=(slot-1 slot-2) # the nightly's slot is fixed; see preview.tf
+docs_bucket() { printf 'gs://ascomply-preview-docs-%s' "$1"; }
+
+# slot_of <pr>: the slot whose claim carries the PR's label. Returns 1 for no claim, 2 when a claim cannot be read.
+slot_of() {
+  local s out
+  [ "$1" != nightly ] || { echo nightly; return; }
+  for s in "${PR_SLOTS[@]}"; do
+    if out=$(gcloud secrets describe "$s-claim" --project "$PROJECT" --format "value(labels.$LABEL)" 2>&1); then
+      [ "$(tail -n 1 <<<"$out")" != "$1" ] || { echo "$s"; return; }
+    elif ! grep -q NOT_FOUND <<<"$out"; then
+      echo "ERROR: could not read the claim $s-claim: $(tail -n 1 <<<"$out")" >&2
+      return 2
+    fi
+  done
+  return 1
+}
+
+# empty_slot <slot>: no object may outlive its preview in a reused bucket.
+empty_slot() {
+  local err
+  if err=$(gcloud storage ls "$(docs_bucket "$1")/**" --project "$PROJECT" 2>&1 >/dev/null); then
+    gcloud storage rm "$(docs_bucket "$1")/**" --project "$PROJECT" --quiet
+  else
+    grep -q 'matched no objects' <<<"$err"
+  fi
+}
+
+# claim <pr>: the PR's slot, else the lowest free one; the create of its claim secret is atomic.
+cmd_claim() {
+  local pr=$1 slot s err rc=0
+  [ "$pr" != nightly ] || die "the nightly's slot is fixed; it takes no claim"
+  slot=$(slot_of "$pr") || rc=$?
+  [ "$rc" != 2 ] || die "could not read the claims; no slot taken for PR $pr"
+  if [ "$rc" != 0 ]; then
+    for s in "${PR_SLOTS[@]}"; do
+      if err=$(gcloud secrets create "$s-claim" --project "$PROJECT" --replication-policy user-managed --locations "$REGION" \
+        --labels "$LABEL=$pr" 2>&1 >/dev/null); then
+        slot=$s
+        break
+      fi
+      # gcloud prints "...is the subject of a conflict: Secret [...] already exists."; older ones ALREADY_EXISTS.
+      grep -qiE 'already exists|ALREADY_EXISTS|subject of a conflict' <<<"$err" || die "could not create the claim $s-claim: $err"
+    done
+  fi
+  if [ -z "${slot:-}" ]; then
+    echo "full=true"
     return
   fi
-  gcloud storage buckets create "$(bucket "$pr")" --project "$PROJECT" --location "$REGION" \
-    --uniform-bucket-level-access --public-access-prevention --soft-delete-duration 0 >/dev/null
-  gcloud storage buckets update "$(bucket "$pr")" --project "$PROJECT" --update-labels "$LABEL=$pr" >/dev/null
-  echo "created $(bucket "$pr")"
+  empty_slot "$slot" || die "could not empty $(docs_bucket "$slot")"
+  echo "slot=$slot"
+}
+
+cmd_bucket() {
+  local pr=$1 slot
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  gcloud storage buckets describe "$(docs_bucket "$slot")" --project "$PROJECT" >/dev/null 2>&1 \
+    || die "$(docs_bucket "$slot") does not exist; invoice-os-infra preview.tf makes it"
 }
 
 # too_many_connections <execution>: its log shows SQLSTATE 53300; psql prints only the message text.
@@ -265,7 +338,7 @@ env_file() {
         [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
         # OpenRouter groups usage by this referrer URL; the nightly's own app URL is stable across nights.
         [ "$pr" != nightly ] || { echo "OPENROUTER_APP_NAME: Nightly App"; echo "OPENROUTER_APP_URL: $(url app "$pr")"; }
-        echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
+        echo "DOCUMENT_BUCKET: ascomply-preview-docs-${SLOT:?no slot claimed}"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
         ;;
@@ -278,7 +351,7 @@ secrets_of() {
   local pr=$1 s=()
   case "$2" in
     gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url DATABASE_MIGRATION_URL=database-migration-url
-      GATEWAY_MOCK_ISSUER_KEY=mock-issuer-key) ;;
+      GATEWAY_MOCK_ISSUER_KEY=mock-issuer-key GATEWAY_MOCK_ISSUER_TOKEN=mock-issuer-token) ;;
     auth) s=(DATABASE_URL=database-auth-url GOTRUE_JWT_KEYS=gotrue-jwt-keys GOTRUE_JWT_SECRET=gotrue-jwt-secret) ;;
     tenancy | portfolio | dashboard | notifications) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token) ;;
     validation) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
@@ -288,10 +361,9 @@ secrets_of() {
   esac
   local out=() kv
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done
-  [ "$pr$2" != nightlygateway ] || out+=(GATEWAY_MOCK_ISSUER_TOKEN=nightly-mock-issuer-token:latest)
   case "$2" in
     invoice | submission | worker)
-      out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
+      out+=(DOCUMENT_ACCESS_KEY_ID="${SLOT:?no slot claimed}-document-access-key-id:latest" DOCUMENT_SECRET_ACCESS_KEY="$SLOT-document-secret-key:latest")
       [ "$pr" != nightly ] || out+=(OPENROUTER_API_KEY=nightly-openrouter-api-key:latest)
       ;;
   esac
@@ -315,7 +387,7 @@ deploy_one() {
   esac
   envf=$(mktemp)
   env_file "$pr" "$svc" "$envf"
-  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$RUNTIME" --labels "$LABEL=$pr"
+  args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$(runtime "$pr" "$SLOT")" --labels "$LABEL=$pr"
     --env-vars-file "$envf" --min-instances "$min" --max-instances "$(max_instances "$svc")" --cpu "$cpu" --memory "$memory"
     --no-cpu-boost --ingress all)
   secrets=$(secrets_of "$pr" "$svc")
@@ -338,6 +410,7 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
+  SLOT=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
   # The token version is pinned at deploy time; deploy_one's child bash has no die.
   if [ "$pr" = nightly ]; then
     for svc in "$@"; do
@@ -346,8 +419,8 @@ cmd_deploy() {
       esac
     done
   fi
-  export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool deal_stage
-  export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL HUBSPOT_TOKEN_SECRET
+  export -f deploy_one env_file secrets_of url image secret suffix runtime dbname max_instances gotrue_pool deal_stage
+  export SLOT PROJECT PROJECT_NUMBER REGION REGISTRY LABEL HUBSPOT_TOKEN_SECRET
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
   printf '%s\n' "$@" | xargs -P 4 -I{} bash -c 'gc=(--project "$PROJECT" --region "$REGION" --quiet); deploy_one "$0" "$1" "$2" >"deploy-$2.log" 2>&1' \
@@ -361,20 +434,22 @@ cmd_deploy() {
 
 # migrate_job <name> <sha>: the per-preview migrate job; it bootstraps, migrates and seeds the database.
 migrate_job() {
-  local pr=$1 sha=$2 envf
+  local pr=$1 sha=$2 envf slot shared='' n
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  for n in "${SHARED_SECRETS[@]}"; do shared+="${shared:+,}$(tr 'a-z-' 'A-Z_' <<<"$n")=$n:latest"; done
   envf=$(mktemp)
   {
     echo "DEPLOY_ENV: $(suffix "$pr")"
     echo "ENVIRONMENT: development"
     echo "GATEWAY_DB_BOOTSTRAP: 'true'"
-    echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
+    echo "DOCUMENT_BUCKET: ascomply-preview-docs-$slot"
     echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
     echo "DOCUMENT_REGION: auto"
   } >"$envf"
   gcloud run jobs deploy "migrate-$(suffix "$pr")" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
-    --service-account "$RUNTIME" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
+    --service-account "$(runtime "$pr" "$slot")" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
     --network preview --subnet run --vpc-egress private-ranges-only \
-    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest"
+    --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,$shared,DOCUMENT_ACCESS_KEY_ID=$slot-document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=$slot-document-secret-key:latest"
   rm -f "$envf"
   gcloud run jobs execute "migrate-$(suffix "$pr")" "${gc[@]}" --wait
 }
@@ -385,23 +460,66 @@ cmd_grant() {
   job_execute "migrate-$(suffix "$1")" --update-env-vars GATEWAY_DB_BOOTSTRAP=false
 }
 
+# present <gcloud run describe args>: 0 present, 1 absent, 2 when the describe fails otherwise.
+# gcloud run prints no NOT_FOUND for an absent resource: "Cannot find service [x]" / "Cannot find job [x]."
+# (googlecloudsdk surface/run/{services,jobs}/describe.py).
+present() {
+  local out
+  out=$(gcloud run "$@" "${gc[@]}" 2>&1) && return 0
+  grep -qE "Cannot find (service|job) \\[" <<<"$out" && return 1
+  echo "ERROR: could not describe $1 $3: $(tail -n 1 <<<"$out")" >&2
+  return 2
+}
+
 cmd_teardown() {
-  local pr=$1 svc name failed=0
+  local pr=$1 svc job name names out slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
-    if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
-      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || failed=1
+    rc=0
+    present services describe "$svc-$(suffix "$pr")" || rc=$?
+    if [ "$rc" = 0 ]; then
+      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+    elif [ "$rc" = 2 ]; then
+      failed=1
+      slotfail=1
     fi
   done
-  if gcloud run jobs describe "migrate-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
-    gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || failed=1
-  fi
-  database "$pr" drop || failed=1
-  if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
-  fi
-  for name in $(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)'); do
-    gcloud secrets delete "$name" --project "$PROJECT" --quiet || failed=1
+  for job in migrate reach; do
+    [ "$job$pr" != reachnightly ] || continue # the nightly runs no reach job
+    rc=0
+    present jobs describe "$job-$(suffix "$pr")" || rc=$?
+    if [ "$rc" = 0 ]; then
+      gcloud run jobs delete "$job-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+    elif [ "$rc" = 2 ]; then
+      failed=1
+      slotfail=1
+    fi
   done
+  database "$pr" drop || failed=1
+  # an absent bucket prints "gs://<b> not found: 404." (googlecloudsdk api_lib/storage/errors.py)
+  if out=$(gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" 2>&1); then
+    gcloud storage rm --recursive "$(bucket "$pr")" --project "$PROJECT" --quiet || failed=1
+  elif ! grep -qE 'not found: 404|HTTPError 404' <<<"$out"; then
+    echo "ERROR: could not describe $(bucket "$pr"): $(tail -n 1 <<<"$out")" >&2
+    failed=1
+    slotfail=1
+  fi
+  rc=0
+  slot=$(slot_of "$pr") || rc=$?
+  if [ "$rc" = 2 ]; then
+    failed=1
+    slotfail=1
+  elif [ "$rc" = 0 ]; then
+    empty_slot "$slot" || { failed=1; slotfail=1; }
+  fi
+  names=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)') || { failed=1; slotfail=1; names=; }
+  for name in $names; do
+    [[ $name != slot-*-claim ]] || continue
+    gcloud secrets delete "$name" --project "$PROJECT" --quiet || { failed=1; slotfail=1; }
+  done
+  # the claim outlives a bucket that still holds objects and a service or job that still mounts the slot
+  if [ "$pr" != nightly ] && [ -n "${slot:-}" ] && [ "$slotfail" = 0 ]; then
+    gcloud secrets delete "$slot-claim" --project "$PROJECT" --quiet || failed=1
+  fi
   [ "$failed" = 0 ] || die "teardown of PR $pr left something behind; the errors are above"
   echo "PR $pr: preview deleted"
 }
@@ -553,6 +671,12 @@ cmd_prs() {
   } | sort -k1,1n -k2,2 | awk '!seen[$1]++ {print $1, $2}'
 }
 
+# databases: the preview the pr_<N> databases belong to. A database outlives a teardown that failed mid-way, and prs does not see it.
+cmd_databases() {
+  gcloud sql databases list --instance preview --project "$PROJECT" --format 'value(name)' \
+    | sed -nE 's/^pr_0$/nightly/p; s/^pr_([1-9][0-9]*)$/\1/p'
+}
+
 # cap: PR previews open besides the caller's (a nightly entry never counts) and whether the caller is refused (ci-preview.md).
 cmd_cap() {
   name_arg "${1:-}"
@@ -569,7 +693,7 @@ cmd_cap() {
 
 # budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
 cmd_budget() {
-  local svc kv name pool n leader total=0
+  local svc kv name pool n leader total=0 SLOT=budget # secrets_of needs a slot; the document keys carry no pool
   for svc in "${BACKENDS[@]}"; do
     for kv in $(secrets_of 0 "$svc" | tr , ' '); do
       name=${kv#*=pr-0-}
@@ -589,9 +713,161 @@ cmd_budget() {
   echo "fleet $((total + leader + n))"
 }
 
+# read_verdict <secret>: readable | gone | denied | error <last stderr line>. The value goes to /dev/null; also runs in the reach job.
+read_verdict() {
+  local err
+  if err=$(gcloud secrets versions access latest --secret "$1" --project "$PROJECT" 2>&1 >/dev/null </dev/null); then echo readable
+  elif grep -q NOT_FOUND <<<"$err"; then echo gone
+  elif grep -q PERMISSION_DENIED <<<"$err" && grep -q secretmanager.versions.access <<<"$err"; then echo denied
+  else echo "error $(tail -n 1 <<<"$err")"; fi
+}
+
+# reach_job <pr> <slot> <name>...: reads each name as run-<slot> in a Cloud Run job; sets REACH_VERDICTS to "<name> <verdict>" lines.
+reach_job() {
+  local pr=$1 slot=$2 job nonce envf errf probe try rc=0 lines='' logged n
+  shift 2
+  job="reach-$(suffix "$pr")"
+  nonce="${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-$RANDOM"
+  # the job's script: one line per name, never a value
+  # shellcheck disable=SC2016 # expanded in the job, not here
+  probe="$(declare -f read_verdict)"$'\n''for n in $NAMES; do printf "reach %s %s %s\n" "$NONCE" "$n" "$(read_verdict "$n")"; done'
+  envf=$(mktemp)
+  errf=$(mktemp)
+  REACH_VERDICTS=
+  {
+    echo "PROJECT: '$PROJECT'"
+    echo "NONCE: '$nonce'"
+    echo "NAMES: '$*'"
+    echo "PROBE: '$(base64 <<<"$probe" | tr -d '\n')'"
+  } >"$envf"
+  # shellcheck disable=SC2016 # the job expands PROBE
+  if ! gcloud run jobs deploy "$job" "${gc[@]}" --image "$PROBE_IMAGE" --service-account "$(runtime "$pr" "$slot")" \
+    --labels "$LABEL=$pr" --env-vars-file "$envf" --command bash --args '-c,eval "$(printf %s "$PROBE" | base64 -d)"' \
+    --max-retries 0 --task-timeout 600s >/dev/null 2>"$errf"; then
+    echo "::error::could not deploy the reach job: $(tail -n 1 "$errf")"
+    rm -f "$envf" "$errf"
+    return 1
+  fi
+  rm -f "$envf"
+  if ! gcloud run jobs execute "$job" "${gc[@]}" --wait >/dev/null 2>"$errf"; then
+    echo "::error::the reach job failed: $(tail -n 1 "$errf")"
+    rc=1
+  else
+    # ceiling: 120 s of log ingestion lag in all (5+10+15+20+30+40); a name still unlogged then is an error
+    for try in ${REACH_POLL_SLEEPS:-5 10 15 20 30 40}; do
+      sleep "$try" # log ingestion lag
+      if ! lines=$(gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$job\" AND textPayload:\"reach $nonce \"" \
+        --project "$PROJECT" --freshness 1h --format 'value(textPayload)' 2>"$errf"); then
+        echo "::error::could not read the reach job's log: $(tail -n 1 "$errf")"
+        rc=1
+        break
+      fi
+      REACH_VERDICTS=$(awk -v p="reach $nonce " 'index($0, p) == 1 && !seen[$0]++ {print substr($0, length(p) + 1)}' <<<"$lines")
+      logged=$(awk '{print $1}' <<<"$REACH_VERDICTS")
+      for n in "$@"; do
+        grep -qxF -- "$n" <<<"$logged" || continue 2
+      done
+      break
+    done
+    if [ "$rc" = 0 ]; then
+      for n in "$@"; do
+        grep -qxF -- "$n" <<<"$logged" || { echo "::error::no verdict for $n in the reach job's log"; rc=1; }
+      done
+    fi
+  fi
+  gcloud run jobs delete "$job" "${gc[@]}" >/dev/null 2>&1 || echo "::warning::could not delete $job; teardown deletes it"
+  rm -f "$errf"
+  return "$rc"
+}
+
+# in_list <name> <newline list>
+in_list() { grep -qxF -- "$1" <<<"$2"; }
+
+# cmd_reach <pr>: the PR's runtime reads only its own secrets, its slot's keys and the shared passwords.
+cmd_reach() {
+  local pr=$1 slot sa all mine allowed names='' send n errf err pol members foreign v bad=0 reads=0 denied='' ndenied=0 reads_list=''
+  [ "$pr" != nightly ] || die "reach checks a PR runtime; run-nightly is read by the owner"
+  slot=$(slot_of "$pr") || die "PR $pr holds no preview slot; preview.sh claim runs first"
+  sa="$(runtime "$pr" "$slot")"
+  errf=$(mktemp)
+  all=$(gcloud secrets list --project "$PROJECT" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
+  mine=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
+  all=$(grep -vE '^slot-.*-claim$' <<<"$all" || true)
+  mine=$(grep -vE '^slot-.*-claim$' <<<"$mine" || true)
+  allowed="$mine"$'\n'"$slot-document-access-key-id"$'\n'"$slot-document-secret-key"
+  for n in "${SHARED_SECRETS[@]}"; do allowed+=$'\n'"$n"; done
+  allowed=$(grep -v '^$' <<<"$allowed" | sort -u)
+  # policy pass
+  for n in $all; do
+    [[ $n != nightly-* ]] || continue
+    if ! pol=$(gcloud secrets get-iam-policy "$n" --project "$PROJECT" --format json 2>"$errf"); then
+      if ! in_list "$n" "$allowed" && grep -q NOT_FOUND "$errf"; then
+        echo "::notice::$n is gone; skipped."
+      else
+        echo "::error::could not read the policy of $n: $(tail -n 1 "$errf")"
+        bad=1
+      fi
+      continue
+    fi
+    if ! members=$(jq -r '.bindings[]? | select(.role=="roles/secretmanager.secretAccessor") | .members[]' <<<"$pol" 2>"$errf"); then
+      echo "::error::could not read the policy of $n: $(tail -n 1 "$errf")"
+      bad=1
+      continue
+    fi
+    if in_list "$n" "$allowed"; then
+      in_list "serviceAccount:$sa" "$members" || { echo "::error::${sa%%@*} cannot read $n, which this preview mounts."; bad=1; }
+    elif in_list "serviceAccount:$sa" "$members"; then
+      echo "::error::${sa%%@*} can read $n, which is not this preview's."
+      bad=1
+    fi
+    if in_list "$n" "$mine"; then
+      foreign=$(jq -r --arg m "serviceAccount:$sa" '[.bindings[]? | .role as $r | .members[]? | select($r != "roles/secretmanager.secretAccessor" or . != $m)] | join(", ")' <<<"$pol")
+      [ -z "$foreign" ] || { echo "::error::$n is readable by someone other than ${sa%%@*}: $foreign"; bad=1; }
+    fi
+  done
+  rm -f "$errf"
+  # read pass: the control, then every name that is not allowed
+  send=$(secret "$pr" gateway-token)
+  for n in $all; do in_list "$n" "$allowed" || send+=" $n"; done
+  # shellcheck disable=SC2086 # names are space-separated
+  reach_job "$pr" "$slot" $send || bad=1
+  for n in $send; do
+    v=$(awk -v n="$n" '$1 == n {sub(/^[^ ]+ /, ""); print; exit}' <<<"$REACH_VERDICTS")
+    [ -n "$v" ] || continue
+    if [ "$n" = "$(secret "$pr" gateway-token)" ]; then
+      [ "$v" = readable ] || { echo "::error::${sa%%@*} cannot read its own $n: $v"; bad=1; }
+      continue
+    fi
+    case "$v" in
+      readable) echo "::error::${sa%%@*} can read $n."; bad=1 ;;
+      gone)
+        # Secret Manager checks IAM first: NOT_FOUND to a caller means it had access, so only a missing secret is gone
+        if err=$(gcloud secrets describe "$n" --project "$PROJECT" 2>&1 >/dev/null </dev/null); then
+          echo "::error::${sa%%@*} may read $n: it answered NOT_FOUND, not a denial, and the secret exists."
+          bad=1
+        elif grep -q NOT_FOUND <<<"$err"; then
+          echo "::notice::$n is gone; skipped."
+        else
+          echo "::error::could not check $n: $(tail -n 1 <<<"$err")"
+          bad=1
+        fi
+        ;;
+      denied) denied+="- $n"$'\n'; ndenied=$((ndenied + 1)) ;;
+      *) echo "::error::could not check $n: ${v#error }"; bad=1 ;;
+    esac
+  done
+  [ "$bad" = 0 ] || exit 1
+  for n in $allowed; do reads=$((reads + 1)); reads_list+="- $n"$'\n'; done
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '### Runtime reach for PR %s (%s)\n\n#### reads\n\n%s\n#### denied\n\n%s' "$pr" "${sa%%@*}" "$reads_list" "$denied" >>"$GITHUB_STEP_SUMMARY"
+  fi
+  echo "Runtime reach holds for PR $pr: ${sa%%@*} reads $reads secrets (its own, its slot's keys, the shared passwords); $ndenied others denied."
+}
+
 # invariants: GKE-11 AC6.
 cmd_invariants() {
-  local bad=0 names envs held token code perms
+  local bad=0 readable=0 v rc names envs held token code perms n email closed=${NIGHTLY_KEYS_CLOSED:-} mode='(not enforced: NIGHTLY_KEYS_CLOSED is not true)'
+  [ "$closed" = true ] && mode='(enforced)'
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
   if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
     echo "::error::ascomply-preview holds an OpenRouter or Sentry secret (listed above); only nightly-openrouter-api-key is allowed."
@@ -636,6 +912,50 @@ cmd_invariants() {
     echo "::error::the preview deployer can write production images: $held on $PROD_IMAGES."
     bad=1
   fi
+  # A nightly-* secret must be unreadable to the preview deployer. A secret deleted since the listing
+  # is gone, not a finding; only a denial of secretmanager.versions.access on it passes.
+  while read -r n; do
+    v=$(read_verdict "$n")
+    case "$v" in
+      readable)
+        readable=$((readable + 1))
+        if [ "$closed" = true ]; then
+          echo "::error::the preview deployer can read $n."
+          bad=1
+        else
+          echo "::warning::the preview deployer can read $n; the PR side keeps it until invoice-os-infra closes it and NIGHTLY_KEYS_CLOSED is true."
+        fi
+        ;;
+      gone) echo "::notice::$n is gone or has no version; skipped." ;;
+      denied) ;;
+      *)
+        echo "::error::could not check $n: ${v#error }"
+        bad=1
+        ;;
+    esac
+  done < <(grep '^nightly-' <<<"$names" || true)
+  for email in run-nightly@ascomply-preview.iam.gserviceaccount.com deploy-nightly@ascomply-preview.iam.gserviceaccount.com; do
+    rc=0
+    code=$(curl -sS -o "$RUNNER_TEMP/sa-held.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" \
+      -H 'Content-Type: application/json' \
+      -d '{"permissions":["iam.serviceAccounts.actAs","iam.serviceAccounts.getAccessToken"]}' \
+      "https://iam.googleapis.com/v1/projects/$PROJECT/serviceAccounts/$email:testIamPermissions") || rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "::error::could not check $email: curl exited $rc."
+      bad=1
+      continue
+    fi
+    if [ "$code" != 200 ]; then
+      echo "::error::testIamPermissions on $email answered HTTP $code."
+      bad=1
+      continue
+    fi
+    held=$(jq -r '.permissions // [] | join(", ")' "$RUNNER_TEMP/sa-held.json")
+    if [ -n "$held" ]; then
+      echo "::error::the preview deployer holds $held on $email."
+      bad=1
+    fi
+  done
   # A deploy trigger outside GitHub Actions needs Cloud Build or Cloud Deploy.
   if gcloud services list --project "$PROJECT" --enabled --format 'value(config.name)' |
     grep -Ex 'cloudbuild.googleapis.com|clouddeploy.googleapis.com'; then
@@ -643,13 +963,16 @@ cmd_invariants() {
     bad=1
   fi
   [ "$bad" = 0 ] || exit 1
-  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no deploy trigger outside GitHub Actions."
+  local nightly_read='no read of a nightly-* secret'
+  [ "$readable" = 0 ] || nightly_read="the nightly-* secret read is not enforced and $readable are readable"
+  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no write on the production image repository ($PROD_IMAGES), no act-as on run-nightly or deploy-nightly, $nightly_read, no deploy trigger outside GitHub Actions $mode"
 }
 
 case "${1:-}" in
   urls) name_arg "${2:-}"; cmd_urls "$2" ;;
   image) name_arg "${2:-}"; image "$2" "${3:?image}" "${4:?sha}" ;;
   secrets) name_arg "${2:-}"; cmd_secrets "$2" ;;
+  claim) name_arg "${2:-}"; cmd_claim "$2" ;;
   bucket) name_arg "${2:-}"; cmd_bucket "$2" ;;
   database) name_arg "${2:-}"; database "$2" recreate ;;
   migrate) name_arg "${2:-}"; migrate_job "$2" "${3:?sha}" ;;
@@ -657,13 +980,14 @@ case "${1:-}" in
   deploy) name_arg "${2:-}"; [ "$#" -ge 4 ] || die "usage: preview.sh deploy <pr|nightly> <sha> <svc>..."; shift; cmd_deploy "$@" ;;
   token) name_arg "${2:-}"; gcloud secrets versions access latest --secret "$(secret "$2" gateway-token)" --project "$PROJECT" ;;
   teardown) name_arg "${2:-}"; cmd_teardown "$2" ;;
+  reach) name_arg "${2:-}"; cmd_reach "$2" ;;
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
   check-mail-on) mail_arg "${2:-}"; cmd_check_mail_on ;;
   check-mail-off) mail_arg "${2:-}"; cmd_check_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
-  mock-token) mail_arg "${2:-}"; read_secret latest --secret nightly-mock-issuer-token --project "$PROJECT" ;;
+  mock-token) name_arg "${2:-}"; read_secret latest --secret "$(secret "$2" mock-issuer-token)" --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
@@ -671,8 +995,9 @@ case "${1:-}" in
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
   deal-stage) deal_stage ;;
   prs) cmd_prs ;;
+  databases) cmd_databases ;;
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

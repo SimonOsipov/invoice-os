@@ -175,6 +175,9 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		var in struct {
 			Token string `json:"token"`
 		}
@@ -247,6 +250,9 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		if !postOnly(w, r) {
 			return
 		}
+		if !jsonOnly(w, r) {
+			return
+		}
 		if registrations.Claim == nil || registrations.Release == nil {
 			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
 			return
@@ -296,7 +302,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		if !first {
 			// A repeat waits the same floor and mails nobody.
-			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "")
+			_ = signUp(w, r, client, signup, nil, start, minResponse, log, func(context.Context) (bool, error) { return true, nil }, nil, nil, "", nil)
 			return
 		}
 		body := map[string]any{
@@ -305,7 +311,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			"data":     map[string]any{"invited": true},
 		}
 		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
-		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists, tokens, email); !mayExist {
+		if mayExist := signUp(w, r, client, signup, body, start, minResponse, log, nil, exists, tokens, email, nil); !mayExist {
 			if err := registrations.Release(context.WithoutCancel(r.Context()), in.Token); err != nil {
 				log.WarnContext(r.Context(), "invitation: release failed", slog.String("error", err.Error()))
 			}
@@ -319,6 +325,9 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 	endpoint := authURL.JoinPath("resend").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
+			return
+		}
+		if !jsonOnly(w, r) {
 			return
 		}
 		var in struct {
@@ -380,7 +389,8 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 		case status == http.StatusTooManyRequests && gt.ErrorCode == "over_request_rate_limit":
 			writeError(w, http.StatusTooManyRequests, "too many requests")
 			return
-		case gt.ErrorCode == "over_email_send_rate_limit":
+		case isIdPMailCap(gt):
+			alertMail(r.Context(), ErrIdPMailCap)
 			log.WarnContext(r.Context(), "invitation-resend: gotrue email send rate limit", slog.Int("upstream_status", status))
 		default:
 			log.WarnContext(r.Context(), "invitation-resend: gotrue resend failed",

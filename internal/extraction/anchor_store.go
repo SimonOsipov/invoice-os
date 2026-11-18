@@ -27,6 +27,7 @@ type AnchorRule struct {
 // AnchorRulesFor returns the tenant's anchor rules for one layout fingerprint, newest first,
 // never a nil slice.
 func (s *Store) AnchorRulesFor(ctx context.Context, tenantID, fingerprint string) ([]AnchorRule, error) {
+	// ceiling: rules are tenant-wide, so a client-limited member's correction teaches every client's copy of the layout; revisit if a firm reports a rule taught under another client.
 	out := []AnchorRule{}
 	err := db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
 		var err error

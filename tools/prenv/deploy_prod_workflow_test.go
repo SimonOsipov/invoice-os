@@ -919,3 +919,161 @@ func TestDeployProd_LabelCheckRunsInDeployAfterTheRevisionsStart(t *testing.T) {
 	soft := mutateOnce(t, yml, "      - name: "+labelStep+"\n", "      - name: "+labelStep+"\n        continue-on-error: true\n")
 	requireProblemWith(t, "continue-on-error added", labelStepProblems(soft), "continue-on-error")
 }
+
+const (
+	siteStep    = "Wait for each site to serve the commit"
+	sendStep    = "Send 100 % to the new revisions"
+	restoreStep = "Send traffic back to the previous revisions"
+)
+
+// curlShim logs one argv per line and answers a build.txt URL with $SHA.
+const curlShim = `#!/bin/bash
+echo "$*" >>"$D/curl.argv"
+case "$*" in *build.txt*) printf '%s' "$SHA" ;; esac
+`
+
+func TestDeployProd_SiteCheckSendsTheIAPTokenOnlyToTheConsoles(t *testing.T) {
+	t.Parallel()
+	b := newProdBox(t)
+	writeShim(t, filepath.Join(b.bin, "curl"), curlShim)
+	b.env["SHA"], b.env["LB_IP"], b.env["IAP_TOKEN"] = strings.Repeat("f", 40), "192.0.2.1", "iap-x"
+	r := b.step(stepOf(t, "deploy-prod.yml", "promote", siteStep))
+	if r.code != 0 {
+		t.Fatalf("exit %d stderr %q, want exit 0", r.code, r.stderr)
+	}
+	calls := b.lines("curl.argv")
+	if len(calls) != 7 {
+		t.Fatalf("curl calls = %q, want 7", calls)
+	}
+	for _, c := range calls {
+		console := strings.Contains(c, "https://ops.ascomply.com/") || strings.Contains(c, "https://sup.ascomply.com/")
+		has := strings.Contains(c, "Authorization: Bearer iap-x")
+		if console != has {
+			t.Errorf("curl %q: console host = %t, Authorization = %t, want them equal", c, console, has)
+		}
+		if !console && strings.Contains(c, "Authorization") {
+			t.Errorf("curl %q sends Authorization to a non-console host", c)
+		}
+	}
+}
+
+// promoteSteps splits job promote into its raw steps, in order.
+func promoteSteps(yml string) (job string, steps [][]string, ok bool) {
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "promote" {
+			continue
+		}
+		in := false
+		for _, l := range j.lines {
+			if !in {
+				in = strings.TrimSpace(l) == "steps:" && strings.HasPrefix(l, "    steps:")
+				continue
+			}
+			if strings.HasPrefix(l, "      - ") {
+				steps = append(steps, nil)
+			}
+			if len(steps) > 0 {
+				steps[len(steps)-1] = append(steps[len(steps)-1], l)
+			}
+		}
+		return j.name, steps, true
+	}
+	return "", nil, false
+}
+
+// siteStepProblems: the iap token step sits in promote before Send 100 %, fails the job when it fails, and keeps the file-less credentials.
+func siteStepProblems(yml string) []string {
+	var p []string
+	for _, j := range workflowJobsOf(yml) {
+		for _, s := range j.steps() {
+			if s.keys["id"] == "iap" && j.name != "promote" {
+				p = append(p, "the iap step is in job "+j.name+", not promote")
+			}
+		}
+	}
+	_, steps, ok := promoteSteps(yml)
+	if !ok {
+		return append(p, "no job promote")
+	}
+	iap, send := -1, -1
+	for i, s := range steps {
+		text := strings.Join(s, "\n")
+		switch {
+		case strings.Contains(text, "- id: iap\n"):
+			iap = i
+			if strings.Contains(text, "continue-on-error") {
+				p = append(p, "the iap step has continue-on-error")
+			}
+			if !strings.Contains(text, "create_credentials_file: false") {
+				p = append(p, "the iap step does not set create_credentials_file: false")
+			}
+		case strings.Contains(text, "- name: "+sendStep):
+			send = i
+		}
+	}
+	switch {
+	case iap < 0:
+		p = append(p, "promote has no iap step")
+	case send < 0:
+		p = append(p, "promote has no step "+sendStep)
+	case iap > send:
+		p = append(p, "the iap step runs after Send 100 %")
+	}
+	return p
+}
+
+func TestDeployProd_IAPTokenStepPrecedesTraffic(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "deploy-prod.yml")
+	requireNoProblems(t, "deploy-prod.yml", siteStepProblems(yml))
+	start := strings.Index(yml, "      # IAP admits deploy-prod on ops/sup (SECAUD-35). A failed")
+	end := start + strings.Index(yml[start:], "      - uses: actions/download-artifact@v4")
+	if start < 0 || end < start {
+		t.Fatal("cannot find the iap step block")
+	}
+	block := yml[start:end]
+	moved := strings.Replace(yml, block, "", 1)
+	after := mutateOnce(t, moved, "      # Through the load balancer", block+"      # Through the load balancer")
+	requireProblemWith(t, "iap after Send", siteStepProblems(after), "after Send")
+	soft := mutateOnce(t, yml, "      - id: iap\n        uses: google-github-actions/auth@v3\n", "      - id: iap\n        continue-on-error: true\n        uses: google-github-actions/auth@v3\n")
+	requireProblemWith(t, "continue-on-error added", siteStepProblems(soft), "continue-on-error")
+	noFile := mutateOnce(t, yml, "          create_credentials_file: false\n", "")
+	requireProblemWith(t, "create_credentials_file removed", siteStepProblems(noFile), "create_credentials_file")
+	toDeploy := mutateOnce(t, moved, "      - name: Start the new revisions without traffic", block+"      - name: Start the new revisions without traffic")
+	requireProblemWith(t, "iap in deploy", siteStepProblems(toDeploy), "not promote")
+}
+
+const restoreGate = "failure() && steps.send.outcome != 'skipped'"
+
+// restoreGateProblems: the restore step runs only when Send 100 % ran.
+func restoreGateProblems(yml string) []string {
+	var p []string
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "promote" {
+			continue
+		}
+		for _, s := range j.steps() {
+			switch s.keys["name"] {
+			case sendStep:
+				if s.keys["id"] != "send" {
+					p = append(p, "Send 100 % has no id: send")
+				}
+			case restoreStep:
+				if s.keys["if"] != restoreGate {
+					p = append(p, "the restore step's if is "+s.keys["if"]+", want "+restoreGate)
+				}
+			}
+		}
+	}
+	return p
+}
+
+func TestDeployProd_RestoreRunsOnlyWhenTrafficMoved(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "deploy-prod.yml")
+	requireNoProblems(t, "deploy-prod.yml", restoreGateProblems(yml))
+	bare := mutateOnce(t, yml, "        if: "+restoreGate+"\n", "        if: failure()\n")
+	requireProblemWith(t, "failure() alone", restoreGateProblems(bare), "restore step's if")
+	noID := mutateOnce(t, yml, "        id: send\n", "")
+	requireProblemWith(t, "id: send removed", restoreGateProblems(noID), "no id: send")
+}

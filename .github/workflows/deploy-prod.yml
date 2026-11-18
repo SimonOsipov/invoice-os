@@ -309,10 +309,21 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
+      # IAP admits deploy-prod on ops/sup (SECAUD-35). A failed mint stops the job before traffic moves.
+      - id: iap
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+          token_format: access_token
+          access_token_scopes: openid, https://www.googleapis.com/auth/userinfo.email
+          create_credentials_file: false
+          export_environment_variables: false
       - uses: actions/download-artifact@v4
         with:
           name: serving
       - name: Send 100 % to the new revisions
+        id: send
         run: bash scripts/ci/gcp-traffic.sh promote serving.txt "$TAG"
       # Through the load balancer: --resolve reaches it before and after DNS moves (GKE-10).
       - name: Poll /healthz/fleet until every backend serves the commit
@@ -340,12 +351,15 @@ jobs:
           fi
           echo "Every backend serves $SHA."
       - name: Wait for each site to serve the commit
+        env:
+          IAP_TOKEN: ${{ steps.iap.outputs.access_token }}
         run: |
           for site in app.ascomply.com www.ascomply.com www.ascomply.com/library www.ascomply.com/blog www.ascomply.com/check ops.ascomply.com sup.ascomply.com; do
             host=${site%%/*}
+            auth=(); case $host in ops.ascomply.com|sup.ascomply.com) auth=(-H "Authorization: Bearer $IAP_TOKEN") ;; esac
             seen=""
             for _ in $(seq 1 60); do
-              seen=$(curl -fsS --max-time 10 --resolve "$host:443:$LB_IP" "https://$site/build.txt" 2>/dev/null | tr -d '[:space:]' || true)
+              seen=$(curl -fsS --max-time 10 "${auth[@]}" --resolve "$host:443:$LB_IP" "https://$site/build.txt" 2>/dev/null | tr -d '[:space:]' || true)
               if [ "$seen" = "$SHA" ]; then break; fi
               sleep 5
             done
@@ -356,7 +370,7 @@ jobs:
             echo "$site serves $SHA."
           done
       - name: Send traffic back to the previous revisions
-        if: failure()
+        if: failure() && steps.send.outcome != 'skipped'
         run: |
           bash scripts/ci/gcp-traffic.sh restore serving.txt
           echo "::error::the fleet check failed after traffic moved; traffic is back on the previous revisions."

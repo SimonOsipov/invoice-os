@@ -61,6 +61,7 @@ export interface LoginResult {
   created: boolean
   reused: boolean
   gatewayWrites: number
+  iapExpiresAt?: string
   next: string[]
 }
 
@@ -80,8 +81,22 @@ export interface LoginDeps {
   apiRole(account: Account): Promise<ApiRole>
   credentialsValid(account: Account): Promise<boolean>
   regrant(key: AccountKey, account: Account): Promise<void>
-  signInFresh(key: AccountKey, account: Account, urls: EnvResult['urls'], statePath: string): Promise<{ role?: string }>
+  signInFresh(key: AccountKey, account: Account, urls: EnvResult['urls'], statePath: string, iap?: string): Promise<{ role?: string }>
+  productionStaff(): Record<'developer' | 'support', Account>
+  staffClaim(account: Account): Promise<StaffClaim>
+  mintIap(): Promise<{ token: string; expiresAt: string }>
   checkSavedState(key: AccountKey, account: Account, urls: EnvResult['urls'], statePath: string): Promise<{ ok: boolean; role?: string }>
+}
+
+export type StaffClaim = 'staff' | 'not-staff' | 'refused'
+
+// Red-test stubs (SECAUD-35-10): signatures only, replaced by the implementation.
+export const productionStaffFile = (): string => ''
+export function readProductionStaff(_file = productionStaffFile()): Record<'developer' | 'support', Account> {
+  return undefined as never
+}
+export async function staffClaim(_account: Account): Promise<StaffClaim> {
+  return undefined as never
 }
 
 const ROLES: readonly Role[] = ['admin', 'preparer', 'reviewer']
@@ -351,7 +366,8 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
 export async function defaultDeps(root: string): Promise<LoginDeps> {
   const { resolveEnvByName } = await import('./envUrls')
   const { signInFresh, checkSavedState } = await import('./browserSession')
-  return { resolveEnv: resolveEnvByName, store: createStore(root), provisionAll, apiRole, credentialsValid, regrant, signInFresh, checkSavedState }
+  const { mintIapToken } = await import('./iap')
+  return { resolveEnv: resolveEnvByName, store: createStore(root), provisionAll, apiRole, credentialsValid, regrant, signInFresh, checkSavedState, productionStaff: () => readProductionStaff(), staffClaim, mintIap: mintIapToken }
 }
 
 export async function loginCommand(positionals: string[], flags: Record<string, string | undefined>): Promise<unknown> {

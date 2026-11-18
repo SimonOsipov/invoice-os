@@ -27,6 +27,10 @@ var (
 	wifEmailRe  = regexp.MustCompile(`[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com`)
 	wifSARe     = regexp.MustCompile(`(?m)^\s*service_account:\s*(.+?)\s*$`)
 	wifEnvRefRe = regexp.MustCompile(`^\$\{\{\s*env\.(\w+)\s*\}\}$`)
+	// wifQuotedRe and wifEventRe are the only pieces an env value may hold besides operators.
+	wifQuotedRe = regexp.MustCompile(`'[^']*'`)
+	wifEventRe  = regexp.MustCompile(`github\.event_name`)
+	wifOpsRe    = regexp.MustCompile(`^[\s$&|=!(){}]*$`)
 )
 
 func wifTableRows(md string) []wifRow {
@@ -56,6 +60,11 @@ func wifSAEmails(file, code string) (emails, faults []string) {
 		if r := wifEnvRefRe.FindStringSubmatch(v); r != nil {
 			envRe := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(r[1]) + `:\s*(.+)$`)
 			for _, e := range envRe.FindAllStringSubmatch(code, -1) {
+				// Anything but quoted literals, github.event_name and operators is dynamic.
+				if !wifOpsRe.MatchString(wifEventRe.ReplaceAllString(wifEmailRe.ReplaceAllString(wifQuotedRe.ReplaceAllString(e[1], ""), ""), "")) {
+					found = nil
+					break
+				}
 				found = append(found, wifEmailRe.FindAllString(e[1], -1)...)
 			}
 		}
@@ -218,6 +227,7 @@ func TestWIFTable_FaultsANonLiteralServiceAccount(t *testing.T) {
 		"  service_account: ${{ secrets.SA }}\n",
 		"  service_account: ${{ env.MISSING }}\n",
 		"  service_account: ${{ env.SA }}\nenv:\n  SA: ${{ vars.SA }}\n",
+		"  service_account: ${{ env.SA }}\nenv:\n  SA: ${{ github.event_name == 'x' && 'a-b@p.iam.gserviceaccount.com' || vars.SA }}\n",
 	} {
 		got := wifTableFaults(rows, wifOne("s.yml", body))
 		if !strings.Contains(strings.Join(got, "\n"), "not a literal") {
@@ -229,7 +239,7 @@ func TestWIFTable_FaultsANonLiteralServiceAccount(t *testing.T) {
 func TestWIFTable_ResolvesAnEnvValueWithTwoArms(t *testing.T) {
 	t.Parallel()
 	rows := []wifRow{{"deploy-preview", "s.yml"}, {"deploy-nightly", "s.yml"}}
-	body := "  service_account: ${{ env.D }}\nenv:\n  D: ${{ x && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}\n"
+	body := "  service_account: ${{ env.D }}\nenv:\n  D: ${{ github.event_name == 'x' && 'deploy-nightly@ascomply-preview.iam.gserviceaccount.com' || 'deploy-preview@ascomply-preview.iam.gserviceaccount.com' }}\n"
 	if got := wifTableFaults(rows, wifOne("s.yml", body)); len(got) != 0 {
 		t.Fatalf("faults = %q", got)
 	}

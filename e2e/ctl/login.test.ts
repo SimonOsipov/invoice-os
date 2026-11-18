@@ -1519,6 +1519,9 @@ describe('staffClaim against a stubbed gateway', () => {
     stubGateway({ accessToken: tokenWith({ app_metadata: { staff: true } }), signOutStatus: 500 })
     const err = await refused(L.staffClaim(DEV))
     expect(err.message).toContain('sign-out answered 500')
+
+    stubGateway({ accessToken: tokenWith({ app_metadata: { staff: true } }), signOutStatus: 401 })
+    expect((await refused(L.staffClaim(DEV))).message).toContain('sign-out answered 401')
   })
 
   it('a token without a boolean true staff claim is not staff', async () => {

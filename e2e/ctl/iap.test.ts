@@ -301,7 +301,7 @@ describe('mintIapToken', () => {
 
     expect(err.message).toContain('ctl-console@ascomply-prod.iam.gserviceaccount.com')
     expect(err.message).toContain('403')
-    expect(err.hint).toContain('roles/iam.serviceAccountTokenCreator')
+    expect(err.hint).toContain('--role=roles/iam.serviceAccountTokenCreator')
     expect(err.hint).toContain('SECAUD-35-05')
     expect(err.hint).toContain('serviceusage.services.use')
     expect(err.message).toContain('quota project')

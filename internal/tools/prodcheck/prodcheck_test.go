@@ -56,6 +56,7 @@ type fakeProd struct {
 	consoleHSTS func(id, auth string) (int, http.Header)
 	guard       func(id string) (int, http.Header)
 	noGuardURLs bool
+	oneGuardURL bool
 
 	// the probe: signIn and exchange get the decoded JSON body, reads gets the path
 	signIn   func(in map[string]string) (int, string)
@@ -339,6 +340,9 @@ func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) resu
 	}
 	if f.noGuardURLs {
 		consoleGuard = nil
+	}
+	if f.oneGuardURL {
+		consoleGuard = consoleGuard[:1]
 	}
 	cfg := config{
 		targets: targets{
@@ -1798,17 +1802,33 @@ func TestSites_ConsolesFailWithoutTheIAPToken(t *testing.T) {
 }
 
 func TestSites_ARefusedIAPTokenIsNotReportedAsBehindMain(t *testing.T) {
+	for _, refused := range []int{401, 403} {
+		f := newFake(t)
+		f.site = func(s string) (int, string, http.Header) {
+			if s == "ops.ascomply.com" {
+				return refused, "", nil
+			}
+			return 200, good + "\n", nil
+		}
+		r := f.run(t, nil)
+		r.want(t, 2, "failed", "ops.ascomply.com")
+		r.want(t, 2, "failed", "IAP refused the token")
+		r.want(t, 2, "failed", "not a deploy lag")
+		r.wantNot(t, 2, "behind main")
+	}
+}
+
+func TestSites_ANonConsole4xxIsStillBehindMain(t *testing.T) {
 	f := newFake(t)
 	f.site = func(s string) (int, string, http.Header) {
-		if s == "ops.ascomply.com" {
-			return 401, "", nil
+		if s == "www.ascomply.com" {
+			return 403, "", nil
 		}
 		return 200, good + "\n", nil
 	}
 	r := f.run(t, nil)
-	r.want(t, 2, "failed", "ops.ascomply.com")
-	r.want(t, 2, "failed", "IAP refused the token")
-	r.wantNot(t, 2, "behind main")
+	r.want(t, 2, "failed", "www.ascomply.com=none")
+	r.wantNot(t, 2, "IAP refused")
 }
 
 func TestTestHook_ConsolesFailWithoutTheIAPToken(t *testing.T) {
@@ -1924,6 +1944,12 @@ func TestConsoleGuard_FailsWithNoGuardURLs(t *testing.T) {
 	f := newFake(t)
 	f.noGuardURLs = true
 	f.run(t, nil).want(t, lastStep, "failed", "guard URLs")
+}
+
+func TestConsoleGuard_FailsWhenTheGuardListIsShorterThanTheConsoles(t *testing.T) {
+	f := newFake(t)
+	f.oneGuardURL = true
+	f.run(t, nil).want(t, lastStep, "failed", "1 guard URLs for 2 console hosts")
 }
 
 func TestConsoleGuard_FailsOnALookalikeHost(t *testing.T) {

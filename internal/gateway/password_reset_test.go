@@ -624,6 +624,13 @@ func TestRequestPasswordReset_EveryRefusalIsTheSame202AfterTheFloor(t *testing.T
 			if time.Since(start) < floor {
 				t.Errorf("answered after %v, want at least %v", time.Since(start), floor)
 			}
+			want := 0
+			if name == "share free" {
+				want = 1
+			}
+			if n := callsTo(fake, "/recover"); n != want {
+				t.Errorf("GoTrue saw %d /recover, want %d", n, want)
+			}
 		})
 	}
 }

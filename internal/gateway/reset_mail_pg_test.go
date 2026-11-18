@@ -72,6 +72,19 @@ func TestRLS_GatewayResetMail_ConcurrentResetsMakeExactlyThreeGoTrueCalls(t *tes
 	}
 }
 
+func TestRLS_GatewayResetMail_OneIPCountsAcrossInstances(t *testing.T) {
+	d := requireHandoffDB(t)
+	scope := mailScope(t, d)
+	a := sharedReset(d, scope, 10, 100, 1, 100, time.Now, false)
+	b := sharedReset(d, scope, 10, 100, 1, 100, time.Now, true)
+	if _, spent, err := a.Hold(testIP(1)); spent != "" || err != nil {
+		t.Fatalf("Hold on a = (%q, %v)", spent, err)
+	}
+	if _, spent, _ := b.Hold(testIP(1)); spent != "ip-hour" {
+		t.Errorf("same IP on b = %q, want ip-hour", spent)
+	}
+}
+
 func TestRLS_GatewayResetMail_ARefusalLeavesNoCount(t *testing.T) {
 	d := requireHandoffDB(t)
 	scope := mailScope(t, d)

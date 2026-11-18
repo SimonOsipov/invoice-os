@@ -141,7 +141,7 @@ func TestGoTrueAddress_EveryGoTrueCallCarriesTheHeader(t *testing.T) {
 		{"invitation register", InvitationRegisterHandler(f.URL, testClient(), 0, log, invitePreviewing("none").preview, claiming(inviteAddress, true, nil).registrations(), nil),
 			"/auth/invitation/register", jsonType, tokenBody(inviteToken), []string{"POST /signup"}},
 		{"resend verification", ResendVerificationHandler(f.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil), "/auth/resend-verification", jsonType, resendBody(regEmail), []string{"POST /resend"}},
-		{"request password reset", RequestPasswordResetHandler(f.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil), "/auth/request-password-reset", jsonType, resendBody(regEmail), []string{"POST /recover"}},
+		{"request password reset", RequestPasswordResetHandler(f.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil, nil), "/auth/request-password-reset", jsonType, resendBody(regEmail), []string{"POST /recover"}},
 		{"invitation resend", InvitationResendHandler(f.URL, testClient(), resendThrottle(time.Now), true, log, invitePreviewing("unconfirmed").preview), "/auth/invitation/resend", jsonType, tokenBody(inviteToken), []string{"POST /resend"}},
 	}
 	for _, c := range rows {

@@ -101,7 +101,7 @@ func newJSONRig(t *testing.T, minResponse time.Duration) *jsonRig {
 	add("resend", "/auth/resend-verification", resendBody(regEmail),
 		ResendVerificationHandler(authURL, testClient(), minResponse, th("resend"), true, log, nil))
 	add("reset", "/auth/request-password-reset", resendBody(regEmail),
-		RequestPasswordResetHandler(authURL, testClient(), minResponse, th("reset"), true, log, nil))
+		RequestPasswordResetHandler(authURL, testClient(), minResponse, th("reset"), true, log, nil, nil))
 	add("invitation register", "/auth/invitation/register", tokenBody(inviteToken),
 		InvitationRegisterHandler(authURL, testClient(), minResponse, log, r.previews.preview, regs, nil))
 	add("invitation resend", "/auth/invitation/resend", tokenBody(inviteToken),

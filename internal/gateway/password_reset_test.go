@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -26,7 +27,7 @@ func newReset(authURL *url.URL, client *http.Client, floor time.Duration, log *s
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return RequestPasswordResetHandler(authURL, client, floor, resendThrottle(time.Now), true, log, nil)
+	return RequestPasswordResetHandler(authURL, client, floor, resendThrottle(time.Now), true, log, nil, nil)
 }
 
 // serveReset posts body and times ServeHTTP.
@@ -227,7 +228,7 @@ func TestRequestPasswordReset_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 			for range ResendPerAddress {
 				perAddress.Reserve(addr)
 			}
-			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, true, log, nil), f
+			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, true, log, nil, nil), f
 		}, 0},
 		{"refused connection", func(t *testing.T, log *slog.Logger) (http.Handler, *fakeGoTrue) {
 			return newReset(closedURL(t), testClient(), floor, log), nil
@@ -293,7 +294,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 		if !shared {
 			perAddress = resendThrottle(time.Now)
 		}
-		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
+		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil, nil)
 	}
 	for _, shared := range []bool{true, false} {
 		name := "shared instances"
@@ -353,7 +354,7 @@ func TestRequestPasswordReset_CooldownRefusalsAreRefunded(t *testing.T) {
 	ok, cooldown := gtAnswer{http.StatusOK, `{}`}, gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
 	fake := sequenceGoTrue(t, ok, cooldown, cooldown, ok, ok, ok)
 	log, buf := captureLog()
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil, nil)
 
 	for range 6 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -369,7 +370,7 @@ func TestRequestPasswordReset_CooldownRefusalsAreRefunded(t *testing.T) {
 func TestRequestPasswordReset_UnenforcedLimitOnlyLogs(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log, nil)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log, nil, nil)
 
 	for range ResendPerAddress + 1 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -391,7 +392,7 @@ func TestRequestPasswordReset_LogsCarryNoAddress(t *testing.T) {
 	log, buf := captureLog()
 	run := func(auth *url.URL, perAddress *SignInThrottle) {
 		t.Helper()
-		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, true, log, nil), resendBody(email))
+		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, true, log, nil, nil), resendBody(email))
 	}
 
 	run(newFakeGoTrue(t, http.StatusOK, echo("ok")).URL, resendThrottle(time.Now))
@@ -457,7 +458,7 @@ func TestRequestPasswordReset_ValidationFailedRefundsTheAddressCount(t *testing.
 	fake := newFakeGoTrue(t, http.StatusBadRequest, gtValidationFailed)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil, nil)
 
 	for range 3 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -478,7 +479,7 @@ func TestRequestPasswordReset_FullMapFailsClosed(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", ResendPerAddress, 1, ResendWindow, time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil, nil)
 
 	first, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
 	newAddress, _ := serveReset(t.Context(), h, resendBody("bob@corp.example"))
@@ -491,5 +492,262 @@ func TestRequestPasswordReset_FullMapFailsClosed(t *testing.T) {
 	lines := recordsNamed(t, buf, resetLimitMsg)
 	if len(lines) != 1 || lines[0]["limit"] != "address" {
 		t.Errorf("limit lines = %v, want one limit=address", lines)
+	}
+}
+
+// postResetXFF posts a reset as the load balancer would: <client>, <rule IP> in X-Forwarded-For.
+func postResetXFF(h http.Handler, xff, email string) (*httptest.ResponseRecorder, time.Duration) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(resendBody(email)))
+	req.Header.Set("Content-Type", "application/json")
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	h.ServeHTTP(rec, req)
+	return rec, time.Since(start)
+}
+
+func spentResetShare(t *testing.T, perHour, perIPHour int, c *mailClock) *ResetMail {
+	t.Helper()
+	m := resetShareAt(perHour, 100, perIPHour, 100, c)
+	for i := range perHour {
+		if _, spent, err := m.Hold(fmt.Sprintf("203.0.113.%d", 100+i)); spent != "" || err != nil {
+			t.Fatalf("priming Hold = (%q, %v)", spent, err)
+		}
+	}
+	return m
+}
+
+func TestRequestPasswordReset_ShareRefusalMakesNoGoTrueCall(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	h := resetHandlerOn(fake.URL, resendThrottle(time.Now), resetShareAt(1, 100, 10, 100, newMailClock(resetT0)))
+
+	requireAccepted(t, postResetFrom(t, h, testIP(1), "a@corp.example"), "first")
+	requireAccepted(t, postResetFrom(t, h, testIP(2), "b@corp.example"), "second")
+
+	if n := callsTo(fake, "/recover"); n != 1 {
+		t.Errorf("GoTrue saw %d /recover, want 1", n)
+	}
+}
+
+func TestRequestPasswordReset_SpoofedLeftmostXFFDoesNotChangeTheIPKey(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	h := resetHandlerOn(fake.URL, resendThrottle(time.Now), prodReset(newMailClock(resetT0)))
+
+	for i, spoof := range []string{"203.0.113.1", "203.0.113.2", "not-an-ip"} {
+		rec, _ := postResetXFF(h, spoof+", 198.51.100.7, 35.191.0.1", fmt.Sprintf("u%d@corp.example", i))
+		requireAccepted(t, rec, "spoofed "+spoof)
+	}
+
+	if n := callsTo(fake, "/recover"); n != 1 {
+		t.Errorf("GoTrue saw %d /recover, want 1: the spoofed leftmost entry must not change the key", n)
+	}
+}
+
+func TestRequestPasswordReset_UnattributableClientIPSharesOneSend(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "production")
+	const floor = 50 * time.Millisecond
+	for _, xff := range []string{"", "198.51.100.7", "198.51.100.7, not-an-ip, 35.191.0.1", "198.51.100.7, 10.0.0.5, 35.191.0.1"} {
+		t.Run(xff, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+			log, buf := captureLog()
+			h := RequestPasswordResetHandler(fake.URL, testClient(), floor, resendThrottle(time.Now), true, log, nil, prodReset(newMailClock(resetT0)))
+
+			first, _ := postResetXFF(h, xff, "a@corp.example")
+			second, elapsed := postResetXFF(h, xff, "b@corp.example")
+
+			requireAccepted(t, first, "first")
+			requireAccepted(t, second, "second")
+			if elapsed < floor {
+				t.Errorf("refused answer after %v, want at least %v", elapsed, floor)
+			}
+			if n := callsTo(fake, "/recover"); n != 1 {
+				t.Errorf("GoTrue saw %d /recover, want 1", n)
+			}
+			for _, leak := range []string{"not-an-ip", "10.0.0.5", "198.51.100.7"} {
+				if strings.Contains(buf.String(), leak) {
+					t.Errorf("log holds %q: %s", leak, buf)
+				}
+			}
+		})
+	}
+}
+
+func TestRequestPasswordReset_SecondResetFromOneIPMakesNoGoTrueCall(t *testing.T) {
+	for _, c := range []struct{ name, first, second, other string }{
+		{"IPv4", "198.51.100.7", "198.51.100.7", "198.51.100.8"},
+		{"IPv6 /64", "2001:db8:1::1", "2001:db8:1::2", "2001:db8:2::1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+			h := resetHandlerOn(fake.URL, resendThrottle(time.Now), prodReset(newMailClock(resetT0)))
+
+			postResetFrom(t, h, c.first, "a@corp.example")
+			postResetFrom(t, h, c.second, "b@corp.example")
+			postResetFrom(t, h, c.other, "c@corp.example")
+
+			if n := callsTo(fake, "/recover"); n != 2 {
+				t.Errorf("GoTrue saw %d /recover, want 2", n)
+			}
+		})
+	}
+}
+
+func TestRequestPasswordReset_EveryRefusalIsTheSame202AfterTheFloor(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	c := newMailClock(resetT0)
+	rows := map[string]func(t *testing.T) *ResetMail{
+		"share spent": func(t *testing.T) *ResetMail { return spentResetShare(t, 1, 10, c) },
+		"ip spent": func(t *testing.T) *ResetMail {
+			m := resetShareAt(10, 100, 1, 100, c)
+			m.Hold(testIP(1))
+			return m
+		},
+		"count unreadable": func(t *testing.T) *ResetMail {
+			m := resetShareAt(10, 100, 10, 100, c)
+			m.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+			return m
+		},
+		"share free": func(t *testing.T) *ResetMail { return resetShareAt(10, 100, 10, 100, c) },
+	}
+	for name, mk := range rows {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+			h := RequestPasswordResetHandler(fake.URL, testClient(), floor, resendThrottle(c.Now), true, slog.New(slog.DiscardHandler), nil, mk(t))
+
+			start := time.Now()
+			rec := postResetFrom(t, h, testIP(1), "a@corp.example")
+
+			requireAccepted(t, rec, name)
+			if time.Since(start) < floor {
+				t.Errorf("answered after %v, want at least %v", time.Since(start), floor)
+			}
+			want := 0
+			if name == "share free" {
+				want = 1
+			}
+			if n := callsTo(fake, "/recover"); n != want {
+				t.Errorf("GoTrue saw %d /recover, want %d", n, want)
+			}
+		})
+	}
+}
+
+func TestRequestPasswordReset_KnownAndUnknownAddressesSpendTheShareAlike(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	h := resetHandlerOn(fake.URL, resendThrottle(time.Now), resetShareAt(1, 100, 10, 100, newMailClock(resetT0)))
+
+	postResetFrom(t, h, testIP(1), "unknown@corp.example")
+	postResetFrom(t, h, testIP(2), "registered@corp.example")
+
+	if n := callsTo(fake, "/recover"); n != 1 {
+		t.Errorf("GoTrue saw %d /recover, want 1: the unknown address spent the share", n)
+	}
+}
+
+func TestRequestPasswordReset_A4xxRefundsTheHold(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"cooldown 429", http.StatusTooManyRequests, gtOverEmailSendRateLimit},
+		{"validation_failed 400", http.StatusBadRequest, `{"code":400,"error_code":"validation_failed","msg":"x"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			refusing := newFakeGoTrue(t, c.status, c.body)
+			ok := newFakeGoTrue(t, http.StatusOK, `{}`)
+			m := resetShareAt(1, 100, 1, 100, newMailClock(resetT0))
+			per := resendThrottle(time.Now)
+
+			postResetFrom(t, resetHandlerOn(refusing.URL, per, m), testIP(1), "a@corp.example")
+			postResetFrom(t, resetHandlerOn(ok.URL, per, m), testIP(1), "b@corp.example")
+
+			if n := callsTo(ok, "/recover"); n != 1 {
+				t.Errorf("GoTrue saw %d /recover after the refund, want 1", n)
+			}
+		})
+	}
+}
+
+func TestRequestPasswordReset_A2xx5xxOrTransportErrorKeepsTheHold(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		url  func(t *testing.T) *url.URL
+	}{
+		{"200", func(t *testing.T) *url.URL { return newFakeGoTrue(t, http.StatusOK, `{}`).URL }},
+		{"500", func(t *testing.T) *url.URL { return newFakeGoTrue(t, http.StatusInternalServerError, `{}`).URL }},
+		{"transport error", closedURL},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ok := newFakeGoTrue(t, http.StatusOK, `{}`)
+			m := resetShareAt(1, 100, 10, 100, newMailClock(resetT0))
+			per := resendThrottle(time.Now)
+
+			postResetFrom(t, resetHandlerOn(c.url(t), per, m), testIP(1), "a@corp.example")
+			postResetFrom(t, resetHandlerOn(ok.URL, per, m), testIP(2), "b@corp.example")
+
+			if n := callsTo(ok, "/recover"); n != 0 {
+				t.Errorf("GoTrue saw %d /recover, want 0: the hold must stay", n)
+			}
+		})
+	}
+}
+
+func TestRequestPasswordReset_AHoldRefusalRefundsTheAddress(t *testing.T) {
+	a, b := newMailClock(resetT0), newMailClock(resetT0)
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	h := resetHandlerOn(fake.URL, resendThrottle(a.Now), spentResetShare(t, 1, 10, b))
+
+	for i := range 3 {
+		postResetFrom(t, h, testIP(i+1), "ada@corp.example")
+	}
+	if n := callsTo(fake, "/recover"); n != 0 {
+		t.Fatalf("GoTrue saw %d /recover while the share was spent", n)
+	}
+	b.Add(61 * time.Minute)
+	postResetFrom(t, h, testIP(9), "ada@corp.example")
+
+	if n := callsTo(fake, "/recover"); n != 1 {
+		t.Errorf("GoTrue saw %d /recover, want 1: refusals must refund the address count", n)
+	}
+}
+
+func TestRequestPasswordReset_RefusalsLogTheWindowAndNoAddressOrIP(t *testing.T) {
+	c := newMailClock(resetT0)
+	find := func(buf string, msg string) []map[string]any {
+		var out []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(buf), "\n") {
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == msg {
+				out = append(out, rec)
+			}
+		}
+		return out
+	}
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	for _, row := range []struct {
+		name, msg, key, want string
+		m                    *ResetMail
+	}{
+		{"ip", resetLimitMsg, "limit", "ip-hour", func() *ResetMail { m := resetShareAt(10, 100, 1, 100, c); m.Hold("198.51.100.7"); return m }()},
+		{"share", "reset-request: mail share spent", "share", "hour", spentResetShare(t, 1, 10, c)},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			log, buf := captureLog()
+			h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(c.Now), true, log, nil, row.m)
+
+			postResetFrom(t, h, "198.51.100.7", "ada@corp.example")
+
+			got := find(buf.String(), row.msg)
+			if len(got) != 1 || got[0][row.key] != row.want {
+				t.Fatalf("%q lines = %v, want one with %s=%s", row.msg, got, row.key, row.want)
+			}
+			if strings.Contains(buf.String(), "@") || strings.Contains(buf.String(), "198.51.100.7") {
+				t.Errorf("log holds an address or IP: %s", buf)
+			}
+		})
 	}
 }

@@ -143,5 +143,13 @@ describe('signInFresh installs the IAP route only when it gets a token', () => {
     expect(calls, 'without a token the sign-in still opens the page').toEqual(['newContext', 'newPage'])
     expect(openWithHandoff).toHaveBeenCalledTimes(1)
     expect(route).not.toHaveBeenCalled()
+
+    launch.mockResolvedValue(fakeBrowser() as never)
+    calls.length = 0
+
+    await signInFresh('support', account, urls, statePath, '')
+
+    expect(calls, 'an empty token is no token').toEqual(['newContext', 'newPage'])
+    expect(route).not.toHaveBeenCalled()
   })
 })

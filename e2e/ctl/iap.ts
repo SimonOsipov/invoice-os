@@ -23,11 +23,17 @@ export async function mintIapToken(): Promise<{ token: string; expiresAt: string
   if (!userToken) {
     throw new CtlError(`could not read a gcloud access token (gcloud auth print-access-token): ${cause}`, 'Run gcloud auth login with the account that holds Token Creator on ctl-console (SECAUD-35-05).', 1)
   }
-  const res = await fetch(MINT_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${userToken}`, 'Content-Type': 'application/json', 'X-Goog-User-Project': 'ascomply-prod' },
-    body: JSON.stringify({ scope: ['openid', 'https://www.googleapis.com/auth/userinfo.email'], lifetime: '3600s' }),
-  })
+  let res: Response
+  try {
+    res = await fetch(MINT_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}`, 'Content-Type': 'application/json', 'X-Goog-User-Project': 'ascomply-prod' },
+      body: JSON.stringify({ scope: ['openid', 'https://www.googleapis.com/auth/userinfo.email'], lifetime: '3600s' }),
+    })
+  } catch {
+    // The transport error is dropped: it is not ours to vouch for.
+    throw new CtlError('generateAccessToken did not answer', 'Check the network, then retry.', 1)
+  }
   if (res.status === 403) {
     throw new CtlError(
       `this gcloud account may not mint a token for ${CTL_IAP_ACCOUNT} (403)`,
@@ -56,8 +62,16 @@ export async function installIapRoute(context: BrowserContext, token: string, or
         return route.abort('failed')
       }
       const loc = res.status() >= 300 && res.status() < 400 ? res.headers()['location'] : undefined
+      let off = false
+      if (loc !== undefined) {
+        try {
+          off = new URL(loc, route.request().url()).origin !== origin
+        } catch {
+          off = true // an unparsable Location is no origin we can vouch for
+        }
+      }
       // never let the token follow a redirect off its origin
-      if (loc !== undefined && new URL(loc, route.request().url()).origin !== origin) {
+      if (off) {
         return route.fulfill({ status: 401, contentType: 'text/plain', body: `ctl: IAP refused the token for ${origin}; run ctl login again` })
       }
       return route.fulfill({ response: res })

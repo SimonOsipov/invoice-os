@@ -2,7 +2,7 @@
 // The helpers that resolve a URL at load are imported by login.ts lazily, so every test imports a fresh ./login
 // after vi.resetModules() (the realAccounts.test.ts pattern). Credentials never reach an assertion message.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -228,7 +228,7 @@ describe('parseLoginArgs', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(0)
   })
 
-  it('--role on a staff persona is a usage error on production too', async () => {
+  it('a --role on a staff persona is a usage error on production too', async () => {
     const L = await load()
 
     for (const persona of ['developer', 'support'] as const) {
@@ -1305,7 +1305,7 @@ describe('readProductionStaff', () => {
   })
 
   it('a wider mode is refused before the file is parsed', async () => {
-    for (const mode of [0o644, 0o640, 0o604, 0o700]) {
+    for (const mode of [0o644, 0o640, 0o604, 0o700, 0o660, 0o606, 0o666, 0o610, 0o601, 0o750]) {
       const file = fileWith('not json SECRET-X', mode)
       const shown = `0${mode.toString(8)}`
 
@@ -1338,6 +1338,69 @@ describe('readProductionStaff', () => {
     expect(err.code).toBe(1)
     expect(err.message).toContain(file)
     expect(err.message).toContain('is not a regular file')
+  })
+
+  it('a symlink is judged by its target: a wide target is refused, a dangling link is missing, a link to a directory is no file', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ctl-staff-'))
+    roots.push(dir)
+    const link = path.join(dir, 'ctl-production-staff.json')
+    const wide = fileWith('not json SECRET-X', 0o644)
+    symlinkSync(wide, link)
+    const wideErr = await failOf(link)
+    expect(wideErr.message).toContain('mode 0644')
+    expect(wideErr.message).not.toContain('valid JSON')
+
+    rmSync(link)
+    symlinkSync(path.join(dir, 'nowhere.json'), link)
+    expect((await failOf(link)).message).toBe(`${link} is missing`)
+
+    rmSync(link)
+    symlinkSync(dir, link)
+    expect((await failOf(link)).message).toContain('is not a regular file')
+
+    rmSync(link)
+    symlinkSync(fileWith(JSON.stringify(GOOD), 0o600), link)
+    expect(await readOf(link), 'a link to a 0600 file is read').toEqual(GOOD)
+  })
+
+  it('a path under a regular file is a read error that names the code and no value', async () => {
+    const under = path.join(fileWith('x', 0o600), 'ctl-production-staff.json')
+
+    const err = await failOf(under)
+
+    expect(err.code).toBe(1)
+    expect(err.message).toBe(`could not read ${under}: ENOTDIR`)
+    expect(err.hint).toContain('SECAUD-35-11')
+  })
+
+  it('an empty file and a top level that is not an object fail on the file or the first persona, never on a value', async () => {
+    const empty = await failOf(fileWith(''))
+    expect(empty.message).toMatch(/ is not valid JSON$/)
+    for (const top of ['null', '[]', '"pw-top-1"', '7', 'true', '[{"developer":{"email":"a@ascomply.com","password":"pw-top-2"}}]']) {
+      const err = await failOf(fileWith(top))
+
+      expect(err.code, top).toBe(1)
+      expect(err.message, top).toContain(': developer is missing')
+      expect(`${err.message}\n${err.hint}`, top).not.toContain('pw-top')
+    }
+  })
+
+  it('an email on a lookalike domain, a bare array persona and an empty email are refused by field', async () => {
+    const ok = GOOD.support
+    const cases: { content: unknown; says: string }[] = [
+      { content: { developer: { email: 'dev@ascomply.com.evil.example', password: 'pw-d' }, support: ok }, says: 'developer.email must end in @ascomply.com' },
+      { content: { developer: { email: 'dev@xascomply.com', password: 'pw-d' }, support: ok }, says: 'developer.email must end in @ascomply.com' },
+      { content: { developer: { email: '', password: 'pw-d' }, support: ok }, says: 'developer.email must be a non-empty string' },
+      { content: { developer: [], support: ok }, says: 'developer must be an object' },
+      { content: { developer: GOOD.developer, support: { email: 'agent-support@ascomply.com' } }, says: 'support.password must be a non-empty string' },
+      { content: { developer: GOOD.developer, support: { password: 'pw-s' } }, says: 'support.email must be a non-empty string' },
+    ]
+    for (const c of cases) {
+      const err = await failOf(fileWith(JSON.stringify(c.content)))
+
+      expect(err.message, c.says).toContain(c.says)
+      expect(`${err.message}\n${err.hint}`, c.says).not.toMatch(/evil\.example|xascomply|pw-d|pw-s/)
+    }
   })
 
   it('bad JSON gets a fixed message that quotes nothing', async () => {
@@ -1454,6 +1517,13 @@ describe('staffClaim against a stubbed gateway', () => {
       const err = await refused(L.staffClaim(DEV))
       expect(err.code, String(status)).toBe(1)
       expect(err.message, String(status)).toContain(`answered ${status}`)
+    }
+    // Any other status is the gateway's own error: neither refused nor not-staff.
+    for (const status of [400, 403, 500]) {
+      stubGateway({ signIn: { status, body: { error: 'nope' } } })
+      const err = await refused(L.staffClaim(DEV))
+      expect(err.message, String(status)).not.toContain('refused')
+      expect((err as { status?: number }).status, String(status)).toBe(status)
     }
   })
 })
@@ -1585,6 +1655,87 @@ describe('production staff login', () => {
     expect(existsSync(path.join(prodDir(root), 'iap-route.js'))).toBe(false)
   })
 
+  it('a browser failure leaves no route script, and a stale script and tmp file are replaced at 0600', async () => {
+    const { L, root, deps } = await prodSetup({ signInFresh: vi.fn(async () => Promise.reject(new Error('boom'))) })
+    await refused(L.login(req('developer', 'admin', 'production'), deps))
+    expect(walk(prodDir(root)).filter((f) => f.includes('iap-route')), 'no script after a failed sign-in').toEqual([])
+
+    const next = await prodSetup()
+    const dir = prodDir(next.root)
+    mkdirSync(dir, { recursive: true })
+    for (const stale of ['iap-route.js', 'iap-route.js.tmp']) {
+      writeFileSync(path.join(dir, stale), 'old-token')
+      chmodSync(path.join(dir, stale), 0o644)
+    }
+
+    await next.L.login(req('developer', 'admin', 'production'), next.deps)
+
+    const script = path.join(dir, 'iap-route.js')
+    expect(statSync(script).mode & 0o777).toBe(0o600)
+    expect(readFileSync(script, 'utf8')).toContain(IAP_TOKEN)
+    expect(readFileSync(script, 'utf8')).not.toContain('old-token')
+    expect(existsSync(`${script}.tmp`), 'the tmp file was renamed away').toBe(false)
+  })
+
+  it('a dark console stops a production login before the staff file is read', async () => {
+    const { L, deps } = await prodSetup({
+      resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: 'production', urls: { ...PROD_URLS }, dark: ['ops-console'] })),
+    })
+
+    const err = await refused(L.login(req('developer', 'admin', 'production'), deps))
+
+    expect(err.message).toContain('ops-console is dark for developer')
+    expect(count(deps.productionStaff)).toBe(0)
+    expect(count(deps.mintIap)).toBe(0)
+  })
+
+  it('a path with a space and a quote reaches the shell as one run-code word', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ctl prod $HOME it's "))
+    roots.push(root)
+    const L = await load()
+    const calls: string[] = []
+    const deps = makeDeps(L, root, calls, {
+      resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: 'production', urls: { ...PROD_URLS }, dark: [] })),
+      productionStaff: vi.fn(() => ({ developer: { ...DEV }, support: { ...SUP } })),
+      staffClaim: vi.fn(async (): Promise<'staff'> => 'staff'),
+      mintIap: vi.fn(async () => ({ token: IAP_TOKEN, expiresAt: IAP_EXPIRES })),
+      signInFresh: vi.fn(async (_k: AccountKey, _a: Account, _u: unknown, statePath: string) => {
+        mkdirSync(path.dirname(statePath), { recursive: true })
+        writeFileSync(statePath, '{}')
+        return {}
+      }),
+    })
+
+    const r = await L.login(req('developer', 'admin', 'production'), deps)
+
+    const line = r.next.find((l) => l.includes(' run-code '))!
+    const words = spawnSync('sh', ['-c', `printf '%s\\n' ${line.slice(line.indexOf('playwright-cli ') + 'playwright-cli '.length)}`], { encoding: 'utf8' }).stdout.split('\n').slice(0, -1)
+    expect(words).toEqual(['-s=default', 'run-code', `--filename=${path.join(storeDir(root, 'production'), 'iap-route.js')}`])
+  })
+
+  it('the real dependencies read the home staff file, check the claim and mint through iap.ts', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ctl-home-'))
+    roots.push(home)
+    const file = path.join(home, '.config', 'ascomply', 'ctl-production-staff.json')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ developer: DEV, support: SUP }), { mode: 0o600 })
+    const saved = process.env.HOME
+    process.env.HOME = home
+    try {
+      const L = await load()
+      const { mintIapToken } = await import('./iap')
+
+      const deps = await L.defaultDeps(home)
+
+      expect(deps.productionStaff()).toEqual({ developer: DEV, support: SUP })
+      expect(deps.staffClaim).toBe(L.staffClaim)
+      expect(deps.mintIap).toBe(mintIapToken)
+    } finally {
+      if (saved === undefined) delete process.env.HOME
+      else process.env.HOME = saved
+    }
+  })
+
   it('a preview staff login never reads the staff file or mints', async () => {
     const { L, calls, deps } = await setup()
 
@@ -1643,7 +1794,14 @@ describe('production staff login keeps secrets out of every output', () => {
 
   it('no staff password leaves login on any failure', async () => {
     const scenarios: { name: string; over: () => Partial<LoginDeps> }[] = [
-      { name: 'the claim check rejects with the password', over: () => ({ staffClaim: vi.fn(async () => Promise.reject(new Error(`x ${DEV_PW}`))) }) },
+      { name: 'the claim check rejects with the password', over: () => ({
+          staffClaim: vi.fn(async () => {
+            const e = new Error(`x ${DEV_PW}`)
+            void e.stack // V8 formats the stack header on first read, so read it before login edits the message
+            throw e
+          }),
+        }),
+      },
       {
         name: 'the mint rejects with the other persona password',
         over: () => ({ mintIap: vi.fn(async () => {
@@ -1652,7 +1810,14 @@ describe('production staff login keeps secrets out of every output', () => {
             throw new CtlError(`m ${SUP_PW}`, `h ${DEV_PW}`, 1, { e: SUP_PW })
           }) }),
       },
-      { name: 'the browser sign-in echoes everything', over: () => ({ signInFresh: vi.fn(async () => Promise.reject(new Error(`boom ${IAP_TOKEN} ${DEV_PW} ${SUP_PW}`))) }) },
+      { name: 'the browser sign-in echoes everything', over: () => ({
+          signInFresh: vi.fn(async () => {
+            const e = new Error(`boom ${IAP_TOKEN} ${DEV_PW} ${SUP_PW}`)
+            void e.stack // as above
+            throw e
+          }),
+        }),
+      },
     ]
     for (const s of scenarios) {
       const { L, root, deps } = await prodSetup(s.over())

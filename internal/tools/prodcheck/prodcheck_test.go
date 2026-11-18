@@ -1880,7 +1880,7 @@ func TestConsoleGuard_FailsOnARedirectWithoutLocation(t *testing.T) {
 	f := newFake(t)
 	guardAnswers(f, status(302, googleAuth), status(302, ""))
 	r := f.run(t, nil)
-	r.want(t, lastStep, "failed", "sup.ascomply.com")
+	r.want(t, lastStep, "failed", "sup.ascomply.com answered 302 with no Location")
 	if strings.Contains(r.step(t, lastStep).Detail, "ops.ascomply.com") {
 		t.Errorf("detail names ops: %q", r.step(t, lastStep).Detail)
 	}
@@ -1890,6 +1890,33 @@ func TestConsoleGuard_FailsOnALookalikeHost(t *testing.T) {
 	f := newFake(t)
 	guardAnswers(f, status(302, "https://accounts.google.com.evil.example/"), status(302, googleAuth))
 	f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com")
+	// Userinfo, a relative Location and a suffix-only match are not Google's host either.
+	for _, loc := range []string{"https://accounts.google.com@evil.example/", "/o/oauth2/v2/auth", "https://evilaccounts.google.com/", "https://google.com/", "https://accounts.google.com.:evil/"} {
+		g := newFake(t)
+		guardAnswers(g, status(302, googleAuth), status(302, loc))
+		g.run(t, nil).want(t, lastStep, "failed", "sup.ascomply.com")
+	}
+	// The positive control: the same fake with Google's host passes.
+	ok := newFake(t)
+	guardAnswers(ok, status(302, googleAuth), status(302, "https://accounts.google.com/signin"))
+	ok.run(t, nil).want(t, lastStep, "passed", "")
+}
+
+func TestConsoleGuard_FailsOnEveryRedirectStatusButFoundAndSeeOther(t *testing.T) {
+	for _, code := range []int{301, 307, 308} {
+		f := newFake(t)
+		guardAnswers(f, status(code, googleAuth), status(302, googleAuth))
+		f.run(t, nil).want(t, lastStep, "failed", "ops.ascomply.com answered "+strconv.Itoa(code))
+	}
+}
+
+func TestConsoleGuard_RunsWithoutTheIAPToken(t *testing.T) {
+	f := newFake(t)
+	guardAnswers(f, status(200, ""), status(302, googleAuth))
+	f.run(t, noIAP()).want(t, lastStep, "failed", "ops.ascomply.com served its page without sign-in")
+	if f.count("/guard/0") == 0 || f.count("/guard/1") == 0 {
+		t.Errorf("the guard reads were skipped: %d, %d", f.count("/guard/0"), f.count("/guard/1"))
+	}
 }
 
 func TestConsoleGuard_FailsWhenAConsoleServesWithoutSignIn(t *testing.T) {

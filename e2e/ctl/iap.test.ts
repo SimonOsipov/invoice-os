@@ -11,7 +11,7 @@ const TOK = 'tok-9f3a' // not a substring of any message word, so "body lacks th
 const OPS = 'https://ops.ascomply.com'
 const SUP = 'https://sup.ascomply.com'
 
-const ADMITTED = [`${OPS}/`, `${SUP}/assets/x.js`, `${OPS}:443/`]
+const ADMITTED = [`${OPS}/`, `${SUP}/assets/x.js`, `${OPS}:443/`, 'https://OPS.ascomply.com/Assets/A.js?q=1#f']
 const REFUSED = [
   'http://ops.ascomply.com/',
   'https://ops.ascomply.com:8443/',
@@ -23,6 +23,14 @@ const REFUSED = [
   'https://www.ascomply.com/',
   'https://accounts.google.com/',
   'https://ops-console-pr-1-944095690109.africa-south1.run.app/',
+  'https://ops.ascomply.com@evil.example/', // userinfo: the host is evil.example
+  'https://sup.ascomply.com.evil.example/',
+  'https://evil-ops.ascomply.com/',
+  'https://ops.ascomply.com./', // the trailing-dot form is another origin: it fails closed
+  'https://ops.ascomply.com:80/',
+  'wss://ops.ascomply.com/socket',
+  'ws://ops.ascomply.com/',
+  'https://ascomply.com/ops.ascomply.com',
 ]
 
 type Matcher = (url: URL) => boolean
@@ -122,6 +130,11 @@ describe('installIapRoute', () => {
       [`${OPS}/`, 'https://accounts.google.com/o/oauth2/v2/auth?x'],
       [`${OPS}/`, `${SUP}/y`], // the other console is another origin too
       [`${OPS}/`, 'http://ops.ascomply.com/'], // a scheme downgrade is another origin
+      [`${OPS}/`, '//evil.example/x'], // scheme-relative
+      [`${OPS}/`, 'https://ops.ascomply.com@evil.example/'],
+      [`${OPS}/`, 'https://ops.ascomply.com:8443/'],
+      [`${OPS}/`, 'https://ops.ascomply.com.evil.example/'],
+      [`${OPS}/`, 'http://[bad'], // unparsable: never fulfilled as sent
     ]
     for (const [url, location] of off) {
       const route = await run(handler, url!, reply(302, { location: location! }))
@@ -145,6 +158,44 @@ describe('installIapRoute', () => {
 
     expect((await run(handler, `${OPS}/`, relative)).fulfill).toHaveBeenCalledWith({ response: relative })
     expect((await run(handler, `${SUP}/`, sameOrigin)).fulfill).toHaveBeenCalledWith({ response: sameOrigin })
+  })
+
+  it('a same-origin Location in any spelling passes through', async () => {
+    const context = fakeContext()
+    await installIapRoute(context as never, TOK, IAP_ORIGINS)
+    const { handler } = recorded(context)
+    const same = [`${OPS}:443/x`, '', '?q=1', '#f', '../up', 'HTTPS://OPS.ascomply.com/y']
+    for (const location of same) {
+      const res = reply(302, { location })
+      const route = await run(handler, `${OPS}/a/b`, res)
+      expect(route.fulfill, `location ${location}`).toHaveBeenCalledWith({ response: res })
+    }
+  })
+
+  it('only 3xx is a redirect: a Location on 299 or 400 passes, 300 and 399 are refused', async () => {
+    const context = fakeContext()
+    await installIapRoute(context as never, TOK, IAP_ORIGINS)
+    const { handler } = recorded(context)
+    for (const status of [299, 400]) {
+      const res = reply(status, { location: 'https://evil.example/' })
+      expect((await run(handler, `${OPS}/`, res)).fulfill, String(status)).toHaveBeenCalledWith({ response: res })
+    }
+    for (const status of [300, 301, 303, 304, 307, 308, 399]) {
+      const route = await run(handler, `${OPS}/`, reply(status, { location: 'https://evil.example/' }))
+      expect(route.fulfill.mock.calls[0]![0], String(status)).toMatchObject({ status: 401 })
+    }
+    const none = reply(304)
+    expect((await run(handler, `${OPS}/`, none)).fulfill, 'a 3xx without Location').toHaveBeenCalledWith({ response: none })
+  })
+
+  it('a bearer the page sent is replaced by ours', async () => {
+    const context = fakeContext()
+    await installIapRoute(context as never, TOK, IAP_ORIGINS)
+    const { handler } = recorded(context)
+
+    const route = await run(handler, `${OPS}/`, reply(200), { authorization: 'Bearer from-the-page', cookie: 'a=b' })
+
+    expect(route.fetch).toHaveBeenCalledWith({ headers: { authorization: `Bearer ${TOK}`, cookie: 'a=b' }, maxRedirects: 0 })
   })
 
   it('a 4xx and a 5xx pass through unchanged', async () => {
@@ -266,6 +317,22 @@ describe('mintIapToken', () => {
       const err = expectCtlError(await failure())
       expect(err.message, JSON.stringify(body)).toContain('without a token')
     }
+    fetchMock.mockResolvedValueOnce(new Response('<html>not json</html>', { status: 200 }))
+    expect(expectCtlError(await failure()).message, 'a 200 that is not JSON').toContain('without a token')
+    for (const status of [401, 404, 429, 503]) {
+      fetchMock.mockResolvedValueOnce(json(status, {}))
+      const err = expectCtlError(await failure())
+      expect(err.message, String(status)).toBe(`generateAccessToken answered ${status}`)
+    }
     expect(`${other.message} ${other.hint}`).not.toContain('user-tok')
+  })
+
+  it('a fetch that rejects is a CtlError that holds no token', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed: Bearer user-tok'))
+
+    const err = expectCtlError(await failure())
+
+    expect(err.message).toContain('generateAccessToken did not answer')
+    expect(`${err.message} ${err.hint} ${err.stack}`).not.toContain('user-tok')
   })
 })

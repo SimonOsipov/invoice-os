@@ -304,10 +304,10 @@ function scrub(e: unknown, secrets: Set<string>): unknown {
   if (!(e instanceof Error)) return e
   e.message = clean(e.message)
   if (e.stack) e.stack = clean(e.stack)
-  // Duck-typed: a CtlError from another module instance must be scrubbed too.
-  const ctl = e as Partial<CtlError>
-  if (typeof ctl.hint === 'string') ctl.hint = clean(ctl.hint)
-  if (ctl.extra) ctl.extra = JSON.parse(clean(JSON.stringify(ctl.extra)))
+  if (e instanceof CtlError) {
+    e.hint = clean(e.hint)
+    if (e.extra) e.extra = JSON.parse(clean(JSON.stringify(e.extra)))
+  }
   return e
 }
 

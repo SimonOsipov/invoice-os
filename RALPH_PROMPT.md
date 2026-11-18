@@ -286,7 +286,7 @@ DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 - Omit `DEV_DB_PORT` only when Phase 0.5 started no dev Postgres. The script then prints `db=skipped`.
 - `wait=1`: a `go test` still runs in this worktree, and no suite ran. Wait for it to end, then run the command again.
 - `docker=unreachable`: Docker Desktop did not answer, so the db suite did not run or its failures are not counted. No story test is red from it. Run the command again. After three such runs in a row, stop and report it.
-- Exit 1 with "the suites did not run": this run was first in line for an hour, and the suites that hold the queue did not end or the Mac stayed short of memory. Stop and report the error. It names the run that holds the queue. A new run of this worktree within 30 minutes keeps its place in the line.
+- Exit 1 with "the suites did not run": this run was first in line for an hour, and the suites that hold the queue did not end or the Mac stayed short of memory. Stop and report the error. A new run of this worktree within 30 minutes keeps its place in the line.
 - Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Its exit wakes you.
 - A zero exit and its summary line are the evidence. Read a full log only when its suite failed.
 - A subagent's report of a suite is not the suite's result.

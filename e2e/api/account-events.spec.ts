@@ -40,6 +40,12 @@ const ACCOUNT_EVENTS = [SIGNED_IN, SIGN_IN_FAILED, SIGN_IN_BLOCKED, SIGNED_OUT, 
 // internal/gateway/signin_throttle.go SignInMaxFailures.
 const MAX_FAILURES = 10
 const IP_PATTERN = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*)$/
+// internal/gateway mailLinkHandler: the body every reset request answers.
+const RESET_ACCEPTED = { status: 'accepted' }
+// internal/gateway/register.go DefaultRegisterMinResponse.
+const REGISTER_MIN_MS = 2000
+// internal/gateway ResendPerAddress: mails per mailbox per window.
+const RESEND_PER_ADDRESS = 3
 const POLL = { timeout: 30_000, intervals: [1_000] }
 
 interface Session {
@@ -205,6 +211,33 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     for (const event of [SIGN_IN_FAILED, SIGNED_OUT, RESET_REQUESTED]) {
       await expect.poll(async () => rowsOf(await rows(adminToken, event), adminId).length, { ...POLL, message: event }).toBeGreaterThan(0)
     }
+  })
+
+  test('a reset request past the per-mailbox limit answers the same 202 and leaves no row', async () => {
+    // The fork's GoTrue answers 500 for an account while mail is off, which keeps the per-address count,
+    // and the gateway records a row only for an admitted request. Pins the per-mailbox bound; passes at head
+    // because the reset share is hosted-only.
+    const m = await member(tenantId, 'acct-events-r')
+    const sent = await Promise.all(
+      Array.from({ length: RESEND_PER_ADDRESS + 1 }, async () => {
+        const start = Date.now()
+        const res = await requestPasswordReset({ email: m.email })
+        return { res, ms: Date.now() - start }
+      }),
+    )
+    for (const { res, ms } of sent) {
+      expect(res.status).toBe(202)
+      expect(res.body).toEqual(RESET_ACCEPTED)
+      expect(ms, 'a reset request waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
+    }
+    await expect.poll(async () => rowsOf(await rows(adminToken, RESET_REQUESTED), m.id).length, POLL).toBe(RESEND_PER_ADDRESS)
+
+    const outBefore = (await getAuditLog(adminToken, { event: [SIGNED_OUT], limit: 100 })).total
+    await signOut(await signIn(admin.email, admin.password))
+    await refreshAdminToken()
+    await expect.poll(async () => (await getAuditLog(adminToken, { event: [SIGNED_OUT], limit: 100 })).total, POLL).toBeGreaterThan(outBefore)
+    await new Promise((r) => setTimeout(r, 6_000)) // one HandoffInterval (5 s) plus job time
+    expect(rowsOf(await rows(adminToken, RESET_REQUESTED), m.id)).toHaveLength(RESEND_PER_ADDRESS)
   })
 
   test('an admin sees every member, a preparer only themself', async () => {

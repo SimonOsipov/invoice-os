@@ -44,5 +44,5 @@ paths:
 | `deploy-nightly` | `dev-env.yml` | `refs/heads/main` |
 
 - The list lives in invoice-os-infra `bootstrap/wif-provider.yaml`; a token from any other file is refused at the exchange. In invoice-os-infra only `terraform.yml` gets a credential.
-- Rename or add a workflow that authenticates in three steps. (1) Add the new file name to `wif-provider.yaml`; the owner merges it and runs `bootstrap.sh`. (2) Merge the invoice-os change, which updates this table in the same PR. (3) Remove the old name from `wif-provider.yaml` and run the script again.
+- Rename or add a workflow that authenticates in three steps. (1) Add the new file name to `wif-provider.yaml`; the owner merges it and runs `bootstrap.sh`. (2) Merge the invoice-os change, which updates this table in the same PR. (3) Remove the old name from `wif-provider.yaml` and from the `wifcheck/` tests that pin it (`bootstrap.sh` stops while they fail), then run the script again.
 - `TestWIFTable_*` (`tools/prenv/wif_binding_workflow_test.go`) fails a PR when a workflow that calls `google-github-actions/auth` has no row, names a deployer its rows do not give it, or a row names a missing file.

@@ -30,6 +30,22 @@ func wifTableRows(md string) []wifRow {
 	return rows
 }
 
+func wifCode(text string) string {
+	return strings.Join(stripHashComments(strings.Split(text, "\n")), "\n")
+}
+
+// wifAuthUsing lists the files that call google-github-actions/auth outside a comment.
+func wifAuthUsing(texts map[string]string) []string {
+	var files []string
+	for file, text := range texts {
+		if strings.Contains(wifCode(text), "google-github-actions/auth") {
+			files = append(files, file)
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
 // wifTableFaults compares the table with the workflow texts, keyed by file name.
 func wifTableFaults(rows []wifRow, texts map[string]string) []string {
 	const where = "; the list lives in invoice-os-infra bootstrap/wif-provider.yaml"
@@ -47,7 +63,7 @@ func wifTableFaults(rows []wifRow, texts map[string]string) []string {
 		}
 	}
 	for file, text := range texts {
-		code := strings.Join(stripHashComments(strings.Split(text, "\n")), "\n")
+		code := wifCode(text)
 		if !strings.Contains(code, "google-github-actions/auth") {
 			continue
 		}
@@ -82,6 +98,10 @@ func wifReal(t *testing.T) ([]wifRow, map[string]string) {
 func TestWIFTable_EveryAuthWorkflowIsListed(t *testing.T) {
 	t.Parallel()
 	rows, texts := wifReal(t)
+	// Floor: a scan that finds no auth step would pass for nothing.
+	if got := wifAuthUsing(texts); len(got) < 6 {
+		t.Fatalf("auth-using workflows = %q, want at least 6", got)
+	}
 	for _, f := range wifTableFaults(rows, texts) {
 		if strings.Contains(f, "no ci-gcp.md table row") {
 			t.Error(f)

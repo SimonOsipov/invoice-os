@@ -57,6 +57,7 @@ var bcExemptRoutes = map[string]string{
 // bcShapeExemptions are the only handlers allowed to read a body uncapped.
 var bcShapeExemptions = []struct{ file, fn, why string }{
 	{"internal/gateway/gateway.go", "MockLoginHandler", "mock-issuer build only, public /auth route, never in production"},
+	{"internal/platform/resetretry.go", "retryable", "an outgoing request; it only checks that a body is absent and never reads it"},
 }
 
 // ---------------------------------------------------------------------------

@@ -171,6 +171,21 @@ describe('scrubDir', () => {
     expect(Array.from(e['p.png'])).toEqual(Array.from(png))
   })
 
+  it('redacts the member password in a retry trace and passes the residual check', () => {
+    const dir = tmp()
+    const pw = `${pwTag()}-preparer`
+    const trace = [
+      `{"type":"before","method":"fill","title":"Fill \\"${pw}\\"","params":{"selector":"#p","value":"${pw}"}}`,
+      `{"type":"log","message":["page.goto","typed ${pw} into the form"]}`,
+    ].join('\n')
+    put(dir, 'data/abc.zip', zipSync({ 'test.trace': enc(trace) }))
+    scrubDir(dir)
+    const e = unzipSync(new Uint8Array(readFileSync(join(dir, 'data/abc.zip'))))
+    expect(dec(e['test.trace'])).not.toContain(pwTag())
+    expect(dec(e['test.trace'])).toContain('[redacted]')
+    expect(residualHits(dir)).toEqual([])
+  })
+
   it('keeps non-ASCII text intact while redacting', () => {
     const dir = tmp()
     put(dir, 'r.json', '{"name":"Zoë — ok","title":"Fill \\"pw\\""}')
@@ -206,6 +221,13 @@ describe('scrubDir', () => {
 })
 
 describe('residuals', () => {
+  it('fails closed on a member password the scrub cannot reach', () => {
+    const dir = tmp()
+    put(dir, 'x.png', `typed ${pwTag()}-preparer`)
+    scrubDir(dir)
+    expect(residualHits(dir).map((h) => h.rule)).toEqual(['member-password'])
+  })
+
   it('flags an unredacted password field', () => {
     const dir = tmp()
     put(dir, 'bad.png', '{"password":"Ab12cd34Ef56gh78"}')
@@ -229,10 +251,10 @@ describe('reportScrub CLI', () => {
     const dir = tmp()
     const pre = '<p>head</p>'
     put(dir, 'index.html', `${pre}<script>var t="${jwt()}"</script>`)
-    put(dir, 'run.txt', `k=${pwTag()}`)
+    put(dir, 'run.png', `k=${pwTag()}`)
     const err = run(dir).stderr
     expect(err).toContain(`index.html: a credential survived the scrub (rule jwt, offset ${pre.length + '<script>var t="'.length}, in page text)`)
-    expect(err).toContain('run.txt: a credential survived the scrub (rule member-password, offset 2, in file)')
+    expect(err).toContain('run.png: a credential survived the scrub (rule member-password, offset 2, in file)')
     expect(err).not.toContain(pwTag())
     expect(err).not.toContain(jwt())
   })

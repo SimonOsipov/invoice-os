@@ -271,6 +271,11 @@ export async function signInSession(email: string, password: string): Promise<{ 
   return res.body as { access_token: string; refresh_token: string }
 }
 
+// POST /auth/sign-out: revokes every session of the account; 204 on success.
+export async function signOutSession(refreshToken: string): Promise<number> {
+  return (await rawFetch('/auth/sign-out', { method: 'POST', body: { refresh_token: refreshToken } })).status
+}
+
 // POST /auth/refresh: a fresh access token (claims re-minted) without a password sign-in.
 export async function refreshSession(refreshToken: string): Promise<string> {
   const res = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } })

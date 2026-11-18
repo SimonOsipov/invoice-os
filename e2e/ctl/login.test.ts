@@ -1633,7 +1633,7 @@ describe('production staff login keeps secrets out of every output', () => {
 
       expect(error, persona).toBeUndefined()
       const files = walk(prodDir(root))
-      expect(files.map((f) => path.basename(f)).sort(), persona).toEqual([`${persona}.json`, 'iap-route.js'])
+      expect(files.map((f) => path.basename(f)).sort(), persona).toEqual([`${persona}.json`, 'iap-route.js'].sort())
       const written = files.map((f) => readFileSync(f, 'utf8')).join('\n')
       expect(leaks(JSON.stringify(value)).filter((s) => s !== IAP_TOKEN), `${persona} result`).toEqual([])
       expect(leaks(out), `${persona} output`).toEqual([])
@@ -1642,12 +1642,15 @@ describe('production staff login keeps secrets out of every output', () => {
   })
 
   it('no staff password leaves login on any failure', async () => {
-    const { CtlError: Ctl } = await import('./main')
     const scenarios: { name: string; over: () => Partial<LoginDeps> }[] = [
       { name: 'the claim check rejects with the password', over: () => ({ staffClaim: vi.fn(async () => Promise.reject(new Error(`x ${DEV_PW}`))) }) },
       {
         name: 'the mint rejects with the other persona password',
-        over: () => ({ mintIap: vi.fn(async () => Promise.reject(new Ctl(`m ${SUP_PW}`, `h ${DEV_PW}`, 1, { e: SUP_PW }))) }),
+        over: () => ({ mintIap: vi.fn(async () => {
+            // Imported at call time: same module instance as the login under test (after its resetModules).
+            const { CtlError } = await import('./main')
+            throw new CtlError(`m ${SUP_PW}`, `h ${DEV_PW}`, 1, { e: SUP_PW })
+          }) }),
       },
       { name: 'the browser sign-in echoes everything', over: () => ({ signInFresh: vi.fn(async () => Promise.reject(new Error(`boom ${IAP_TOKEN} ${DEV_PW} ${SUP_PW}`))) }) },
     ]

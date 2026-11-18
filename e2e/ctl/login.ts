@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { CtlError } from './main'
@@ -90,13 +91,62 @@ export interface LoginDeps {
 
 export type StaffClaim = 'staff' | 'not-staff' | 'refused'
 
-// Red-test stubs (SECAUD-35-10): signatures only, replaced by the implementation.
-export const productionStaffFile = (): string => ''
-export function readProductionStaff(_file = productionStaffFile()): Record<'developer' | 'support', Account> {
-  return undefined as never
+export const productionStaffFile = (): string => path.join(os.homedir(), '.config', 'ascomply', 'ctl-production-staff.json')
+
+// Reads the user's file; no network call. Messages and hints never hold a value from the file.
+export function readProductionStaff(file = productionStaffFile()): Record<'developer' | 'support', Account> {
+  const shapeHint = `The user writes it in SECAUD-35-11 as {"developer":{"email","password"},"support":{"email","password"}}, then runs chmod 600 ${file}.`
+  let st
+  try {
+    st = statSync(file)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    throw new CtlError(code === 'ENOENT' ? `${file} is missing` : `could not read ${file}: ${code}`, shapeHint, 1)
+  }
+  if (!st.isFile()) throw new CtlError(`${file} is not a regular file`, shapeHint, 1)
+  if ((st.mode & 0o177) !== 0) {
+    throw new CtlError(`${file} is mode 0${(st.mode & 0o777).toString(8)}: it holds production staff passwords, so it must be 0600`, `Run: chmod 600 ${file}`, 1)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    // V8's parse message quotes the input, so it is dropped.
+    throw new CtlError(`${file} is not valid JSON`, shapeHint, 1)
+  }
+  const fail = (what: string) => new CtlError(`${file}: ${what}`, shapeHint, 1)
+  const root = (parsed ?? {}) as Record<string, unknown>
+  const out = {} as Record<'developer' | 'support', Account>
+  for (const persona of ['developer', 'support'] as const) {
+    const entry = root[persona]
+    if (entry === undefined) throw fail(`${persona} is missing`)
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw fail(`${persona} must be an object`)
+    const { email, password } = entry as Record<string, unknown>
+    if (typeof email !== 'string' || email === '') throw fail(`${persona}.email must be a non-empty string`)
+    if (!email.toLowerCase().endsWith('@ascomply.com')) throw fail(`${persona}.email must end in @ascomply.com`)
+    if (typeof password !== 'string' || password === '') throw fail(`${persona}.password must be a non-empty string`)
+    out[persona] = { email, password }
+  }
+  if (out.developer.email.toLowerCase() === out.support.email.toLowerCase()) {
+    throw fail('developer.email and support.email must differ: each persona has its own account (SECAUD-35)')
+  }
+  return out
 }
-export async function staffClaim(_account: Account): Promise<StaffClaim> {
-  return undefined as never
+
+// Answers from the access token's staff claim; the session is dropped.
+export async function staffClaim(account: Account): Promise<StaffClaim> {
+  const { signInSession, claimsOf, ApiError } = await import('../api/client')
+  let token: string
+  try {
+    token = (await signInSession(account.email, account.password)).access_token
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e
+    if (e.status === 401) return 'refused'
+    if (e.status === 429 || e.status === 503) throw new CtlError(`API sign-in answered ${e.status}`, throttleHint(e.status), 1)
+    throw e
+  }
+  const meta = claimsOf(token).app_metadata as { staff?: unknown } | undefined
+  return meta?.staff === true ? 'staff' : 'not-staff'
 }
 
 const ROLES: readonly Role[] = ['admin', 'preparer', 'reviewer']
@@ -111,7 +161,7 @@ const PROVISION_WRITES = 2 * ACCOUNT_KEYS.length
 
 const productionRefusal = () =>
   new CtlError(
-    'login refuses production: agents verify UI on PR environments, and production has no demo account (FLOWUPD-01 D6).',
+    'login refuses production for firm and inhouse: agents verify tenant UI on PR environments, and production has no demo tenant account (FLOWUPD-01 D6).',
     'Use --env pr-<N>. For production use read-only probes: the API, the database, Cloud Run logs, Sentry.',
     1,
   )
@@ -125,7 +175,7 @@ export function parseLoginArgs(positionals: string[], flags: Record<string, stri
   if (env === undefined || !/^(pr-[0-9]+|production)$/.test(env)) {
     throw usage(`--env must be pr-<N> or production, got: ${env ?? '(none)'}`)
   }
-  if (env === 'production') throw productionRefusal()
+  if (env === 'production' && !isStaff(persona)) throw productionRefusal()
   if (flags.role !== undefined && isStaff(persona)) {
     throw new CtlError('--role applies to firm and inhouse only: developer and support are staff accounts with no tenant role.', 'Drop --role.', 2)
   }
@@ -254,10 +304,10 @@ function scrub(e: unknown, secrets: Set<string>): unknown {
   if (!(e instanceof Error)) return e
   e.message = clean(e.message)
   if (e.stack) e.stack = clean(e.stack)
-  if (e instanceof CtlError) {
-    e.hint = clean(e.hint)
-    if (e.extra) e.extra = JSON.parse(clean(JSON.stringify(e.extra)))
-  }
+  // Duck-typed: a CtlError from another module instance must be scrubbed too.
+  const ctl = e as Partial<CtlError>
+  if (typeof ctl.hint === 'string') ctl.hint = clean(ctl.hint)
+  if (ctl.extra) ctl.extra = JSON.parse(clean(JSON.stringify(ctl.extra)))
   return e
 }
 
@@ -272,8 +322,8 @@ export async function login(req: LoginRequest, deps: LoginDeps): Promise<LoginRe
 
 async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>): Promise<LoginResult> {
   const { persona, env, role } = req
-  if (env === 'production') throw productionRefusal()
   const staff = isStaff(persona)
+  if (env === 'production' && !staff) throw productionRefusal()
   const key = (staff ? persona : `${persona}-${role}`) as AccountKey
 
   const resolved = await deps.resolveEnv(env)
@@ -283,6 +333,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
   }
   // The e2e helpers read these at module scope, so they load only after this.
   for (const [name, value] of Object.entries(resolved.urls)) if (value) process.env[name] = value
+  if (env === 'production') return productionStaffLogin(req, deps, secrets, key as 'developer' | 'support', resolved)
 
   let saved = deps.store.read(env)
   const remember = () => {
@@ -357,6 +408,57 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
       `${PLAYWRIGHT_CLI} list --json   # run open only if session ${req.session} is absent: open restarts an open session`,
       `${cli} open`,
       `${cli} state-load ${shq(storageState)}`,
+      `${cli} goto ${shq(url)}`,
+    ],
+  }
+}
+
+// Production staff: the user's own accounts, no provisioning, no accounts.json.
+async function productionStaffLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>, key: 'developer' | 'support', resolved: EnvResult): Promise<LoginResult> {
+  const accounts = deps.productionStaff()
+  for (const a of Object.values(accounts)) secrets.add(a.password)
+  const account = accounts[key]
+  const claim = await deps.staffClaim(account)
+  if (claim === 'refused') {
+    throw new CtlError(
+      `production refused the sign-in for ${account.email}`,
+      'The user checks that account and its password in ~/.config/ascomply/ctl-production-staff.json (SECAUD-35-11); ctl creates no production account.',
+      1,
+    )
+  }
+  if (claim === 'not-staff') {
+    throw new CtlError(`${account.email} signed in but is not staff on production`, 'The user makes it an active member of the house workspace (SECAUD-35-11).', 1)
+  }
+  const iap = await deps.mintIap()
+  secrets.add(iap.token)
+  const dir = deps.store.dir('production')
+  mkdirSync(dir, { recursive: true })
+  const statePath = deps.store.statePath('production', key)
+  await deps.signInFresh(key, account, resolved.urls, statePath, iap.token)
+  const { iapRouteScript } = await import('./iap')
+  const script = path.join(dir, 'iap-route.js')
+  const tmp = `${script}.tmp`
+  writeFileSync(tmp, iapRouteScript(iap.token), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, script)
+  const url = (key === 'developer' ? resolved.urls.OPS_CONSOLE_URL : resolved.urls.SUPPORT_CONSOLE_URL) as string
+  const storageState = path.resolve(statePath)
+  const cli = `${PLAYWRIGHT_CLI} -s=${shq(req.session)}`
+  return {
+    env: req.env,
+    persona: req.persona,
+    email: account.email,
+    url,
+    storageState,
+    created: false,
+    reused: false,
+    gatewayWrites: 0,
+    iapExpiresAt: iap.expiresAt,
+    next: [
+      `${PLAYWRIGHT_CLI} list --json   # run open only if session ${req.session} is absent: open restarts an open session`,
+      `${cli} open`,
+      `${cli} state-load ${shq(storageState)}`,
+      `${cli} run-code --filename=${shq(path.resolve(script))}`,
       `${cli} goto ${shq(url)}`,
     ],
   }

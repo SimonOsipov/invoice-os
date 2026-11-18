@@ -42,7 +42,7 @@ Example: ${CTL} env pr-348`,
   login: `Usage: ctl login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer] [--session S]
 
 Provisions the demo accounts once per environment, signs in, and saves a storage state.
---role applies to firm and inhouse only (default admin). --env production is refused.
+--role applies to firm and inhouse only (default admin). --env production: developer and support only, each with its own account from ~/.config/ascomply/ctl-production-staff.json, through IAP (see e2e/README.md).
 --session defaults to $PLAYWRIGHT_CLI_SESSION, else "default".
 Prints { env, persona, role, email, tenantId, url, storageState, created, reused, gatewayWrites, next }.
 Example: ${CTL} login firm --env pr-348 --role reviewer`,

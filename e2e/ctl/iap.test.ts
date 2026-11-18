@@ -303,7 +303,11 @@ describe('mintIapToken', () => {
     expect(err.message).toContain('403')
     expect(err.hint).toContain('roles/iam.serviceAccountTokenCreator')
     expect(err.hint).toContain('SECAUD-35-05')
+    expect(err.hint).toContain('serviceusage.services.use')
+    expect(err.message).toContain('quota project')
     expect(`${err.message} ${err.hint}`).not.toContain('user-tok')
+    const headers = (fetchMock.mock.calls.at(-1)![1] as { headers: Record<string, string> }).headers
+    expect(headers['X-Goog-User-Project']).toBe('ascomply-prod')
   })
 
   it('another status and a body without a token fail', async () => {

@@ -1,4 +1,4 @@
-// The production consoles sit behind IAP; ctl sends a service-account token to those two origins only.
+// The production consoles are guarded by IAP when it is on; ctl sends a service-account token to those two origins only.
 import { execFileSync } from 'node:child_process'
 
 import type { BrowserContext } from '@playwright/test'
@@ -36,8 +36,8 @@ export async function mintIapToken(): Promise<{ token: string; expiresAt: string
   }
   if (res.status === 403) {
     throw new CtlError(
-      `this gcloud account may not mint a token for ${CTL_IAP_ACCOUNT} (403)`,
-      `The user grants it: gcloud iam service-accounts add-iam-policy-binding ${CTL_IAP_ACCOUNT} --member=user:<account> --role=roles/iam.serviceAccountTokenCreator --project=ascomply-prod (SECAUD-35-05).`,
+      `this gcloud account may not mint a token for ${CTL_IAP_ACCOUNT}, or may not use project ascomply-prod as the quota project (403)`,
+      `The user grants roles/iam.serviceAccountTokenCreator: gcloud iam service-accounts add-iam-policy-binding ${CTL_IAP_ACCOUNT} --member=user:<account> --role=roles/iam.serviceAccountTokenCreator --project=ascomply-prod; the request also bills ascomply-prod, which needs serviceusage.services.use (SECAUD-35-05).`,
       1,
     )
   }

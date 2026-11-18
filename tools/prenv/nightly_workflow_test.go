@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,8 +328,8 @@ func nightlyProdCheckProblems(j workflowJob, all []string) []string {
 			p = append(p, "prod-check gcloud read is not retried: "+l)
 		}
 	}
-	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "latestCreatedRevisionName") {
-		p = append(p, "prod-check reads the auth image from the revision serving traffic, not the newest one")
+	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "revisions describe") {
+		p = append(p, "prod-check reads the auth commit from the revision serving traffic, not the service template")
 	}
 	up := nightlyStepLines(j, "uses: actions/upload-artifact@")
 	if up == nil {
@@ -606,9 +607,9 @@ func TestNightly_ProdCheckJobMutations(t *testing.T) {
 			return mutateOnce(t, n, "token=$(retry gcloud", "token=$(gcloud")
 		}, []string{"gcloud read is not retried"}},
 		{"retry loses its pause", func(t *testing.T, n string) string { return mutateOnce(t, n, "sleep 20;", "true;") }, []string{"3 tries, 20 s apart"}},
-		{"auth image read from the newest revision", func(t *testing.T, n string) string {
+		{"auth commit read from the template, not the serving revision", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, ".status.traffic", ".status.other")
-		}, []string{"not the newest one"}},
+		}, []string{"not the service template"}},
 		{"gateway token read in summary", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      T: gateway-token\n")
 		}, []string{"gateway-token is named outside prod-check"}},
@@ -908,9 +909,21 @@ func authStepBox(t *testing.T, svc string) (b *prodBox, envFile string) {
 case "$1 $2 $3" in
 "secrets versions access") echo tok ;;
 "run services describe") cat "$D/svc.json" ;;
+"run revisions describe")
+	if [ -f "$D/rev-$4.json" ]; then cat "$D/rev-$4.json"; elif [ -f "$D/rev.json" ]; then cat "$D/rev.json"; else echo "no such revision $4" >&2; exit 1; fi ;;
 esac
 `)
 	b.put("svc.json", svc)
+	// Default: every revision carries the labels of the service template; runAuthStepWith overrides per revision.
+	var s struct {
+		Spec struct {
+			Template struct{ Metadata json.RawMessage }
+		}
+	}
+	if err := json.Unmarshal([]byte(svc), &s); err != nil {
+		t.Fatal(err)
+	}
+	b.put("rev.json", `{"metadata":`+string(s.Spec.Template.Metadata)+`}`)
 	envFile = filepath.Join(b.root, "github_env")
 	b.env["GITHUB_ENV"], b.env["PROJECT"], b.env["REGION"] = envFile, "proj-x", "region-x"
 	return b, envFile
@@ -930,8 +943,17 @@ func authSvcTraffic(traffic, newest, ready, labels string) string {
 
 func runAuthStep(t *testing.T, svc string) (envText string, calls []string) {
 	t.Helper()
+	return runAuthStepWith(t, svc, nil)
+}
+
+// runAuthStepWith is runAuthStep with revisions[name] as the JSON `gcloud run revisions describe name` returns.
+func runAuthStepWith(t *testing.T, svc string, revisions map[string]string) (envText string, calls []string) {
+	t.Helper()
 	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
 	b, envFile := authStepBox(t, svc)
+	for name, body := range revisions {
+		b.put("rev-"+name+".json", body)
+	}
 	if r := b.step(step); r.code != 0 {
 		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
 	}
@@ -949,8 +971,25 @@ func TestNightly_ProdCheckAuthStepSetsTheServingBuild(t *testing.T) {
 	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+sha+"\n" {
 		t.Errorf("GITHUB_ENV = %q, want the token and AUTH_BUILD=%s", env, sha)
 	}
-	if len(calls) != 2 {
-		t.Errorf("gcloud calls %q, want exactly two", calls)
+	// token, service describe, serving-revision describe
+	if len(calls) != 3 {
+		t.Errorf("gcloud calls %q, want exactly three", calls)
+	}
+}
+
+// A terraform apply leaves a newer revision with no traffic; the commit is the serving revision's label.
+func TestNightly_ProdCheckAuthStepReadsTheCommitFromTheServingRevision(t *testing.T) {
+	t.Parallel()
+	servingSha, templateSha := strings.Repeat("a", 40), strings.Repeat("d", 40)
+	svc := authSvcJSON("auth-00524-von", "auth-00199-ht5", `{"commit":"`+templateSha+`"}`, "r/images/auth@sha256:D")
+	env, calls := runAuthStepWith(t, svc, map[string]string{
+		"auth-00524-von": `{"metadata":{"name":"auth-00524-von","labels":{"commit":"` + servingSha + `"}}}`,
+	})
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+servingSha+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want AUTH_BUILD=%s (serving revision), not the template's %s", env, servingSha, templateSha)
+	}
+	if !slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe auth-00524-von ") }) {
+		t.Errorf("gcloud calls %q, want a describe of the serving revision", calls)
 	}
 }
 
@@ -958,7 +997,6 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 	t.Parallel()
 	sha := strings.Repeat("b", 40)
 	for _, tc := range []struct{ name, svc string }{
-		{"serving is not the newest", authSvcJSON("auth-1", "auth-2", `{"commit":"`+sha+`"}`, "r/auth@sha256:D")},
 		{"no label", authSvcJSON("auth-2", "auth-2", `{}`, "r/auth@sha256:D")},
 		{"label latest", authSvcJSON("auth-2", "auth-2", `{"commit":"latest"}`, "r/auth@sha256:D")},
 		{"39 hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha[:39]+`"}`, "r/auth@sha256:D")},
@@ -969,7 +1007,6 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 		{"40 non-hex letters", authSvcJSON("auth-2", "auth-2", `{"commit":"`+strings.Repeat("g", 40)+`"}`, "r/auth@sha256:D")},
 		{"traffic split over two revisions", authSvcTraffic(`[{"revisionName":"auth-2","percent":50},{"revisionName":"auth-1","percent":50}]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
 		{"no traffic entry", authSvcTraffic(`[]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
-		{"latest revision, but not the newest ready", authSvcTraffic(`[{"latestRevision":true,"percent":100}]`, "auth-3", "auth-2", `{"commit":"`+sha+`"}`)},
 		{"no labels at all", authSvcJSON("auth-2", "auth-2", `null`, "r/auth@sha256:D")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

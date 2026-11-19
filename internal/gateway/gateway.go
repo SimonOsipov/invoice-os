@@ -101,7 +101,23 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, strings.ToLower(http.StatusText(status)))
 		return
 	}
+	if WritesOnGet(rest) {
+		r = r.WithContext(platform.NoResetRetry(r.Context()))
+	}
 	proxy.ServeHTTP(w, r)
+}
+
+// writingGets matches the proxied GETs whose handler writes upstream (an audit row or an export
+// lock), so a reset after the upstream committed must not re-send them. Add a route here when a GET
+// handler starts to write.
+var writingGets = regexp.MustCompile(`^/(?:` +
+	`v1/(?:evidence-bundle|invoice-register|workspace/export|imports/saved-mapping)|` +
+	`v1/documents/[^/]+(?:/sheet)?|` +
+	`v1/extractions/[^/]+)/?$`)
+
+// WritesOnGet tests the path as sent and as the upstream mux will clean it.
+func WritesOnGet(rest string) bool {
+	return writingGets.MatchString("/"+rest) || writingGets.MatchString(path.Clean("/"+rest))
 }
 
 // A token with no tenant may reach these two POST routes: provisioning creates a tenant, accept joins one.
@@ -174,7 +190,7 @@ var errGuardRefused = errors.New("upstream refused the gateway token")
 // upstream and overwrite the identity headers from the verified token.
 func newReverseProxy(service string, target *url.URL, gatewayToken string, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		Transport: platform.TraceTransport(nil),
+		Transport: platform.TraceTransport(platform.ResetRetryTransport(nil)),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.SetXForwarded()

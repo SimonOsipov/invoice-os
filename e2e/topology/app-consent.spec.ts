@@ -1,6 +1,6 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
 import { randomUUID } from 'node:crypto'
-import { test, expect, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import { test, expect, type BrowserContext, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
 import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
@@ -69,18 +69,50 @@ test('AC-03 the PR app host loads no HubSpot chat and no Google tag after Accept
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Seeds the HubSpot cookies, clicks Sign out, and checks the cookies and console are clean.
+async function signOutAndExpectClean(page: Page, context: BrowserContext, errors: string[]): Promise<void> {
+  await context.addCookies(HUBSPOT_COOKIES.map((name) => ({ name, value: 'e2e', url: APP_URL })))
+  const held = (await context.cookies(APP_URL)).map((c) => c.name)
+  expect(held, 'the seeded cookies were not stored').toEqual(expect.arrayContaining(HUBSPOT_COOKIES))
+  // Revocation makes the gateway answer an in-flight mount read 401, which Chrome logs as a console error.
+  await page.waitForLoadState('networkidle')
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  // Polls the URL: with any page.route active the first landing request is superseded, and waitForURL rejects on that ERR_ABORTED.
+  await expect.poll(() => page.url().startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 }).toBe(true)
+  const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))
+  expect(left, 'HubSpot cookies survived the sign-out').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+}
+
 test('AC-04 Sign out deletes the HubSpot cookies on the app host', async ({ page, context }) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await context.addCookies(HUBSPOT_COOKIES.map((name) => ({ name, value: 'e2e', url: APP_URL })))
-  const held = (await context.cookies(APP_URL)).map((c) => c.name)
-  expect(held, 'the seeded cookies were not stored').toEqual(expect.arrayContaining(HUBSPOT_COOKIES))
-  await page.getByRole('button', { name: 'Sign out' }).click()
-  await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
-  const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))
-  expect(left, 'HubSpot cookies survived the sign-out').toEqual([])
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  await signOutAndExpectClean(page, context, errors)
+})
+
+test('AC-04 a workflow-roles read held past the sign-out revocation does not log a 401', async ({ page, context }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  let signedOut!: () => void
+  let rolesDone!: () => void
+  const signOutAnswered = new Promise<void>((resolve) => { signedOut = resolve })
+  const rolesAnswered = new Promise<void>((resolve) => { rolesDone = resolve })
+  // The roles read waits for the sign-out response (or 4s, so a spec that waits for idle is not deadlocked), so the gateway answers it 401.
+  // The sign-out is only observed; the landing navigation is held until the read is answered, keeping the page alive to log the 401.
+  page.on('response', (res) => { if (res.url().endsWith('/auth/sign-out')) signedOut() })
+  await page.route('**/api/invoice/v1/workflow-roles*', async (route) => {
+    await Promise.race([signOutAnswered, new Promise((resolve) => setTimeout(resolve, 4_000))])
+    const res = await route.fetch()
+    rolesDone()
+    await route.fulfill({ response: res })
+  })
+  await page.route((u) => u.href.startsWith(resolveTarget('LANDING_URL')), async (route) => {
+    if (route.request().isNavigationRequest()) await Promise.race([rolesAnswered, new Promise((resolve) => setTimeout(resolve, 5_000))])
+    await route.continue()
+  })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await signOutAndExpectClean(page, context, errors)
 })
 
 const ROUTES = ['/', '/invoices', '/approvals', '/rules', '/customers', '/reports', '/workflows', '/clients', '/audit', '/settings', '/create']

@@ -57,6 +57,8 @@ func (u *resetUpstream) serve(c *net.TCPConn) {
 	u.mu.Unlock()
 
 	if reset && !u.readFirst {
+		// Wait for the first bytes: an RST before any arrive can surface as EOF, not ECONNRESET.
+		_, _ = c.Read(make([]byte, 1))
 		_ = c.SetLinger(0)
 		return
 	}

@@ -36,7 +36,7 @@ type resetRetry struct {
 
 func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
 	retry := retryable(req)
-	resp, err, viaH2 := t.attempt(req, retry)
+	resp, viaH2, err := t.attempt(req, retry)
 	if err == nil || !isReset(err, viaH2) || req.Context().Err() != nil {
 		return resp, err
 	}
@@ -44,7 +44,7 @@ func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !retry {
 		return nil, err
 	}
-	resp, err, viaH2 = t.attempt(req, true)
+	resp, viaH2, err = t.attempt(req, true)
 	if err != nil && isReset(err, viaH2) {
 		logReset(req, 2, false, err)
 	}
@@ -52,19 +52,19 @@ func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // attempt round-trips once; with probe it also reports whether the connection negotiated h2.
-func (t *resetRetry) attempt(req *http.Request, probe bool) (*http.Response, error, bool) {
+func (t *resetRetry) attempt(req *http.Request, probe bool) (*http.Response, bool, error) {
 	if !probe {
 		resp, err := t.base.RoundTrip(req)
-		return resp, err, false
+		return resp, false, err
 	}
 	var h2 atomic.Bool
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
-		if c, ok := i.Conn.(*tls.Conn); ok && c.ConnectionState().NegotiatedProtocol == "h2" {
-			h2.Store(true)
-		}
+		// ceiling: h2 seen only on *tls.Conn; revisit if a base dials h2c or wraps the TLS conn
+		c, ok := i.Conn.(*tls.Conn)
+		h2.Store(ok && c.ConnectionState().NegotiatedProtocol == "h2") // last conn used decides
 	}}
 	resp, err := t.base.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
-	return resp, err, h2.Load()
+	return resp, h2.Load(), err
 }
 
 // isReset: on Linux a client write after the RST consumes the socket error, so the h2 read ends in

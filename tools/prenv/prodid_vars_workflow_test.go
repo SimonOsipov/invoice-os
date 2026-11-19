@@ -127,7 +127,7 @@ func checkProblems(yml string, root int) []string {
 	if idx > auth {
 		out = append(out, label+": the check runs after auth")
 	}
-	if co := slices.IndexFunc(steps, func(x workflowStep) bool { return x.keys["uses"] == "actions/checkout@v4" }); co < 0 || idx < co {
+	if co := slices.IndexFunc(steps, func(x workflowStep) bool { return strings.HasPrefix(x.keys["uses"], "actions/checkout@") }); co < 0 || idx < co {
 		out = append(out, label+": the check runs before checkout")
 	}
 	if want := "bash scripts/ci/require-vars.sh " + strings.Join(r.names, " "); s.keys["run"] != want {

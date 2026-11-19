@@ -4,9 +4,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var usesRefRE = regexp.MustCompile(`(uses:\s*['"]?[\w./-]+@)[^\s'"]*['"]?(\s+#.*)?$`)
+
+// refless drops the pin and the version comment from a `uses:` line, so a check names the action, not its ref.
+func refless(l string) string { return usesRefRE.ReplaceAllString(l, "${1}") }
+
+// actionLine returns the ref and comment that yml gives action (`owner/repo@<ref> # vX.Y.Z`).
+// It fails unless one distinct value is found, so a needle built from it matches the file.
+func actionLine(t *testing.T, yml, action string) string {
+	t.Helper()
+	found := map[string]bool{}
+	for _, l := range strings.Split(yml, "\n") {
+		if _, v, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "- ")), "uses: "); ok && strings.HasPrefix(v, action+"@") {
+			found[v] = true
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one ref of %s in the workflow, got %v", action, found)
+	}
+	for v := range found {
+		return v
+	}
+	return ""
+}
 
 // workflowJob is one jobs.<name> block of comment-stripped workflow lines.
 type workflowJob struct {

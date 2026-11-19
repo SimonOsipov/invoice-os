@@ -41,11 +41,11 @@ var (
 		"PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}",
 		"PROD_IAP_TOKEN: ${{ steps.iap.outputs.access_token }}",
 	}
-	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
-	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@v4", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}
+	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
+	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}
 	// each is named only inside prod-check.
 	nightlyProdOnly    = []string{"secrets.PROD_PROBE_EMAIL", "secrets.PROD_PROBE_PASSWORD", "gateway-token", "id-token"}
-	nightlyUploadLines = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: nightly-summary", "path: ${{ runner.temp }}/summary.json", "if-no-files-found: error", "retention-days: 14"}
+	nightlyUploadLines = []string{"if: always()", "uses: actions/upload-artifact@", "name: nightly-summary", "path: ${{ runner.temp }}/summary.json", "if-no-files-found: error", "retention-days: 14"}
 )
 
 // nightlyStepLines returns the trimmed lines of the first step of j that has a line containing marker.
@@ -65,7 +65,7 @@ func nightlyStepLines(j workflowJob, marker string) []string {
 			cur = nil
 		}
 		if strings.HasPrefix(l, "      ") && strings.TrimSpace(l) != "" {
-			cur = append(cur, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "- ")))
+			cur = append(cur, refless(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "- "))))
 		}
 	}
 	return flush()
@@ -886,11 +886,11 @@ func TestNightly_ArgosSectionIsPassed(t *testing.T) {
 
 func TestNightly_ArgosInstallAfterTheDispatch(t *testing.T) {
 	t.Parallel()
-	pnpm := "      - uses: pnpm/action-setup@v6\n        if: always()\n"
-	install := "      - name: Install the e2e workspace\n        if: always()\n        run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts\n"
 	nightly, ci, suites := nightlyFiles(t)
+	pnpm := "      - uses: " + actionLine(t, nightly, "pnpm/action-setup") + "\n        if: always()\n"
+	install := "      - name: Install the e2e workspace\n        if: always()\n        run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts\n"
 	early := mutateOnce(t, nightly, pnpm+install, "")
-	early = mutateOnce(t, early, "      - uses: actions/setup-node@v4\n", pnpm+install+"      - uses: actions/setup-node@v4\n")
+	early = mutateOnce(t, early, "      - uses: "+actionLine(t, nightly, "actions/setup-node")+"\n", pnpm+install+"      - uses: "+actionLine(t, nightly, "actions/setup-node")+"\n")
 	if got := nightlyRunProblems(early, ci, suites); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "before the CI dispatch") }) {
 		t.Errorf("install before the dispatch: problems %q name no such rule", got)
 	}

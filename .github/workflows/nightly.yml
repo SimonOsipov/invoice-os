@@ -34,18 +34,18 @@ jobs:
       PROJECT: ascomply-prod
       REGION: africa-south1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           filter: blob:none
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Check the Actions variables
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         continue-on-error: true
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -67,7 +67,7 @@ jobs:
       # The nightly mints an IAP token for its console reads; gcloud creds stay as set above.
       - id: iap
         continue-on-error: true
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
@@ -89,7 +89,7 @@ jobs:
         run: go run ./internal/tools/prodcheck -head "$HEAD" -expected "$EXPECTED" -auth-build "${AUTH_BUILD:-}" -out "$RUNNER_TEMP/prod_check.json"
       - name: Upload prod-check
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prod-check
           path: ${{ runner.temp }}/prod_check.json
@@ -109,11 +109,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Run CI and the nightly preview on this ref
@@ -141,11 +141,11 @@ jobs:
       - name: Download the prod check
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: prod-check
           path: ${{ runner.temp }}/prod-check
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         if: always()
       - name: Install the e2e workspace
         if: always()
@@ -178,7 +178,7 @@ jobs:
           go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -section ai="$RUNNER_TEMP/results/results-ai-check/ai.json" -section email="$RUNNER_TEMP/results/results-email/email.json" -section hubspot="$RUNNER_TEMP/results/results-hubspot/hubspot.json" -section prod_check="$RUNNER_TEMP/prod-check/prod_check.json" -section argos="$RUNNER_TEMP/argos.json" -out "$RUNNER_TEMP/summary.json"
       - name: Upload nightly-summary
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-summary
           path: ${{ runner.temp }}/summary.json

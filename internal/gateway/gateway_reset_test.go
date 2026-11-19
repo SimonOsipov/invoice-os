@@ -131,25 +131,58 @@ func TestProxyRetriesAnUpstreamConnectionReset(t *testing.T) {
 	if got := retried.Get(headerUserID); got != testSubject {
 		t.Errorf("retry %s = %q, want %q", headerUserID, got, testSubject)
 	}
-}
 
-// A GET whose handler writes upstream (an audit row, the export lock) must not be re-sent.
-func TestProxyDoesNotRetryAResetGETThatWrites(t *testing.T) {
+	// Read-only neighbours of the writing GETs stay retried, so the list does not over-match.
 	for _, p := range []string{
-		"/api/invoice/v1/invoice-register",
-		"/api/invoice/v1/workspace/export",
-		"/api/invoice/v1/evidence-bundle",
-		"/api/invoice/v1/documents/abc",
-		"/api/invoice/v1/documents/abc/sheet",
-		"/api/invoice/v1/imports/saved-mapping",
-		"/api/submission/v1/extractions/abc",
-		"/api/invoice/v1/x/../invoice-register",
+		"/api/invoice/v1/workspace/export/preflight",
+		"/api/invoice/v1/evidence-bundle/preview",
+		"/api/invoice/v1/documents",
+		"/api/invoice/v1/documents/abc/sheet/x",
+		"/api/invoice/v1/imports/abc",
+		"/api/invoice/v1/invoices/abc",
+		"/api/submission/v1/extractions",
+		"/api/submission/v1/extractions/abc/pages/1",
+		"/api/invoice/V1/Documents/abc",   // the mux is case-sensitive: this is no document route
+		"/api/invoice/x/v1/documents/abc", // a writing route anchors at the start too
 	} {
 		t.Run(p, func(t *testing.T) {
 			up := newResetUpstream(t, 1, true)
 			h, tok := resetGateway(t, up, slog.New(slog.DiscardHandler))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, request("GET", p, tok))
+			if _, reqs := up.counts(); reqs != 2 {
+				t.Fatalf("upstream saw %d requests, want 2", reqs)
+			}
+		})
+	}
+}
+
+// A GET whose handler writes upstream (an audit row, the export lock) must not be re-sent.
+func TestProxyDoesNotRetryAResetGETThatWrites(t *testing.T) {
+	for _, c := range [][2]string{
+		{"GET", "/api/invoice/v1/invoice-register"},
+		{"GET", "/api/invoice/v1/workspace/export"},
+		{"GET", "/api/invoice/v1/evidence-bundle"},
+		{"GET", "/api/invoice/v1/documents/abc"},
+		{"GET", "/api/invoice/v1/documents/abc/sheet"},
+		{"GET", "/api/invoice/v1/imports/saved-mapping"},
+		{"GET", "/api/submission/v1/extractions/abc"},
+		{"GET", "/api/invoice/v1/x/../invoice-register"},
+		// Spellings the upstream mux still serves: query, escaped segment, cleaned slashes, HEAD.
+		{"GET", "/api/invoice/v1/evidence-bundle?entity=e&from=2026-01-01"},
+		{"GET", "/api/invoice/v1/documents/abc?download=1"},
+		{"GET", "/api/invoice/v1/%65vidence-bundle"},
+		{"GET", "/api/invoice//v1//invoice-register"},
+		{"GET", "/api/invoice/v1/documents/abc/./sheet"},
+		{"GET", "/api/invoice/v1/documents/abc/"},
+		{"HEAD", "/api/invoice/v1/documents/abc"},
+	} {
+		method, p := c[0], c[1]
+		t.Run(method+" "+p, func(t *testing.T) {
+			up := newResetUpstream(t, 1, true)
+			h, tok := resetGateway(t, up, slog.New(slog.DiscardHandler))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request(method, p, tok))
 			if rec.Code != http.StatusBadGateway {
 				t.Fatalf("status = %d, want 502", rec.Code)
 			}

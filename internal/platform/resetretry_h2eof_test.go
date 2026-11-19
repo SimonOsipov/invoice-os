@@ -145,7 +145,7 @@ func TestResetRetry_H2UnexpectedEOF_SafeMethodsAreRetried(t *testing.T) {
 	}
 }
 
-// The real BUG-152 race, no injection and no warm-up; it passes whichever error attempt 1 gets.
+// The real race, no injection and no warm-up; it passes whichever error attempt 1 gets.
 func TestResetRetry_H2UnexpectedEOF_LinuxColdConnRaceIsRetried(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the unexpected EOF outcome of the RST race is Linux-only")
@@ -402,5 +402,44 @@ func TestResetRetry_HTTP1UnexpectedEOFIsNotRetried(t *testing.T) {
 				t.Errorf("records = %v, want none", recs)
 			}
 		})
+	}
+}
+
+type gotConnTwice struct {
+	conns []net.Conn
+	calls atomic.Int32
+}
+
+func (s *gotConnTwice) RoundTrip(r *http.Request) (*http.Response, error) {
+	s.calls.Add(1)
+	if tr := httptrace.ContextClientTrace(r.Context()); tr != nil {
+		for _, c := range s.conns {
+			tr.GotConn(httptrace.GotConnInfo{Conn: c})
+		}
+	}
+	return nil, io.ErrUnexpectedEOF
+}
+
+// net/http can re-dial inside one RoundTrip; the last conn used decides, so h2 then HTTP/1.1 is not retried.
+func TestResetRetry_H2ThenHTTP1ConnUnexpectedEOFIsNotRetried(t *testing.T) {
+	srv, _ := eofH2Srv(t, 0)
+	h2conn, err := tls.Dial("tcp", srv.Listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2conn.Close()
+	if h2conn.ConnectionState().NegotiatedProtocol != "h2" {
+		t.Fatalf("fixture conn did not negotiate h2")
+	}
+	plain, other := net.Pipe()
+	defer plain.Close()
+	defer other.Close()
+
+	base := &gotConnTwice{conns: []net.Conn{h2conn, plain}}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	_, err = ResetRetryTransport(base).RoundTrip(req)
+	wantUnexpectedEOF(t, err)
+	if base.calls.Load() != 1 {
+		t.Errorf("base round trips = %d, want 1", base.calls.Load())
 	}
 }

@@ -1,19 +1,19 @@
-# SECAUD-19 throwaway probe: prints the pull_request OIDC claims and the STS status. Never merge.
+# SECAUD-19 throwaway probe: proves an unnamed workflow gets no cloud credential. Never merge.
 name: secaud-19-oidc-probe
 on: pull_request
 permissions:
   contents: read
   id-token: write
 jobs:
-  probe:
+  refused:
+    name: STS exchange is refused
     runs-on: ubuntu-latest
     steps:
-      - name: Print claims and STS status (never the token)
+      - name: Exchange the OIDC token; pass only on an attribute-condition refusal
         env:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
           set -euo pipefail
-          echo "::add-mask::$WIF_PROVIDER"
           tok=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "https://iam.googleapis.com/$WIF_PROVIDER" '$a|@uri')" | jq -r .value)
           echo "::add-mask::$tok"
@@ -28,4 +28,21 @@ jobs:
             --data-urlencode subject_token_type=urn:ietf:params:oauth:token-type:jwt \
             --data-urlencode "subject_token=$tok")
           echo "STS HTTP status: $status"
-          if [ "$status" != 200 ]; then jq -c . "$RUNNER_TEMP/sts.json"; fi
+          if [ "${status:0:1}" = 2 ]; then rm -f "$RUNNER_TEMP/sts.json"; echo "credential issued"; exit 1; fi
+          jq -c . "$RUNNER_TEMP/sts.json"
+          jq -e '.error_description | contains("rejected by the attribute condition")' "$RUNNER_TEMP/sts.json"
+
+  auth-fails:
+    name: auth as deploy-preview fails
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
+      - name: Pass only when the auth step failed
+        env:
+          OUTCOME: ${{ steps.auth.outcome }}
+        run: '[ "$OUTCOME" = failure ] || { echo "::error::auth outcome $OUTCOME"; exit 1; }'

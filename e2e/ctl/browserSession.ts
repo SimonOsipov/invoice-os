@@ -6,6 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from '@playwri
 import { CtlError } from './main'
 import type { Account, AccountKey } from './login'
 import type { EnvResult } from './envUrls'
+import { IAP_ORIGINS, installIapRoute } from './iap'
 
 type Urls = EnvResult['urls']
 type Destination = 'app' | 'ops' | 'support'
@@ -15,7 +16,7 @@ const DESTINATION: Record<'developer' | 'support', Destination> = { developer: '
 const rootUrl = (dest: Destination, urls: Urls) => (dest === 'app' ? urls.APP_URL : dest === 'ops' ? urls.OPS_CONSOLE_URL : urls.SUPPORT_CONSOLE_URL) as string
 const destinationOf = (key: AccountKey): Destination => (key === 'developer' || key === 'support' ? DESTINATION[key] : 'app')
 
-async function withContext<T>(storageState: string | undefined, run: (context: BrowserContext, page: Page) => Promise<T>): Promise<T> {
+async function withContext<T>(storageState: string | undefined, run: (context: BrowserContext, page: Page) => Promise<T>, iap?: string): Promise<T> {
   let browser: Browser
   try {
     browser = await chromium.launch()
@@ -24,6 +25,7 @@ async function withContext<T>(storageState: string | undefined, run: (context: B
   }
   try {
     const context = await browser.newContext(storageState ? { storageState } : {})
+    if (iap) await installIapRoute(context, iap, IAP_ORIGINS)
     return await run(context, await context.newPage())
   } finally {
     await browser.close()
@@ -46,7 +48,7 @@ async function save(context: BrowserContext, statePath: string): Promise<void> {
   chmodSync(statePath, 0o600)
 }
 
-export async function signInFresh(key: AccountKey, account: Account, _urls: Urls, statePath: string): Promise<{ role?: string }> {
+export async function signInFresh(key: AccountKey, account: Account, _urls: Urls, statePath: string, iap?: string): Promise<{ role?: string }> {
   const dest = destinationOf(key)
   const { DESTINATION_READY, passFrontDoor } = await import('../personaSession')
   return withContext(undefined, async (context, page) => {
@@ -61,7 +63,7 @@ export async function signInFresh(key: AccountKey, account: Account, _urls: Urls
     await openWithHandoff(page, dest, account as Required<Pick<Account, 'email' | 'password'>>)
     await save(context, statePath)
     return {}
-  })
+  }, iap)
 }
 
 const APP_SESSION_KEY = 'invoice-os.session'

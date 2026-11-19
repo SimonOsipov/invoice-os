@@ -190,8 +190,8 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 			t.Errorf("%s CheckRedirect returns %q, want only http.ErrUseLastResponse", name, got)
 		}
 		// GKE-08: GoTrue is ingress-internal; Cloud Run admits only a call with an ID token.
-		if got := clients[0]["Transport"]; got != "platform.IDTokenTransport(nil)" {
-			t.Errorf("%s Transport = %q, want platform.IDTokenTransport(nil)", name, got)
+		if got := clients[0]["Transport"]; got != "platform.IDTokenTransport(platform.ResetRetryTransport(nil))" {
+			t.Errorf("%s Transport = %q, want platform.IDTokenTransport(platform.ResetRetryTransport(nil))", name, got)
 		}
 	}
 }

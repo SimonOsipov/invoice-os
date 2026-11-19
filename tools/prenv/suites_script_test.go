@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // suitesRun is one run of suites.sh; zero values mean green and silent.
@@ -20,22 +23,50 @@ type suitesRun struct {
 	cores                 string // getconf _NPROCESSORS_ONLN output; "" means 12
 	noCores               bool   // getconf prints nothing
 	setup                 func(t *testing.T, tree string)
+	gap                   string        // DOCKER_GAP: start, go or db; "" means Docker never stops answering
+	dockerMode            string        // DOCKER_MODE: fail, missing, slow or deaf (ignores TERM); "" answers at once
+	dbOut                 string        // test-rls output
+	dbRC                  int           // test-rls exit code once Docker is not in a gap
+	probe                 string        // DOCKER_PROBE_SECS; "" sets 1, "unset" leaves it out
+	sleepStub             bool          // a sleep stub that logs its argv
+	deadline              time.Duration // fail the test, not hang, if the script runs longer; 0 means none
 }
 
 type suitesResult struct {
 	stdout string
 	code   int
 	tree   string
+	bin    string
 }
 
 const (
 	makeShim = `echo "$*" >> "$SUITES_FX/make.argv"
 if [ "$1" = fmt-check ]; then cat "$SUITES_FX/fmt.out"; exit "$FMT_RC"; fi
+if [ "$1" = test-rls ]; then
+  [ "$DOCKER_GAP" != db ] || : > "$SUITES_FX/gap"
+  if [ "$DOCKER_GAP" = start ] || [ -e "$SUITES_FX/gap" ]; then
+    echo "dial tcp 127.0.0.1:5466: connect: connection refused"; exit 2
+  fi
+  cat "$SUITES_FX/db.out"; exit "$DB_RC"
+fi
 exit 0
 `
 	goShim = `echo "$*" >> "$SUITES_FX/go.argv"
-if [ "$1" = test ]; then cat "$SUITES_FX/go.out"; exit "$GO_RC"; fi
+if [ "$1" = test ]; then
+  [ "$DOCKER_GAP" != go ] || : > "$SUITES_FX/gap"
+  cat "$SUITES_FX/go.out"; exit "$GO_RC"
+fi
 exit 0
+`
+	dockerShim = `echo "$*" >> "$SUITES_FX/docker.argv"
+if [ "$DOCKER_GAP" = start ] || [ -e "$SUITES_FX/gap" ]; then exec /bin/sleep 600; fi
+case "$DOCKER_MODE" in
+  fail) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
+  missing) echo "docker: command not found" >&2; exit 127 ;;
+  slow) /bin/sleep 1; echo 29.1.3 ;;
+  deaf) trap '' TERM; while :; do /bin/sleep 1; done ;;
+  *) echo 29.1.3 ;;
+esac
 `
 	getconfShim = `[ "$1" = _NPROCESSORS_ONLN ] || exit 1
 echo "$GETCONF_N"
@@ -69,10 +100,10 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		}
 	}
 	writeShim(t, filepath.Join(tree, "scripts/dev/wait-go-test-idle.sh"), "exit "+strconv.Itoa(r.waitRC)+"\n")
-	for name, body := range map[string]string{"make": makeShim, "go": goShim, "pnpm": pnpmShim, "getconf": getconfShim} {
+	for name, body := range map[string]string{"make": makeShim, "go": goShim, "pnpm": pnpmShim, "getconf": getconfShim, "docker": dockerShim} {
 		writeShim(t, filepath.Join(bin, name), body)
 	}
-	for name, body := range map[string]string{"fmt.out": r.fmtOut, "go.out": r.goOut, "r.out": r.rOut} {
+	for name, body := range map[string]string{"fmt.out": r.fmtOut, "go.out": r.goOut, "r.out": r.rOut, "db.out": r.dbOut} {
 		if err := os.WriteFile(filepath.Join(fx, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -85,6 +116,9 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 	if r.setup != nil {
 		r.setup(t, tree)
 	}
+	if r.sleepStub {
+		writeSleepStub(t, bin)
+	}
 	cores := r.cores
 	if cores == "" {
 		cores = "12"
@@ -93,20 +127,41 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		bash = "/bin/bash"
 	}
-	cmd := exec.Command(bash, filepath.Join(tree, "scripts/dev/suites.sh"))
+	ctx := context.Background()
+	if r.deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.deadline)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, bash, filepath.Join(tree, "scripts/dev/suites.sh"))
+	// Own process group: on the deadline, kill the shims and their sleeps too, not only bash.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = tree
 	cmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SUITES_FX="+fx,
 		"DEV_DB_PORT="+r.port,
 		"FMT_RC="+strconv.Itoa(r.fmtRC), "GO_RC="+strconv.Itoa(r.goRC),
-		"R_RC="+strconv.Itoa(r.rRC), "E_RC="+strconv.Itoa(r.eRC))
+		"R_RC="+strconv.Itoa(r.rRC), "E_RC="+strconv.Itoa(r.eRC),
+		"DOCKER_GAP="+r.gap, "DOCKER_MODE="+r.dockerMode, "DB_RC="+strconv.Itoa(r.dbRC))
+	switch r.probe {
+	case "":
+		cmd.Env = append(cmd.Env, "DOCKER_PROBE_SECS=1")
+	case "unset":
+	default:
+		cmd.Env = append(cmd.Env, "DOCKER_PROBE_SECS="+r.probe)
+	}
 	if r.noCores {
 		cmd.Env = append(cmd.Env, "GETCONF_N=")
 	} else {
 		cmd.Env = append(cmd.Env, "GETCONF_N="+cores)
 	}
 	stdout, _, err := runToFiles(t, cmd, false)
+	if ctx.Err() != nil {
+		t.Fatalf("suites.sh still running after %s (timeout); stdout so far:\n%s", r.deadline, stdout)
+	}
 	code := 0
 	if err != nil {
 		ee, ok := err.(*exec.ExitError)
@@ -115,7 +170,7 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		}
 		code = ee.ExitCode()
 	}
-	return suitesResult{stdout: stdout, code: code, tree: tree}
+	return suitesResult{stdout: stdout, code: code, tree: tree, bin: bin}
 }
 
 func readFx(t *testing.T, res suitesResult, name string) string {
@@ -239,6 +294,9 @@ func TestSuites_TheDBSuiteRunsWithTheWorkersPort(t *testing.T) {
 	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=0", "spa=0", "unit=0")
 	if got := readFx(t, res, "make.argv"); !strings.Contains(got, "test-rls test-queue test-audit test-approvals DEV_DB_PORT=5466\n") || strings.Contains(got, "test-db") {
 		t.Fatalf("make argv:\n%s", readFx(t, res, "make.argv"))
+	}
+	if n := len(nonBlankLines(readFx(t, res, "docker.argv"))); n != 2 {
+		t.Fatalf("docker called %d times, want 2", n)
 	}
 }
 
@@ -384,5 +442,161 @@ func TestSuites_TheDBSuiteRunsTheChangedDBPackagesOnly(t *testing.T) {
 	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=0", "db=0", "spa=0", "unit=0")
 	if got := readFx(t, res, "make.argv"); !strings.Contains(got, "test-db PKGS=./internal/dbpkg ./internal/dbpkg2 DEV_DB_PORT=5466\n") {
 		t.Fatalf("make argv:\n%s", got)
+	}
+}
+
+func TestSuites_DockerUnreachableReportsInfraNotRed(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	res := runSuites(t, suitesRun{port: "5466", gap: "start"})
+	if want := "docker=unreachable: docker info failed or gave no answer in 1s; no suite ran\n"; res.stdout != want || res.code != 3 {
+		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(res.tree, ".ralph/fmt.log")); !os.IsNotExist(err) {
+		t.Fatalf("fmt.log exists (stat err %v)", err)
+	}
+	if got := readFx(t, res, "make.argv"); got != "" {
+		t.Fatalf("make ran:\n%s", got)
+	}
+	if got := readFx(t, res, "docker.argv"); got != "info --format {{.ServerVersion}}\n" {
+		t.Fatalf("docker argv %q", got)
+	}
+	if d := time.Since(start); d > 15*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+func TestSuites_AGapDuringTheDBSuiteIsNotRed(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", gap: "db"})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main",
+		"docker=unreachable: docker stopped answering during the db suite; its failures are not counted, see .ralph/db.log",
+		"spa=0", "unit=0")
+	if res.code != 3 {
+		t.Fatalf("exit %d", res.code)
+	}
+}
+
+func TestSuites_AGapBeforeTheDBSuiteSkipsIt(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", gap: "go"})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main",
+		"docker=unreachable: docker info failed or gave no answer in 1s; the db suite did not run",
+		"spa=0", "unit=0")
+	if got := readFx(t, res, "make.argv"); strings.Contains(got, "test-rls") {
+		t.Fatalf("db suite ran:\n%s", got)
+	}
+	if res.code != 3 {
+		t.Fatalf("exit %d", res.code)
+	}
+}
+
+func TestSuites_ARedDBSuiteWithDockerUpStaysRed(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", dbRC: 1, dbOut: "--- FAIL: TestX (0.1s)\nFAIL\tgithub.com/x/db\t1s\n"})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=1", "spa=0", "unit=0",
+		"db package: github.com/x/db", "db test: TestX")
+	if strings.Contains(res.stdout, "docker=") || res.code != 1 {
+		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+	}
+	if n := len(nonBlankLines(readFx(t, res, "docker.argv"))); n != 3 {
+		t.Fatalf("docker called %d times, want 3", n)
+	}
+}
+
+func TestSuites_ARedSuiteBeatsAnUnreachableDocker(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", gap: "db", goRC: 1, goOut: "FAIL\tgithub.com/x/bad\t1s\n"})
+	for _, want := range []string{"go=1\n", "docker=unreachable: docker stopped answering during the db suite", "go package: github.com/x/bad\n"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, res.stdout)
+		}
+	}
+	if res.code != 1 {
+		t.Fatalf("exit %d", res.code)
+	}
+}
+
+func TestSuites_WithoutADBPortDockerIsNotAsked(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{gap: "start"})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=skipped: no DEV_DB_PORT", "spa=0", "unit=0")
+	if got := readFx(t, res, "docker.argv"); res.code != 0 || got != "" {
+		t.Fatalf("exit %d, docker argv %q", res.code, got)
+	}
+}
+
+func TestSuites_TheDockerProbeGivesUpAfterThirtySeconds(t *testing.T) {
+	t.Parallel()
+	for _, probe := range []string{"unset", "abc", "0", "00", "08", "010"} {
+		t.Run(probe, func(t *testing.T) {
+			t.Parallel()
+			res := runSuites(t, suitesRun{port: "5466", gap: "start", probe: probe, sleepStub: true})
+			if res.stdout != "docker=unreachable: docker info failed or gave no answer in 30s; no suite ran\n" || res.code != 3 {
+				t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+			}
+			var sl []string
+			for _, a := range sleepsIn(t, res.bin) {
+				if a != "0.1" { // the grace wait after TERM
+					sl = append(sl, a)
+				}
+			}
+			if len(sl) != 150 {
+				t.Fatalf("%d sleeps, want 150", len(sl))
+			}
+			for _, a := range sl {
+				if a != "0.2" {
+					t.Fatalf("sleep %q, want 0.2", a)
+				}
+			}
+		})
+	}
+}
+
+func TestSuites_ADockerThatIgnoresTermIsKilledAtTheLimit(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "deaf", probe: "1", deadline: 10 * time.Second})
+	if want := "docker=unreachable: docker info failed or gave no answer in 1s; no suite ran\n"; res.stdout != want || res.code != 3 {
+		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+func TestSuites_AMissingDockerReportsInfra(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "missing", probe: "30"})
+	wantUnreachableAtOnce(t, res, start)
+}
+
+func TestSuites_ADockerErrorReportsInfraAtOnce(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "fail", probe: "30"})
+	wantUnreachableAtOnce(t, res, start)
+}
+
+func wantUnreachableAtOnce(t *testing.T, res suitesResult, start time.Time) {
+	t.Helper()
+	if want := "docker=unreachable: docker info failed or gave no answer in 30s; no suite ran\n"; res.stdout != want || res.code != 3 {
+		t.Fatalf("exit %d, stdout:\n%s", res.code, res.stdout)
+	}
+	if got := readFx(t, res, "make.argv"); got != "" {
+		t.Fatalf("make ran:\n%s", got)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+func TestSuites_ASlowDockerInsideTheLimitIsUp(t *testing.T) {
+	t.Parallel()
+	res := runSuites(t, suitesRun{port: "5466", dockerMode: "slow", probe: "3"})
+	wantOut(t, res.stdout, "fmt=0", "go=0", "gates=skipped: no origin/main", "db=0", "spa=0", "unit=0")
+	if n := len(nonBlankLines(readFx(t, res, "docker.argv"))); n != 2 || res.code != 0 {
+		t.Fatalf("exit %d, docker called %d times, want 2", res.code, n)
 	}
 }

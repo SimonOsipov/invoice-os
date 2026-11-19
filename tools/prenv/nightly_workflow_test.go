@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ var (
 		"EXPECTED: ${{ steps.main.outputs.expected }}",
 		"PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}",
 		"PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}",
+		"PROD_IAP_TOKEN: ${{ steps.iap.outputs.access_token }}",
 	}
 	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
 	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@v4", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}
@@ -308,6 +310,17 @@ func nightlyProdCheckProblems(j workflowJob, all []string) []string {
 			p = append(p, "prod-check tool step lacks "+want)
 		}
 	}
+	// A failed mint must not stop the report: the console steps then fail with "no IAP token". The mint keeps the gcloud credentials.
+	if iap := nightlyStepLines(j, "id: iap"); iap == nil {
+		p = append(p, "prod-check has no iap step")
+	} else {
+		if !slices.Contains(iap, "continue-on-error: true") {
+			p = append(p, "prod-check iap step is not continue-on-error")
+		}
+		if !slices.Contains(iap, "create_credentials_file: false") || !slices.Contains(iap, "export_environment_variables: false") {
+			p = append(p, "prod-check iap step replaces the gcloud credentials")
+		}
+	}
 	if !strings.Contains(strings.Join(tool, "\n"), nightlyProdOutFlag) {
 		p = append(p, "prod-check tool step lacks "+nightlyProdOutFlag)
 	}
@@ -327,8 +340,8 @@ func nightlyProdCheckProblems(j workflowJob, all []string) []string {
 			p = append(p, "prod-check gcloud read is not retried: "+l)
 		}
 	}
-	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "latestCreatedRevisionName") {
-		p = append(p, "prod-check reads the auth image from the revision serving traffic, not the newest one")
+	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "revisions describe") {
+		p = append(p, "prod-check reads the auth commit from the revision serving traffic, not the service template")
 	}
 	up := nightlyStepLines(j, "uses: actions/upload-artifact@")
 	if up == nil {
@@ -606,9 +619,15 @@ func TestNightly_ProdCheckJobMutations(t *testing.T) {
 			return mutateOnce(t, n, "token=$(retry gcloud", "token=$(gcloud")
 		}, []string{"gcloud read is not retried"}},
 		{"retry loses its pause", func(t *testing.T, n string) string { return mutateOnce(t, n, "sleep 20;", "true;") }, []string{"3 tries, 20 s apart"}},
-		{"auth image read from the newest revision", func(t *testing.T, n string) string {
+		{"auth commit read from the template, not the serving revision", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, ".status.traffic", ".status.other")
-		}, []string{"not the newest one"}},
+		}, []string{"not the service template"}},
+		{"iap mint made fatal", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "      - id: iap\n        continue-on-error: true\n", "      - id: iap\n")
+		}, []string{"prod-check iap step is not continue-on-error"}},
+		{"iap mint replaces the credentials", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "          create_credentials_file: false\n", "")
+		}, []string{"prod-check iap step replaces the gcloud credentials"}},
 		{"gateway token read in summary", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      T: gateway-token\n")
 		}, []string{"gateway-token is named outside prod-check"}},
@@ -908,9 +927,21 @@ func authStepBox(t *testing.T, svc string) (b *prodBox, envFile string) {
 case "$1 $2 $3" in
 "secrets versions access") echo tok ;;
 "run services describe") cat "$D/svc.json" ;;
+"run revisions describe")
+	if [ -f "$D/rev-$4.json" ]; then cat "$D/rev-$4.json"; elif [ -f "$D/rev.json" ]; then cat "$D/rev.json"; else echo "no such revision $4" >&2; exit 1; fi ;;
 esac
 `)
 	b.put("svc.json", svc)
+	// Default: every revision carries the labels of the service template; runAuthStepWith overrides per revision.
+	var s struct {
+		Spec struct {
+			Template struct{ Metadata json.RawMessage }
+		}
+	}
+	if err := json.Unmarshal([]byte(svc), &s); err != nil {
+		t.Fatal(err)
+	}
+	b.put("rev.json", `{"metadata":`+string(s.Spec.Template.Metadata)+`}`)
 	envFile = filepath.Join(b.root, "github_env")
 	b.env["GITHUB_ENV"], b.env["PROJECT"], b.env["REGION"] = envFile, "proj-x", "region-x"
 	return b, envFile
@@ -930,8 +961,17 @@ func authSvcTraffic(traffic, newest, ready, labels string) string {
 
 func runAuthStep(t *testing.T, svc string) (envText string, calls []string) {
 	t.Helper()
+	return runAuthStepWith(t, svc, nil)
+}
+
+// runAuthStepWith is runAuthStep with revisions[name] as the JSON `gcloud run revisions describe name` returns.
+func runAuthStepWith(t *testing.T, svc string, revisions map[string]string) (envText string, calls []string) {
+	t.Helper()
 	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
 	b, envFile := authStepBox(t, svc)
+	for name, body := range revisions {
+		b.put("rev-"+name+".json", body)
+	}
 	if r := b.step(step); r.code != 0 {
 		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
 	}
@@ -949,8 +989,25 @@ func TestNightly_ProdCheckAuthStepSetsTheServingBuild(t *testing.T) {
 	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+sha+"\n" {
 		t.Errorf("GITHUB_ENV = %q, want the token and AUTH_BUILD=%s", env, sha)
 	}
-	if len(calls) != 2 {
-		t.Errorf("gcloud calls %q, want exactly two", calls)
+	// token, service describe, serving-revision describe
+	if len(calls) != 3 {
+		t.Errorf("gcloud calls %q, want exactly three", calls)
+	}
+}
+
+// A terraform apply leaves a newer revision with no traffic; the commit is the serving revision's label.
+func TestNightly_ProdCheckAuthStepReadsTheCommitFromTheServingRevision(t *testing.T) {
+	t.Parallel()
+	servingSha, templateSha := strings.Repeat("a", 40), strings.Repeat("d", 40)
+	svc := authSvcJSON("auth-00524-von", "auth-00199-ht5", `{"commit":"`+templateSha+`"}`, "r/images/auth@sha256:D")
+	env, calls := runAuthStepWith(t, svc, map[string]string{
+		"auth-00524-von": `{"metadata":{"name":"auth-00524-von","labels":{"commit":"` + servingSha + `"}}}`,
+	})
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+servingSha+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want AUTH_BUILD=%s (serving revision), not the template's %s", env, servingSha, templateSha)
+	}
+	if !slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe auth-00524-von ") }) {
+		t.Errorf("gcloud calls %q, want a describe of the serving revision", calls)
 	}
 }
 
@@ -958,7 +1015,6 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 	t.Parallel()
 	sha := strings.Repeat("b", 40)
 	for _, tc := range []struct{ name, svc string }{
-		{"serving is not the newest", authSvcJSON("auth-1", "auth-2", `{"commit":"`+sha+`"}`, "r/auth@sha256:D")},
 		{"no label", authSvcJSON("auth-2", "auth-2", `{}`, "r/auth@sha256:D")},
 		{"label latest", authSvcJSON("auth-2", "auth-2", `{"commit":"latest"}`, "r/auth@sha256:D")},
 		{"39 hex", authSvcJSON("auth-2", "auth-2", `{"commit":"`+sha[:39]+`"}`, "r/auth@sha256:D")},
@@ -969,7 +1025,6 @@ func TestNightly_ProdCheckAuthStepLeavesTheBuildUnsetWithoutAServingLabel(t *tes
 		{"40 non-hex letters", authSvcJSON("auth-2", "auth-2", `{"commit":"`+strings.Repeat("g", 40)+`"}`, "r/auth@sha256:D")},
 		{"traffic split over two revisions", authSvcTraffic(`[{"revisionName":"auth-2","percent":50},{"revisionName":"auth-1","percent":50}]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
 		{"no traffic entry", authSvcTraffic(`[]`, "auth-2", "auth-2", `{"commit":"`+sha+`"}`)},
-		{"latest revision, but not the newest ready", authSvcTraffic(`[{"latestRevision":true,"percent":100}]`, "auth-3", "auth-2", `{"commit":"`+sha+`"}`)},
 		{"no labels at all", authSvcJSON("auth-2", "auth-2", `null`, "r/auth@sha256:D")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -998,5 +1053,84 @@ func TestNightly_ProdCheckAuthStepIgnoresTheImageTag(t *testing.T) {
 	env, _ := runAuthStep(t, authSvcJSON("auth-2", "auth-2", `{}`, "r/images/auth:"+strings.Repeat("c", 40)))
 	if strings.Contains(env, "AUTH_BUILD") {
 		t.Errorf("GITHUB_ENV = %q, want no AUTH_BUILD from an image tag", env)
+	}
+}
+
+// The serving revision's own label decides: a template label does not stand in for a revision without one.
+func TestNightly_ProdCheckAuthStepIgnoresTheTemplateLabelWhenTheServingRevisionHasNone(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	svc := authSvcJSON("auth-1", "auth-2", `{"commit":"`+sha+`"}`, "r/auth@sha256:D")
+	env, _ := runAuthStepWith(t, svc, map[string]string{"auth-1": `{"metadata":{"name":"auth-1","labels":{}}}`})
+	if env != "PROD_GATEWAY_TOKEN=tok\n" {
+		t.Errorf("GITHUB_ENV = %q, want only the token", env)
+	}
+}
+
+// 100 % on "latest" describes latestReadyRevisionName, not the newest created one.
+func TestNightly_ProdCheckAuthStepDescribesTheLatestReadyRevision(t *testing.T) {
+	t.Parallel()
+	ready, created := strings.Repeat("a", 40), strings.Repeat("e", 40)
+	svc := authSvcTraffic(`[{"latestRevision":true,"percent":100}]`, "auth-3", "auth-2", `{}`)
+	env, calls := runAuthStepWith(t, svc, map[string]string{
+		"auth-2": `{"metadata":{"labels":{"commit":"` + ready + `"}}}`,
+		"auth-3": `{"metadata":{"labels":{"commit":"` + created + `"}}}`,
+	})
+	if env != "PROD_GATEWAY_TOKEN=tok\nAUTH_BUILD="+ready+"\n" {
+		t.Errorf("GITHUB_ENV = %q, want AUTH_BUILD=%s", env, ready)
+	}
+	if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe auth-3 ") }) {
+		t.Errorf("gcloud calls %q, want no describe of the unready newest revision", calls)
+	}
+}
+
+// Without a single 100 % revision there is nothing to describe.
+func TestNightly_ProdCheckAuthStepDescribesNoRevisionWithoutASingleServingOne(t *testing.T) {
+	t.Parallel()
+	sha := strings.Repeat("b", 40)
+	for name, traffic := range map[string]string{
+		"split": `[{"revisionName":"auth-2","percent":50},{"revisionName":"auth-1","percent":50}]`,
+		"none":  `[]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, calls := runAuthStep(t, authSvcTraffic(traffic, "auth-2", "auth-2", `{"commit":"`+sha+`"}`))
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "run revisions describe") }) {
+				t.Errorf("gcloud calls %q, want no revision describe", calls)
+			}
+		})
+	}
+}
+
+// A failed revision describe (all tries) leaves the token set and AUTH_BUILD unset; the step is continue-on-error.
+func TestNightly_ProdCheckAuthStepKeepsTheTokenWhenTheRevisionDescribeFails(t *testing.T) {
+	t.Parallel()
+	step := stepOf(t, "nightly.yml", "prod-check", nightlyAuthStep)
+	b, envFile := authStepBox(t, authSvcJSON("auth-9", "auth-9", `{"commit":"`+strings.Repeat("b", 40)+`"}`, "r/auth@sha256:D"))
+	if err := os.Remove(filepath.Join(b.root, "rev.json")); err != nil {
+		t.Fatal(err)
+	}
+	b.step(step)
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "PROD_GATEWAY_TOKEN=tok\n" {
+		t.Errorf("GITHUB_ENV = %q, want only the token", raw)
+	}
+	n := 0
+	for _, c := range b.lines("gcloud.log") {
+		if strings.HasPrefix(c, "run revisions describe auth-9 ") {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("revision describe tried %d times, want 3", n)
+	}
+	// Source scan: continue-on-error is a runner attribute no shell run can observe.
+	nightly, _, _ := nightlyFiles(t)
+	_, after, _ := strings.Cut(nightly, "- name: "+nightlyAuthStep+"\n")
+	if head, _, _ := strings.Cut(after, "run:"); !strings.Contains(head, "continue-on-error: true") {
+		t.Error("the auth step is not continue-on-error, so a failed read would fail the job")
 	}
 }

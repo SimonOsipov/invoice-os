@@ -93,7 +93,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 	if log == nil {
 		log = slog.Default()
 	}
-	client := &http.Client{Timeout: healthzTimeout, Transport: platform.IDTokenTransport(nil)}
+	client := &http.Client{Timeout: healthzTimeout, Transport: platform.IDTokenTransport(platform.ResetRetryTransport(nil))}
 
 	// Stable order — the context services sorted by name — so the payload is deterministic
 	// for tests and reads consistently on a status page. The gateway is prepended per-request.

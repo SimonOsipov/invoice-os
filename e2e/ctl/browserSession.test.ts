@@ -3,13 +3,15 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { checkSavedState } from './browserSession'
+import { checkSavedState, signInFresh } from './browserSession'
 
 const launch = vi.hoisted(() => vi.fn(async () => Promise.reject(new Error('the saved-state check booted a browser'))))
 const me = vi.hoisted(() => vi.fn())
+const openWithHandoff = vi.hoisted(() => vi.fn(async () => ({ token: 'staff' })))
 vi.mock('@playwright/test', () => ({ chromium: { launch } }))
 vi.mock('../api/client', () => ({ me }))
-vi.mock('../staffSession', () => ({ CONSOLE_SESSION_KEY: { ops: 'invoice-os.ops-session', support: 'invoice-os.support-session' } }))
+vi.mock('../staffSession', () => ({ CONSOLE_SESSION_KEY: { ops: 'invoice-os.ops-session', support: 'invoice-os.support-session' }, openWithHandoff }))
+vi.mock('../personaSession', () => ({ DESTINATION_READY: {}, passFrontDoor: vi.fn() }))
 
 const urls = { GATEWAY_URL: 'https://api.test', APP_URL: 'https://app.test', LANDING_URL: 'https://landing.test', OPS_CONSOLE_URL: 'https://ops.test', SUPPORT_CONSOLE_URL: 'https://support.test' }
 const TENANT = '11111111-1111-1111-1111-111111111111'
@@ -94,5 +96,60 @@ describe('checkSavedState reads the saved access token and never boots the app',
     me.mockResolvedValue({ tenant: { id: TENANT }, user: { role: 'admin' } })
     expect(await checkSavedState('firm-admin', account, urls, appState(jwt({ iat: now() - 3000, exp: now() + 600 })))).toEqual({ ok: false })
     expect(await checkSavedState('firm-admin', account, urls, appState(jwt({ iat: now() - 300, exp: now() + 3300 })))).toEqual({ ok: true, role: 'admin' })
+  })
+})
+
+describe('signInFresh installs the IAP route only when it gets a token', () => {
+  const calls: string[] = []
+  const route = vi.fn(async () => {
+    calls.push('route')
+  })
+  const fakeBrowser = () => ({
+    newContext: vi.fn(async () => {
+      calls.push('newContext')
+      return {
+        route,
+        newPage: vi.fn(async () => {
+          calls.push('newPage')
+          return {}
+        }),
+        storageState: vi.fn(async (opts: { path: string }) => writeFileSync(opts.path, '{}')),
+      }
+    }),
+    close: vi.fn(async () => {}),
+  })
+
+  it('the first run routes the console origins before newPage; the second does not route', async () => {
+    const statePath = path.join(dir, 'staff.json')
+    launch.mockResolvedValue(fakeBrowser() as never)
+    calls.length = 0
+    route.mockClear()
+
+    await signInFresh('developer', account, urls, statePath, 'tok')
+
+    expect(route, 'with a token, one route on the new context').toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['newContext', 'route', 'newPage'])
+    const [matcher] = route.mock.calls[0] as unknown as [(u: URL) => boolean]
+    expect(matcher(new URL('https://ops.ascomply.com/'))).toBe(true)
+    expect(matcher(new URL('https://api.ascomply.com/'))).toBe(false)
+
+    launch.mockResolvedValue(fakeBrowser() as never)
+    calls.length = 0
+    route.mockClear()
+    openWithHandoff.mockClear()
+
+    await signInFresh('developer', account, urls, statePath)
+
+    expect(calls, 'without a token the sign-in still opens the page').toEqual(['newContext', 'newPage'])
+    expect(openWithHandoff).toHaveBeenCalledTimes(1)
+    expect(route).not.toHaveBeenCalled()
+
+    launch.mockResolvedValue(fakeBrowser() as never)
+    calls.length = 0
+
+    await signInFresh('support', account, urls, statePath, '')
+
+    expect(calls, 'an empty token is no token').toEqual(['newContext', 'newPage'])
+    expect(route).not.toHaveBeenCalled()
   })
 })

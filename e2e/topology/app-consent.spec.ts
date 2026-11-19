@@ -74,6 +74,8 @@ async function signOutAndExpectClean(page: Page, context: BrowserContext, errors
   await context.addCookies(HUBSPOT_COOKIES.map((name) => ({ name, value: 'e2e', url: APP_URL })))
   const held = (await context.cookies(APP_URL)).map((c) => c.name)
   expect(held, 'the seeded cookies were not stored').toEqual(expect.arrayContaining(HUBSPOT_COOKIES))
+  // Revocation makes the gateway answer an in-flight mount read 401, which Chrome logs as a console error.
+  await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
   const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))

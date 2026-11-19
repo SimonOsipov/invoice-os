@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -148,11 +149,20 @@ func TestResetRetry_HEADAndOPTIONSAreRetried(t *testing.T) {
 	}
 }
 
-// h2Srv resets the raw connection on the first request of each test and records the protocol.
+// h2Srv resets the connection on the first resetFirstN requests other than /warm and counts them.
+// The GOMAXPROCS pin is process-wide: callers must not run in parallel.
 func h2Srv(t *testing.T, resetFirstN int32) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	// Pin one P so CI always runs the schedule that exposed the client-write race.
-	t.Cleanup(func(p int) func() { return func() { runtime.GOMAXPROCS(p) } }(runtime.GOMAXPROCS(1)))
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() {
+		// GOMAXPROCS(n) turns off the automatic container-aware updates; restore the default unless the env set it.
+		if _, set := os.LookupEnv("GOMAXPROCS"); set {
+			runtime.GOMAXPROCS(prev)
+			return
+		}
+		runtime.SetDefaultGOMAXPROCS()
+	})
 	var reqs atomic.Int32
 	type connKey struct{}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -199,6 +209,9 @@ func h2Warm(t *testing.T, rt http.RoundTripper, srv *httptest.Server) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.ProtoMajor != 2 {
+		t.Fatalf("warm-up: status %d proto %d; want 200, 2", resp.StatusCode, resp.ProtoMajor)
+	}
 }
 
 func TestResetRetry_GETResetOverHTTP2IsRetried(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -472,5 +473,24 @@ func TestResetRetry_IDTokenFetchIsRetried(t *testing.T) {
 	resp.Body.Close()
 	if md.reqs.Load() != 2 || stub.calls.Load() != 1 {
 		t.Errorf("metadata requests %d, upstream calls %d; want 2 and 1", md.reqs.Load(), stub.calls.Load())
+	}
+}
+
+type resetRT struct{ calls atomic.Int32 }
+
+func (r *resetRT) RoundTrip(*http.Request) (*http.Response, error) {
+	r.calls.Add(1)
+	return nil, &net.OpError{Op: "read", Err: syscall.ECONNRESET}
+}
+
+// A cancelled caller must not get a second attempt even when the base reports a reset (the real
+// transport usually reports the context error instead, which hides the guard).
+func TestResetRetry_CancelledContextWithResetIsNotRetried(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	base := &resetRT{}
+	_, err := call(t, ctx, ResetRetryTransport(base), http.MethodGet, "http://example.invalid/", nil)
+	if !errors.Is(err, syscall.ECONNRESET) || base.calls.Load() != 1 {
+		t.Errorf("err = %v, calls = %d; want the reset and 1 call", err, base.calls.Load())
 	}
 }

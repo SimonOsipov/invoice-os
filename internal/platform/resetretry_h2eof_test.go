@@ -205,6 +205,9 @@ func TestResetRetry_H2UnexpectedEOF_ReusedConnIsRetried(t *testing.T) {
 	if dials.Load() != 2 {
 		t.Errorf("dials = %d, want 2", dials.Load())
 	}
+	if len(got) != 2 { // the caller's own trace still fires on both attempts
+		t.Errorf("GotConn calls = %d, want 2", len(got))
+	}
 	recs := logs()
 	if len(recs) != 1 || recs[0]["attempt"] != float64(1) || recs[0]["retrying"] != true {
 		t.Errorf("records = %v, want one record, attempt 1, retrying true", recs)
@@ -261,6 +264,12 @@ func TestResetRetry_H2UnexpectedEOF_MarkedGETIsNotRetried(t *testing.T) {
 }
 
 func TestResetRetry_H2SecondFailureReturnsTheError(t *testing.T) {
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		t.Run(m, func(t *testing.T) { h2SecondFailure(t, m) })
+	}
+}
+
+func h2SecondFailure(t *testing.T, method string) {
 	cases := []struct {
 		name  string
 		modes []faultMode
@@ -275,7 +284,7 @@ func TestResetRetry_H2SecondFailureReturnsTheError(t *testing.T) {
 			srv, reqs := eofH2Srv(t, -1)
 			tr, _ := faultClient(srv, c.modes...)
 			ctx := WithRequestID(context.Background(), "req-160")
-			_, err := call(t, ctx, ResetRetryTransport(tr), http.MethodGet, srv.URL+"/secret/path", nil)
+			_, err := call(t, ctx, ResetRetryTransport(tr), method, srv.URL+"/secret/path", nil)
 			if c.modes[1] == modeEOF {
 				wantUnexpectedEOF(t, err)
 			} else if !errors.Is(err, syscall.ECONNRESET) {
@@ -297,6 +306,36 @@ func TestResetRetry_H2SecondFailureReturnsTheError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// cancelAfterErr cancels the caller's context once the base fails, as a client hang-up between attempts.
+type cancelAfterErr struct {
+	base   http.RoundTripper
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterErr) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.base.RoundTrip(r)
+	if err != nil {
+		c.cancel()
+	}
+	return resp, err
+}
+
+func TestResetRetry_H2UnexpectedEOF_CancelledContextIsNotRetried(t *testing.T) {
+	logs := captureLogs(t)
+	srv, reqs := eofH2Srv(t, 1)
+	tr, _ := faultClient(srv, modeEOF)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := call(t, ctx, ResetRetryTransport(cancelAfterErr{tr, cancel}), http.MethodGet, srv.URL, nil)
+	wantUnexpectedEOF(t, err)
+	if reqs.Load() != 1 {
+		t.Errorf("requests = %d, want 1", reqs.Load())
+	}
+	if recs := logs(); len(recs) != 0 {
+		t.Errorf("records = %v, want none", recs)
 	}
 }
 

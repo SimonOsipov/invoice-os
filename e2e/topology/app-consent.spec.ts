@@ -77,7 +77,7 @@ async function signOutAndExpectClean(page: Page, context: BrowserContext, errors
   // Revocation makes the gateway answer an in-flight mount read 401, which Chrome logs as a console error.
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'Sign out' }).click()
-  // Polls the URL: a held request routes the landing navigation, and waitForURL rejects when one landing request is superseded (ERR_ABORTED).
+  // Polls the URL: with any page.route active the first landing request is superseded, and waitForURL rejects on that ERR_ABORTED.
   await expect.poll(() => page.url().startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 }).toBe(true)
   const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))
   expect(left, 'HubSpot cookies survived the sign-out').toEqual([])
@@ -99,8 +99,7 @@ test('AC-04 a workflow-roles read held past the sign-out revocation does not log
   const signOutAnswered = new Promise<void>((resolve) => { signedOut = resolve })
   const rolesAnswered = new Promise<void>((resolve) => { rolesDone = resolve })
   // The roles read waits for the sign-out response (or 4s, so a spec that waits for idle is not deadlocked), so the gateway answers it 401.
-  // Routing /auth/sign-out itself breaks the cross-origin sign-out, so the sign-out is only observed; the landing navigation is held
-  // until the read is answered, keeping the page alive to log the 401.
+  // The sign-out is only observed; the landing navigation is held until the read is answered, keeping the page alive to log the 401.
   page.on('response', (res) => { if (res.url().endsWith('/auth/sign-out')) signedOut() })
   await page.route('**/api/invoice/v1/workflow-roles*', async (route) => {
     await Promise.race([signOutAnswered, new Promise((resolve) => setTimeout(resolve, 4_000))])

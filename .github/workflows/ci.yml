@@ -59,6 +59,7 @@ jobs:
               - 'Dockerfile'
               - 'Dockerfile.dockerignore'
               - '.github/workflows/**'
+              - '.claude/rules/ci-gcp.md'
             migrations:
               - 'migrations/**'
               - 'db/**'

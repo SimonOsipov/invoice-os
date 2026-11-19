@@ -206,6 +206,9 @@ func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del
 		if in.Type == "" || in.Message == "" {
 			return Rule{}, InvalidError{"type and message are required"}
 		}
+		if err := rangeBoundsError(in.Type, in.Params); err != nil {
+			return Rule{}, err
+		}
 		if in.EntityID != nil {
 			if err := entityVisible(ctx, tx, *in.EntityID); err != nil {
 				return Rule{}, err

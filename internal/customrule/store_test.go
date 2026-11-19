@@ -145,6 +145,7 @@ func input(entity *string, msg string) customrule.RuleInput {
 
 type seedRev struct {
 	Tenant, RuleID string
+	Type, Params   string
 	Revision       int
 	Entity         *string
 	Severity       string
@@ -163,8 +164,9 @@ func insertRev(t *testing.T, super *pgxpool.Pool, r seedRev) string {
 	if err := super.QueryRow(context.Background(),
 		`INSERT INTO custom_rule_revisions
 		     (tenant_id, rule_id, revision, entity_id, type, target, params, severity, message, enabled, deleted, created_by)
-		 VALUES ($1, $2, $3, $4, 'required', 'buyer.name', '{}', $5, $6, $7, $8, 'seed') RETURNING id`,
-		r.Tenant, r.RuleID, r.Revision, r.Entity, r.Severity, r.Message, r.Enabled, r.Deleted).Scan(&id); err != nil {
+		 VALUES ($1, $2, $3, $4, coalesce(nullif($9, ''), 'required'), 'buyer.name', coalesce(nullif($10, ''), '{}')::jsonb,
+		         $5, $6, $7, $8, 'seed') RETURNING id`,
+		r.Tenant, r.RuleID, r.Revision, r.Entity, r.Severity, r.Message, r.Enabled, r.Deleted, r.Type, r.Params).Scan(&id); err != nil {
 		t.Fatalf("seed custom_rule_revisions: %v", err)
 	}
 	return id
@@ -1668,5 +1670,122 @@ func TestCustomRules_AFailingAuditRowRollsBackTheRevision(t *testing.T) {
 	rec := do(t, newMux(store), ws.admin, http.MethodPost, "/v1/custom-rules", input(nil, "x"))
 	if rec.Code != http.StatusInternalServerError || errorBody(t, rec) != "internal server error" {
 		t.Errorf("POST with a failing audit insert = %d %q, want 500 without the cause", rec.Code, rec.Body.String())
+	}
+}
+
+// --- range bounds -------------------------------------------------------------
+
+func rangeInput(params string) customrule.RuleInput {
+	in := input(nil, "range")
+	in.Type, in.Target, in.Params = "range", "total", json.RawMessage(params)
+	return in
+}
+
+func TestCustomRules_RangeMinAboveMaxWritesNothingAndSkipsTheCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range refused")
+	fc := &fakeCheck{}
+	store := customrule.NewStore(app, fc.fn)
+	existing := uuid.NewString()
+	insertRev(t, super, rev(ws.id, existing, 1))
+	before := snapshot(t, super, ws.id)
+
+	body := rangeInput(`{"min":10,"max":5}`)
+	_, err := store.Create(ws.admin, body)
+	if ie, ok := asInvalid(err); !ok || ie.Msg != "The minimum (min) cannot be greater than the maximum (max)." {
+		t.Errorf("Create min>max err = %v, want the bounds InvalidError", err)
+	}
+	_, err = store.Update(ws.admin, existing, body)
+	if ie, ok := asInvalid(err); !ok || ie.Msg != "The minimum (min) cannot be greater than the maximum (max)." {
+		t.Errorf("Update min>max err = %v, want the bounds InvalidError", err)
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("rows changed by refused saves:\nbefore %s\nafter  %s", before, after)
+	}
+	if n := auditTotal(t, super, ws.id); n != 0 {
+		t.Errorf("audit rows = %d, want 0", n)
+	}
+	if n := fc.calls.Load(); n != 0 {
+		t.Errorf("check calls = %d, want 0", n)
+	}
+}
+
+func TestCustomRules_RangeEqualBoundsAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range equal")
+	fc := &fakeCheck{}
+	if _, err := customrule.NewStore(app, fc.fn).Create(ws.admin, rangeInput(`{"min":5,"max":5}`)); err != nil {
+		t.Fatalf("Create min==max err = %v, want nil", err)
+	}
+	if n := fc.calls.Load(); n != 1 {
+		t.Errorf("check calls = %d, want 1", n)
+	}
+}
+
+func TestCustomRules_RangeWithOneBoundOrExclusiveBoundsAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range one bound")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	for _, params := range []string{`{"min":10}`, `{"max":5}`, `{"min":10,"exclusive_max":5}`, `{"min":null,"max":5}`} {
+		if _, err := store.Create(ws.admin, rangeInput(params)); err != nil {
+			t.Errorf("Create %s err = %v, want nil", params, err)
+		}
+	}
+	if n := currentCount(t, super, ws.id); n != 4 {
+		t.Errorf("rules = %d, want 4", n)
+	}
+}
+
+func TestCustomRules_RangeNonNumericBoundFallsThroughToTheCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range non-numeric")
+	fc := &fakeCheck{}
+	const reason = "params.min must be a number"
+	fc.setErr(customrule.InvalidError{Msg: reason})
+	_, err := customrule.NewStore(app, fc.fn).Create(ws.admin, rangeInput(`{"min":"x","max":5}`))
+	if ie, ok := asInvalid(err); !ok || ie.Msg != reason {
+		t.Errorf("Create non-numeric min err = %v, want the check's %q", err, reason)
+	}
+	if n := fc.calls.Load(); n != 1 {
+		t.Errorf("check calls = %d, want 1", n)
+	}
+}
+
+func TestCustomRules_MinAboveMaxParamsOnAnotherTypeAreNotRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule min max other type")
+	fc := &fakeCheck{}
+	body := rangeInput(`{"min":10,"max":5}`)
+	body.Type = "enum"
+	if _, err := customrule.NewStore(app, fc.fn).Create(ws.admin, body); err != nil {
+		t.Errorf("Create enum with min>max params err = %v, want nil", err)
+	}
+	if n := fc.calls.Load(); n != 1 {
+		t.Errorf("check calls = %d, want 1", n)
+	}
+}
+
+func TestCustomRules_DeleteOfARuleSavedWithMinAboveMaxSucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule legacy range delete")
+	legacy := uuid.NewString()
+	r := rev(ws.id, legacy, 1)
+	r.Type, r.Params = "range", `{"min":10,"max":5}`
+	insertRev(t, super, r)
+	if err := customrule.NewStore(app, (&fakeCheck{}).fn).Delete(ws.admin, legacy); err != nil {
+		t.Fatalf("Delete err = %v, want nil", err)
+	}
+	rows := revRows(t, super, ws.id, legacy)
+	if len(rows) != 2 || !rows[1].Deleted {
+		t.Errorf("revisions = %+v, want the seed plus a deleted revision", rows)
+	}
+}
+
+func TestCustomRules_RangeBoundsRefusedAfterTheAdminCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range admin first")
+	_, err := customrule.NewStore(app, (&fakeCheck{}).fn).Create(ws.preparer, rangeInput(`{"min":10,"max":5}`))
+	if !errors.Is(err, customrule.ErrNotPermitted) {
+		t.Errorf("preparer Create min>max err = %v, want ErrNotPermitted", err)
 	}
 }

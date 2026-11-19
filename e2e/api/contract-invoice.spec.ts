@@ -40,6 +40,7 @@ import {
   createInvoice,
   createCustomRule,
   deleteCustomRule,
+  listCustomRules,
   validateInvoice,
   explainViolation,
   rawFetch,
@@ -502,6 +503,43 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const row = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
       expect(row?.can_submit).toBe(false)
       expect(row?.submit_blocked_reason).toBe(RULE_CHANGE_PENDING_REASON)
+    })
+  })
+
+  // The store refuses min > max before it writes or calls the validation service.
+  test.describe('a range rule with min above max', () => {
+    let ruleId: string | null = null
+    let rangeEntity: Entity
+
+    test.afterAll(async () => {
+      if (ruleId) await deleteCustomRule(token, ruleId).catch(() => undefined)
+    })
+
+    test('range rule with min above max is a 400 naming both bounds and writes nothing', async () => {
+      const tin = freshTin()
+      rangeEntity = await createEntity(token, { name: `BUG-36 range ${tin}`, tin })
+      const body = (params: unknown) => ({
+        entity_id: rangeEntity.id,
+        type: 'range',
+        target: 'total',
+        params,
+        severity: 'warning',
+        message: 'BUG-36 range rule',
+        enabled: true,
+      })
+      const send = (params: unknown) =>
+        rawFetch('/api/invoice/v1/custom-rules', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: body(params) })
+
+      const refused = await send({ min: 10, max: 5 })
+      assertErrorEnvelope(refused, 400, 'range min above max')
+      const message = (refused.body as { error: string }).error
+      expect(message).toContain('min')
+      expect(message).toContain('max')
+      expect((await listCustomRules(token)).filter((r) => r.entity_id === rangeEntity.id), 'the refused body left no rule').toEqual([])
+
+      const equal = await send({ min: 5, max: 5 })
+      expect(equal.status, 'equal bounds are accepted').toBe(201)
+      ruleId = (equal.body as { id: string }).id
     })
   })
 

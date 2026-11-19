@@ -18,6 +18,29 @@ type InvalidError struct{ Msg string }
 
 func (e InvalidError) Error() string { return e.Msg }
 
+// typeRange is validation.TypeRange; customrule does not import validation.
+const typeRange = "range"
+
+const rangeBoundsMsg = "The minimum (min) cannot be greater than the maximum (max)."
+
+// rangeBoundsError refuses a range rule whose min exceeds its max; other shapes are the check route's.
+func rangeBoundsError(typ string, params json.RawMessage) error {
+	if typ != typeRange {
+		return nil
+	}
+	var b struct {
+		Min *float64 `json:"min"`
+		Max *float64 `json:"max"`
+	}
+	if json.Unmarshal(params, &b) != nil || b.Min == nil || b.Max == nil {
+		return nil
+	}
+	if *b.Min > *b.Max {
+		return InvalidError{rangeBoundsMsg}
+	}
+	return nil
+}
+
 // Key is the violation key of a rule: "custom:" + ruleID.
 func Key(ruleID string) string { return "custom:" + ruleID }
 

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -364,5 +366,31 @@ func TestCustomRulesHandlers_NoIdentityIs401BeforeTheStore(t *testing.T) {
 				t.Errorf("store calls = %d, want 0", fs.writes()+fs.lists)
 			}
 		})
+	}
+}
+
+func TestCustomRulesHandlers_RangeMinAboveMaxIs400(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range handler")
+	h := newMux(customrule.NewStore(app, (&fakeCheck{}).fn))
+	existing := uuid.NewString()
+	insertRev(t, super, rev(ws.id, existing, 1))
+	before := snapshot(t, super, ws.id)
+
+	const want = "The minimum (min) cannot be greater than the maximum (max)."
+	body := rangeInput(`{"min":10,"max":5}`)
+	rec := do(t, h, ws.admin, http.MethodPost, "/v1/custom-rules", body)
+	if rec.Code != http.StatusBadRequest || errorBody(t, rec) != want {
+		t.Errorf("POST min>max = %d %q, want 400 %q", rec.Code, rec.Body.String(), want)
+	}
+	rec = do(t, h, ws.admin, http.MethodPut, "/v1/custom-rules/"+existing, body)
+	if rec.Code != http.StatusBadRequest || errorBody(t, rec) != want {
+		t.Errorf("PUT min>max = %d %q, want 400 %q", rec.Code, rec.Body.String(), want)
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("rows changed by refused saves:\nbefore %s\nafter  %s", before, after)
+	}
+	if n := auditTotal(t, super, ws.id); n != 0 {
+		t.Errorf("audit rows = %d, want 0", n)
 	}
 }

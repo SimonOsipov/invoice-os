@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -109,6 +108,15 @@ func wantReset(t *testing.T, err error) {
 	t.Helper()
 	if err == nil || !strings.Contains(err.Error(), "connection reset by peer") {
 		t.Fatalf("err = %v, want a connection reset", err)
+	}
+}
+
+func TestResetRetry_MarkedGETIsNotRetried(t *testing.T) {
+	srv := newRawSrv(t, false, resetFirst(1))
+	_, err := call(t, NoResetRetry(context.Background()), ResetRetryTransport(noKeepAlives()), http.MethodGet, srv.url, nil)
+	wantReset(t, err)
+	if srv.reqs.Load() != 1 {
+		t.Errorf("requests = %d, want 1", srv.reqs.Load())
 	}
 }
 
@@ -266,27 +274,16 @@ func TestResetRetry_SecondResetReturnsTheError(t *testing.T) {
 	}
 }
 
-// captureLogs sends the default slog logger to a buffer of JSON records.
+// captureLogs sends the default slog logger to stdout and returns the reset records it wrote.
 func captureLogs(t *testing.T) func() []map[string]any {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	prevOut := os.Stdout
-	os.Stdout = w
-	var buf bytes.Buffer
-	done := make(chan struct{})
-	go func() { _, _ = io.Copy(&buf, r); close(done) }()
+	read := CaptureStdout(t)
 	prev := slog.Default()
 	slog.SetDefault(newLogger(Config{Service: "test", Environment: "test", LogLevel: "debug"}))
-	t.Cleanup(func() { os.Stdout = prevOut; slog.SetDefault(prev) })
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	return func() []map[string]any {
-		os.Stdout = prevOut
-		_ = w.Close()
-		<-done
 		var out []map[string]any
-		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(read()), "\n") {
 			var rec map[string]any
 			if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == "upstream connection reset" {
 				out = append(out, rec)
@@ -380,32 +377,6 @@ func TestResetRetry_OtherFailuresAreNotRetried(t *testing.T) {
 			t.Errorf("err = %v, requests = %d; want canceled and at most 1", err, srv.reqs.Load())
 		}
 	})
-}
-
-func TestResetRetry_CancelDuringFirstAttemptIsNotRetried(t *testing.T) {
-	release := make(chan struct{})
-	srv := newRawSrv(t, false, func(_ int, c *net.TCPConn, _ *http.Request) {
-		<-release
-		rst(c)
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := call(t, ctx, ResetRetryTransport(noKeepAlives()), http.MethodGet, srv.url, nil)
-		done <- err
-	}()
-	for srv.reqs.Load() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	cancel()
-	close(release)
-	if err := <-done; err == nil {
-		t.Fatal("want an error")
-	}
-	time.Sleep(50 * time.Millisecond)
-	if srv.reqs.Load() != 1 {
-		t.Errorf("requests = %d, want 1", srv.reqs.Load())
-	}
 }
 
 func TestResetRetry_ResetAfterResponseHeadersIsNotRetried(t *testing.T) {

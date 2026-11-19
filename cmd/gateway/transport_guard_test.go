@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// BUG-150: every gateway client transport rides ResetRetryTransport, so a reset upstream
+// Every gateway client transport rides ResetRetryTransport, so a reset upstream
 // connection on a bodyless read is retried instead of surfacing as a 502.
 func TestGatewayTransportsAllCarryResetRetry(t *testing.T) {
 	var files []string
@@ -54,7 +54,7 @@ func TestGatewayTransportsAllCarryResetRetry(t *testing.T) {
 			return true
 		})
 	}
-	// Today's counts (BUG-150); lower means the scan stopped finding the gateway's clients.
+	// Today's counts; lower means the scan stopped finding the gateway's clients.
 	if sites < minTransportSites || clients < minClientLiterals {
 		t.Fatalf("scan found %d transport calls and %d http.Client literals, want at least %d and %d",
 			sites, clients, minTransportSites, minClientLiterals)

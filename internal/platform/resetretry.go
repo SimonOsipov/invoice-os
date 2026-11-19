@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -16,6 +17,14 @@ func ResetRetryTransport(base http.RoundTripper) http.RoundTripper {
 		base = http.DefaultTransport
 	}
 	return &resetRetry{base: base}
+}
+
+type noRetryKey struct{}
+
+// NoResetRetry marks a request that must never be re-sent after a reset, such as a GET whose
+// handler writes upstream.
+func NoResetRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRetryKey{}, true)
 }
 
 type resetRetry struct {
@@ -41,6 +50,9 @@ func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // retryable is true for safe methods with no body; a one-shot body stream cannot be re-sent.
 func retryable(req *http.Request) bool {
+	if marked, _ := req.Context().Value(noRetryKey{}).(bool); marked {
+		return false
+	}
 	switch req.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return noBody(req.Body)

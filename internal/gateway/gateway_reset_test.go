@@ -23,9 +23,9 @@ type resetUpstream struct {
 	mu        sync.Mutex
 	conns     int
 	requests  int
-	headers   []http.Header
-	resetUpTo int  // connections 1..resetUpTo are reset; later ones answer 200 "ok"
-	readFirst bool // read the request (and body) before resetting
+	headers   []http.Header // read through requestHeaders
+	resetUpTo int           // connections 1..resetUpTo are reset; later ones answer 200 "ok"
+	readFirst bool          // read the request (and body) before resetting
 }
 
 func newResetUpstream(t *testing.T, resetUpTo int, readFirst bool) *resetUpstream {
@@ -84,6 +84,12 @@ func (u *resetUpstream) counts() (conns, requests int) {
 	return u.conns, u.requests
 }
 
+func (u *resetUpstream) requestHeaders(i int) http.Header {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.headers[i].Clone()
+}
+
 // resetGateway wires a gateway whose tenancy upstream is up and returns a valid token.
 func resetGateway(t *testing.T, up *resetUpstream, log *slog.Logger) (http.Handler, string) {
 	t.Helper()
@@ -97,7 +103,7 @@ func resetGateway(t *testing.T, up *resetUpstream, log *slog.Logger) (http.Handl
 	if err != nil {
 		t.Fatalf("verifier: %v", err)
 	}
-	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": up.url}, GatewayToken: testGatewayToken, Logger: log})
+	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": up.url, "invoice": up.url, "submission": up.url}, GatewayToken: testGatewayToken, Logger: log})
 	tok, err := issuer.Mint(auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -118,11 +124,39 @@ func TestProxyRetriesAnUpstreamConnectionReset(t *testing.T) {
 	if _, reqs := up.counts(); reqs != 2 {
 		t.Fatalf("upstream saw %d requests, want 2", reqs)
 	}
-	if got := up.headers[1].Get(headerTenantID); got != testTenant {
+	retried := up.requestHeaders(1)
+	if got := retried.Get(headerTenantID); got != testTenant {
 		t.Errorf("retry %s = %q, want %q", headerTenantID, got, testTenant)
 	}
-	if got := up.headers[1].Get(headerUserID); got != testSubject {
+	if got := retried.Get(headerUserID); got != testSubject {
 		t.Errorf("retry %s = %q, want %q", headerUserID, got, testSubject)
+	}
+}
+
+// A GET whose handler writes upstream (an audit row, the export lock) must not be re-sent.
+func TestProxyDoesNotRetryAResetGETThatWrites(t *testing.T) {
+	for _, p := range []string{
+		"/api/invoice/v1/invoice-register",
+		"/api/invoice/v1/workspace/export",
+		"/api/invoice/v1/evidence-bundle",
+		"/api/invoice/v1/documents/abc",
+		"/api/invoice/v1/documents/abc/sheet",
+		"/api/invoice/v1/imports/saved-mapping",
+		"/api/submission/v1/extractions/abc",
+		"/api/invoice/v1/x/../invoice-register",
+	} {
+		t.Run(p, func(t *testing.T) {
+			up := newResetUpstream(t, 1, true)
+			h, tok := resetGateway(t, up, slog.New(slog.DiscardHandler))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request("GET", p, tok))
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502", rec.Code)
+			}
+			if _, reqs := up.counts(); reqs != 1 {
+				t.Fatalf("upstream saw %d requests, want 1", reqs)
+			}
+		})
 	}
 }
 

@@ -1,12 +1,10 @@
 package platform_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -22,29 +20,7 @@ import (
 
 // captureStdout points os.Stdout at a pipe before Boot builds the logger; call the
 // returned func once to restore it and read what the process wrote.
-func captureStdout(t *testing.T) func() string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	prev := os.Stdout
-	os.Stdout = w
-	var buf bytes.Buffer
-	done := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(&buf, r)
-		close(done)
-	}()
-	t.Cleanup(func() { os.Stdout = prev })
-	return func() string {
-		os.Stdout = prev
-		_ = w.Close()
-		<-done
-		_ = r.Close()
-		return buf.String()
-	}
-}
+var captureStdout = platform.CaptureStdout
 
 func logsWithBody(rec *sentrytest.Recorder, body string) []sentry.Log {
 	var out []sentry.Log

@@ -77,7 +77,8 @@ async function signOutAndExpectClean(page: Page, context: BrowserContext, errors
   // Revocation makes the gateway answer an in-flight mount read 401, which Chrome logs as a console error.
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'Sign out' }).click()
-  await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
+  // Polls the URL: a held request routes the landing navigation, and waitForURL rejects when one landing request is superseded (ERR_ABORTED).
+  await expect.poll(() => page.url().startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 }).toBe(true)
   const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))
   expect(left, 'HubSpot cookies survived the sign-out').toEqual([])
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
@@ -97,19 +98,19 @@ test('AC-04 a workflow-roles read held past the sign-out revocation does not log
   let rolesDone!: () => void
   const signOutAnswered = new Promise<void>((resolve) => { signedOut = resolve })
   const rolesAnswered = new Promise<void>((resolve) => { rolesDone = resolve })
-  // The roles read waits for the sign-out revocation (or 4s, so a spec that waits for idle is not deadlocked).
-  // The sign-out response then waits for the read's answer, so the page is still alive to log a 401.
+  // The roles read waits for the sign-out response (or 4s, so a spec that waits for idle is not deadlocked), so the gateway answers it 401.
+  // Routing /auth/sign-out itself breaks the cross-origin sign-out, so the sign-out is only observed; the landing navigation is held
+  // until the read is answered, keeping the page alive to log the 401.
+  page.on('response', (res) => { if (res.url().endsWith('/auth/sign-out')) signedOut() })
   await page.route('**/api/invoice/v1/workflow-roles*', async (route) => {
     await Promise.race([signOutAnswered, new Promise((resolve) => setTimeout(resolve, 4_000))])
     const res = await route.fetch()
     rolesDone()
     await route.fulfill({ response: res })
   })
-  await page.route('**/auth/sign-out', async (route) => {
-    const res = await route.fetch()
-    signedOut()
-    await Promise.race([rolesAnswered, new Promise((resolve) => setTimeout(resolve, 5_000))])
-    await route.fulfill({ response: res })
+  await page.route((u) => u.href.startsWith(resolveTarget('LANDING_URL')), async (route) => {
+    if (route.request().isNavigationRequest()) await Promise.race([rolesAnswered, new Promise((resolve) => setTimeout(resolve, 5_000))])
+    await route.continue()
   })
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await signOutAndExpectClean(page, context, errors)

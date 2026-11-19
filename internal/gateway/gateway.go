@@ -101,7 +101,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, strings.ToLower(http.StatusText(status)))
 		return
 	}
-	if writesOnGet(rest) {
+	if WritesOnGet(rest) {
 		r = r.WithContext(platform.NoResetRetry(r.Context()))
 	}
 	proxy.ServeHTTP(w, r)
@@ -115,8 +115,8 @@ var writingGets = regexp.MustCompile(`^/(?:` +
 	`v1/documents/[^/]+(?:/sheet)?|` +
 	`v1/extractions/[^/]+)/?$`)
 
-// writesOnGet tests the path as sent and as the upstream mux will clean it.
-func writesOnGet(rest string) bool {
+// WritesOnGet tests the path as sent and as the upstream mux will clean it.
+func WritesOnGet(rest string) bool {
 	return writingGets.MatchString("/"+rest) || writingGets.MatchString(path.Clean("/"+rest))
 }
 

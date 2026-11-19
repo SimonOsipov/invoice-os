@@ -10,8 +10,8 @@ import (
 )
 
 // ResetRetryTransport retries a bodyless GET, HEAD or OPTIONS once when its connection is reset before
-// any response arrives. Any other request is never retried: a reset may follow a request the upstream
-// already acted on. A nil base is http.DefaultTransport, resolved now because tests swap it.
+// any response arrives, unless NoResetRetry marked it. Any other request is never retried: a reset may
+// follow a request the upstream already acted on. A nil base is http.DefaultTransport, resolved now because tests swap it.
 func ResetRetryTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
@@ -48,7 +48,8 @@ func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// retryable is true for safe methods with no body; a one-shot body stream cannot be re-sent.
+// retryable is true for safe methods with no body, unless NoResetRetry marked the request; a one-shot
+// body stream cannot be re-sent.
 func retryable(req *http.Request) bool {
 	if marked, _ := req.Context().Value(noRetryKey{}).(bool); marked {
 		return false

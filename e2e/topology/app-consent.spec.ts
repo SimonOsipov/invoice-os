@@ -1,6 +1,6 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
 import { randomUUID } from 'node:crypto'
-import { test, expect, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import { test, expect, type BrowserContext, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
 import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
@@ -69,10 +69,8 @@ test('AC-03 the PR app host loads no HubSpot chat and no Google tag after Accept
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('AC-04 Sign out deletes the HubSpot cookies on the app host', async ({ page, context }) => {
-  test.setTimeout(180_000)
-  const errors = collectErrors(page)
-  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+// Seeds the HubSpot cookies, clicks Sign out, and checks the cookies and console are clean.
+async function signOutAndExpectClean(page: Page, context: BrowserContext, errors: string[]): Promise<void> {
   await context.addCookies(HUBSPOT_COOKIES.map((name) => ({ name, value: 'e2e', url: APP_URL })))
   const held = (await context.cookies(APP_URL)).map((c) => c.name)
   expect(held, 'the seeded cookies were not stored').toEqual(expect.arrayContaining(HUBSPOT_COOKIES))
@@ -81,6 +79,38 @@ test('AC-04 Sign out deletes the HubSpot cookies on the app host', async ({ page
   const left = (await context.cookies(APP_URL)).map((c) => c.name).filter((n) => HUBSPOT_COOKIES.includes(n))
   expect(left, 'HubSpot cookies survived the sign-out').toEqual([])
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+}
+
+test('AC-04 Sign out deletes the HubSpot cookies on the app host', async ({ page, context }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await signOutAndExpectClean(page, context, errors)
+})
+
+test('AC-04 a workflow-roles read held past the sign-out revocation does not log a 401', async ({ page, context }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  let signedOut!: () => void
+  let rolesDone!: () => void
+  const signOutAnswered = new Promise<void>((resolve) => { signedOut = resolve })
+  const rolesAnswered = new Promise<void>((resolve) => { rolesDone = resolve })
+  // The roles read waits for the sign-out revocation (or 4s, so a spec that waits for idle is not deadlocked).
+  // The sign-out response then waits for the read's answer, so the page is still alive to log a 401.
+  await page.route('**/api/invoice/v1/workflow-roles*', async (route) => {
+    await Promise.race([signOutAnswered, new Promise((resolve) => setTimeout(resolve, 4_000))])
+    const res = await route.fetch()
+    rolesDone()
+    await route.fulfill({ response: res })
+  })
+  await page.route('**/auth/sign-out', async (route) => {
+    const res = await route.fetch()
+    signedOut()
+    await Promise.race([rolesAnswered, new Promise((resolve) => setTimeout(resolve, 5_000))])
+    await route.fulfill({ response: res })
+  })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await signOutAndExpectClean(page, context, errors)
 })
 
 const ROUTES = ['/', '/invoices', '/approvals', '/rules', '/customers', '/reports', '/workflows', '/clients', '/audit', '/settings', '/create']

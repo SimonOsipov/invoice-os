@@ -157,6 +157,9 @@ func h2Srv(t *testing.T, resetFirstN int32) (*httptest.Server, *atomic.Int32) {
 			t.Errorf("server saw %s, want HTTP/2.0", r.Proto)
 		}
 		if reqs.Add(1) <= resetFirstN {
+			// Drain the body so the client has no writes left: a client write after the RST
+			// consumes the socket error on Linux and its next read sees EOF, not ECONNRESET.
+			_, _ = io.Copy(io.Discard, r.Body)
 			if tc, ok := r.Context().Value(connKey{}).(*tls.Conn); ok {
 				rst(tc.NetConn().(*net.TCPConn))
 			}

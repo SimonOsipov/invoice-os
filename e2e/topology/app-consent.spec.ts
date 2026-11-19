@@ -207,10 +207,15 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
           await framesPaint()
           await scrollAndMeasure(`${at} settled`, width)
         } else if (clients) {
-          // BUG-151: scroll while the list is loading, then measure only once rows and health pills have drawn.
+          // Measure the held list first, then once rows and health pills have drawn.
           await scrollToEnd(width)
+          await framesPaint()
+          await settleAnimations(notice(page))
+          await measure(`${at} list held, scroll 0`)
           releaseEntities()
-          await Promise.all(served)
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const hung = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${at}: a held entities/rollup request never finished`)), 30_000) })
+          try { await Promise.race([Promise.all(served), hung]) } finally { clearTimeout(timer) }
           const rows = page.getByTestId('client-row')
           await expect(rows.first(), `${at}: no client row after the entities response`).toBeVisible({ timeout: 30_000 })
           await expect(rows.filter({ hasNotText: HEALTH_LABEL }), `${at}: a row still shows the neutral health cell`).toHaveCount(0, { timeout: 30_000 })

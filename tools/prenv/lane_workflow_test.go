@@ -226,6 +226,7 @@ func rawSteps(j workflowJob) [][]string {
 			out = append(out, nil)
 			t = strings.TrimPrefix(t, "- ")
 		}
+		t = refless(t)
 		if len(out) > 0 {
 			out[len(out)-1] = append(out[len(out)-1], t)
 		}

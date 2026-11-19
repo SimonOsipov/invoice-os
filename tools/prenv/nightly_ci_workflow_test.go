@@ -81,7 +81,7 @@ func ciFullModeProblems(yaml string) []string {
 	}
 	filterSkipped := false
 	for i, l := range changes.lines {
-		if strings.TrimSpace(l) != "- uses: dorny/paths-filter@v3" {
+		if !strings.HasPrefix(strings.TrimSpace(l), "- uses: dorny/paths-filter@") {
 			continue
 		}
 		for _, n := range changes.lines[i+1:] {
@@ -241,7 +241,7 @@ const (
 var (
 	ciResultsJobs  = []string{"go", "migrations", "rls", "idp", "queue", "audit", "frontend", "library", "blog", "hooks", "docling-test"}
 	ciVitestJobs   = []string{"frontend", "library", "blog", "hooks"}
-	ciUploadLines  = []string{"if: always() && env.NIGHTLY_RESULTS != ''", "uses: actions/upload-artifact@v7", "with:", "name: results-${{ github.job }}", "path: nightly-results/", "if-no-files-found: warn", "retention-days: 14"}
+	ciUploadLines  = []string{"if: always() && env.NIGHTLY_RESULTS != ''", "uses: actions/upload-artifact@", "with:", "name: results-${{ github.job }}", "path: nightly-results/", "if-no-files-found: warn", "retention-days: 14"}
 	ciVitestRun    = regexp.MustCompile(`^pnpm --filter @invoice-os/([\w-]+) (test(?::unit|:hooks)?)( .*)?$`)
 	ciVitestSuffix = regexp.MustCompile(`^ \$\{NIGHTLY_RESULTS:\+--retry=1 --reporter=default --reporter=json --outputFile\.json=\$GITHUB_WORKSPACE/\$NIGHTLY_RESULTS/(vitest-[\w-]+\.json)\}$`)
 )
@@ -274,7 +274,7 @@ func ciUploadStepProblems(j workflowJob) []string {
 			continue
 		}
 		if in && t != "" {
-			got = append(got, t)
+			got = append(got, refless(t))
 		}
 	}
 	if !slices.Equal(got, ciUploadLines) {
@@ -456,8 +456,10 @@ func requireCIResultsProblem(t *testing.T, yml string, want ...string) {
 	}
 }
 
-func ciUploadStepText() string {
-	return "      - name: " + ciUploadStepName + "\n        " + strings.Join(ciUploadLines[:3], "\n        ") +
+func ciUploadStepText(t *testing.T, yml string) string {
+	t.Helper()
+	up := strings.Replace(strings.Join(ciUploadLines[:3], "\n        "), "uses: actions/upload-artifact@", "uses: "+actionLine(t, yml, "actions/upload-artifact"), 1)
+	return "      - name: " + ciUploadStepName + "\n        " + up +
 		"\n          " + strings.Join(ciUploadLines[3:], "\n          ") + "\n"
 }
 
@@ -538,12 +540,12 @@ func TestCIResults_DoclingStepWritesJUnitInFullMode(t *testing.T) {
 func TestCIResults_UploadStepOnExactlyTheResultsJobs(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "ci.yml")
-	requireCIResultsProblem(t, mutateInJob(t, yml, "audit", ciUploadStepText(), ""), "audit job does not end")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "audit", ciUploadStepText(t, yml), ""), "audit job does not end")
 	requireCIResultsProblem(t, mutateInJob(t, yml, "audit", "        if: always() && env.NIGHTLY_RESULTS != ''\n", "        if: always()\n"), "audit job upload step differs")
 	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "retention-days: 14", "retention-days: 90"), "queue job upload step differs")
 	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "name: results-${{ github.job }}", "name: results"), "queue job upload step differs")
 	requireCIResultsProblem(t, mutateInJob(t, yml, "idp", "if-no-files-found: warn", "if-no-files-found: error"), "idp job upload step differs")
-	only := mutateInJob(t, yml, "stale-refs", "      - uses: actions/checkout@v4\n", "      - uses: actions/checkout@v4\n"+ciUploadStepText())
+	only := mutateInJob(t, yml, "stale-refs", "      - uses: "+actionLine(t, yml, "actions/checkout")+"\n", "      - uses: "+actionLine(t, yml, "actions/checkout")+"\n"+ciUploadStepText(t, yml))
 	requireCIResultsProblem(t, only, "stale-refs job has the upload step")
 }
 

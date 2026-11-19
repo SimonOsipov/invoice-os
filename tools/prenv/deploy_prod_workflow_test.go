@@ -584,9 +584,9 @@ func TestDeployProd_EveryImageFlagIsInAnExecutedStep(t *testing.T) {
 }
 
 var (
-	uploadLines = []string{"uses: actions/upload-artifact@v7", "name: digest-${{ matrix.image }}", "path: digests/",
+	uploadLines = []string{"uses: actions/upload-artifact@", "name: digest-${{ matrix.image }}", "path: digests/",
 		"if-no-files-found: error", "overwrite: true", "retention-days: 7"}
-	downloadLines = []string{"uses: actions/download-artifact@v4", "pattern: digest-*", "merge-multiple: true", "path: digests"}
+	downloadLines = []string{"uses: actions/download-artifact@", "pattern: digest-*", "merge-multiple: true", "path: digests"}
 )
 
 func digestArtifactProblems(yml string) []string {
@@ -614,7 +614,7 @@ func digestArtifactProblems(yml string) []string {
 	}
 	need("build", "uses: actions/upload-artifact", uploadLines, false)
 	for _, job := range []string{"migrate", "deploy"} {
-		need(job, "uses: actions/checkout", []string{"uses: actions/checkout@v4"}, true)
+		need(job, "uses: actions/checkout", []string{"uses: actions/checkout@"}, true)
 		need(job, "uses: actions/download-artifact", downloadLines, false)
 	}
 	return p
@@ -631,8 +631,8 @@ func TestDeployProd_DigestArtifactsFlowFromBuildToDeployers(t *testing.T) {
 	} {
 		requireProblemWith(t, "drop "+row.job+" "+row.drop, digestArtifactProblems(editJobLine(t, yml, row.job, row.drop, "")), row.job+": ")
 	}
-	pinned := editJobLine(t, yml, "migrate", "- uses: actions/checkout@v4",
-		"- uses: actions/checkout@v4\n        with:\n          ref: ${{ needs.await-ci.outputs.sha }}")
+	pinned := editJobLine(t, yml, "migrate", "- uses: "+actionLine(t, yml, "actions/checkout"),
+		"- uses: "+actionLine(t, yml, "actions/checkout")+"\n        with:\n          ref: ${{ needs.await-ci.outputs.sha }}")
 	requireProblemWith(t, "pin migrate's checkout", digestArtifactProblems(pinned), "migrate: checkout is pinned")
 }
 
@@ -739,8 +739,8 @@ func TestDeployProd_BuildPinsBeforeItPushes(t *testing.T) {
 	requireNoProblems(t, "deploy-prod.yml", pinOrderProblems(yml))
 	block := "      - name: " + pinStepName + "\n        run: bash \"$RUNNER_TEMP/prod-image.sh\" pin \"$IMAGE_NAME\"\n"
 	moved := mutateOnce(t, mutateOnce(t, yml, block, ""),
-		"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n",
-		block+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+		"      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n",
+		block+"      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n")
 	requireProblemWith(t, "pin moved after the push", pinOrderProblems(moved), "after Build and push")
 
 	// The pin step reads $RUNNER_TEMP/prod-image.sh, so the step that writes it comes first.
@@ -748,7 +748,7 @@ func TestDeployProd_BuildPinsBeforeItPushes(t *testing.T) {
 		"          git show \"$GITHUB_SHA:scripts/ci/prod-image.sh\" >\"$RUNNER_TEMP/prod-image.sh\"\n"
 	late := mutateOnce(t, mutateOnce(t, yml, takeBlock, ""), "      - name: "+pinStepName+"\n", takeBlock+"      - name: "+pinStepName+"\n")
 	requireNoProblems(t, "take moved to just before the pin (still in order)", pinOrderProblems(late))
-	after := mutateOnce(t, mutateOnce(t, yml, takeBlock, ""), "      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n", takeBlock+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+	after := mutateOnce(t, mutateOnce(t, yml, takeBlock, ""), "      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n", takeBlock+"      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n")
 	requireProblemWith(t, "take moved to the end of build", pinOrderProblems(after), "does not come before the pin step")
 }
 
@@ -788,7 +788,7 @@ func TestDeployProd_BuildLegsNeverSkipOrReadOrPushATag(t *testing.T) {
 	yml := readWorkflow(t, "deploy-prod.yml")
 	requireNoProblems(t, "deploy-prod.yml", buildLegProblems(yml))
 	add := func(step string) string {
-		return mutateOnce(t, yml, "      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n", step+"      - uses: actions/upload-artifact@v7\n        with:\n          name: digest-${{ matrix.image }}\n")
+		return mutateOnce(t, yml, "      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n", step+"      - uses: "+actionLine(t, yml, "actions/upload-artifact")+"\n        with:\n          name: digest-${{ matrix.image }}\n")
 	}
 	requireProblemWith(t, "an exists step", buildLegProblems(add("      - id: exists\n        run: gcloud artifacts docker images describe \"$X\"\n")), "gcloud artifacts")
 	requireProblemWith(t, "a docker push", buildLegProblems(add("      - run: docker push \"$X\"\n")), "docker push")
@@ -1027,7 +1027,7 @@ func TestDeployProd_IAPTokenStepPrecedesTraffic(t *testing.T) {
 	yml := readWorkflow(t, "deploy-prod.yml")
 	requireNoProblems(t, "deploy-prod.yml", siteStepProblems(yml))
 	start := strings.Index(yml, "      # deploy-prod mints an IAP token for its console reads. A failed")
-	end := start + strings.Index(yml[start:], "      - uses: actions/download-artifact@v4")
+	end := start + strings.Index(yml[start:], "      - uses: "+actionLine(t, yml, "actions/download-artifact"))
 	if start < 0 || end < start {
 		t.Fatal("cannot find the iap step block")
 	}
@@ -1035,7 +1035,7 @@ func TestDeployProd_IAPTokenStepPrecedesTraffic(t *testing.T) {
 	moved := strings.Replace(yml, block, "", 1)
 	after := mutateOnce(t, moved, "      # Through the load balancer", block+"      # Through the load balancer")
 	requireProblemWith(t, "iap after Send", siteStepProblems(after), "after Send")
-	soft := mutateOnce(t, yml, "      - id: iap\n        uses: google-github-actions/auth@v3\n", "      - id: iap\n        continue-on-error: true\n        uses: google-github-actions/auth@v3\n")
+	soft := mutateOnce(t, yml, "      - id: iap\n        uses: "+actionLine(t, yml, "google-github-actions/auth")+"\n", "      - id: iap\n        continue-on-error: true\n        uses: "+actionLine(t, yml, "google-github-actions/auth")+"\n")
 	requireProblemWith(t, "continue-on-error added", siteStepProblems(soft), "continue-on-error")
 	noFile := mutateOnce(t, yml, "          create_credentials_file: false\n", "")
 	requireProblemWith(t, "create_credentials_file removed", siteStepProblems(noFile), "create_credentials_file")

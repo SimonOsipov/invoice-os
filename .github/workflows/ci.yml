@@ -33,7 +33,7 @@ jobs:
       caddy: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.caddy }}
       lane: ${{ steps.lane.outputs.lane }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
       # PR-only: a push has no PR diff to classify.
@@ -41,7 +41,7 @@ jobs:
         id: lane
         if: github.event_name == 'pull_request'
         run: bash scripts/ci/lane.sh pr
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         if: github.event_name != 'workflow_dispatch'
         with:
@@ -199,8 +199,8 @@ jobs:
     # queue smoke suite at an unmigrated DB, so it is deliberately absent. This job
     # builds/vets/tests the pure-Go units.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           # No dependencies / go.sum yet — nothing to cache. Enable in M2.
@@ -272,7 +272,7 @@ jobs:
           grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -297,10 +297,10 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build one plain service image (SERVICE=tenancy)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: Dockerfile
@@ -308,7 +308,7 @@ jobs:
             SERVICE=tenancy
           push: false
       - name: Build the gateway image (SERVICE=gateway) — exercises the db/ dockerignore carve-out
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: Dockerfile
@@ -325,7 +325,7 @@ jobs:
         run: sh scripts/ci/stamp-mock-issuer.sh
       # context: . builds the working tree, so this build sees the stamped build.tags.
       - name: Build the PR-shaped gateway image (-tags mockissuer)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: Dockerfile
@@ -341,7 +341,7 @@ jobs:
       # TestCommittedGatewayBuildTagsAreEmpty reads this file.
       - name: Restore the committed build.tags
         run: git checkout -- cmd/gateway/build.tags
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Scan both gateway binaries for the minting path
@@ -364,14 +364,14 @@ jobs:
       # confirmed against sidecar/docling/Dockerfile's EXPOSE/CMD default.
       DOCLING_CANARY_PORT: "8080"
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # T-02-4 needs a non-"dev" build value baked in before the boot below.
       - name: Stamp a build sha
         run: ./scripts/ci/stamp-build-sha.sh "$GITHUB_SHA"
       # No cache-from on this build: docling-freeze needs two independent builds.
       - name: Build the docling image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: sidecar/docling/Dockerfile
@@ -389,7 +389,7 @@ jobs:
       - name: The image installs exactly the lock
         run: mkdir -p "$RUNNER_TEMP/freeze" && scripts/ci/docling-canary.sh freeze --out "$RUNNER_TEMP/freeze/canary-run.freeze"
       - name: Upload the run image's pip freeze
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docling-freeze-canary
           path: ${{ runner.temp }}/freeze/canary-run.freeze
@@ -563,16 +563,16 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.11.7"
       - name: The locks agree with requirements*.txt
         run: sidecar/docling/lock.sh --check
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # No cache-from on this build: docling-freeze needs two independent builds.
       - name: Build the docling test image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: sidecar/docling/Dockerfile
@@ -583,7 +583,7 @@ jobs:
       - name: Save the deps stage's pip freeze
         run: mkdir -p "$RUNNER_TEMP/freeze" && docker run --rm --entrypoint cat docling:test /build/deps.freeze > "$RUNNER_TEMP/freeze/test-build.freeze"
       - name: Upload the deps stage's pip freeze
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docling-freeze-test
           path: ${{ runner.temp }}/freeze/test-build.freeze
@@ -604,7 +604,7 @@ jobs:
           fi
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -653,8 +653,8 @@ jobs:
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -727,7 +727,7 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestPurge|TestShard|TestSuperuserDSNNotRetainedForRequestPath|TestMigrateMain|TestHandlerMapping' ./internal/platform/db/...
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -781,8 +781,8 @@ jobs:
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -920,7 +920,7 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestSeed|TestCIRunFilters|TestQueryTracer|TestNewPool|TestAuthAdminDSN|TestGrantAccountStateRead|TestLeader|TestBodyCap' ./internal/platform/db/...
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -960,8 +960,8 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
       DATABASE_GATEWAY_URL: postgres://invoice_gateway:gateway@localhost:5432/invoice_os?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -982,7 +982,7 @@ jobs:
         run: for c in idp-es256 idp-hs256 idp-rebuild idp-mail idp-short idp-session mailpit; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1036,8 +1036,8 @@ jobs:
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -1102,7 +1102,7 @@ jobs:
           grep -q 'end-to-end field accuracy, document in to invoice row out' endtoend-corpus.txt
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1149,8 +1149,8 @@ jobs:
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -1165,7 +1165,7 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/audit/...
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1178,10 +1178,10 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library' && needs.changes.outputs.lane != 'blog'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # action-setup reads the pinned pnpm version from package.json#packageManager.
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -1222,7 +1222,7 @@ jobs:
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1236,9 +1236,9 @@ jobs:
     if: needs.changes.outputs.lane == 'library' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -1254,7 +1254,7 @@ jobs:
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1268,9 +1268,9 @@ jobs:
     if: needs.changes.outputs.lane == 'blog' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -1286,7 +1286,7 @@ jobs:
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1300,9 +1300,9 @@ jobs:
     if: needs.changes.outputs.hooks == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -1312,7 +1312,7 @@ jobs:
         run: pnpm --filter @invoice-os/e2e test:hooks ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e-hooks.json}
       - name: Upload the nightly results
         if: always() && env.NIGHTLY_RESULTS != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ github.job }}
           path: nightly-results/
@@ -1330,7 +1330,7 @@ jobs:
     name: Clean-clone build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # ubuntu is case-sensitive.
       - name: No tracked file matches .gitignore
         run: |
@@ -1341,7 +1341,7 @@ jobs:
             exit 1
           fi
       # Go from scratch — no module/build cache.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -1349,8 +1349,8 @@ jobs:
         run: go build ./...
       # All SPAs from scratch — cold pnpm install (deliberately no `cache: pnpm`)
       # so a stale cache can't mask a lockfile that no longer resolves.
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: pnpm install (cold, frozen lockfile)
@@ -1376,12 +1376,12 @@ jobs:
     name: Stale references
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The scan diffs against the merge base, so a shallow clone would make
           # it silently find nothing — the failure mode it is built to catch.
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       # Proves the detector still fires on its pinned known positives before its
@@ -1403,8 +1403,8 @@ jobs:
     name: Production ids
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the guard fires (known positives)
@@ -1421,8 +1421,8 @@ jobs:
     name: Rule-file globs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the guard fires
@@ -1437,11 +1437,11 @@ jobs:
     name: Migration order
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The check needs the merge base; a shallow clone has none.
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the check fires (pinned PR #142 break)
@@ -1462,10 +1462,10 @@ jobs:
     name: Schema deletion
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the check fires, releases and stays silent
@@ -1483,8 +1483,8 @@ jobs:
     name: Dockerfile guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the guard fires and stays silent
@@ -1498,11 +1498,11 @@ jobs:
     name: Line-number citations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Diffs against the merge base; a shallow clone has none.
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Prove the detector fires (known positives)
@@ -1540,8 +1540,8 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       # The gate asserts an ABSENCE, so it proves it can still decide before its
@@ -1565,8 +1565,8 @@ jobs:
     name: advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Scan for high or critical advisories
@@ -1577,8 +1577,8 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       # Pinned: a scanner release must not change the verdict between two runs.
@@ -1597,7 +1597,7 @@ jobs:
     if: needs.changes.outputs.caddy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: bash scripts/ci/caddy-headers.sh
 
   # The deps stage of docling-test and the run image of docling-canary are
@@ -1608,7 +1608,7 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: docling-freeze-*
           merge-multiple: true

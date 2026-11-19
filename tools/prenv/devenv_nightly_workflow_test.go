@@ -231,7 +231,7 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	for j, art := range map[string]string{"e2e": "results-e2e", "topology": "results-topology-${{ matrix.shard }}"} {
 		raw := nlRaw(jobs[j], "Upload the nightly results")
-		for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+		for _, w := range []string{"if: always() && " + nlOn + " && steps.scrub.outcome == 'success'", "uses: actions/upload-artifact@", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
 			if !slices.Contains(raw, w) {
 				bad(j + " results upload lacks " + w)
 			}
@@ -243,7 +243,7 @@ func devEnvNightlyProblems(yml string) []string {
 			bad(j + " env lacks the nightly-only ARGOS_SHOTS")
 		}
 		raw := nlRaw(jobs[j], "Upload the Argos shots")
-		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@v7", "name: " + art, "path: e2e/argos-shots/", "if-no-files-found: ignore", "retention-days: 14"} {
+		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@", "name: " + art, "path: e2e/argos-shots/", "if-no-files-found: ignore", "retention-days: 14"} {
 			if !slices.Contains(raw, w) {
 				bad(j + " Argos upload lacks " + w)
 			}
@@ -451,7 +451,7 @@ func contactProblems(jobs map[string]workflowJob) []string {
 	if !strings.Contains(dl, "continue-on-error: true") {
 		bad("contacts-cleanup download can fail the job before the delete")
 	}
-	for _, w := range []string{"uses: actions/download-artifact@v4", "pattern: contacts-*", "merge-multiple: true"} {
+	for _, w := range []string{"uses: actions/download-artifact@", "pattern: contacts-*", "merge-multiple: true"} {
 		if !strings.Contains(dl, w) {
 			bad("contacts-cleanup download lacks " + w)
 		}
@@ -1130,13 +1130,14 @@ func TestDevEnvNightly_PRGatesSkipped(t *testing.T) {
 
 func TestDevEnvNightly_ResultsUploaded(t *testing.T) {
 	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
 	for _, c := range []struct{ old, repl, want string }{
 		{"      " + nlTarget + "\n    steps:\n      # \"Re-run", "    steps:\n      # \"Re-run", "e2e env lacks E2E_TARGET"},
 		{nlJSONFile("playwright-smoke.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "Smoke"},
 		{nlJSONFile("playwright-api.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "API E2E"},
 		{"name: results-e2e", "name: results", "results upload lacks name: results-e2e"},
 		{"name: results-topology-${{ matrix.shard }}", "name: results-topology", "topology results upload lacks"},
-		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: results-e2e", "        if: always()\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
 		{"          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 14", "          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 7", "retention-days: 14"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), c.old, c.repl))
@@ -1291,8 +1292,9 @@ func TestDevEnvNightly_ArgosFlagIsNightlyOnly(t *testing.T) {
 
 func TestDevEnvNightly_ArgosUploadIsNightlyOnly(t *testing.T) {
 	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
 	for _, art := range []string{"argos-shots-e2e", "argos-shots-topology-${{ matrix.shard }}"} {
-		old := "        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: " + art
+		old := "        if: always() && " + nlOn + "\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: " + art
 		requireDevEnvProblem(t, old, strings.Replace(old, " && "+nlOn, "", 1), "Argos upload lacks if: always() && "+nlOn)
 	}
 }
@@ -1324,12 +1326,13 @@ func requireEmailMutations(t *testing.T, rows []struct{ old, repl, want string }
 
 func TestDevEnvNightly_EmailJobRunsInNightlyModeOnly(t *testing.T) {
 	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
 	requireEmailMutations(t, []struct{ old, repl, want string }{
 		{"contacts, nightly-ai]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&\n", "contacts, nightly-ai]\n    if: >-\n      !cancelled() &&\n", "email if"},
 		{"    name: Real invite and reset mail\n", "    name: Mail\n", "email name"},
 		{"    timeout-minutes: 25\n    permissions:\n      contents: read\n      actions: read", "    timeout-minutes: 40\n    permissions:\n      contents: read\n      actions: read", "email timeout-minutes"},
 		{"        timeout-minutes: 16\n", "        timeout-minutes: 30\n", "timeout-minutes is not 16"},
-		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
+		{"        if: always() && " + nlOn + " && steps.scrub.outcome == 'success'\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: results-email", "        if: always()\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: results-email", "email results upload lacks"},
 	})
 }
 
@@ -1364,7 +1367,7 @@ func TestDevEnvNightly_GuardRunsBeforeAnyDeploy(t *testing.T) {
 		{"      - id: token_version\n        name: Read the HubSpot token version\n        if: " + nlOn + "\n", "      - id: token_version\n        name: Read the HubSpot token version\n", "Read the HubSpot token version is not nightly only"},
 		{"    needs: [prepare-env, build]\n", "    needs: [build]\n", "deploy does not need prepare-env"},
 		{"!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'", "!cancelled() && needs.build.result == 'success'", "deploy if does not require"},
-		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: contacts-start", "        if: " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: contacts-start", "contacts-start upload"},
+		{"        if: always() && " + nlOn + "\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: contacts-start", "        if: " + nlOn + "\n        uses: " + actionLine(t, yml, "actions/upload-artifact") + "\n        with:\n          name: contacts-start", "contacts-start upload"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
@@ -1422,7 +1425,7 @@ func TestDevEnvNightly_ContactsGuardsAndDownloadSurviveFailure(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
 	for _, c := range []struct{ old, repl, want string }{
-		{"        continue-on-error: true\n        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "download can fail"},
+		{"        continue-on-error: true\n        uses: " + actionLine(t, yml, "actions/download-artifact") + "\n        with:\n          pattern: contacts-*", "        uses: " + actionLine(t, yml, "actions/download-artifact") + "\n        with:\n          pattern: contacts-*", "download can fail"},
 		{"          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" = \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
 		{"      - name: Refuse a re-run that skipped the deploy\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "      - name: Refuse a re-run\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
 	} {
@@ -1509,7 +1512,7 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 			t.Errorf("swap %v: problems %q", pair, got)
 		}
 	}
-	auth := "      - uses: google-github-actions/auth@v3\n        with:\n          workload_identity_provider: ${{ env.WIF_PROVIDER }}\n          service_account: ${{ env.DEPLOYER }}\n"
+	auth := "      - uses: " + actionLine(t, yml, "google-github-actions/auth") + "\n        with:\n          workload_identity_provider: ${{ env.WIF_PROVIDER }}\n          service_account: ${{ env.DEPLOYER }}\n"
 	pf := "      - name: Check the nightly mail secrets\n        run: bash scripts/ci/preview.sh mail-preflight \"$PR\"\n"
 	if got := emailProblems(nlJobs(mutateOnce(t, yml, auth+pf, pf+auth))); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
 		t.Errorf("swap auth and preflight: problems %q", got)

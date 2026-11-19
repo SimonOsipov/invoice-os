@@ -50,7 +50,7 @@ jobs:
       draft_api: ${{ steps.draft.outputs.api }}
       draft_topology: ${{ steps.draft.outputs.topology }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
       # The checkout is the merge ref, which always contains the base: test the PR head. Fails before any deploy.
@@ -84,7 +84,7 @@ jobs:
           else
             echo "topology_after=success" >>"$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       # A draft deploys only when it changes an E2E spec, and runs only those specs.
@@ -123,7 +123,7 @@ jobs:
             shards='[]'
           fi
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         if: github.event_name == 'pull_request'
         with:
@@ -166,7 +166,7 @@ jobs:
     outputs:
       dependabot_only: ${{ steps.verdict.outputs.dependabot_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: verdict
         env:
           GH_TOKEN: ${{ github.token }}
@@ -191,7 +191,7 @@ jobs:
     outputs:
       conclusion: ${{ steps.wait.outputs.conclusion }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: wait
         name: Wait for the CI check to succeed on this commit
         if: needs.changes.outputs.nightly != 'true'
@@ -219,12 +219,12 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check the Actions variables
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           # Checks the PR deployer on every run.
@@ -274,18 +274,18 @@ jobs:
       check_url: ${{ steps.urls.outputs.check_url }}
       hubspot_token_version: ${{ steps.token_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check the Actions variables
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
           HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
         run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER HUBSPOT_PORTAL_ID
       # `prenv jwk-es256` generates the PR's GoTrue key.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -372,7 +372,7 @@ jobs:
             go run ./internal/tools/nightlycontacts start -out "$RUNNER_TEMP/contacts/start.json"
       - name: Upload the contacts start result
         if: always() && needs.changes.outputs.nightly == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: contacts-start
           path: ${{ runner.temp }}/contacts/start.json
@@ -422,13 +422,13 @@ jobs:
     env:
       SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check the Actions variables
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
           HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
         run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER HUBSPOT_PORTAL_ID
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -498,8 +498,8 @@ jobs:
     env:
       SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -534,8 +534,8 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -582,7 +582,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -603,8 +603,8 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -744,16 +744,16 @@ jobs:
             echo "::error::Re-run the whole workflow, not failed jobs — the database is recreated only when the deploy job runs. It last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
             exit 1
           fi
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile --ignore-scripts
       # After the install: the fleet specs send the PR's gateway token.
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -856,7 +856,7 @@ jobs:
       # the only evidence.
       - name: Upload smoke Playwright report
         if: always() && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-playwright-report
           path: e2e/report-smoke/
@@ -864,7 +864,7 @@ jobs:
           retention-days: 7
       - name: Upload API Playwright report
         if: always() && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-api
           path: e2e/report-api/
@@ -872,7 +872,7 @@ jobs:
           retention-days: 7
       - name: Upload the flaky JSON
         if: always() && steps.scrub-flaky.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flaky-results-e2e-${{ github.run_attempt }}
           path: e2e/flaky-results/
@@ -880,7 +880,7 @@ jobs:
           retention-days: 30
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-e2e
           path: nightly-results/
@@ -888,7 +888,7 @@ jobs:
           retention-days: 14
       - name: Upload the Argos shots
         if: always() && needs.changes.outputs.nightly == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: argos-shots-e2e
           path: e2e/argos-shots/
@@ -951,9 +951,9 @@ jobs:
             fi
           done
           exit "$rc"
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -961,7 +961,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install Chromium
         run: pnpm --filter @invoice-os/e2e exec playwright install chromium
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1015,7 +1015,7 @@ jobs:
         run: node e2e/reportScrub.ts e2e/flaky-results
       - name: Upload topology Playwright report
         if: always() && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: topology-playwright-report-${{ matrix.shard }}
           path: e2e/report-topology/
@@ -1023,7 +1023,7 @@ jobs:
           retention-days: 7
       - name: Upload the flaky JSON
         if: always() && steps.scrub-flaky.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
           path: e2e/flaky-results/
@@ -1031,7 +1031,7 @@ jobs:
           retention-days: 30
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-topology-${{ matrix.shard }}
           path: nightly-results/
@@ -1039,7 +1039,7 @@ jobs:
           retention-days: 14
       - name: Upload the Argos shots
         if: always() && needs.changes.outputs.nightly == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: argos-shots-topology-${{ matrix.shard }}
           path: e2e/argos-shots/
@@ -1057,8 +1057,8 @@ jobs:
       id-token: write
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1073,8 +1073,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - run: node e2e/mergeGate.ts
@@ -1115,12 +1115,12 @@ jobs:
             echo "::error::Re-run the whole workflow, not failed jobs — the fleet is torn down after each attempt. The deploy last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
             exit 1
           fi
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1138,7 +1138,7 @@ jobs:
             go run ./internal/tools/nightlycontacts check -out "$RUNNER_TEMP/contacts/check.json"
       - name: Upload the contacts check result
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: contacts-check
           path: ${{ runner.temp }}/contacts/check.json
@@ -1180,15 +1180,15 @@ jobs:
             echo "::error::Re-run the whole workflow, not failed jobs — the database is recreated only when the deploy job runs. It last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
             exit 1
           fi
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
       - name: Install the e2e dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1207,7 +1207,7 @@ jobs:
         run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-ai-check
           path: nightly-results/
@@ -1253,20 +1253,20 @@ jobs:
             echo "::error::Re-run the whole workflow, not failed jobs — the database is recreated only when the deploy job runs. It last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
             exit 1
           fi
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Install Chromium
         run: pnpm --filter @invoice-os/e2e exec playwright install chromium
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1308,7 +1308,7 @@ jobs:
         run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true' && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-email
           path: nightly-results/
@@ -1326,8 +1326,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
@@ -1360,26 +1360,26 @@ jobs:
       actions: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
       - name: Install the e2e dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
       # An API error must not skip the delete; finish reports a missing phase file.
       - name: Download the contacts results
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: contacts-*
           merge-multiple: true
@@ -1406,7 +1406,7 @@ jobs:
         run: node e2e/reportScrub.ts nightly-results
       - name: Upload the nightly results
         if: always() && steps.scrub.outcome == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-hubspot
           path: nightly-results/

@@ -67,6 +67,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
 const (
@@ -993,11 +995,15 @@ func (r scRoute) String() string {
 
 var scMuxMethods = map[string]bool{"Handle": true, "HandleFunc": true}
 
-type scRouteVerdict struct{ verdict, reason string }
+// get classifies a GET/HEAD route the gateway proxies: scWrites when its handler writes upstream.
+type scRouteVerdict struct{ verdict, reason, get string }
 
 const (
 	scCovered = "covered"
 	scExempt  = "exempt"
+
+	scReads  = "reads"
+	scWrites = "writes"
 )
 
 // scRouteVerdicts classifies every registered route; TestRLS_EveryRegisteredRouteHasAVerdict keeps it total.
@@ -1023,48 +1029,48 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /emails/confirmation.html":                          {verdict: scExempt, reason: "no database; static account-mail template"},
 	"GET /emails/mark.png":                                   {verdict: scExempt, reason: "no database; static account-mail logo"},
 	"GET /emails/recovery.html":                              {verdict: scExempt, reason: "no database; static account-mail template"},
-	"GET /health":                                            {verdict: scExempt, reason: "alias of /healthz for run.app hosts, which reserve /healthz"},
-	"GET /healthz":                                           {verdict: scExempt, reason: "must answer while the database is down; a membership lookup would invert its meaning"},
+	"GET /health":                                            {verdict: scExempt, reason: "alias of /healthz for run.app hosts, which reserve /healthz", get: scReads},
+	"GET /healthz":                                           {verdict: scExempt, reason: "must answer while the database is down; a membership lookup would invert its meaning", get: scReads},
 	"GET /healthz/fleet":                                     {verdict: scExempt, reason: "fleet roll-up across services, deliberately outside the verifier"},
-	"GET /readyz":                                            {verdict: scExempt, reason: "readiness reports on the database, so it cannot depend on reaching it"},
-	"GET /v1/approval-policies":                              {verdict: scCovered},
-	"GET /v1/approval-policies/{id}":                         {verdict: scCovered},
-	"GET /v1/audit-log":                                      {verdict: scCovered},
-	"GET /v1/contacts/me":                                    {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant"},
-	"GET /v1/code-lists/{list}":                              {verdict: scCovered},
-	"GET /v1/custom-rules":                                   {verdict: scCovered},
-	"GET /v1/customers":                                      {verdict: scCovered},
-	"GET /v1/documents/{id}":                                 {verdict: scCovered},
-	"GET /v1/documents/{id}/sheet":                           {verdict: scCovered},
-	"GET /v1/entities":                                       {verdict: scCovered},
-	"GET /v1/entities/{id}":                                  {verdict: scCovered},
-	"GET /v1/evidence-bundle":                                {verdict: scCovered},
-	"GET /v1/evidence-bundle/preview":                        {verdict: scCovered},
-	"GET /v1/extractions":                                    {verdict: scCovered},
-	"GET /v1/extractions/{id}":                               {verdict: scCovered},
-	"GET /v1/extractions/{id}/pages/{n}":                     {verdict: scCovered},
-	"GET /v1/imports/document/note-originals":                {verdict: scCovered},
-	"GET /v1/imports/document/reading":                       {verdict: scCovered},
-	"GET /v1/imports/saved-mapping":                          {verdict: scCovered},
-	"GET /v1/imports/{id}":                                   {verdict: scCovered},
-	"GET /v1/invitations":                                    {verdict: scCovered},
-	"GET /v1/invitations/mine":                               {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
-	"GET /v1/invoice-register":                               {verdict: scCovered},
-	"GET /v1/invoices":                                       {verdict: scCovered},
-	"GET /v1/invoices/violation-summary":                     {verdict: scCovered},
-	"GET /v1/invoices/{id}":                                  {verdict: scCovered},
-	"GET /v1/invoices/{id}/approval":                         {verdict: scCovered},
-	"GET /v1/invoices/{id}/history":                          {verdict: scCovered},
-	"GET /v1/invoices/{id}/notes":                            {verdict: scCovered},
-	"GET /v1/invoices/{id}/source-document":                  {verdict: scCovered},
-	"GET /v1/invoices/{id}/ubl":                              {verdict: scCovered},
-	"GET /v1/me":                                             {verdict: scExempt, reason: "the SPA's boot round trip; gating it would make the 403 unreachable"},
-	"GET /v1/me/deletion":                                    {verdict: scCovered},
-	"GET /v1/memberships":                                    {verdict: scCovered},
-	"GET /v1/ping":                                           {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table"},
-	"GET /v1/rollup":                                         {verdict: scCovered},
-	"GET /v1/rollup/history":                                 {verdict: scCovered},
-	"GET /v1/workflow-roles":                                 {verdict: scCovered},
+	"GET /readyz":                                            {verdict: scExempt, reason: "readiness reports on the database, so it cannot depend on reaching it", get: scReads},
+	"GET /v1/approval-policies":                              {verdict: scCovered, get: scReads},
+	"GET /v1/approval-policies/{id}":                         {verdict: scCovered, get: scReads},
+	"GET /v1/audit-log":                                      {verdict: scCovered, get: scReads},
+	"GET /v1/contacts/me":                                    {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant", get: scReads},
+	"GET /v1/code-lists/{list}":                              {verdict: scCovered, get: scReads},
+	"GET /v1/custom-rules":                                   {verdict: scCovered, get: scReads},
+	"GET /v1/customers":                                      {verdict: scCovered, get: scReads},
+	"GET /v1/documents/{id}":                                 {verdict: scCovered, get: scWrites},
+	"GET /v1/documents/{id}/sheet":                           {verdict: scCovered, get: scWrites},
+	"GET /v1/entities":                                       {verdict: scCovered, get: scReads},
+	"GET /v1/entities/{id}":                                  {verdict: scCovered, get: scReads},
+	"GET /v1/evidence-bundle":                                {verdict: scCovered, get: scWrites},
+	"GET /v1/evidence-bundle/preview":                        {verdict: scCovered, get: scReads},
+	"GET /v1/extractions":                                    {verdict: scCovered, get: scReads},
+	"GET /v1/extractions/{id}":                               {verdict: scCovered, get: scWrites},
+	"GET /v1/extractions/{id}/pages/{n}":                     {verdict: scCovered, get: scReads},
+	"GET /v1/imports/document/note-originals":                {verdict: scCovered, get: scReads},
+	"GET /v1/imports/document/reading":                       {verdict: scCovered, get: scReads},
+	"GET /v1/imports/saved-mapping":                          {verdict: scCovered, get: scWrites},
+	"GET /v1/imports/{id}":                                   {verdict: scCovered, get: scReads},
+	"GET /v1/invitations":                                    {verdict: scCovered, get: scReads},
+	"GET /v1/invitations/mine":                               {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites", get: scReads},
+	"GET /v1/invoice-register":                               {verdict: scCovered, get: scWrites},
+	"GET /v1/invoices":                                       {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/violation-summary":                     {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}":                                  {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}/approval":                         {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}/history":                          {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}/notes":                            {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}/source-document":                  {verdict: scCovered, get: scReads},
+	"GET /v1/invoices/{id}/ubl":                              {verdict: scCovered, get: scReads},
+	"GET /v1/me":                                             {verdict: scExempt, reason: "the SPA's boot round trip; gating it would make the 403 unreachable", get: scReads},
+	"GET /v1/me/deletion":                                    {verdict: scCovered, get: scReads},
+	"GET /v1/memberships":                                    {verdict: scCovered, get: scReads},
+	"GET /v1/ping":                                           {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table", get: scReads},
+	"GET /v1/rollup":                                         {verdict: scCovered, get: scReads},
+	"GET /v1/rollup/history":                                 {verdict: scCovered, get: scReads},
+	"GET /v1/workflow-roles":                                 {verdict: scCovered, get: scReads},
 	"OPTIONS /auth/export-code":                              {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"OPTIONS /auth/console-handoff":                          {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                                 {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
@@ -1094,45 +1100,45 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/me/deletion":                                   {verdict: scCovered},
 	"POST /v1/memberships/{user_id}/remove":                  {verdict: scCovered},
 	"POST /v1/workspace/deletion":                            {verdict: scCovered},
-	"GET /v1/staff/tenants/{id}/members/{user_id}/deletion":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"GET /v1/staff/tenants/{id}/members/{user_id}/deletion":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, read in that tenant's READ ONLY WithinTenantTxOpts", get: scReads},
 	"POST /v1/staff/tenants/{id}/deletion":                   {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/tenants/{id}/deletion/cancel":            {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/tenants/{id}/deletion/purge":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/tenants/{id}/members/{user_id}/deletion": {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/workspace/deletion/cancel":                     {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
 	"POST /v1/workspace/deletion/cancel-by-link":             {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
-	"GET /v1/workspace/export/preflight":                     {verdict: scCovered},
-	"GET /v1/workspace/export":                               {verdict: scExempt, reason: "admin export of a locked workspace; WorkspaceStore.AssembleWorkspace gates the active admin itself in WithinTenantTxOpts and writes workspace.exported"},
+	"GET /v1/workspace/export/preflight":                     {verdict: scCovered, get: scReads},
+	"GET /v1/workspace/export":                               {verdict: scExempt, reason: "admin export of a locked workspace; WorkspaceStore.AssembleWorkspace gates the active admin itself in WithinTenantTxOpts and writes workspace.exported", get: scWrites},
 	"PUT /v1/memberships/{user_id}/clients":                  {verdict: scCovered},
-	"GET /v1/staff/health":                                   {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/metrics":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},
-	"GET /v1/staff/tenants":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/tenants/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/jobs":                                     {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/jobs/{id}":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/health":                                   {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/metrics":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows", get: scReads},
+	"GET /v1/staff/tenants":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/tenants/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/jobs":                                     {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/jobs/{id}":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
 	"POST /v1/staff/jobs/{id}/redrive":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/jobs/{id}/cancel":                        {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
-	"GET /v1/staff/rules":                                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/rule-versions":                            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/rules":                                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/rule-versions":                            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
 	"PATCH /v1/staff/rules/{key}":                            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/custom-rules":                                  {verdict: scCovered},
 	"POST /v1/customers":                                     {verdict: scCovered},
 	"POST /v1/customers/{id}/archive":                        {verdict: scCovered},
 	"POST /v1/customers/{id}/restore":                        {verdict: scCovered},
-	"GET /v1/staff/blog/categories":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/blog/categories":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
 	"POST /v1/staff/blog/categories":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/staff/blog/categories/{id}":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/blog/categories/{id}/move":               {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/blog/categories/{id}":                  {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/blog/authors":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/blog/posts":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/blog/authors":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/blog/posts":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
 	"POST /v1/staff/blog/posts":                              {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/staff/blog/posts/{id}":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/blog/posts/{id}":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/staff/blog/posts/{id}/featured":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/staff/blog/posts/{id}/cover":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/blog/posts/{id}/cover":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/blog/posts/{id}/cover":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/blog/posts/{id}/cover":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
 	"POST /v1/staff/rule-versions/draft":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/rules":               {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/custom-rules/{id}":                              {verdict: scCovered},
@@ -1140,15 +1146,15 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"DELETE /v1/staff/rule-versions/draft/rules/{key}":       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/publish":             {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/test":                {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/code-list-syncs":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/audit-log":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/staff-audit-log":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/ai-calls":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/ai-calls/totals":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/tenants/{id}/entities":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"GET /v1/staff/code-list-syncs":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/audit-log":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/staff-audit-log":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/ai-calls":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/ai-calls/totals":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx", get: scReads},
+	"GET /v1/staff/tenants/{id}/entities":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts", get: scReads},
 	"POST /v1/staff/tenants/{id}/evidence-bundle":            {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts, then writes the audit rows in a short tenant tx"},
-	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":     {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
-	"GET /v1/rules":                                          {verdict: scCovered},
+	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":     {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts", get: scReads},
+	"GET /v1/rules":                                          {verdict: scCovered, get: scReads},
 	"PATCH /v1/rules/{key}":                                  {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                         {verdict: scCovered},
 	"POST /auth/console-handoff":                             {verdict: scExempt, reason: "no database; in-process code store"},
@@ -1186,10 +1192,10 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /internal/invitations/pending":                     {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
 	"POST /internal/invitations/register":                    {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /internal/invitations/release":                     {verdict: scExempt, reason: "no caller; the token names the invite"},
-	"GET /internal/blog/categories":                          {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
-	"GET /internal/blog/posts":                               {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
-	"GET /internal/blog/posts/{id}":                          {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
-	"GET /internal/blog/covers/{id}/{version}":               {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
+	"GET /internal/blog/categories":                          {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404", get: scReads},
+	"GET /internal/blog/posts":                               {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404", get: scReads},
+	"GET /internal/blog/posts/{id}":                          {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404", get: scReads},
+	"GET /internal/blog/covers/{id}/{version}":               {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404", get: scReads},
 	"POST /internal/blog/subscriptions":                      {verdict: scExempt, reason: "gateway-token call with no caller; subscribers carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/blog/subscriptions/confirm":              {verdict: scExempt, reason: "gateway-token call with no caller; subscribers carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /v1/approval-policies":                             {verdict: scCovered},
@@ -1413,9 +1419,9 @@ func scRouteVerdictProblems(verdicts map[string]scRouteVerdict, registered map[s
 	return out
 }
 
-func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
-	t.Run("control needles", scRouteControlNeedles)
-
+// scRegisteredRoutes walks every cmd/ file and internal/platform/server.go for Mux registrations.
+func scRegisteredRoutes(t *testing.T) []scRoute {
+	t.Helper()
 	root := repoRootDir(t)
 	// internal/platform/server.go registers GET /healthz and GET /readyz for
 	// EVERY service, so a cmd/-only walk cannot see them.
@@ -1452,6 +1458,36 @@ func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
 	if rootsWithRoutes < 8 || len(routes) < 55 {
 		t.Fatalf("found %d registration(s) across %d file(s), want at least 55 across at least 8 (63 across 9 measured at AUDIT-10-04) — a walk that reads nothing classifies nothing", len(routes), rootsWithRoutes)
 	}
+	return routes
+}
+
+// TestRLS_WritingGetsMatchGateway makes every proxied GET/HEAD route state whether its handler
+// writes, and holds that set equal to what the gateway refuses to retry after a reset.
+func TestRLS_WritingGetsMatchGateway(t *testing.T) {
+	param := regexp.MustCompile(`\{[^}]*\}`)
+	seen := map[string]bool{}
+	for _, r := range scRegisteredRoutes(t) {
+		method, pattern, _ := strings.Cut(r.route, " ")
+		if (method != "GET" && method != "HEAD") || r.file == "cmd/gateway/main.go" || seen[r.route] {
+			continue
+		}
+		seen[r.route] = true
+		switch get := scRouteVerdicts[r.route].get; get {
+		case scReads, scWrites:
+			rest := strings.TrimPrefix(param.ReplaceAllString(pattern, "x"), "/")
+			if got := gateway.WritesOnGet(rest); got != (get == scWrites) {
+				t.Errorf("%s is classified %q but gateway.WritesOnGet(%q) = %v", r.route, get, rest, got)
+			}
+		default:
+			t.Errorf("%s is a proxied GET with get %q in scRouteVerdicts, want %q or %q", r.route, get, scReads, scWrites)
+		}
+	}
+}
+
+func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
+	t.Run("control needles", scRouteControlNeedles)
+
+	routes := scRegisteredRoutes(t)
 
 	registered := map[string]bool{}
 	for _, r := range routes {

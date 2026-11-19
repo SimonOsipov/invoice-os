@@ -89,7 +89,7 @@ func main() {
 	withSessionCORS := gateway.SessionCORS(corsOrigins, cookies)
 
 	gwPool := gatewayPool(app.Logger)
-	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(nil)}, time.Now, app.Logger)
+	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(platform.ResetRetryTransport(nil))}, time.Now, app.Logger)
 	sessions.Shared(gwPool)
 	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger, gatewayToken)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
@@ -112,9 +112,9 @@ func main() {
 	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
 
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
-	sink := registrantSink(gwPool, gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken))
+	sink := registrantSink(gwPool, gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken))
 
-	pending := gateway.NewHTTPPendingInviteLookup(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	pending := gateway.NewHTTPPendingInviteLookup(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken)
 
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
@@ -126,8 +126,8 @@ func main() {
 	app.Mux.Handle("POST /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("OPTIONS /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
-	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
-	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken)
+	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken)
 	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, previewer, registrations, poolTokens(gwPool), app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
@@ -161,7 +161,7 @@ func main() {
 	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
 	app.Mux.Handle("OPTIONS /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
-	unsubscribePage := gateway.UnsubscribePageHandler(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, app.Logger)
+	unsubscribePage := gateway.UnsubscribePageHandler(routed["notifications"], &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken, app.Logger)
 	app.Mux.Handle("GET /unsubscribe", unsubscribePage)
 	app.Mux.Handle("POST /unsubscribe", unsubscribePage)
 
@@ -265,7 +265,7 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pr
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     platform.IDTokenTransport(nil),
+		Transport:     platform.IDTokenTransport(platform.ResetRetryTransport(nil)),
 	}
 	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, log, preview, registrations, tokens)
 }
@@ -279,7 +279,7 @@ func invitationResendHandler(authURL, siteURL *url.URL, perAddress *gateway.Sign
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     platform.IDTokenTransport(nil),
+		Transport:     platform.IDTokenTransport(platform.ResetRetryTransport(nil)),
 	}
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return gateway.InvitationResendHandler(authURL, client, perAddress, enforce, log, preview)
@@ -287,7 +287,7 @@ func invitationResendHandler(authURL, siteURL *url.URL, perAddress *gateway.Sign
 
 // newJWKSClient builds the JWKS fetch client.
 func newJWKSClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(nil)}
+	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
@@ -303,7 +303,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     platform.IDTokenTransport(nil),
+		Transport:     platform.IDTokenTransport(platform.ResetRetryTransport(nil)),
 	}
 	// Resend and reset share one budget per address.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
@@ -332,7 +332,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 
 // blogHandlers builds the public blog reads.
 func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger) gateway.BlogRoutes {
-	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, log)
+	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken, log)
 }
 
 // blogSubscribeHandlers builds the public newsletter routes; the per-email cap logs and admits on a PR fork.
@@ -340,7 +340,7 @@ func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minRespo
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
 	perEmail.Shared(pool, log)
-	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perEmail, enforce, log)
+	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}, gatewayToken, minResponse, perEmail, enforce, log)
 }
 
 // readinessCheckHandlers builds the public check routes; a preview logs the per-IP limit and admits.
@@ -348,7 +348,7 @@ func readinessCheckHandlers(worker *url.URL, gatewayToken string, log *slog.Logg
 	posture := platform.Posture(platform.DeployEnv())
 	perIP := gateway.NewSignInThrottle("readiness-check-ip", gateway.ReadinessCheckPerIP, gateway.ReadinessCheckMaxKeys, gateway.ReadinessCheckIPWindow, time.Now)
 	perIP.Shared(pool, log)
-	client := &http.Client{Transport: platform.TraceTransport(nil)}
+	client := &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
 	return gateway.ReadinessCheckHandlers(worker, client, gatewayToken, perIP, posture != platform.PosturePreview, posture, log)
 }
 
@@ -357,7 +357,7 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     platform.IDTokenTransport(nil),
+		Transport:     platform.IDTokenTransport(platform.ResetRetryTransport(nil)),
 	}
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log, events, perIP, platform.Posture(platform.DeployEnv()) != platform.PosturePreview)
 }
@@ -428,7 +428,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     platform.IDTokenTransport(nil),
+		Transport:     platform.IDTokenTransport(platform.ResetRetryTransport(nil)),
 	}
 	events := gateway.NewAccountEvents(pool, log)
 	// One count for every link route; a preview logs and admits.

@@ -2,15 +2,18 @@ package platform
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
+	"sync/atomic"
 	"syscall"
 )
 
-// ResetRetryTransport retries a bodyless GET, HEAD or OPTIONS once when its connection is reset before
-// any response arrives, unless NoResetRetry marked it. Any other request is never retried: a reset may
+// ResetRetryTransport retries a bodyless GET, HEAD or OPTIONS once when its connection is reset, or an HTTP/2
+// connection ends in unexpected EOF, before any response arrives, unless NoResetRetry marked it. Any other request is never retried: a reset may
 // follow a request the upstream already acted on. A nil base is http.DefaultTransport, resolved now because tests swap it.
 func ResetRetryTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
@@ -32,20 +35,42 @@ type resetRetry struct {
 }
 
 func (t *resetRetry) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err == nil || !errors.Is(err, syscall.ECONNRESET) || req.Context().Err() != nil {
+	retry := retryable(req)
+	resp, viaH2, err := t.attempt(req, retry)
+	if err == nil || !isReset(err, viaH2) || req.Context().Err() != nil {
 		return resp, err
 	}
-	retry := retryable(req)
 	logReset(req, 1, retry, err)
 	if !retry {
 		return nil, err
 	}
-	resp, err = t.base.RoundTrip(req)
-	if err != nil && errors.Is(err, syscall.ECONNRESET) {
+	resp, viaH2, err = t.attempt(req, true)
+	if err != nil && isReset(err, viaH2) {
 		logReset(req, 2, false, err)
 	}
 	return resp, err
+}
+
+// attempt round-trips once; with probe it also reports whether the connection negotiated h2.
+func (t *resetRetry) attempt(req *http.Request, probe bool) (*http.Response, bool, error) {
+	if !probe {
+		resp, err := t.base.RoundTrip(req)
+		return resp, false, err
+	}
+	var h2 atomic.Bool
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		// ceiling: h2 seen only on *tls.Conn; revisit if a base dials h2c or wraps the TLS conn
+		c, ok := i.Conn.(*tls.Conn)
+		h2.Store(ok && c.ConnectionState().NegotiatedProtocol == "h2") // last conn used decides
+	}}
+	resp, err := t.base.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	return resp, h2.Load(), err
+}
+
+// isReset: on Linux a client write after the RST consumes the socket error, so the h2 read ends in
+// unexpected EOF instead of ECONNRESET. HTTP/1.1 unexpected EOF is a truncated response, not a reset.
+func isReset(err error, viaH2 bool) bool {
+	return errors.Is(err, syscall.ECONNRESET) || (viaH2 && errors.Is(err, io.ErrUnexpectedEOF))
 }
 
 // retryable is true for safe methods with no body, unless NoResetRetry marked the request; a one-shot

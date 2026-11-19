@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -147,17 +149,32 @@ func TestResetRetry_HEADAndOPTIONSAreRetried(t *testing.T) {
 	}
 }
 
-// h2Srv resets the raw connection on the first request of each test and records the protocol.
+// h2Srv resets the connection on the first resetFirstN requests other than /warm and counts them.
+// The GOMAXPROCS pin is process-wide: callers must not run in parallel.
 func h2Srv(t *testing.T, resetFirstN int32) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
+	// Pin one P so CI always runs the schedule that exposed the client-write race.
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() {
+		// GOMAXPROCS(n) turns off the automatic container-aware updates; restore the default unless the env set it.
+		if _, set := os.LookupEnv("GOMAXPROCS"); set {
+			runtime.GOMAXPROCS(prev)
+			return
+		}
+		runtime.SetDefaultGOMAXPROCS()
+	})
 	var reqs atomic.Int32
 	type connKey struct{}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Proto != "HTTP/2.0" {
 			t.Errorf("server saw %s, want HTTP/2.0", r.Proto)
 		}
+		if r.URL.Path == "/warm" {
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
 		if reqs.Add(1) <= resetFirstN {
-			// Drain the body so the client has no writes left: a client write after the RST
+			// Drain the body (h2Warm already got the SETTINGS ACK out): a client write after the RST
 			// consumes the socket error on Linux and its next read sees EOF, not ECONNRESET.
 			_, _ = io.Copy(io.Discard, r.Body)
 			if tc, ok := r.Context().Value(connKey{}).(*tls.Conn); ok {
@@ -176,15 +193,32 @@ func h2Srv(t *testing.T, resetFirstN int32) (*httptest.Server, *atomic.Int32) {
 	return srv, &reqs
 }
 
-func h2Client(srv *httptest.Server) *http.Transport {
+func h2Client(t *testing.T, srv *httptest.Server) *http.Transport {
+	t.Helper()
 	tr := srv.Client().Transport.(*http.Transport).Clone()
-	tr.DisableKeepAlives = true
+	t.Cleanup(tr.CloseIdleConnections)
 	return tr
+}
+
+// h2Warm completes the h2 handshake so the client has no SETTINGS ACK left to write when the reset lands.
+func h2Warm(t *testing.T, rt http.RoundTripper, srv *httptest.Server) {
+	t.Helper()
+	resp, err := call(t, context.Background(), rt, http.MethodGet, srv.URL+"/warm", nil)
+	if err != nil {
+		t.Fatalf("warm-up: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.ProtoMajor != 2 {
+		t.Fatalf("warm-up: status %d proto %d; want 200, 2", resp.StatusCode, resp.ProtoMajor)
+	}
 }
 
 func TestResetRetry_GETResetOverHTTP2IsRetried(t *testing.T) {
 	srv, reqs := h2Srv(t, 1)
-	resp, err := call(t, context.Background(), ResetRetryTransport(h2Client(srv)), http.MethodGet, srv.URL, nil)
+	rt := ResetRetryTransport(h2Client(t, srv))
+	h2Warm(t, rt, srv)
+	resp, err := call(t, context.Background(), rt, http.MethodGet, srv.URL, nil)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -234,7 +268,9 @@ func TestResetRetry_UnsafeMethodWithIdempotencyKeyIsNotRetried(t *testing.T) {
 
 func TestResetRetry_POSTResetOverHTTP2IsNotRetried(t *testing.T) {
 	srv, reqs := h2Srv(t, 1)
-	_, err := call(t, context.Background(), ResetRetryTransport(h2Client(srv)), http.MethodPost, srv.URL, strings.NewReader("{}"))
+	rt := ResetRetryTransport(h2Client(t, srv))
+	h2Warm(t, rt, srv)
+	_, err := call(t, context.Background(), rt, http.MethodPost, srv.URL, strings.NewReader("{}"))
 	wantReset(t, err)
 	if reqs.Load() != 1 {
 		t.Errorf("requests = %d, want 1", reqs.Load())

@@ -8,7 +8,7 @@ paths:
 
 - Production deploys are in `ci-gcp.md`. PR previews are in `ci-preview.md`.
 - Never trigger a workflow on `pull_request_target`, `workflow_run` or `workflow_call`. Never use `secrets: inherit` or a local `uses: ./` step. `TestNoWorkflowReachesSecretsThroughATrustedTrigger` pins it.
-- Pin every `uses:` by full commit SHA with a trailing `# vX.Y.Z`. `TestEveryActionIsPinnedByCommit` fails a tag pin. The repository also requires SHA pins (Actions setting `sha_pinning_required`).
+- Pin every `uses:` by full commit SHA with a trailing `# vX.Y.Z`. `TestEveryActionIsPinnedByCommit` fails a tag pin.
 - Run E2E only on `pull_request` and on the nightly preview. The api suite writes data, so it never runs against production.
 - Start the `topology` job on a PR only when the `e2e` job succeeded. A red `e2e` job skips topology and fails the gate. On the nightly, start topology when `e2e` has ended.
 - Expect a superseded commit's preview to fail at the CI watch. `ci.yml` cancels the earlier run on the same ref.

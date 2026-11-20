@@ -146,32 +146,32 @@ describe('BUG-14: no control in the detail action cluster wires aria-describedby
     {
       id: 'detail-approve',
       first: "onClick={() => toApprovePhase({ type: 'arm' })}",
-      last: '...(!inv.can_approve',
-      title: 'title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}',
+      last: '...(approveRefused',
+      title: null,
     },
     {
       id: 'detail-reject',
       first: 'onClick={() => setRejectOpen(true)}',
-      last: '...(!inv.can_reject || rejectOpen ?',
-      title: 'title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}',
+      last: '...(rejectOpen ?',
+      title: null,
     },
     {
       id: 'edit-toggle',
-      first: 'if (inv.can_edit) setEditing(true)',
-      last: '...(!inv.can_edit ?',
+      first: 'onClick={() => setEditing(true)}',
+      last: "style={{ height: 34 }}",
       title: null, // [edit-gets-no-reason]: no edit_blocked_reason on the wire.
     },
     {
       id: 'revalidate',
       first: 'onClick={handleRevalidate}',
       last: '...(revalidateDisabled ?',
-      title: 'title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}',
+      title: null,
     },
     {
       id: 'detail-submit',
       first: "onClick={() => toSubmitPhase({ type: 'arm' })}",
-      last: '...(!inv.can_submit ?',
-      title: 'title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}',
+      last: "style={{ height: 34 }}",
+      title: null,
     },
   ]
 
@@ -205,12 +205,12 @@ describe('BUG-14: no control in the detail action cluster wires aria-describedby
     }
   })
 
-  // [title-survives]: nothing else stops a sweep deleting both attributes at once.
-  it('control: every control that carried a title still carries it', () => {
+  // BUG-168: a refused control is not rendered, so none carries a blocked-reason title.
+  it('control: no cluster control carries a title', () => {
     for (const c of CONTROLS) {
       const block = attributeBlock(c.id)
       if (c.title == null) expect(block, `${c.id} gained a title`).not.toContain('title=')
-      else expect(block, `${c.id} lost its title -- [title-survives] says it stays`).toContain(c.title)
+      else expect(block, `${c.id} lost its title`).toContain(c.title)
     }
   })
 })

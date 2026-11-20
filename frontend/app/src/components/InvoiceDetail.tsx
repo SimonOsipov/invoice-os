@@ -3,8 +3,8 @@
 // rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
 // end, the five-node state strip) fetched from the gateway; otherwise renders an honest
 // EmptyState ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
-// into two independently-gated actions ([edit-ux]); the bar holding them is always present,
-// each control disabled off its own wire flag ([actions-visibility]). The
+// into two independently-gated actions ([edit-ux]); each action renders only while its own
+// wire flag is true ([gates-on-the-wire]), never as a disabled button (BUG-168). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
@@ -447,7 +447,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
-    const revalidateDisabled = !inv.can_revalidate || revalidating
+    const revalidateDisabled = revalidating
+    // Rendered only while the wire allows it (BUG-168); an armed or refused Approve stays
+    // visible so a refetch that flips the flag cannot drop it mid-flow.
+    const showApprove = inv.can_approve || approvePhase !== 'idle' || approveRefused
+    const showSubmit = inv.can_submit || submitPhase !== 'idle'
+    const showNotes = shouldShowFiscalRecord(inv) && inv.can_issue_note
+    const showUndo = undoBatch.undoable && inv.import_batch_id != null
+    const hasBarActions = inv.can_edit || inv.can_revalidate || showSubmit || showUndo || showNotes
+    const showBar = hasBarActions || revalidateError != null || submitPhase !== 'idle'
+    const creatorReason = inv.approve_blocked_by_creator && inv.approve_blocked_reason != null
+    const showDecision = showApprove || inv.can_reject || rejectOpen || creatorReason
+    // No empty column: it renders only while something in it does.
+    const showColumn = (!formOpen && (showDecision || showBar || decisionError != null)) || submitSkipped != null || submitError != null
     const resolveOutsideDisabled = !inv.can_resolve_outside || resolving || !canResolveOutside(resolveReason)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
@@ -486,7 +498,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       if (renamed) void handleRevalidate()
     }
 
-    // INVED-01-07: the button this drives is now DISABLED whenever `!inv.can_revalidate`,
+    // INVED-01-07: the button this drives is not rendered unless `inv.can_revalidate`,
     // so the old "click it on an untouched validated/rejected invoice and eat a 409
     // (ErrNotDraft) from Store.ApplyValidation's draft-only gate" path is unreachable from
     // the UI -- that dead end is precisely what this story removes. The catch stays: it is
@@ -728,41 +740,37 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </p>
           </div>
 
-          {/* Always present ([actions-visibility]); each control disables off its own wire flag
-              ([gates-on-the-wire]); `!formOpen` hides it ([D-actions-hidden-while-editing]). */}
+          {/* Each control renders only while its own wire flag is true ([gates-on-the-wire]);
+              `!formOpen` hides the bar ([D-actions-hidden-while-editing]). */}
           {/* Outer column wraps the actions bar AND the submit skip/error banners together,
               so both stay in one right-aligned flex item ([D-actions-column]). The banners
               live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
               editor or note form owns the screen, and the banner describing a skipped submit must
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
-          {(!formOpen || submitSkipped != null || submitError != null) && (
+          {showColumn && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
-              {/* The decision pair, gated on `!formOpen` alone -- NOT
-                  `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
-                  where `can_edit` is false (queued, submitted, failed, ...), and a decision
-                  is taken on the STORED record, never on a dirty edit form.
-                  A row wrapper (`detail-decision-actions`), not bare siblings, sits outside
-                  `invoice-actions` so it survives that div's disappearance. Disabled: the
-                  ghost swaps background/color; Approve dims to .45 with `filter: 'none'`. */}
-              {!formOpen && (
+              {/* The decision pair: each button renders only on its own can_approve / can_reject
+                  (BUG-168), never on `can_edit`, and never on a dirty edit form (`!formOpen`).
+                  The wrapper sits outside `invoice-actions` so it survives that div's absence. */}
+              {!formOpen && showDecision && (
                 <>
+                  {(showApprove || inv.can_reject) && (
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
                         swaps in place to detail-approve-cancel/-confirm while armed. Reject
                         stays independently clickable throughout (disabled only while its own
                         row is open, below), so the two decisions are never mutually exclusive. */}
-                    {approvePhase === 'idle' ? (
+                    {!showApprove ? null : approvePhase === 'idle' ? (
                       <button
                         type="button"
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
-                        disabled={!inv.can_approve || approveRefused}
-                        title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
+                        disabled={approveRefused}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 34,
-                          ...(!inv.can_approve || approveRefused
+                          ...(approveRefused
                             ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
                             : null),
                         }}
@@ -799,22 +807,24 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         </button>
                       </>
                     )}
-                    <button
-                      type="button"
-                      data-testid="detail-reject"
-                      onClick={() => setRejectOpen(true)}
-                      disabled={!inv.can_reject || rejectOpen}
-                      title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}
-                      className="v2-btn v2-btn-ghost pf-btn"
-                      style={{
-                        height: 34,
-                        ...(!inv.can_reject || rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                      }}
-                    >
-                      {DETAIL_DECISION_COPY.reject}
-                    </button>
+                    {inv.can_reject && (
+                      <button
+                        type="button"
+                        data-testid="detail-reject"
+                        onClick={() => setRejectOpen(true)}
+                        disabled={rejectOpen}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 34,
+                          ...(rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.reject}
+                      </button>
+                    )}
                   </div>
-                  {inv.approve_blocked_by_creator && inv.approve_blocked_reason != null && (
+                  )}
+                  {creatorReason && (
                     <div data-testid="detail-approve-creator-reason" style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{inv.approve_blocked_reason}</div>
                     </div>
@@ -882,38 +892,29 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
-              {!formOpen && (
+              {!formOpen && showBar && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+                  {hasBarActions && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {inv.can_edit && (
                     <button
                       type="button"
                       data-testid="edit-toggle"
-                      // Second line of defence, like handleSubmit's own gate: since the bar
-                      // mounts at every status, `disabled` is otherwise the only barrier.
-                      onClick={() => {
-                        if (inv.can_edit) setEditing(true)
-                      }}
-                      disabled={!inv.can_edit}
+                      onClick={() => setEditing(true)}
                       className="v2-btn v2-btn-primary pf-btn"
-                      style={{
-                        height: 34,
-                        ...(!inv.can_edit ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
-                      }}
+                      style={{ height: 34 }}
                     >
                       Edit
                     </button>
-                    {/* Disabled rather than hidden ([revalidate-visibility]) -- hiding it makes
-                        the edit -> demote -> re-validate loop undiscoverable. Real `disabled` attribute;
-                        the ghost swaps background/color inline (`.v2-btn-ghost:hover` is unguarded),
-                        Edit dims to .45.
-                        `title` rides along ([title-survives]) but only while the WIRE says blocked,
-                        never on an enabled control and never on a transient in-flight disable. */}
+                    )}
+                    {/* Hidden unless the wire allows it (BUG-168). `disabled` is only the
+                        transient in-flight state. */}
+                    {inv.can_revalidate && (
                     <button
                       type="button"
                       data-testid="revalidate"
                       onClick={handleRevalidate}
                       disabled={revalidateDisabled}
-                      title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
                         height: 34,
@@ -924,23 +925,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     >
                       {revalidating ? 'Revalidating…' : 'Re-validate'}
                     </button>
+                    )}
                     {/* Inline arm -> confirm, not a modal ([no-modal], ReviewInvoicesTab.tsx file
                         header) -- the second stage renders below, in this same actions column.
-                        Always rendered, disabled rather than hidden when `!inv.can_submit`. Disabled
-                        Submit dims to .45 with `filter: 'none'` (`.v2-btn-primary:hover` brightens);
-                        `handleSubmit`'s `!inv.can_submit` guard backs the `disabled` attribute. */}
-                    {submitPhase === 'idle' ? (
+                        `handleSubmit`'s `!inv.can_submit` guard stays as a second barrier. */}
+                    {!showSubmit ? null : submitPhase === 'idle' ? (
                         <button
                           type="button"
                           data-testid="detail-submit"
                           onClick={() => toSubmitPhase({ type: 'arm' })}
-                          disabled={!inv.can_submit}
-                          title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
-                          style={{
-                            height: 34,
-                            ...(!inv.can_submit ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
-                          }}
+                          style={{ height: 34 }}
                         >
                           {DETAIL_SUBMIT_COPY.submit}
                         </button>
@@ -974,10 +969,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           </button>
                         </>
                       )}
-                    {undoBatch.undoable && inv.import_batch_id != null && (
+                    {showUndo && (
                       <UndoImportControl
                         ctx={ctx}
-                        batchId={inv.import_batch_id}
+                        batchId={inv.import_batch_id!}
                         size={34}
                         onSettled={() => {
                           gen.current++
@@ -988,28 +983,22 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         }}
                       />
                     )}
-                    {/* Shown only on a fiscal record; an accepted note is disabled with the wire's reason. */}
-                    {shouldShowFiscalRecord(inv) &&
+                    {/* Shown only on a fiscal record whose wire flag allows a note. */}
+                    {showNotes &&
                       (['credit_note', 'debit_note'] as const).map((type) => (
                         <button
                           key={type}
                           type="button"
                           data-testid={type === 'credit_note' ? 'issue-credit-note' : 'issue-debit-note'}
-                          onClick={() => {
-                            if (inv.can_issue_note) setNoteType(type)
-                          }}
-                          disabled={!inv.can_issue_note}
-                          title={!inv.can_issue_note ? (inv.issue_note_blocked_reason ?? undefined) : undefined}
+                          onClick={() => setNoteType(type)}
                           className="v2-btn v2-btn-ghost pf-btn"
-                          style={{
-                            height: 34,
-                            ...(!inv.can_issue_note ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                          }}
+                          style={{ height: 34 }}
                         >
                           {type === 'credit_note' ? 'Issue credit note' : 'Issue debit note'}
                         </button>
                       ))}
                   </div>
+                  )}
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style
                       unchanged; only the card-relative `margin` is dropped, since the column's
                       own `gap` now does that spacing. */}

@@ -2495,8 +2495,7 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The founder-reversed visibility model: Submit always renders inside the actions bar now,
-// disabled+reasoned when `can_submit` is false, rather than hidden. This test proves that on
+// Submit renders only while `can_submit` is true (BUG-168). This test proves it absent on
 // a draft first, then drives a real submit-and-verdict journey entirely from the detail
 // page's own Submit control -- no batch-select, no navigation away.
 test('detail surface: submit one invoice from its own page -- cancel sends nothing, confirm sends one, and the verdict lands without leaving', async ({
@@ -2511,7 +2510,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVED02 submit ${Date.now()}`, tin: freshTin() })
 
-  // Never validated, so can_submit stays false for the disabled-state leg below.
+  // Never validated, so can_submit stays false for the absence leg below.
   const draftNumber = `INV-INVED02-DRAFT-${Date.now()}`
   const draft = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(draftNumber) })
 

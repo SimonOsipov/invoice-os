@@ -4941,6 +4941,58 @@ describe('InvoiceDetail action cluster: only the allowed controls render (BUG-16
     expect(bar, 'floor: both rows mount on a can_edit:false invoice').not.toBeNull()
     expect((bar as HTMLElement).parentElement, 'the bar shares the column, at every status').toBe(decisionActions.parentElement)
   })
+
+  // One flag true at a time: the control it names is the only one rendered, and it is enabled.
+  const ISOLATED: { flag: keyof InvoiceDetailRecord; testid: string }[] = [
+    { flag: 'can_edit', testid: 'edit-toggle' },
+    { flag: 'can_revalidate', testid: 'revalidate' },
+    { flag: 'can_submit', testid: 'detail-submit' },
+    { flag: 'can_approve', testid: 'detail-approve' },
+    { flag: 'can_reject', testid: 'detail-reject' },
+    { flag: 'can_issue_note', testid: 'issue-credit-note' },
+    { flag: 'can_issue_note', testid: 'issue-debit-note' },
+  ]
+  const ALL_SEVEN = ['edit-toggle', 'revalidate', 'detail-submit', 'detail-approve', 'detail-reject', 'issue-credit-note', 'issue-debit-note']
+  for (const { flag, testid } of ISOLATED) {
+    it(`BUG-168: ${testid} is the only rendered action when only ${flag} is true, and it is enabled`, async () => {
+      mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', [flag]: true }))
+
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const btn = (await screen.findByTestId(testid)) as HTMLButtonElement
+
+      expect(btn.disabled, `${testid} enabled`).toBe(false)
+      const present = ALL_SEVEN.filter((id) => screen.queryByTestId(id) != null)
+      const expected = ISOLATED.filter((i) => i.flag === flag).map((i) => i.testid)
+      expect(present, `only the ${flag} controls render`).toEqual(ALL_SEVEN.filter((id) => expected.includes(id)))
+    })
+  }
+
+  it('BUG-168: the creator keeps the reason, loses Approve, and no empty wrapper is left around it', async () => {
+    const reason = 'You created this invoice, so another approver must approve it.'
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: reason }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(reason)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions'), 'no empty decision box').toBeNull()
+    expect(screen.queryByTestId('invoice-actions'), 'no empty bar').toBeNull()
+  })
+
+  it('BUG-168: an allowed action leaves no empty sibling wrapper (Reject only, Edit only)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-reject')
+    expect(screen.queryByTestId('invoice-actions'), 'Reject alone: no bar').toBeNull()
+    cleanup()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-decision-actions'), 'Edit alone: no decision box').toBeNull()
+  })
 })
 
 // QA-added (Stage 4, BUG-14-01). Three gaps the Mode-A specs leave: AC-1's four named
@@ -5014,8 +5066,6 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
 })
 
 // The blocked-reason layer is gone: no reason node, no aria-describedby, no REASON_ID const.
-// `title=` survives on all seven controls ([title-survives]); the pins that keep that
-// argument honest are the two title specs at the end.
 describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-14-02)', () => {
   const ID = 'inv-reason-gone-1'
 
@@ -5171,8 +5221,7 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
   })
 
   it('BUG-14-02 AC-4: no ENABLED control in the cluster carries a title', async () => {
-    // [title-survives] rests on a `title` never firing because it only ever sits on a
-    // DISABLED control -- a property only the backend enforces (P-15). This pins it SPA-side.
+    // An enabled control must carry no title; only the backend enforces it (P-15), so pin it SPA-side.
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -5354,7 +5403,7 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-02)', 
 // own fixture. This one populates all six reasons AND sets every can_* true -- the shape a
 // contradictory wire produces -- and asserts the cluster carries no `title` at all. A title
 // on an ENABLED control is a live native tooltip in every browser, which is the on-demand
-// disclosure the story's Out of Scope forbids and the only reason [title-survives] holds.
+// disclosure the story's Out of Scope forbids.
 describe('InvoiceDetail action cluster: `title` is gated on the wire, not just present (BUG-14-02, task-899 AC #4)', () => {
   const ID = 'inv-title-gate-1'
 

@@ -94,6 +94,30 @@ func (s *Store) List(ctx context.Context) ([]Rule, error) {
 	return out, err
 }
 
+// Names maps each rule key to the message of its latest revision, deleted rules included.
+// Entity filter as List: a rule of a client the caller cannot see is left out.
+// ceiling: one row per rule ever saved in the workspace; revisit if a workspace churns thousands of rules.
+func (s *Store) Names(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	err := db.WithinRequestTenantTxOpts(ctx, s.pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT cur.rule_id::text, cur.message FROM `+latestRevisions+`
+			WHERE cur.entity_id IS NULL OR EXISTS (SELECT 1 FROM business_entities e WHERE e.id = cur.entity_id)`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, msg string
+			if err := rows.Scan(&id, &msg); err != nil {
+				return err
+			}
+			out[Key(id)] = msg
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 func (s *Store) Create(ctx context.Context, in RuleInput) (Rule, error) {
 	return s.save(ctx, "", in, false)
 }

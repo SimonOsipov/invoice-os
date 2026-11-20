@@ -30,6 +30,7 @@ type fakeStore struct {
 	lastID                    string
 	lastIn                    customrule.RuleInput
 	rule                      customrule.Rule
+	nameMap                   map[string]string
 }
 
 func (f *fakeStore) list(context.Context) ([]customrule.Rule, error) {
@@ -38,6 +39,10 @@ func (f *fakeStore) list(context.Context) ([]customrule.Rule, error) {
 		return nil, f.err
 	}
 	return []customrule.Rule{f.rule}, nil
+}
+
+func (f *fakeStore) names(context.Context) (map[string]string, error) {
+	return f.nameMap, f.err
 }
 
 func (f *fakeStore) create(_ context.Context, in customrule.RuleInput) (customrule.Rule, error) {
@@ -61,6 +66,7 @@ func (f *fakeStore) del(_ context.Context, id string) error {
 func (f *fakeStore) mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/custom-rules", customrule.ListHandler(f.list, nil))
+	mux.HandleFunc("GET /v1/custom-rules/names", customrule.NamesHandler(f.names, nil))
 	mux.HandleFunc("POST /v1/custom-rules", customrule.CreateHandler(f.create, nil))
 	mux.HandleFunc("PUT /v1/custom-rules/{id}", customrule.UpdateHandler(f.update, nil))
 	mux.HandleFunc("DELETE /v1/custom-rules/{id}", customrule.DeleteHandler(f.del, nil))
@@ -392,5 +398,27 @@ func TestCustomRulesHandlers_RangeMinAboveMaxIs400(t *testing.T) {
 	}
 	if n := auditTotal(t, super, ws.id); n != 0 {
 		t.Errorf("audit rows = %d, want 0", n)
+	}
+}
+
+func TestCustomRulesHandlers_NamesAnswersTheMap(t *testing.T) {
+	f := newFakeStore()
+	f.nameMap = map[string]string{"custom:a": "x"}
+	if rec := call(f.mux(), http.MethodGet, "/v1/custom-rules/names", ""); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"names":{"custom:a":"x"}}` {
+		t.Errorf("names = %d %s, want 200 {\"names\":{\"custom:a\":\"x\"}}", rec.Code, rec.Body)
+	}
+	f.nameMap = nil
+	if rec := call(f.mux(), http.MethodGet, "/v1/custom-rules/names", ""); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"names":{}}` {
+		t.Errorf("nil map = %d %s, want 200 {\"names\":{}}", rec.Code, rec.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/custom-rules/names", nil)
+	rec := httptest.NewRecorder()
+	f.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no identity = %d, want 401", rec.Code)
+	}
+	f.err = db.ErrNotActiveMember
+	if rec := call(f.mux(), http.MethodGet, "/v1/custom-rules/names", ""); rec.Code != http.StatusForbidden {
+		t.Errorf("store error = %d, want 403 (the status ListHandler maps ErrNotActiveMember to)", rec.Code)
 	}
 }

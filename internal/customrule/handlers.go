@@ -47,6 +47,28 @@ func ListHandler(list func(ctx context.Context) ([]Rule, error), log *slog.Logge
 	}
 }
 
+type namesResponse struct {
+	Names map[string]string `json:"names"`
+}
+
+func NamesHandler(names func(ctx context.Context) (map[string]string, error), log *slog.Logger) http.HandlerFunc {
+	log = orDefault(log)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !hasIdentity(w, r) {
+			return
+		}
+		m, err := names(r.Context())
+		if err != nil {
+			fail(w, r, log, err)
+			return
+		}
+		if m == nil {
+			m = map[string]string{}
+		}
+		writeJSON(w, http.StatusOK, namesResponse{Names: m})
+	}
+}
+
 func CreateHandler(create func(ctx context.Context, in RuleInput) (Rule, error), log *slog.Logger) http.HandlerFunc {
 	log = orDefault(log)
 	return func(w http.ResponseWriter, r *http.Request) {

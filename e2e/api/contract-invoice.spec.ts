@@ -41,6 +41,8 @@ import {
   createCustomRule,
   deleteCustomRule,
   listCustomRules,
+  getCustomRuleNames,
+  updateCustomRule,
   validateInvoice,
   explainViolation,
   rawFetch,
@@ -540,6 +542,33 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const equal = await send({ min: 5, max: 5 })
       expect(equal.status, 'equal bounds are accepted').toBe(201)
       ruleId = (equal.body as { id: string }).id
+    })
+  })
+
+  test.describe('custom rule names', () => {
+    test('names follow an edit and survive a delete', async () => {
+      const tin = freshTin()
+      const namesEntity = await createEntity(token, { name: `BUG-36 names ${tin}`, tin })
+      const input = (message: string) => ({
+        entity_id: namesEntity.id,
+        type: 'required' as const,
+        target: 'buyer.name',
+        params: {},
+        severity: 'warning' as const,
+        message,
+        enabled: true,
+      })
+      const rule = await createCustomRule(token, input('BUG-36 name one'))
+      const key = `custom:${rule.id}`
+      try {
+        expect((await getCustomRuleNames(token)).names[key]).toBe('BUG-36 name one')
+        await updateCustomRule(token, rule.id, input('BUG-36 name two'))
+        expect((await getCustomRuleNames(token)).names[key], 'an edit changes the name').toBe('BUG-36 name two')
+      } finally {
+        await deleteCustomRule(token, rule.id)
+      }
+      expect((await getCustomRuleNames(token)).names[key], 'a delete keeps the last saved name').toBe('BUG-36 name two')
+      expect((await listCustomRules(token)).some((r) => r.id === rule.id), 'the rule list omits it').toBe(false)
     })
   })
 

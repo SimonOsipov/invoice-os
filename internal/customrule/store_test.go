@@ -1789,3 +1789,91 @@ func TestCustomRules_RangeBoundsRefusedAfterTheAdminCheck(t *testing.T) {
 		t.Errorf("preparer Create min>max err = %v, want ErrNotPermitted", err)
 	}
 }
+
+func TestCustomRules_NamesAreTheLatestRevisionsMessage(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule names edit")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	r, err := store.Create(ws.admin, input(nil, "Name one"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Update(ws.admin, r.ID, input(nil, "Name two")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := store.Names(ws.preparer)
+	if want := map[string]string{customrule.Key(r.ID): "Name two"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Names = %v, err %v, want %v", got, err, want)
+	}
+}
+
+func TestCustomRules_NamesSurviveADelete(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule names delete")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	r, err := store.Create(ws.admin, input(nil, "Name one"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Update(ws.admin, r.ID, input(nil, "Name two")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := store.Delete(ws.admin, r.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if list, err := store.List(ws.admin); err != nil || len(list) != 0 {
+		t.Errorf("List after delete = %v, err %v, want none", list, err)
+	}
+	got, err := store.Names(ws.admin)
+	if want := map[string]string{customrule.Key(r.ID): "Name two"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Names after delete = %v, err %v, want %v", got, err, want)
+	}
+}
+
+func TestCustomRules_NamesAreTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	a := seedWorkspace(t, super, "customrule names A")
+	b := seedWorkspace(t, super, "customrule names B")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	aID, _ := seedRule(t, super, a.id, nil, "of A")
+	bID, _ := seedRule(t, super, b.id, nil, "of B")
+	for name, c := range map[string]struct {
+		ctx       context.Context
+		id, other string
+		msg       string
+	}{"A": {a.admin, aID, bID, "of A"}, "B": {b.admin, bID, aID, "of B"}} {
+		got, err := store.Names(c.ctx)
+		if want := map[string]string{customrule.Key(c.id): c.msg}; err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("Names as %s = %v, err %v, want %v", name, got, err, want)
+		}
+	}
+}
+
+func TestCustomRules_NamesLeaveOutAClientRuleTheCallerCannotSee(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSRules(t, super, app, "CS rules names")
+	firm, _ := seedRule(t, super, x.ws.id, nil, "firm")
+	seedRule(t, super, x.ws.id, &x.entB, "client-b")
+	got, err := x.store.Names(x.limited)
+	if want := map[string]string{customrule.Key(firm): "firm"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("limited Names = %v, err %v, want %v", got, err, want)
+	}
+	if all, err := x.store.Names(x.ws.admin); err != nil || len(all) != 2 {
+		t.Errorf("admin Names = %v, err %v, want both rules", all, err)
+	}
+}
+
+func TestCustomRules_NamesAreReadableInALockedWorkspace(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule names locked")
+	id, _ := seedRule(t, super, ws.id, nil, "kept")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = gen_random_uuid() WHERE id = $1`, ws.id); err != nil {
+		t.Fatalf("schedule deletion: %v", err)
+	}
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	got, err := store.Names(ws.admin)
+	if want := map[string]string{customrule.Key(id): "kept"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Names in a locked workspace = %v, err %v, want %v", got, err, want)
+	}
+}

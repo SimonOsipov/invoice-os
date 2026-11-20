@@ -2157,6 +2157,14 @@ export interface CustomRuleInput {
   enabled: boolean
 }
 
+export interface CustomRuleNames {
+  names: Record<string, string>
+}
+
+export function getCustomRuleNames(token: string): Promise<CustomRuleNames> {
+  return apiFetch<CustomRuleNames>(`${apiBase()}/api/invoice/v1/custom-rules/names`, { token })
+}
+
 export async function listCustomRules(token: string): Promise<CustomRule[]> {
   const res = await apiFetch<{ custom_rules: CustomRule[] }>(`${apiBase()}/api/invoice/v1/custom-rules`, { token })
   return res.custom_rules

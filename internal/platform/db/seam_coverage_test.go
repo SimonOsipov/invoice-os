@@ -1039,6 +1039,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/contacts/me":                                    {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant", get: scReads},
 	"GET /v1/code-lists/{list}":                              {verdict: scCovered, get: scReads},
 	"GET /v1/custom-rules":                                   {verdict: scCovered, get: scReads},
+	"GET /v1/custom-rules/names":                             {verdict: scCovered, get: scReads},
 	"GET /v1/customers":                                      {verdict: scCovered, get: scReads},
 	"GET /v1/documents/{id}":                                 {verdict: scCovered, get: scWrites},
 	"GET /v1/documents/{id}/sheet":                           {verdict: scCovered, get: scWrites},

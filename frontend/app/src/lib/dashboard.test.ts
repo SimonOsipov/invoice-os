@@ -752,3 +752,28 @@ describe('LIB-DOC: the RollupBucket doc names both overlays and the Reports carv
     expect(doc, 'the consumer that deliberately reads it must be named').toContain('ReportsView')
   })
 })
+
+describe('custom names', () => {
+  const a = 'custom:3f2a0000-0000-0000-0000-000000000001'
+  const b = 'custom:3f2a0000-0000-0000-0000-000000000002'
+  const names = { [a]: 'PO number required', [b]: 'Total under limit' }
+
+  it('deslug_customKeyUsesTheNamesMap', () => {
+    expect(deslug(a, names)).toBe('PO number required')
+    expect(deslug(a)).toBe('Custom rule')
+    expect(deslug('supplier-tin-format', names)).toBe('Supplier TIN format')
+  })
+
+  it('topFailures_namesCustomRows', () => {
+    const rows = topFailures(
+      [
+        { rule_key: a, invoices: 3 },
+        { rule_key: b, invoices: 2 },
+        { rule_key: 'supplier-tin-format', invoices: 1 },
+      ],
+      names,
+    )
+    expect(rows.map((r) => r.label)).toEqual(['PO number required', 'Total under limit', 'Supplier TIN format'])
+    expect(rows.map((r) => r.ruleKey)).toEqual([a, b, 'supplier-tin-format'])
+  })
+})

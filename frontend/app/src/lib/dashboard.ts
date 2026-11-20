@@ -193,8 +193,8 @@ export function donutSegments(counts: Counts): DonutSeg[] {
 // The system is sentence case everywhere, with VAT/TIN/MBS/FIRS uppercase.
 const RULE_KEY_ACRONYMS = new Set(['vat', 'tin', 'mbs', 'firs', 'irn', 'csid', 'ngn', 'ubl', 'xml', 'json', 'pdf', 'api', 'erp', 'id'])
 
-export function deslug(ruleKey: string): string {
-  if (ruleKey.startsWith('custom:')) return ruleKeyLabel(ruleKey)
+export function deslug(ruleKey: string, names?: Readonly<Record<string, string>>): string {
+  if (ruleKey.startsWith('custom:')) return ruleKeyLabel(ruleKey, names)
   return ruleKey
     .split(/[-_\s]+/)
     .filter(Boolean)
@@ -208,10 +208,11 @@ export function deslug(ruleKey: string): string {
 
 export function topFailures(
   v: RuleCount[],
+  names?: Readonly<Record<string, string>>,
 ): { label: string; ruleKey: string; count: number; bar: string }[] {
   const max = Math.max(1, ...v.map((x) => x.invoices))
   return v.map((x) => ({
-    label: deslug(x.rule_key),
+    label: deslug(x.rule_key, names),
     ruleKey: x.rule_key,
     count: x.invoices,
     bar: Math.round((x.invoices / max) * 100) + '%',

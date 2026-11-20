@@ -15,6 +15,7 @@ import {
   payloadPath,
   ruleInputOf,
   ruleJSON,
+  getCustomRuleNames,
   ruleKeyLabel,
   rulesInScope,
   scopeLabel,
@@ -262,6 +263,40 @@ describe('rulesApi', () => {
       const differing = (Object.keys(body) as (keyof CustomRuleInput)[]).filter((k) => flipped[k] !== body[k])
       expect(differing).toEqual(['enabled'])
     }
+  })
+
+  it('ruleKeyLabel_namesACustomRule', () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    expect(ruleKeyLabel(key, { [key]: 'PO number required' })).toBe('PO number required')
+    expect(ruleKeyLabel(key, { [key]: '  PO number required ' })).toBe('PO number required')
+  })
+
+  it('ruleKeyLabel_fallsBackWithoutAName', () => {
+    const a = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const b = 'custom:3f2a0000-0000-0000-0000-000000000002'
+    expect(ruleKeyLabel(a)).toBe('Custom rule')
+    expect(ruleKeyLabel(a, {})).toBe('Custom rule')
+    expect(ruleKeyLabel(a, { [a]: '' })).toBe('Custom rule')
+    expect(ruleKeyLabel(a, { [a]: '   ' })).toBe('Custom rule')
+    expect(ruleKeyLabel('buyer-tin-format', { [a]: 'x' })).toBe('buyer-tin-format')
+    const names = { [a]: 'First', [b]: 'Second' }
+    expect(ruleKeyLabel(a, names)).toBe('First')
+    expect(ruleKeyLabel(b, names)).toBe('Second')
+  })
+
+  it('getCustomRuleNames_readsTheNamesEnvelope', async () => {
+    const f = vi.fn(async (_url: string) => ({ names: { k: 'n' } }))
+    await expect(getCustomRuleNames(f as never, 'https://gw')).resolves.toEqual({ k: 'n' })
+    expect(String(f.mock.calls[0]![0])).toMatch(/\/api\/invoice\/v1\/custom-rules\/names$/)
+  })
+
+  it('formError_rangeMinAboveMaxIsRefused', () => {
+    const range = { field: 'total', check: 'range' } as const
+    const sentence = 'The minimum cannot be greater than the maximum.'
+    expect(formError(guided({ ...range, min: '10', max: '5' }))).toBe(sentence)
+    expect(formError(guided({ ...range, min: '5', max: '5' }))).toBeNull()
+    expect(formError(guided({ ...range, min: '10', max: '' }))).toBeNull()
+    expect(formError(guided({ ...range, min: '', max: '5' }))).toBeNull()
   })
 
   it('ruleKeyLabel_andScopeLabel', () => {

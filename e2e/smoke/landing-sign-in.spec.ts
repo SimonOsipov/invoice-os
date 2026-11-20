@@ -169,3 +169,65 @@ test('landing forgot view: the reset notice is peach, readable and clear of the 
     expect(rectsOverlap(noticeBox, backBox), `${at}: the notice overlaps Back to sign in`).toBe(false)
   }
 })
+
+// A console's signed-out redirect carries state and console but no signin=; it opens the dialog.
+const OPS_CONSOLE_URL = resolveTarget('OPS_CONSOLE_URL')
+const SUPPORT_CONSOLE_URL = resolveTarget('SUPPORT_CONSOLE_URL')
+const CONSOLES = [
+  ['ops', OPS_CONSOLE_URL],
+  ['support', SUPPORT_CONSOLE_URL],
+] as const
+const HOME_H1 = 'Nigeria moves. Compliance keeps up.'
+
+for (const [target] of CONSOLES) {
+  test(`landing console target: ${target} URL opens the sign-in dialog, Close and Sign in reopen it`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text())
+    })
+    page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await seedConsent(page, false)
+
+    await page.goto(`${LANDING_URL}/?state=${STATE}&console=${target}`)
+    const dialog = page.getByRole('dialog', { name: 'Sign in', exact: true })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.locator('[role="alert"]')).toHaveCount(0)
+    await expect.poll(() => new URL(page.url()).search).toBe('')
+
+    await dialog.getByRole('button', { name: 'Close' }).click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByRole('heading', { level: 1, name: HOME_H1 })).toBeVisible()
+
+    await page.locator('header').getByRole('button', { name: 'Sign in', exact: true }).click()
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
+    expect(page.url()).toMatch(new RegExp(`^${LANDING_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+
+    expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
+  })
+}
+
+for (const [target, consoleUrl] of CONSOLES) {
+  test(`console redirect: a signed-out visit to the ${target} console lands on the open sign-in dialog`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await seedConsent(page, false)
+
+    await page.goto(consoleUrl)
+    await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+    const dialog = page.getByRole('dialog', { name: 'Sign in', exact: true })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.locator('[role="alert"]')).toHaveCount(0)
+  })
+}
+
+test('landing without a console target: no dialog opens', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await seedConsent(page, false)
+  for (const query of [`state=${STATE}`, `state=${STATE}&console=app`]) {
+    await page.goto(`${LANDING_URL}/?${query}`)
+    await expect(page.getByRole('heading', { level: 1, name: HOME_H1 }), query).toBeVisible()
+    await expect(page.getByRole('dialog'), query).toHaveCount(0)
+  }
+})

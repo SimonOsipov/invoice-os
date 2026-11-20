@@ -861,6 +861,22 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(btn.getAttribute('title')).toBe(reason)
   })
 
+  // BUG-168: the detail screen renders only the actions the wire allows; the rest are absent.
+  it('BUG-168: a draft invoice with errors shows only the actions its step allows', async () => {
+    mockDetailFetch(detailRecord({
+      id: ID, status: 'draft', can_edit: true, can_revalidate: true,
+      can_submit: false, can_approve: false, can_reject: false,
+    }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect((await screen.findByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('revalidate') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+  })
+
   // THE MUTATION ORACLE -- do not soften or drop. Presence stopped being discriminating
   // once Submit always renders; this now rides on the `disabled` property and the
   // absence of a title. A component that re-derives `status === 'validated'` yields

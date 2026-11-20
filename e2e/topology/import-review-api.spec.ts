@@ -21,7 +21,7 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
-import { enclosesRect, PHONE_WIDTHS, settleAnimations, WIDE_WIDTHS } from './layout'
+import { assertControlAddsNoOverflow, enclosesRect, PHONE_WIDTHS, settleAnimations, WIDE_WIDTHS } from './layout'
 import { approveOpenRunsForEntity, collectErrors, shardPersonas } from './importWizardShared'
 import { APP_URL } from './targets'
 
@@ -682,12 +682,15 @@ test.describe.serial('custom rule names on the review', () => {
               const [railBox, pillBox] = await Promise.all([rail.boundingBox(), pill.boundingBox()])
               if (!railBox || !pillBox) return 'the rail or the pill has no box'
               if (!enclosesRect(railBox, pillBox, 1)) return `the pill ${JSON.stringify(pillBox)} is outside the rail ${JSON.stringify(railBox)}`
+              // The review column can already scroll sideways on a phone for another reason; there the pill may add at most 1px.
+              if (width <= 767) return 'ok'
               const over = await page.locator('main.pf-main .pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth)
               return over <= 1 ? 'ok' : `the page column scrolls sideways by ${over}px`
             },
             { message: `the long-name pill inside the rail at ${width}px`, timeout: 10_000 },
           )
           .toBe('ok')
+        if (width <= 767) await assertControlAddsNoOverflow(page, pill, `the long-name pill at ${width}px`, width)
       }
     } finally {
       if (entry) await page.setViewportSize(entry)

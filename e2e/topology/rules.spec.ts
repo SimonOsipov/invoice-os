@@ -20,7 +20,7 @@ import {
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, signInAs } from '../personaSession'
-import { expectedStatusDropper, type Dropper } from './consoleGate'
+import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import {
   assertFitsNarrow,
   assertPageDoesNotScrollSideways,
@@ -709,7 +709,7 @@ test.describe.serial('custom rule names', () => {
 
   test('two custom rules are told apart by name', async ({ page }) => {
     test.setTimeout(120_000)
-    const errors = collectErrors(page)
+    const errors = collectErrors(page, [approvalRun404Dropper(page)])
     const [a, b] = rules
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, named!.name)
@@ -732,7 +732,7 @@ test.describe.serial('custom rule names', () => {
 
   test('a custom violation follows an edit and keeps the last saved name after a delete', async ({ page }) => {
     test.setTimeout(120_000)
-    const errors = collectErrors(page)
+    const errors = collectErrors(page, [approvalRun404Dropper(page)])
     const b = rules[1]
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 

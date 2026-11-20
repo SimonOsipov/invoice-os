@@ -38,6 +38,7 @@ import { CLIENT_ADMIN_ONLY, companySetupAccess, NO_ASSIGNED_CLIENTS, viewerHasNo
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { EntityFormModal } from './EntityFormModal'
+import { FilterBar } from './FilterBar'
 import type { PlatformCtx } from '../types'
 
 // filter:none outranks .v2-btn:hover's lift (same recipe as MembersView's Invite people).
@@ -191,7 +192,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20, marginBottom: 22 }}>
         <div>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             FIRM PORTFOLIO
@@ -203,25 +204,6 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {FILTER_POSITIONS.map(({ pos: p, label }) => (
-              <button
-                key={p}
-                onClick={() => setPos(p)}
-                className="pf-chip"
-                style={{
-                  height: 30,
-                  padding: '0 12px',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
-                  background: pos === p ? 'var(--action)' : 'var(--bg-2)',
-                  color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
-                }}
-              >
-                {label}
-              </button>
-            ))}
           {(access === 'add' || adminOnly) && (
             <button
               onClick={() => setModal({ mode: 'create' })}
@@ -242,6 +224,28 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           {CLIENT_ADMIN_ONLY}
         </div>
       )}
+
+      <FilterBar testId="clients-filter-bar">
+        {FILTER_POSITIONS.map(({ pos: p, label }) => (
+          <button
+            key={p}
+            onClick={() => setPos(p)}
+            className="pf-chip"
+            style={{
+              height: 30,
+              padding: '0 12px',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
+              background: pos === p ? 'var(--action)' : 'var(--bg-2)',
+              color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </FilterBar>
 
       {filteredState === 'loading' && <Loading label="Loading entities…" />}
 

@@ -244,10 +244,11 @@ describe('ClientsView: a narrowing position with zero rows renders a filter-spec
     render(<ClientsView ctx={clientsCtx(activeOnly)} />)
     await screen.findByText('Solo Client')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    fireEvent.click(within(screen.getByTestId('clients-filter-bar')).getByRole('button', { name: 'Archived' }))
 
     // Copy chosen here (not pinned by the story) -- see the RED-run report.
     await screen.findByText('No clients match this filter')
+    expect(within(screen.getByTestId('clients-filter-bar')).getAllByRole('button').map((b) => b.textContent), 'the bar stays while the filtered empty state shows').toEqual(['All', 'Active', 'Archived'])
     expect(screen.queryByText('No entities yet'), 'the generic empty state is wrong while active clients exist').toBeNull()
   })
 })
@@ -745,17 +746,45 @@ describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
     }
   })
 
-  it('CL-03 one cluster holds the filters and Add client', async () => {
+  it('CL-03 the status filters sit in their own bar, and the header holds only Add client', async () => {
     mockFetchArchiveAware(ACTIVE_ROWS)
     render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
     await screen.findByText('Okafor & Partners')
 
-    const cluster = screen.getByRole('button', { name: 'Add client' }).parentElement as HTMLElement
-    const kids = Array.from(cluster.children)
-    for (const name of ['All', 'Active', 'Archived']) {
-      expect(kids, `${name} must be a direct child of the Add client cluster`).toContain(filterButton(name))
-    }
-    expect(cluster.style.gap).toBe('10px')
+    const header = screen.getByRole('heading', { level: 1, name: 'Client portfolio' }).parentElement!.parentElement as HTMLElement
+    expect(within(header).getByRole('button', { name: 'Add client' })).toBeTruthy()
+    for (const name of ['All', 'Active', 'Archived']) expect(within(header).queryByRole('button', { name }), `${name} must not sit in the header`).toBeNull()
+
+    const bar = screen.getByTestId('clients-filter-bar')
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['All', 'Active', 'Archived'])
+    const bg = (name: string) => within(bar).getByRole('button', { name }).style.background
+    expect(bg('All')).toBe('var(--action)')
+    expect(bg('Active')).toBe('var(--bg-2)')
+    expect(bg('Archived')).toBe('var(--bg-2)')
+    expect(header.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING, 'the bar follows the header').toBeTruthy()
+    expect(bar.compareDocumentPosition(rowFor('Okafor & Partners')) & Node.DOCUMENT_POSITION_FOLLOWING, 'the roster follows the bar').toBeTruthy()
+  })
+
+  it('FBAR the Clients bar renders in loading, error and with no Add client', async () => {
+    const bar = () => within(screen.getByTestId('clients-filter-bar')).getAllByRole('button').map((b) => b.textContent)
+    const chips = ['All', 'Active', 'Archived']
+
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    expect(bar(), 'loading').toEqual(chips)
+    cleanup()
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(isRollupUrl(url) ? rollupResponse() : { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })))
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Something went wrong')
+    expect(bar(), 'error').toEqual(chips)
+    cleanup()
+
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: [], membersState: 'loading' })} />)
+    await screen.findByText('Okafor & Partners')
+    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+    expect(bar(), 'no Add client').toEqual(chips)
   })
 
   it('CL-04 status and health are 4px mono chips with no dot, in a plain wrapper', async () => {

@@ -7,7 +7,7 @@ import { login, createEntity, createInvoice, validateInvoice, PERSONAS } from '.
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -282,33 +282,26 @@ test('PW-01 Clients at 1440: heading, roster table, chips, filters, Add client',
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-02 Clients header row fits at every wide width', async ({ page }, testInfo) => {
+test('PW-02 Clients: the header holds the title and Add client, and the status filters sit in their own bar above the roster at every width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const api = trackApi(page)
   await openFirm(page, api)
   await openNav(page, /^Clients/, 'Client portfolio')
   await expect(clientRow(page), 'the roster never drew').toBeVisible()
-  const h1 = h1Of(page, 'Client portfolio')
-  const named: Named = {
-    header: h1.locator('xpath=../..'),
-    titles: h1.locator('xpath=..'),
-    all: main(page).getByRole('button', { name: 'All', exact: true }),
-    active: main(page).getByRole('button', { name: 'Active', exact: true }),
-    archived: main(page).getByRole('button', { name: 'Archived', exact: true }),
-    add: main(page).getByRole('button', { name: /Add client/ }),
-  }
-  const controls = ['all', 'active', 'archived', 'add']
-  const measured = await sweepWide(page, 'Clients header', async () => {
-    await settle(page, ...Object.values(named))
-    const { rects, problems } = await boxes(named)
-    inside(rects, 'header', controls, problems)
-    noOverlap(rects, controls, problems)
-    for (const c of controls) noOverlap(rects, [c, 'titles'], problems)
-    const centres = controls.filter((c) => rects[c]).map((c) => centreY(rects[c]))
-    if (Math.max(...centres) - Math.min(...centres) > 1) problems.push(`the controls do not share a vertical centre (${centres.join(', ')})`)
-    return { problems, rects }
-  })
-  await attachJson(testInfo, 'pw-02-measurements', measured)
+  const bar = page.getByTestId('clients-filter-bar')
+  const readings = await assertFilterBarPlacement(
+    page,
+    {
+      column: page.locator('main.pf-main .pf-scroll'),
+      header: h1Of(page, 'Client portfolio').locator('xpath=../..'),
+      action: main(page).getByRole('button', { name: /Add client/ }),
+      bar,
+      filters: ['All', 'Active', 'Archived'].map((n) => bar.getByRole('button', { name: n, exact: true })),
+      list: main(page).locator('.pf-list-head').locator('xpath=..'),
+    },
+    'Clients',
+  )
+  await attachJson(testInfo, 'pw-02-measurements', readings)
   await attachShot(page, testInfo, 'clients-header')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -350,32 +343,29 @@ test('PW-03 Customers at 1440: heading, table, tax chip, avatar', async ({ page 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-const CUSTOMERS_HEADER_BUTTONS = ['All', 'Active', 'Archived', 'Add customer']
-
-test('PW-11 Customers header row fits at every wide width', async ({ page }, testInfo) => {
+test('PW-11 Customers: the header holds the title and Add customer, and the status filters sit in their own bar above the list at every width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const api = trackApi(page)
   await openFirm(page, api)
   await openNav(page, /^Customers/, 'Customers')
-  const h1 = h1Of(page, 'Customers')
-  const named: Named = {
-    header: h1.locator('xpath=../..'),
-    titles: h1.locator('xpath=..'),
-    ...Object.fromEntries(CUSTOMERS_HEADER_BUTTONS.map((n) => [n, main(page).getByRole('button', { name: n, exact: true })])),
-  }
-  await expect(named['Add customer'], 'the header never drew').toBeVisible()
-  const controls = CUSTOMERS_HEADER_BUTTONS
-  const measured = await sweepWide(page, 'Customers header', async () => {
-    await settle(page, ...Object.values(named))
-    const { rects, problems } = await boxes(named)
-    inside(rects, 'header', controls, problems)
-    noOverlap(rects, controls, problems)
-    for (const c of controls) noOverlap(rects, [c, 'titles'], problems)
-    const centres = controls.filter((c) => rects[c]).map((c) => centreY(rects[c]))
-    if (Math.max(...centres) - Math.min(...centres) > 1) problems.push(`the controls do not share a vertical centre (${centres.join(', ')})`)
-    return { problems, rects }
-  })
-  await attachJson(testInfo, 'pw-11-measurements', measured)
+  const action = main(page).getByRole('button', { name: 'Add customer', exact: true })
+  await expect(action, 'the header never drew').toBeVisible()
+  const list = main(page).locator('.pf-list-head').locator('xpath=..')
+  await expect(list, 'the customer list never drew').toBeVisible()
+  const bar = page.getByTestId('customers-filter-bar')
+  const readings = await assertFilterBarPlacement(
+    page,
+    {
+      column: page.locator('main.pf-main .pf-scroll'),
+      header: h1Of(page, 'Customers').locator('xpath=../..'),
+      action,
+      bar,
+      filters: ['All', 'Active', 'Archived'].map((n) => bar.getByRole('button', { name: n, exact: true })),
+      list,
+    },
+    'Customers',
+  )
+  await attachJson(testInfo, 'pw-11-measurements', readings)
   await attachShot(page, testInfo, 'customers-header')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

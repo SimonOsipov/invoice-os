@@ -297,14 +297,16 @@ pre.pf-json {
     border-left: 0 !important;
     border-top: 1px solid var(--line-1);
   }
-  /* The rules rail is a fixed 244px beside a table that already has a 940px
-     minimum; below this width the pair no longer fits, so the rail stacks above
-     the table (which keeps its own horizontal scroll). */
-  .pf-rules-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
   .pf-drawer {
     width: 100vw !important;
+  }
+}
+
+/* The rules table card needs 790px plus border and scrollbar beside the 244px rail and
+   18px gap, inside the 252px sidebar and 72px page padding; below 1400px the rail stacks above it. */
+@media (max-width: 1399px) {
+  .pf-rules-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 }
 

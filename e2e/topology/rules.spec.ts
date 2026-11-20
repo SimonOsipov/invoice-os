@@ -16,7 +16,17 @@ import {
 import { freshTin } from '../api/fixtures'
 import { browserToken, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertSameHeight, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import {
+  assertFitsNarrow,
+  assertPageDoesNotScrollSideways,
+  assertSameHeight,
+  enclosesRect,
+  PHONE_WIDTHS,
+  rectsOverlap,
+  settleAnimations,
+  WIDE_WIDTHS,
+  type Rect,
+} from './layout'
 import { shardTenants } from './targets'
 
 const SHARD = shardTenants('rules.spec.ts')
@@ -127,8 +137,8 @@ async function atEachWidth(page: Page, label: string, probe: () => Promise<strin
 const noSideScroll = (el: Element) => el.scrollWidth - el.clientWidth
 
 // The table has a 790px floor inside a horizontally scrolling card. From this width the card
-// holds it with no scroll (8578a362 keeps the On column on screen at 1440px); below it the card scrolls.
-const TABLE_FITS_FROM = 1440
+// holds it with no scroll, the rail stacking above it below 1400px; narrower widths scroll the card.
+const TABLE_FITS_FROM = Math.min(...WIDE_WIDTHS)
 
 const pageScrolls = (page: Page) => page.locator('main.pf-main .pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth > 1)
 
@@ -394,6 +404,112 @@ test('every switch is visible without scrolling', async ({ page }) => {
     const scrollLeft = await card.evaluate((el) => el.scrollLeft)
     return scrollLeft === 0 ? null : `the card is scrolled ${scrollLeft}px`
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The rail stacks below 1400px (platform.css); 1399 and 1400 are the boundary on each side.
+const LAPTOP_WIDTHS = [...WIDE_WIDTHS, 1400, 1399].sort((a, b) => b - a)
+const BREAKPOINT = 1400
+
+const onHeader = (card: Locator) => card.getByText('On', { exact: true }).first()
+const versionsCard = (page: Page) => page.getByText('Golden ruleset', { exact: true }).locator('xpath=..')
+
+test('the Rules table fits its card at laptop widths with the On column in view', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await atEachWidth(
+    page,
+    'the table fits its card with the On column and every switch inside it',
+    async () => {
+      if (await pageScrolls(page)) return 'the page scrolls sideways'
+      const cardBox = await box(card)
+      const headerBox = await box(onHeader(card))
+      if (!cardBox || !headerBox) return 'the card or the On header has no box'
+      const over = await card.evaluate((c) => c.scrollWidth - c.clientWidth)
+      if (over > 0) return `the card scrolls sideways by ${over}px`
+      if (!enclosesRect(cardBox, headerBox, 1)) return `the On header ${JSON.stringify(headerBox)} is outside the card ${JSON.stringify(cardBox)}`
+      const switches = await card.getByRole('switch').all()
+      if (switches.length < 2) return `${switches.length} switches`
+      for (const sw of switches) {
+        const b = await box(sw)
+        if (!b || !enclosesRect(cardBox, b, 1)) return `a switch ${JSON.stringify(b)} is outside the card`
+      }
+      const scrollLeft = await card.evaluate((c) => c.scrollLeft)
+      return scrollLeft === 0 ? null : `the card is scrolled ${scrollLeft}px`
+    },
+    LAPTOP_WIDTHS,
+  )
+  await assertPageDoesNotScrollSideways(page, 'the Rules page at the entry width')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the Rules table is one card scroll away at phone widths', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await assertFitsNarrow(page, page.locator('main.pf-main .pf-scroll'), 'the Rules page column', PHONE_WIDTHS)
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 844 })
+      await expect
+        .poll(
+          async () => {
+            await settleAnimations(card)
+            await card.evaluate((c) => c.scrollTo({ left: c.scrollWidth }))
+            try {
+              const cardBox = await box(card)
+              const headerBox = await box(onHeader(card))
+              const switchBox = await box(card.getByRole('switch').first())
+              if (!cardBox || !headerBox || !switchBox) return 'an element has no box'
+              if (!enclosesRect(cardBox, headerBox, 1)) return 'the On header is outside the card at its end'
+              return enclosesRect(cardBox, switchBox, 1) ? 'ok' : 'a switch is outside the card at its end'
+            } finally {
+              await card.evaluate((c) => c.scrollTo({ left: 0 }))
+            }
+          },
+          { message: `the On column one card scroll away at ${width}px`, timeout: 10_000 },
+        )
+        .toBe('ok')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the golden versions card sits beside the table from 1400px', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  const versions = versionsCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await atEachWidth(
+    page,
+    'the golden versions card beside the table from the breakpoint, above it below',
+    async () => {
+      const [v, t] = await Promise.all([box(versions), box(card)])
+      if (!v || !t) return 'the versions card or the table card has no box'
+      if (page.viewportSize()!.width >= BREAKPOINT) {
+        return v.x + v.width <= t.x ? null : `the versions card ${JSON.stringify(v)} is not left of the table ${JSON.stringify(t)}`
+      }
+      return v.y + v.height <= t.y + 1 ? null : `the versions card ${JSON.stringify(v)} is not above the table ${JSON.stringify(t)}`
+    },
+    [1440, BREAKPOINT, BREAKPOINT - 1],
+  )
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

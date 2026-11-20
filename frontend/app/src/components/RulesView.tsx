@@ -29,13 +29,11 @@ import type { PlatformCtx } from '../types'
 
 // Key · Type · Target field · Severity · Source · Message · On
 //
-// These minimums are load-bearing, not taste. The table sits beside a fixed 244px
-// rail inside a 252px-sidebar shell, which leaves it ~854px at a 1440px viewport —
-// so a min-width above that pushes the LAST column off-screen behind a horizontal
-// scrollbar. That column is the lock/toggle: the one cell on the row that says
-// whether a rule is inherited or yours to switch off. It has to be visible without
-// scrolling at a normal laptop width. Sum of the minimums below is 744 + 32px of
-// row padding = 776, which is what TABLE_MIN_WIDTH states.
+// These minimums are load-bearing, not taste. The On column holds the lock/toggle, the one cell
+// that says whether a rule is inherited or yours to switch off, so it must be visible without
+// scrolling at a laptop width. Beside the 244px rail the card fits the table only from 1400px
+// (platform.css), so below that the rail stacks above it. The minimums below sum to 744 + 32px
+// of row padding = 776, which is what TABLE_MIN_WIDTH states.
 const RULE_COLS = 'minmax(150px,1.1fr) 118px minmax(120px,1fr) 72px 74px minmax(140px,1.3fr) 70px'
 const TABLE_MIN_WIDTH = 790
 

@@ -247,6 +247,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
         await page.setViewportSize({ width, height })
         inflight = new Map()
         started = 0
+        if (route === '/' && width === 1280) await page.route((u) => u.pathname === '/api/dashboard/v1/rollup', () => new Promise<void>(() => {}))
         await page.goto(`${APP_URL}${route}`)
         await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
         // CreateFlow draws no h1; its step label is the landmark.

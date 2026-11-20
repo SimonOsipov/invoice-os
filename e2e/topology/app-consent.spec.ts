@@ -1,6 +1,6 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
 import { randomUUID } from 'node:crypto'
-import { test, expect, type BrowserContext, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import { test, expect, type BrowserContext, type Page, type Request, type Response, type Route, type TestInfo } from '@playwright/test'
 import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
@@ -167,6 +167,30 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   const isTenantListUrl = (u: URL) => u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
   const isTenantList = (r: Response) => r.request().method() === 'GET' && isTenantListUrl(new URL(r.url()))
   const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+  // Counted per navigation: goto may fire neither requestfinished nor requestfailed for a request it cuts off.
+  let inflight = new Map<Request, string>()
+  let started = 0
+  const isApiGet = (r: Request): boolean => r.method() === 'GET' && new URL(r.url()).pathname.startsWith('/api/')
+  page.on('request', (r) => { if (isApiGet(r)) { inflight.set(r, new URL(r.url()).pathname); started++ } })
+  page.on('requestfinished', (r) => { inflight.delete(r) })
+  page.on('requestfailed', (r) => { inflight.delete(r) })
+  const scrollHeights = (): Promise<string> => page.evaluate(() => `${document.documentElement.scrollHeight}|${document.querySelector('main.pf-main .pf-scroll')?.scrollHeight ?? 0}`)
+  // Settled: no /api/ GET in flight or started, and both scroll heights unchanged, for 300 ms ending in two painted frames.
+  const settled = async (at: string): Promise<void> => {
+    const deadline = Date.now() + 30_000
+    let key = ''
+    let since = Date.now()
+    while (Date.now() < deadline) {
+      const now = `${inflight.size}|${started}|${await scrollHeights()}`
+      if (inflight.size > 0 || now !== key) { key = now; since = Date.now() } else if (Date.now() - since >= 300) {
+        await framesPaint()
+        if (`${inflight.size}|${started}|${await scrollHeights()}` === key) return
+        since = Date.now()
+      }
+      await page.waitForTimeout(50)
+    }
+    throw new Error(`${at}: the screen never settled: ${inflight.size} /api/ GET(s) in flight [${[...inflight.values()].join(', ')}]`)
+  }
   const scrollToEnd = async (width: number): Promise<void> => {
     await settleAnimations(notice(page))
     await page.evaluate((wide) => {
@@ -184,6 +208,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
     measured.push({ at, notice: read.notice, controls: read.controls.length })
   }
   const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
+    await settled(at)
     await scrollToEnd(width)
     await measure(at)
   }
@@ -220,6 +245,8 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
       for (const [match, handler] of held) await page.route(match, handler)
       try {
         await page.setViewportSize({ width, height })
+        inflight = new Map()
+        started = 0
         await page.goto(`${APP_URL}${route}`)
         await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
         // CreateFlow draws no h1; its step label is the landmark.

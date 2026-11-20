@@ -421,6 +421,24 @@ describe('DEL-02-05: Remove through the view', () => {
 // QA (Stage 4) -- adversarial coverage over the live surface ladder and the write race
 // ============================================================================
 
+describe('BUG-167: the intro sentence and Invite share one row', () => {
+  it('members-actions holds both the intro and members-invite, so no empty row sits above the filter', () => {
+    render(<Harness initial={[member({ isYou: true, role: 'admin' }), otherMember()]} />)
+
+    const row = screen.getByTestId('members-actions')
+    expect(within(row).getByTestId('members-invite')).toBeTruthy()
+    expect(within(row).getByText(/Who can sign in to this workspace/)).toBeTruthy()
+  })
+
+  it('in-house: the longer intro and members-invite share the row', () => {
+    render(<Harness mode="inhouse" initial={[member({ isYou: true, role: 'admin' }), otherMember()]} />)
+
+    const row = screen.getByTestId('members-actions')
+    expect(within(row).getByTestId('members-invite')).toBeTruthy()
+    expect(within(row).getByText(/and where they sit in the approval chain/)).toBeTruthy()
+  })
+})
+
 describe('AC1: an errored roster never renders as an empty success', () => {
   it('the error surface renders, not the "just you" empty state, over a roster that never loaded', () => {
     render(<Harness initial={[]} membersState="error" membersError={new ApiError('http', 'gateway is down', 503)} />)
@@ -1800,6 +1818,25 @@ describe('RESEND-07-04', () => {
       const el = await screen.findByTestId('members-flash')
       expect(within(screen.getByTestId('members-actions')).getByTestId('members-flash'), 'the flash is in the action row').toBe(el)
       expect(within(screen.getByTestId('members-filter-bar')).queryByTestId('members-flash')).toBeNull()
+    })
+
+    it('the group sizes from the button, not the flash, and the flash can shrink', async () => {
+      const sent = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={sent.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      const group = screen.getByTestId('members-invite').parentElement as HTMLElement
+      const before = group.style.flex
+      clickResendOn(inviteRows()[0])
+      const el = await screen.findByTestId('members-flash')
+
+      expect(group.style.flex, 'flex-basis does not depend on the flash').toBe(before)
+      expect(before).toMatch(/^1 1 \d+px$/)
+      expect(parseFloat(group.style.minWidth)).toBe(0)
+      expect(screen.getByTestId('members-invite').style.flex).toMatch(/^none$|^0 0 auto$/)
+      expect([parseFloat(el.style.minWidth), el.style.overflow, el.style.textOverflow]).toEqual([0, 'hidden', 'ellipsis'])
     })
 
     it('MembersView: the flash clears after three seconds', async () => {

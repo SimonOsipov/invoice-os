@@ -63,7 +63,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   subject: RoleModalSubject
   /** Must be STABLE — it is a `useDismiss` dependency (useDismiss.ts:36-37). */
   onClose: () => void
-  /** RolesView's existing toolbar flash setter, not a second mechanism (RolesView.tsx:46-51). */
+  /** RolesView's existing flash setter, not a second mechanism. */
   onFlash: (message: string) => void
 }) {
   const role = subject.mode === 'edit' ? subject.role : null

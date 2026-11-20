@@ -497,7 +497,7 @@ async function listFetchOn(page: Page, want: boolean, action: () => Promise<void
 }
 
 async function toggleNeedsAttention(page: Page, want: boolean): Promise<void> {
-  await listFetchOn(page, want, () => page.getByTestId('needs-attention-toggle').click())
+  await listFetchOn(page, want, () => page.getByTestId('invoices-filter-bar').getByTestId('needs-attention-toggle').click())
 }
 
 // installRowLatch()/readRowLatch(): the presence-over-time sampler. An OBSERVER, never a timer: a fixed-period
@@ -708,7 +708,7 @@ test('list surface: real rows render with real status badges, and Needs attentio
       new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
       new URL(r.url()).searchParams.get('needs_attention') === 'true',
   )
-  await page.getByTestId('needs-attention-toggle').click()
+  await page.getByTestId('invoices-filter-bar').getByTestId('needs-attention-toggle').click()
   await filteredResp
   await expect(attnRow).toBeVisible()
   await expect(cleanRow).toHaveCount(0)
@@ -720,7 +720,7 @@ test('list surface: real rows render with real status badges, and Needs attentio
       new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
       new URL(r.url()).searchParams.get('needs_attention') === null,
   )
-  await page.getByTestId('needs-attention-toggle').click()
+  await page.getByTestId('invoices-filter-bar').getByTestId('needs-attention-toggle').click()
   await unfilteredResp
   await expect(cleanRow).toBeVisible()
 

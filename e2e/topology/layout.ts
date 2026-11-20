@@ -366,3 +366,70 @@ export async function assertControlAddsNoOverflow(page: Page, control: Locator, 
   })
   expect(addedByControl, `${label}: showing the control widens the page column by ${addedByControl}px (shown ${shown}, hidden ${hiddenOverflow})`).toBeLessThanOrEqual(1)
 }
+
+export type FilterBarRects = { column: Rect; header: Rect; action: Rect; bar: Rect; filters: Rect[]; list: Rect }
+
+// One message per broken relationship, 1px slack on every edge comparison.
+export function filterBarProblems(r: FilterBarRects): string[] {
+  const slack = 1
+  const out: string[] = []
+  if (r.filters.length === 0) out.push('no filters were measured')
+  if (!enclosesRect(r.column, r.bar, slack)) out.push('the bar is not inside the column')
+  if (r.filters.some((f) => !enclosesRect(r.bar, f, slack))) out.push('a filter is not inside the bar')
+  if (Math.abs(r.bar.x - r.list.x) > slack) out.push("the bar's left edge is off the list's left edge")
+  if (r.filters.length > 0 && Math.abs(r.filters[0].x - r.bar.x) > slack) out.push("the first filter's left edge is off the bar's left edge")
+  if (r.bar.y < r.header.y + r.header.height - slack) out.push("the bar's top is above the header's bottom")
+  if (r.bar.y + r.bar.height > r.list.y + slack) out.push("the bar's bottom is below the list's top")
+  if (rectsOverlap(r.bar, r.header)) out.push('the bar overlaps the header')
+  if (rectsOverlap(r.bar, r.list)) out.push('the bar overlaps the list')
+  if (!enclosesRect(r.header, r.action, slack)) out.push('the action is not inside the header')
+  if (rectsOverlap(r.action, r.bar)) out.push('the action overlaps the bar')
+  if (r.filters.some((f) => rectsOverlap(f, r.header))) out.push('a filter overlaps the header')
+  return out
+}
+
+type FilterBarParts = { column: Locator; header: Locator; action: Locator; bar: Locator; filters: Locator[]; list: Locator }
+
+async function readFilterBar(p: FilterBarParts): Promise<FilterBarRects | null> {
+  await settleAnimations(p.column, p.header, p.action, p.bar, p.list, ...p.filters)
+  const [column, header, action, bar, list, ...filters] = await Promise.all([
+    p.column.boundingBox(),
+    p.header.boundingBox(),
+    p.action.boundingBox(),
+    p.bar.boundingBox(),
+    p.list.boundingBox(),
+    ...p.filters.map((f) => f.boundingBox()),
+  ])
+  if (!column || !header || !action || !bar || !list || filters.some((f) => !f)) return null
+  return { column, header, action, bar, list, filters: filters as Rect[] }
+}
+
+// At every width: the bar sits between header and list, holds every filter from its left edge, and adds <=1px of sideways overflow.
+export async function assertFilterBarPlacement(
+  page: Page,
+  parts: FilterBarParts,
+  label: string,
+): Promise<Array<{ width: number; rects: FilterBarRects }>> {
+  const entry = page.viewportSize()
+  const readings: Array<{ width: number; rects: FilterBarRects }> = []
+  try {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect
+        .poll(
+          async () => {
+            const rects = await readFilterBar(parts)
+            return rects ? filterBarProblems(rects) : ['an element has no box']
+          },
+          { message: `${label} at ${width}px wide`, timeout: 10_000 },
+        )
+        .toEqual([])
+      await assertControlAddsNoOverflow(page, parts.bar, `${label} at ${width}px wide`, width)
+      const rects = await readFilterBar(parts)
+      if (rects) readings.push({ width, rects })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  return readings
+}

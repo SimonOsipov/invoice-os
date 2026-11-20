@@ -28,6 +28,7 @@ import {
   type Role,
 } from '../lib/roles'
 import { AmberNote, InitialsChip, SearchBox } from './MemberParts'
+import { FilterBar } from './FilterBar'
 import { RoleModal, type RoleModalSubject } from './RoleModal'
 import type { PlatformCtx } from '../types'
 
@@ -100,7 +101,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{intro(roles)}</p>
 
-      {/* Above the toolbar, the grid and both empty surfaces: coverage is a statement about the
+      {/* Above the grid and both empty surfaces: coverage is a statement about the
           workspace, which a search box cannot change. Gated on the roster having landed,
           though — over an errored fetch every role reads unheld. */}
       {surface === 'roster' && unassigned.length > 0 && (
@@ -110,8 +111,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
         </AmberNote>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
+      <div data-testid="roles-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1 }} />
         {flash && (
           <span data-testid="roles-flash" style={{ flex: 'none', fontSize: 12.5, color: 'var(--status-green-text)' }}>
@@ -125,6 +125,10 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           {lock}
         </div>
       )}
+
+      <FilterBar testId="roles-filter-bar">
+        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
+      </FilterBar>
 
       {surface === 'loading' && <Loading label="Loading members…" />}
 

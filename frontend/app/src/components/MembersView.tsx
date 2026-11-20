@@ -44,6 +44,7 @@ import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
 import { InviteModal } from './InviteModal'
 import { MemberDrawer } from './MemberDrawer'
 import { AmberNote, SearchBox } from './MemberParts'
+import { FilterBar } from './FilterBar'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
@@ -247,7 +248,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
-      {/* Above the toolbar, and only on a landed roster: over an errored one every role
+      {/* Only on a landed roster: over an errored one every role
           resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
       {surface === 'roster' && unassigned.length > 0 && (
         <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
@@ -256,17 +257,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         </AmberNote>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
-        <WfSelect
-          label="Access role"
-          hideLabel
-          value={roleFilter}
-          options={ROLE_FILTER_OPTIONS}
-          onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
-          height={36}
-          background="var(--bg-2)"
-        />
+      <div data-testid="members-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1 }} />
         {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
         {flash && (
@@ -298,11 +289,24 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         <div
           id={inviteNoteId}
           data-testid="members-invite-reason"
-          style={{ margin: '0 0 14px', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}
+          style={{ margin: '-6px 0 14px', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}
         >
           {INVITE_ADMIN_ONLY}
         </div>
       )}
+
+      <FilterBar testId="members-filter-bar">
+        <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
+        <WfSelect
+          label="Access role"
+          hideLabel
+          value={roleFilter}
+          options={ROLE_FILTER_OPTIONS}
+          onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
+          height={36}
+          background="var(--bg-2)"
+        />
+      </FilterBar>
 
       {(staleReason || list.status === 'error') && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>

@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test'
 
-// Verbatim copy of trackApi in app-shell.spec.ts, so the red test can import it. The fix replaces this body and the spec imports it from here.
+// Counts in-flight /api/ requests. `quiet` waits until none has been in flight for 300 ms, then until no
+// loading text or audit skeleton row is left; it fails with a named message on timeout.
 export function trackApi(page: Page): { quiet: (where: string) => Promise<void> } {
   const inflight = new Set<unknown>()
   const isApi = (url: string) => new URL(url).pathname.includes('/api/')
@@ -8,6 +9,8 @@ export function trackApi(page: Page): { quiet: (where: string) => Promise<void> 
   const done = (r: { url(): string }) => inflight.delete(r)
   page.on('requestfinished', done)
   page.on('requestfailed', done)
+  // Chromium emits neither finished nor failed for a request a navigation cuts off.
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) inflight.clear() })
   return {
     quiet: async (where) => {
       const deadline = Date.now() + 15_000

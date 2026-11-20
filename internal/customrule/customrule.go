@@ -23,16 +23,33 @@ const typeRange = "range"
 
 const rangeBoundsMsg = "The minimum (min) cannot be greater than the maximum (max)."
 
+type bounds struct{ Min, Max *float64 }
+
+func (b bounds) equal(o bounds) bool { return sameBound(b.Min, o.Min) && sameBound(b.Max, o.Max) }
+
+func sameBound(a, b *float64) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// rangeBounds reads params' min and max; a bound that is absent or not a number is nil.
+func rangeBounds(params json.RawMessage) bounds {
+	var b struct {
+		Min *float64 `json:"min"`
+		Max *float64 `json:"max"`
+	}
+	if json.Unmarshal(params, &b) != nil {
+		return bounds{}
+	}
+	return bounds{b.Min, b.Max}
+}
+
 // rangeBoundsError refuses a range rule whose min exceeds its max; other shapes are the check route's.
 func rangeBoundsError(typ string, params json.RawMessage) error {
 	if typ != typeRange {
 		return nil
 	}
-	var b struct {
-		Min *float64 `json:"min"`
-		Max *float64 `json:"max"`
-	}
-	if json.Unmarshal(params, &b) != nil || b.Min == nil || b.Max == nil {
+	b := rangeBounds(params)
+	if b.Min == nil || b.Max == nil {
 		return nil
 	}
 	if *b.Min > *b.Max {

@@ -195,10 +195,11 @@ export function ReviewInvoicesTab({
     { isEmpty: () => false, deps: [batchIdsKey, filter.pill, filter.ruleKey, filter.q, filter.offset] },
   )
 
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
+
   // `deps: [batchIdsKey]` — one fetch per run, for the life of the tab. See the file
   // header, point 3. `violationSummary` already takes `importBatchIds: string[]`
   // (BULK-01-02) -- this is its first caller to actually pass more than one id.
-  const ruleNames = useCustomRuleNames(ctx.authedFetch)
   const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, batchIds), {
     isEmpty: () => false,
     deps: [batchIdsKey],

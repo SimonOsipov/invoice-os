@@ -217,8 +217,8 @@ func snapshot(r Rule) map[string]any {
 		"when": r.When, "message": r.Message, "enabled": r.Enabled}
 }
 
-// guard refuses a non-admin, a bad body, a foreign entity and a missing rule, in that order,
-// and on create the 101st rule. It returns the rule's latest revision for update and delete.
+// guard refuses a non-admin, a bad body (min above max only when the update changes the saved
+// type or bounds), a foreign entity and a missing rule, in that order, and on create the 101st rule. It returns the rule's latest revision for update and delete.
 func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del bool) (Rule, error) {
 	if err := requireActiveAdmin(ctx, tx, subject); err != nil {
 		return Rule{}, err
@@ -230,7 +230,7 @@ func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del
 		if in.Type == "" || in.Message == "" {
 			return Rule{}, InvalidError{"type and message are required"}
 		}
-		if err := rangeBoundsError(in.Type, in.Params); err != nil {
+		if err := rangeBoundsError(in.Type, in.Params); err != nil && !keepsLegacyBounds(ctx, tx, id, in) {
 			return Rule{}, err
 		}
 		if in.EntityID != nil {
@@ -252,17 +252,33 @@ func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del
 	if !canonicalUUID(id) {
 		return Rule{}, ErrNotFound
 	}
-	var deleted bool
-	var latest Rule
-	err := tx.QueryRow(ctx,
-		`SELECT `+ruleCols+`, deleted FROM custom_rule_revisions WHERE rule_id = $1 ORDER BY revision DESC LIMIT 1`, id).
-		Scan(&latest.ID, &latest.RevisionID, &latest.Revision, &latest.EntityID, &latest.Type, &latest.Target,
-			&latest.Params, &latest.Severity, &latest.When, &latest.Message, &latest.Enabled, &latest.UpdatedAt,
-			&latest.UpdatedBy, &deleted)
+	latest, deleted, err := latestRevision(ctx, tx, id)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && deleted) {
 		return Rule{}, ErrNotFound
 	}
 	return latest, err
+}
+
+func latestRevision(ctx context.Context, tx pgx.Tx, id string) (latest Rule, deleted bool, err error) {
+	err = tx.QueryRow(ctx,
+		`SELECT `+ruleCols+`, deleted FROM custom_rule_revisions WHERE rule_id = $1 ORDER BY revision DESC LIMIT 1`, id).
+		Scan(&latest.ID, &latest.RevisionID, &latest.Revision, &latest.EntityID, &latest.Type, &latest.Target,
+			&latest.Params, &latest.Severity, &latest.When, &latest.Message, &latest.Enabled, &latest.UpdatedAt,
+			&latest.UpdatedBy, &deleted)
+	return
+}
+
+// keepsLegacyBounds is true when an update leaves a saved inverted range rule's type and
+// bounds as they are, so it can still be switched off, re-severitied or re-messaged.
+func keepsLegacyBounds(ctx context.Context, tx pgx.Tx, id string, in RuleInput) bool {
+	if id == "" || !canonicalUUID(id) {
+		return false
+	}
+	cur, deleted, err := latestRevision(ctx, tx, id)
+	if err != nil || deleted || cur.Type != in.Type {
+		return false
+	}
+	return rangeBounds(cur.Params).equal(rangeBounds(in.Params))
 }
 
 // canonicalUUID is the 36-char form only: uuid.Parse also takes urn: and braced forms, which

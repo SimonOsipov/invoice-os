@@ -91,12 +91,13 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
     [list.data, ctx.mode, ctx.active.entityId],
   )
 
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
+
   // Drives ONLY the Validation summary card below — a separate async ladder from
   // `list` above (two genuinely different endpoints), so a slow/errored rollup fetch
   // never blocks the monetary KPIs this page's empty state is otherwise gated on. No
   // isEmpty predicate, same reason as DashboardActive.tsx:48-56 — a zero-count rollup
   // is 'ready', not empty.
-  const ruleNames = useCustomRuleNames(ctx.authedFetch)
   const roll = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },

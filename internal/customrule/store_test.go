@@ -1781,6 +1781,43 @@ func TestCustomRules_DeleteOfARuleSavedWithMinAboveMaxSucceeds(t *testing.T) {
 	}
 }
 
+func seedLegacyInverted(t *testing.T, super *pgxpool.Pool, tenant string) string {
+	t.Helper()
+	id := uuid.NewString()
+	r := rev(tenant, id, 1)
+	r.Type, r.Params = "range", `{"min":10,"max":5}`
+	insertRev(t, super, r)
+	return id
+}
+
+func TestCustomRules_LegacyMinAboveMaxRuleCanBeSwitchedOff(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule legacy switch off")
+	id := seedLegacyInverted(t, super, ws.id)
+	in := rangeInput(`{"min":10,"max":5}`)
+	in.Enabled = false
+	if _, err := customrule.NewStore(app, (&fakeCheck{}).fn).Update(ws.admin, id, in); err != nil {
+		t.Fatalf("Update err = %v, want nil", err)
+	}
+	rows := revRows(t, super, ws.id, id)
+	if len(rows) != 2 || rows[1].Enabled {
+		t.Errorf("revisions = %+v, want the seed plus a disabled revision", rows)
+	}
+}
+
+func TestCustomRules_LegacyMinAboveMaxRuleCannotTakeNewInvertedBounds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule legacy new bounds")
+	id := seedLegacyInverted(t, super, ws.id)
+	_, err := customrule.NewStore(app, (&fakeCheck{}).fn).Update(ws.admin, id, rangeInput(`{"min":20,"max":5}`))
+	if ie, ok := asInvalid(err); !ok || ie.Msg != "The minimum (min) cannot be greater than the maximum (max)." {
+		t.Errorf("Update to new min>max err = %v, want the bounds InvalidError", err)
+	}
+	if rows := revRows(t, super, ws.id, id); len(rows) != 1 {
+		t.Errorf("revisions = %d, want 1", len(rows))
+	}
+}
+
 func TestCustomRules_RangeBoundsRefusedAfterTheAdminCheck(t *testing.T) {
 	super, app := dbTestPools(t)
 	ws := seedWorkspace(t, super, "customrule range admin first")

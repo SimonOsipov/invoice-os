@@ -201,12 +201,12 @@ func TestRender_PassesNegativeAndZeroAmountsThroughUnchanged(t *testing.T) {
 	wantTextAt(t, nodes, "Invoice/cac:TaxTotal/cbc:TaxAmount", "0",
 		"a zero tax amount is emitted, not treated as absent")
 	wantTextsAt(t, nodes, linePath+"/cbc:InvoicedQuantity", []string{"-2"}, "a negative quantity passes through")
-	wantTextAt(t, nodes, "Invoice/cbc:InvoiceTypeCode", "381",
-		"the type code follows DocumentType, not the sign: a negative commercial invoice stays 381")
+	wantTextAt(t, nodes, "Invoice/cbc:InvoiceTypeCode", "380",
+		"the type code follows DocumentType, not the sign: a negative commercial invoice stays 380 (UNTDID 1001)")
 
 	c.DocumentType = submission.CreditNote
-	wantTextAt(t, walkDocument(t, mustRender(t, c)), "Invoice/cbc:InvoiceTypeCode", "380",
-		"a credit note declares 380")
+	wantTextAt(t, walkDocument(t, mustRender(t, c)), "Invoice/cbc:InvoiceTypeCode", "381",
+		"a credit note declares 381 (UNTDID 1001)")
 }
 
 // --- free text ---------------------------------------------------------------------------------

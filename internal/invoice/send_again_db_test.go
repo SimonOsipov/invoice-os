@@ -21,6 +21,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // saRig is one firm tenant with a Submitter over an insert-only River client.
@@ -457,7 +458,8 @@ func (*unbuildableAdapter) Transform(context.Context, submission.Canonical) (sub
 func (r *saRig) work(t *testing.T, adapter submission.Adapter, args submission.SubmitArgs, riverID int64) error {
 	t.Helper()
 	w := &submission.SubmitWorker{
-		Pool: r.app, Adapter: adapter, InvoicePort: NewStore(r.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              r.app, Adapter: adapter, InvoicePort: NewStore(r.app),
 		Limiter: submission.NewRateLimiter(), RateLimit: 1000, Logger: slog.Default(),
 	}
 	job := &river.Job[submission.SubmitArgs]{JobRow: &rivertype.JobRow{ID: riverID, Attempt: 1, MaxAttempts: 8}, Args: args}

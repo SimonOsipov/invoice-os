@@ -55,6 +55,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // mockPendingTIN is mock_script.go's mockTINPending ("99999999-0003") -- unexported inside
@@ -432,12 +433,13 @@ func TestPollWorker_ConvergesAgainstTheRealMockAdapterInTwoPolls(t *testing.T) {
 
 	mock := submission.NewMockAdapter(submission.MockConfig{}) // zero Latency: instant
 	sw := &submission.SubmitWorker{
-		Pool:        f.app,
-		Adapter:     mock,
-		InvoicePort: testInvoicePort{buyerTIN: mockPendingTIN},
-		Limiter:     submission.NewRateLimiter(),
-		RateLimit:   60,
-		Queue:       newQueueClient(f.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              f.app,
+		Adapter:           mock,
+		InvoicePort:       testInvoicePort{buyerTIN: mockPendingTIN},
+		Limiter:           submission.NewRateLimiter(),
+		RateLimit:         60,
+		Queue:             newQueueClient(f.app),
 	}
 	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
 	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {

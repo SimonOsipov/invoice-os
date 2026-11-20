@@ -76,6 +76,8 @@ type SubmitWorker struct {
 	// follow-up PollArgs job at river.InsertOpts.ScheduledAt == Pending.PollAfter (M5-04-06).
 	Queue  *queue.Client
 	Logger *slog.Logger
+	// InvoiceTypeLabels is codelist.LabelsTx; nil fails every submission loudly.
+	InvoiceTypeLabels LabelsFunc
 }
 
 // tx1Outcome is what tx1 decided before it committed: whether Work should short-circuit
@@ -182,6 +184,11 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 			}
 			outcome = tx1ContentChanged
 			return nil
+		}
+
+		// A plain error: River retries, and a later list sync clears the fault.
+		if err := CheckInvoiceTypeCodes(ctx, tx, w.InvoiceTypeLabels); err != nil {
+			return err
 		}
 
 		// Rate-limit gate (T05-10). A denial does not consume the retry budget.

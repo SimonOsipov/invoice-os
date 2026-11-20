@@ -76,6 +76,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // --- shared read-back helper (poll_ref/next_poll_at -- not in submit_worker_test.go's
@@ -573,12 +574,13 @@ func TestSubmitWorker_BlankIRNChecksViolationRollsBackTx2Whole(t *testing.T) {
 		evidence: submission.Evidence{ReachedWire: true},
 	})
 	w := &submission.SubmitWorker{
-		Pool:        f.app,
-		Adapter:     adapter,
-		InvoicePort: rawIRNInvoicePort{},
-		Limiter:     submission.NewRateLimiter(),
-		RateLimit:   60,
-		Queue:       newQueueClient(f.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              f.app,
+		Adapter:           adapter,
+		InvoicePort:       rawIRNInvoicePort{},
+		Limiter:           submission.NewRateLimiter(),
+		RateLimit:         60,
+		Queue:             newQueueClient(f.app),
 	}
 	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
 
@@ -852,12 +854,13 @@ func TestSubmitWorker_FailureAuditRollsBackWithTheTx(t *testing.T) {
 
 			idemKey := "req-" + uuid.NewString() + ":" + invoiceID
 			w := &submission.SubmitWorker{
-				Pool:        f.app,
-				Adapter:     tc.adapter(),
-				InvoicePort: badKindInvoicePort{},
-				Limiter:     submission.NewRateLimiter(),
-				RateLimit:   60,
-				Queue:       newQueueClient(f.app),
+				InvoiceTypeLabels: codelist.LabelsTx,
+				Pool:              f.app,
+				Adapter:           tc.adapter(),
+				InvoicePort:       badKindInvoicePort{},
+				Limiter:           submission.NewRateLimiter(),
+				RateLimit:         60,
+				Queue:             newQueueClient(f.app),
 			}
 			job := newSubmitJob(1, tc.attempt, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
 

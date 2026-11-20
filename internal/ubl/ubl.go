@@ -236,7 +236,7 @@ func build(c submission.Canonical) document {
 		CustomizationID: customizationID,
 		ProfileID:       profileID,
 		ID:              c.InvoiceNumber,
-		InvoiceTypeCode: submission.InvoiceTypeCode(c.DocumentType),
+		InvoiceTypeCode: untdid1001(c.DocumentType),
 		Supplier:        partyFrom(c.Supplier),
 		Buyer:           partyFrom(c.Buyer),
 	}
@@ -397,3 +397,16 @@ func amountFrom(v, currency *string) *amount {
 }
 
 func blank(p *string) bool { return p == nil || strings.TrimSpace(*p) == "" }
+
+// untdid1001 is the UNTDID 1001 code PEPPOL BIS 3.0 uses; NRS has its own list (submission.InvoiceTypeCode).
+// Pinned by TestRender_DeclaresTheBISProfileConstants.
+func untdid1001(t submission.DocumentType) string {
+	switch t {
+	case submission.CreditNote:
+		return "381"
+	case submission.DebitNote:
+		return "383"
+	default:
+		return "380"
+	}
+}

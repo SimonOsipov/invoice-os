@@ -167,7 +167,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   const isTenantListUrl = (u: URL) => u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
   const isTenantList = (r: Response) => r.request().method() === 'GET' && isTenantListUrl(new URL(r.url()))
   const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
-  // Counted per navigation: goto may fire neither requestfinished nor requestfailed for a request it cuts off.
+  // Counted per navigation, reset at the goto commit: the old document's requests are dead and the new one's scripts have not run.
   let inflight = new Map<Request, string>()
   let started = 0
   const isApiGet = (r: Request): boolean => r.method() === 'GET' && new URL(r.url()).pathname.startsWith('/api/')
@@ -189,7 +189,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
       }
       await page.waitForTimeout(50)
     }
-    throw new Error(`${at}: the screen never settled: ${inflight.size} /api/ GET(s) in flight [${[...inflight.values()].join(', ')}]`)
+    throw new Error(`${at}: the screen never settled: ${inflight.size} /api/ GET(s) in flight [${[...inflight.values()].join(', ')}] (last: ${key})`)
   }
   const scrollToEnd = async (width: number): Promise<void> => {
     await settleAnimations(notice(page))
@@ -245,9 +245,10 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
       for (const [match, handler] of held) await page.route(match, handler)
       try {
         await page.setViewportSize({ width, height })
+        await page.goto(`${APP_URL}${route}`, { waitUntil: 'commit' })
         inflight = new Map()
         started = 0
-        await page.goto(`${APP_URL}${route}`)
+        await page.waitForLoadState('load')
         await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
         // CreateFlow draws no h1; its step label is the landmark.
         const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()

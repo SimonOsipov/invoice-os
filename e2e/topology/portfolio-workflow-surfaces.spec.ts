@@ -7,7 +7,7 @@ import { login, createEntity, createInvoice, validateInvoice, PERSONAS } from '.
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -301,6 +301,31 @@ test('PW-02 Clients: the header holds the title and Add client, and the status f
     },
     'Clients',
   )
+  // A wrapped Add client stays right-aligned, so the admin-only note below it sits under its button.
+  const header = h1Of(page, 'Client portfolio').locator('xpath=../..')
+  const add = main(page).getByRole('button', { name: /Add client/ })
+  const note = page.getByTestId('clients-admin-only')
+  const entry = page.viewportSize()
+  try {
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect
+        .poll(
+          async () => {
+            const [h, a, n] = await Promise.all([header.boundingBox(), add.boundingBox(), note.count().then((c) => (c ? note.boundingBox() : null))])
+            if (!h || !a) return 'an element has no box'
+            const right = h.x + h.width
+            if (Math.abs(a.x + a.width - right) > 1) return `Add client's right edge is off the header's by ${a.x + a.width - right}px`
+            if (n && Math.abs(a.x + a.width - (n.x + n.width)) > 1) return "Add client's right edge is off the admin note's"
+            return ''
+          },
+          { message: `Clients Add client alignment at ${width}px wide`, timeout: 10_000 },
+        )
+        .toBe('')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
   await attachJson(testInfo, 'pw-02-measurements', readings)
   await attachShot(page, testInfo, 'clients-header')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

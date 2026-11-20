@@ -858,6 +858,19 @@ test('ST-01 Settings › Members at 1440: heading, table card, status pill, avat
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The bar and the action stay inside the Settings tab column and below the tab strip, at every wide width.
+async function assertInsideTabColumn(page: Page, label: string, parts: Named): Promise<Record<string, unknown>[]> {
+  const names = Object.keys(parts).filter((n) => n !== 'strip')
+  return sweep(page, `${label} tab column`, async () => {
+    const { rects, problems } = await boxes({ strip: tabStrip(page), ...parts })
+    insideX(rects, 'strip', names, problems)
+    for (const n of names) {
+      if (rects.strip && rects[n] && rects[n].y < rects.strip.y + rects.strip.height - 1) problems.push(`${n} sits above the tab strip's bottom edge`)
+    }
+    return { problems, rects }
+  })
+}
+
 test('ST-02 Members: the action row holds Invite people, and the search and role filter sit in their own bar above the roster at every width', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [])
   await openMembers(page)
@@ -869,12 +882,13 @@ test('ST-02 Members: the action row holds Invite people, and the search and role
       header: tid(page, 'members-actions'),
       action: tid(page, 'members-invite'),
       bar,
-      filters: [bar.getByLabel('Search members'), bar.locator('label[aria-label="Access role"]')],
+      filters: [bar.locator('.pf-chipbox'), bar.locator('label[aria-label="Access role"]')],
       list: tid(page, 'members-table'),
     },
     'Members',
   )
-  await attachJson(testInfo, 'st-02-measurements', readings)
+  const tabColumn = await assertInsideTabColumn(page, 'Members', { bar, invite: tid(page, 'members-invite') })
+  await attachJson(testInfo, 'st-02-measurements', { readings, tabColumn })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -890,12 +904,13 @@ test('ST-22 Roles: the action row holds New role, and the search sits in its own
       header: tid(page, 'roles-actions'),
       action: tid(page, 'roles-new'),
       bar,
-      filters: [bar.getByTestId('roles-search')],
+      filters: [bar.locator('.pf-chipbox')],
       list: tid(page, 'roles-grid'),
     },
     'Roles',
   )
-  await attachJson(testInfo, 'st-22-measurements', readings)
+  const tabColumn = await assertInsideTabColumn(page, 'Roles', { bar, new: tid(page, 'roles-new') })
+  await attachJson(testInfo, 'st-22-measurements', { readings, tabColumn })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

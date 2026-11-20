@@ -161,7 +161,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
             {ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''}Customer records, tax IDs &amp; billing history
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
           <button onClick={() => setModal({ mode: 'create' })} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add customer
           </button>

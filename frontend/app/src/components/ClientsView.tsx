@@ -203,7 +203,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             {portfolioCountLabel(shown, total)} · partner program
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
           {(access === 'add' || adminOnly) && (
             <button
               onClick={() => setModal({ mode: 'create' })}

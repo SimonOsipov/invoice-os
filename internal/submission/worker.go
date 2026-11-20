@@ -184,6 +184,11 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 			return nil
 		}
 
+		// A plain error: River retries, and a later list sync clears the fault.
+		if err := CheckInvoiceTypeCodes(ctx, tx); err != nil {
+			return err
+		}
+
 		// Rate-limit gate (T05-10). A denial does not consume the retry budget.
 		limit, err := RateLimitFor(ctx, tx, w.RateLimit)
 		if err != nil {

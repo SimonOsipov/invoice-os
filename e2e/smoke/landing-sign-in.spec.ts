@@ -170,7 +170,7 @@ test('landing forgot view: the reset notice is peach, readable and clear of the 
   }
 })
 
-// A console's signed-out redirect carries state and console but no signin=; it opens the dialog.
+// A console target with a state opens the sign-in dialog at boot.
 const OPS_CONSOLE_URL = resolveTarget('OPS_CONSOLE_URL')
 const SUPPORT_CONSOLE_URL = resolveTarget('SUPPORT_CONSOLE_URL')
 const CONSOLES = [
@@ -210,19 +210,34 @@ for (const [target] of CONSOLES) {
 
 for (const [target, consoleUrl] of CONSOLES) {
   test(`console redirect: a signed-out visit to the ${target} console lands on the open sign-in dialog`, async ({ page }) => {
+    const errors: string[] = []
+    const collect = () => {
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') errors.push(msg.text())
+      })
+      page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+    }
     await page.setViewportSize({ width: 1280, height: 800 })
     await seedConsent(page, false)
 
     await page.goto(consoleUrl)
     await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    collect()
 
     const dialog = page.getByRole('dialog', { name: 'Sign in', exact: true })
     await expect(dialog).toBeVisible()
     await expect(dialog.locator('[role="alert"]')).toHaveCount(0)
+
+    expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
   })
 }
 
 test('landing without a console target: no dialog opens', async ({ page }) => {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
   await page.setViewportSize({ width: 1280, height: 800 })
   await seedConsent(page, false)
   for (const query of [`state=${STATE}`, `state=${STATE}&console=app`]) {
@@ -230,4 +245,5 @@ test('landing without a console target: no dialog opens', async ({ page }) => {
     await expect(page.getByRole('heading', { level: 1, name: HOME_H1 }), query).toBeVisible()
     await expect(page.getByRole('dialog'), query).toHaveCount(0)
   }
+  expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
 })

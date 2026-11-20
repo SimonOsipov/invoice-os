@@ -2468,7 +2468,7 @@ async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
 }
 
 async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
-  await headerSignIn(page).click({ timeout: 15_000 })
+  await expect(signInDialog(page)).toBeVisible({ timeout: 15_000 })
   const [handoff] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
     submitSignIn(page, account.email, account.password),

@@ -31,7 +31,7 @@ import { registrationOpen } from './register'
 import { bounceToStart, readSignInConsole, readSignInState, SIGN_IN_UNAVAILABLE, signInConfigured } from './signIn'
 import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
-// Copy for the ?signin= outcome; `ready` opens the modal with no message. A console target with a state opens it too.
+// Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
   ['no-workspace', 'This account has no workspace yet. If you were invited, open the invite link in your email.'],

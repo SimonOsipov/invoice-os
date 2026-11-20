@@ -1217,8 +1217,10 @@ jobs:
         run: pnpm --filter @invoice-os/check test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-check.json}
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
-      # until this line. Cheap and deployment-free: they assert local seam logic
-      # (requireDbInCI, resolveTarget), not anything about a live environment.
+      # until this line. Deployment-free: they assert local seam logic
+      # (requireDbInCI, resolveTarget) and drive a local Chromium (apiTracker), not a live environment.
+      - name: Install Chromium (e2e seams)
+        run: pnpm --filter @invoice-os/e2e exec playwright install chromium
       - name: Unit tests (e2e seams)
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results

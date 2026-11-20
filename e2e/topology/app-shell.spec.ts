@@ -11,6 +11,7 @@ import { brandMarkProblems, MARK_RING, readBrandMark, ringProblems, ringWidth } 
 import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
+import { trackApi } from './apiTracker'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
 const SHARD = shardTenants('app-shell.spec.ts')
@@ -70,31 +71,6 @@ async function settle(page: Page, ...targets: Locator[]): Promise<void> {
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
   })
   await settleAnimations(...targets)
-}
-
-// Counts in-flight /api/ requests. `quiet` waits until none has been in flight for 300 ms, then until no
-// loading text or audit skeleton row is left; it fails with a named message on timeout.
-function trackApi(page: Page): { quiet: (where: string) => Promise<void> } {
-  const inflight = new Set<unknown>()
-  const isApi = (url: string) => new URL(url).pathname.includes('/api/')
-  page.on('request', (r) => { if (isApi(r.url())) inflight.add(r) })
-  const done = (r: { url(): string }) => inflight.delete(r)
-  page.on('requestfinished', done)
-  page.on('requestfailed', done)
-  return {
-    quiet: async (where) => {
-      const deadline = Date.now() + 15_000
-      let idleSince = Date.now()
-      while (Date.now() - idleSince < 300) {
-        if (Date.now() > deadline) throw new Error(`${where}: /api/ requests still in flight after 15s (${inflight.size})`)
-        if (inflight.size > 0) idleSince = Date.now()
-        await page.waitForTimeout(50)
-      }
-      const main = page.locator('main.pf-main')
-      await expect(main.getByText(/^Loading .+…$/), `${where}: a loading label never went away`).toHaveCount(0, { timeout: 15_000 })
-      await expect(main.getByTestId('audit-skeleton-row'), `${where}: audit skeleton rows never went away`).toHaveCount(0, { timeout: 15_000 })
-    },
-  }
 }
 
 // Computed values of one element, by CSS property name, in one evaluate.

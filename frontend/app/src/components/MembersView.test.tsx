@@ -1820,6 +1820,25 @@ describe('RESEND-07-04', () => {
       expect(within(screen.getByTestId('members-filter-bar')).queryByTestId('members-flash')).toBeNull()
     })
 
+    it('the group sizes from the button, not the flash, and the flash can shrink', async () => {
+      const sent = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={sent.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      const group = screen.getByTestId('members-invite').parentElement as HTMLElement
+      const before = group.style.flex
+      clickResendOn(inviteRows()[0])
+      const el = await screen.findByTestId('members-flash')
+
+      expect(group.style.flex, 'flex-basis does not depend on the flash').toBe(before)
+      expect(before).toMatch(/^1 1 \d+px$/)
+      expect(parseFloat(group.style.minWidth)).toBe(0)
+      expect(screen.getByTestId('members-invite').style.flex).toMatch(/^none$|^0 0 auto$/)
+      expect([parseFloat(el.style.minWidth), el.style.overflow, el.style.textOverflow]).toEqual([0, 'hidden', 'ellipsis'])
+    })
+
     it('MembersView: the flash clears after three seconds', async () => {
       const timeouts = vi.spyOn(window, 'setTimeout')
       const gw = gateway({

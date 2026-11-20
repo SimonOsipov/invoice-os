@@ -140,6 +140,24 @@ describe('BUG-167: the intro sentence and New role share one row', () => {
   })
 })
 
+describe('BUG-167: the flash never changes whether the action group wraps', () => {
+  it('the group sizes from the button, not the flash, and the flash can shrink', async () => {
+    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true })]} roles={[role()]} createRole={vi.fn().mockResolvedValue(role({ key: 'b', title: 'Bravo' }))} />)
+    const group = screen.getByTestId('roles-new').parentElement as HTMLElement
+    const before = group.style.flex
+    fireEvent.click(screen.getByTestId('roles-new'))
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Bravo' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    const el = await screen.findByTestId('roles-flash')
+
+    expect(group.style.flex, 'flex-basis does not depend on the flash').toBe(before)
+    expect(before).toMatch(/^1 1 \d+px$/)
+    expect(parseFloat(group.style.minWidth)).toBe(0)
+    expect([parseFloat(el.style.minWidth), el.style.overflow, el.style.textOverflow, el.style.whiteSpace]).toEqual([0, 'hidden', 'ellipsis', 'nowrap'])
+    expect(el.getAttribute('title')).toBe(el.textContent)
+  })
+})
+
 describe('AC-2: ErrorState renders rolesError ?? membersError; retry calls the matching refetch', () => {
   it('retry calls refetchRoles when the roles fetch is the one that failed', () => {
     const refetchRoles = vi.fn()
@@ -525,6 +543,7 @@ describe('Roles tab v2 paint', () => {
     const note = screen.getByTestId('roles-unassigned')
     const toolbar = screen.getByTestId('roles-filter-bar')
     expect(note.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING, 'notice precedes toolbar').toBeTruthy()
+    expect(screen.getByTestId('roles-actions').compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING, 'action row precedes notice').toBeTruthy()
   })
 })
 

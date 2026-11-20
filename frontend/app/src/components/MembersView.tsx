@@ -246,10 +246,11 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <>
-      {/* Intro left, actions right; wraps rather than squashing the intro on a narrow column. */}
-      <div data-testid="members-actions" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
-        <p style={{ flex: '0 1 auto', minWidth: 240, maxWidth: 680, margin: 0, fontSize: 13.5, color: 'var(--fg-2)', lineHeight: 1.6 }}>{INTRO[mode]}</p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', minWidth: 0 }}>
+      {/* Intro left, actions right; wraps rather than squashing the intro on a narrow column.
+          The group's flex-basis is the button's width, never the flash's, so a flash cannot change the wrap. */}
+      <div data-testid="members-actions" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: -4, marginBottom: 14 }}>
+        <p style={{ flex: '0 1 auto', minWidth: 'min(240px, 100%)', maxWidth: 680, margin: 0, fontSize: 13.5, color: 'var(--fg-2)', lineHeight: 1.6 }}>{INTRO[mode]}</p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flex: '1 1 150px', minWidth: 0 }}>
           {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
           {flash && (
             <span

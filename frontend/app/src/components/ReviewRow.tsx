@@ -103,6 +103,7 @@ export function Row({
   ctx,
   base,
   onChanged,
+  ruleNames,
 }: {
   r: InvoiceRecord
   // Every batch the review shell fetched (BULK-01-07, AC #4) -- threaded through from
@@ -125,6 +126,7 @@ export function Row({
   // out of scope, §14). The name is now imprecise for this second caller; flagged as
   // copy/naming debt in task-290's notes rather than renamed here.
   onChanged: () => void
+  ruleNames?: Readonly<Record<string, string>>
 }) {
   // `kept_as_is_at` (INVCR-01-15, D6, task-291): now on InvoiceRecord/the list wire
   // for real (invoices.ts) -- passed through so a kept row's pill renders
@@ -236,7 +238,7 @@ export function Row({
           {chevDownGlyph}
         </span>
       </div>
-      {expanded && <ExpandedFixPanel invoiceId={r.id} ctx={ctx} base={base} onChanged={onChanged} />}
+      {expanded && <ExpandedFixPanel invoiceId={r.id} ctx={ctx} base={base} onChanged={onChanged} ruleNames={ruleNames} />}
     </>
   )
 }
@@ -262,6 +264,7 @@ function FixCardView({
   explainDisabled,
   explainTitle,
   explanation,
+  ruleNames,
 }: {
   card: FixCard
   value: string
@@ -275,13 +278,14 @@ function FixCardView({
   explainDisabled: boolean
   explainTitle?: string
   explanation: React.ReactNode
+  ruleNames?: Readonly<Record<string, string>>
 }) {
   const st = severityStyle(card.severity)
   return (
     <div data-testid="review-fix-card" style={{ border: `1px solid ${st.border}`, borderRadius: 'var(--radius-md)', padding: '12px 14px', background: 'var(--bg-2)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7, flexWrap: 'wrap' }}>
         <span className="mono" style={{ background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: st.text }}>{st.label}</span>
-        <span className="mono" title={card.ruleKey} style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{ruleKeyLabel(card.ruleKey)}</span>
+        <span className="mono" title={card.ruleKey} style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)', overflowWrap: 'anywhere' }}>{ruleKeyLabel(card.ruleKey, ruleNames)}</span>
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
       {explainOpen && <div style={{ margin: '0 0 10px' }}>{explanation}</div>}
@@ -355,11 +359,13 @@ function ExpandedFixPanel({
   ctx,
   base,
   onChanged,
+  ruleNames,
 }: {
   invoiceId: string
   ctx: PlatformCtx
   base: string
   onChanged: () => void
+  ruleNames?: Readonly<Record<string, string>>
 }) {
   const detail = useAsync<InvoiceDetailRecord>(() => getInvoice(ctx.authedFetch, base, invoiceId), { deps: [invoiceId] })
 
@@ -552,6 +558,7 @@ function ExpandedFixPanel({
               }}
               explainDisabled={editedSinceValidation || inv.verdict_stale}
               explainTitle={EXPLAIN_COPY.stale}
+              ruleNames={ruleNames}
               explanation={
                 <ExplainPanel
                   key={key}

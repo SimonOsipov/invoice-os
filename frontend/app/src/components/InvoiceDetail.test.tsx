@@ -194,6 +194,8 @@ interface DetailFetchOptions {
   explainResponse?: MockResponse
   // GET .../notes. Defaults to no notes; answered before the detail-refetch counter.
   notesResponse?: MockResponse
+  // GET .../custom-rules/names. Defaults to no names.
+  names?: Record<string, string>
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -222,6 +224,9 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET'
 
+    if (url.endsWith('/custom-rules/names')) {
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ names: opts.names ?? {} }) })
+    }
     if (url.endsWith('/history')) {
       const call = historyCalls
       historyCalls++
@@ -1355,7 +1360,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2124,6 +2129,27 @@ describe('missing buyer TIN stated twice, in two grammars (disclosure, task-413)
   })
 })
 
+describe('custom rule names on the violations table', () => {
+  it('invoice detail names a custom violation from the names route', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    mockDetailFetch(
+      detailRecord({
+        rule_set_version_id: 'rsv-4',
+        rule_set_version: 4,
+        violations: [{ rule_key: key, severity: 'error', message: 'This custom rule could not be evaluated on this invoice.', path: 'buyer.tin' }],
+      }),
+      [],
+      { names: { [key]: 'PO required' } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const cell = await within(screen.getByTestId('violations-table')).findByText('PO required')
+    expect(cell.getAttribute('title')).toBe(key)
+  })
+})
+
 // Disclosure, not a fix (task-413 Implementation Notes, Phase 3.5 input #2): [stale-
 // violations-honest] (store.go:1067-1135) means an edit demotes validated->draft without
 // touching the stored violations. Constructed directly via fixture (a rendering-state
@@ -2560,7 +2586,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2596,7 +2622,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 

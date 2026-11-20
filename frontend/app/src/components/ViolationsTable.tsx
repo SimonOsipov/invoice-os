@@ -21,9 +21,10 @@ export interface ViolationsTableProps {
   renderExplanation?: (v: Violation) => React.ReactNode
   explainDisabled?: boolean
   explainTitle?: string
+  ruleNames?: Readonly<Record<string, string>>
 }
 
-export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDisabled, explainOpen, onExplain, renderExplanation, explainDisabled, explainTitle }: ViolationsTableProps): React.JSX.Element {
+export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDisabled, explainOpen, onExplain, renderExplanation, explainDisabled, explainTitle, ruleNames }: ViolationsTableProps): React.JSX.Element {
   if (violations.length === 0) {
     return (
       <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>
@@ -65,7 +66,7 @@ export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDi
                     min-content width table-layout:auto reads when sizing the table. */}
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)', fontSize: 12.5, color: 'var(--fg-1)', overflowWrap: 'anywhere', lineHeight: 1.5 }}>{v.message}</td>
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)', overflowWrap: 'anywhere', lineHeight: 1.4 }}>
-                  <span className="mono" title={v.rule_key} style={{ fontSize: 11, color: 'var(--fg-2)' }}>{ruleKeyLabel(v.rule_key)}</span>
+                  <span className="mono" title={v.rule_key} style={{ fontSize: 11, color: 'var(--fg-2)' }}>{ruleKeyLabel(v.rule_key, ruleNames)}</span>
                 </td>
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)', overflowWrap: 'anywhere', lineHeight: 1.4 }}>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{v.path ?? '—'}</span>

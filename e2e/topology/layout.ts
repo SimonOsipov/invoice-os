@@ -338,7 +338,7 @@ export function controlOverflow(shown: number, hidden: number): { hiddenOverflow
 }
 
 // Phone: the page may already overflow for another reason; the control must add at most 1px. The overflow with the control hidden is attached.
-async function assertControlAddsNoOverflow(page: Page, control: Locator, label: string, width: number): Promise<void> {
+export async function assertControlAddsNoOverflow(page: Page, control: Locator, label: string, width: number): Promise<void> {
   const column = page.locator('main.pf-main .pf-scroll')
   const read = () =>
     column.evaluate(async (el) => {

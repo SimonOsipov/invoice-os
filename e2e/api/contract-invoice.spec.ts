@@ -40,6 +40,9 @@ import {
   createInvoice,
   createCustomRule,
   deleteCustomRule,
+  listCustomRules,
+  getCustomRuleNames,
+  updateCustomRule,
   validateInvoice,
   explainViolation,
   rawFetch,
@@ -502,6 +505,70 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const row = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
       expect(row?.can_submit).toBe(false)
       expect(row?.submit_blocked_reason).toBe(RULE_CHANGE_PENDING_REASON)
+    })
+  })
+
+  // The store refuses min > max before it writes or calls the validation service.
+  test.describe('a range rule with min above max', () => {
+    let ruleId: string | null = null
+    let rangeEntity: Entity
+
+    test.afterAll(async () => {
+      if (ruleId) await deleteCustomRule(token, ruleId).catch(() => undefined)
+    })
+
+    test('range rule with min above max is a 400 naming both bounds and writes nothing', async () => {
+      const tin = freshTin()
+      rangeEntity = await createEntity(token, { name: `BUG-36 range ${tin}`, tin })
+      const body = (params: unknown) => ({
+        entity_id: rangeEntity.id,
+        type: 'range',
+        target: 'total',
+        params,
+        severity: 'warning',
+        message: 'BUG-36 range rule',
+        enabled: true,
+      })
+      const send = (params: unknown) =>
+        rawFetch('/api/invoice/v1/custom-rules', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: body(params) })
+
+      const refused = await send({ min: 10, max: 5 })
+      assertErrorEnvelope(refused, 400, 'range min above max')
+      const message = (refused.body as { error: string }).error
+      expect(message).toContain('min')
+      expect(message).toContain('max')
+      expect((await listCustomRules(token)).filter((r) => r.entity_id === rangeEntity.id), 'the refused body left no rule').toEqual([])
+
+      const equal = await send({ min: 5, max: 5 })
+      expect(equal.status, 'equal bounds are accepted').toBe(201)
+      ruleId = (equal.body as { id: string }).id
+    })
+  })
+
+  test.describe('custom rule names', () => {
+    test('names follow an edit and survive a delete', async () => {
+      const tin = freshTin()
+      const namesEntity = await createEntity(token, { name: `BUG-36 names ${tin}`, tin })
+      const input = (message: string) => ({
+        entity_id: namesEntity.id,
+        type: 'required' as const,
+        target: 'buyer.name',
+        params: {},
+        severity: 'warning' as const,
+        message,
+        enabled: true,
+      })
+      const rule = await createCustomRule(token, input('BUG-36 name one'))
+      const key = `custom:${rule.id}`
+      try {
+        expect((await getCustomRuleNames(token)).names[key]).toBe('BUG-36 name one')
+        await updateCustomRule(token, rule.id, input('BUG-36 name two'))
+        expect((await getCustomRuleNames(token)).names[key], 'an edit changes the name').toBe('BUG-36 name two')
+      } finally {
+        await deleteCustomRule(token, rule.id)
+      }
+      expect((await getCustomRuleNames(token)).names[key], 'a delete keeps the last saved name').toBe('BUG-36 name two')
+      expect((await listCustomRules(token)).some((r) => r.id === rule.id), 'the rule list omits it').toBe(false)
     })
   })
 

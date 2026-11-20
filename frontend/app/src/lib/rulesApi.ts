@@ -66,6 +66,19 @@ export function getGoldenRules(authedFetch: AuthedFetch, base: string): Promise<
   return authedFetch<GoldenRules>(`${base}/api/validation/v1/rules`)
 }
 
+// Mirrors namesResponse (internal/customrule/handlers.go).
+export interface CustomRuleNames {
+  names: Record<string, string>
+}
+
+export async function getCustomRuleNames(
+  authedFetch: AuthedFetch,
+  base: string,
+): Promise<Record<string, string>> {
+  const res = await authedFetch<CustomRuleNames>(`${base}/api/invoice/v1/custom-rules/names`)
+  return res.names
+}
+
 export async function listCustomRules(authedFetch: AuthedFetch, base: string): Promise<CustomRule[]> {
   const res = await authedFetch<{ custom_rules: CustomRule[] }>(`${base}/api/invoice/v1/custom-rules`)
   return res.custom_rules
@@ -91,8 +104,10 @@ export function rulesInScope(rules: readonly CustomRule[], entityId: string | nu
 // Violation key prefix of a custom rule: customrule.Key.
 const CUSTOM_KEY_PREFIX = 'custom:'
 
-export function ruleKeyLabel(key: string): string {
-  return key.startsWith(CUSTOM_KEY_PREFIX) ? 'Custom rule' : key
+// A custom key shows its saved name; a blank or missing one falls back to the generic label.
+export function ruleKeyLabel(key: string, names?: Readonly<Record<string, string>>): string {
+  if (!key.startsWith(CUSTOM_KEY_PREFIX)) return key
+  return names?.[key]?.trim() || 'Custom rule'
 }
 
 export function scopeLabel(rule: Pick<CustomRule, 'entity_id'>, mode: Mode): 'FIRM' | 'CLIENT' | 'CUSTOM' {

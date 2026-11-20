@@ -256,6 +256,7 @@ func main() {
 	// store. The check call is injected: customrule must not import invoice.
 	ruleStore := customrule.NewStore(pool, validator.CheckCustomRule)
 	app.Mux.HandleFunc("GET /v1/custom-rules", customrule.ListHandler(ruleStore.List, app.Logger))
+	app.Mux.HandleFunc("GET /v1/custom-rules/names", customrule.NamesHandler(ruleStore.Names, app.Logger))
 	app.Mux.HandleFunc("POST /v1/custom-rules", customrule.CreateHandler(ruleStore.Create, app.Logger))
 	app.Mux.HandleFunc("PUT /v1/custom-rules/{id}", customrule.UpdateHandler(ruleStore.Update, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/custom-rules/{id}", customrule.DeleteHandler(ruleStore.Delete, app.Logger))

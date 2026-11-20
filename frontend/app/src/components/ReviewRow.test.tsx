@@ -953,10 +953,10 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     )
   }
 
-  async function renderOpen(detail: InvoiceDetailRecord, mutationError?: string) {
+  async function renderOpen(detail: InvoiceDetailRecord, mutationError?: string, ruleNames?: Record<string, string>) {
     stubDetail(detail, mutationError)
     render(
-      <Row r={listRow({ status: detail.status })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} />,
+      <Row r={listRow({ status: detail.status })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} ruleNames={ruleNames} />,
     )
     return (await screen.findByTestId('review-revalidate')) as HTMLButtonElement
   }
@@ -1251,16 +1251,28 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     expect(block.style.fontSize).toBe('10.5px')
   })
 
-  it('reviewRow_customKeyCardReadsCustomRule', async () => {
-    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
-    await renderOpen(failing({ violations: [{ ...ERR, rule_key: key }, { ...ERR, rule_key: 'vat-standard-rate', path: 'tax_total' }] }))
-    const cards = screen.getAllByTestId('review-fix-card')
-    expect(cards.length).toBeGreaterThan(0)
+  it('fix card names a custom rule', async () => {
+    const a = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const b = 'custom:3f2a0000-0000-0000-0000-000000000002'
+    await renderOpen(
+      failing({ violations: [{ ...ERR, rule_key: a }, { ...ERR, rule_key: b, path: 'buyer.email' }, { ...ERR, rule_key: 'vat-standard-rate', path: 'tax_total' }] }),
+      undefined,
+      { [a]: 'PO required', [b]: 'Buyer email required' },
+    )
     const keyCell = (c: HTMLElement) => c.firstElementChild?.lastElementChild as HTMLElement
-    const custom = cards.map(keyCell).find((e) => e.textContent === 'Custom rule')
-    expect(custom?.getAttribute('title')).toBe(key)
-    const golden = cards.map(keyCell).find((e) => e.textContent === 'vat-standard-rate')
-    expect(golden?.getAttribute('title')).toBe('vat-standard-rate')
+    const cells = screen.getAllByTestId('review-fix-card').map(keyCell)
+    const byTitle = (t: string) => cells.find((e) => e.getAttribute('title') === t)
+    expect(byTitle(a)?.textContent).toBe('PO required')
+    expect(byTitle(b)?.textContent).toBe('Buyer email required')
+    expect(byTitle('vat-standard-rate')?.textContent).toBe('vat-standard-rate')
+  })
+
+  it('a custom fix card without a name reads Custom rule', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    await renderOpen(failing({ violations: [{ ...ERR, rule_key: key }] }))
+    const cell = screen.getByTestId('review-fix-card').firstElementChild?.lastElementChild as HTMLElement
+    expect(cell.textContent).toBe('Custom rule')
+    expect(cell.getAttribute('title')).toBe(key)
   })
 
   it('the section label sits 10px above the first card (margin plus flex gap)', async () => {

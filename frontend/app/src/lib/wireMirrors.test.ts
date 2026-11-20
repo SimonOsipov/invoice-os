@@ -464,6 +464,16 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export async function listCustomRules(',
     floor: 14,
   },
+  {
+    ts: 'CustomRuleNames',
+    go: 'namesResponse',
+    goPath: 'internal/customrule/handlers.go',
+    goAnchor: 'func NamesHandler(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export async function getCustomRuleNames(',
+    e2eAnchor: 'export function getCustomRuleNames(',
+    floor: 1,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -635,6 +645,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'GoldenVersion',
       'GoldenRule',
       'CustomRule',
+      'CustomRuleNames',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage', 'WorkspaceLockedMessage'])
   })

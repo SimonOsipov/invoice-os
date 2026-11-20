@@ -5,19 +5,34 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   createCustomRule,
   createEntity,
+  createInvoice,
   deleteCustomRule,
   getGoldenRules,
   listCustomRules,
   login,
+  offboardEntity,
+  updateCustomRule,
+  validateInvoice,
   type CustomRule,
+  type CustomRuleInput,
   type Entity,
   type Persona,
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, signInAs } from '../personaSession'
-import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertSameHeight, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
-import { shardTenants } from './targets'
+import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
+import {
+  assertFitsNarrow,
+  assertPageDoesNotScrollSideways,
+  assertSameHeight,
+  enclosesRect,
+  PHONE_WIDTHS,
+  rectsOverlap,
+  settleAnimations,
+  WIDE_WIDTHS,
+  type Rect,
+} from './layout'
+import { APP_URL, shardTenants } from './targets'
 
 const SHARD = shardTenants('rules.spec.ts')
 const ADMIN: Persona = { ...SHARD.a, tenantId: SHARD.a.id }
@@ -36,6 +51,8 @@ const ENTITY_NAME = `ENGI-15 Rules ${RUN} Consolidated Holdings and Trading Part
 
 let admin: string
 let entity: Entity
+// The two-named-rules entity of the naming tests; its own, so the rule counts above stay as seeded.
+let named: Entity | undefined
 
 test.beforeAll(async () => {
   expect(test.info().project.name, 'rules.spec.ts belongs to the invoice-surfaces shard').toBe('invoice-surfaces')
@@ -56,8 +73,12 @@ test.beforeAll(async () => {
 
 // Every rule written for this spec's client is removed, whichever test wrote it.
 test.afterAll(async () => {
-  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id || r.message === CLIENT_RULE_MESSAGE)
+  const mine = (await listCustomRules(admin)).filter(
+    (r: CustomRule) => r.entity_id === entity.id || r.entity_id === named?.id || r.message === CLIENT_RULE_MESSAGE,
+  )
   for (const r of mine) await deleteCustomRule(admin, r.id).catch(() => undefined)
+  // There is no entity delete; offboarding takes it out of the client list.
+  if (named) await offboardEntity(admin, named.id).catch(() => undefined)
 })
 
 function collectErrors(page: Page, droppers: Dropper[] = []): string[] {
@@ -127,8 +148,8 @@ async function atEachWidth(page: Page, label: string, probe: () => Promise<strin
 const noSideScroll = (el: Element) => el.scrollWidth - el.clientWidth
 
 // The table has a 790px floor inside a horizontally scrolling card. From this width the card
-// holds it with no scroll (8578a362 keeps the On column on screen at 1440px); below it the card scrolls.
-const TABLE_FITS_FROM = 1440
+// holds it with no scroll, the rail stacking above it below 1400px; narrower widths scroll the card.
+const TABLE_FITS_FROM = Math.min(...WIDE_WIDTHS)
 
 const pageScrolls = (page: Page) => page.locator('main.pf-main .pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth > 1)
 
@@ -398,6 +419,112 @@ test('every switch is visible without scrolling', async ({ page }) => {
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The rail stacks below 1400px (platform.css); 1399 and 1400 are the boundary on each side.
+const LAPTOP_WIDTHS = [...WIDE_WIDTHS, 1400, 1399].sort((a, b) => b - a)
+const BREAKPOINT = 1400
+
+const onHeader = (card: Locator) => card.getByText('On', { exact: true }).first()
+const versionsCard = (page: Page) => page.getByText('Golden ruleset', { exact: true }).locator('xpath=..')
+
+test('the Rules table fits its card at laptop widths with the On column in view', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await atEachWidth(
+    page,
+    'the table fits its card with the On column and every switch inside it',
+    async () => {
+      if (await pageScrolls(page)) return 'the page scrolls sideways'
+      const cardBox = await box(card)
+      const headerBox = await box(onHeader(card))
+      if (!cardBox || !headerBox) return 'the card or the On header has no box'
+      const over = await card.evaluate((c) => c.scrollWidth - c.clientWidth)
+      if (over > 0) return `the card scrolls sideways by ${over}px`
+      if (!enclosesRect(cardBox, headerBox, 1)) return `the On header ${JSON.stringify(headerBox)} is outside the card ${JSON.stringify(cardBox)}`
+      const switches = await card.getByRole('switch').all()
+      if (switches.length < 2) return `${switches.length} switches`
+      for (const sw of switches) {
+        const b = await box(sw)
+        if (!b || !enclosesRect(cardBox, b, 1)) return `a switch ${JSON.stringify(b)} is outside the card`
+      }
+      const scrollLeft = await card.evaluate((c) => c.scrollLeft)
+      return scrollLeft === 0 ? null : `the card is scrolled ${scrollLeft}px`
+    },
+    LAPTOP_WIDTHS,
+  )
+  await assertPageDoesNotScrollSideways(page, 'the Rules page at the entry width')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the Rules table is one card scroll away at phone widths', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await assertFitsNarrow(page, page.locator('main.pf-main .pf-scroll'), 'the Rules page column', PHONE_WIDTHS)
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 844 })
+      await expect
+        .poll(
+          async () => {
+            await settleAnimations(card)
+            await card.evaluate((c) => c.scrollTo({ left: c.scrollWidth }))
+            try {
+              const cardBox = await box(card)
+              const headerBox = await box(onHeader(card))
+              const switchBox = await box(card.getByRole('switch').first())
+              if (!cardBox || !headerBox || !switchBox) return 'an element has no box'
+              if (!enclosesRect(cardBox, headerBox, 1)) return 'the On header is outside the card at its end'
+              return enclosesRect(cardBox, switchBox, 1) ? 'ok' : 'a switch is outside the card at its end'
+            } finally {
+              await card.evaluate((c) => c.scrollTo({ left: 0 }))
+            }
+          },
+          { message: `the On column one card scroll away at ${width}px`, timeout: 10_000 },
+        )
+        .toBe('ok')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the golden versions card sits beside the table from 1400px', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  await openRules(page)
+  const card = tableCard(page)
+  const versions = versionsCard(page)
+  await expect(card.getByRole('switch').first()).toBeVisible()
+
+  await atEachWidth(
+    page,
+    'the golden versions card beside the table from the breakpoint, above it below',
+    async () => {
+      const [v, t] = await Promise.all([box(versions), box(card)])
+      if (!v || !t) return 'the versions card or the table card has no box'
+      if (page.viewportSize()!.width >= BREAKPOINT) {
+        return v.x + v.width <= t.x ? null : `the versions card ${JSON.stringify(v)} is not left of the table ${JSON.stringify(t)}`
+      }
+      return v.y + v.height <= t.y + 1 ? null : `the versions card ${JSON.stringify(v)} is not above the table ${JSON.stringify(t)}`
+    },
+    [1440, BREAKPOINT, BREAKPOINT - 1],
+  )
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // Core AC 2: the Source label stays in its column.
 test('the source label fits its column', async ({ page }) => {
   test.setTimeout(90_000)
@@ -525,4 +652,98 @@ test('(fixture check) a failed switch prints its error under its own row', async
   })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Two custom rules on one invoice are told apart by name on the surfaces that showed "Custom rule".
+test.describe.serial('custom rule names', () => {
+  // The long message is over 60 characters.
+  const NAME_A = `Due date needed ${RUN}`
+  const NAME_B = `Buyer email needed on every invoice sent to a client of this practice ${RUN}`
+  const RENAMED = `Buyer email now required ${RUN}`
+  const rules: CustomRule[] = []
+  let invoiceId: string
+
+  const input = (target: string, message: string): CustomRuleInput => ({
+    entity_id: named!.id,
+    type: 'required',
+    target,
+    params: {},
+    severity: 'error',
+    message,
+    enabled: true,
+  })
+
+  const detailKey = (page: Page, key: string) => page.getByTestId('violations-table').locator(`[title="${key}"]`)
+
+  async function openDetail(page: Page): Promise<void> {
+    await page.goto(`${APP_URL}/invoices/${invoiceId}`)
+    await expect(page.getByTestId('invoice-detail')).toBeVisible()
+    await expect(page.getByTestId('invoice-status-badge')).toBeVisible()
+  }
+
+  test.beforeAll(async () => {
+    named = await createEntity(admin, { name: `BUG-36 names ${RUN}`, tin: freshTin() })
+    rules.push(await createCustomRule(admin, input('due_date', NAME_A)), await createCustomRule(admin, input('buyer.email', NAME_B)))
+    const invoice = await createInvoice(admin, {
+      entity_id: named.id,
+      invoice_number: `INV-BUG36-${RUN}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      supplier_tin: freshTin(),
+      supplier_name: 'Acme Nigeria Ltd',
+      buyer_tin: '87654321-0002',
+      buyer_name: 'Buyer Ltd',
+      currency: 'NGN',
+      subtotal: '1000',
+      vat: '75',
+      total: '1075',
+      line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+    })
+    invoiceId = invoice.id
+  })
+
+  test('(fixture check) both custom rules fire on the clean-CSV invoice', async () => {
+    const validated = await validateInvoice(admin, invoiceId)
+    const keys = validated.violations.map((v) => v.rule_key)
+    for (const rule of rules) expect(keys, `${rule.key} fires on the invoice with no due date and no buyer email`).toContain(rule.key)
+  })
+
+  test('two custom rules are told apart by name', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page, [approvalRun404Dropper(page)])
+    const [a, b] = rules
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+    await selectEntity(page, named!.name)
+
+    // The dashboard rollup reads the stored verdict, so give it time to count the invoice.
+    for (const [rule, name] of [[a, NAME_A], [b, NAME_B]] as const) {
+      const keyCell = page.locator(`main [title="${rule.key}"]`)
+      await expect(keyCell, `the top failures list ${rule.key}`).toBeVisible({ timeout: 60_000 })
+      await expect(keyCell, 'the key cell reads the name').toHaveText(name)
+      const headline = keyCell.locator('xpath=..').locator('> div').first().locator('> div').first()
+      await expect(headline, 'the headline reads the name').toHaveText(name)
+    }
+
+    await openDetail(page)
+    await expect(detailKey(page, a.key)).toHaveText(NAME_A)
+    await expect(detailKey(page, b.key)).toHaveText(NAME_B)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('a custom violation follows an edit and keeps the last saved name after a delete', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page, [approvalRun404Dropper(page)])
+    const b = rules[1]
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+    await updateCustomRule(admin, b.id, input('buyer.email', RENAMED))
+    await openDetail(page)
+    await expect(detailKey(page, b.key), 'the detail shows the edited name').toHaveText(RENAMED)
+
+    expect(await deleteCustomRule(admin, b.id), 'the rule is deleted').toBe(204)
+    await openDetail(page)
+    await expect(detailKey(page, b.key), 'a deleted rule keeps its last saved name').toHaveText(RENAMED)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

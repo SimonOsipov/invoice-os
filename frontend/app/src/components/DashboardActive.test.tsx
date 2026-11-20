@@ -90,8 +90,14 @@ type HistoryReply = unknown | (() => Promise<MockResponse>)
 
 // Routes by URL: /audit-log answers `audit` (default: an empty log), /rollup/history answers
 // `history` (default: no rows), anything else the rollup.
-function mockRollupFetch(data: Rollup, audit: AuditReply = auditResponse(), history: HistoryReply = { history: [] }) {
+function mockRollupFetch(
+  data: Rollup,
+  audit: AuditReply = auditResponse(),
+  history: HistoryReply = { history: [] },
+  names: () => Promise<MockResponse> = () => ok({ names: {} }),
+) {
   const fetchMock = vi.fn((url: string) => {
+    if (String(url).endsWith('/custom-rules/names')) return names()
     if (String(url).includes('/rollup/history')) return typeof history === 'function' ? (history as () => Promise<MockResponse>)() : ok(history)
     if (!String(url).includes('/audit-log')) return ok(data)
     return typeof audit === 'function' ? audit(String(url)) : ok(audit)
@@ -258,22 +264,40 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
     expect(screen.queryByText('tenant-wide-rule')).toBeNull()
   })
 
-  it('dashboardActive_customKeyReadsCustomRule', async () => {
+  it('top failures headline and key cell name a custom rule', async () => {
     const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
     const data = rollup(0)
     data.totals.top_violations = [{ rule_key: key, invoices: 4 }, { rule_key: 'vat-standard-rate', invoices: 2 }]
-    mockRollupFetch(data)
+    mockRollupFetch(data, undefined, undefined, () => ok({ names: { [key]: 'PO required' } }))
 
     const { container } = render(<DashboardActive ctx={dashCtx()} />)
     await screen.findByText('Top validation failures')
 
-    const custom = await waitFor(() => {
+    const cell = await waitFor(() => {
+      const el = container.querySelector(`[title="${key}"]`)
+      expect(el?.textContent).toBe('PO required')
+      return el as Element
+    })
+    expect(cell.previousElementSibling?.firstElementChild?.textContent, 'the headline reads the name too').toBe('PO required')
+    expect(container.querySelector('[title="vat-standard-rate"]')?.textContent).toBe('vat-standard-rate')
+  })
+
+  it('a custom violation without a name reads Custom rule', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const data = rollup(0)
+    data.totals.top_violations = [{ rule_key: key, invoices: 4 }]
+    mockRollupFetch(data, undefined, undefined, () => Promise.reject(new Error('names down')))
+
+    const { container } = render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Top validation failures')
+
+    const cell = await waitFor(() => {
       const el = container.querySelector(`[title="${key}"]`)
       expect(el).not.toBeNull()
       return el as Element
     })
-    expect(custom.textContent).toBe('Custom rule')
-    expect(container.querySelector('[title="vat-standard-rate"]')?.textContent).toBe('vat-standard-rate')
+    expect(cell.textContent).toBe('Custom rule')
+    expect(cell.previousElementSibling?.firstElementChild?.textContent).toBe('Custom rule')
   })
 })
 

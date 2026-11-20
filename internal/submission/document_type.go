@@ -2,9 +2,9 @@ package submission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -40,14 +40,22 @@ var invoiceTypeLabels = []struct {
 	{DebitNote, "Debit Note"},
 }
 
+// LabelsFunc reads the label of each wanted code in a synced code list (codelist.LabelsTx).
+// Injected so internal/archive, which imports this package, does not reach codelist.
+type LabelsFunc func(ctx context.Context, tx pgx.Tx, list string, codes []string) (map[string]string, error)
+
 // CheckInvoiceTypeCodes fails unless the synced invoice-types list labels every code
-// InvoiceTypeCode returns as expected. There is no fallback: an unsynced list fails too.
-func CheckInvoiceTypeCodes(ctx context.Context, tx pgx.Tx) error {
+// InvoiceTypeCode returns as expected. There is no fallback: an unsynced list or a nil
+// labels lookup fails too.
+func CheckInvoiceTypeCodes(ctx context.Context, tx pgx.Tx, labels LabelsFunc) error {
+	if labels == nil {
+		return errors.New("submission: no invoice-types lookup wired; cannot check the NRS invoice type codes")
+	}
 	codes := make([]string, 0, len(invoiceTypeLabels))
 	for _, e := range invoiceTypeLabels {
 		codes = append(codes, InvoiceTypeCode(e.docType))
 	}
-	got, err := codelist.LabelsTx(ctx, tx, "invoice-types", codes)
+	got, err := labels(ctx, tx, "invoice-types", codes)
 	if err != nil {
 		return err
 	}

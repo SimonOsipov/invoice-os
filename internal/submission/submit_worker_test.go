@@ -79,6 +79,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // --- seeding (own, unexported, duplicated -- [mapper-lives-in-03]) --------------------
@@ -759,12 +760,13 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 // function's signature keeps all 23 of 05's existing call sites unchanged.
 func newTestWorker(pool *pgxpool.Pool, adapter submission.Adapter) *submission.SubmitWorker {
 	return &submission.SubmitWorker{
-		Pool:        pool,
-		Adapter:     adapter,
-		InvoicePort: testInvoicePort{},
-		Limiter:     submission.NewRateLimiter(),
-		RateLimit:   60,
-		Queue:       newQueueClient(pool),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              pool,
+		Adapter:           adapter,
+		InvoicePort:       testInvoicePort{},
+		Limiter:           submission.NewRateLimiter(),
+		RateLimit:         60,
+		Queue:             newQueueClient(pool),
 	}
 }
 

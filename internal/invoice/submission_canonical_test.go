@@ -314,10 +314,12 @@ func TestSubmissionCanonical_MapsTheDocumentType(t *testing.T) {
 // The stored type reaches both wires through SubmissionCanonical, not through a hand-built Canonical.
 func TestSubmissionCanonical_StoredTypeReachesBothWires(t *testing.T) {
 	for _, tc := range []struct {
-		dt   submission.DocumentType
-		code string
+		dt       submission.DocumentType
+		wireCode string // NRS mapping
+		ublCode  string // UNTDID 1001
 	}{
-		{submission.CommercialInvoice, "381"}, {submission.CreditNote, "380"}, {submission.DebitNote, "384"}, {"", "381"},
+		{submission.CommercialInvoice, "381", "380"}, {submission.CreditNote, "380", "381"},
+		{submission.DebitNote, "384", "383"}, {"", "381", "380"},
 	} {
 		inv := completeUBLInvoice(t, "INV-TYPE")
 		inv.DocumentType = tc.dt
@@ -327,14 +329,14 @@ func TestSubmissionCanonical_StoredTypeReachesBothWires(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: Transform: %v", tc.dt, err)
 		}
-		if want := `"InvoiceTypeCode":"` + tc.code + `"`; !strings.Contains(string(wire), want) {
+		if want := `"InvoiceTypeCode":"` + tc.wireCode + `"`; !strings.Contains(string(wire), want) {
 			t.Errorf("%q: mock wire lacks %s", tc.dt, want)
 		}
 		doc, err := ubl.Render(c)
 		if err != nil {
 			t.Fatalf("%q: Render: %v", tc.dt, err)
 		}
-		if want := "<cbc:InvoiceTypeCode>" + tc.code + "</cbc:InvoiceTypeCode>"; !strings.Contains(string(doc), want) {
+		if want := "<cbc:InvoiceTypeCode>" + tc.ublCode + "</cbc:InvoiceTypeCode>"; !strings.Contains(string(doc), want) {
 			t.Errorf("%q: UBL lacks %s", tc.dt, want)
 		}
 	}

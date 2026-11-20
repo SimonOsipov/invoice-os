@@ -447,14 +447,15 @@ func TestUBLBlockedReason_NilWhenNothingIsMissing(t *testing.T) {
 	}
 }
 
-// A credit note downloaded from the route declares 380, a debit note 384, an untyped row 381.
+// The route's UBL declares UNTDID 1001 codes: invoice and untyped 380, credit note 381, debit note 383
+// (the NRS wire carries 381/380/384 instead).
 func TestUBLHandler_DeclaresTheInvoiceDocumentType(t *testing.T) {
 	id := ublTestIdentity()
 	for _, tc := range []struct {
 		dt   submission.DocumentType
 		code string
 	}{
-		{submission.CommercialInvoice, "381"}, {submission.CreditNote, "380"}, {submission.DebitNote, "384"}, {"", "381"},
+		{submission.CommercialInvoice, "380"}, {submission.CreditNote, "381"}, {submission.DebitNote, "383"}, {"", "380"},
 	} {
 		inv := completeUBLInvoice(t, "INV-TYPE")
 		inv.DocumentType = tc.dt

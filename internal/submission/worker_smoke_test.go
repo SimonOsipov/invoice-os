@@ -40,6 +40,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // errRollback is the sentinel a WithinTenantTx callback returns to force a rollback,
@@ -99,7 +100,7 @@ func (immediateRetry) NextRetry(*rivertype.JobRow) time.Time { return time.Now()
 // worker, under the fast retry policy.
 func newSmokeClient(t *testing.T, pool *pgxpool.Pool) *queue.Client {
 	t.Helper()
-	sw := &submission.SubmitWorker{Pool: pool}
+	sw := &submission.SubmitWorker{Pool: pool, InvoiceTypeLabels: codelist.LabelsTx}
 	pw := &submission.PollWorker{Pool: pool}
 	workers := submission.Workers(sw, pw)
 	river.AddWorker(workers, &failWorker{})

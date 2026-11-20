@@ -164,3 +164,29 @@ func LoadTx(ctx context.Context, tx pgx.Tx, names []string) (map[string]map[stri
 	}
 	return out, nil
 }
+
+// LabelsTx returns the label ("value") of each wanted code in the named list. A code with no
+// row, or whose entry has no label, is absent from the result.
+func LabelsTx(ctx context.Context, tx pgx.Tx, list string, codes []string) (map[string]string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT code, entries->0->>'value' FROM nrs_codes WHERE list = $1 AND code = ANY($2::text[])`, list, codes)
+	if err != nil {
+		return nil, fmt.Errorf("codelist: labels: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var code string
+		var label *string
+		if err := rows.Scan(&code, &label); err != nil {
+			return nil, fmt.Errorf("codelist: labels: %w", err)
+		}
+		if label != nil {
+			out[code] = *label
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("codelist: labels: %w", err)
+	}
+	return out, nil
+}

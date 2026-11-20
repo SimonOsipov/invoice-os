@@ -1,6 +1,9 @@
 package submission
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestInvoiceTypeCode_MapsEachDocumentType(t *testing.T) {
 	for _, tc := range []struct {
@@ -18,5 +21,11 @@ func TestInvoiceTypeCode_MapsEachDocumentType(t *testing.T) {
 		if got := InvoiceTypeCode(tc.in); got != tc.want {
 			t.Errorf("InvoiceTypeCode(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestCheckInvoiceTypeCodes_NilLookupFailsLoudly(t *testing.T) {
+	if err := CheckInvoiceTypeCodes(context.Background(), nil, nil); err == nil {
+		t.Fatal("CheckInvoiceTypeCodes with no lookup wired returned nil, want an error (no silent skip)")
 	}
 }

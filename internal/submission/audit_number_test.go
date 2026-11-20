@@ -23,6 +23,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // auditNumberKey is the ONE spelling, settled by AUDIT-11-01 and verbatim from
@@ -553,12 +554,13 @@ func TestAuditNumber_SubmitWorkerAddsNoInvoiceQuery(t *testing.T) {
 	port := &anCountingInvoicePort{}
 	idemKey := anIdemKey(invoiceID)
 	w := &submission.SubmitWorker{
-		Pool:        f.app,
-		Adapter:     newScriptedAdapter(anAccepted("NOQUERY")),
-		InvoicePort: port,
-		Limiter:     submission.NewRateLimiter(),
-		RateLimit:   60,
-		Queue:       newQueueClient(f.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              f.app,
+		Adapter:           newScriptedAdapter(anAccepted("NOQUERY")),
+		InvoicePort:       port,
+		Limiter:           submission.NewRateLimiter(),
+		RateLimit:         60,
+		Queue:             newQueueClient(f.app),
 	}
 	if err := w.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{
 		TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey,

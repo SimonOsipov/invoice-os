@@ -93,6 +93,13 @@ func runEffects(m *testing.M) int {
 		return 1
 	}
 
+	if err := seedInvoiceTypes(ctx, mig); err != nil {
+		app.Close()
+		mig.Close()
+		fmt.Fprintln(os.Stderr, "effects suite:", err)
+		return 1
+	}
+
 	fx = &effectsFixture{app: app, mig: mig}
 	code := m.Run()
 
@@ -100,6 +107,19 @@ func runEffects(m *testing.M) int {
 	app.Close()
 	mig.Close()
 	return code
+}
+
+// seedInvoiceTypes makes SubmitWorker's invoice-type self-check pass for every Work test:
+// it adds any of the three codes the dev DB's invoice-types list lacks and leaves the rest.
+func seedInvoiceTypes(ctx context.Context, mig *pgxpool.Pool) error {
+	for code, label := range map[string]string{"380": "Credit Note", "381": "Commercial Invoice", "384": "Debit Note"} {
+		if _, err := mig.Exec(ctx,
+			`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', $1, $2::jsonb) ON CONFLICT DO NOTHING`,
+			code, fmt.Sprintf(`[{"code":%q,"value":%q}]`, code, label)); err != nil {
+			return fmt.Errorf("seed invoice-types %s: %w", code, err)
+		}
+	}
+	return nil
 }
 
 // createEffectsTable builds the test-only side-effect table as the migrator/owner. It is

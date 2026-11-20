@@ -24,6 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func TestRLS_StaffJobsListReadsEveryTenant(t *testing.T) {
@@ -333,7 +334,8 @@ func TestRLS_RedrivenJobRunsTheNormalWorkerPath(t *testing.T) {
 		t.Fatal("Redrive left no river_job_id")
 	}
 	sw := &submission.SubmitWorker{
-		Pool: r.app, Adapter: acceptAdapter{}, InvoicePort: invoice.NewStore(r.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              r.app, Adapter: acceptAdapter{}, InvoicePort: invoice.NewStore(r.app),
 		Limiter: submission.NewRateLimiter(), RateLimit: 1000, Logger: slog.Default(),
 	}
 	job := &river.Job[submission.SubmitArgs]{JobRow: &rivertype.JobRow{ID: newID, Attempt: 1, MaxAttempts: 8}, Args: r.args}
@@ -1015,7 +1017,8 @@ func TestRLS_CancelledJobShortCircuitsTheWorker(t *testing.T) {
 	}
 	adapter := &countingAdapter{}
 	sw := &submission.SubmitWorker{
-		Pool: r.app, Adapter: adapter, InvoicePort: invoice.NewStore(r.app),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              r.app, Adapter: adapter, InvoicePort: invoice.NewStore(r.app),
 		Limiter: submission.NewRateLimiter(), RateLimit: 1000, Logger: slog.Default(),
 	}
 	job := &river.Job[submission.SubmitArgs]{JobRow: &rivertype.JobRow{ID: riverID, Attempt: 1, MaxAttempts: 8}, Args: r.args}

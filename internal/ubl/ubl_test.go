@@ -238,15 +238,15 @@ func TestRender_DeclaresTheBISProfileConstants(t *testing.T) {
 	}
 }
 
-// wantTypeCodes holds the values of submission.InvoiceTypeCode (document_type.go).
+// wantTypeCodes holds the UNTDID 1001 codes PEPPOL BIS 3.0 uses, not the NRS list's (BUG-37).
 var wantTypeCodes = []struct {
 	docType submission.DocumentType
 	code    string
 }{
-	{submission.CommercialInvoice, "381"},
-	{submission.CreditNote, "380"},
-	{submission.DebitNote, "384"},
-	{"bogus_type", "381"},
+	{submission.CommercialInvoice, "380"},
+	{submission.CreditNote, "381"},
+	{submission.DebitNote, "383"},
+	{"bogus_type", "380"},
 }
 
 func TestRender_KeepsTheInvoice2RootForEveryType(t *testing.T) {

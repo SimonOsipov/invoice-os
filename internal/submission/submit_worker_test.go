@@ -63,6 +63,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,6 +79,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // --- seeding (own, unexported, duplicated -- [mapper-lives-in-03]) --------------------
@@ -758,12 +760,13 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 // function's signature keeps all 23 of 05's existing call sites unchanged.
 func newTestWorker(pool *pgxpool.Pool, adapter submission.Adapter) *submission.SubmitWorker {
 	return &submission.SubmitWorker{
-		Pool:        pool,
-		Adapter:     adapter,
-		InvoicePort: testInvoicePort{},
-		Limiter:     submission.NewRateLimiter(),
-		RateLimit:   60,
-		Queue:       newQueueClient(pool),
+		InvoiceTypeLabels: codelist.LabelsTx,
+		Pool:              pool,
+		Adapter:           adapter,
+		InvoicePort:       testInvoicePort{},
+		Limiter:           submission.NewRateLimiter(),
+		RateLimit:         60,
+		Queue:             newQueueClient(pool),
 	}
 }
 
@@ -2325,5 +2328,122 @@ func TestSubmitWorker_AlreadyClearedWinsBeforeTheContentCheck(t *testing.T) {
 	exchanges := wjExchanges(t, f, tenantID, wj.id)
 	if len(exchanges) != 1 || exchanges[0].outcome != "skipped_already_cleared" {
 		t.Errorf("app_exchange rows = %+v, want exactly one skipped_already_cleared row", exchanges)
+	}
+}
+
+// --- BUG-37 AC-2 -------------------------------------------------------------------------
+
+// setInvoiceTypesList replaces the global synced invoice-types list (code -> stored entries
+// JSON) and restores the previous rows on cleanup. nrs_codes has no tenant and no RLS.
+func setInvoiceTypesList(t *testing.T, f *effectsFixture, entries map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := f.mig.Query(ctx, `SELECT code, entries FROM nrs_codes WHERE list = 'invoice-types'`)
+	if err != nil {
+		t.Fatalf("read invoice-types: %v", err)
+	}
+	saved := map[string]string{}
+	for rows.Next() {
+		var code, entries string
+		if err := rows.Scan(&code, &entries); err != nil {
+			t.Fatalf("scan invoice-types: %v", err)
+		}
+		saved[code] = entries
+	}
+	rows.Close()
+	put := func(set map[string]string) {
+		if _, err := f.mig.Exec(ctx, `DELETE FROM nrs_codes WHERE list = 'invoice-types'`); err != nil {
+			t.Fatalf("clear invoice-types: %v", err)
+		}
+		for code, entries := range set {
+			if _, err := f.mig.Exec(ctx,
+				`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', $1, $2::jsonb)`,
+				code, entries); err != nil {
+				t.Fatalf("insert invoice-types %s: %v", code, err)
+			}
+		}
+	}
+	t.Cleanup(func() { put(saved) })
+	put(entries)
+}
+
+// labelledList stores each code with one entry carrying the given NRS label.
+func labelledList(labels map[string]string) map[string]string {
+	out := map[string]string{}
+	for code, label := range labels {
+		out[code] = fmt.Sprintf(`[{"code":%q,"value":%q}]`, code, label)
+	}
+	return out
+}
+
+// A commercial invoice maps to 381; the submission must not go out unless the synced list
+// confirms 381 is "Commercial Invoice", and the failure names the code and the label found.
+func TestSubmitWorker_InvoiceTypeCodeIsCheckedAgainstTheSyncedList(t *testing.T) {
+	synced := map[string]string{"380": "Credit Note", "381": "Commercial Invoice", "384": "Debit Note"}
+	tests := []struct {
+		name      string
+		list      map[string]string
+		wantSent  bool
+		wantInErr []string
+	}{
+		{"list matches: the submission goes out", labelledList(synced), true, nil},
+		{"list not synced", labelledList(map[string]string{}), false, []string{"381"}},
+		{"381 absent from the list", labelledList(map[string]string{"380": "Credit Note", "384": "Debit Note"}), false, []string{"381"}},
+		{"381 labelled differently", labelledList(map[string]string{"380": "Credit Note", "381": "Self Billed Invoice", "384": "Debit Note"}),
+			false, []string{"381", "Self Billed Invoice"}},
+		{"a list with extra codes still passes", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice",
+			"384": "Debit Note", "385": "Self Billed Invoice", "396": "Invoice Request"}), true, nil},
+		{"380 absent: the credit-note code is checked too", labelledList(map[string]string{"381": "Commercial Invoice", "384": "Debit Note"}),
+			false, []string{"380", "Credit Note"}},
+		{"384 absent: the debit-note code is checked too", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice"}),
+			false, []string{"384", "Debit Note"}},
+		{"label differs only in case", labelledList(map[string]string{"380": "Credit Note", "381": "commercial invoice", "384": "Debit Note"}),
+			false, []string{"381", "commercial invoice"}},
+		{"label differs only by trailing space", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice ", "384": "Debit Note"}),
+			false, []string{"381"}},
+		{"381 entry has no value key", map[string]string{"380": `[{"code":"380","value":"Credit Note"}]`,
+			"381": `[{"code":"381"}]`, "384": `[{"code":"384","value":"Debit Note"}]`}, false, []string{"381", "none"}},
+		{"label is the first of several entries for the code", map[string]string{"380": `[{"code":"380","value":"Credit Note"}]`,
+			"381": `[{"code":"381","value":"Commercial Invoice"},{"code":"381","value":"Other"}]`,
+			"384": `[{"code":"384","value":"Debit Note"}]`}, true, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := requireExchangeDB(t)
+			tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+			defer cleanup()
+			setInvoiceTypesList(t, f, tc.list)
+
+			idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+			adapter := newScriptedAdapter(scriptedOutcome{
+				result:   submission.Accepted{IRN: "NG-1", CSID: "CSID-1", QRPayload: "QR-1"},
+				evidence: submission.Evidence{ReachedWire: true},
+			})
+			w := newTestWorker(f.app, adapter)
+			err := w.Work(context.Background(), newSubmitJob(1, 1, 8,
+				submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey}))
+
+			if tc.wantSent {
+				if err != nil || adapter.calls() != 1 {
+					t.Fatalf("matching list: err=%v submit calls=%d, want nil and 1", err, adapter.calls())
+				}
+				return
+			}
+			if got := adapter.calls(); got != 0 {
+				t.Errorf("adapter.Submit call count = %d, want 0: a submission with an unconfirmed type code must not go out", got)
+			}
+			if err == nil {
+				t.Fatal("Work returned nil, want an error naming the type code")
+			}
+			msg := err.Error()
+			if wj, ok := wjTry(t, f, tenantID, idemKey); ok && wj.lastError != nil {
+				msg += " | " + *wj.lastError
+			}
+			for _, want := range tc.wantInErr {
+				if !strings.Contains(msg, want) {
+					t.Errorf("failure %q does not name %q", msg, want)
+				}
+			}
+		})
 	}
 }

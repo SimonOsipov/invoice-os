@@ -17,6 +17,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 // --- the skipped closure -----------------------------------------------------------------
@@ -265,7 +266,8 @@ func TestAuditNumberAdversarial_EachWorkerFreezesItsOwnReadOfTheNumber(t *testin
 		adapter := newScriptedAdapter(anAccepted("FREEZE-SUBMIT"))
 		adapter.onSubmit = func() { rename(t, tenantID, invoiceID, after) }
 		w := &submission.SubmitWorker{
-			Pool: f.app, Adapter: adapter, InvoicePort: testInvoicePort{},
+			InvoiceTypeLabels: codelist.LabelsTx,
+			Pool:              f.app, Adapter: adapter, InvoicePort: testInvoicePort{},
 			Limiter: submission.NewRateLimiter(), RateLimit: 60, Queue: newQueueClient(f.app),
 		}
 		if err := w.Work(ctx, newSubmitJob(40, 1, 8, submission.SubmitArgs{

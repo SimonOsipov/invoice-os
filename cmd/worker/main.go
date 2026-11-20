@@ -114,6 +114,8 @@ func main() {
 		Limiter:     limiter,
 		RateLimit:   rateLimit,
 		Logger:      app.Logger,
+
+		InvoiceTypeLabels: codelist.LabelsTx,
 	}
 	pw := &submission.PollWorker{
 		Pool:        pool,

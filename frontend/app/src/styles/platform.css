@@ -303,7 +303,8 @@ pre.pf-json {
 }
 
 /* The rules table card needs 790px plus border and scrollbar beside the 244px rail and
-   18px gap, inside the 252px sidebar and 72px page padding; below 1400px the rail stacks above it. */
+   18px gap, inside the 252px sidebar and 72px page padding; below 1400px the rail stacks above it.
+   rules.spec.ts "the Rules table fits its card at laptop widths with the On column in view" pins it. */
 @media (max-width: 1399px) {
   .pf-rules-grid {
     grid-template-columns: minmax(0, 1fr) !important;

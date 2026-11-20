@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { Component, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuthedFetch } from './portfolio'
 import { useCustomRuleNames } from './useCustomRuleNames'
+
+// A hook that throws on a failed read unmounts here; a result held from before the throw would hide it.
+class Catch extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? <span data-testid="hook-threw" /> : this.props.children
+  }
+}
 
 beforeEach(() => vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test'))
 afterEach(() => vi.unstubAllEnvs())
@@ -19,8 +31,12 @@ describe('useCustomRuleNames', () => {
     const bad = vi.fn(async () => {
       throw new Error('boom')
     })
-    const b = renderHook(() => useCustomRuleNames(bad as unknown as AuthedFetch))
+    const b = renderHook(() => useCustomRuleNames(bad as unknown as AuthedFetch), { wrapper: Catch })
     await waitFor(() => expect(bad).toHaveBeenCalled())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(document.querySelector('[data-testid="hook-threw"]')).toBeNull()
     expect(b.result.current).toEqual({})
 
     vi.stubEnv('VITE_GATEWAY_URL', '')

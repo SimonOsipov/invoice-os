@@ -417,9 +417,10 @@ describe('ReviewInvoicesTab: the review prototype look (RESKIN2-04-04)', () => {
     const pills = await screen.findAllByTestId('review-rail-pill')
     expect(pills).toHaveLength(3)
     const byTitle = (t: string) => pills.find((p) => p.getAttribute('title') === t) as HTMLElement
-    await waitFor(() => expect(byTitle(a).textContent).toMatch(/^PO required/))
-    expect(byTitle(b).textContent).toMatch(/^Buyer email required/)
-    expect(byTitle('vat-standard-rate').textContent).toMatch(/^vat-standard-rate/)
+    const label = (t: string) => byTitle(t).firstElementChild?.textContent
+    await waitFor(() => expect(label(a)).toBe('PO required'))
+    expect(label(b)).toBe('Buyer email required')
+    expect(label('vat-standard-rate')).toBe('vat-standard-rate')
     expect(byTitle(a).style.maxWidth).toBe('100%')
   })
 
@@ -428,7 +429,36 @@ describe('ReviewInvoicesTab: the review prototype look (RESKIN2-04-04)', () => {
     renderTab()
     await screen.findByText('INV-A')
     const pills = await screen.findAllByTestId('review-rail-pill')
-    expect(pills.find((p) => p.getAttribute('title') === a)?.textContent).toMatch(/^Custom rule/)
+    expect(pills.find((p) => p.getAttribute('title') === a)?.firstElementChild?.textContent).toBe('Custom rule')
+  })
+
+  it('an opened row passes the names to its fix cards', async () => {
+    const a = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const failed = row({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      status: 'failed',
+      violations: [{ rule_key: a, severity: 'error', message: 'This custom rule could not be evaluated on this invoice.', path: 'buyer.tin' }],
+      rule_set_version: 3,
+      rule_set_version_id: 'rsv-3',
+    })
+    const detail = { ...failed, verdict_stale: false, can_edit: false, can_revalidate: true, revalidate_blocked_reason: null }
+    const json = (body: unknown) => Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(body) })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.endsWith('/custom-rules/names')) return json({ names: { [a]: 'PO required' } })
+        if (url.includes('/violation-summary')) return json({ rules: [{ rule_key: a, invoices: 1 }] })
+        if (url.endsWith('/invoices/inv-a')) return json(detail)
+        return Promise.resolve(listResponse([failed], { limit: 50, offset: 0, total: 1 }))
+      }),
+    )
+    renderTab()
+    fireEvent.click(await screen.findByText('INV-A'))
+    const cards = await screen.findAllByTestId('review-fix-card')
+    expect(cards).toHaveLength(1)
+    await waitFor(() => expect((cards[0].firstElementChild?.lastElementChild as HTMLElement).textContent).toBe('PO required'))
+    expect((cards[0].firstElementChild?.lastElementChild as HTMLElement).getAttribute('title')).toBe(a)
   })
 
   it('the bulk bar follows the review prototype', async () => {

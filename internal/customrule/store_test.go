@@ -1790,6 +1790,29 @@ func TestCustomRules_RangeBoundsRefusedAfterTheAdminCheck(t *testing.T) {
 	}
 }
 
+func TestCustomRules_RangeBoundsCompareAsSignedDecimals(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule range decimals")
+	fc := &fakeCheck{}
+	store := customrule.NewStore(app, fc.fn)
+	refused := []string{`{"min":-5,"max":-10}`, `{"min":0.3,"max":0.1}`, `{"min":1e2,"max":99.99}`}
+	for _, params := range refused {
+		_, err := store.Create(ws.admin, rangeInput(params))
+		if _, ok := asInvalid(err); !ok {
+			t.Errorf("Create %s err = %v, want the bounds InvalidError", params, err)
+		}
+	}
+	accepted := []string{`{"min":-10,"max":-5}`, `{"min":0.1,"max":0.3}`, `{"min":99.99,"max":1e2}`}
+	for _, params := range accepted {
+		if _, err := store.Create(ws.admin, rangeInput(params)); err != nil {
+			t.Errorf("Create %s err = %v, want nil", params, err)
+		}
+	}
+	if n := fc.calls.Load(); n != int32(len(accepted)) {
+		t.Errorf("check calls = %d, want %d (only the accepted bodies reach it)", n, len(accepted))
+	}
+}
+
 func TestCustomRules_NamesAreTheLatestRevisionsMessage(t *testing.T) {
 	super, app := dbTestPools(t)
 	ws := seedWorkspace(t, super, "customrule names edit")

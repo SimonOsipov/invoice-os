@@ -2331,9 +2331,9 @@ func TestSubmitWorker_AlreadyClearedWinsBeforeTheContentCheck(t *testing.T) {
 
 // --- BUG-37 AC-2 -------------------------------------------------------------------------
 
-// setInvoiceTypesList replaces the global synced invoice-types list (code -> NRS label) and
-// restores the previous rows on cleanup. nrs_codes has no tenant and no RLS.
-func setInvoiceTypesList(t *testing.T, f *effectsFixture, labels map[string]string) {
+// setInvoiceTypesList replaces the global synced invoice-types list (code -> stored entries
+// JSON) and restores the previous rows on cleanup. nrs_codes has no tenant and no RLS.
+func setInvoiceTypesList(t *testing.T, f *effectsFixture, entries map[string]string) {
 	t.Helper()
 	ctx := context.Background()
 	rows, err := f.mig.Query(ctx, `SELECT code, entries FROM nrs_codes WHERE list = 'invoice-types'`)
@@ -2362,11 +2362,16 @@ func setInvoiceTypesList(t *testing.T, f *effectsFixture, labels map[string]stri
 		}
 	}
 	t.Cleanup(func() { put(saved) })
-	fresh := map[string]string{}
+	put(entries)
+}
+
+// labelledList stores each code with one entry carrying the given NRS label.
+func labelledList(labels map[string]string) map[string]string {
+	out := map[string]string{}
 	for code, label := range labels {
-		fresh[code] = fmt.Sprintf(`[{"code":%q,"value":%q}]`, code, label)
+		out[code] = fmt.Sprintf(`[{"code":%q,"value":%q}]`, code, label)
 	}
-	put(fresh)
+	return out
 }
 
 // A commercial invoice maps to 381; the submission must not go out unless the synced list
@@ -2379,11 +2384,26 @@ func TestSubmitWorker_InvoiceTypeCodeIsCheckedAgainstTheSyncedList(t *testing.T)
 		wantSent  bool
 		wantInErr []string
 	}{
-		{"list matches: the submission goes out", synced, true, nil},
-		{"list not synced", map[string]string{}, false, []string{"381"}},
-		{"381 absent from the list", map[string]string{"380": "Credit Note", "384": "Debit Note"}, false, []string{"381"}},
-		{"381 labelled differently", map[string]string{"380": "Credit Note", "381": "Self Billed Invoice", "384": "Debit Note"},
+		{"list matches: the submission goes out", labelledList(synced), true, nil},
+		{"list not synced", labelledList(map[string]string{}), false, []string{"381"}},
+		{"381 absent from the list", labelledList(map[string]string{"380": "Credit Note", "384": "Debit Note"}), false, []string{"381"}},
+		{"381 labelled differently", labelledList(map[string]string{"380": "Credit Note", "381": "Self Billed Invoice", "384": "Debit Note"}),
 			false, []string{"381", "Self Billed Invoice"}},
+		{"a list with extra codes still passes", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice",
+			"384": "Debit Note", "385": "Self Billed Invoice", "396": "Invoice Request"}), true, nil},
+		{"380 absent: the credit-note code is checked too", labelledList(map[string]string{"381": "Commercial Invoice", "384": "Debit Note"}),
+			false, []string{"380", "Credit Note"}},
+		{"384 absent: the debit-note code is checked too", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice"}),
+			false, []string{"384", "Debit Note"}},
+		{"label differs only in case", labelledList(map[string]string{"380": "Credit Note", "381": "commercial invoice", "384": "Debit Note"}),
+			false, []string{"381", "commercial invoice"}},
+		{"label differs only by trailing space", labelledList(map[string]string{"380": "Credit Note", "381": "Commercial Invoice ", "384": "Debit Note"}),
+			false, []string{"381"}},
+		{"381 entry has no value key", map[string]string{"380": `[{"code":"380","value":"Credit Note"}]`,
+			"381": `[{"code":"381"}]`, "384": `[{"code":"384","value":"Debit Note"}]`}, false, []string{"381", "none"}},
+		{"label is the first of several entries for the code", map[string]string{"380": `[{"code":"380","value":"Credit Note"}]`,
+			"381": `[{"code":"381","value":"Commercial Invoice"},{"code":"381","value":"Other"}]`,
+			"384": `[{"code":"384","value":"Debit Note"}]`}, true, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -29,32 +29,36 @@ func InvoiceTypeCode(t DocumentType) string {
 	}
 }
 
-// invoiceTypeLabels is what the synced invoice-types list must say for each code InvoiceTypeCode returns.
-var invoiceTypeLabels = map[DocumentType]string{
-	CommercialInvoice: "Commercial Invoice",
-	CreditNote:        "Credit Note",
-	DebitNote:         "Debit Note",
+// invoiceTypeLabels is what the synced invoice-types list must say for each code InvoiceTypeCode
+// returns. A slice, so the first failure reported is the same every run.
+var invoiceTypeLabels = []struct {
+	docType DocumentType
+	label   string
+}{
+	{CommercialInvoice, "Commercial Invoice"},
+	{CreditNote, "Credit Note"},
+	{DebitNote, "Debit Note"},
 }
 
 // CheckInvoiceTypeCodes fails unless the synced invoice-types list labels every code
 // InvoiceTypeCode returns as expected. There is no fallback: an unsynced list fails too.
 func CheckInvoiceTypeCodes(ctx context.Context, tx pgx.Tx) error {
 	codes := make([]string, 0, len(invoiceTypeLabels))
-	for t := range invoiceTypeLabels {
-		codes = append(codes, InvoiceTypeCode(t))
+	for _, e := range invoiceTypeLabels {
+		codes = append(codes, InvoiceTypeCode(e.docType))
 	}
 	got, err := codelist.LabelsTx(ctx, tx, "invoice-types", codes)
 	if err != nil {
 		return err
 	}
-	for t, want := range invoiceTypeLabels {
-		code := InvoiceTypeCode(t)
-		if got[code] != want {
+	for _, e := range invoiceTypeLabels {
+		code := InvoiceTypeCode(e.docType)
+		if got[code] != e.label {
 			found := "none (code absent or invoice-types list not synced)"
 			if l, ok := got[code]; ok {
 				found = fmt.Sprintf("%q", l)
 			}
-			return fmt.Errorf("submission: NRS invoice type code %s must be %q in the synced invoice-types list, found %s", code, want, found)
+			return fmt.Errorf("submission: NRS invoice type code %s must be %q in the synced invoice-types list, found %s", code, e.label, found)
 		}
 	}
 	return nil

@@ -63,6 +63,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2325,5 +2326,102 @@ func TestSubmitWorker_AlreadyClearedWinsBeforeTheContentCheck(t *testing.T) {
 	exchanges := wjExchanges(t, f, tenantID, wj.id)
 	if len(exchanges) != 1 || exchanges[0].outcome != "skipped_already_cleared" {
 		t.Errorf("app_exchange rows = %+v, want exactly one skipped_already_cleared row", exchanges)
+	}
+}
+
+// --- BUG-37 AC-2 -------------------------------------------------------------------------
+
+// setInvoiceTypesList replaces the global synced invoice-types list (code -> NRS label) and
+// restores the previous rows on cleanup. nrs_codes has no tenant and no RLS.
+func setInvoiceTypesList(t *testing.T, f *effectsFixture, labels map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := f.mig.Query(ctx, `SELECT code, entries FROM nrs_codes WHERE list = 'invoice-types'`)
+	if err != nil {
+		t.Fatalf("read invoice-types: %v", err)
+	}
+	saved := map[string]string{}
+	for rows.Next() {
+		var code, entries string
+		if err := rows.Scan(&code, &entries); err != nil {
+			t.Fatalf("scan invoice-types: %v", err)
+		}
+		saved[code] = entries
+	}
+	rows.Close()
+	put := func(set map[string]string) {
+		if _, err := f.mig.Exec(ctx, `DELETE FROM nrs_codes WHERE list = 'invoice-types'`); err != nil {
+			t.Fatalf("clear invoice-types: %v", err)
+		}
+		for code, entries := range set {
+			if _, err := f.mig.Exec(ctx,
+				`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', $1, $2::jsonb)`,
+				code, entries); err != nil {
+				t.Fatalf("insert invoice-types %s: %v", code, err)
+			}
+		}
+	}
+	t.Cleanup(func() { put(saved) })
+	fresh := map[string]string{}
+	for code, label := range labels {
+		fresh[code] = fmt.Sprintf(`[{"code":%q,"value":%q}]`, code, label)
+	}
+	put(fresh)
+}
+
+// A commercial invoice maps to 381; the submission must not go out unless the synced list
+// confirms 381 is "Commercial Invoice", and the failure names the code and the label found.
+func TestSubmitWorker_InvoiceTypeCodeIsCheckedAgainstTheSyncedList(t *testing.T) {
+	synced := map[string]string{"380": "Credit Note", "381": "Commercial Invoice", "384": "Debit Note"}
+	tests := []struct {
+		name      string
+		list      map[string]string
+		wantSent  bool
+		wantInErr []string
+	}{
+		{"list matches: the submission goes out", synced, true, nil},
+		{"list not synced", map[string]string{}, false, []string{"381"}},
+		{"381 absent from the list", map[string]string{"380": "Credit Note", "384": "Debit Note"}, false, []string{"381"}},
+		{"381 labelled differently", map[string]string{"380": "Credit Note", "381": "Self Billed Invoice", "384": "Debit Note"},
+			false, []string{"381", "Self Billed Invoice"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := requireExchangeDB(t)
+			tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+			defer cleanup()
+			setInvoiceTypesList(t, f, tc.list)
+
+			idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+			adapter := newScriptedAdapter(scriptedOutcome{
+				result:   submission.Accepted{IRN: "NG-1", CSID: "CSID-1", QRPayload: "QR-1"},
+				evidence: submission.Evidence{ReachedWire: true},
+			})
+			w := newTestWorker(f.app, adapter)
+			err := w.Work(context.Background(), newSubmitJob(1, 1, 8,
+				submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey}))
+
+			if tc.wantSent {
+				if err != nil || adapter.calls() != 1 {
+					t.Fatalf("matching list: err=%v submit calls=%d, want nil and 1", err, adapter.calls())
+				}
+				return
+			}
+			if got := adapter.calls(); got != 0 {
+				t.Errorf("adapter.Submit call count = %d, want 0: a submission with an unconfirmed type code must not go out", got)
+			}
+			if err == nil {
+				t.Fatal("Work returned nil, want an error naming the type code")
+			}
+			msg := err.Error()
+			if wj, ok := wjTry(t, f, tenantID, idemKey); ok && wj.lastError != nil {
+				msg += " | " + *wj.lastError
+			}
+			for _, want := range tc.wantInErr {
+				if !strings.Contains(msg, want) {
+					t.Errorf("failure %q does not name %q", msg, want)
+				}
+			}
+		})
 	}
 }

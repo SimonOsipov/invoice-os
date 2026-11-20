@@ -3710,7 +3710,7 @@ test('detail surface: an unstaffed seat sees no decision block, and the approval
   // The real backend, over the real wire: this invoice's total sits below both firm
   // conditions, so materialise emits fin_mgr (ord0) then compliance (ord1), both pending.
   // The e2e member holds neither seat, so the lowest-ord pending check (fin_mgr) fails and
-  // both controls are not rendered (BUG-168), the AXIS-2 sentence (handlers.go:394) reaching
+  // both controls are not rendered (BUG-168), the AXIS-2 sentence (approvalGate in handlers.go) reaching
   // the browser on the wire only ([reason-text-disappears]). NOT a duplicate of
   // InvoiceDetail.test.tsx, which parametrizes all five gate sentences against a mock and
   // never leaves it.

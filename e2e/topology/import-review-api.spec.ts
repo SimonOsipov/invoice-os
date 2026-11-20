@@ -1,11 +1,27 @@
 // The import review table on a batch minted through the API, with no AI.
 import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
-import { login, createEntity, createImportBatchFromCsv, listInvoices, uploadDocument, buildForm, importFetch, type ImportBatchResult } from '../api/client'
+import {
+  login,
+  createCustomRule,
+  createEntity,
+  createImportBatchFromCsv,
+  deleteCustomRule,
+  listInvoices,
+  offboardEntity,
+  uploadDocument,
+  buildForm,
+  importFetch,
+  type CustomRule,
+  type CustomRuleInput,
+  type Entity,
+  type ImportBatchResult,
+} from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
+import { enclosesRect, PHONE_WIDTHS, settleAnimations, WIDE_WIDTHS } from './layout'
 import { approveOpenRunsForEntity, collectErrors, shardPersonas } from './importWizardShared'
 import { APP_URL } from './targets'
 
@@ -577,6 +593,105 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(marked).toHaveCount(1)
     await expect(page.getByTestId('sheet-row-number')).toHaveCount(1)
     await expect(marked.getByTestId('sheet-row-number')).toHaveText('4')
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe.serial('custom rule names on the review', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  const RUN = Date.now()
+  const NAME_A = `Due date needed ${RUN}`
+  // Over 60 characters.
+  const NAME_B = `Buyer email needed on every invoice sent to a client of this practice ${RUN}`
+  const rules: CustomRule[] = []
+  let token: string
+  let entity: Entity
+  let batch: ImportBatchResult
+
+  const input = (target: string, message: string): CustomRuleInput => ({
+    entity_id: entity.id,
+    type: 'required',
+    target,
+    params: {},
+    severity: 'error',
+    message,
+    enabled: true,
+  })
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+    entity = await createEntity(token, { name: `BUG-36 review names ${RUN}`, tin: freshTin() })
+    rules.push(await createCustomRule(token, input('due_date', NAME_A)), await createCustomRule(token, input('buyer.email', NAME_B)))
+    // The clean CSV has no Due Date or Buyer Email column, so both rules fire at import.
+    batch = await createImportBatchFromCsv(token, entity.id, { csv: buildCleanCsv('INV-BUG36'), filename: 'review-names.csv', mapping: PERF_MAPPING })
+  })
+
+  test.afterAll(async () => {
+    for (const r of rules) await deleteCustomRule(token, r.id).catch(() => undefined)
+    // There is no entity delete; offboarding takes it out of the client list.
+    if (entity) await offboardEntity(token, entity.id).catch(() => undefined)
+  })
+
+  test('(fixture check) the clean-CSV batch lists both custom keys', async ({ page }) => {
+    test.setTimeout(180_000)
+    const { summary } = await openReview(page, [batch.id], batch.ready_invoices)
+    const keys = summary.rules.map((r) => r.rule_key)
+    for (const rule of rules) expect(keys, `${rule.key} is in the batch violation summary`).toContain(rule.key)
+  })
+
+  test('the review rail and fix cards name two custom rules', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+    await openReview(page, [batch.id], batch.ready_invoices)
+
+    const names = [NAME_A, NAME_B]
+    for (const [i, rule] of rules.entries()) {
+      const pill = page.getByTestId('review-rail-pill').and(page.locator(`[title="${rule.key}"]`))
+      await expect(pill, `the rail pill for ${rule.key}`).toBeVisible()
+      await expect(pill.locator('> span').first(), 'the pill reads the name').toHaveText(names[i])
+    }
+
+    await page.getByTestId('review-row').first().click()
+    for (const [i, rule] of rules.entries()) {
+      const key = page.getByTestId('review-fix-card').locator(`[title="${rule.key}"]`)
+      await expect(key, `the fix card for ${rule.key}`).toBeVisible()
+      await expect(key, 'the fix card reads the name').toHaveText(names[i])
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('the review rail pill stays inside the rail', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+    await openReview(page, [batch.id], batch.ready_invoices)
+    const rail = page.getByTestId('review-rail')
+    const pill = page.getByTestId('review-rail-pill').and(page.locator(`[title="${rules[1].key}"]`))
+    await expect(pill).toBeVisible()
+
+    const entry = page.viewportSize()
+    try {
+      for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+        await page.setViewportSize({ width, height: width <= 767 ? 844 : 1080 })
+        await expect
+          .poll(
+            async () => {
+              await settleAnimations(rail, pill)
+              const [railBox, pillBox] = await Promise.all([rail.boundingBox(), pill.boundingBox()])
+              if (!railBox || !pillBox) return 'the rail or the pill has no box'
+              if (!enclosesRect(railBox, pillBox, 1)) return `the pill ${JSON.stringify(pillBox)} is outside the rail ${JSON.stringify(railBox)}`
+              const over = await page.locator('main.pf-main .pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth)
+              return over <= 1 ? 'ok' : `the page column scrolls sideways by ${over}px`
+            },
+            { message: `the long-name pill inside the rail at ${width}px`, timeout: 10_000 },
+          )
+          .toBe('ok')
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

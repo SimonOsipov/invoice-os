@@ -5,11 +5,16 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   createCustomRule,
   createEntity,
+  createInvoice,
   deleteCustomRule,
   getGoldenRules,
   listCustomRules,
   login,
+  offboardEntity,
+  updateCustomRule,
+  validateInvoice,
   type CustomRule,
+  type CustomRuleInput,
   type Entity,
   type Persona,
 } from '../api/client'
@@ -27,7 +32,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
-import { shardTenants } from './targets'
+import { APP_URL, shardTenants } from './targets'
 
 const SHARD = shardTenants('rules.spec.ts')
 const ADMIN: Persona = { ...SHARD.a, tenantId: SHARD.a.id }
@@ -46,6 +51,8 @@ const ENTITY_NAME = `ENGI-15 Rules ${RUN} Consolidated Holdings and Trading Part
 
 let admin: string
 let entity: Entity
+// The two-named-rules entity of the naming tests; its own, so the rule counts above stay as seeded.
+let named: Entity | undefined
 
 test.beforeAll(async () => {
   expect(test.info().project.name, 'rules.spec.ts belongs to the invoice-surfaces shard').toBe('invoice-surfaces')
@@ -66,8 +73,12 @@ test.beforeAll(async () => {
 
 // Every rule written for this spec's client is removed, whichever test wrote it.
 test.afterAll(async () => {
-  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id || r.message === CLIENT_RULE_MESSAGE)
+  const mine = (await listCustomRules(admin)).filter(
+    (r: CustomRule) => r.entity_id === entity.id || r.entity_id === named?.id || r.message === CLIENT_RULE_MESSAGE,
+  )
   for (const r of mine) await deleteCustomRule(admin, r.id).catch(() => undefined)
+  // There is no entity delete; offboarding takes it out of the client list.
+  if (named) await offboardEntity(admin, named.id).catch(() => undefined)
 })
 
 function collectErrors(page: Page, droppers: Dropper[] = []): string[] {
@@ -641,4 +652,98 @@ test('(fixture check) a failed switch prints its error under its own row', async
   })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Two custom rules on one invoice are told apart by name on the surfaces that showed "Custom rule".
+test.describe.serial('custom rule names', () => {
+  // The long message is over 60 characters.
+  const NAME_A = `Due date needed ${RUN}`
+  const NAME_B = `Buyer email needed on every invoice sent to a client of this practice ${RUN}`
+  const RENAMED = `Buyer email now required ${RUN}`
+  const rules: CustomRule[] = []
+  let invoiceId: string
+
+  const input = (target: string, message: string): CustomRuleInput => ({
+    entity_id: named!.id,
+    type: 'required',
+    target,
+    params: {},
+    severity: 'error',
+    message,
+    enabled: true,
+  })
+
+  const detailKey = (page: Page, key: string) => page.getByTestId('violations-table').locator(`[title="${key}"]`)
+
+  async function openDetail(page: Page): Promise<void> {
+    await page.goto(`${APP_URL}/invoices/${invoiceId}`)
+    await expect(page.getByTestId('invoice-detail')).toBeVisible()
+    await expect(page.getByTestId('invoice-status-badge')).toBeVisible()
+  }
+
+  test.beforeAll(async () => {
+    named = await createEntity(admin, { name: `BUG-36 names ${RUN}`, tin: freshTin() })
+    rules.push(await createCustomRule(admin, input('due_date', NAME_A)), await createCustomRule(admin, input('buyer.email', NAME_B)))
+    const invoice = await createInvoice(admin, {
+      entity_id: named.id,
+      invoice_number: `INV-BUG36-${RUN}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      supplier_tin: freshTin(),
+      supplier_name: 'Acme Nigeria Ltd',
+      buyer_tin: '87654321-0002',
+      buyer_name: 'Buyer Ltd',
+      currency: 'NGN',
+      subtotal: '1000',
+      vat: '75',
+      total: '1075',
+      line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+    })
+    invoiceId = invoice.id
+  })
+
+  test('(fixture check) both custom rules fire on the clean-CSV invoice', async () => {
+    const validated = await validateInvoice(admin, invoiceId)
+    const keys = validated.violations.map((v) => v.rule_key)
+    for (const rule of rules) expect(keys, `${rule.key} fires on the invoice with no due date and no buyer email`).toContain(rule.key)
+  })
+
+  test('two custom rules are told apart by name', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+    const [a, b] = rules
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+    await selectEntity(page, named!.name)
+
+    // The dashboard rollup reads the stored verdict, so give it time to count the invoice.
+    for (const [rule, name] of [[a, NAME_A], [b, NAME_B]] as const) {
+      const keyCell = page.locator(`main [title="${rule.key}"]`)
+      await expect(keyCell, `the top failures list ${rule.key}`).toBeVisible({ timeout: 60_000 })
+      await expect(keyCell, 'the key cell reads the name').toHaveText(name)
+      const headline = keyCell.locator('xpath=..').locator('> div').first().locator('> div').first()
+      await expect(headline, 'the headline reads the name').toHaveText(name)
+    }
+
+    await openDetail(page)
+    await expect(detailKey(page, a.key)).toHaveText(NAME_A)
+    await expect(detailKey(page, b.key)).toHaveText(NAME_B)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('a custom violation follows an edit and keeps the last saved name after a delete', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+    const b = rules[1]
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+    await updateCustomRule(admin, b.id, input('buyer.email', RENAMED))
+    await openDetail(page)
+    await expect(detailKey(page, b.key), 'the detail shows the edited name').toHaveText(RENAMED)
+
+    expect(await deleteCustomRule(admin, b.id), 'the rule is deleted').toBe(204)
+    await openDetail(page)
+    await expect(detailKey(page, b.key), 'a deleted rule keeps its last saved name').toHaveText(RENAMED)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

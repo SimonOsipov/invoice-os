@@ -20,11 +20,13 @@ const EMPTY_INVOICES = { invoices: [], pagination: { limit: 50, offset: 0, total
 const EMPTY_PAGE = { invoices: [], pagination: { limit: 50, offset: 0, total: 120 } }
 const EMPTY_ENTITIES = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
 const UNAVAILABLE = { error: 'service unavailable' }
+const CUSTOM_KEY = 'custom:3f2a0000-0000-4000-8000-000000000001'
+const CUSTOM_NAME = 'PO number required' // 18 characters: the 150px key cell holds it
 const VIOLATIONS = [
   { rule_key: 'no-duplicate-invoice-number', invoices: 12345 }, // longest seeded key: ruleKeyDuplicateInvoiceNumber, internal/importer/service.go
   { rule_key: 'buyer-tin-format', invoices: 3 },
   { rule_key: 'vat-standard-rate', invoices: 1 },
-  { rule_key: 'custom:3f2a0000-0000-4000-8000-000000000001', invoices: 2 }, // the key cell draws "Custom rule"
+  { rule_key: CUSTOM_KEY, invoices: 2 }, // the headline and the key cell draw the stubbed name
 ]
 const APPROVALS_LOADING = 'Loading approvals…' // APPROVALS_COPY.loading, frontend/app/src/lib/approvals.ts
 
@@ -442,6 +444,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
     }),
   })
   // Fixture check: the snapshot worker records a row per day, so a gate re-run on a later WAT day holds two.
+  await stubGet(page, (url) => onPath(url, '/api/invoice/v1/custom-rules/names'), { mode: 'empty', empty: { names: { [CUSTOM_KEY]: CUSTOM_NAME } } })
   await stubGet(page, (url) => onPath(url, '/api/dashboard/v1/rollup/history'), { mode: 'empty', empty: { history: [] } })
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('.pf-dash-row-a .pf-grid-2 > div'), 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
@@ -471,10 +474,12 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
   const sentence = needs.locator('p')
   const needsCta = needs.getByRole('button')
   const edges = [page.locator('.pf-dash-row-b > div:nth-child(2)'), page.locator('.pf-dash-row-c > div:nth-child(2)'), page.locator('.pf-grid-2 > div:nth-child(2)')]
-  // The key cell carries the raw key as its title; a custom key's text is the label "Custom rule".
+  // The key cell carries the raw key as its title; a custom key's text is its name.
   const failureKeys = VIOLATIONS.map((v) => page.locator('.pf-dash-row-c').locator(`[title="${v.rule_key}"]`))
   for (const key of failureKeys) await expect(key, 'the injected failure row drew').toBeVisible()
-  await expect(failureKeys[VIOLATIONS.length - 1], 'a custom key reads as "Custom rule"').toHaveText('Custom rule')
+  const customKey = failureKeys[VIOLATIONS.length - 1]
+  await expect(customKey, 'a custom key cell reads its name').toHaveText(CUSTOM_NAME)
+  await expect(customKey.locator('xpath=..').locator('> div').first().locator('> div').first(), 'the custom headline reads its name').toHaveText(CUSTOM_NAME)
 
   const widths = await atWidths(page, 'overview tiles', async () => {
     const problems: string[] = []
@@ -514,7 +519,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
         return { lines: tops.size, clipped: el.scrollWidth > el.clientWidth }
       })
       if (lines !== 1) problems.push(`failure key ${i} draws on ${lines} lines`)
-      if (VIOLATIONS[i].rule_key.startsWith('custom:') && clipped) problems.push(`the Custom rule label is clipped in its key cell (failure key ${i})`)
+      if (VIOLATIONS[i].rule_key.startsWith('custom:') && clipped) problems.push(`the custom rule name is clipped in its key cell (failure key ${i})`)
       const count = await cells.last().evaluate((el) => el.scrollWidth - el.clientWidth)
       if (count > 1) problems.push(`failure count ${i} overflows its cell by ${count}px`)
       rects[`failure row ${i}`] = { row: rowBox, cells: cellBoxes, lines, clipped, countOverflow: count }

@@ -282,9 +282,7 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
           await framesPaint()
           await scrollAndMeasure(`${at} settled`, width)
         } else {
-          await scrollToEnd(width)
-          await page.waitForTimeout(3_000)
-          await measure(at)
+          await scrollAndMeasure(at, width)
         }
       } finally {
         releaseEntities()

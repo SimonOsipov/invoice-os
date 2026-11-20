@@ -246,43 +246,35 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <>
-      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
-
-      {/* Only on a landed roster: over an errored one every role
-          resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
-      {surface === 'roster' && unassigned.length > 0 && (
-        <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
-          {unassignedNotice(unassigned.length)}{' '}
-          <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
-        </AmberNote>
-      )}
-
-      <div data-testid="members-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{ flex: 1 }} />
-        {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
-        {flash && (
-          <span
-            data-testid="members-flash"
-            title={flash.text}
-            style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, color: flash.tone === 'failed' ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
+      {/* Intro left, actions right; wraps rather than squashing the intro on a narrow column. */}
+      <div data-testid="members-actions" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+        <p style={{ flex: '0 1 auto', minWidth: 240, maxWidth: 680, margin: 0, fontSize: 13.5, color: 'var(--fg-2)', lineHeight: 1.6 }}>{INTRO[mode]}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', minWidth: 0 }}>
+          {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
+          {flash && (
+            <span
+              data-testid="members-flash"
+              title={flash.text}
+              style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, color: flash.tone === 'failed' ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
+            >
+              {flash.text}
+            </span>
+          )}
+          {/* The real `disabled` attribute plus the inline recipe: `filter: 'none'` outranks
+              `.v2-btn:hover`'s brightness lift, which nothing in design-tokens guards with `:disabled`. */}
+          <button
+            type="button"
+            disabled={!inviteReady}
+            onClick={openInvite}
+            title={showAdminOnly ? INVITE_ADMIN_ONLY : undefined}
+            aria-describedby={showAdminOnly ? inviteNoteId : listFailed ? invitesErrorId : undefined}
+            data-testid="members-invite"
+            className="v2-btn v2-btn-primary pf-btn"
+            style={{ flex: 'none', height: 36, gap: 7, ...(inviteReady ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }}
           >
-            {flash.text}
-          </span>
-        )}
-        {/* The real `disabled` attribute plus the inline recipe: `filter: 'none'` outranks
-            `.v2-btn:hover`'s brightness lift, which nothing in design-tokens guards with `:disabled`. */}
-        <button
-          type="button"
-          disabled={!inviteReady}
-          onClick={openInvite}
-          title={showAdminOnly ? INVITE_ADMIN_ONLY : undefined}
-          aria-describedby={showAdminOnly ? inviteNoteId : listFailed ? invitesErrorId : undefined}
-          data-testid="members-invite"
-          className="v2-btn v2-btn-primary pf-btn"
-          style={{ flex: 'none', height: 36, gap: 7, ...(inviteReady ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }}
-        >
-          <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Invite people
-        </button>
+            <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Invite people
+          </button>
+        </div>
       </div>
 
       {showAdminOnly && (
@@ -293,6 +285,15 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         >
           {INVITE_ADMIN_ONLY}
         </div>
+      )}
+
+      {/* Only on a landed roster: over an errored one every role
+          resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}{' '}
+          <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
+        </AmberNote>
       )}
 
       <FilterBar testId="members-filter-bar">

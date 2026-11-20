@@ -494,7 +494,7 @@ describe('Roles tab v2 paint', () => {
   it('the intro reads 680 wide at lh 1.6 and the toolbar search is the 300x36 bordered box with a glyph', () => {
     renderCrew()
     const intro = screen.getByText(/A role is a named seat/)
-    expect([intro.style.maxWidth, intro.style.lineHeight, intro.style.margin]).toEqual(['680px', '1.6', '-4px 0px 16px'])
+    expect([intro.style.maxWidth, intro.style.lineHeight, intro.style.margin]).toEqual(['680px', '1.6', '0px'])
     const input = screen.getByTestId('roles-search')
     expect(input.className, 'a bare input inside the wrapper').toBe('')
     const box = input.parentElement as HTMLElement
@@ -520,10 +520,10 @@ describe('Roles tab v2 paint', () => {
     expect([card.style.textAlign, card.style.fontSize, card.style.padding]).toEqual(['center', '12.5px', '26px 16px'])
   })
 
-  it('the unassigned notice sits above the toolbar', () => {
+  it('the unassigned notice sits between the action row and the filter bar', () => {
     renderCrew()
     const note = screen.getByTestId('roles-unassigned')
-    const toolbar = screen.getByTestId('roles-new').parentElement as HTMLElement
+    const toolbar = screen.getByTestId('roles-filter-bar')
     expect(note.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING, 'notice precedes toolbar').toBeTruthy()
   })
 })

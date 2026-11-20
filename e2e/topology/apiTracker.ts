@@ -5,12 +5,15 @@ import { expect, type Page } from '@playwright/test'
 export function trackApi(page: Page): { quiet: (where: string) => Promise<void> } {
   const inflight = new Set<unknown>()
   const isApi = (url: string) => new URL(url).pathname.includes('/api/')
-  page.on('request', (r) => { if (isApi(r.url())) inflight.add(r) })
+  // Chromium emits neither finished nor failed for a request a navigation cuts off, so a new document drops
+  // them. A same-document change (pushState) is no request and keeps them: its /api/ calls are still live.
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) inflight.clear()
+    else if (isApi(r.url())) inflight.add(r)
+  })
   const done = (r: { url(): string }) => inflight.delete(r)
   page.on('requestfinished', done)
   page.on('requestfailed', done)
-  // Chromium emits neither finished nor failed for a request a navigation cuts off.
-  page.on('framenavigated', (f) => { if (f === page.mainFrame()) inflight.clear() })
   return {
     quiet: async (where) => {
       const deadline = Date.now() + 15_000

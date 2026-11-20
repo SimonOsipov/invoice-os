@@ -18,11 +18,13 @@ async function serve(page: Page): Promise<() => void> {
   const gate = new Promise<void>((r) => (release = r))
   await page.route(`${ORIGIN}/**`, async (route) => {
     const { pathname } = new URL(route.request().url())
+    if (pathname === '/api/fast') return route.fulfill({ body: '{}' })
+    if (pathname === '/api/fail') return route.abort()
     if (pathname === '/api/slow') {
       await gate
       return route.fulfill({ body: '{}' }).catch(() => {})
     }
-    return route.fulfill({ contentType: 'text/html', body: page_(pathname === '/firm' ? '/api/slow' : '') })
+    return route.fulfill({ contentType: 'text/html', body: page_(pathname === '/firm' ? '/api/slow' : pathname === '/fast' ? '/api/fast' : pathname === '/failing' ? '/api/fail' : pathname === '/late' ? '/api/slow' : '') })
   })
   return release
 }
@@ -46,6 +48,40 @@ describe('trackApi across a navigation (BUG-165)', () => {
     const api = trackApi(page)
     await page.goto(`${ORIGIN}/firm`)
     await expect(api.quiet('firm / Overview')).rejects.toThrow(/firm \/ Overview: \/api\/ requests still in flight after 15s/)
+    release()
+    await page.close()
+  }, 30_000)
+
+  it('still fails when the SPA changes its URL (pushState) while a slow /api/ request is in flight', async () => {
+    const page = await browser.newPage()
+    const release = await serve(page)
+    const api = trackApi(page)
+    await page.goto(`${ORIGIN}/firm`)
+    await page.waitForTimeout(300)
+    await page.evaluate(() => history.pushState({}, '', '/firm/page-2'))
+    await expect(api.quiet('firm / pushState')).rejects.toThrow(/requests still in flight after 15s \(1\)/)
+    release()
+    await page.close()
+  }, 30_000)
+
+  it('does not count a request that finished or failed', async () => {
+    const page = await browser.newPage()
+    await serve(page)
+    const api = trackApi(page)
+    await page.goto(`${ORIGIN}/fast`)
+    await expect(api.quiet('fast')).resolves.toBeUndefined() // no later navigation clears it for us
+    await page.goto(`${ORIGIN}/failing`)
+    await expect(api.quiet('fast and failed')).resolves.toBeUndefined()
+    await page.close()
+  }, 30_000)
+
+  it('counts a slow request started on the page after the navigation', async () => {
+    const page = await browser.newPage()
+    const release = await serve(page)
+    const api = trackApi(page)
+    await page.goto(`${ORIGIN}/inhouse`)
+    await page.goto(`${ORIGIN}/late`)
+    await expect(api.quiet('late')).rejects.toThrow(/late: \/api\/ requests still in flight after 15s/)
     release()
     await page.close()
   }, 30_000)

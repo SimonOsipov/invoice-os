@@ -210,7 +210,6 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
     await settled(at)
     await scrollToEnd(width)
-    await page.waitForTimeout(3_000)
     await measure(at)
   }
   // Holds a GET until its gate opens; each held request pushes a promise to `served` once fulfilled.

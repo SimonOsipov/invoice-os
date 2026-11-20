@@ -130,6 +130,34 @@ describe('AC-1: RolesView branches on rolesSurface(rolesState, membersState), ne
   })
 })
 
+describe('BUG-167: the intro sentence and New role share one row', () => {
+  it('roles-actions holds both the intro and roles-new, so no empty row sits above the filter', () => {
+    render(<Harness members={[member()]} roles={[role()]} />)
+
+    const row = screen.getByTestId('roles-actions')
+    expect(within(row).getByTestId('roles-new')).toBeTruthy()
+    expect(within(row).getByText(/A role is a named seat/)).toBeTruthy()
+  })
+})
+
+describe('BUG-167: the flash never changes whether the action group wraps', () => {
+  it('the group sizes from the button, not the flash, and the flash can shrink', async () => {
+    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true })]} roles={[role()]} createRole={vi.fn().mockResolvedValue(role({ key: 'b', title: 'Bravo' }))} />)
+    const group = screen.getByTestId('roles-new').parentElement as HTMLElement
+    const before = group.style.flex
+    fireEvent.click(screen.getByTestId('roles-new'))
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Bravo' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    const el = await screen.findByTestId('roles-flash')
+
+    expect(group.style.flex, 'flex-basis does not depend on the flash').toBe(before)
+    expect(before).toMatch(/^1 1 \d+px$/)
+    expect(parseFloat(group.style.minWidth)).toBe(0)
+    expect([parseFloat(el.style.minWidth), el.style.overflow, el.style.textOverflow, el.style.whiteSpace]).toEqual([0, 'hidden', 'ellipsis', 'nowrap'])
+    expect(el.getAttribute('title')).toBe(el.textContent)
+  })
+})
+
 describe('AC-2: ErrorState renders rolesError ?? membersError; retry calls the matching refetch', () => {
   it('retry calls refetchRoles when the roles fetch is the one that failed', () => {
     const refetchRoles = vi.fn()
@@ -484,7 +512,7 @@ describe('Roles tab v2 paint', () => {
   it('the intro reads 680 wide at lh 1.6 and the toolbar search is the 300x36 bordered box with a glyph', () => {
     renderCrew()
     const intro = screen.getByText(/A role is a named seat/)
-    expect([intro.style.maxWidth, intro.style.lineHeight, intro.style.margin]).toEqual(['680px', '1.6', '-4px 0px 16px'])
+    expect([intro.style.maxWidth, intro.style.lineHeight, intro.style.margin]).toEqual(['680px', '1.6', '0px'])
     const input = screen.getByTestId('roles-search')
     expect(input.className, 'a bare input inside the wrapper').toBe('')
     const box = input.parentElement as HTMLElement
@@ -510,11 +538,12 @@ describe('Roles tab v2 paint', () => {
     expect([card.style.textAlign, card.style.fontSize, card.style.padding]).toEqual(['center', '12.5px', '26px 16px'])
   })
 
-  it('the unassigned notice sits above the toolbar', () => {
+  it('the unassigned notice sits between the action row and the filter bar', () => {
     renderCrew()
     const note = screen.getByTestId('roles-unassigned')
-    const toolbar = screen.getByTestId('roles-new').parentElement as HTMLElement
+    const toolbar = screen.getByTestId('roles-filter-bar')
     expect(note.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING, 'notice precedes toolbar').toBeTruthy()
+    expect(screen.getByTestId('roles-actions').compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING, 'action row precedes notice').toBeTruthy()
   })
 })
 

@@ -99,7 +99,28 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <>
-      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{intro(roles)}</p>
+      {/* Intro left, actions right; wraps rather than squashing the intro on a narrow column.
+          The group's flex-basis is the button's width, never the flash's, so a flash cannot change the wrap. */}
+      <div data-testid="roles-actions" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: -4, marginBottom: 14 }}>
+        <p style={{ flex: '0 1 auto', minWidth: 'min(240px, 100%)', maxWidth: 680, margin: 0, fontSize: 13.5, color: 'var(--fg-2)', lineHeight: 1.6 }}>{intro(roles)}</p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flex: '1 1 150px', minWidth: 0 }}>
+          {flash && (
+            <span
+              data-testid="roles-flash"
+              title={flash}
+              style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, color: 'var(--status-green-text)' }}
+            >
+              {flash}
+            </span>
+          )}
+          <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={noRoles ? emptyNoteId : headerNoteId} />
+        </div>
+      </div>
+      {lock && !noRoles && (
+        <div id={headerNoteId} data-testid="roles-admin-only" style={{ ...NOTE_STYLE, margin: '-6px 0 14px' }}>
+          {lock}
+        </div>
+      )}
 
       {/* Above the grid and both empty surfaces: coverage is a statement about the
           workspace, which a search box cannot change. Gated on the roster having landed,
@@ -109,21 +130,6 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           {unassignedNotice(unassigned.length)}
           <div style={{ fontWeight: 700, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
         </AmberNote>
-      )}
-
-      <div data-testid="roles-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{ flex: 1 }} />
-        {flash && (
-          <span data-testid="roles-flash" style={{ flex: 'none', fontSize: 12.5, color: 'var(--status-green-text)' }}>
-            {flash}
-          </span>
-        )}
-        <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={noRoles ? emptyNoteId : headerNoteId} />
-      </div>
-      {lock && !noRoles && (
-        <div id={headerNoteId} data-testid="roles-admin-only" style={{ ...NOTE_STYLE, margin: '-6px 0 14px' }}>
-          {lock}
-        </div>
       )}
 
       <FilterBar testId="roles-filter-bar">

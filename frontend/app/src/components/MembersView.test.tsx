@@ -429,6 +429,14 @@ describe('BUG-167: the intro sentence and Invite share one row', () => {
     expect(within(row).getByTestId('members-invite')).toBeTruthy()
     expect(within(row).getByText(/Who can sign in to this workspace/)).toBeTruthy()
   })
+
+  it('in-house: the longer intro and members-invite share the row', () => {
+    render(<Harness mode="inhouse" initial={[member({ isYou: true, role: 'admin' }), otherMember()]} />)
+
+    const row = screen.getByTestId('members-actions')
+    expect(within(row).getByTestId('members-invite')).toBeTruthy()
+    expect(within(row).getByText(/and where they sit in the approval chain/)).toBeTruthy()
+  })
 })
 
 describe('AC1: an errored roster never renders as an empty success', () => {

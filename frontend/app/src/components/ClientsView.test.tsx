@@ -267,6 +267,19 @@ describe('ClientsView: Add client follows the role (LOGFIX-06-03)', () => {
     for (const name of ['All', 'Active', 'Archived']) expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('FBAR the admin-only note stays with Add client, above the bar', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: SELF('reviewer') })} />)
+    await screen.findByText('Okafor & Partners')
+
+    const header = screen.getByRole('heading', { level: 1, name: 'Client portfolio' }).parentElement!.parentElement as HTMLElement
+    const note = screen.getByTestId('clients-admin-only')
+    const bar = screen.getByTestId('clients-filter-bar')
+    expect(header.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note follows the header').toBeTruthy()
+    expect(note.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note precedes the bar').toBeTruthy()
+    expect(within(bar).queryByRole('button', { name: 'Add client' }), 'no action in the bar').toBeNull()
+  })
+
   it('Clients: a non-admin with no clients sees No company created and a disabled Add client', async () => {
     mockFetchArchiveAware([])
     render(<ClientsView ctx={clientsCtx([], { members: SELF('preparer') })} />)

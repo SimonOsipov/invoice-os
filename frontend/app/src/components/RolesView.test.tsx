@@ -7,7 +7,7 @@
 //
 // Extended for the rolesSurface repoint (AC-1 through AC-4): the ladder must branch on BOTH
 // the roles fetch and the members fetch, not membersState alone.
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
@@ -63,6 +63,7 @@ function Harness({
   refetchMembers,
   refetchRolesInForce,
   renameRole,
+  createRole,
 }: {
   members?: Member[]
   roles?: Role[]
@@ -77,6 +78,7 @@ function Harness({
   refetchMembers?: () => void
   refetchRolesInForce?: () => void
   renameRole?: () => Promise<void>
+  createRole?: () => Promise<Role>
 }) {
   const ctx = {
     members,
@@ -94,7 +96,7 @@ function Harness({
     membersState,
     membersError,
     refetchMembers: refetchMembers ?? vi.fn(),
-    createRole: vi.fn(),
+    createRole: createRole ?? vi.fn(),
     renameRole: renameRole ?? vi.fn(),
     staffRole: vi.fn(),
     deleteRole: vi.fn(),
@@ -533,9 +535,33 @@ describe('Roles filter bar', () => {
     expect(within(actions).getByTestId('roles-new')).toBeTruthy()
     expect(within(actions).queryByTestId('roles-search')).toBeNull()
     expect(within(bar).getByTestId('roles-search')).toBeTruthy()
+    expect(within(bar).getByPlaceholderText('Search roles')).toBeTruthy()
     expect(within(bar).queryAllByRole('button')).toHaveLength(0)
     expect(follows(actions, bar), 'the action row precedes the bar').toBe(true)
     expect(follows(bar, screen.getByTestId('roles-grid')), 'the bar precedes the grid').toBe(true)
+  })
+
+  it('FBAR the flash after a save sits in the action row, not the bar', async () => {
+    render(<Harness members={crew} roles={[role({ key: 'a', title: 'Alpha', members: ['u1'] })]} createRole={vi.fn().mockResolvedValue(role({ key: 'b', title: 'Bravo' }))} />)
+
+    fireEvent.click(screen.getByTestId('roles-new'))
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Bravo' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+
+    await waitFor(() => expect(screen.getByTestId('roles-flash')).toBeTruthy())
+    expect(within(screen.getByTestId('roles-actions')).getByTestId('roles-flash')).toBe(screen.getByTestId('roles-flash'))
+    expect(within(screen.getByTestId('roles-filter-bar')).queryByTestId('roles-flash')).toBeNull()
+  })
+
+  it('FBAR the Roles bar stays on the no-roles and no-match surfaces', () => {
+    render(<Harness members={crew} roles={[]} />)
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search'), 'empty').toBeTruthy()
+    cleanup()
+
+    render(<Harness members={crew} roles={[role({ key: 'a', title: 'Alpha', members: ['u1'] })]} />)
+    fireEvent.change(screen.getByTestId('roles-search'), { target: { value: 'zzzz' } })
+    expect(screen.getByTestId('roles-no-match')).toBeTruthy()
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search'), 'no match').toBeTruthy()
   })
 
   it('FBAR the Roles bar renders in loading and in error', () => {

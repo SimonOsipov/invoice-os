@@ -248,7 +248,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
-      {/* Above the toolbar, and only on a landed roster: over an errored one every role
+      {/* Only on a landed roster: over an errored one every role
           resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
       {surface === 'roster' && unassigned.length > 0 && (
         <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>

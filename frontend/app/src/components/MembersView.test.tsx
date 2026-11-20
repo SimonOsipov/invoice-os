@@ -2020,6 +2020,7 @@ describe('the toolbar and the invite control', () => {
     expect(within(actions).getByTestId('members-invite')).toBeTruthy()
     expect(within(actions).queryByLabelText('Search members')).toBeNull()
     expect(within(actions).queryByLabelText('Access role')).toBeNull()
+    expect(within(bar).getByPlaceholderText('Search name or email')).toBeTruthy()
     expect(Array.from(bar.children).map((c) => c.querySelector('input, select')?.getAttribute('aria-label') ?? c.getAttribute('aria-label'))).toEqual(['Search members', 'Access role'])
     expect(follows(actions, bar), 'the action row precedes the bar').toBe(true)
     expect(follows(bar, screen.getByTestId('members-table')), 'the bar precedes the roster').toBe(true)

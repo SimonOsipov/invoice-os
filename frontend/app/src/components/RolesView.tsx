@@ -101,7 +101,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{intro(roles)}</p>
 
-      {/* Above the toolbar, the grid and both empty surfaces: coverage is a statement about the
+      {/* Above the grid and both empty surfaces: coverage is a statement about the
           workspace, which a search box cannot change. Gated on the roster having landed,
           though — over an errored fetch every role reads unheld. */}
       {surface === 'roster' && unassigned.length > 0 && (

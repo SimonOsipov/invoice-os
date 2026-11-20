@@ -1709,7 +1709,7 @@ test('firm Roles: a reviewer sees the write controls locked, still reads the tab
     await search.fill('')
     await expect(cards).toHaveCount(count)
 
-    // Each note sits inside its card; the header note clears the toolbar and stays on screen.
+    // Each note sits inside its card; the header note stays on screen.
     const layout = await atEachWidth(member, async (width) => {
       await settleAnimations(headerNote, newRole, search)
       const viewport: Rect = { x: 0, y: 0, width, height: 1080 }

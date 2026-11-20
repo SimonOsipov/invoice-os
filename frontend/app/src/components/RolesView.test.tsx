@@ -130,6 +130,16 @@ describe('AC-1: RolesView branches on rolesSurface(rolesState, membersState), ne
   })
 })
 
+describe('BUG-167: the intro sentence and New role share one row', () => {
+  it('roles-actions holds both the intro and roles-new, so no empty row sits above the filter', () => {
+    render(<Harness members={[member()]} roles={[role()]} />)
+
+    const row = screen.getByTestId('roles-actions')
+    expect(within(row).getByTestId('roles-new')).toBeTruthy()
+    expect(within(row).getByText(/A role is a named seat/)).toBeTruthy()
+  })
+})
+
 describe('AC-2: ErrorState renders rolesError ?? membersError; retry calls the matching refetch', () => {
   it('retry calls refetchRoles when the roles fetch is the one that failed', () => {
     const refetchRoles = vi.fn()

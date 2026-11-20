@@ -421,6 +421,16 @@ describe('DEL-02-05: Remove through the view', () => {
 // QA (Stage 4) -- adversarial coverage over the live surface ladder and the write race
 // ============================================================================
 
+describe('BUG-167: the intro sentence and Invite share one row', () => {
+  it('members-actions holds both the intro and members-invite, so no empty row sits above the filter', () => {
+    render(<Harness initial={[member({ isYou: true, role: 'admin' }), otherMember()]} />)
+
+    const row = screen.getByTestId('members-actions')
+    expect(within(row).getByTestId('members-invite')).toBeTruthy()
+    expect(within(row).getByText(/Who can sign in to this workspace/)).toBeTruthy()
+  })
+})
+
 describe('AC1: an errored roster never renders as an empty success', () => {
   it('the error surface renders, not the "just you" empty state, over a roster that never loaded', () => {
     render(<Harness initial={[]} membersState="error" membersError={new ApiError('http', 'gateway is down', 503)} />)

@@ -360,13 +360,42 @@ describe('ViolationsTable explain (ENGI-17-05)', () => {
     }
   })
 
-  it('violationsTable_customKeyReadsCustomRule', () => {
-    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
-    render(<ViolationsTable violations={[violation({ rule_key: key }), violation({ rule_key: 'buyer-tin-format' })]} ruleSetVersion={3} />)
+  const A = 'custom:3f2a0000-0000-0000-0000-000000000001'
+  const B = 'custom:3f2a0000-0000-0000-0000-000000000002'
 
-    const cell = screen.getByText('Custom rule')
-    expect(cell.getAttribute('title')).toBe(key)
+  it('violationsTable_customKeyReadsItsName', () => {
+    render(
+      <ViolationsTable
+        violations={[violation({ rule_key: A }), violation({ rule_key: B }), violation({ rule_key: 'buyer-tin-format' })]}
+        ruleSetVersion={3}
+        ruleNames={{ [A]: 'PO required', [B]: 'Buyer email required' }}
+      />,
+    )
+
+    expect(screen.getByText('PO required').getAttribute('title')).toBe(A)
+    expect(screen.getByText('Buyer email required').getAttribute('title')).toBe(B)
     expect(screen.getByText('buyer-tin-format').getAttribute('title')).toBe('buyer-tin-format')
+  })
+
+  it('a custom violation without a name reads Custom rule', () => {
+    render(<ViolationsTable violations={[violation({ rule_key: A })]} ruleSetVersion={3} ruleNames={{}} />)
+
+    expect(screen.getByText('Custom rule').getAttribute('title')).toBe(A)
+  })
+
+  it('violationsTable_faultMessageDoesNotBecomeTheName', () => {
+    const fault = 'This custom rule could not be evaluated on this invoice.'
+    render(
+      <ViolationsTable
+        violations={[violation({ rule_key: A, message: fault }), violation({ rule_key: B, message: fault })]}
+        ruleSetVersion={3}
+        ruleNames={{ [A]: 'PO required', [B]: 'Buyer email required' }}
+      />,
+    )
+
+    expect(screen.getByText('PO required').getAttribute('title')).toBe(A)
+    expect(screen.getByText('Buyer email required').getAttribute('title')).toBe(B)
+    expect(screen.getAllByText(fault)).toHaveLength(2)
   })
 
   it('violationsTable_withoutOnExplainRendersNoExplain', () => {

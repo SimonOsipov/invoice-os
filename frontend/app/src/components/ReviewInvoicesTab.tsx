@@ -77,6 +77,7 @@ import { ErrorState, Loading, toApiError, useAsync, type ApiError } from '@invoi
 import { searchGlyph } from '../glyphs'
 import type { ImportBatch } from '../lib/importApi'
 import { ruleKeyLabel } from '../lib/rulesApi'
+import { useCustomRuleNames } from '../lib/useCustomRuleNames'
 import {
   listInvoices,
   newIdempotencyKey,
@@ -197,6 +198,7 @@ export function ReviewInvoicesTab({
   // `deps: [batchIdsKey]` — one fetch per run, for the life of the tab. See the file
   // header, point 3. `violationSummary` already takes `importBatchIds: string[]`
   // (BULK-01-02) -- this is its first caller to actually pass more than one id.
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
   const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, batchIds), {
     isEmpty: () => false,
     deps: [batchIdsKey],
@@ -502,9 +504,10 @@ export function ReviewInvoicesTab({
                   border: `1px solid ${r.active ? 'var(--action)' : 'var(--line-2)'}`,
                   background: r.active ? 'var(--action)' : 'var(--bg-3)',
                   color: r.active ? 'var(--primary-foreground)' : 'var(--fg-2)',
+                  maxWidth: '100%',
                 }}
               >
-                {ruleKeyLabel(r.ruleKey)}
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ruleKeyLabel(r.ruleKey, ruleNames)}</span>
                 <span style={{ opacity: 0.75 }}>{r.count}</span>
               </button>
             ))}
@@ -704,6 +707,7 @@ export function ReviewInvoicesTab({
                   }}
                   ctx={ctx}
                   base={base}
+                  ruleNames={ruleNames}
                   // A successful Save or Re-validate moved this invoice's server-side
                   // state — refetch THIS page (moves the row's own verdict pill) and the
                   // shell's four count queries (moves the pills/tiles/tab label/footer),

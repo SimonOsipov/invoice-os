@@ -95,6 +95,7 @@ import { SourceDocumentModal } from './SourceDocumentModal'
 import { StatusStrip } from './StatusStrip'
 import { UblDocumentCard } from './UblDocumentCard'
 import { ViolationsTable } from './ViolationsTable'
+import { useCustomRuleNames } from '../lib/useCustomRuleNames'
 import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
 
@@ -179,6 +180,7 @@ function blankRow(): LineRowState {
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
   // Same `base ? … : …` narrowing as ClientsView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
   // A 403 on confirm: the server refused this seat. Approve stays off until the re-read
@@ -1199,6 +1201,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 {inv.rule_set_version != null ? (
                   <div data-testid="violations-table">
                     <ViolationsTable
+                      ruleNames={ruleNames}
                       violations={inv.violations}
                       ruleSetVersion={inv.rule_set_version}
                       lineDisabled={!inv.can_edit}

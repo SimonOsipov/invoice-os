@@ -35,6 +35,7 @@ import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, 
 import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, signedAmount, type AllInvoices } from '../lib/invoices'
 import { fetchInvoiceRegister, previousMonthPeriod, registerErrorLine, registerPeriodValid } from '../lib/invoiceRegister'
 import { crossGlyph, docGlyph, downloadGlyph } from '../glyphs'
+import { useCustomRuleNames } from '../lib/useCustomRuleNames'
 import type { PlatformCtx } from '../types'
 
 // Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
@@ -95,6 +96,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   // never blocks the monetary KPIs this page's empty state is otherwise gated on. No
   // isEmpty predicate, same reason as DashboardActive.tsx:48-56 — a zero-count rollup
   // is 'ready', not empty.
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
   const roll = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
@@ -151,7 +153,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   // top_violations has no per-entity breakdown on the wire (dashboard.go's Rollup) —
   // stays tenant-wide regardless of the selected client, same as DashboardActive's own
   // "Top validation failures" panel; the FIRM-WIDE chip below discloses that honestly.
-  const reportFailures = roll.data ? topFailures(roll.data.top_violations) : []
+  const reportFailures = roll.data ? topFailures(roll.data.top_violations, ruleNames) : []
 
   const [period, setPeriod] = useState(() => previousMonthPeriod(new Date()))
   const [registerBusy, setRegisterBusy] = useState(false)

@@ -41,6 +41,7 @@ import {
 import { TREND_CHART_H } from '../lib/chartPath'
 import { historyView, watToday } from '../lib/dashboardHistory'
 import { ruleKeyLabel } from '../lib/rulesApi'
+import { useCustomRuleNames } from '../lib/useCustomRuleNames'
 import type { PlatformCtx } from '../types'
 import { RecentActivityBody } from './RecentActivityBody'
 
@@ -175,7 +176,8 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
   const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0)
   const anyValidated = total - bucket.counts.draft > 0 // drafts are the only pre-validation status
   const needsAttention = bucket.needs_attention
-  const failures = topFailures(bucket.top_violations)
+  const ruleNames = useCustomRuleNames(ctx.authedFetch)
+  const failures = topFailures(bucket.top_violations, ruleNames)
   const ring = readinessRing(bucket.metrics)
   const note = readinessNote(bucket.metrics)
   const bars = readinessBars(bucket.metrics)
@@ -390,13 +392,13 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
               <div key={f.ruleKey} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'grid', placeItems: 'center' }}>{crossGlyph}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{f.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6, overflowWrap: 'anywhere' }}>{f.label}</div>
                   <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', maxWidth: 240 }}>
                     <div style={{ width: f.bar, height: '100%', background: 'var(--action)', borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
                 <span className="mono" title={f.ruleKey} style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 150, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {ruleKeyLabel(f.ruleKey)}
+                  {ruleKeyLabel(f.ruleKey, ruleNames)}
                 </span>
                 <div style={{ textAlign: 'right', flex: 'none', minWidth: 40, whiteSpace: 'nowrap' }}>
                   <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>

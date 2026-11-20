@@ -57,6 +57,10 @@ function isCustomersUrl(url: string): boolean {
 type CustomersHandler = (url: string) => MockResponse
 const NO_RECORDS: CustomersHandler = () => ({ ok: true, status: 200, json: () => Promise.resolve({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } }) })
 
+function isNamesUrl(url: string): boolean {
+  return new URL(url).pathname.endsWith('/v1/custom-rules/names')
+}
+
 function isRegisterUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/v1/invoice-register')
 }
@@ -64,7 +68,13 @@ function isRegisterUrl(url: string): boolean {
 // The register download is a bare fetch with an init arg; unset, a click is a test bug.
 type RegisterHandler = (url: string, init?: RequestInit) => Promise<unknown>
 
-function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP, customers: CustomersHandler = NO_RECORDS, register?: RegisterHandler) {
+function mockFetch(
+  invoiceResponses: MockResponse[],
+  rollup: Rollup = ZERO_ROLLUP,
+  customers: CustomersHandler = NO_RECORDS,
+  register?: RegisterHandler,
+  names: () => Promise<unknown> = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ names: {} }) }),
+) {
   const queue = [...invoiceResponses]
   const rollupResponse: MockResponse = { ok: true, status: 200, json: () => Promise.resolve(rollup) }
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
@@ -72,6 +82,7 @@ function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLU
       if (!register) throw new Error(`ReportsView test: unexpected register fetch ${url}`)
       return register(url, init)
     }
+    if (isNamesUrl(url)) return names()
     if (isRollupUrl(url)) return Promise.resolve(rollupResponse)
     if (isCustomersUrl(url)) return Promise.resolve(customers(url))
     const next = queue.shift()
@@ -84,7 +95,7 @@ function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLU
 
 // The invoices-only call URLs, in request order -- excludes the interleaved rollup call.
 function invoiceCallUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
-  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url) && !isCustomersUrl(url) && !isRegisterUrl(url))
+  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url) && !isCustomersUrl(url) && !isRegisterUrl(url) && !isNamesUrl(url))
 }
 
 function listResponse(invoices: InvoiceRecord[], pagination: { limit: number; offset: number; total: number }): MockResponse {
@@ -922,6 +933,27 @@ function labelDiv(container: HTMLElement, text: string): HTMLElement {
   if (!el) throw new Error(`no div.label "${text}"`)
   return el as HTMLElement
 }
+
+describe('ReportsView: Validation summary names a custom rule', () => {
+  const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+  const customRollup: Rollup = { ...summaryRollup(0, {}), top_violations: [{ rule_key: key, invoices: 2 }] }
+
+  async function renderWith(names: () => Promise<unknown>) {
+    mockFetch([listResponse([row({ id: 'inv-n', buyer_tin: tinFor(1), buyer_name: 'Named Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], customRollup, NO_RECORDS, undefined, names)
+    render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Passed')
+  }
+
+  it('Validation summary card names a custom rule', async () => {
+    await renderWith(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ names: { [key]: 'PO required' } }) }))
+    expect(await screen.findByText('PO required')).toBeDefined()
+  })
+
+  it('a custom violation without a name reads Custom rule', async () => {
+    await renderWith(() => Promise.reject(new Error('names down')))
+    expect(await screen.findByText('Custom rule')).toBeDefined()
+  })
+})
 
 describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
   async function renderReady(rollup: Rollup = RULE_ROLLUP) {

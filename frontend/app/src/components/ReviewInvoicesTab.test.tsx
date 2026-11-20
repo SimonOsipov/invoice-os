@@ -387,26 +387,48 @@ describe('ReviewInvoicesTab: the review prototype look (RESKIN2-04-04)', () => {
     expect(searchBox.style.borderRadius).toBe('var(--radius-btn)')
   })
 
-  it('reviewInvoicesTab_customKeyRailPillReadsCustomRule', async () => {
-    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+  function stubRail(names: () => Promise<MockResponse>) {
+    const a = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const b = 'custom:3f2a0000-0000-0000-0000-000000000002'
     const rows = [row({ id: 'inv-a', invoice_number: 'INV-A' })]
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
+        if (url.endsWith('/custom-rules/names')) return names()
         if (url.includes('/violation-summary')) {
-          return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ rules: [{ rule_key: key, invoices: 2 }, { rule_key: 'vat-standard-rate', invoices: 1 }] }) })
+          return Promise.resolve<MockResponse>({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ rules: [{ rule_key: a, invoices: 2 }, { rule_key: b, invoices: 2 }, { rule_key: 'vat-standard-rate', invoices: 1 }] }),
+          })
         }
         return Promise.resolve(listResponse(rows, { limit: 50, offset: 0, total: 1 }))
       }),
     )
+    return { a, b }
+  }
+
+  it('rail pill names a custom rule', async () => {
+    const { a, b } = stubRail(() =>
+      Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ names: { 'custom:3f2a0000-0000-0000-0000-000000000001': 'PO required', 'custom:3f2a0000-0000-0000-0000-000000000002': 'Buyer email required' } }) }),
+    )
     renderTab()
     await screen.findByText('INV-A')
     const pills = await screen.findAllByTestId('review-rail-pill')
-    expect(pills).toHaveLength(2)
-    const custom = pills.find((p) => p.textContent?.startsWith('Custom rule'))
-    expect(custom?.getAttribute('title')).toBe(key)
-    const golden = pills.find((p) => p.textContent?.startsWith('vat-standard-rate'))
-    expect(golden?.getAttribute('title')).toBe('vat-standard-rate')
+    expect(pills).toHaveLength(3)
+    const byTitle = (t: string) => pills.find((p) => p.getAttribute('title') === t) as HTMLElement
+    await waitFor(() => expect(byTitle(a).textContent).toMatch(/^PO required/))
+    expect(byTitle(b).textContent).toMatch(/^Buyer email required/)
+    expect(byTitle('vat-standard-rate').textContent).toMatch(/^vat-standard-rate/)
+    expect(byTitle(a).style.maxWidth).toBe('100%')
+  })
+
+  it('a custom violation without a name reads Custom rule', async () => {
+    const { a } = stubRail(() => Promise.reject(new Error('names down')))
+    renderTab()
+    await screen.findByText('INV-A')
+    const pills = await screen.findAllByTestId('review-rail-pill')
+    expect(pills.find((p) => p.getAttribute('title') === a)?.textContent).toMatch(/^Custom rule/)
   })
 
   it('the bulk bar follows the review prototype', async () => {

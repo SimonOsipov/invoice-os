@@ -68,6 +68,7 @@ import {
 import { BULK_COPY, bulkBarView, bulkPhaseReducer, type BulkPhase } from '../lib/reviewBatch'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import type { PlatformCtx } from '../types'
+import { FilterBar } from './FilterBar'
 import { Pager } from './Pager'
 import { SEVERITY_TONE } from './RulePills'
 
@@ -362,7 +363,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      {/* The page's create control; the app header has none. The unfiltered empty state keeps its own button, the filtered one offers a way out of the filter. The toggle sits outside the async gating so it stays reachable on an empty filtered set. */}
+      {/* The page's create control; the app header has none. The unfiltered empty state keeps its own button, the filtered one offers a way out of the filter. The toggle sits in the filter bar below, outside the async gating, so it stays reachable on an empty filtered set. */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20, marginBottom: 22 }}>
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
@@ -372,35 +373,38 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
-          <button
-            onClick={() => {
-              setNeedsAttention((v) => !v)
-              setOffset(0)
-              setSelected([])
-              disarm()
-            }}
-            data-testid="needs-attention-toggle"
-            className="pf-chip"
-            style={{
-              flex: 'none',
-              height: 30,
-              padding: '0 12px',
-              borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-sans)',
-              fontSize: 12.5,
-              fontWeight: 600,
-              border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
-              background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
-              color: needsAttention ? 'var(--primary-foreground)' : 'var(--fg-2)',
-            }}
-          >
-            Needs attention
-          </button>
           <button onClick={ctx.openCreate} disabled={entityPending} data-testid="invoices-new-invoice" className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
           </button>
         </div>
       </div>
+
+      <FilterBar testId="invoices-filter-bar">
+        <button
+          onClick={() => {
+            setNeedsAttention((v) => !v)
+            setOffset(0)
+            setSelected([])
+            disarm()
+          }}
+          data-testid="needs-attention-toggle"
+          className="pf-chip"
+          style={{
+            flex: 'none',
+            height: 30,
+            padding: '0 12px',
+            borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
+            background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
+            color: needsAttention ? 'var(--primary-foreground)' : 'var(--fg-2)',
+          }}
+        >
+          Needs attention
+        </button>
+      </FilterBar>
 
       {/* Rendered independent of both `selected.length > 0` (submit clears the
           selection, which would unmount a panel nested under that condition the instant

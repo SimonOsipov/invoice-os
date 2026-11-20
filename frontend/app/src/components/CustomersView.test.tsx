@@ -858,6 +858,7 @@ describe('CustomersView: the status chips', () => {
     render(<CustomersView ctx={ctxFor()} />)
     await screen.findByText('Alpha Traders')
 
+    expect(within(screen.getByTestId('customers-filter-bar')).getByRole('button', { name: 'Active' }).style.background).toBe('var(--action)')
     expect(chip('Active').style.background).toBe('var(--action)')
     expect(chip('All').style.background).not.toBe('var(--action)')
     expect(chip('Archived').style.background).not.toBe('var(--action)')
@@ -921,6 +922,7 @@ describe('CustomersView: the status chips', () => {
     expect(await screen.findByText('No customers yet')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
     expect(screen.getByRole('button', { name: 'Add customer' }), 'control: the header action stays').toBeTruthy()
+    expect(within(screen.getByTestId('customers-filter-bar')).getAllByRole('button').map((b) => b.textContent), 'the bar stays').toEqual(['All', 'Active', 'Archived'])
     expect(probeCalls(customerCalls()), 'no probe on Archived or All').toHaveLength(0)
   })
 
@@ -933,6 +935,7 @@ describe('CustomersView: the status chips', () => {
 
     expect(await screen.findByText('No active customers')).toBeTruthy()
     expect(screen.getByText('Archived customers are under the Archived filter.')).toBeTruthy()
+    expect(within(screen.getByTestId('customers-filter-bar')).getAllByRole('button').map((b) => b.textContent), 'the bar stays').toEqual(['All', 'Active', 'Archived'])
     expect(screen.queryByRole('button', { name: /New invoice/ })).toBeNull()
     expect(screen.queryByText('No customers yet')).toBeNull()
     const probe = probeCalls(customerCalls())
@@ -1037,6 +1040,34 @@ describe('CustomersView: states', () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.getByText('No customers yet')).toBeTruthy()
+  })
+
+  it('FBAR the Customers header holds Add customer and the bar holds the chips', async () => {
+    mockApi({ customers: () => recordsPage([record()]), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    const header = screen.getByRole('heading', { level: 1, name: 'Customers' }).parentElement!.parentElement as HTMLElement
+    expect(within(header).getByRole('button', { name: 'Add customer' })).toBeTruthy()
+    for (const name of ['All', 'Active', 'Archived']) expect(within(header).queryByRole('button', { name }), `${name} must not sit in the header`).toBeNull()
+    const bar = screen.getByTestId('customers-filter-bar')
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['All', 'Active', 'Archived'])
+    expect(header.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING, 'the bar follows the header').toBeTruthy()
+    expect(bar.compareDocumentPosition(rows()[0]) & Node.DOCUMENT_POSITION_FOLLOWING, 'the list follows the bar').toBeTruthy()
+  })
+
+  it('FBAR the Customers bar renders in loading and error', async () => {
+    const bar = () => within(screen.getByTestId('customers-filter-bar')).getAllByRole('button').map((b) => b.textContent)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    render(<CustomersView ctx={ctxFor()} />)
+    expect(await screen.findByText('Loading customers…')).toBeTruthy()
+    expect(bar(), 'loading').toEqual(['All', 'Active', 'Archived'])
+    cleanup()
+
+    mockApi({ customers: () => down, invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    expect(await screen.findByText('Something went wrong')).toBeTruthy()
+    expect(bar(), 'error').toEqual(['All', 'Active', 'Archived'])
   })
 
   it('CU-08 loading and error render the shared state, never the register', async () => {

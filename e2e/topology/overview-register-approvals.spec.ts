@@ -6,7 +6,7 @@ import { test, expect, type Locator, type Page, type Response, type Route, type 
 import type { DashboardClient, RollupHistoryRow } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
 const SHARD = shardTenants('overview-register-approvals.spec.ts')
@@ -888,7 +888,7 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk bar, header and pager relations', async ({ page }, testInfo) => {
+test('IN-01 invoices register: heading, card, badge, toggle in its filter bar, New invoice, bulk bar, header and pager relations', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
@@ -916,14 +916,10 @@ test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk b
     const b = await boxes(page, { header: heading(page).locator('xpath=../..'), title: heading(page).locator('xpath=..'), toggle, newInvoice: page.getByTestId('invoices-new-invoice') })
     const problems = [
       ...within(b.header, b.title, 'title block in the header'),
-      ...within(b.header, b.toggle, 'toggle in the header'),
+      ...apart(b.header, b.toggle, 'toggle vs header'),
       ...within(b.header, b.newInvoice, 'New invoice in the header'),
-      ...apart(b.title, b.toggle, 'title block vs toggle'),
       ...apart(b.title, b.newInvoice, 'title block vs New invoice'),
-      ...apart(b.toggle, b.newInvoice, 'toggle vs New invoice'),
-      ...leftOf(b.toggle, b.newInvoice, 'toggle vs New invoice'),
     ]
-    if (Math.abs(centreY(b.toggle) - centreY(b.newInvoice)) > 1) problems.push('toggle and New invoice centres differ')
     if (Math.abs(b.title.y + b.title.height - (b.newInvoice.y + b.newInvoice.height)) > 1) problems.push('New invoice bottom vs title block bottom')
     return { problems, rects: { header: b.header, title: b.title, toggle: b.toggle, newInvoice: b.newInvoice } }
   }
@@ -953,7 +949,7 @@ test('IN-01 invoices register: heading, card, badge, toggle, New invoice, bulk b
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('IN-03 invoices header: on a phone the title keeps its line and New invoice drops below it; wide keeps one row', async ({ page }, testInfo) => {
+test('IN-03 invoices header: on a phone the title keeps its line and New invoice stays on screen; wide keeps one row', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
@@ -977,6 +973,29 @@ test('IN-03 invoices header: on a phone the title keeps its line and New invoice
   const phone = await atWidths(page, 'invoices header on a phone', read(true), [375, 414])
   const wide = await atWidths(page, 'invoices header wide', read(false), [1280])
   await attachJson(testInfo, 'in-03-measurements', { phone, wide })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('IN-04 invoices filter bar: Needs attention sits in its own left-aligned bar between the header and the register at every width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await openNav(page, navButton(page, /^Invoices/))
+  await expectVisibleRows(page.getByTestId('invoice-row'), 'the firm register must hold at least one invoice on the PR environment (the seed holds firm invoices, D-14)')
+  const bar = page.getByTestId('invoices-filter-bar')
+  const readings = await assertFilterBarPlacement(
+    page,
+    {
+      column: column(page),
+      header: heading(page).locator('xpath=../..'),
+      action: page.getByTestId('invoices-new-invoice'),
+      bar,
+      filters: [bar.getByTestId('needs-attention-toggle')],
+      list: page.getByTestId('invoices-list'),
+    },
+    'Invoices',
+  )
+  await attachJson(testInfo, 'in-04-measurements', readings)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

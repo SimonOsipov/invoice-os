@@ -14,6 +14,7 @@ import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 import { CustomerFormModal } from './CustomerFormModal'
 import { Pager } from './Pager'
+import { FilterBar } from './FilterBar'
 
 const PAGE_SIZE = 50
 const GRID_COLUMNS = 'minmax(160px, 1.6fr) 120px 70px 70px 140px 104px 140px'
@@ -150,7 +151,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20, marginBottom: 22 }}>
         <div>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             TRADING PARTNERS
@@ -160,31 +161,34 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
             {ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''}Customer records, tax IDs &amp; billing history
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {FILTER_POSITIONS.map(({ pos: p, label }) => (
-            <button
-              key={p}
-              onClick={() => changePos(p)}
-              className="pf-chip"
-              style={{
-                height: 30,
-                padding: '0 12px',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 12.5,
-                fontWeight: 500,
-                border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
-                background: pos === p ? 'var(--action)' : 'var(--bg-2)',
-                color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
-              }}
-            >
-              {label}
-            </button>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
           <button onClick={() => setModal({ mode: 'create' })} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add customer
           </button>
         </div>
       </div>
+
+      <FilterBar testId="customers-filter-bar">
+        {FILTER_POSITIONS.map(({ pos: p, label }) => (
+          <button
+            key={p}
+            onClick={() => changePos(p)}
+            className="pf-chip"
+            style={{
+              height: 30,
+              padding: '0 12px',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
+              background: pos === p ? 'var(--action)' : 'var(--bg-2)',
+              color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </FilterBar>
 
       {errored && error && <ErrorState error={error} onRetry={retry} />}
 

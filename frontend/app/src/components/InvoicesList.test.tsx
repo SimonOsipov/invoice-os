@@ -2388,9 +2388,10 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-A1')
 
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    fireEvent.click(within(screen.getByTestId('invoices-filter-bar')).getByTestId('needs-attention-toggle'))
 
     const filtered = await screen.findByTestId('invoices-empty-filtered')
+    expect(within(screen.getByTestId('invoices-filter-bar')).getByTestId('needs-attention-toggle'), 'the bar keeps the toggle while the filtered empty state shows').toBeTruthy()
     expect(filtered.textContent, 'the filtered empty state must say which kind of empty this is').toContain('Nothing needs attention')
     expect(filtered.textContent, 'the System Design copy verbatim -- this sentence IS the claim, so a reword is a new claim').toContain('No invoice in this register is waiting on you. Clear the filter to see the rest.')
     expect(within(filtered).getByTestId('clear-needs-attention').textContent, 'the way back must say where it goes -- S2 clicks it by testid and would not notice a rename').toBe('Show all invoices')
@@ -3038,6 +3039,52 @@ describe('CRDDBTNOTE-04-04: the list shows the document type and the signed amou
   })
 })
 
+describe('InvoicesList: the filter bar above the register (FBAR-01-02)', () => {
+  it('FBAR the header row holds New invoice and no filter', async () => {
+    mockFetchSequence([listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    const header = screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
+    expect(within(header).getByTestId('invoices-new-invoice')).toBeTruthy()
+    expect(within(header).queryByTestId('needs-attention-toggle')).toBeNull()
+  })
+
+  it('FBAR the filter bar holds only the toggle, between the header and the register', async () => {
+    mockFetchSequence([listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    const bar = screen.getByTestId('invoices-filter-bar')
+    const header = screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
+    expect(within(bar).getByTestId('needs-attention-toggle')).toBeTruthy()
+    expect(within(bar).getAllByRole('button')).toHaveLength(1)
+    expect(header.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING, 'the bar follows the header').toBeTruthy()
+    expect(bar.compareDocumentPosition(screen.getByTestId('invoices-list')) & Node.DOCUMENT_POSITION_FOLLOWING, 'the register follows the bar').toBeTruthy()
+  })
+
+  it('FBAR the filter bar stays in every list state', async () => {
+    const barHoldsToggle = (state: string) => expect(within(screen.getByTestId('invoices-filter-bar')).getByTestId('needs-attention-toggle'), state).toBeTruthy()
+
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    render(<InvoicesList ctx={listCtx()} />)
+    expect(screen.getByText('Loading invoices…')).toBeTruthy()
+    barHoldsToggle('loading')
+    cleanup()
+
+    mockFetchSequence([{ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }])
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(screen.queryByText('Loading invoices…')).toBeNull())
+    barHoldsToggle('error')
+    cleanup()
+
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByTestId('invoices-empty')
+    barHoldsToggle('empty')
+  })
+})
+
 describe('InvoicesList: New invoice in the page header', () => {
   const newInvoice = () => screen.getByTestId('invoices-new-invoice') as HTMLButtonElement
   const headerRow = () => screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
@@ -3160,15 +3207,14 @@ describe('InvoicesList: New invoice in the page header', () => {
     expect(buttons.filter((b) => !empty.contains(b))).toEqual([newInvoice()])
   })
 
-  it('IL-NEW-04 the toggle and New invoice share one group, toggle first', async () => {
+  it('IL-NEW-04 New invoice is alone in its group; the toggle sits in the filter bar', async () => {
     mockFetchSequence([listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 })])
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-A1')
 
-    const toggle = screen.getByTestId('needs-attention-toggle')
     const group = newInvoice().parentElement as HTMLElement
-    expect(group).toBe(toggle.parentElement)
-    expect(Array.from(group.children)).toEqual([toggle, newInvoice()])
+    expect(Array.from(group.children)).toEqual([newInvoice()])
     expect(group).not.toBe(headerRow())
+    expect(screen.getByTestId('needs-attention-toggle').parentElement).toBe(screen.getByTestId('invoices-filter-bar'))
   })
 })

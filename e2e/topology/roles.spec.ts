@@ -1333,7 +1333,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
 
   // L4: with the flash showing the long address, the top bar keeps its alignment. Each width
   // resends (the flash lasts 3 s) and reads the four boxes while it is up.
-  const roleFilter = page.locator('label[aria-label="Access role"]')
+  const actions = page.getByTestId('members-actions')
   const table = page.getByTestId('members-table')
   const l4 = await atEachWidth(page, async (width) => {
     await settleAnimations(invite, table)
@@ -1344,17 +1344,17 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
     await menu.getByRole('button', { name: 'Resend invite', exact: true }).click()
     expect((await resend).status(), `the resend answers 200 at ${width}px`).toBe(200)
     await expect(flash).toContainText(long)
-    const [flashBox, filterBox, inviteBox, tableBox] = [
+    const [flashBox, actionsBox, inviteBox, tableBox] = [
       await boxOf(flash, `the flash at ${width}px`),
-      await boxOf(roleFilter, `the role filter at ${width}px`),
+      await boxOf(actions, `the action row at ${width}px`),
       await boxOf(invite, `the Invite button at ${width}px`),
       await boxOf(table, `the table at ${width}px`),
     ]
-    expect(rectsOverlap(flashBox, filterBox), `the flash must not overlap the role filter at ${width}px`).toBe(false)
+    expect(enclosesRect(actionsBox, flashBox, 1), `the flash must stay in the action row at ${width}px`).toBe(true)
     expect(rectsOverlap(flashBox, inviteBox), `the flash must not overlap the Invite button at ${width}px`).toBe(false)
     const rightDelta = Math.abs(inviteBox.x + inviteBox.width - (tableBox.x + tableBox.width))
     expect(rightDelta, `the Invite button must end where the table ends at ${width}px`).toBeLessThanOrEqual(1)
-    return { width, flashBox, filterBox, inviteBox, rightDelta }
+    return { width, flashBox, actionsBox, inviteBox, rightDelta }
   })
   expect(l4.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
   await testInfo.attach('members-top-bar-fit.json', { body: JSON.stringify(l4, null, 2), contentType: 'application/json' })

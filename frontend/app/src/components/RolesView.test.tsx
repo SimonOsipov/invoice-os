@@ -520,6 +520,34 @@ describe('Roles tab v2 paint', () => {
 // Write controls lock for a non-admin viewer
 // ============================================================================
 
+const follows = (a: HTMLElement, b: HTMLElement) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+describe('Roles filter bar', () => {
+  const crew = [member({ id: 'me', role: 'admin', isYou: true }), member()]
+
+  it('FBAR the Roles action row holds New role and the bar holds the search', () => {
+    render(<Harness members={crew} roles={[role({ key: 'a', title: 'Alpha', members: ['u1'] })]} />)
+
+    const actions = screen.getByTestId('roles-actions')
+    const bar = screen.getByTestId('roles-filter-bar')
+    expect(within(actions).getByTestId('roles-new')).toBeTruthy()
+    expect(within(actions).queryByTestId('roles-search')).toBeNull()
+    expect(within(bar).getByTestId('roles-search')).toBeTruthy()
+    expect(within(bar).queryAllByRole('button')).toHaveLength(0)
+    expect(follows(actions, bar), 'the action row precedes the bar').toBe(true)
+    expect(follows(bar, screen.getByTestId('roles-grid')), 'the bar precedes the grid').toBe(true)
+  })
+
+  it('FBAR the Roles bar renders in loading and in error', () => {
+    render(<Harness roles={[role()]} rolesState="loading" membersState="ready" />)
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search'), 'loading').toBeTruthy()
+    cleanup()
+
+    render(<Harness rolesState="error" rolesError={new ApiError('http', 'gateway is down', 503)} membersState="ready" />)
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search'), 'error').toBeTruthy()
+  })
+})
+
 describe('Roles tab write lock', () => {
   const me = (over: Partial<Member> = {}) => member({ id: 'me', isYou: true, role: 'preparer', ...over })
   const nonAdmin = [me(), member()]
@@ -588,6 +616,7 @@ describe('Roles tab write lock', () => {
     const header = btn('roles-new')
     expect(header.title).toBe(WFROLE_ADMIN_ONLY)
     expect(describedBy(header)).toBe(note)
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search')).toBeTruthy()
   })
 
   it('the header note stays on the no-match card', () => {
@@ -596,6 +625,15 @@ describe('Roles tab write lock', () => {
 
     expect(screen.getByTestId('roles-no-match')).toBeTruthy()
     expect(describedBy(btn('roles-new'))).toBe(screen.getByTestId('roles-admin-only'))
+    expect(within(screen.getByTestId('roles-filter-bar')).getByTestId('roles-search')).toBeTruthy()
+  })
+
+  it('FBAR the lock note sits between New role and the bar', () => {
+    render(<Harness members={nonAdmin} roles={two} />)
+
+    const note = screen.getByTestId('roles-admin-only')
+    expect(follows(screen.getByTestId('roles-actions'), note)).toBe(true)
+    expect(follows(note, screen.getByTestId('roles-filter-bar'))).toBe(true)
   })
 
   it('a non-admin viewer still reads the whole tab', () => {

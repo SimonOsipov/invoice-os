@@ -613,7 +613,7 @@ export function SearchBox({ value, onChange, placeholder, label, testId }: {
   testId?: string
 }) {
   return (
-    <div className="pf-chipbox" style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
+    <div className="pf-chipbox" style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, maxWidth: '100%', height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
       <span aria-hidden="true" style={{ flex: 'none', display: 'inline-flex', color: 'var(--fg-3)' }}>
         {searchGlyph}
       </span>

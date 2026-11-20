@@ -809,6 +809,12 @@ const inviteRows = () => screen.queryAllByTestId('invite-row')
 const memberRows = () => screen.queryAllByTestId('member-row')
 const inviteRowFor = (email: string) => inviteRows().find((r) => r.textContent?.includes(email)) as HTMLElement
 const flash = () => screen.getByTestId('members-flash')
+const follows = (a: HTMLElement, b: HTMLElement) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+function expectBarHoldsFilters() {
+  const bar = within(screen.getByTestId('members-filter-bar'))
+  expect(bar.getByLabelText('Search members')).toBeTruthy()
+  expect(bar.getByLabelText('Access role')).toBeTruthy()
+}
 
 async function landed() {
   await waitFor(() => expect(inviteButton().disabled, 'the invite button never enabled').toBe(false))
@@ -1774,6 +1780,28 @@ describe('RESEND-07-04', () => {
       expect(el.getAttribute('title')).toBe(el.textContent)
     })
 
+    it('FBAR the flash and the admin-only note stay with Invite people', async () => {
+      const gw = gateway({ list: [answer(listOf())] })
+      render(<Harness initial={[selfRow({ role: 'preparer' }), member()]} authedFetch={gw.authedFetch} />)
+      const actions = screen.getByTestId('members-actions')
+      const bar = screen.getByTestId('members-filter-bar')
+      const reason = screen.getByTestId('members-invite-reason')
+      expect(follows(actions, reason), 'the note follows the action row').toBe(true)
+      expect(follows(reason, bar), 'the note precedes the bar').toBe(true)
+      cleanup()
+
+      const sent = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={sent.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      clickResendOn(inviteRows()[0])
+      const el = await screen.findByTestId('members-flash')
+      expect(within(screen.getByTestId('members-actions')).getByTestId('members-flash'), 'the flash is in the action row').toBe(el)
+      expect(within(screen.getByTestId('members-filter-bar')).queryByTestId('members-flash')).toBeNull()
+    })
+
     it('MembersView: the flash clears after three seconds', async () => {
       const timeouts = vi.spyOn(window, 'setTimeout')
       const gw = gateway({
@@ -1956,6 +1984,7 @@ describe('the roster table chrome', () => {
     const head = table.firstElementChild as HTMLElement
     expect(head.contains(noMatch)).toBe(false)
     expect(head.nextElementSibling).toBe(noMatch)
+    expectBarHoldsFilters()
   })
 
   it('a failed suspend renders member-status-error as a full-width red strip under the row', async () => {
@@ -1983,6 +2012,28 @@ describe('the roster table chrome', () => {
 })
 
 describe('the toolbar and the invite control', () => {
+  it('FBAR the action row holds Invite people and the bar holds the search and role filter', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const actions = screen.getByTestId('members-actions')
+    const bar = screen.getByTestId('members-filter-bar')
+    expect(within(actions).getByTestId('members-invite')).toBeTruthy()
+    expect(within(actions).queryByLabelText('Search members')).toBeNull()
+    expect(within(actions).queryByLabelText('Access role')).toBeNull()
+    expect(Array.from(bar.children).map((c) => c.querySelector('input, select')?.getAttribute('aria-label') ?? c.getAttribute('aria-label'))).toEqual(['Search members', 'Access role'])
+    expect(follows(actions, bar), 'the action row precedes the bar').toBe(true)
+    expect(follows(bar, screen.getByTestId('members-table')), 'the bar precedes the roster').toBe(true)
+  })
+
+  it('FBAR the Members bar renders in loading and error', () => {
+    render(<Harness initial={[]} membersState="loading" />)
+    expectBarHoldsFilters()
+    cleanup()
+
+    render(<Harness initial={[]} membersState="error" membersError={new ApiError('http', 'gateway is down', 503)} />)
+    expectBarHoldsFilters()
+  })
+
   it('for a non-admin viewer Invite people is a disabled 36px primary that states its reason, right-aligned', () => {
     render(<Harness initial={[member(), otherMember()]} />)
 
@@ -2040,6 +2091,7 @@ describe('the roster table chrome, head to rows', () => {
     expect(within(table).queryAllByTestId(/^(member|invite)-row$/)).toHaveLength(0)
     expect((table.firstElementChild as HTMLElement).nextElementSibling).toBe(within(table).getByTestId('members-no-match'))
     expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
+    expectBarHoldsFilters()
   })
 
   it('a removed row keeps the table on screen, not the "just you" card', () => {
@@ -2051,6 +2103,7 @@ describe('the roster table chrome, head to rows', () => {
   it('with only you on the roster the "just you" card shows', () => {
     render(<Harness initial={[member()]} />)
     expect(screen.getByText('Just you at the firm')).toBeTruthy()
+    expectBarHoldsFilters()
   })
 
   it('the Admin role filter lists no removed former admin', () => {

@@ -28,6 +28,7 @@ import {
   type Role,
 } from '../lib/roles'
 import { AmberNote, InitialsChip, SearchBox } from './MemberParts'
+import { FilterBar } from './FilterBar'
 import { RoleModal, type RoleModalSubject } from './RoleModal'
 import type { PlatformCtx } from '../types'
 
@@ -110,8 +111,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
         </AmberNote>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
+      <div data-testid="roles-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1 }} />
         {flash && (
           <span data-testid="roles-flash" style={{ flex: 'none', fontSize: 12.5, color: 'var(--status-green-text)' }}>
@@ -125,6 +125,10 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           {lock}
         </div>
       )}
+
+      <FilterBar testId="roles-filter-bar">
+        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
+      </FilterBar>
 
       {surface === 'loading' && <Loading label="Loading members…" />}
 

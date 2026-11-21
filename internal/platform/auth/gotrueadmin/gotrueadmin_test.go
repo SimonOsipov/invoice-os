@@ -849,3 +849,138 @@ func TestListUsers_DecodesTheConfirmationTimes(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateRecoveryLink_SendsRecoveryWithAServiceRoleToken(t *testing.T) {
+	const email = "sam+console@ascomply.test"
+	banned := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
+	cases := []struct {
+		name, reply string
+		want        gotrueadmin.RecoveryLink
+	}{
+		{"confirmed and banned", `{"action_link":"https://auth.invalid/verify?token=abc&type=recovery","email_otp":"0123456789","hashed_token":"HASHED-1","verification_type":"recovery","email":"sam+console@ascomply.test","email_confirmed_at":"2026-01-02T03:04:05Z","banned_until":"2031-02-03T04:05:06Z"}`,
+			gotrueadmin.RecoveryLink{TokenHash: "HASHED-1", Confirmed: true, BannedUntil: &banned}},
+		{"unconfirmed and not banned", `{"hashed_token":"HASHED-2","verification_type":"recovery","email":"sam+console@ascomply.test","email_confirmed_at":null,"banned_until":null}`,
+			gotrueadmin.RecoveryLink{TokenHash: "HASHED-2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := signing(t)
+			srv, got := recordingServer(t, http.StatusOK, tc.reply)
+			link, err := newClient(t, srv.URL, k).GenerateRecoveryLink(context.Background(), email)
+			if err != nil {
+				t.Fatalf("GenerateRecoveryLink: %v", err)
+			}
+			if len(*got) != 1 {
+				t.Fatalf("server got %d requests, want 1", len(*got))
+			}
+			r := (*got)[0]
+			if r.method != http.MethodPost || r.path != "/admin/generate_link" {
+				t.Errorf("request = %s %s, want POST /admin/generate_link", r.method, r.path)
+			}
+			var body map[string]any
+			if err := json.Unmarshal([]byte(r.body), &body); err != nil || !reflect.DeepEqual(body, map[string]any{"type": "recovery", "email": email}) {
+				t.Errorf("body = %q (%v), want exactly type recovery and the email", r.body, err)
+			}
+			header, claims := parseAdminToken(t, r.auth, k)
+			if header["kid"] != k.jwk.Kid || header["alg"] != "ES256" || claims["role"] != "service_role" {
+				t.Errorf("bearer header %v role %v, want ES256, kid %q, service_role", header, claims["role"], k.jwk.Kid)
+			}
+			if link.TokenHash != tc.want.TokenHash || link.Confirmed != tc.want.Confirmed || !reflect.DeepEqual(link.BannedUntil, tc.want.BannedUntil) {
+				t.Errorf("link = %+v, want %+v", link, tc.want)
+			}
+		})
+	}
+}
+
+func TestGenerateRecoveryLink_NotFoundAndValidationAreNoAccount(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{http.StatusNotFound, `{"code":404,"error_code":"user_not_found","msg":"User not found"}`},
+		{http.StatusUnprocessableEntity, `{"code":422,"error_code":"validation_failed","msg":"Unable to validate email address: invalid format"}`},
+		{http.StatusBadRequest, `{"code":400,"error_code":"validation_failed","msg":"bad request"}`},
+	} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			srv, got := recordingServer(t, tc.status, tc.body)
+			link, err := newClient(t, srv.URL, signing(t)).GenerateRecoveryLink(context.Background(), "nobody@ascomply.test")
+			if !errors.Is(err, gotrueadmin.ErrNoAccount) {
+				t.Errorf("GenerateRecoveryLink on %d = %v, want ErrNoAccount", tc.status, err)
+			}
+			if link != (gotrueadmin.RecoveryLink{}) {
+				t.Errorf("link = %+v, want zero", link)
+			}
+			if len(*got) != 1 {
+				t.Errorf("server got %d requests, want 1 (control: the call was made)", len(*got))
+			}
+		})
+	}
+}
+
+func TestGenerateRecoveryLink_OtherAnswersAreStatusErrors(t *testing.T) {
+	ctx := context.Background()
+	for _, status := range []int{http.StatusInternalServerError, http.StatusUnauthorized} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			srv, _ := recordingServer(t, status, `{"msg":"SECRETBODYTEXT"}`)
+			link, err := newClient(t, srv.URL, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
+			var se *gotrueadmin.StatusError
+			if !errors.As(err, &se) || se.Status != status || errors.Is(err, gotrueadmin.ErrNoAccount) {
+				t.Fatalf("GenerateRecoveryLink on %d = %v, want *StatusError{%d} and not ErrNoAccount", status, err, status)
+			}
+			if strings.Contains(err.Error(), "SECRETBODYTEXT") || link != (gotrueadmin.RecoveryLink{}) {
+				t.Errorf("error %q or link %+v carries the answer", err, link)
+			}
+		})
+	}
+
+	t.Run("transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		base := srv.URL
+		srv.Close()
+		_, err := newClient(t, base, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
+		var se *gotrueadmin.StatusError
+		if !errors.As(err, &se) || se.Status != 0 {
+			t.Errorf("GenerateRecoveryLink on a closed server = %v, want *StatusError{0}", err)
+		}
+	})
+
+	t.Run("redirect", func(t *testing.T) {
+		var second atomic.Int64
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			second.Add(1)
+			_, _ = io.WriteString(w, `{"hashed_token":"FOLLOWED","email_confirmed_at":"2026-01-02T03:04:05Z"}`)
+		}))
+		t.Cleanup(target.Close)
+		first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+		}))
+		t.Cleanup(first.Close)
+		link, err := newClient(t, first.URL, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
+		var se *gotrueadmin.StatusError
+		if !errors.As(err, &se) || se.Status != http.StatusTemporaryRedirect || link.TokenHash != "" || second.Load() != 0 {
+			t.Errorf("GenerateRecoveryLink on a redirect = %+v, %v, target hits %d; want zero link, *StatusError{307}, 0", link, err, second.Load())
+		}
+	})
+
+	t.Run("answer over 16 KiB", func(t *testing.T) {
+		big := `{"hashed_token":"HASHED-BIG","email_confirmed_at":"2026-01-02T03:04:05Z","pad":"` + strings.Repeat("a", 20<<10) + `"}`
+		srv, _ := recordingServer(t, http.StatusOK, big)
+		link, err := newClient(t, srv.URL, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
+		if err == nil || link.TokenHash != "" {
+			t.Errorf("GenerateRecoveryLink on a 20 KiB answer = %+v, %v; want a zero link and an error", link, err)
+		}
+
+		var read int
+		hc := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: infiniteBody{&read}, Header: http.Header{}, Request: r}, nil
+		})}
+		c, err := gotrueadmin.New("http://auth.invalid", keysJSON(t, signing(t).jwk), hc)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, _ = c.GenerateRecoveryLink(ctx, "ada@ascomply.test")
+		if read == 0 || read > 16<<10 {
+			t.Errorf("read %d bytes of an endless answer, want some and at most %d", read, 16<<10)
+		}
+	})
+}

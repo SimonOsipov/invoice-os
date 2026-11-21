@@ -156,6 +156,21 @@ func (c *Client) call(ctx context.Context, method, userID string) (*http.Respons
 	return c.do(ctx, method, "/admin/users/"+userID, nil)
 }
 
+// ErrNoAccount: GoTrue has no account for the address, or refused the address as invalid.
+var ErrNoAccount = errors.New("gotrueadmin: no account")
+
+// RecoveryLink is what GoTrue answers to a recovery generate_link: the token hash and the account's state.
+type RecoveryLink struct {
+	TokenHash   string
+	Confirmed   bool
+	BannedUntil *time.Time
+}
+
+// GenerateRecoveryLink is a compile stub for the red tests (CSSO-01-03); the executor replaces it.
+func (c *Client) GenerateRecoveryLink(ctx context.Context, email string) (RecoveryLink, error) {
+	return RecoveryLink{}, errors.New("gotrueadmin: GenerateRecoveryLink is not implemented")
+}
+
 // AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe. The times are
 // GoTrue's; a mail never sent leaves its time nil.
 type AdminUser struct {

@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { signOut } from '../auth'
 import { Sidebar } from './Sidebar'
 
-vi.mock('@invoice-os/console-session', () => ({ StaffGate: () => null, signOutConsole: vi.fn() }))
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
+  StaffGate: () => null,
+  signOutConsole: vi.fn(),
+}))
 
 type ButtonEl = ReactElement<Record<string, unknown>>
 

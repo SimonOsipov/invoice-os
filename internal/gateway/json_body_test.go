@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/iaptest"
 )
 
 const want415 = `{"error":"Content-Type must be application/json"}`
@@ -47,7 +50,7 @@ type jsonRoute struct {
 	h                http.Handler
 }
 
-// jsonRig builds the eleven public JSON handlers on recording fakes.
+// jsonRig builds the twelve public JSON handlers on recording fakes.
 type jsonRig struct {
 	routes   []jsonRoute
 	gotrue   atomic.Int32
@@ -56,6 +59,7 @@ type jsonRig struct {
 	claims   atomic.Int32
 	sink     *demoSink
 	upstream *subUpstream
+	worker   atomic.Int32
 }
 
 const takenEmail = "taken@corp.example"
@@ -113,6 +117,19 @@ func newJSONRig(t *testing.T, minResponse time.Duration) *jsonRig {
 		SignInHandler(authURL, testClient(), testHandoffStore(), th("sign-in"), log, nil, nil))
 	add("exchange", "/auth/exchange", `{"code":"c","state":"s"}`, ExchangeHandler(testHandoffStore(), nil))
 	add("invitation preview", "/auth/invitation", tokenBody(inviteToken), InvitationHandler(r.previews.preview, log))
+	_, jwks := iaptest.NewSigner(t)
+	iap, err := auth.NewIAPVerifier(auth.IAPConfig{Audiences: []string{iapAud}, JWKSURL: jwks})
+	if err != nil {
+		t.Fatalf("NewIAPVerifier: %v", err)
+	}
+	wk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		r.worker.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(wk.Close)
+	workerURL, _ := url.Parse(wk.URL)
+	add("iap-session", "/auth/iap-session", `{"state":"`+randomState(t)+`"}`,
+		IAPSessionHandler(iap, workerURL, testClient(), "gw-token", authURL, testClient(), testHandoffStore(), log, nil))
 	return r
 }
 
@@ -126,8 +143,8 @@ func (r *jsonRig) post(rt jsonRoute, contentType, body string) *httptest.Respons
 
 func TestPublicJSONRoutes_RefuseANonJSONBodyBeforeAnyDownstreamCall(t *testing.T) {
 	r := newJSONRig(t, 0)
-	if len(r.routes) != 11 {
-		t.Fatalf("%d routes, want 11", len(r.routes))
+	if len(r.routes) != 12 {
+		t.Fatalf("%d routes, want 12", len(r.routes))
 	}
 	for _, rt := range r.routes {
 		rec := r.post(rt, "text/plain", rt.body)
@@ -137,6 +154,9 @@ func TestPublicJSONRoutes_RefuseANonJSONBodyBeforeAnyDownstreamCall(t *testing.T
 	}
 	if n := r.gotrue.Load(); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+	if n := r.worker.Load(); n != 0 {
+		t.Errorf("worker saw %d calls, want 0", n)
 	}
 	if n := len(r.previews.calls()); n != 0 {
 		t.Errorf("previewer saw %d tokens, want 0", n)
@@ -200,8 +220,8 @@ func TestPublicJSONRoutes_AJSONBodyWithACharsetPassesTheCheck(t *testing.T) {
 
 func TestPublicJSONRoutes_AWrongMethodIs405NotTheJSON415(t *testing.T) {
 	r := newJSONRig(t, 0)
-	if len(r.routes) != 11 {
-		t.Fatalf("%d routes, want 11", len(r.routes))
+	if len(r.routes) != 12 {
+		t.Fatalf("%d routes, want 12", len(r.routes))
 	}
 	for _, rt := range r.routes {
 		for _, m := range []string{http.MethodGet, http.MethodOptions, http.MethodPut} {

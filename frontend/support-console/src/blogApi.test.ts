@@ -441,6 +441,7 @@ describe('blog calls through withSession', () => {
 
   beforeEach(() => {
     stored = JSON.stringify({ v: 3, token: 'OLD' })
+    vi.stubGlobal('window', { location: { hostname: 'localhost' } })
     vi.stubGlobal('localStorage', {
       getItem: (k: string) => (k === SESSION_KEY ? stored : null),
       setItem: (k: string, v: string) => {

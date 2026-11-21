@@ -1,5 +1,6 @@
 import { ApiError, sessionFetch } from '@invoice-os/api-client/client'
 
+import { clearSignedOut, consumeExpiredFresh, isSignedOut, markIapOpen, mintFromIap } from './iap'
 import { postSignOut } from './signOut'
 import { clearConsoleSession, decodeJwtPayload, isStaffToken, loadConsoleSession, nonEmpty, saveConsoleSession, type ConsoleSession } from './session'
 import {
@@ -14,7 +15,12 @@ import {
   type ConsoleTarget,
 } from './state'
 
-export type ConsoleBoot = { kind: 'open'; session: ConsoleSession | null } | { kind: 'leave'; url: string; replace?: true }
+export type ConsoleBoot =
+  | { kind: 'open'; session: ConsoleSession | null }
+  | { kind: 'leave'; url: string; replace?: true }
+  | { kind: 'failed' }
+  | { kind: 'no-staff'; email: string }
+  | { kind: 'signed-out' }
 
 const TIMEOUT_MS = 15000
 
@@ -62,9 +68,10 @@ export async function resolveConsoleBoot(o: {
   gateway: string | null
   landing: string | null
   app?: string | null
+  iap?: boolean
   now?: number
 }): Promise<ConsoleBoot> {
-  const { landing, gateway, storageKey, target } = o
+  const { landing, gateway, storageKey, target, iap = false } = o
   const now = o.now ?? Date.now()
   if (landing === null) return { kind: 'open', session: null }
   const pendingKey = `${storageKey}:sign-out-pending`
@@ -89,6 +96,13 @@ export async function resolveConsoleBoot(o: {
     return { kind: 'open', session }
   }
 
+  // IAP mode never leaves to landing: where a password console would leave, it mints from the IAP identity.
+  const mint = async (): Promise<ConsoleBoot> => {
+    if (gateway === null) return { kind: 'failed' }
+    const m = await mintFromIap({ gateway, storageKey, now })
+    return m.kind === 'session' ? open(m.session) : m
+  }
+
   const app = o.app ?? null
   const auth = new URLSearchParams(o.search).get('auth')
   // A usable landing session on the support console stays: StaffGate strips the param and the stored record renews.
@@ -96,25 +110,30 @@ export async function resolveConsoleBoot(o: {
   if (!keepsLanding && auth === 'app' && app !== null) {
     return { kind: 'leave', url: appStartUrl(app, mintSignInState(now), target), replace: true }
   }
-  if (!keepsLanding && (auth === 'start' || auth === 'app')) {
+  if (!iap && !keepsLanding && (auth === 'start' || auth === 'app')) {
     // replace drops the ?auth= entry so Back from the landing skips it.
     return { kind: 'leave', url: landingSignInUrl(landing, mintSignInState(now), target, 'ready'), replace: true }
   }
 
   const state = code === null ? null : consumeSignInState(now)
   if (code !== null && state !== null) {
-    if (gateway === null) return leave('failed')
+    if (gateway === null) return iap ? { kind: 'failed' } : leave('failed')
     try {
       const s = await redeemHandoffCode(gateway, code, state, target === 'support' && app !== null)
       clearPending()
-      return isStaffToken(s.token) ? open(s) : leave('not-staff')
+      if (isStaffToken(s.token)) {
+        if (iap) clearSignedOut(storageKey)
+        return open(s)
+      }
+      if (!iap) return leave('not-staff')
     } catch {
-      return leave('failed')
+      if (!iap) return leave('failed')
     }
   }
 
+  if (iap && isSignedOut(storageKey)) return { kind: 'signed-out' }
   const stored = loadConsoleSession(storageKey)
-  if (stored === null || gateway === null) return leave()
+  if (stored === null || gateway === null) return iap ? mint() : leave()
   if (stored.borrowed) {
     // Kept for a second tab, but never a loop: an expired record, or one whose bounce already ran, is cleared.
     const exp = decodeJwtPayload(stored.token)?.exp
@@ -122,21 +141,26 @@ export async function resolveConsoleBoot(o: {
     const bounced = app !== null && peekSignInState(now) !== null
     if (expired || bounced) {
       clearConsoleSession(storageKey)
-      return leave()
+      return iap ? mint() : leave()
     }
-    if (app === null) return leave()
+    if (app === null) return iap ? mint() : leave()
     return { kind: 'leave', url: appStartUrl(app, ensureSignInState(now), target), replace: true }
   }
+  // A 401 right after the last open armed the guard: no fetch, "Try again" opens once more.
+  if (iap && consumeExpiredFresh(storageKey)) return { kind: 'failed' }
   try {
     const s = await renewConsoleSession(gateway, stored.legacyRefreshToken)
-    if (isStaffToken(s.token)) return open(s)
+    if (isStaffToken(s.token)) {
+      if (iap) markIapOpen(storageKey, now)
+      return open(s)
+    }
     clearConsoleSession(storageKey)
-    return leave('not-staff')
+    return iap ? mint() : leave('not-staff')
   } catch (e) {
     if (e instanceof ApiError && e.kind === 'http' && (e.status === 400 || e.status === 401)) {
       clearConsoleSession(storageKey)
-      return leave()
+      return iap ? mint() : leave()
     }
-    return leave('failed')
+    return iap ? { kind: 'failed' } : leave('failed')
   }
 }

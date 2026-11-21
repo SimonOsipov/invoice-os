@@ -1,5 +1,5 @@
 import { ApiError, gatewayBase } from '@invoice-os/api-client'
-import { decodeJwtPayload, isStaffToken, loadConsoleSession, renewConsoleSession, saveConsoleSession } from '@invoice-os/console-session'
+import { decodeJwtPayload, isStaffToken, isIapHost, loadConsoleSession, renewStaffSession, saveConsoleSession } from '@invoice-os/console-session'
 import { expireSession, SESSION_KEY } from './auth'
 import { subOf } from './blog'
 
@@ -10,7 +10,12 @@ const renewOnce = (): Promise<void> => {
     const s = loadConsoleSession(SESSION_KEY)
     const base = gatewayBase()
     if (!s || s.borrowed || !base) throw new ApiError('http', 'Not signed in', 401)
-    const next = await renewConsoleSession(base, s.legacyRefreshToken)
+    const next = await renewStaffSession({
+      gateway: base,
+      storageKey: SESSION_KEY,
+      iap: isIapHost(window.location.hostname),
+      legacyRefreshToken: s.legacyRefreshToken,
+    })
     if (!isStaffToken(next.token)) throw new ApiError('http', 'Not signed in', 401)
     saveConsoleSession(SESSION_KEY, next)
   })().finally(() => {

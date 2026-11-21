@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -15,6 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/iaptest"
 )
 
 // With a gateway pool, each builder writes its account events to account_event_handoffs.
@@ -89,5 +94,38 @@ func TestGatewayMain_AccountEventsUseTheOutboxWithAPool(t *testing.T) {
 		if n := rows(event); n != 1 {
 			t.Errorf("%s rows = %d, want 1", event, n)
 		}
+	}
+
+	// A staff mint through the IAP route adds one signed_in row for the account /verify names.
+	g.verifyStaff.Store(true)
+	signer, jwks := iaptest.NewSigner(t)
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"token_hash":"wiring-hash"}`)
+	}))
+	t.Cleanup(worker.Close)
+	workerURL, _ := url.Parse(worker.URL)
+	app, err := platform.New("gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := envOf(map[string]string{"IAP_AUDIENCES": iapAudienceOps})
+	if err := mountIAPSession(app, env, auth.IAPConfig{JWKSURL: jwks}, workerURL, authURL, "gw-token", gateway.NewHandoffStore(gateway.HandoffTTL, time.Now), log, pool); err != nil {
+		t.Fatalf("mountIAPSession: %v", err)
+	}
+	now := time.Now()
+	assertion := signer.Sign(map[string]any{"iss": auth.IAPIssuer, "aud": iapAudienceOps, "sub": "accounts.google.com:1", "email": email,
+		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix()})
+	before := rows(gateway.EventSignedIn)
+	body, _ := json.Marshal(map[string]string{"state": handoffState})
+	req := httptest.NewRequest(http.MethodPost, "/auth/iap-session", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-Iap-Jwt-Assertion", assertion)
+	rec := httptest.NewRecorder()
+	app.Mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("iap-session = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if n := rows(gateway.EventSignedIn); n != before+1 {
+		t.Errorf("signed_in rows after the IAP mint = %d, want %d", n, before+1)
 	}
 }

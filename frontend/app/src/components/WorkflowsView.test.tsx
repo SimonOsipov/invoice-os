@@ -184,6 +184,19 @@ describe('APPR-09-04 AC-1/AC-2/AC-3: the surface is chosen by policiesState, nev
   })
 })
 
+describe('BUG-173: the roster carries no N POLICIES counter', () => {
+  it('a landed roster renders its rows and no "N POLICIES" text', () => {
+    render(<WorkflowsView ctx={listCtx([policy({ id: 'p1', name: 'Alpha' }), policy({ id: 'p2', name: 'Beta' })])} />)
+
+    // Control: the roster landed, so the absence below is not an unrendered list.
+    expect(screen.getByTestId('policies-list')).toBeTruthy()
+    expect(screen.getByText('Alpha')).toBeTruthy()
+    expect(screen.getByText('Beta')).toBeTruthy()
+
+    expect(screen.queryByText(/\d+\s+POLICIES/i), 'the counter row still renders').toBeNull()
+  })
+})
+
 describe('APPR-09-04 AC-4: the pill and the standing report different facts', () => {
   it('each row carries its own status pill beside its standing', () => {
     const list = [

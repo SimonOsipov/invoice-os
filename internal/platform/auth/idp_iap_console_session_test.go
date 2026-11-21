@@ -263,6 +263,8 @@ func TestIdP_IAPConsoleSession_NonStaffGetsNoSessionLeftOpen(t *testing.T) {
 	conn := superConn(t)
 	u := signUp(t, conn, base) // confirmed, no house membership
 	s := newIAPStack(t, base, nil, false)
+	// signUp logs in once (immediate login after signup), which leaves a session; clear it so the count isolates the mint.
+	exec(t, conn, `DELETE FROM auth.sessions WHERE user_id = $1`, u.id)
 	if n := countAuthRows(t, conn, sessionsSQL, u.id); n != 0 {
 		t.Fatalf("control: %d sessions before the call", n)
 	}

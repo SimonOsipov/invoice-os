@@ -1,3 +1,4 @@
+import { reportApiFailure } from '@invoice-os/api-client'
 import { ApiError } from '@invoice-os/api-client/client'
 
 import { redeemHandoffCode, renewConsoleSession } from './boot'
@@ -50,14 +51,22 @@ const FAILED: IapMint = { kind: 'failed' }
 // Wire shape of /auth/iap-session: internal/gateway/iap_session.go. Same-origin (the console host proxies it),
 // redirect manual so an IAP login redirect reads as a failure instead of being followed.
 async function requestCode(state: string): Promise<IapMint | string> {
-  const res = await fetch(IAP_SESSION_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state }),
-    credentials: 'same-origin',
-    redirect: 'manual',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  })
+  const signal = AbortSignal.timeout(TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(IAP_SESSION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+      credentials: 'same-origin',
+      redirect: 'manual',
+      signal,
+    })
+  } catch (e) {
+    reportApiFailure(e, { method: 'POST', url: IAP_SESSION_URL, signal })
+    throw e
+  }
+  if (res.status >= 500) reportApiFailure(new ApiError('http', 'iap-session failed', res.status), { method: 'POST', url: IAP_SESSION_URL })
   if (res.status === 403) {
     const b = (await res.json()) as { error?: unknown; email?: unknown } | null
     return b?.error === 'no staff account' && nonEmpty(b.email) ? { kind: 'no-staff', email: b.email } : FAILED

@@ -2636,11 +2636,11 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 // silently lagging.
 const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed', 'discarded']
 
-// The header's action column carries no testid; `invoice-actions` is its last row.
+// The header's action column carries no testid; it is the parent of `invoice-header-actions-row`.
 function actionColumn(): HTMLElement {
-  const column = screen.getByTestId('invoice-actions').parentElement
+  const column = screen.getByTestId('invoice-header-actions-row').parentElement
   expect(column, 'the actions column must exist').toBeTruthy()
-  expect(column!.style.maxWidth, 'the anchor resolved to the header column').toBe('320px')
+  expect(column!.style.maxWidth, 'the 320px cap is gone (BUG-171)').toBe('')
   expect(column!.contains(screen.getByTestId('detail-decision-actions')), 'the decision row is in the column').toBe(true)
   return column!
 }
@@ -3003,7 +3003,7 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
   // that column (InvoiceDetail.tsx:474).
   // KILLS: widening the condition all the way to `true`.
   const columns = () =>
-    Array.from(document.querySelectorAll<HTMLElement>('div')).filter((d) => d.style.maxWidth === '320px')
+    Array.from(document.querySelectorAll<HTMLElement>('div')).filter((d) => d.style.flexDirection === 'column' && d.style.alignItems === 'flex-end' && d.style.gap === '10px' && !d.hasAttribute('data-testid'))
 
   it.each([
     ['can_edit true, not editing', { ...editable }, false],
@@ -4398,7 +4398,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
   // The edit form's invoice number cell.
   const EXTR_27_TESTIDS = ['edit-invoice-number']
-  const APPR_17_TESTIDS = ['detail-approve-creator-reason']
+  const APPR_17_TESTIDS = ['detail-approve-creator-reason', 'invoice-header-actions-row']
   const RETRY_01_TESTIDS = ['send-again', 'send-again-blocked', 'send-again-error']
   const ENGI_17_TESTIDS = ['violation-explain']
   const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']

@@ -749,11 +749,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
           {showColumn && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+              {/* One horizontal row for every header action; explanation text goes below it, never between buttons (BUG-171). */}
+              {!formOpen && (showDecision || showBar) && (
+                <div data-testid="invoice-header-actions-row" style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10 }}>
               {/* The decision pair: each button renders only on its own can_approve / can_reject
                   (BUG-168), never on `can_edit`, and never on a dirty edit form (`!formOpen`).
                   The wrapper sits outside `invoice-actions` so it survives that div's absence. */}
-              {!formOpen && showDecision && (
+              {showDecision && (
                 <>
                   {(showApprove || inv.can_reject) && (
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -824,75 +827,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     )}
                   </div>
                   )}
-                  {creatorReason && (
-                    <div data-testid="detail-approve-creator-reason" style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{inv.approve_blocked_reason}</div>
-                    </div>
-                  )}
-                  {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
-                      and styling as detail-submit-confirm-prompt below. */}
-                  {approvePhase !== 'idle' && (
-                    <div data-testid="detail-approve-confirm-prompt" style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_DECISION_COPY.approvePrompt}</div>
-                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_DECISION_COPY.approveDetail}</div>
-                    </div>
-                  )}
-                  {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
-                      detail-decision-actions: flexWrap:'wrap' is mandatory, not cosmetic -- the
-                      input plus both button labels don't fit on one line at 320px. */}
-                  {rejectOpen && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      <input
-                        type="text"
-                        data-testid="detail-reject-reason"
-                        aria-label="Reason for rejection"
-                        placeholder={DETAIL_DECISION_COPY.rejectPlaceholder}
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                        disabled={rejecting}
-                        className="pf-input"
-                        style={{ flex: '1 1 100%', height: 34, fontSize: 13, padding: '0 10px' }}
-                      />
-                      <button
-                        type="button"
-                        data-testid="detail-reject-cancel"
-                        onClick={() => {
-                          setRejectOpen(false)
-                          setRejectReason('')
-                        }}
-                        disabled={rejecting}
-                        className="v2-btn v2-btn-ghost pf-btn"
-                        style={{
-                          height: 34,
-                          flexShrink: 0,
-                          whiteSpace: 'nowrap',
-                          ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                        }}
-                      >
-                        {DETAIL_DECISION_COPY.cancel}
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="detail-reject-confirm"
-                        onClick={() => void handleReject()}
-                        disabled={rejecting || !canRejectReason(rejectReason)}
-                        className="v2-btn v2-btn-primary pf-btn"
-                        style={{
-                          height: 34,
-                          flexShrink: 0,
-                          whiteSpace: 'nowrap',
-                          ...(rejecting || !canRejectReason(rejectReason)
-                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
-                            : null),
-                        }}
-                      >
-                        {rejecting ? DETAIL_DECISION_COPY.rejectSending : DETAIL_DECISION_COPY.rejectConfirm}
-                      </button>
-                    </div>
-                  )}
                 </>
               )}
-              {!formOpen && showBar && (
+              {showBar && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
                   {hasBarActions && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1016,6 +953,78 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </div>
                   )}
                 </div>
+              )}
+                </div>
+              )}
+              {!formOpen && showDecision && (
+                <>
+                  {creatorReason && (
+                    <div data-testid="detail-approve-creator-reason" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{inv.approve_blocked_reason}</div>
+                    </div>
+                  )}
+                  {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
+                      and styling as detail-submit-confirm-prompt below. */}
+                  {approvePhase !== 'idle' && (
+                    <div data-testid="detail-approve-confirm-prompt" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_DECISION_COPY.approvePrompt}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_DECISION_COPY.approveDetail}</div>
+                    </div>
+                  )}
+                  {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
+                      detail-decision-actions: flexWrap:'wrap' is mandatory, not cosmetic -- the
+                      input plus both button labels don't fit on one line at 320px. */}
+                  {rejectOpen && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <input
+                        type="text"
+                        data-testid="detail-reject-reason"
+                        aria-label="Reason for rejection"
+                        placeholder={DETAIL_DECISION_COPY.rejectPlaceholder}
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        disabled={rejecting}
+                        className="pf-input"
+                        style={{ flex: '1 1 100%', height: 34, fontSize: 13, padding: '0 10px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="detail-reject-cancel"
+                        onClick={() => {
+                          setRejectOpen(false)
+                          setRejectReason('')
+                        }}
+                        disabled={rejecting}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 34,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="detail-reject-confirm"
+                        onClick={() => void handleReject()}
+                        disabled={rejecting || !canRejectReason(rejectReason)}
+                        className="v2-btn v2-btn-primary pf-btn"
+                        style={{
+                          height: 34,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting || !canRejectReason(rejectReason)
+                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            : null),
+                        }}
+                      >
+                        {rejecting ? DETAIL_DECISION_COPY.rejectSending : DETAIL_DECISION_COPY.rejectConfirm}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               {/* A skip is not a failure -- amber, like the stale-verdict banner, never red.
                   Outside the `invoice-actions` gate above -- see the wrapper's own comment. */}

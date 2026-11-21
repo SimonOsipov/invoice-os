@@ -26,14 +26,14 @@ var (
 
 // Connection is one client's link to one ERP system; it carries no grant field.
 type Connection struct {
-	ID          string
-	EntityID    string
-	System      string
-	ExternalKey *string
-	Status      string
-	LastSyncAt  *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          string     `json:"id"`
+	EntityID    string     `json:"entity_id"`
+	System      string     `json:"system"`
+	ExternalKey *string    `json:"external_key"`
+	Status      string     `json:"status"`
+	LastSyncAt  *time.Time `json:"last_sync_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type ConnectInput struct{ System, ExternalKey string }

@@ -451,6 +451,20 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
     expect(publishPolicy, 'the click reached the gateway for a publish the server refuses').not.toHaveBeenCalled()
   })
 
+  it('BUG-174: the sealed publish note sits in the policy-name column, not the button column', () => {
+    const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: 2 }
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed] })} policy={sealed} />)
+    const note = screen.getByTestId('publish-blocked-reason')
+    expect(note.textContent).toContain(PUBLISH_SEALED_REASON)
+
+    // Smallest container holding both the name input and the note: the header row if the note is
+    // in the button column (it also holds Publish), the name column once it is fixed.
+    let shared: HTMLElement | null = screen.getByLabelText('Policy name')
+    while (shared && !shared.contains(note)) shared = shared.parentElement
+    expect(shared, 'the note shares no container with the name input').not.toBeNull()
+    expect(shared!.contains(publishButton()), 'the note sits in the button column, not under the policy name').toBe(false)
+  })
+
   it('the consequence note stops promising a replacement it cannot perform', () => {
     const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: 2 }
     render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed] })} policy={sealed} />)

@@ -451,6 +451,56 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
     expect(publishPolicy, 'the click reached the gateway for a publish the server refuses').not.toHaveBeenCalled()
   })
 
+  it('BUG-174: the sealed publish note sits in the policy-name column, not the button column', () => {
+    const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: 2 }
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed] })} policy={sealed} />)
+    const note = screen.getByTestId('publish-blocked-reason')
+    expect(note.textContent).toContain(PUBLISH_SEALED_REASON)
+
+    // Smallest container holding both the name input and the note: the header row if the note is
+    // in the button column (it also holds Publish), the name column once it is fixed.
+    let shared: HTMLElement | null = screen.getByLabelText('Policy name')
+    while (shared && !shared.contains(note)) shared = shared.parentElement
+    expect(shared, 'the note shares no container with the name input').not.toBeNull()
+    expect(shared!.contains(publishButton()), 'the note sits in the button column, not under the policy name').toBe(false)
+  })
+
+  it('BUG-174: the dirty reason sits in the name column too, and Publish is described by the moved note in both states', () => {
+    // Smallest container holding the name input and the note; it must not hold Publish.
+    const nameColumnHoldsNote = (note: HTMLElement) => {
+      let shared: HTMLElement | null = screen.getByLabelText('Policy name')
+      while (shared && !shared.contains(note)) shared = shared.parentElement
+      return shared !== null && !shared.contains(publishButton())
+    }
+    const describedBy = () => {
+      const id = publishButton().getAttribute('aria-describedby')
+      return id ? document.getElementById(id) : null
+    }
+
+    const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: 2 }
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed] })} policy={sealed} />)
+    expect(describedBy(), 'sealed: Publish points at nothing').toBe(screen.getByTestId('publish-blocked-reason'))
+    expect(nameColumnHoldsNote(screen.getByTestId('publish-blocked-reason'))).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Renamed policy' } })
+    const dirtyNote = screen.getByTestId('publish-blocked-reason')
+    expect(dirtyNote.textContent).toContain(PUBLISH_BLOCKED_REASON)
+    expect(describedBy(), 'dirty: Publish points at nothing').toBe(dirtyNote)
+    expect(nameColumnHoldsNote(dirtyNote), 'the dirty reason sits in the button column').toBe(true)
+  })
+
+  it('BUG-174: no note renders when nothing blocks Publish, and the consequence stays with the buttons', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+    expect(screen.queryByTestId('publish-blocked-reason')).toBeNull()
+    expect(publishButton().getAttribute('aria-describedby')).toBeNull()
+
+    const consequence = screen.getByTestId('publish-consequence')
+    expect(consequence.textContent?.length, 'the consequence note is empty').toBeGreaterThan(0)
+    let shared: HTMLElement | null = screen.getByLabelText('Policy name')
+    while (shared && !shared.contains(consequence)) shared = shared.parentElement
+    expect(shared!.contains(publishButton()), 'the consequence moved under the policy name').toBe(true)
+  })
+
   it('the consequence note stops promising a replacement it cannot perform', () => {
     const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: 2 }
     render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed] })} policy={sealed} />)

@@ -472,9 +472,15 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             />
             <PolicyStatusPill status={working.status} padding="3px 9px" />
           </div>
+          {/* Under the name, not the buttons: it explains the policy's state. Id kept for Publish's aria-describedby. */}
+          {blockedReason && (
+            <div id={PUBLISH_BLOCKED_REASON_ID} data-testid="publish-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, marginTop: 6 }}>
+              {blockedReason}
+            </div>
+          )}
         </div>
 
-        {/* A column, not a row: each control's reason follows it down when the header wraps. */}
+        {/* A column, not a row: each control's consequence and error follows it down when the header wraps. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 420 }}>
           <div style={{ display: 'flex', gap: 10 }}>
             <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13, ...(submitting ? DISABLED_GHOST : null) }}>
@@ -506,11 +512,6 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               {pendingVerb === 'publish' ? 'Publishing…' : 'Publish'}
             </button>
           </div>
-          {blockedReason && (
-            <div id={PUBLISH_BLOCKED_REASON_ID} data-testid="publish-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-              {blockedReason}
-            </div>
-          )}
           {/* Rendered whether or not Publish is clickable, so the consequence is read BEFORE
               the save that arms it — but not once the version is sealed, where the only honest
               answer is that there is nothing to publish, which the reason above already gives. */}

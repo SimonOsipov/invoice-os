@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -55,5 +57,50 @@ func TestRegistry_SystemsOfAnEmptyRegistryIsEmptyNotNil(t *testing.T) {
 	}
 	if b, _ := json.Marshal(s); string(b) != "[]" {
 		t.Errorf("JSON = %s", b)
+	}
+}
+
+// Nothing calls most of these methods through the interface until ERPF-03 to ERPF-06, so a
+// removed or retyped one would otherwise go unseen.
+func TestConnector_DeclaresItsTenMethods(t *testing.T) {
+	typ := reflect.TypeOf((*Connector)(nil)).Elem()
+	var got []string
+	for i := range typ.NumMethod() {
+		got = append(got, typ.Method(i).Name)
+	}
+	want := []string{"Authorize", "Capabilities", "EnsureSubscriptions", "Fetch", "FetchParty", "ListChanged", "System", "Validate", "VerifyWebhook", "WriteBack"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Connector methods = %v, want %v", got, want)
+	}
+	lc, _ := typ.MethodByName("ListChanged")
+	if lc.Type.NumIn() != 4 || lc.Type.In(3) != reflect.TypeOf([]byte(nil)) {
+		t.Errorf("ListChanged cursor parameter = %v, want an opaque []byte", lc.Type)
+	}
+	vw, _ := typ.MethodByName("VerifyWebhook")
+	if vw.Type.NumOut() != 2 || vw.Type.Out(0) != reflect.TypeOf([]Hint(nil)) {
+		t.Errorf("VerifyWebhook results = %v, want ([]Hint, error)", vw.Type)
+	}
+}
+
+func TestConnector_DocRefAndCapabilitiesFields(t *testing.T) {
+	fields := func(v any) map[string]string {
+		out := map[string]string{}
+		typ := reflect.TypeOf(v)
+		for f := range typ.Fields() {
+			out[f.Name] = f.Type.String()
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		got  map[string]string
+		want map[string]string
+	}{
+		{"DocRef", fields(DocRef{}), map[string]string{"SourceDocID": "string", "SourceRevision": "string", "Scope": "string", "Deleted": "bool"}},
+		{"Capabilities", fields(Capabilities{}), map[string]string{"Webhooks": "bool", "Note": "bool", "Attachment": "bool", "CustomFieldSlots": "int", "RequiresRevisionOnWrite": "bool"}},
+	} {
+		if len(c.got) == 0 || !reflect.DeepEqual(c.got, c.want) {
+			t.Errorf("%s fields = %v, want %v", c.name, c.got, c.want)
+		}
 	}
 }

@@ -1115,6 +1115,7 @@ describe('ClientsView: the search box (CSRCH-01-02)', () => {
     await advance(300)
     const box = screen.getByTestId('clients-no-match')
     expect(within(box).getByText('No clients match “zzz”')).toBeTruthy()
+    expect(within(box).getByText("Search matches part of a client's name or TIN.")).toBeTruthy()
     expect(within(box).getByTestId('clients-clear-search').textContent).toBe('Clear search')
     expect(screen.queryByText('No entities yet')).toBeNull()
     expect(screen.queryByText('No clients match this filter')).toBeNull()

@@ -7495,6 +7495,20 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
   })
 
+  // BUG-171: Reject and Edit share one row; the reason note sits after it, not between them.
+  it('detail_headerActions_rejectAndEditShareOneRow_reasonFollowsIt', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const reason = await screen.findByTestId('detail-approve-creator-reason')
+    const row = screen.getByTestId('invoice-header-actions-row')
+    expect(within(row).getByTestId('detail-reject')).toBeTruthy()
+    expect(within(row).getByTestId('edit-toggle')).toBeTruthy()
+    expect(row.contains(reason)).toBe(false)
+    expect(row.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('detail_roleRefused_printsNoReason', async () => {
     mockDetailFetch(
       detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: false, approve_blocked_reason: 'Only an approver can approve this invoice.' }),

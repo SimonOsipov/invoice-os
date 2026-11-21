@@ -669,6 +669,20 @@ func TestRLS_ErpConnectionsInsertOutsideTheScopeRefused(t *testing.T) {
 		t.Fatalf("control INSERT inside the scope: %v", err)
 	}
 	assertRLSViolation(t, insert(e2, "k1"))
+
+	// Without RETURNING the row is never read back, so only the policy's insert check can refuse it.
+	bare := func(entity, key string) error {
+		return erpApp(a, &scope, func(tx pgx.Tx) error {
+			_, e := tx.Exec(context.Background(),
+				`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status) VALUES ($1, $2, 'fake', $3, 'pending')`,
+				a, entity, key)
+			return e
+		})
+	}
+	if err := bare(e1, "k4"); err != nil {
+		t.Fatalf("control INSERT without RETURNING inside the scope: %v", err)
+	}
+	assertRLSViolation(t, bare(e2, "k4"))
 	if n := mustCount(t, h.super, `SELECT count(*) FROM erp_connections WHERE entity_id = $1`, e2); n != 0 {
 		t.Errorf("connections of the out-of-scope client after the refused INSERT = %d, want 0", n)
 	}

@@ -895,8 +895,12 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     }
     if (rects.back && rects.left && rects.back.y + rects.back.height > rects.left.y + 1) problems.push('the back link is not above the header row')
     scopeCardLayout(rects, problems)
-    for (const n of ['reason', 'consequence']) {
-      if (rects[n] && rects.publish && Math.abs(rects[n].x + rects[n].width - (rects.publish.x + rects.publish.width)) > 1) problems.push(`${n} right edge differs from Publish`)
+    const { consequence: cons, reason, nameRow } = rects
+    if (cons && rects.publish && Math.abs(cons.x + cons.width - (rects.publish.x + rects.publish.width)) > 1) problems.push('consequence right edge differs from Publish')
+    inside(rects, 'left', ['reason'], problems)
+    if (reason && nameRow) {
+      if (reason.y < nameRow.y + nameRow.height - 1) problems.push('reason is not below the name row')
+      if (Math.abs(reason.x - nameRow.x) > 1) problems.push('reason left edge differs from the name row')
     }
     return { problems, rects }
   })

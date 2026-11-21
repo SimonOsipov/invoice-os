@@ -1,3 +1,4 @@
+import { reportApiFailure } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot, type ConsoleBoot } from './boot'
@@ -25,6 +26,12 @@ import {
   v3BorrowedRaw,
   v3Raw,
 } from './testkit'
+
+// The real reporter still runs; the spy shows which mint outcomes reach it.
+vi.mock('@invoice-os/api-client', async (orig) => {
+  const m = await orig<typeof import('@invoice-os/api-client')>()
+  return { ...m, reportApiFailure: vi.fn(m.reportApiFailure) }
+})
 
 const MINT_URL = '/auth/iap-session'
 const EXCHANGE = `${GW}/auth/exchange`
@@ -296,7 +303,8 @@ describe('mintFromIap', () => {
   })
 
   it('mintFromIap_everyOtherOutcomeFails', async () => {
-    const rows: [string, Routes][] = [
+    // The third cell: the outcome reaches the failure reporter (unreachable or 5xx), which a refusal does not.
+    const rows: [string, Routes, boolean?][] = [
       // The browser's opaque redirect has status 0 and ok false. Its body would redeem, so only the status refuses it.
       [
         'opaqueredirect',
@@ -308,10 +316,10 @@ describe('mintFromIap', () => {
           }),
         },
       ],
-      ['network', { mint: new TypeError('Failed to fetch') }],
-      ['timeout', { mint: timeoutError() }],
+      ['network', { mint: new TypeError('Failed to fetch') }, true],
+      ['timeout', { mint: timeoutError() }, true],
       ['401', { mint: reply(401, { error: 'no verified Google identity' }) }],
-      ['502', { mint: reply(502, { error: 'console sign-in is unavailable' }) }],
+      ['502', { mint: reply(502, { error: 'console sign-in is unavailable' }) }, true],
       ['200 empty', { mint: reply(200, {}) }],
       ['200 short code', { mint: reply(200, { code: 'short' }) }],
       ['403 without email', { mint: reply(403, { error: 'no staff account' }) }],
@@ -327,10 +335,14 @@ describe('mintFromIap', () => {
         },
       ],
     ]
-    for (const [name, r] of rows) {
+    for (const [name, r, reported = false] of rows) {
+      vi.mocked(reportApiFailure).mockClear()
       const { store } = setup({}, r)
       expect(await mintFromIap(o), name).toEqual({ kind: 'failed' })
       expect(store.local.getItem(OPS_KEY), name).toBeNull()
+      const calls = vi.mocked(reportApiFailure).mock.calls
+      expect(calls, name).toHaveLength(reported ? 1 : 0)
+      if (reported) expect(calls[0]![1], name).toMatchObject({ method: 'POST', url: MINT_URL })
     }
   })
 
@@ -380,12 +392,13 @@ describe('IAP loop guard', () => {
   it('expire_iap_liveCookieRenewsWithoutMint', async () => {
     const win = installWindow()
     const renewed = staffToken('renewed')
+    const routes: Routes = { refresh: reply(200, { access_token: renewed }) }
     const { net, store } = setup(
       {
         local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) },
         session: { [iapMintedAtKey(OPS_KEY)]: String(Date.now() - 10_000) },
       },
-      { refresh: reply(200, { access_token: renewed }) },
+      routes,
     )
     await expireConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING, app: null, target: 'ops', iap: true })
     expect(win.reload).toHaveBeenCalledTimes(1)
@@ -393,6 +406,11 @@ describe('IAP loop guard', () => {
     expect(await boot()).toEqual({ kind: 'open', session: { token: renewed, borrowed: false } })
     expect(urls(net)).toEqual([REFRESH])
     expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBeNull()
+
+    // The renewal disarmed the guard: a later lapse the cookie no longer covers mints, it does not show "failed".
+    routes.refresh = reply(401, { error: 'refused' })
+    expect(await boot()).toMatchObject({ kind: 'open', session: { token: staffToken('minted') } })
+    expect(urls(net)).toEqual([REFRESH, REFRESH, MINT_URL, EXCHANGE])
   })
 
   it('expire_iap_refusedCookieMints', async () => {

@@ -28,7 +28,7 @@ export function isSignedOut(storageKey: string): boolean {
   }
 }
 
-// A renewal through the cookie disarms the loop guard: only a mint can loop.
+// A renewal through the cookie disarms the loop guard, which bounds mints only.
 export function clearExpiredFresh(storageKey: string): void {
   try {
     sessionStorage.removeItem(iapExpiredFreshKey(storageKey))

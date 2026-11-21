@@ -502,23 +502,86 @@ func TestIAPSession_UpstreamFailures(t *testing.T) {
 	}
 }
 
+// lateVerify delivers GoTrue's /verify answer only after the request's context is done, as an upstream
+// whose answer lands past the deadline. It buffers the body first: the stock transport ties it to the context.
+type lateVerify struct{ wait bool }
+
+func (l lateVerify) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil || !l.wait || req.URL.Path != "/verify" {
+		return resp, err
+	}
+	b, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-req.Context().Done():
+	case <-time.After(3 * time.Second): // no deadline on the request: fail the test, do not hang it
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	return resp, nil
+}
+
 func TestIAPSession_DeadlineWritesNoEventAndStoresNoCode(t *testing.T) {
 	old := iapDeadline
-	iapDeadline = 50 * time.Millisecond
+	if old <= 0 || old >= 15*time.Second {
+		t.Errorf("default deadline = %s, want under the browser's 15 s abort (packages/console-session TIMEOUT_MS)", old)
+	}
+	iapDeadline = 250 * time.Millisecond
 	t.Cleanup(func() { iapDeadline = old })
-	rg := newIAPRig(t)
-	rg.worker = func(int) (int, string) {
-		time.Sleep(300 * time.Millisecond)
-		return http.StatusOK, `{"token_hash":"` + iapHash(1) + `"}`
+
+	serve := func(rg *iapRig, late bool) (*httptest.ResponseRecorder, string) {
+		state := randomState(t)
+		h := IAPSessionHandler(rg.verifier, rg.workerURL, testClient(), iapGatewayTok, rg.authURL,
+			&http.Client{Transport: lateVerify{wait: late}}, rg.store, rg.log, rg.events)
+		return serveRecorder(h, rg.request(state)), state
+	}
+	requireNoCode := func(t *testing.T, rg *iapRig, state string) {
+		t.Helper()
+		rg.events.requireNames(t)
+		if got := rg.store.LiveForTest(); got != 0 {
+			t.Errorf("%d codes stored after the deadline, want none (state %s)", got, state)
+		}
 	}
 
-	rec, state := rg.mint()
+	t.Run("control: every answer inside the deadline", func(t *testing.T) {
+		rg := newIAPRig(t)
+		rec, _ := serve(rg, false)
+		requireCode(t, rec)
+		rg.events.requireNames(t, EventSignedIn)
+	})
+	t.Run("worker answers past the deadline", func(t *testing.T) {
+		rg := newIAPRig(t)
+		rg.worker = func(int) (int, string) {
+			time.Sleep(1200 * time.Millisecond)
+			return http.StatusOK, `{"token_hash":"` + iapHash(1) + `"}`
+		}
+		start := time.Now()
+		rec, state := serve(rg, false)
 
-	requireRefusal(t, rec, http.StatusBadGateway, msgConsoleDown)
-	rg.events.requireNames(t)
-	if got := rg.store.LiveForTest(); got != 0 {
-		t.Errorf("%d codes stored after the deadline, want none (state %s)", got, state)
-	}
+		requireRefusal(t, rec, http.StatusBadGateway, msgConsoleDown)
+		requireNoCode(t, rg, state)
+		// The deadline cuts the upstream call; it does not wait for the answer and refuse it afterwards.
+		if took := time.Since(start); took > 900*time.Millisecond {
+			t.Errorf("handler took %s, want it back near the %s deadline, not after the 1.2 s worker", took, iapDeadline)
+		}
+	})
+	// The one case that reaches the check before store.Put: GoTrue's session arrives, then the deadline is found passed.
+	t.Run("GoTrue answers past the deadline", func(t *testing.T) {
+		rg := newIAPRig(t)
+		rec, state := serve(rg, true)
+
+		requireRefusal(t, rec, http.StatusBadGateway, msgConsoleDown)
+		requireNoCode(t, rg, state)
+		if v, l := len(rg.gotrueAt("/verify")), len(rg.gotrueAt("/logout")); v != 1 || l != 0 {
+			t.Errorf("GoTrue calls: %d /verify, %d /logout; want the one /verify the session came from", v, l)
+		}
+		if !strings.Contains(rg.logBuf.String(), "deadline passed before the code was stored") {
+			t.Errorf("log %q does not name the deadline check: the refusal came from another branch", rg.logBuf.String())
+		}
+	})
 }
 
 func TestIAPSession_MethodAndBody(t *testing.T) {

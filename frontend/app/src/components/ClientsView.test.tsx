@@ -1274,4 +1274,46 @@ describe('ClientsView: the search box (CSRCH-01-02)', () => {
     expect(screen.getByText('Beta Traders')).toBeTruthy()
     expect(screen.queryByText('Okafor & Partners')).toBeNull()
   })
+
+  it('CSRCH a restore that resolves after a newer search reruns the newer search', async () => {
+    vi.useFakeTimers()
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((res) => {
+      release = res
+    })
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) return held
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    const archiveCalls: string[] = []
+    fetchMock.mockImplementation((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) {
+        if (url.endsWith('/onboard')) archiveCalls.push(url)
+        return held
+      }
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('honey')
+    await advance(300)
+    const action = within(rowFor('Honeywell Group')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm; the POST is held
+    await flush()
+    typeSearch('beta')
+    await advance(300)
+    release({ ok: true, status: 200, json: () => Promise.resolve(null) })
+    await flush()
+    await flush()
+    const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
+    expect(paramsOf(listUrls.at(-1)!).get('q'), 'the archive reran the current search').toBe('beta')
+    expect(archiveCalls, 'the held POST was onboard').toHaveLength(1)
+    expect(searchBox().value).toBe('beta')
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+    expect(screen.queryByText('Honeywell Group')).toBeNull()
+  })
 })

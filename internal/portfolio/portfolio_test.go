@@ -1997,6 +1997,63 @@ func TestStoreList_SearchQWildcardsAreLiteral(t *testing.T) {
 	}
 }
 
+// TestStoreList_SearchQTINWildcardsAreLiteral (CSRCH-01 QA): the tin arm escapes q too. The TIN holds a
+// literal _, % and \; each is found as itself, and a wildcard reading of it matches nothing.
+func TestStoreList_SearchQTINWildcardsAreLiteral(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-tin-literal tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	seedEntity(t, super, tenantID, "Okafor Ltd", nil)
+	tinLit := `12_34%56\78`
+	seedEntity(t, super, tenantID, "Plain Name", &tinLit)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	for _, tc := range []struct {
+		q    string
+		want string
+	}{
+		{"2_3", "Plain Name"},
+		{"4%5", "Plain Name"},
+		{`6\7`, "Plain Name"},
+		{"2%3", ""},
+		{"4_5", ""},
+		{`6\\7`, ""},
+	} {
+		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", tc.q, err)
+		}
+		wantN := 1
+		if tc.want == "" {
+			wantN = 0
+		}
+		if total != wantN || len(items) != wantN {
+			t.Errorf("List(q=%q) = %d items, total %d, want %d", tc.q, len(items), total, wantN)
+			continue
+		}
+		if wantN == 1 && items[0].Name != tc.want {
+			t.Errorf("List(q=%q) = %q, want %q", tc.q, items[0].Name, tc.want)
+		}
+	}
+}
+
 // TestStoreList_PaginationPastEnd (QA-added, AC-4 edge): tenant A has 3
 // entities -- List(limit=10, offset=100), an offset past the end of the
 // filtered set, must return an empty slice, but total must still reflect the

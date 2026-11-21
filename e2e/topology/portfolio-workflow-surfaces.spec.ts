@@ -7,7 +7,7 @@ import { login, createEntity, createInvoice, validateInvoice, PERSONAS } from '.
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertControlFits, assertFilterBarPlacement, assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -282,13 +282,14 @@ test('PW-01 Clients at 1440: heading, roster table, chips, filters, Add client',
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-02 Clients: the header holds the title and Add client, and the status filters sit in their own bar above the roster at every width', async ({ page }, testInfo) => {
+test('PW-02 Clients: the header holds the title and Add client, and the search box and status filters sit in their own bar above the roster at every width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const api = trackApi(page)
   await openFirm(page, api)
   await openNav(page, /^Clients/, 'Client portfolio')
   await expect(clientRow(page), 'the roster never drew').toBeVisible()
   const bar = page.getByTestId('clients-filter-bar')
+  const chips = ['All', 'Active', 'Archived'].map((n) => bar.getByRole('button', { name: n, exact: true }))
   const readings = await assertFilterBarPlacement(
     page,
     {
@@ -296,11 +297,12 @@ test('PW-02 Clients: the header holds the title and Add client, and the status f
       header: h1Of(page, 'Client portfolio').locator('xpath=../..'),
       action: main(page).getByRole('button', { name: /Add client/ }),
       bar,
-      filters: ['All', 'Active', 'Archived'].map((n) => bar.getByRole('button', { name: n, exact: true })),
+      filters: [bar.locator('.pf-chipbox'), ...chips],
       list: main(page).locator('.pf-list-head').locator('xpath=..'),
     },
     'Clients',
   )
+  await assertControlFits(page, bar.locator('.pf-chipbox'), bar, chips, chips[0], 'Clients search')
   // A wrapped Add client stays right-aligned, so the admin-only note below it sits under its button.
   const header = h1Of(page, 'Client portfolio').locator('xpath=../..')
   const add = main(page).getByRole('button', { name: /Add client/ })
@@ -322,6 +324,30 @@ test('PW-02 Clients: the header holds the title and Add client, and the status f
           { message: `Clients Add client alignment at ${width}px wide`, timeout: 10_000 },
         )
         .toBe('')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  // A 150-character unbroken search must wrap inside the page column ([long-search-text]).
+  await page.getByTestId('clients-search').fill('zz' + 'x'.repeat(148))
+  const noMatch = page.getByTestId('clients-no-match')
+  await expect(noMatch, 'the no-match state never showed').toBeVisible()
+  const noMatchTitle = noMatch.getByText(/^No clients match/)
+  const searchColumn = page.locator('main.pf-main .pf-scroll')
+  try {
+    for (const width of PHONE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect
+        .poll(
+          async () => {
+            const [t, c] = await Promise.all([noMatchTitle.boundingBox(), searchColumn.boundingBox()])
+            if (!t || !c) return 'an element has no box'
+            return enclosesRect(c, t, 1) ? 'ok' : 'the no-match title leaves the page column'
+          },
+          { message: `Clients no-match title at ${width}px wide`, timeout: 10_000 },
+        )
+        .toBe('ok')
+      await assertPageDoesNotScrollSideways(page, `Clients long search at ${width}px wide`)
     }
   } finally {
     if (entry) await page.setViewportSize(entry)

@@ -23,11 +23,15 @@ export function jwt(claims: Record<string, unknown>): string {
   return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url(claims)}.c2lnbmF0dXJl`
 }
 
-export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
-  jwt({ sub: 'staff-1', exp: expSec, tag, app_metadata: { staff: true } })
+export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string => jwt({ sub: 'staff-1', exp: expSec, tag, app_metadata: { staff: true } })
 
 export const customerToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
-  jwt({ sub: 'cust-1', exp: expSec, tag, app_metadata: { tenant_id: 'tenant-1' } })
+  jwt({
+    sub: 'cust-1',
+    exp: expSec,
+    tag,
+    app_metadata: { tenant_id: 'tenant-1' },
+  })
 
 // The current records: `{v:3, token}` (landing) and `{v:3, token, from:"app"}` (borrowed).
 export const v3Raw = (token: string): string => JSON.stringify({ v: 3, token })
@@ -124,6 +128,7 @@ export const spyTimeouts = () => vi.spyOn(AbortSignal, 'timeout').mockImplementa
 export function installWindow(log: string[] = []) {
   const hrefWrites: string[] = []
   const replaceWrites: string[] = []
+  const assignWrites: string[] = []
   const reload = vi.fn(() => void log.push('reload'))
   vi.stubGlobal('window', {
     location: {
@@ -138,10 +143,14 @@ export function installWindow(log: string[] = []) {
         replaceWrites.push(v)
         log.push('replace')
       },
+      assign(v: string) {
+        assignWrites.push(v)
+        log.push('assign')
+      },
       reload,
     },
   })
-  return { hrefWrites, replaceWrites, reload }
+  return { hrefWrites, replaceWrites, assignWrites, reload }
 }
 
 export const timeoutError = (): DOMException => new DOMException('The operation timed out', 'TimeoutError')

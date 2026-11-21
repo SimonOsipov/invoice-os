@@ -1253,6 +1253,8 @@ jobs:
         run: pnpm --filter @invoice-os/library build
       - name: Unit tests (monitoring)
         run: pnpm --filter @invoice-os/monitoring test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-monitoring.json}
+      - name: Install Chromium (e2e seams)
+        run: pnpm --filter @invoice-os/e2e exec playwright install chromium
       - name: Unit tests (e2e seams)
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results
@@ -1285,6 +1287,8 @@ jobs:
         run: pnpm --filter @invoice-os/blog build
       - name: Unit tests (monitoring)
         run: pnpm --filter @invoice-os/monitoring test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-monitoring.json}
+      - name: Install Chromium (e2e seams)
+        run: pnpm --filter @invoice-os/e2e exec playwright install chromium
       - name: Unit tests (e2e seams)
         run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
       - name: Upload the nightly results

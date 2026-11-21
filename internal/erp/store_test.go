@@ -610,6 +610,38 @@ func TestStore_ConcurrentIdenticalConnectsLeaveOneRow(t *testing.T) {
 	if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 10 || g != 10 {
 		t.Errorf("after 10 rounds: %d connections, %d grants, want 10 and 10 (a loser's grant must roll back)", n, g)
 	}
+
+	// A double-submitted reconnect of a disconnected row takes the same row lock as a new connect.
+	for i := 0; i < 10; i++ {
+		e := seedClient(t, super, tenant, fmt.Sprintf("Reconnect %d", i))
+		in := ConnectInput{System: "fake", ExternalKey: "fake-co-2"}
+		first, _, err := store.Connect(admin, e, in)
+		if err != nil {
+			t.Fatalf("round %d: connect: %v", i, err)
+		}
+		if _, err := store.Disconnect(admin, e, first.ID); err != nil {
+			t.Fatalf("round %d: disconnect: %v", i, err)
+		}
+		call := func() error { _, _, err := store.Connect(admin, e, in); return err }
+		errs := race(call, call)
+		ok, dup := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrAlreadyConnected):
+				dup++
+			default:
+				t.Errorf("reconnect round %d: err = %v, want nil or ErrAlreadyConnected", i, err)
+			}
+		}
+		if ok != 1 || dup != 1 {
+			t.Errorf("reconnect round %d: %d successes and %d ErrAlreadyConnected, want 1 and 1", i, ok, dup)
+		}
+		if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 11+i || g != 11+i {
+			t.Errorf("reconnect round %d: %d connections, %d grants, want %d each (a lost grant is an orphan)", i, n, g, 11+i)
+		}
+	}
 }
 
 // --- AC 6: reconnect -------------------------------------------------------------------

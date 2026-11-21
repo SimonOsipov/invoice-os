@@ -30,7 +30,10 @@ func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
 	for scope, co := range fakeSeed {
 		var got []string
 		var cursor []byte
-		for {
+		for pages := 0; ; pages++ {
+			if pages > 10 {
+				t.Fatalf("%s: the cursor never ends", scope)
+			}
 			ch, err := f.ListChanged(ctx, cr, scope, cursor)
 			if err != nil {
 				t.Fatal(err)
@@ -73,7 +76,10 @@ func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
 func TestFake_ListChangedFinalCursorReturnsNothingNew(t *testing.T) {
 	f := NewFake()
 	var cursor []byte
-	for {
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatal("the cursor never ends")
+		}
 		ch, err := f.ListChanged(ctx, cr, "fake-co-2", cursor)
 		if err != nil {
 			t.Fatal(err)
@@ -119,9 +125,18 @@ func TestFake_FetchReturnsTheSeededInvoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body struct{ Number string }
+	var body struct {
+		Number     string
+		IssueDate  string `json:"issue_date"`
+		Currency   string
+		CustomerID string `json:"customer_id"`
+		Lines      []struct{ Description string }
+	}
 	if err := json.Unmarshal(d.Body, &body); err != nil || body.Number != seed.number {
 		t.Fatalf("body %s: %v", d.Body, err)
+	}
+	if body.IssueDate != seed.date || body.Currency != "NGN" || body.CustomerID != seed.customerID || len(body.Lines) == 0 {
+		t.Errorf("body %s, want date %s, NGN, customer %s and a line", d.Body, seed.date, seed.customerID)
 	}
 	if d.ContentType != "application/json" || d.Ref.SourceRevision != "1" {
 		t.Errorf("doc = %+v", d)
@@ -147,8 +162,8 @@ func TestFake_FetchPartyReturnsTheSeededCustomer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var body struct{ ID, TIN string }
-			if err := json.Unmarshal(p.Body, &body); err != nil || body.ID != c.id || body.TIN != c.tin {
+			var body struct{ ID, Name, TIN, Email string }
+			if err := json.Unmarshal(p.Body, &body); err != nil || body.ID != c.id || body.TIN != c.tin || body.Name != c.name || body.Email != c.email {
 				t.Errorf("%s body %s: %v", c.id, p.Body, err)
 			}
 		}

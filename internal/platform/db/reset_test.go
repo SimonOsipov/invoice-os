@@ -584,6 +584,11 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
+	for _, table := range []string{"erp_connections", "erp_grants"} {
+		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
+			t.Errorf("%s rows after Reset = %d, want 0", table, n)
+		}
+	}
 }
 
 // TestResetTruncatesApprovalRunLedger: targeted counterpart to

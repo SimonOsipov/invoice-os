@@ -32,7 +32,7 @@ type stubs struct {
 func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /v1/entities/{id}/erp-connections", ListHandler(
-		func(context.Context, string) ([]Connection, error) { return s.conns, s.listErr },
+		func(_ context.Context, e string) ([]Connection, error) { s.gotEntity = e; return s.conns, s.listErr },
 		func() []string { return nil }, log))
 	m.HandleFunc("POST /v1/entities/{id}/erp-connections", ConnectHandler(
 		func(context.Context) error { s.gateCalls++; return s.gateErr },
@@ -240,5 +240,10 @@ func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 	do(s.mux(nil), "POST", disconnectPath, "", true)
 	if s.gotEntity != "E" || s.gotConn != "C" {
 		t.Errorf("got %q %q", s.gotEntity, s.gotConn)
+	}
+	s.gotEntity = ""
+	do(s.mux(nil), "GET", listPath, "", true)
+	if s.gotEntity != "E" {
+		t.Errorf("list got entity %q, want E", s.gotEntity)
 	}
 }

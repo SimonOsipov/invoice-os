@@ -65,6 +65,9 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'workflow_role.staffed': { label: 'Role staffed', domain: 'roles' },
 
   'portfolio.entity.created': { label: 'Company added', domain: 'companies' },
+  'erp.connection.created': { label: 'ERP connection added', domain: 'companies' },
+  'erp.connection.authorised': { label: 'ERP connection authorised', domain: 'companies' },
+  'erp.connection.revoked': { label: 'ERP disconnected', domain: 'companies' },
   'portfolio.entity.updated': { label: 'Company updated', domain: 'companies' },
   'portfolio.entity.onboarded': { label: 'Company onboarded', domain: 'companies' },
   'portfolio.entity.offboarded': { label: 'Company offboarded', domain: 'companies' },

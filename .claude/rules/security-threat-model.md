@@ -98,7 +98,6 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - The production edge buffers the whole upload before the gateway reads it. The 90 s upload limit on `/readiness-check/*` guards local runs and a future HTTP/2 end-to-end port.
 - The recovery link overwrites the account's stored recovery token, so a pending reset link dies when a console opens.
 - Each IAP mint makes one GoTrue session; sessions are not reused.
-- The worker's GoTrue address is shared with the gateway behind Caddy, so per-address limits count both.
 - Three overlapping mints for one account can leave the third at 502 (`TestIAPSession_SecondSpentTokenIs502`); the retry covers two (`TestIAPSession_RetriesOnceWhenAConcurrentMintSpentTheToken`).
 - A shared browser profile keeps one stored console session, so the next Google account on it opens as the stored identity until Sign out or "Use a different Google account".
 - The IAP mint's account event carries the console service's egress address as its IP, not the staff member's.

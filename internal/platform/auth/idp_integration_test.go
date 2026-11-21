@@ -181,7 +181,13 @@ type idpUser struct {
 // signUp creates a user through the provider's own API; the superuser deletes it afterwards.
 func signUp(t *testing.T, conn *pgx.Conn, base string) idpUser {
 	t.Helper()
-	u := idpUser{email: "idp-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
+	return signUpAs(t, conn, base, "idp-"+uuid.NewString()+"@example.test")
+}
+
+// signUpAs is signUp for a chosen address.
+func signUpAs(t *testing.T, conn *pgx.Conn, base, email string) idpUser {
+	t.Helper()
+	u := idpUser{email: email, password: "pw-" + uuid.NewString()}
 	t.Cleanup(func() {
 		_, _ = conn.Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, u.email)
 	})

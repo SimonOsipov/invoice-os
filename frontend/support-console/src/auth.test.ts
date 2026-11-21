@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { expireConsole, signOutConsole } from '@invoice-os/console-session'
 
 import { appBase, expireSession, signOut } from './auth'
 
-vi.mock('@invoice-os/console-session', () => ({
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: () => null,
   signOutConsole: vi.fn(),
   expireConsole: vi.fn(),
@@ -14,7 +15,10 @@ vi.mock('@invoice-os/console-session', () => ({
 const SUPPORT_SESSION_KEY = 'invoice-os.support-session'
 
 describe('auth', () => {
+  const host = (hostname: string) => vi.stubGlobal('window', { location: { hostname } })
+  beforeEach(() => host('localhost'))
   afterEach(() => {
+    vi.unstubAllGlobals()
     vi.unstubAllEnvs()
     vi.mocked(signOutConsole).mockClear()
   })
@@ -28,6 +32,7 @@ describe('auth', () => {
       storageKey: SUPPORT_SESSION_KEY,
       gateway: 'https://gw.example',
       landing: 'https://land.example',
+      iap: false,
     })
 
     // The env is read per call, not frozen at module load.
@@ -35,7 +40,7 @@ describe('auth', () => {
     vi.stubEnv('VITE_LANDING_URL', '')
     signOut()
     expect(signOutConsole).toHaveBeenCalledTimes(2)
-    expect(signOutConsole).toHaveBeenLastCalledWith({ storageKey: SUPPORT_SESSION_KEY, gateway: null, landing: null })
+    expect(signOutConsole).toHaveBeenLastCalledWith({ storageKey: SUPPORT_SESSION_KEY, gateway: null, landing: null, iap: false })
   })
 
   it('appBase_trimsAndNullsBlank', () => {
@@ -63,6 +68,19 @@ describe('auth', () => {
       landing: 'https://land.example',
       app: 'https://app.example',
       target: 'support',
+      iap: false,
     })
+  })
+
+  it('auth_iapHostSignOutPassesIap', () => {
+    for (const [h, want] of [['sup.ascomply.com', true], ['localhost', false]] as const) {
+      host(h)
+      vi.mocked(signOutConsole).mockClear()
+      vi.mocked(expireConsole).mockClear()
+      signOut()
+      expireSession()
+      expect(signOutConsole, h).toHaveBeenCalledWith(expect.objectContaining({ iap: want }))
+      expect(expireConsole, h).toHaveBeenCalledWith(expect.objectContaining({ iap: want }))
+    }
   })
 })

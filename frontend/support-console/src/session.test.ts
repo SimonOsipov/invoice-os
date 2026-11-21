@@ -1,5 +1,5 @@
 import { ApiError } from '@invoice-os/api-client'
-import { expireConsole, renewConsoleSession, saveConsoleSession } from '@invoice-os/console-session'
+import { expireConsole, renewStaffSession, saveConsoleSession } from '@invoice-os/console-session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
@@ -7,7 +7,7 @@ import { expireOnce, withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
-  renewConsoleSession: vi.fn(),
+  renewStaffSession: vi.fn(),
   saveConsoleSession: vi.fn(),
   expireConsole: vi.fn(),
 }))
@@ -20,7 +20,7 @@ const CUSTOMER = jwt({ sub: 'c1', app_metadata: { tenant_id: 't1' } })
 
 const store = (raw: string | null) => vi.stubGlobal('localStorage', { getItem: (k: string) => (k === SESSION_KEY ? raw : null) })
 const unauthorized = () => new ApiError('http', 'Unauthorized', 401)
-const renew = vi.mocked(renewConsoleSession)
+const renew = vi.mocked(renewStaffSession)
 
 // Rejects 401 on its first n runs, then resolves 'ok'.
 const flaky = (n: number) => {
@@ -31,7 +31,10 @@ const flaky = (n: number) => {
   })
 }
 
+const host = (hostname: string) => vi.stubGlobal('window', { location: { hostname } })
+
 beforeEach(() => {
+  host('localhost')
   vi.stubEnv('VITE_GATEWAY_URL', GW + '/')
   store(JSON.stringify({ v: 3, token: 'OLD' }))
   renew.mockReset()
@@ -49,7 +52,7 @@ describe('withSession', () => {
     await expect(withSession(call)).resolves.toBe('ok')
     expect(call).toHaveBeenCalledTimes(2)
     expect(renew).toHaveBeenCalledTimes(1)
-    expect(renew).toHaveBeenCalledWith(GW, undefined)
+    expect(renew).toHaveBeenCalledWith({ gateway: GW, storageKey: SESSION_KEY, iap: false, legacyRefreshToken: undefined })
     expect(saveConsoleSession).toHaveBeenCalledTimes(1)
     expect(saveConsoleSession).toHaveBeenCalledWith(SESSION_KEY, { token: STAFF, borrowed: false })
   })
@@ -200,7 +203,7 @@ describe('withSession over the gateway cookie (SECAUD-17-10)', () => {
 
   beforeEach(async () => {
     const actual = await vi.importActual<typeof import('@invoice-os/console-session')>('@invoice-os/console-session')
-    renew.mockImplementation(actual.renewConsoleSession)
+    renew.mockImplementation(actual.renewStaffSession)
     vi.mocked(saveConsoleSession).mockImplementation(actual.saveConsoleSession)
     local = new Map()
     vi.stubGlobal('localStorage', {
@@ -240,5 +243,41 @@ describe('withSession over the gateway cookie (SECAUD-17-10)', () => {
     expect(call).toHaveBeenCalledTimes(1)
     expect(fetchCalls).toHaveLength(0)
     expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toEqual({ v: 3, token: T, from: 'app' })
+  })
+
+  const reply = (status: number, body: unknown = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+
+  it('withSession_iapHostRenewsFromIapAfterACookieRefusal', async () => {
+    host('sup.ascomply.com')
+    vi.mocked(expireConsole).mockClear()
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    const urls: string[] = []
+    vi.stubGlobal('fetch', async (url: string) => {
+      urls.push(url)
+      if (url === `${GW}/auth/refresh`) return reply(401)
+      if (url === '/auth/iap-session') return reply(200, { code: 'A'.repeat(43) })
+      return reply(200, { access_token: T2, renewable: true })
+    })
+    const call = flaky(1)
+    await expect(withSession(call)).resolves.toBe('ok')
+    expect(call).toHaveBeenCalledTimes(2)
+    expect(urls).toEqual([`${GW}/auth/refresh`, '/auth/iap-session', `${GW}/auth/exchange`])
+    expect(JSON.parse(local.get(SESSION_KEY) ?? 'null')).toMatchObject({ v: 3, token: T2 })
+    expect(expireConsole).not.toHaveBeenCalled()
+  })
+
+  it('withSession_previewHostKeepsTodaysRenewal', async () => {
+    host('localhost')
+    local.set(SESSION_KEY, JSON.stringify({ v: 3, token: T }))
+    const urls: string[] = []
+    vi.stubGlobal('fetch', async (url: string) => {
+      urls.push(url)
+      return reply(401)
+    })
+    const call = flaky(1)
+    await expect(withSession(call)).rejects.toMatchObject({ kind: 'http', status: 401 })
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(urls).toEqual([`${GW}/auth/refresh`])
   })
 })

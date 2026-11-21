@@ -10,11 +10,11 @@ const SEAMS = 'Unit tests (e2e seams)'
 const INSTALL = 'Install Chromium (e2e seams)'
 
 /** job id -> its step names in order (line scan: no yaml dependency is installed). */
-function jobSteps(): Map<string, string[]> {
+function jobSteps(text: string): Map<string, string[]> {
   const jobs = new Map<string, string[]>()
   let inJobs = false
   let job: string | undefined
-  for (const line of readFileSync(CI_YML, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (/^jobs:\s*$/.test(line)) inJobs = true
     else if (/^\S/.test(line)) inJobs = false
     if (!inJobs) continue
@@ -29,16 +29,38 @@ function jobSteps(): Map<string, string[]> {
   return jobs
 }
 
+/** ids of jobs that run the seams step without an earlier install step. */
+function offenders(text: string): string[] {
+  return [...jobSteps(text)]
+    .filter(([, steps]) => steps.includes(SEAMS))
+    .filter(([, steps]) => !(steps.indexOf(INSTALL) >= 0 && steps.indexOf(INSTALL) < steps.indexOf(SEAMS)))
+    .map(([id]) => id)
+}
+
+const job = (id: string, ...names: string[]) =>
+  `  ${id}:\n    steps:\n${names.map((n) => `      - name: ${n}\n        run: x\n`).join('')}`
+
 describe('ci.yml e2e seams', () => {
   it('every job that runs the e2e seams step installs Chromium first', () => {
-    const jobs = jobSteps()
+    const jobs = jobSteps(readFileSync(CI_YML, 'utf8'))
     const withSeams = [...jobs].filter(([, steps]) => steps.includes(SEAMS))
     expect(withSeams.map(([id]) => id), 'found no job with the e2e seams step — the ci.yml scan is broken').toEqual(
       expect.arrayContaining(['frontend', 'library', 'blog']),
     )
-    const offenders = withSeams
-      .filter(([, steps]) => !(steps.indexOf(INSTALL) >= 0 && steps.indexOf(INSTALL) < steps.indexOf(SEAMS)))
-      .map(([id]) => id)
-    expect(offenders, `jobs run "${SEAMS}" without an earlier "${INSTALL}" step`).toEqual([])
+    expect(offenders(readFileSync(CI_YML, 'utf8')), `jobs run "${SEAMS}" without an earlier "${INSTALL}" step`).toEqual([])
+  })
+
+  it('flags an install after the seams step, a commented-out install, an install in another job, and a near-miss name', () => {
+    const yml = [
+      'jobs:\n',
+      job('after', SEAMS, INSTALL),
+      job('commented', `${SEAMS}`).replace('    steps:\n', `    steps:\n      # - name: ${INSTALL}\n`),
+      job('other', INSTALL),
+      job('near', `${INSTALL} again`, SEAMS),
+      job('ok', INSTALL, SEAMS),
+      'other:\n',
+      job('outside', SEAMS),
+    ].join('')
+    expect(offenders(yml)).toEqual(['after', 'commented', 'near'])
   })
 })

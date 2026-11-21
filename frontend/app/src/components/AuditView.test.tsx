@@ -1639,8 +1639,7 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
     expect(bundle.style.height, 'control needle: the compared geometry must be real, not two empty strings').toBe('38px')
   })
 
-  it('BUG-175 headerButtonLabels_useTheDefaultButtonFont', async () => {
-    await landLoaded()
+  const expectDefaultButtonFont = () => {
     // Same rule as v2-btn header buttons elsewhere: plain label, no mono span, no inline 10.5px.
     const cases = [
       ['audit-bundle-open', EVIDENCE_COPY.openCaption],
@@ -1658,6 +1657,24 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
         `${id}: no element sets an inline 10.5px font size`,
       ).toBe(0)
     }
+  }
+
+  it('BUG-175 headerButtonLabels_useTheDefaultButtonFont', async () => {
+    await landLoaded()
+    expectDefaultButtonFont()
+  })
+
+  it('BUG-175 headerButtonLabels_keepTheDefaultFontWhenExportIsDisabled', async () => {
+    await landEmptyByFilter()
+    expect((screen.getByTestId('audit-export') as HTMLButtonElement).disabled, 'needle: export is the disabled variant').toBe(true)
+    expectDefaultButtonFont()
+  })
+
+  it('BUG-175 headerButtonLabels_keepTheDefaultFontWhileTheDrawerIsOpen', async () => {
+    await landLoaded()
+    fireEvent.click(screen.getByTestId('audit-bundle-open'))
+    expect(screen.getByTestId('audit-bundle-open').getAttribute('aria-expanded'), 'needle: the drawer is open').toBe('true')
+    expectDefaultButtonFont()
   })
 
   it('EB-03-2 bundleButton_captionIsTheZipTag', async () => {
@@ -1913,7 +1930,7 @@ describe('AuditView evidence-bundle trigger, adversarial (AUDIT-08-03 QA)', () =
   })
 
   // Neither control carries an aria-label and both glyphs are aria-hidden, so each button's
-  // accessible name is its mono caption alone. A screen-reader user must be able to tell the
+  // accessible name is its caption alone. A screen-reader user must be able to tell the
   // two apart without the visual weight difference that separates them on screen.
   it('EB-03-13 headerControls_haveDistinctAccessibleNames', async () => {
     await landLoaded()

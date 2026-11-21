@@ -149,8 +149,8 @@ paths:
 - Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path. An earlier front-door case wins: `?auth=start`, a confirm hop, a pending hand-off or a join offer. `frontDoor_authStartWinsOverVia` and `frontDoor_aPendingHandoffWinsOverVia` pin it.
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
-- Expect a `?signin` outcome to suppress `?register` and `?demo` in `readDeepLink`. `?register` wins over `?demo`.
-- Expect `?forgot` to open the sign-in window on its reset-password view. `?register` and `?demo` win over it, and a `?signin` outcome suppresses it.
+- Expect a `?signin` outcome or a console target with a valid state to suppress `?register` and `?demo` in `readDeepLink`. `?register` wins over `?demo`.
+- Expect `?forgot` to open the sign-in window on its reset-password view. `?register` and `?demo` win over it, and a `?signin` outcome or a console target with a valid state suppresses it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
 - Accept a tenant-less token only on four routes: `POST /api/tenancy/v1/workspaces`, `POST /api/tenancy/v1/invitations/accept`, `GET /api/tenancy/v1/invitations/mine` and `POST /api/tenancy/v1/invitations/{id}/accept`.
 - Admit the two join routes only when GoTrue confirmed the email and it equals the token's `email` claim after trim and case folding.

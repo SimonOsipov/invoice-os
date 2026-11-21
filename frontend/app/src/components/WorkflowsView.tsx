@@ -116,15 +116,6 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {/* Roster arm only, so a loading or errored fetch never reads as 0 policies. */}
-      {surface === 'roster' && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
-          <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
-            {policies.length} POLICIES
-          </span>
-        </div>
-      )}
-
       {surface === 'loading' && <Loading label="Loading approval policies…" />}
 
       {surface === 'error' && ctx.policiesError && <ErrorState error={ctx.policiesError} onRetry={ctx.refetchPolicies} />}

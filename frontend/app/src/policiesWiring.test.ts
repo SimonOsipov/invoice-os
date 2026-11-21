@@ -382,7 +382,7 @@ describe('the policies mirror at the edges', () => {
     // deletePolicy's patch (App.tsx:1043) and nothing else.
     mirror = mirror.filter((p) => p.id !== A.id)
     expect(surfaceOf(state), 'only a fetch writes the status').toBe('roster')
-    expect(mirror, 'the roster arm now renders `0 POLICIES` over a blank column').toEqual([])
+    expect(mirror, 'the roster arm now renders a blank column').toEqual([])
 
     state = asyncReducer(state, { type: 'start' })
     state = asyncReducer(state, { type: 'success', data: [] })

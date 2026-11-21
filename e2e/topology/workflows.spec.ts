@@ -48,9 +48,8 @@
 // by it. Do not read the switch as a second server read; it is not one.
 //
 // COUNTS are baseline-relative, never literal: `baseline` is taken off the row locator once
-// the ladder settles, and every later count is `baseline` or `baseline + 1`. Not off the
-// `N POLICIES` counter — that renders only in the roster arm (WorkflowsView.tsx:107-111),
-// whose baseline is now the seeded firm policy, not zero.
+// the ladder settles, and every later count is `baseline` or `baseline + 1`. The baseline
+// is the seeded firm policy, not zero.
 //
 // ISOLATION, by ID first and name second. `ctx.createPolicy()` (App.tsx:1033-1037) mints the
 // row named `Untitled policy`; the per-run-unique name lands only on Save draft. A run that
@@ -220,8 +219,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   ).toBeVisible()
 
   // --- 5. settle the ladder, then take the baseline ----------------------------------------
-  // Off the ROW locator, never the `N POLICIES` counter: that counter renders only in the
-  // roster arm, and this tenant's starting state is now one seeded policy, not zero.
+  // Off the ROW locator; this tenant's starting state is one seeded policy, not zero.
   // Waiting on either terminal arm is both the settle and the guard — a baseline read while
   // the fetch is still in flight would be 0 and would make every later count a lie.
   await expect(
@@ -345,7 +343,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByTestId('policies-list')).toBeVisible()
   await expect(row, 'the created policy is on the list exactly once after a reload').toHaveCount(1)
   await expect(rows, 'the list grew by exactly the one row this test created').toHaveCount(baseline + 1)
-  await expect(screen.getByText(`${baseline + 1} POLICIES`, { exact: true })).toBeVisible()
+  await expect(screen.getByText(/^\d+ POLICIES$/), 'the list carries no N POLICIES counter').toHaveCount(0)
   await expect(row, 'a policy that has never been published').toContainText('DRAFT')
   await expect(row, 'policyStanding, off version 1 / draft / no active version').toContainText('Never published')
   await expect(row, 'and the dropped step survived the round trip').toContainText('1 approval')

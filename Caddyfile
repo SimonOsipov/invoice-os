@@ -88,6 +88,20 @@
 		respond 404
 	}
 
+	# IAP's assertion header reaches only the console backend, so the console hosts forward the session
+	# request to the gateway; Cookie is dropped so the sender's session never leaves the console origin.
+	@iapSession {
+		host ops.ascomply.com sup.ascomply.com
+		method POST
+		path /auth/iap-session
+	}
+	handle @iapSession {
+		reverse_proxy {$IAP_SESSION_UPSTREAM:https://api.ascomply.com} {
+			header_up Host {upstream_hostport}
+			header_up -Cookie
+		}
+	}
+
 	# A site that ships /404.html serves only built addresses; the app and consoles keep the SPA fallback.
 	@strict file {
 		root /srv

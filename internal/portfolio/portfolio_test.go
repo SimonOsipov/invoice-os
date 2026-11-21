@@ -2093,6 +2093,9 @@ func TestStoreList_SearchQTINHyphen(t *testing.T) {
 		{"unhyphenated fragment", "567800", []string{"Okafor Ltd"}},
 		{"hyphen only matches names holding it", "-", []string{"Anchor-Point Co"}},
 		{"hyphenated name search", "Anchor-Po", []string{"Anchor-Point Co"}},
+		{"hyphens only, no name holds them", "--", nil},
+		{"hyphen plus wildcard stays literal on the tin arm", "5678-%", nil},
+		{"hyphen plus underscore stays literal on the tin arm", "5678-_", nil},
 	} {
 		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
 		if err != nil {

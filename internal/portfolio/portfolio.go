@@ -91,8 +91,8 @@ type UpdateInput struct {
 }
 
 // ListFilter is the Store.List query (M3-03-03, task-36). Status nil means
-// both active and archived; Q is an optional case-insensitive substring
-// match over name OR tin (empty = no filter); Limit/Offset paginate.
+// both active and archived; Q is an optional case-insensitive literal
+// substring of name, or of tin with q's hyphens removed (empty = no filter); Limit/Offset paginate.
 // ListHandler is responsible for producing a validated ListFilter from query
 // params (status must be exactly "active"/"archived" or omitted; limit
 // defaults to 50 and clamps to [1,200]; offset defaults to 0) -- that

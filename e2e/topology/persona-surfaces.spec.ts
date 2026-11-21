@@ -1295,7 +1295,7 @@ test("in-house Approvals: the creator's own invoice shows the refusal before any
   await approvalRowByNumber(page, number).locator('> *').nth(BUYER_TRACK).click()
   await expect(page).toHaveURL(new RegExp(`/invoices/${id}$`))
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  await expect(page.getByTestId('detail-approve'), 'Approve is off for the creator').toBeDisabled()
+  await expect(page.getByTestId('detail-approve'), 'Approve is not rendered for the creator').toHaveCount(0)
   await expect(page.getByTestId('detail-approve-creator-reason')).toBeVisible()
   await expect(page.getByTestId('detail-approve-creator-reason')).toContainText(CREATOR_REFUSED_REASON)
 

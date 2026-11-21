@@ -114,7 +114,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: sbx.dot }} />
             SANDBOX
           </button>
-          {/* Disabled, not hidden — InvoiceDetail.tsx:406-444's idiom, with the banner
+          {/* Disabled, not hidden: the banner
               sentence below the header as the visible reason. The dot mutes too, or LIVE
               reads "unselected"; no `--bg-3` fill, since in a segment a fill means selected. */}
           <button

@@ -119,6 +119,18 @@ describe('deep links', () => {
     expect(dialogs()).toEqual(['Sign in'])
   })
 
+  it('deepLink_consoleStrictModeOpensOnce', async () => {
+    await bootAt(`/?state=${STATE}&console=ops`, true)
+    expect(dialogs()).toEqual(['Sign in'])
+  })
+
+  it.each(['register', 'demo', 'forgot'])('deepLink_consoleWinsOverRegisterDemoAndForgot (%s)', async (p) => {
+    await bootAt(`/?state=${STATE}&console=ops&${p}`)
+    expect(dialogs()).toEqual(['Sign in'])
+    const labels = Array.from(document.querySelectorAll(`${DIALOG} button`)).map((b) => b.textContent?.trim())
+    expect(labels).not.toContain('Send reset link')
+  })
+
   it('deepLink_registerWinsOverDemo', async () => {
     await bootAt('/?register&demo')
     expect(dialogs()).toEqual(['Create an account'])

@@ -580,12 +580,9 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     const buttons = Array.from(card.querySelectorAll('button'))
     expect(buttons.map((b) => b.dataset.testid)).toEqual(['resolve-outside'])
     expect(buttons.some((b) => /submit|retry|re-?drive|resubmit|validate/i.test(b.textContent ?? ''))).toBe(false)
-    // task-554/APPR-13-04 (AC-1, AC-2): the decision pair renders on every status,
-    // including this failed/terminal one, but lives in the action column, not this card.
-    expect(screen.getByTestId('detail-approve')).toBeTruthy()
-    expect(screen.getByTestId('detail-reject')).toBeTruthy()
-    expect(card.contains(screen.getByTestId('detail-approve'))).toBe(false)
-    expect(card.contains(screen.getByTestId('detail-reject'))).toBe(false)
+    // BUG-168: the decision pair renders only when the wire allows it (default flags: no).
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
   })
 })
 
@@ -845,20 +842,35 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     const bar = await screen.findByTestId('invoice-actions')
     expect(within(bar).getByTestId('detail-submit')).toBeTruthy()
     expect(within(bar).getByTestId('edit-toggle')).toBeTruthy()
-    expect(within(bar).getByTestId('revalidate')).toBeTruthy()
+    expect(within(bar).queryByTestId('revalidate')).toBeNull()
   })
 
-  // INVERTS the pre-INVED-02-05 "never renders Submit when can_submit is false" spec --
-  // founder decision reversed hidden -> disabled-with-reason, mirroring Re-validate.
-  it("AC2/F-255#1: renders Submit DISABLED with the wire's reason when can_submit is false", async () => {
+  // BUG-168: Submit is absent when the wire says can_submit is false, and its reason is not printed.
+  it("AC2/F-255#1: renders no Submit, and no reason, when can_submit is false", async () => {
     const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const btn = await screen.findByTestId('detail-submit')
-    expect((btn as HTMLButtonElement).disabled).toBe(true)
-    expect(btn.getAttribute('title')).toBe(reason)
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(document.body.textContent).not.toContain(reason)
+  })
+
+  // BUG-168: the detail screen renders only the actions the wire allows; the rest are absent.
+  it('BUG-168: a draft invoice with errors shows only the actions its step allows', async () => {
+    mockDetailFetch(detailRecord({
+      id: ID, status: 'draft', can_edit: true, can_revalidate: true,
+      can_submit: false, can_approve: false, can_reject: false,
+    }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect((await screen.findByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('revalidate') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
   })
 
   // THE MUTATION ORACLE -- do not soften or drop. Presence stopped being discriminating
@@ -1006,9 +1018,8 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     const rows = await screen.findAllByTestId('rejection-reason-row')
     expect(rows.some((r) => r.textContent?.includes('NGE-4102'))).toBe(true)
     expect(screen.getByTestId('invoice-detail')).toBeTruthy()
-    // Post-INVED-02-05: a rejected, editable invoice renders Submit disabled, not hidden
-    // (AC #6) -- this incidentally checks that, not the rejection-reasons assertions above.
-    expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(true)
+    // BUG-168: a rejected, editable invoice has no Submit (can_submit false).
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
   })
 
   it('[never-report-success-on-a-skip]: a duplicate_request skip is never reported as sent', async () => {
@@ -1171,27 +1182,30 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(screen.queryByTestId('detail-submit-error')).toBeNull()
   })
 
-  it('clicking the disabled Submit sends nothing and does not arm', async () => {
+  it('with can_submit false there is no Submit to click: nothing arms and nothing is sent', async () => {
     const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
     const { submitCalls } = mockDetailFetch(
       detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }),
     )
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    fireEvent.click(await screen.findByTestId('detail-submit'))
+    await screen.findByTestId('edit-toggle')
 
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
     expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
     expect(screen.queryByTestId('detail-submit-confirm')).toBeNull()
     expect(submitCalls).toHaveLength(0)
   })
 
-  it('the blocked reason comes verbatim from the wire, not from a client status map', async () => {
+  it('a blocked Submit prints no reason, wire-sourced or client-derived', async () => {
     const sentinel = 'Sentinel reason ZZQ-7.'
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: sentinel }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect((await screen.findByTestId('detail-submit')).getAttribute('title')).toBe(sentinel)
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(document.body.textContent).not.toContain(sentinel)
   })
 
   it('when the wire says submittable, Submit is enabled and carries no reason at all', async () => {
@@ -1204,7 +1218,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(btn.hasAttribute('title')).toBe(false)
   })
 
-  it('a rejected invoice carries both blocked reasons, each on its own control', async () => {
+  it('a rejected invoice shows neither Re-validate nor Submit, and neither blocked reason', async () => {
     const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
     const submitReason = 'Only validated invoices can be submitted — edit this invoice and re-validate it first.'
     mockDetailFetch(
@@ -1221,49 +1235,24 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const revalidateBtn = await screen.findByTestId('revalidate')
-    const submitBtn = await screen.findByTestId('detail-submit')
-    expect(revalidateBtn.getAttribute('title')).toBe(revalidateReason)
-    expect(submitBtn.getAttribute('title')).toBe(submitReason)
-    expect(revalidateBtn.getAttribute('title')).not.toBe(submitBtn.getAttribute('title'))
-  })
-
-  it('the disabled Submit carries the wire sentence in title and describes itself through nothing', async () => {
-    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-
-    const btn = await screen.findByTestId('detail-submit')
-    expect(btn.getAttribute('title')).toBe(reason)
-    expect(btn.hasAttribute('aria-describedby')).toBe(false)
-  })
-
-  // QA adversarial (mutation survivor): removing `filter: 'none'` from the disabled
-  // spread passes every other spec -- .v2-btn-primary:hover sets filter:brightness(1.22)
-  // unguarded, so a disabled Submit would still brighten under the cursor without this.
-  it('the disabled Submit neutralises filter, guarding .v2-btn-primary:hover from brightening it', async () => {
-    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const btn = await screen.findByTestId('detail-submit')
-
-    expect(btn.style.filter).toBe('none')
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('revalidate')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(document.body.textContent).not.toContain(revalidateReason)
+    expect(document.body.textContent).not.toContain(submitReason)
   })
 
   // QA adversarial (mutation survivor): a blanket `disabled={!inv.can_edit}` across the whole
   // bar passes every other spec, because can_submit:true implies can_edit:true on every REAL
   // wire shape (TestCanSubmit_ImpliesCanEdit). Synthetic/contradictory fixture isolates the
   // two gates from each other.
-  it('each control reads its own flag -- a wire with can_submit:true but can_edit:false disables Edit and leaves Submit enabled', async () => {
+  it('each control reads its own flag -- a wire with can_submit:true but can_edit:false hides Edit and leaves Submit enabled', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: true, submit_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
 
-    expect(screen.queryByTestId('invoice-actions'), 'the bar mounts at every status').not.toBeNull()
-    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
     expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -1271,11 +1260,9 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
   // that moved the skip/error banners outside the `can_edit` gate): the banner surviving
   // a can_edit:false refetch must not drag actionable controls out with it.
   //
-  // BUG-14 restates the rule: what no banner may do is leave a *lifecycle* control
-  // CLICKABLE -- edit / re-validate / submit all stay mounted and go disabled. The decision
-  // pair is gated on `!editing` alone (task-554/APPR-13-04) and is asserted below so the
-  // disabled claims are not read as "nothing else renders beside the banner".
-  it('a duplicate_request skip banner surviving a can_edit:false refetch leaves the lifecycle controls present but disabled', async () => {
+  // BUG-168: what no banner may do is leave a *lifecycle* control clickable -- with every
+  // flag false after the refetch, edit / re-validate / submit / approve / reject are all absent.
+  it('a duplicate_request skip banner surviving a can_edit:false refetch leaves no lifecycle control', async () => {
     const trueState = detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false })
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
       detailSequence: [trueState],
@@ -1293,34 +1280,9 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     fireEvent.click(screen.getByTestId('detail-submit-confirm'))
 
     await screen.findByTestId('detail-submit-skipped')
-    expect(screen.queryByTestId('invoice-actions'), 'the bar survives the refetch').not.toBeNull()
-    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
-      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, `${id} is disabled, not absent`).toBe(true)
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit', 'detail-approve', 'detail-reject']) {
+      expect(screen.queryByTestId(id), `${id} is absent`).toBeNull()
     }
-    // task-554/APPR-13-04 (AC-1): gated on `!editing` only -- a can_edit:false
-    // refetch must not drag the decision pair out with the lifecycle controls it deletes.
-    expect(screen.getByTestId('detail-approve')).toBeTruthy()
-    expect(screen.getByTestId('detail-reject')).toBeTruthy()
-  })
-
-  // A disabled button is out of the tab order, so the keyboard must not reach the arm/confirm
-  // flow by any other route either.
-  it('the disabled Submit refuses focus, and Enter/Space never arm the confirmation', async () => {
-    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const btn = await screen.findByTestId('detail-submit')
-
-    btn.focus()
-    expect(document.activeElement).not.toBe(btn)
-
-    for (const key of ['Enter', ' ']) {
-      fireEvent.keyDown(btn, { key })
-      fireEvent.keyUp(btn, { key })
-    }
-    expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
-    expect(btn.getAttribute('title')).toBe(reason)
   })
 
   // A contradictory wire (can_submit:true with a non-null submit_blocked_reason -- never
@@ -1381,7 +1343,7 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
   const ID = 'inv-role-blocked-1'
   const ROLE_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
 
-  it('a preparer on a validated invoice sees Submit disabled, carrying the role sentence', async () => {
+  it('a preparer on a validated invoice sees no Submit and no role sentence', async () => {
     // `validated` is the status where a preparer actually meets the block: can_edit is true,
     // so the bar renders, and can_submit is false only because of the role.
     mockDetailFetch(
@@ -1390,40 +1352,13 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const btn = await screen.findByTestId('detail-submit')
-    expect((btn as HTMLButtonElement).disabled).toBe(true)
-    // The wire's own sentence, never SPA-authored ([title-survives]).
-    expect(btn.getAttribute('title')).toBe(ROLE_REASON)
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(document.body.textContent).not.toContain(ROLE_REASON)
   })
 
-  it('the role-blocked Submit carries the role sentence in title and describes itself through nothing', async () => {
-    mockDetailFetch(
-      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
-    )
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-
-    const btn = await screen.findByTestId('detail-submit')
-    expect(btn.getAttribute('title')).toBe(ROLE_REASON)
-    expect(btn.hasAttribute('aria-describedby')).toBe(false)
-  })
-
-  it('clicking the role-blocked Submit sends nothing and does not arm', async () => {
-    const { submitCalls } = mockDetailFetch(
-      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
-    )
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    fireEvent.click(await screen.findByTestId('detail-submit'))
-
-    expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
-    expect(screen.queryByTestId('detail-submit-confirm')).toBeNull()
-    expect(submitCalls).toHaveLength(0)
-  })
-
-  // submitGate's role arm emits the sentence on every status, so pin that it never lands on
-  // an ENABLED control: on a queued invoice the bar is up (BUG-14) and Submit is disabled.
-  it("a preparer's role sentence on a non-editable invoice leaves Submit present and disabled", async () => {
+  // submitGate's role arm emits the sentence on every status; on a queued invoice nothing renders it.
+  it("a preparer's role sentence on a non-editable invoice leaves Submit absent", async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE_REASON }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -1431,15 +1366,15 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
     // empty document.
     await screen.findByTestId('invoice-status-badge')
 
-    expect(screen.queryByTestId('invoice-actions'), 'the bar mounts at every status').not.toBeNull()
-    expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
   })
 
   // The only shape where BOTH reasons are live at once: rejected keeps can_edit true, so the
   // bar is up, can_revalidate is false, and the role arm overrides the status sentence for
   // Submit. A copy-paste that fed one control the other's sentence would pass every
   // single-reason spec above and only fail here.
-  it('a preparer on a rejected invoice gets both reasons, each on its own control', async () => {
+  it('a preparer on a rejected invoice sees neither Submit nor Re-validate, and no reason', async () => {
     const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
     mockDetailFetch(
       detailRecord({
@@ -1455,18 +1390,18 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const submitBtn = await screen.findByTestId('detail-submit')
-    const revalidateBtn = screen.getByTestId('revalidate')
-    expect(submitBtn.getAttribute('title')).toBe(ROLE_REASON)
-    expect(revalidateBtn.getAttribute('title')).toBe(revalidateReason)
-    expect(submitBtn.getAttribute('title')).not.toBe(revalidateBtn.getAttribute('title'))
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(screen.queryByTestId('revalidate')).toBeNull()
+    expect(document.body.textContent).not.toContain(ROLE_REASON)
+    expect(document.body.textContent).not.toContain(revalidateReason)
   })
 
   // Anti-drift on the ROLE-blocked shape. The existing sentinel spec ('...not from a client
   // status map') fixtures draft, which a component re-deriving copy from status could still
   // pass by keying its map on draft alone; validated + can_submit:false is reachable ONLY
   // via the role, so a sentinel here has no status the SPA could have derived it from.
-  it('a sentence the SPA has never seen is carried verbatim on the validated role-blocked shape', async () => {
+  it('a sentence the SPA has never seen is not printed on the validated role-blocked shape', async () => {
     const sentinel = 'Sentinel role refusal QQV-42 — not any shipped copy.'
     mockDetailFetch(
       detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: sentinel }),
@@ -1474,8 +1409,10 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect((await screen.findByTestId('detail-submit')).getAttribute('title')).toBe(sentinel)
-    // No shipped sentence leaks in beside it.
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(document.body.textContent).not.toContain(sentinel)
+    // No shipped sentence leaks in either.
     expect(document.body.textContent).not.toContain('ask an appro' + 'ver on your team')
     expect(document.body.textContent).not.toContain('Only validated invoices can be sub' + 'mitted')
   })
@@ -2345,8 +2282,8 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     const card = await screen.findByTestId('failed-dead-end')
     expect(within(card).getByTestId('resolve-outside')).toBeTruthy()
-    // The bar mounts on failed too (BUG-14), so the claim is containment, not absence.
-    expect(within(screen.getByTestId('invoice-actions')).queryByTestId('resolve-outside')).toBeNull()
+    // BUG-168: a failed invoice allows no bar action, so the bar is absent altogether.
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
   })
 
   it('T7-2: mark-resolved is disabled until a reason is typed', async () => {
@@ -2724,7 +2661,7 @@ describe('InvoiceDetail UBL document card (task-401, BUG-04-05)', () => {
   it('T03-1: the header column holds the five decision controls and no UBL control, at every status', async () => {
     const seen: InvoiceStatus[] = []
     for (const status of ALL_STATUSES) {
-      mockDetailFetch(detailRecord({ id: ID, status }))
+      mockDetailFetch(detailRecord({ id: ID, status, can_edit: true, can_revalidate: true, can_submit: true, can_approve: true, can_reject: true }))
       render(<InvoiceDetail ctx={detailCtx(ID)} />)
       await screen.findByTestId('invoice-status-badge')
 
@@ -2753,7 +2690,7 @@ describe('InvoiceDetail UBL document card (task-401, BUG-04-05)', () => {
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const view = (await screen.findByTestId('ubl-card-view')) as HTMLButtonElement
-    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled, 'floor: the bar really is disabled here').toBe(true)
+    expect(screen.queryByTestId('edit-toggle'), 'floor: no bar action is allowed here').toBeNull()
     expect(view.disabled).toBe(false)
     expect((screen.getByTestId('ubl-card-download') as HTMLButtonElement).disabled).toBe(false)
     expect(screen.getByTestId('invoice-rail').contains(view), 'offered from the rail').toBe(true)
@@ -3112,7 +3049,7 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
   // gate is load-bearing in exactly one state, and every banner-less spec passes with it
   // widened. KILLS: widening the bar's own `{!editing && (`.
   it('Q12/AC3: the actions bar stays gated on !editing even with a banner holding the column open', async () => {
-    mockDetailFetch(detailRecord({ id: ID, ...editable }), [], {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }), [], {
       submitResponses: [
         {
           ok: true,
@@ -3172,15 +3109,17 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
   ]
 
-  it('1: both controls render on a queued, can_edit:false invoice, alongside a disabled actions bar (AC-1)', async () => {
+  it('1: a queued, can_edit:false invoice with no allowed action renders no pair and no bar (BUG-168)', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: false, approve_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
-    expect(screen.getByTestId('detail-reject')).toBeTruthy()
-    expect(screen.queryByTestId('invoice-actions'), 'the bar is disabled here, never gone').not.toBeNull()
-    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions'), 'no empty wrapper').toBeNull()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
   })
 
   it('2: the pair sits outside invoice-actions and before it in document order (AC-1, AC-2)', async () => {
@@ -3222,39 +3161,25 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(rejectBtn.hasAttribute('title')).toBe(false)
   })
 
-  it('5: permutation 2 -- both blocked, same reason: disabled, muted, carried on both, printed nowhere (AC-2)', async () => {
+  it('5: permutation 2 -- both blocked, same reason: neither control renders and the reason is printed nowhere (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
-    expect(approveBtn.disabled).toBe(true)
-    expect(rejectBtn.disabled).toBe(true)
-    expect(approveBtn.style.background).toBe('')
-    expect(approveBtn.style.opacity).toBe('0.45')
-    expect(rejectBtn.style.background).not.toBe('')
-    expect(approveBtn.getAttribute('title')).toBe(S)
-    expect(rejectBtn.getAttribute('title')).toBe(S)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
     expect(screen.queryAllByText(S)).toHaveLength(0)
   })
 
-  it('6: permutation 3 -- both blocked, no reason: disabled, muted, no reason at all, nothing invented (AC-2)', async () => {
+  it('6: permutation 3 -- both blocked, no reason: neither control renders (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
-    expect(approveBtn.disabled).toBe(true)
-    expect(rejectBtn.disabled).toBe(true)
-    expect(approveBtn.style.background).toBe('')
-    expect(approveBtn.style.opacity).toBe('0.45')
-    expect(rejectBtn.style.background).not.toBe('')
-    expect(approveBtn.hasAttribute('title')).toBe(false)
-    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
-    expect(rejectBtn.hasAttribute('title')).toBe(false)
-    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
   })
 
   // The title half is RE-POINTED, not weakened: task-899 AC #4 (BUG-14-02) forbids a title on
@@ -3272,21 +3197,15 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(approveBtn.getAttribute('title')).toBeNull()
   })
 
-  it.each(APPROVAL_GATE_SENTENCES)('8: the carried reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
+  it.each(APPROVAL_GATE_SENTENCES)('8: a refused pair renders nothing and prints no reason -- %s (AC-2)', async (sentence) => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: sentence, can_reject: false, reject_blocked_reason: sentence }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect((await screen.findByTestId('detail-approve')).getAttribute('title')).toBe(sentence)
-  })
-
-  it('9: the disabled Approve neutralises filter, guarding .v2-btn-primary:hover from brightening it (AC-2)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const btn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-
-    expect(btn.style.filter).toBe('none')
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
+    expect(document.body.textContent).not.toContain(sentence)
   })
 
   it('10: an enabled Approve carries no muted inline style, preserving :hover (AC-2)', async () => {
@@ -3300,57 +3219,6 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(btn.style.color).toBe('')
     expect(btn.style.cursor).toBe('')
     expect(btn.style.opacity).toBe('')
-  })
-
-  it('11: the disabled Approve refuses focus, and still carries its reason (AC-2)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const btn = await screen.findByTestId('detail-approve')
-
-    btn.focus()
-    expect(document.activeElement).not.toBe(btn)
-    expect(btn.getAttribute('title')).toBe(S)
-  })
-
-  it('12: neither control describes itself through a node (AC-2)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const approveBtn = await screen.findByTestId('detail-approve')
-    const rejectBtn = screen.getByTestId('detail-reject')
-
-    // Reachability first: an absence-only claim would also pass on a page that dropped the
-    // reason altogether, which is the regression this suite exists to catch.
-    expect(approveBtn.getAttribute('title')).toBe(S)
-    expect(rejectBtn.getAttribute('title')).toBe(S)
-    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
-    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
-  })
-
-  it('13: a sentence both controls carry prints nowhere in the document (AC-2)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const approveBtn = await screen.findByTestId('detail-approve')
-
-    expect(approveBtn.getAttribute('title'), 'floor: the sentence reached the page at all').toBe(S)
-    expect(screen.queryAllByText(S)).toHaveLength(0)
-    expect(document.body.textContent).not.toContain(S)
-  })
-
-  it('14: clicking a disabled Approve sends no request and adds no new control to the page (AC-2)', async () => {
-    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const btn = await screen.findByTestId('detail-approve')
-    const callsBefore = fetchMock.mock.calls.length
-    const buttonsBefore = screen.getAllByRole('button').length
-
-    fireEvent.click(btn)
-
-    expect(fetchMock.mock.calls.length).toBe(callsBefore)
-    expect(screen.getAllByRole('button').length).toBe(buttonsBefore)
   })
 
   // Neither button sits inside `invoice-actions`; the decision wrapper and the bar share the
@@ -3372,49 +3240,22 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     expect(await screen.findByTestId('detail-decision-actions')).toBeTruthy()
-    expect(screen.getByTestId('invoice-actions').parentElement).toBe(screen.getByTestId('detail-decision-actions').parentElement)
-    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which
-  // only covers Approve. Reject's own reason must clear the same bar.
-  it('19: the disabled Reject refuses focus while still carrying its own reason', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const rejectBtn = await screen.findByTestId('detail-reject')
-
-    rejectBtn.focus()
-    expect(document.activeElement).not.toBe(rejectBtn)
-    expect(rejectBtn.getAttribute('title')).toBe(S)
-    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
-  })
-
-  // QA-added (task-554, Mode B adversarial): HTML-significant characters in the reason
-  // survive unchanged -- React's own escaping, not a bespoke sanitiser, so this pins that
-  // nothing mangles the wire string on the way to the DOM.
-  it('a reason with an ampersand, an em dash and a quote survives to the DOM unchanged', async () => {
-    const tricky = 'Blocked — "urgent" review needed & a second signer must confirm.'
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: tricky }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-
-    expect((await screen.findByTestId('detail-approve')).getAttribute('title')).toBe(tricky)
+    expect(screen.queryByTestId('invoice-actions'), 'BUG-168: no allowed bar action, no bar').toBeNull()
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
   })
 
   // QA-added (task-554, Mode B adversarial, defensive): Stage 1 confirmed can_approve and
   // can_reject can never differ on the real wire (handlers.go:481-508 shares one
   // canDecide/decideReason pair) -- this pins that the component still behaves sanely on a
   // shape the type permits but the server never sends, not that the server sends it.
-  it('defensive: can_approve true with can_reject false and a reject-only reason does not crash, and Approve stays enabled', async () => {
+  it('defensive: can_approve true with can_reject false and a reject-only reason does not crash, Approve is enabled and Reject is absent', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
     expect(approveBtn.disabled).toBe(false)
-    expect(rejectBtn.disabled).toBe(true)
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
   })
 
   // QA-added (task-554, Mode B adversarial): D-49's accepted density cost -- the pair
@@ -3433,63 +3274,39 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   // The two surfaces -- the decision pair here and ApprovalStateCard -- must agree on the
   // same invoice. A disabled pair alongside the no-run empty state is a real, reachable
   // state, not a contradiction between the two.
-  it('both controls render disabled while the approval card shows its empty state, in agreement', async () => {
+  it('neither control renders while the approval card shows its empty state, in agreement', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect(((await screen.findByTestId('detail-approve')) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByTestId('approval-empty')).toBeTruthy()
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
   })
 
   // CodeRabbit PR #167 fix: decisionBlockedReasons's array was positional
   // (index 0 always read as "approve"), so a reject-only reason was mislabelled
   // as the approve reason. These four rows bind each control's title to its own wire
   // field directly and prove the mislabelling is gone.
-  it('same sentence on both fields: both controls carry it, neither prints it', async () => {
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
-
-    expect(approveBtn.getAttribute('title')).toBe(S)
-    expect(rejectBtn.getAttribute('title')).toBe(S)
-    expect(document.body.textContent).not.toContain(S)
-  })
-
-  it('different sentences on both fields: each control carries its OWN, never its neighbour\'s', async () => {
-    const reject = 'A different reason entirely.'
-    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: reject }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
-
-    expect(approveBtn.getAttribute('title')).toBe(S)
-    expect(rejectBtn.getAttribute('title')).toBe(reject)
-  })
-
   it('regression: a reject-only reason never mislabels as the approve reason, and Approve stays clean', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
 
-    expect(screen.getByTestId('detail-reject').getAttribute('title')).toBe(S)
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
     expect(approveBtn.disabled).toBe(false)
     expect(approveBtn.hasAttribute('title')).toBe(false)
     expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('approve blocked, reject clear: only Approve carries a reason, Reject carries none', async () => {
+  it('approve blocked, reject clear: Approve is absent, Reject carries no reason', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: true, reject_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
 
-    expect(screen.getByTestId('detail-approve').getAttribute('title')).toBe(S)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
     expect(rejectBtn.hasAttribute('title')).toBe(false)
     expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
@@ -3869,7 +3686,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   // Row 14 only proves the AXIS-2 sentence renders exactly; it never checks the bar
   // recovers. Row "the error leg unsticks the bar" only proves recovery with a generic 500.
   // Neither pairs the two, and neither exercises AXIS-1 (ErrNotPermitted).
-  it('adversarial: a 403 (AXIS-1) unsticks the bar, then APPR-17 holds Approve disabled', async () => {
+  it('adversarial: a 403 (AXIS-1) unsticks the bar, then the re-read (can_approve false) hides Approve', async () => {
     const sentence = 'only an approver can decide an approval step'
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
       detailSequence: [detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: false })],
@@ -3881,7 +3698,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
 
     expect((await screen.findByTestId('detail-decision-error')).textContent).toBe(sentence)
-    expect((await screen.findByTestId('detail-approve') as unknown as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect(screen.queryByTestId('detail-approve')).toBeNull())
   })
 
   // No row asserts the row actually CLOSES and the reason actually CLEARS on success --
@@ -4089,8 +3906,8 @@ describe('InvoiceDetail has no blocked-by-role note', () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false }))
     render(<InvoiceDetail ctx={{ ...detailCtx(ID), members: [PREPARER] } as unknown as PlatformCtx} />)
 
-    const approve = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    expect(approve.disabled, 'the viewer cannot approve').toBe(true)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve'), 'the viewer cannot approve').toBeNull()
     expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
   })
 })
@@ -4763,7 +4580,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
       name: 'validated, all three decisions armed',
       mount: async () => {
         mockDetailFetch(
-          detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_submit: true, can_approve: true, can_reject: true }),
+          detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_revalidate: true, can_submit: true, can_approve: true, can_reject: true }),
         )
         render(<InvoiceDetail ctx={detailCtx(ID)} />)
         fireEvent.click(await screen.findByTestId('detail-approve'))
@@ -4985,10 +4802,9 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   })
 })
 
-// RED specs (BUG-14-01, Mode A). The bar was gated `inv.can_edit && !editing` when these
-// were written, so every spec below that needs it on a can_edit:false record failed on a
-// missing element, never an import/compile error. The gate is now `!editing` alone.
-describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC-2/AC-3)', () => {
+// BUG-168 reversed BUG-14-01's stable control set: each control renders only while its own
+// wire flag is true, so a status that allows nothing renders no bar.
+describe('InvoiceDetail action cluster: only the allowed controls render (BUG-168)', () => {
   const ID = 'inv-stable-cluster-1'
   const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected', 'queued', 'submitted', 'accepted', 'failed', 'discarded']
   const EDITABLE_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected']
@@ -4997,7 +4813,7 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
   // The disabled recipe .v2-btn-primary needs; detail-submit is the sibling to match.
   const MUTED_PROPS = ['background', 'color', 'cursor', 'filter', 'opacity'] as const
 
-  it('the actions bar mounts on every status, never unmounting with can_edit', async () => {
+  it('the actions bar mounts exactly where a bar action is allowed', async () => {
     const mounted: InvoiceStatus[] = []
     for (const status of ALL_STATUSES) {
       mockDetailFetch(detailRecord({ id: ID, status, can_edit: EDITABLE_STATUSES.includes(status) }))
@@ -5006,19 +4822,16 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
       if (screen.queryByTestId('invoice-actions') != null) mounted.push(status)
       cleanup()
     }
-    // Equality is both the floor (seven renders really happened) and the claim.
-    expect(mounted, 'invoice-actions must mount at every status').toEqual(ALL_STATUSES)
+    expect(mounted, 'invoice-actions mounts only on the editable statuses').toEqual(EDITABLE_STATUSES)
   })
 
-  it('Edit is present and disabled when can_edit is false', async () => {
+  it('Edit is absent when can_edit is false', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
 
-    const btn = screen.queryByTestId('edit-toggle') as HTMLButtonElement | null
-    expect(btn, 'Edit must mount even when can_edit is false').not.toBeNull()
-    expect((btn as HTMLButtonElement).disabled, 'present-and-disabled, never absent').toBe(true)
+    expect(screen.queryByTestId('edit-toggle'), 'absent, never disabled').toBeNull()
   })
 
   it('Edit is present and enabled when can_edit is true, and clicking it still enters the editor', async () => {
@@ -5030,23 +4843,6 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     expect(btn.disabled, 'a blanket disabled would satisfy the row above and break Edit').toBe(false)
     fireEvent.click(btn)
     expect(screen.getByTestId('edit-invoice'), 'the click still opens the editor').toBeTruthy()
-  })
-
-  it('disabled Edit carries the same inline style layers as disabled Submit', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false, can_submit: false }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('invoice-status-badge')
-    const edit = screen.queryByTestId('edit-toggle') as HTMLButtonElement | null
-    const submit = screen.queryByTestId('detail-submit') as HTMLButtonElement | null
-    // Floor first: both buttons mount, and Submit's own recipe is really applied, so the
-    // equality below can never be satisfied by two blank styles.
-    expect(edit, 'Edit must mount to be compared').not.toBeNull()
-    expect(submit, 'Submit must mount to be compared').not.toBeNull()
-    const editStyle = (edit as HTMLButtonElement).style
-    const submitStyle = (submit as HTMLButtonElement).style
-    for (const prop of ['cursor', 'filter', 'opacity'] as const) expect(submitStyle[prop], `disabled Submit sets ${prop}`).not.toBe('')
-    for (const prop of MUTED_PROPS) expect(editStyle[prop], `disabled Edit matches Submit's ${prop}`).toBe(submitStyle[prop])
   })
 
   // MUTATION ORACLE: an unconditional spread satisfies the parity row above while killing
@@ -5061,36 +4857,6 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     for (const prop of MUTED_PROPS) expect(edit.style[prop], `enabled Edit must not set ${prop}`).toBe('')
   })
 
-  it('AC4: a disabled idle primary dims, it does not swap', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_approve: false, can_edit: false, can_submit: false }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('invoice-status-badge')
-    for (const id of ['detail-approve', 'edit-toggle', 'detail-submit']) {
-      const btn = screen.getByTestId(id) as HTMLButtonElement
-      expect(btn.disabled, `${id} is disabled`).toBe(true)
-      expect(btn.style.opacity, `${id} opacity`).toBe('0.45')
-      expect(btn.style.cursor, `${id} cursor`).toBe('not-allowed')
-      expect(btn.style.filter, `${id} filter`).toBe('none')
-      expect(btn.style.background, `${id} background`).toBe('')
-      expect(btn.style.color, `${id} color`).toBe('')
-    }
-  })
-
-  it('AC4: the disabled ghosts beside them keep the swap', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_reject: false, can_revalidate: false }))
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('invoice-status-badge')
-    for (const id of ['detail-reject', 'revalidate']) {
-      const btn = screen.getByTestId(id) as HTMLButtonElement
-      expect(btn.disabled, `${id} is disabled`).toBe(true)
-      expect(btn.style.background, `${id} background`).not.toBe('')
-      expect(btn.style.color, `${id} color`).not.toBe('')
-      expect(btn.style.opacity, `${id} opacity`).toBe('')
-    }
-  })
-
   it('AC4: the disabled reject-confirm keeps the swap', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true }))
 
@@ -5103,7 +4869,7 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     expect(confirm.style.opacity).toBe('')
   })
 
-  it('a role that permits nothing yields five controls, all disabled', async () => {
+  it('a role that permits nothing yields none of the five controls', async () => {
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -5121,28 +4887,24 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
 
-    // Floor before any disabled claim -- an empty collection satisfies the loop below.
-    const resolved = CONTROLS.filter((id) => screen.queryAllByTestId(id).length === 1)
-    expect(resolved, 'each of the five resolves exactly once').toEqual(CONTROLS)
-    for (const id of CONTROLS) {
-      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, `${id} must be disabled, not absent`).toBe(true)
-    }
+    expect(CONTROLS.filter((id) => screen.queryByTestId(id) != null), 'none of the five renders').toEqual([])
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions')).toBeNull()
   })
 
-  it('the control set is identical at a can_edit-true and a can_edit-false status', async () => {
+  it('the control set follows the wire flags, not the status', async () => {
     const collect = () => CONTROLS.filter((id) => screen.queryByTestId(id) != null)
 
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }))
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: true, can_submit: true, can_approve: true, can_reject: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
-    const editableSet = collect()
-    expect(editableSet, 'floor: the editable status shows all five').toEqual(CONTROLS)
+    expect(collect(), 'floor: every flag true shows all five').toEqual(CONTROLS)
     cleanup()
 
-    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false, can_submit: false }))
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: false, can_submit: false }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
-    expect(collect(), 'membership must not shift with status').toEqual(editableSet)
+    expect(collect(), 'every flag false shows none').toEqual([])
   })
 
   // The `!editing` half, which this story does not widen. Companion to 'Q12/AC3: the
@@ -5156,22 +4918,21 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     expect(screen.queryByTestId('invoice-actions'), 'the !editing half survives the widen').toBeNull()
   })
 
-  // Reshapes 'T7-1: resolve action renders inside the failed card, not invoice-actions',
-  // whose `invoice-actions is null` half goes vacuous once the bar always mounts.
+  // A bar that does render (can_submit true, synthetic on failed) still never holds resolve-outside.
   it('reshaped: resolve-outside is not a descendant of invoice-actions', async () => {
-    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true, can_submit: true }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const resolveOutside = await screen.findByTestId('resolve-outside')
     const bar = screen.queryByTestId('invoice-actions')
-    expect(bar, 'floor: the bar mounts on failed too, so this claim is not vacuous').not.toBeNull()
+    expect(bar, 'floor: the bar mounts here, so this claim is not vacuous').not.toBeNull()
     expect((bar as HTMLElement).contains(resolveOutside), 'the resolve action lives in the failed card').toBe(false)
   })
 
   // Companion to '17: detail-decision-actions is a sibling of invoice-actions in the action column'.
   it('both action rows are siblings in one column on a can_edit:false invoice', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: true, can_approve: true, can_reject: true }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
@@ -5179,6 +4940,58 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     const bar = screen.queryByTestId('invoice-actions')
     expect(bar, 'floor: both rows mount on a can_edit:false invoice').not.toBeNull()
     expect((bar as HTMLElement).parentElement, 'the bar shares the column, at every status').toBe(decisionActions.parentElement)
+  })
+
+  // One flag true at a time: the control it names is the only one rendered, and it is enabled.
+  const ISOLATED: { flag: keyof InvoiceDetailRecord; testid: string }[] = [
+    { flag: 'can_edit', testid: 'edit-toggle' },
+    { flag: 'can_revalidate', testid: 'revalidate' },
+    { flag: 'can_submit', testid: 'detail-submit' },
+    { flag: 'can_approve', testid: 'detail-approve' },
+    { flag: 'can_reject', testid: 'detail-reject' },
+    { flag: 'can_issue_note', testid: 'issue-credit-note' },
+    { flag: 'can_issue_note', testid: 'issue-debit-note' },
+  ]
+  const ALL_SEVEN = ['edit-toggle', 'revalidate', 'detail-submit', 'detail-approve', 'detail-reject', 'issue-credit-note', 'issue-debit-note']
+  for (const { flag, testid } of ISOLATED) {
+    it(`BUG-168: ${testid} is the only rendered action when only ${flag} is true, and it is enabled`, async () => {
+      mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', [flag]: true }))
+
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const btn = (await screen.findByTestId(testid)) as HTMLButtonElement
+
+      expect(btn.disabled, `${testid} enabled`).toBe(false)
+      const present = ALL_SEVEN.filter((id) => screen.queryByTestId(id) != null)
+      const expected = ISOLATED.filter((i) => i.flag === flag).map((i) => i.testid)
+      expect(present, `only the ${flag} controls render`).toEqual(ALL_SEVEN.filter((id) => expected.includes(id)))
+    })
+  }
+
+  it('BUG-168: the creator keeps the reason, loses Approve, and no empty wrapper is left around it', async () => {
+    const reason = 'You created this invoice, so another approver must approve it.'
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: reason }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(reason)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions'), 'no empty decision box').toBeNull()
+    expect(screen.queryByTestId('invoice-actions'), 'no empty bar').toBeNull()
+  })
+
+  it('BUG-168: an allowed action leaves no empty sibling wrapper (Reject only, Edit only)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-reject')
+    expect(screen.queryByTestId('invoice-actions'), 'Reject alone: no bar').toBeNull()
+    cleanup()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('detail-decision-actions'), 'Edit alone: no decision box').toBeNull()
   })
 })
 
@@ -5193,7 +5006,7 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
 
   // AC-1 names four statuses and three controls; the Mode-A specs prove the BAR mounts at
   // all seven but only prove the three controls disabled at accepted (AC-3) and queued.
-  it('AC-1: all three bar controls are present and disabled at each of the four non-editable statuses', async () => {
+  it('AC-1: none of the three bar controls renders at any of the four non-editable statuses', async () => {
     const seen: string[] = []
     for (const status of NON_EDITABLE) {
       mockDetailFetch(detailRecord({ id: ID, status, can_edit: false, can_revalidate: false, can_submit: false }))
@@ -5201,19 +5014,19 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
       await screen.findByTestId('invoice-status-badge')
       for (const id of BAR_CONTROLS) {
         const el = screen.queryByTestId(id) as HTMLButtonElement | null
-        if (el != null && el.disabled) seen.push(`${status}/${id}`)
+        if (el != null) seen.push(`${status}/${id}`)
       }
+      expect(screen.queryByTestId('invoice-actions'), `${status}: no empty bar`).toBeNull()
       cleanup()
     }
-    // Equality is the floor: a status that rendered nothing contributes no entries.
-    expect(seen).toEqual(NON_EDITABLE.flatMap((s) => BAR_CONTROLS.map((c) => `${s}/${c}`)))
+    expect(seen).toEqual([])
   })
 
   // Isolates Edit's own flag. A `disabled={!inv.can_edit}` copied onto the bar's wrapper, or
   // onto its siblings, satisfies every all-false fixture; only a can_edit-true/rest-false
   // wire separates them. No REAL wire pairs can_edit:true with can_view_ubl:false, which is
   // the point -- the fixture is synthetic on purpose.
-  it('AC-2: can_edit true with every other flag false leaves Edit the one enabled control', async () => {
+  it('AC-2: can_edit true with every other flag false leaves Edit the one rendered control', async () => {
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -5231,7 +5044,7 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
     await screen.findByTestId('invoice-status-badge')
 
     const enabled = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'].filter(
-      (id) => (screen.getByTestId(id) as HTMLButtonElement).disabled === false,
+      (id) => screen.queryByTestId(id) != null,
     )
     expect(enabled, 'only Edit reads can_edit').toEqual(['edit-toggle'])
   })
@@ -5240,23 +5053,19 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
   // this is the only pin on where a submit reason may land on a NON-EDITABLE status.
   // Retargeted by BUG-14-02 off the deleted node onto the control's own `title`; the second
   // half is the [reason-text-disappears] half -- reaching the control is not printing it.
-  it('AC-1: the submit reason a non-approver gets on a non-editable status reaches the control, and only the control', async () => {
+  it('AC-1: the submit reason a non-approver gets on a non-editable status renders nowhere', async () => {
     const ROLE = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
 
-    const submit = screen.getByTestId('detail-submit') as HTMLButtonElement
-    expect(submit.disabled, 'floor: the control the sentence explains is up and refusing').toBe(true)
-    expect(submit.getAttribute('title'), 'the wire sentence reaches the control that refuses').toBe(ROLE)
-    expect(document.body.textContent, 'and it is printed nowhere').not.toContain(ROLE)
+    expect(screen.queryByTestId('detail-submit'), 'the refused control is absent').toBeNull()
+    expect(document.body.textContent, 'and its reason is printed nowhere').not.toContain(ROLE)
   })
 })
 
 // The blocked-reason layer is gone: no reason node, no aria-describedby, no REASON_ID const.
-// `title=` survives on all seven controls ([title-survives]); the pins that keep that
-// argument honest are the two title specs at the end.
 describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-14-02)', () => {
   const ID = 'inv-reason-gone-1'
 
@@ -5316,10 +5125,11 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
 
-    // Floor: the controls the reasons explain are all up, so an unmounted page cannot be
-    // what makes the six absence claims below pass.
-    const controls = [...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside'].filter((id) => screen.queryByTestId(id) != null)
-    expect(controls, 'every gated control must be mounted').toEqual([...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside'])
+    // Floor: resolve-outside (the one refused control that still renders) is up, so an
+    // unmounted page cannot be what makes the absence claims below pass. BUG-168: the
+    // refused cluster controls are absent.
+    expect(screen.queryByTestId('resolve-outside'), 'the failed card control is up').not.toBeNull()
+    expect([...CLUSTER_TITLED, 'edit-toggle'].filter((id) => screen.queryByTestId(id) != null), 'refused cluster controls are absent').toEqual([])
 
     const rendered = REASON_TESTIDS.filter((id) => screen.queryAllByTestId(id).length > 0)
     expect(rendered, 'no blocked-reason node may render on any wire').toEqual([])
@@ -5334,85 +5144,50 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: R.reject }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
+    await screen.findByTestId('invoice-status-badge')
 
-    expect(rejectBtn.disabled, 'floor: the control the sentence explains is up and refusing').toBe(true)
+    expect(screen.queryByTestId('detail-reject'), 'the refused control is absent').toBeNull()
     expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
   })
 
-  it('BUG-14-02 AC-1: the cluster prints no sentence its own titles carry', async () => {
+  it('BUG-14-02 AC-1: no refused cluster control leaves its sentence, or a truncated re-add, on the page', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
-    const column = actionColumn()
-    const card = screen.getByTestId('failed-dead-end')
 
-    const printed: string[] = []
-    for (const [id, scope] of [
-      ...CLUSTER_TITLED.map((id) => [id, column] as const),
-      ['resolve-outside', card] as const,
-    ]) {
-      // Read the needle out of the DOM, never author it here: a spec that spells the sentence
-      // itself stops tracking what the page actually shows.
-      const title = screen.getByTestId(id).getAttribute('title')
-      expect(title, `${id} carries the backend sentence in its title`).toBeTruthy()
-      expect(title!.length, `${id}'s title is a real needle, not a fragment`).toBeGreaterThanOrEqual(20)
-      if (scope.textContent?.includes(title!) === true) printed.push(id)
+    const text = document.body.textContent ?? ''
+    for (const reason of [R.approve, R.reject, R.revalidate, R.submit]) {
+      expect(text, 'the sentence is printed nowhere').not.toContain(reason)
+      expect(lead(reason).length, 'floor: the lead clause is a real needle').toBeGreaterThanOrEqual(20)
+      expect(text, 'nor its lead clause').not.toContain(lead(reason))
     }
-    expect(printed, 'no control may print the sentence its title carries, at any nesting depth').toEqual([])
+    const card = screen.getByTestId('failed-dead-end')
+    const title = screen.getByTestId('resolve-outside').getAttribute('title')
+    expect(title, 'resolve-outside still carries its sentence').toBeTruthy()
+    expect(card.textContent).not.toContain(title!)
+    expect(card.textContent).not.toContain(lead(title!))
   })
 
-  it('BUG-14-02 AC-1: the cluster prints no truncated re-add of a reason either', async () => {
-    mockDetailFetch(blockedFailed())
-
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('failed-dead-end')
-    const column = actionColumn()
-    const card = screen.getByTestId('failed-dead-end')
-
-    const printed: string[] = []
-    for (const [id, scope] of [
-      ...CLUSTER_TITLED.map((id) => [id, column] as const),
-      ['resolve-outside', card] as const,
-    ]) {
-      const title = screen.getByTestId(id).getAttribute('title')
-      expect(title, `${id} carries the backend sentence in its title`).toBeTruthy()
-      const clause = lead(title!)
-      expect(clause.length, `${id}'s lead clause is a real needle`).toBeGreaterThanOrEqual(20)
-      expect(clause, `${id}'s title must actually have a lead clause to truncate`).not.toBe(title)
-      if (scope.textContent?.includes(clause) === true) printed.push(id)
-    }
-    expect(printed, 'a reason may not come back in truncated form').toEqual([])
-  })
-
-  it('T03-8: a refused document prints its reason in the card, never in the header column', async () => {
+  it('T03-8: a refused document prints its reason once, in the card, never in a header column', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
 
     expect(screen.getByTestId('ubl-card-blocked').textContent, 'the wire sentence, verbatim').toBe(R.ubl)
-    const column = actionColumn()
-    expect(column.textContent, 'the column prints no UBL refusal').not.toContain(R.ubl)
-    expect(column.textContent, 'nor its lead clause').not.toContain(lead(R.ubl))
+    expect(screen.queryAllByText(R.ubl), 'printed once').toHaveLength(1)
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
   })
 
-  it('BUG-14-02 AC-4: no control carries aria-describedby and the cluster holds none at all', async () => {
+  it('BUG-14-02 AC-4: no control carries aria-describedby and no describedby dangles', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
-    const column = actionColumn()
 
-    const ALL_CONTROLS = [...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside']
-    const found = ALL_CONTROLS.map((id) => screen.getByTestId(id))
-    expect(found, 'floor: every control resolved').toHaveLength(ALL_CONTROLS.length)
-
-    const described = ALL_CONTROLS.filter((id) => screen.getByTestId(id).hasAttribute('aria-describedby'))
-    expect(described, 'no control describes itself through a removed node').toEqual([])
-
-    expect(Array.from(column.querySelectorAll('[aria-describedby]')).map((el) => el.getAttribute('data-testid'))).toEqual([])
+    expect(screen.getByTestId('resolve-outside'), 'floor: the control resolved').toBeTruthy()
+    expect(screen.getByTestId('resolve-outside').hasAttribute('aria-describedby'), 'no control describes itself through a removed node').toBe(false)
 
     // A describedby left behind pointing at a deleted node is worse than none: it is a
     // silent dangle no absence check above would see.
@@ -5422,41 +5197,31 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
     expect(dangling, 'no aria-describedby may point at a missing element').toEqual([])
   })
 
-  it('BUG-14-02 AC-3: every control keeps an accessible name and exposes disabled natively', async () => {
+  it('BUG-14-02 AC-3: no refused cluster control has an accessible name on the page', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
 
     for (const name of ['Approve', 'Reject', 'Edit', 'Re-validate', 'Submit']) {
-      const btn = screen.getByRole('button', { name }) as HTMLButtonElement
-      expect(btn.disabled, `${name} exposes its refusal through the native attribute`).toBe(true)
+      expect(screen.queryByRole('button', { name }), `${name} is absent, not disabled`).toBeNull()
     }
   })
 
-  it('BUG-14-02 AC-4: every DISABLED control still carries its backend title verbatim', async () => {
+  it('BUG-14-02 AC-4: the refused resolve-outside control carries its backend title verbatim; the cluster controls are absent', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
 
-    const pairs: [string, string][] = [
-      ['detail-approve', R.approve],
-      ['detail-reject', R.reject],
-      ['revalidate', R.revalidate],
-      ['detail-submit', R.submit],
-      ['resolve-outside', R.resolveOutside],
-    ]
-    for (const [id, sentence] of pairs) {
-      const btn = screen.getByTestId(id) as HTMLButtonElement
-      expect(btn.disabled, `floor: ${id} is refusing`).toBe(true)
-      expect(btn.getAttribute('title'), `${id}'s title is the wire's sentence, never SPA-authored`).toBe(sentence)
-    }
+    const btn = screen.getByTestId('resolve-outside') as HTMLButtonElement
+    expect(btn.disabled, 'floor: resolve-outside is refusing').toBe(true)
+    expect(btn.getAttribute('title'), "the title is the wire's sentence, never SPA-authored").toBe(R.resolveOutside)
+    for (const id of CLUSTER_TITLED) expect(screen.queryByTestId(id), `${id} is absent`).toBeNull()
   })
 
   it('BUG-14-02 AC-4: no ENABLED control in the cluster carries a title', async () => {
-    // [title-survives] rests on a `title` never firing because it only ever sits on a
-    // DISABLED control -- a property only the backend enforces (P-15). This pins it SPA-side.
+    // An enabled control must carry no title; only the backend enforces it (P-15), so pin it SPA-side.
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -5532,37 +5297,13 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
     expect(notRetired, 'each deleted testid is named in RETIRED_TESTIDS so a resurrection reds').toEqual([])
   })
 
-  it('BUG-14-02: edit-toggle refuses to open the editor when can_edit is false, in the handler', async () => {
-    // React suppresses click on a disabled button (measured), so `fireEvent.click` here would
-    // pass whether or not the guard exists. Invoke the handler off the fiber's props instead
-    // -- that is the stray programmatic path BUG-14-01 opened by mounting Edit at every status.
-    const onClickOf = (el: Element) => {
-      const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'))
-      expect(key, 'floor: the React props key must be readable, or this test proves nothing').toBeTruthy()
-      const props = (el as unknown as Record<string, { onClick?: () => void }>)[key!]
-      expect(typeof props.onClick, 'floor: the control must carry an onClick to exercise').toBe('function')
-      return props.onClick!
-    }
-
+  it('BUG-14-02: with can_edit false there is no edit-toggle to open the editor with', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const blocked = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
-    expect(blocked.disabled, 'floor: the attribute barrier is up').toBe(true)
-    await act(async () => {
-      onClickOf(blocked)()
-    })
-    expect(screen.queryAllByTestId('edit-invoice'), 'the handler must gate on can_edit too').toHaveLength(0)
+    await screen.findByTestId('invoice-status-badge')
 
-    // Positive control: the same programmatic path DOES open the editor when the wire allows
-    // it, so the absence above is the guard, not an unreachable handler.
-    cleanup()
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
-    render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const allowed = await screen.findByTestId('edit-toggle')
-    await act(async () => {
-      onClickOf(allowed)()
-    })
-    expect(await screen.findByTestId('edit-invoice')).toBeTruthy()
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
+    expect(screen.queryAllByTestId('edit-invoice')).toHaveLength(0)
   })
 })
 
@@ -5604,28 +5345,17 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-02)', 
     })
   }
 
-  it('BUG-14-02 AC-1: the action column prints its control labels and nothing else', async () => {
+  it('BUG-14-02 AC-1: a fully refused wire renders no action column and prints no reason', async () => {
     mockDetailFetch(blockedFailed())
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('failed-dead-end')
 
-    const column = actionColumn()
-
-    const buttons = Array.from(column.querySelectorAll('button'))
-    expect(buttons.map((b) => b.getAttribute('data-testid')), 'floor: the five controls are the column').toEqual([
-      'detail-approve',
-      'detail-reject',
-      'edit-toggle',
-      'revalidate',
-      'detail-submit',
-    ])
-
-    // Closed world, deliberately strict (the trade UNTOUCHED_TESTIDS already takes above): the
-    // column's whole text IS its buttons' text. Any prose beside a refusing control -- reason,
-    // hint or SPA-authored substitute, testid or not -- makes these two strings differ.
-    expect(column.textContent, 'no prose sits beside a refusing control').toBe(buttons.map((b) => b.textContent).join(''))
-    expect(column.textContent!.trim().length, 'floor: the labels are really there').toBeGreaterThan(30)
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions')).toBeNull()
+    for (const reason of [R.approve, R.reject, R.revalidate, R.submit]) {
+      expect(document.body.textContent, 'no prose stands in for a refused control').not.toContain(reason)
+    }
   })
 
   it('BUG-14-02 AC-4: both resolve-outside arms carry the wire sentence on the control alone', async () => {
@@ -5673,7 +5403,7 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-02)', 
 // own fixture. This one populates all six reasons AND sets every can_* true -- the shape a
 // contradictory wire produces -- and asserts the cluster carries no `title` at all. A title
 // on an ENABLED control is a live native tooltip in every browser, which is the on-demand
-// disclosure the story's Out of Scope forbids and the only reason [title-survives] holds.
+// disclosure the story's Out of Scope forbids.
 describe('InvoiceDetail action cluster: `title` is gated on the wire, not just present (BUG-14-02, task-899 AC #4)', () => {
   const ID = 'inv-title-gate-1'
 
@@ -5748,22 +5478,14 @@ describe('InvoiceDetail action cluster: `title` is gated on the wire, not just p
 
   // Reachability. Without this the two pins above could pass on a component that never reads
   // the reasons at all -- the exact hole task-899 opened in the earlier pin.
-  it('reachability: flip every can_* false and the same five strings reappear as titles', async () => {
+  it('reachability: flip every can_* false and the five controls disappear, resolve-outside keeps its title', async () => {
     mockDetailFetch(reasonedFailed(false))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const card = await screen.findByTestId('failed-dead-end')
 
-    const expected: Record<string, string> = {
-      'detail-approve': R.approve,
-      'detail-reject': R.reject,
-      revalidate: R.revalidate,
-      'detail-submit': R.submit,
-    }
     for (const testid of COLUMN_CONTROLS) {
-      const btn = screen.getByTestId(testid) as HTMLButtonElement
-      expect(btn.disabled, `${testid} refuses`).toBe(true)
-      expect(btn.getAttribute('title'), `${testid} carries its wire sentence`).toBe(expected[testid])
+      expect(screen.queryByTestId(testid), `${testid} refuses by being absent`).toBeNull()
     }
     expect((within(card).getByTestId('resolve-outside') as HTMLButtonElement).getAttribute('title')).toBe(R.resolveOutside)
   })
@@ -6162,9 +5884,8 @@ describe('InvoiceDetail edit form: the invoice number cell', () => {
     )
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    const toggle = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
-    expect(toggle.disabled).toBe(true)
-    fireEvent.click(toggle)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
     expect(screen.getByTestId('invoice-detail')).toBeTruthy()
     expect(screen.queryByTestId('edit-invoice')).toBeNull()
     expect(screen.queryByTestId('edit-invoice-number')).toBeNull()
@@ -6923,7 +6644,8 @@ describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16
     mockDetailFetch(detailRecord({ ...base, can_edit: false }))
     render(<InvoiceDetail ctx={ctxWithLine()} />)
 
-    await screen.findByTestId('edit-toggle')
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
     expect(screen.queryByTestId('edit-invoice')).toBeNull()
   })
 
@@ -7568,25 +7290,21 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
     }
   })
 
-  it('an accepted note disables both actions with the reason', async () => {
+  it('an accepted note hides both actions and prints no reason', async () => {
     const reason = 'A note cannot be the original of a note.'
     mockDetailFetch(
       detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', document_type: 'credit_note', can_issue_note: false, issue_note_blocked_reason: reason }),
     )
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    for (const id of NOTE_ACTIONS) {
-      const btn = (await screen.findByTestId(id)) as HTMLButtonElement
-      expect(btn.disabled).toBe(true)
-      expect(btn.getAttribute('title')).toBe(reason)
-      expect(btn.style.background).toBe('var(--bg-3)')
-      fireEvent.click(btn)
-    }
+    await screen.findByTestId('invoice-status-badge')
+    for (const id of NOTE_ACTIONS) expect(screen.queryByTestId(id), id).toBeNull()
+    expect(document.body.textContent).not.toContain(reason)
     expect(screen.queryByTestId('note-form')).toBeNull()
   })
 
   it('the bar keeps its siblings', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
     expect(screen.queryByTestId('invoice-actions')).not.toBeNull()
@@ -7597,9 +7315,7 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
     mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', can_issue_note: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('issue-credit-note')
-    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
-      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, id).toBe(true)
-    }
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) expect(screen.queryByTestId(id), id).toBeNull()
   })
 
   it('the form replaces the record body and hides the bar', async () => {
@@ -7609,6 +7325,7 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
         status: 'accepted',
         irn: 'IRN-2026-0001',
         can_issue_note: true,
+        can_approve: true,
         line_items: [{ id: 'l1', line_no: 1, description: 'Widget', quantity: '2.000', unit_price: '10.00', line_total: '20.00', line_tax: null }],
       }),
     )
@@ -7765,6 +7482,8 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
   const ID = 'inv-appr17-1'
   const SENTENCE = 'You created this invoice, so another approver must approve it.'
   const approveBtn = () => screen.getByTestId('detail-approve') as HTMLButtonElement
+  // BUG-168: once the wire says can_approve false, Approve is absent, not disabled.
+  const approveGone = () => waitFor(() => expect(screen.queryByTestId('detail-approve')).toBeNull())
 
   it('detail_creatorRefused_printsTheServersReasonAndKeepsRejectEnabled', async () => {
     mockDetailFetch(
@@ -7772,9 +7491,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     )
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
-    expect(approveBtn().disabled).toBe(true)
-    expect(approveBtn().style.opacity).toBe('0.45')
-    expect(approveBtn().style.cursor).toBe('not-allowed')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -7783,7 +7500,8 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
       detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: false, approve_blocked_reason: 'Only an approver can approve this invoice.' }),
     )
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('detail-approve')
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
     expect(screen.queryByTestId('detail-approve-creator-reason')).toBeNull()
   })
 
@@ -7800,7 +7518,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
   const refusedRead = () =>
     detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true })
 
-  it('detail_serverRefusal_showsItsSentenceAndDisablesApprove', async () => {
+  it('detail_serverRefusal_showsItsSentenceAndHidesApprove', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
       detailSequence: [refusedRead()],
       decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
@@ -7809,7 +7527,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     fireEvent.click(await screen.findByTestId('detail-approve'))
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     expect((await screen.findByTestId('detail-decision-error')).textContent).toBe(SENTENCE)
-    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    await approveGone()
   })
 
   it('detail_serverRefusal_keepsRejectEnabledAndApproveCannotBeRearmed', async () => {
@@ -7821,9 +7539,8 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     fireEvent.click(await screen.findByTestId('detail-approve'))
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     await screen.findByTestId('detail-decision-error')
-    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    await approveGone()
 
-    fireEvent.click(approveBtn())
     expect(screen.queryByTestId('detail-approve-confirm')).toBeNull()
     expect(decideCalls).toHaveLength(1)
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
@@ -7876,7 +7593,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     refuseThenRefetch(refusedRead())
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await refuse()
-    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    await approveGone()
     expect(detailGets()).toBe(2)
   })
 
@@ -7888,7 +7605,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     await reject()
     await waitFor(() => expect(screen.queryByTestId('detail-decision-error')).toBeNull())
     expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
-    expect(approveBtn().disabled).toBe(true)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
   })
 
   it('detail_refusal_staysWhenARefetchReadsCanApproveFalse', async () => {
@@ -7897,7 +7614,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     await refuse()
     await reject()
     await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
-    expect(approveBtn().disabled).toBe(true)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
   })
 
   it('detail_refusal_ignoresAReadStartedBeforeTheRefusal', async () => {
@@ -7915,7 +7632,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     await new Promise((r) => setTimeout(r, 20))
     readNow() // the stale read carries can_approve true
     await screen.findByTestId('detail-decision-error')
-    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    await approveGone()
   })
 
   it('detail_serverRefusal_pendingRereadKeepsTheMessageAndApproveDisabled', async () => {
@@ -7986,14 +7703,14 @@ describe('SECAUD-50-04: Undo import on invoice detail', () => {
     const { batchGets } = mockDetailFetch(detailRecord({ import_batch_id: 'b1' }), [], { batchSequence: [{ undoable: false }] })
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await waitFor(() => expect(batchGets).toHaveLength(1))
-    await screen.findByTestId('invoice-actions')
+    await screen.findByTestId('invoice-status-badge')
     expect(screen.queryByTestId('undo-import')).toBeNull()
   })
 
   it('an invoice with no batch makes no batch request', async () => {
     const { batchGets } = mockDetailFetch(detailRecord({ import_batch_id: null }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('invoice-actions')
+    await screen.findByTestId('invoice-status-badge')
     expect(screen.queryByTestId('undo-import')).toBeNull()
     expect(batchGets).toHaveLength(0)
   })

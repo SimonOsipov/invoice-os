@@ -49,10 +49,13 @@ const STATE_HOLD_MS = 9 * 60 * 1000
 function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
-  return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
+  const consoleTarget = readSignInConsole(search)
+  // A console's signed-out redirect carries state and console but no signin=; it must still open the dialog.
+  const consoleOpens = consoleTarget !== null && state !== null
+  return { state, consoleTarget, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) || consoleOpens }
 }
 
-// Deep-link modal: a ?signin= outcome wins, then register (when open), then demo, then forgot. Any value opens.
+// Deep-link modal: a ?signin= outcome or a console open wins, then register (when open), then demo, then forgot. Any value opens.
 function readDeepLink(search: string, signInOpens: boolean): 'register' | 'demo' | 'forgot' | null {
   if (signInOpens) return null
   const p = new URLSearchParams(search)

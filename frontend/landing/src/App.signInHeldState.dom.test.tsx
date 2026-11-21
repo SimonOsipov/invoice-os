@@ -182,6 +182,33 @@ describe('F1a: the held state expires 9 minutes after boot', () => {
   })
 })
 
+describe('a console open follows the same hold', () => {
+  it('console_closeThenStateExpires_signInBouncesToTheConsole', async () => {
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    await bootAt(`/?state=${STATE}&console=ops`)
+    expectFields(onlyDialog())
+    await closeDialog()
+    await advance(HOLD_MS)
+    await openFromNav()
+    expect(nav.assigned).toEqual(['https://ops.x?auth=start'])
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(posts()).toEqual([])
+  })
+
+  it('console_closeThenBfcacheRestore_signInBouncesToTheConsole', async () => {
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    await bootAt(`/?state=${STATE}&console=ops`)
+    await closeDialog()
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
+    await openFromNav()
+    expect(nav.assigned).toEqual(['https://ops.x?auth=start'])
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(posts()).toEqual([])
+  })
+})
+
 describe('F3: a bfcache restore drops the held state', () => {
   it('submit_afterBfcacheRestore_withOpenWindow_navigates', async () => {
     await bootAt(`/?state=${STATE}&signin=ready`)

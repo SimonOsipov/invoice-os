@@ -380,6 +380,38 @@ describe('the console hand-back', () => {
     })
   }
 
+  async function closeOpenDialog(): Promise<void> {
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>(`${DIALOG} button[aria-label="Close"]`)!.click()
+    })
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+  }
+
+  async function fillAndSubmitOpen(): Promise<void> {
+    const d = document.querySelector<HTMLElement>(DIALOG)!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const email = d.querySelector<HTMLInputElement>('input[type="email"]')!
+    const password = d.querySelector<HTMLInputElement>('input[type="password"]')!
+    await act(async () => {
+      setValue.call(email, 'ada@okafor.ng')
+      email.dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(password, 'pw')
+      password.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  const dialogLabels = () => Array.from(document.querySelectorAll<HTMLElement>(DIALOG)).map((d) => d.getAttribute('aria-label'))
+
+  function postBodies(fetchMock: ReturnType<typeof vi.fn>): { state: string }[] {
+    return fetchMock.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method === 'POST').map((c) => JSON.parse((c[1] as RequestInit).body as string))
+  }
+
   function codeFetch() {
     const fetchMock = vi
       .fn()
@@ -391,6 +423,8 @@ describe('the console hand-back', () => {
   it('signIn_returnsTheCodeToTheConsoleThatAsked', async () => {
     const fetchMock = codeFetch()
     await bootAt(`/?state=${STATE}&console=ops`)
+    // The console target opens the dialog at boot; close it so the header click is what runs.
+    await closeOpenDialog()
     await signInFromNav()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(assigned).toEqual(['https://ops.x?handoff=the-code'])
@@ -416,6 +450,94 @@ describe('the console hand-back', () => {
     expect(alerts[0].textContent).not.toContain(NO_WORKSPACE)
     expect(window.location.search).toBe('')
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  describe('a console target opens the sign-in dialog', () => {
+    const TARGETS = ['ops', 'support'] as const
+
+    it.each(TARGETS)('console_withState_opensTheDialogWithNoMessage (%s)', async (t) => {
+      await bootAt(`/?state=${STATE}&console=${t}`)
+      expect(dialogLabels()).toEqual(['Sign in'])
+      const d = document.querySelector<HTMLElement>(DIALOG)!
+      expect(d.querySelectorAll('[role="alert"]').length).toBe(0)
+      expect(d.querySelectorAll('input[type="email"]').length).toBe(1)
+      expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+      expect(window.location.search).toBe('')
+      expect(consoleError).not.toHaveBeenCalled()
+    })
+
+    it.each(TARGETS)('console_openedAtBoot_submitReturnsTheCodeToThatConsole (%s)', async (t) => {
+      const fetchMock = codeFetch()
+      await bootAt(`/?state=${STATE}&console=${t}`)
+      await fillAndSubmitOpen()
+      expect(postBodies(fetchMock).map((b) => b.state)).toEqual([STATE])
+      expect(assigned).toEqual([`https://${t}.x?handoff=the-code`])
+      expect(consoleError).not.toHaveBeenCalled()
+    })
+
+    it('console_withKnownOutcome_outcomeMessageWins', async () => {
+      await bootAt(`/?state=${STATE}&console=ops&signin=failed`)
+      expect(dialogLabels()).toEqual(['Sign in'])
+      const alerts = document.querySelectorAll<HTMLElement>(`${DIALOG} [role="alert"]`)
+      expect(alerts.length).toBe(1)
+      expect(alerts[0].textContent).toContain("We couldn't open your workspace.")
+    })
+
+    it('console_absent_withState_opensNothing', async () => {
+      await bootAt(`/?state=${STATE}`)
+      expect(document.querySelectorAll(DIALOG).length).toBe(0)
+      expect(document.querySelectorAll('header button').length).toBeGreaterThan(0)
+    })
+
+    it.each([['app', 'app'], ['OPS', 'OPS'], ['a list', 'ops,support'], ['empty', ''], ['repeated', 'ops&console=support']])(
+      'console_notAConsole_withState_opensNothing (%s)',
+      async (_n, v) => {
+        await bootAt(`/?state=${STATE}&console=${v}`)
+        expect(document.querySelectorAll(DIALOG).length).toBe(0)
+        expect(window.location.search).toBe('')
+      },
+    )
+
+    it.each([
+      ['no state', '/?console=ops'],
+      ['short state', '/?state=short&console=ops'],
+      ['repeated state', `/?state=${STATE}&state=${STATE.slice(0, -1)}x&console=ops`],
+    ])('console_noState_opensNothing (%s)', async (_n, path) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null)))
+      await bootAt(path)
+      expect(document.querySelectorAll(DIALOG).length).toBe(0)
+      await clickByText(document.querySelector('header')!, SIGN_IN_CTA)
+      expect(assigned).toEqual(['https://ops.x?auth=start'])
+    })
+
+    it('console_closeThenSignIn_reopensWithTheSameHeldState', async () => {
+      const fetchMock = codeFetch()
+      await bootAt(`/?state=${STATE}&console=ops`)
+      await closeOpenDialog()
+      expect(document.querySelectorAll('header button').length).toBeGreaterThan(0)
+      await clickByText(document.querySelector('header')!, SIGN_IN_CTA)
+      expect(dialogLabels()).toEqual(['Sign in'])
+      const d = document.querySelector<HTMLElement>(DIALOG)!
+      expect(d.querySelectorAll('input[type="email"]').length).toBe(1)
+      expect(assigned).toEqual([])
+      expect(fetchMock).not.toHaveBeenCalled()
+      await fillAndSubmitOpen()
+      expect(postBodies(fetchMock).map((b) => b.state)).toEqual([STATE])
+    })
+
+    it('console_onAnotherPath_opensTheDialog', async () => {
+      await bootAt(`/privacy?state=${STATE}&console=ops&keep=1#top`)
+      expect(dialogLabels()).toEqual(['Sign in'])
+      expect(window.location.pathname).toBe('/privacy')
+      expect(window.location.search).toBe('?keep=1')
+      expect(window.location.hash).toBe('#top')
+    })
+
+    it('console_unknownOutcome_stillOpensWithNoMessage', async () => {
+      await bootAt(`/?state=${STATE}&console=ops&signin=x`)
+      expect(dialogLabels()).toEqual(['Sign in'])
+      expect(document.querySelectorAll(`${DIALOG} [role="alert"]`).length).toBe(0)
+    })
   })
 })
 

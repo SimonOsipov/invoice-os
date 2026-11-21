@@ -1284,15 +1284,12 @@ test('register empty state: a filter that matches nothing says so, and offers th
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// BUG-14-02 deleted the six blocked-reason nodes, so a refusal now reaches the browser as
-// the wire plus a `title`, never as rendered text. Declared here rather than at the head of
-// the file so the two ranges other specs cite by line (:35, :290-295) do not move again.
+// BUG-14-02 deleted the six blocked-reason nodes; BUG-168 then stopped rendering the refused
+// controls at all, so a refusal now reaches the browser as the wire alone -- no control, no
+// `title`, no text.
 //
-// The needle comes off getInvoice(), never off getAttribute('title'): reading the DOM's own
-// copy could only prove the SPA agrees with itself, where the wire read proves the sentence
-// the BACKEND sent is the one carried and not the one printed ([gates-on-the-wire]).
-// BUG-14-02's QA gated every `title` on its control's own wire flag, so a title now appears
-// on a DISABLED control only -- asserting one on an enabled control would correctly fail.
+// The needle comes off getInvoice(), never authored here: the wire read proves the sentence the
+// BACKEND sent is the one that is not printed ([gates-on-the-wire]).
 
 /** The right-aligned action column: detail-decision-actions and invoice-actions. */
 function actionCluster(page: Page): Locator {
@@ -1300,22 +1297,19 @@ function actionCluster(page: Page): Locator {
 }
 
 /**
- * The blocked control is present, disabled, carries the wire's own sentence in `title`,
- * and the cluster prints none of it.
+ * The refused control is absent, the wire carries a real sentence for it, and the detail
+ * page prints none of it.
  *
  * `reason` is a getInvoice() field. The >= 20 floor is what stops an empty or null wire
  * reason turning the absence claim into a vacuous pass.
  */
-async function expectBlockedAndUnprinted(page: Page, testid: string, reason: string | null, label: string): Promise<void> {
-  const control = page.getByTestId(testid)
-  await expect(control, `${label} must render at every status, disabled rather than absent`).toHaveCount(1)
-  await expect(control, `${label} must be disabled here`).toBeDisabled()
+async function expectAbsentAndUnprinted(page: Page, testid: string, reason: string | null, label: string): Promise<void> {
+  await expect(page.getByTestId(testid), `${label} must not render here (BUG-168)`).toHaveCount(0)
   expect(
     reason?.length ?? 0,
     `${label}: the wire must carry a real sentence, or the absence claim below is vacuous`,
   ).toBeGreaterThanOrEqual(20)
-  await expect(control, `${label} must carry the wire's own sentence`).toHaveAttribute('title', reason!)
-  await expect(actionCluster(page), `${label}: the cluster must not print the sentence its title carries`).not.toContainText(reason!)
+  await expect(page.getByTestId('invoice-detail'), `${label}: the page must not print the refusal`).not.toContainText(reason!)
 }
 
 test('detail surface: violations render against the rule-set version, the fix loop clears them, and status history records both the round trip and the not-a-draft regression', async ({
@@ -1469,39 +1463,33 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(stripCaption(page, 'draft')).not.toHaveClass(/mono/)
 
   // 6. INVED-01-07/08: the OLD 409-on-Re-validate dead end is gone. On an untouched
-  //    VALIDATED invoice, Re-validate is DISABLED ([revalidate-visibility]/
-  //    [revalidate-reason-from-backend]) -- Edit stays enabled
+  //    VALIDATED invoice, Re-validate is ABSENT (BUG-168: a control renders only while its
+  //    can_* flag is true) -- Edit stays enabled
   //    ([D-actions-hidden-while-editing] only hides the bar while an editor is mounted,
-  //    which none is here). BUG-14-02 deleted revalidate-blocked-reason, so the sentence is
-  //    now on the wire and in `title` and nowhere on screen ([reason-text-disappears]). The
-  //    backend's copy is still pinned, as a substring only -- never the em dash literal, an
-  //    encoding hazard through a CI shell.
+  //    which none is here). The refusal sentence is on the wire and nowhere on screen
+  //    ([reason-text-disappears]). The backend's copy is still pinned, as a substring only --
+  //    never the em dash literal, an encoding hazard through a CI shell.
   const revalidate = page.getByTestId('revalidate')
-  await expect(revalidate).toBeVisible()
+  await expect(revalidate).toHaveCount(0)
   await expect(page.getByTestId('edit-toggle')).toBeEnabled()
   const validatedWire = await getInvoice(token, inv.id)
   expect(validatedWire.revalidate_blocked_reason, 'the backend still refuses a validated re-validate in its own words').toContain(
     'Only draft invoices can be re-validated',
   )
-  await expectBlockedAndUnprinted(page, 'revalidate', validatedWire.revalidate_blocked_reason, 'Re-validate on a validated invoice')
+  await expectAbsentAndUnprinted(page, 'revalidate', validatedWire.revalidate_blocked_reason, 'Re-validate on a validated invoice')
 
   // Non-vacuity: the recorder must already hold BOTH earlier Re-validate clicks (steps 2
-  // and 5) before the disabled click below is attempted -- proving the predicate actually
-  // matches POST .../validate requests, not just that none happened to fire.
+  // and 5) before the quiet window below -- proving the predicate actually matches
+  // POST .../validate requests, not just that none happened to fire.
   expect(validatePosts, 'the two earlier Re-validate clicks were observed').toHaveLength(2)
 
   const noValidate = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/validate'),
     { timeout: 2_000 },
   )
-  // force:true bypasses Playwright's own actionability pre-checks (which would otherwise
-  // refuse to click a disabled element) -- but the real HTML `disabled` attribute still
-  // suppresses the browser's own click event, so React's onClick handler never fires.
-  // Never dispatchEvent('click'): that bypasses the browser's disabled-button suppression
-  // too and would test the OPPOSITE of the guarantee this step exists to prove.
-  await revalidate.click({ force: true })
+  // There is no Re-validate to click, so nothing may be sent in the quiet window.
   await expect(noValidate).rejects.toThrow()
-  expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
+  expect(validatePosts, 'an absent Re-validate must issue no request').toHaveLength(2)
   await expectStripStates(page, { draft: 'done', validated: 'done' })
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
@@ -2029,7 +2017,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await page.getByTestId('edit-cancel').click()
   await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
 
-  // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
+  // Re-validate renders and is enabled again (can_revalidate true on the draft) -- the fixture's numbers
   // were always clean (only the description text changed), so this re-validates green.
   const revalidate = page.getByTestId('revalidate')
   await expect(revalidate).toBeEnabled()
@@ -2253,21 +2241,18 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   // and the Phase 3.5 deploy-gate checklist, not by a browser assertion here.
   await expect(page.getByTestId('failure-detail')).toContainText('was not recorded')
   // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
-  // canEdit/canTransition), but the bar is always present ([actions-visibility]) -- Edit,
-  // Re-validate and Submit render disabled rather than vanishing, which is the whole point:
-  // the user can tell "not allowed" from "not there". The single /submit/i match is the
-  // detail page's own; the register's Submit is unmounted while on the detail view, App.tsx's
-  // view switch being exclusive. The Approve/Reject pair (task-554, APPR-13-04) is gated on
-  // `!editing` alone, so it still renders here -- outside this bar, per-status disabled state
-  // covered by the SPA unit suite, not asserted here.
-  await expect(page.getByTestId('invoice-actions')).toHaveCount(1)
-  await expect(page.getByTestId('revalidate')).toBeDisabled()
-  await expect(page.getByTestId('edit-toggle')).toBeDisabled()
-  await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(1)
-  await expect(page.getByRole('button', { name: /submit/i })).toBeDisabled()
+  // canEdit/canTransition), so BUG-168's rule applies: Edit, Re-validate, Submit and the
+  // Approve/Reject pair are not rendered at all, and no empty bar or decision box stands in
+  // for them. The register's Submit is unmounted while on the detail view, App.tsx's view
+  // switch being exclusive, so the /submit/i match below finds nothing.
+  await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
+  await expect(page.getByTestId('detail-decision-actions')).toHaveCount(0)
+  await expect(page.getByTestId('revalidate')).toHaveCount(0)
+  await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
 
   // can_view_ubl tracks content, not lifecycle: the rail's UBL card still offers this
-  // UBL-complete document while every control in the bar above is disabled.
+  // UBL-complete document although no bar control is allowed.
   await expect(page.getByTestId('ubl-document-card')).toBeVisible()
   for (const testid of ['ubl-card-view', 'ubl-card-download'] as const) {
     await expect(page.getByTestId(testid), `${testid} must be offered on a failed invoice`).toBeVisible()
@@ -2278,7 +2263,7 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByTestId('ubl-card-blocked'), 'an unblocked card prints no refusal').toHaveCount(0)
 
   // resolve-outside is the one ENABLED control on this dead-end card, and it lives in the
-  // card, not in the disabled actions bar above.
+  // card; no actions bar renders on this status.
   await expect(page.getByTestId('resolve-outside')).toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -2510,8 +2495,7 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The founder-reversed visibility model: Submit always renders inside the actions bar now,
-// disabled+reasoned when `can_submit` is false, rather than hidden. This test proves that on
+// Submit renders only while `can_submit` is true (BUG-168). This test proves it absent on
 // a draft first, then drives a real submit-and-verdict journey entirely from the detail
 // page's own Submit control -- no batch-select, no navigation away.
 test('detail surface: submit one invoice from its own page -- cancel sends nothing, confirm sends one, and the verdict lands without leaving', async ({
@@ -2526,7 +2510,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVED02 submit ${Date.now()}`, tin: freshTin() })
 
-  // Never validated, so can_submit stays false for the disabled-state leg below.
+  // Never validated, so can_submit stays false for the absence leg below.
   const draftNumber = `INV-INVED02-DRAFT-${Date.now()}`
   const draft = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(draftNumber) })
 
@@ -2551,40 +2535,33 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
-  // Disabled-with-reason leg, on the draft fixture: Submit is visible but unclickable, and
-  // the backend's own sentence rides the wire and the control's `title`
-  // ([revalidate-visibility] convention, extended to Submit; BUG-14-02 deleted the rendered
-  // node, [reason-text-disappears]).
+  // Refused leg, on the draft fixture: Submit is not rendered (BUG-168), and the backend's
+  // own sentence rides the wire only ([reason-text-disappears]).
   await openInvoiceRow(page, draftNumber)
   // LiveInvoiceDetail's page-level useAsync fetches the run unconditionally on mount and
   // the approval card consumes it, so this never-validated draft still renders the empty
   // branch -- topology's only remaining assertion of it now that a validated firm invoice
   // always arms a run.
   await expect(page.getByTestId('approval-empty')).toBeVisible()
-  await expect(page.getByTestId('detail-submit')).toBeVisible()
+  await expect(page.getByTestId('revalidate')).toBeVisible()
   const draftWire = await getInvoice(token, draft.id)
   // Substring, never the em dash literal -- an encoding hazard through a CI shell.
   expect(draftWire.submit_blocked_reason, "the backend still refuses a draft submit in its own words").toContain(
     'Only validated invoices can be submitted',
   )
-  await expectBlockedAndUnprinted(page, 'detail-submit', draftWire.submit_blocked_reason, 'Submit on a draft invoice')
+  await expectAbsentAndUnprinted(page, 'detail-submit', draftWire.submit_blocked_reason, 'Submit on a draft invoice')
 
   await page.getByRole('button', { name: '← All invoices' }).click()
   await openInvoiceRow(page, invoiceNumber)
   await expect(page.getByTestId('invoices-list')).toHaveCount(0)
 
   const submitBtn = page.getByTestId('detail-submit')
-  await expect(submitBtn).toBeVisible()
-  // AC-4: the undecided state, observed in a browser -- disabled, with the server's own
-  // reason on the wire and in the control's `title`, and printed nowhere. BUG-14 deleted
-  // the sibling text node ([reason-text-disappears]) and deliberately KEPT the `title`
-  // ([title-survives]). Chromium does not paint a tooltip on a DISABLED button (APPR-16),
-  // so the reason really is unreadable here -- that is the accepted trade, the same one
-  // BUG-09 took for the register, not an oversight: the disabled state is the message and
-  // the `title` is for assistive technology and for this assertion.
+  await expect(page.getByTestId('edit-toggle')).toBeVisible()
+  // AC-4: the undecided state, observed in a browser -- Submit is not rendered (BUG-168),
+  // with the server's own reason on the wire and printed nowhere ([reason-text-disappears]).
   const awaitingWire = await getInvoice(token, inv.id)
   expect(awaitingWire.submit_blocked_reason, 'the approval-gate copy stays pinned end to end').toBe(AWAITING_APPROVAL_REASON)
-  await expectBlockedAndUnprinted(page, 'detail-submit', awaitingWire.submit_blocked_reason, 'Submit while approval is open')
+  await expectAbsentAndUnprinted(page, 'detail-submit', awaitingWire.submit_blocked_reason, 'Submit while approval is open')
 
   // Approve over the side channel, then force a refetch: a validated invoice does not poll
   // (shouldPollList needs queued/submitted), so nothing on screen would notice otherwise.
@@ -2687,16 +2664,12 @@ test('submit gate: the register row and its own detail page never disagree -- re
 
   await openInvoiceRow(page, invoiceNumber)
   const submitBtn = page.getByTestId('detail-submit')
-  await expect(submitBtn).toBeVisible()
-  await expect(submitBtn).toBeDisabled()
-  // BUG-14-04: the detail half moved from a rendered node to the control's own `title` --
-  // BUG-14-02 deleted submit-blocked-reason ([reason-text-disappears]). The parity claim is
-  // unchanged and deliberately NOT split by surface: both halves still read the sentence a
-  // user's browser actually received, and they must still be the same sentence.
-  await expect(submitBtn).toHaveAttribute('title', AWAITING_APPROVAL_REASON)
-  const detailReason = (await submitBtn.getAttribute('title')) ?? ''
-  expect(detailReason.length, 'the same floor on the detail half').toBeGreaterThanOrEqual(20)
-  expect(registerTitle, 'the whole bug, as one assertion: the two surfaces must not disagree').toBe(detailReason)
+  await expect(page.getByTestId('edit-toggle')).toBeVisible()
+  // BUG-168: the detail half no longer renders a refused Submit, so the surfaces agree by the
+  // register refusing (disabled, carrying the sentence) and the detail not offering Submit.
+  await expect(submitBtn).toHaveCount(0)
+  // The register carried the approval-gate sentence; the detail prints none of it.
+  await expect(page.getByTestId('invoice-detail')).not.toContainText(registerTitle)
 
   // A validated invoice does not poll (shouldPollList needs queued/submitted), so this
   // back-and-reopen round trip IS the refetch, not navigation garnish.
@@ -3718,7 +3691,7 @@ test("invoice detail: an incomplete invoice's UBL document card prints the serve
 // empty-trail branch moved to a draft-detail test instead (still reachable there, since a
 // draft never arms anything). [topology-never-publishes] still holds: no
 // armedInvoice()-style helper, no policy call anywhere below -- this test only validates.
-test('detail surface: the armed decision block and approval card, plus their layout at every wide width', async ({ page }) => {
+test('detail surface: an unstaffed seat sees no decision block, and the approval card and action column lay out at every wide width', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -3736,20 +3709,19 @@ test('detail surface: the armed decision block and approval card, plus their lay
   // The real backend, over the real wire: this invoice's total sits below both firm
   // conditions, so materialise emits fin_mgr (ord0) then compliance (ord1), both pending.
   // The e2e member holds neither seat, so the lowest-ord pending check (fin_mgr) fails and
-  // both controls stay disabled with the AXIS-2 sentence (handlers.go:394) reaching the
-  // browser on the wire and in `title` (BUG-14-02 deleted the rendered node,
-  // [reason-text-disappears]). NOT a duplicate of InvoiceDetail.test.tsx, which
-  // parametrizes all five gate sentences against a mock and never leaves it.
-  const detailReject = page.getByTestId('detail-reject')
-  await expect(detailReject).toBeVisible()
-  await expect(detailReject).toBeDisabled()
+  // both controls are not rendered (BUG-168), the AXIS-2 sentence (approvalGate in handlers.go) reaching
+  // the browser on the wire only ([reason-text-disappears]). NOT a duplicate of
+  // InvoiceDetail.test.tsx, which parametrizes all five gate sentences against a mock and
+  // never leaves it.
+  await expect(page.getByTestId('detail-reject')).toHaveCount(0)
+  await expect(page.getByTestId('detail-decision-actions')).toHaveCount(0)
   // can_approve is per caller: read with the browser's own token.
   const armedWire = await getInvoice(await browserToken(page), invoice.id)
   // Substring, never the em dash literal -- an encoding hazard through a CI shell.
   expect(armedWire.approve_blocked_reason, 'the AXIS-2 gate sentence still reaches this seat').toContain(
     "Only an approver staffed to this step's workflow role can approve or reject it",
   )
-  await expectBlockedAndUnprinted(page, 'detail-approve', armedWire.approve_blocked_reason, 'Approve on an unstaffed step')
+  await expectAbsentAndUnprinted(page, 'detail-approve', armedWire.approve_blocked_reason, 'Approve on an unstaffed step')
   // reject_blocked_reason is the SAME string: handlers.go:505-508 assigns both pairs
   // `canDecide`/`decideReason`. Nothing renders either one now (BUG-14-02), so the two
   // sentences differ nowhere on screen.
@@ -3772,41 +3744,20 @@ test('detail surface: the armed decision block and approval card, plus their lay
   await expect(approvalCard).not.toContainText('Finance Manager')
   await expect(page.getByTestId('approval-empty')).toHaveCount(0)
 
-  // AC-1: containment -- decision block inside its action column. NOT assertFillsColumn here:
-  // the decision block right-aligns and is legitimately narrower than its column, so a fill
-  // check would fail on correct code. The column carries no testid, so it is read as the
-  // decision block's parent via xpath.
-  const decisionBlock = page.getByTestId('detail-decision-actions')
-  const actionColumn = decisionBlock.locator('xpath=..')
+  // AC-1: containment -- the action bar inside its column (the decision block is absent for
+  // this seat). The column carries no testid, so it is read as the bar's parent via xpath.
   const actions = page.getByTestId('invoice-actions')
+  const actionColumn = actions.locator('xpath=..')
   await expect(actions).toBeVisible()
-  // The right-edge equality below only means something between siblings of one column.
-  expect(
-    await actions.evaluate((el) => el.parentElement === document.querySelector('[data-testid="detail-decision-actions"]')?.parentElement),
-    'invoice-actions and the decision block must share the flex-end column',
-  ).toBe(true)
   const entryViewport = page.viewportSize()
   try {
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
-      const [blockBox, columnBox, actionsBox] = await Promise.all([
-        decisionBlock.boundingBox(),
-        actionColumn.boundingBox(),
-        actions.boundingBox(),
-      ])
-      expect(blockBox && columnBox && actionsBox, `decision block, its column and invoice-actions must all render at ${width}px`).toBeTruthy()
-      const g = gaps(blockBox!, columnBox!)
-      expect(g.left, `decision block must not start left of its column at ${width}px`).toBeGreaterThanOrEqual(0)
-      expect(g.right, `decision block must not extend right of its column at ${width}px`).toBeGreaterThanOrEqual(0)
-
-      // Both are direct children of the same alignItems:'flex-end' column; a wrapping div
-      // around either would break this.
-      const blockRight = blockBox!.x + blockBox!.width
-      const actionsRight = actionsBox!.x + actionsBox!.width
-      expect(
-        Math.abs(blockRight - actionsRight),
-        `decision block's right edge must equal invoice-actions' at ${width}px`,
-      ).toBeLessThanOrEqual(1)
+      const [columnBox, actionsBox] = await Promise.all([actionColumn.boundingBox(), actions.boundingBox()])
+      expect(columnBox && actionsBox, `invoice-actions and its column must render at ${width}px`).toBeTruthy()
+      const g = gaps(actionsBox!, columnBox!)
+      expect(g.left, `invoice-actions must not start left of its column at ${width}px`).toBeGreaterThanOrEqual(0)
+      expect(g.right, `invoice-actions must not extend right of its column at ${width}px`).toBeGreaterThanOrEqual(0)
     }
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
@@ -3986,8 +3937,8 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
     expect(approved.decisions.at(-1)?.decision).toBe('approved')
     expect(approved.decisions.at(-1)?.actor).toBe(driver)
     await expect(page.getByTestId('approval-state')).toHaveText('Approved')
-    await expect(approve).toBeDisabled()
-    await expect(reject).toBeDisabled()
+    await expect(approve).toHaveCount(0)
+    await expect(reject).toHaveCount(0)
 
     await page.goto(`${APP_URL}/invoices/${rejectId}`)
     await expect(reject).toBeEnabled()
@@ -4004,8 +3955,8 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
     expect(rejected.decisions.at(-1)?.decision).toBe('rejected')
     expect(rejected.decisions.at(-1)?.reason).toBe(reason)
     expect(rejected.decisions.at(-1)?.actor).toBe(driver)
-    await expect(approve).toBeDisabled()
-    await expect(reject).toBeDisabled()
+    await expect(approve).toHaveCount(0)
+    await expect(reject).toHaveCount(0)
   } finally {
     // A failed restore must not replace the test's own failure; afterEach retries it.
     await staffWorkflowRole(token, 'compliance', seeded).then(
@@ -4065,7 +4016,11 @@ test('detail surface: the note actions fit the action column', async ({ page }) 
   const errors = collectErrors(page)
   await openAcceptedThreeLineInvoice(page)
 
-  const BAR = ['edit-toggle', 'revalidate', 'detail-submit', 'issue-credit-note', 'issue-debit-note'] as const
+  // An accepted invoice allows only the two note actions (BUG-168): Edit, Re-validate and Submit are not rendered.
+  const BAR = ['issue-credit-note', 'issue-debit-note'] as const
+  for (const absent of ['edit-toggle', 'revalidate', 'detail-submit'] as const) {
+    await expect(page.getByTestId(absent), `${absent} must not render on an accepted invoice`).toHaveCount(0)
+  }
   const column = actionCluster(page)
   const titleBlock = page.getByTestId('invoice-status-badge').locator('xpath=../..')
   const entry = page.viewportSize()
@@ -5113,22 +5068,22 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
 // ## System Design. Alongside the strip / activity / compliance blocks above rather than in
 // a file of its own -- invoice detail IS this file's capability (.claude/rules/e2e.md).
 //
-// SCOPE: the firm ADMIN seat, at two statuses. The ROLE axis (AC-3: a caller who can do
-// nothing sees five disabled controls, never a shorter cluster) is out of
-// this file's scope.
+// SCOPE: the firm ADMIN seat, at two statuses. BUG-168 replaced the stable five-control set
+// with the allowed controls only: a status that allows nothing renders no cluster. The ROLE
+// axis is out of this file's scope.
 //
 // A width is never pinned, only a relationship (layout.ts's file header). The measurements
 // are attached so the numbers outlive the run.
 test.describe.serial("detail surface: the action cluster's geometry (firm admin)", () => {
-  // The closed control set, in render order: row 1 the decision pair, row 2 the Edit /
-  // Re-validate / Submit bar (InvoiceDetail.tsx).
+  // The closed control set a seat could ever see, in render order: row 1 the decision pair,
+  // row 2 the Edit / Re-validate / Submit bar (InvoiceDetail.tsx). Each renders only while its
+  // can_* flag is true (BUG-168); this admin seat is staffed to no approval step.
   const CLUSTER_CONTROLS = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
-  const ROW_TWO = ['edit-toggle', 'revalidate', 'detail-submit'] as const
-  // One can_edit-true status and one can_edit-false one. The pair IS the claim -- a fixture
-  // that drifted into two editable invoices would make every assertion below vacuous, which
-  // is what the enabled/disabled controls guard against.
+  // One status that allows Edit and one that allows nothing. The pair IS the claim -- a
+  // fixture that drifted into two editable invoices would make the absence leg vacuous.
   const CLUSTER_STATUSES = ['validated', 'failed'] as const
   type ClusterStatus = (typeof CLUSTER_STATUSES)[number]
+  const EXPECTED_CONTROLS: Record<ClusterStatus, readonly string[]> = { validated: ['edit-toggle'], failed: [] }
 
   let entityName = ''
   const numbers: Record<ClusterStatus, string> = { validated: '', failed: '' }
@@ -5159,15 +5114,12 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     ids.failed = failed.id
   })
 
-  /** What one width contributed, at one status. Attach it; the numbers outlive the run. */
+  /** What one width contributed on the validated invoice. Attach it; the numbers outlive the run. */
   type ClusterFit = {
-    status: ClusterStatus
     width: number
     bands: number
     columnGapLeft: number
     columnGapRight: number
-    rightEdgeSpread: number
-    rowTwoSpread: number
   }
 
   /**
@@ -5189,11 +5141,11 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     return bands
   }
 
-  test('R1-R6: the same five controls, in two right-aligned rows, at a can_edit-true and a can_edit-false status', async ({
+  test('R1-R6: only the allowed controls render, and an invoice that allows nothing renders no cluster', async ({
     page,
   }, testInfo) => {
-    // Two fixtures already built, one sign-in, two detail round trips and two four-width
-    // sweeps on a possibly cold fleet.
+    // Two fixtures already built, one sign-in, two detail round trips and a four-width
+    // sweep on a possibly cold fleet.
     test.setTimeout(120_000)
     const errors = collectErrors(page)
 
@@ -5206,98 +5158,65 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     for (const status of CLUSTER_STATUSES) {
       await goToInvoices(page)
       await openInvoiceRow(page, numbers[status])
-      const cluster = actionCluster(page)
-      await expect(cluster).toBeVisible()
+      await expect(page.getByTestId('invoice-status-badge')).toBeVisible()
 
-      // R1 -- set stability. Every control, at both statuses, before any geometry is read:
-      // a cluster that lost a control would otherwise make the band count below agree with
-      // the spec by accident.
-      const resolved: string[] = []
+      // R1 -- membership follows the wire flags. Every control is counted at both statuses
+      // before any geometry is read.
+      const present: string[] = []
       for (const testid of CLUSTER_CONTROLS) {
-        await expect(page.getByTestId(testid), `${testid} must resolve exactly once on a ${status} invoice`).toHaveCount(1)
-        resolved.push(testid)
+        const expected = EXPECTED_CONTROLS[status].includes(testid) ? 1 : 0
+        await expect(page.getByTestId(testid), `${testid} must render ${expected} time(s) on a ${status} invoice`).toHaveCount(expected)
+        if (expected === 1) present.push(testid)
       }
-      seen[status] = resolved
+      seen[status] = present
 
-      // The two non-vacuity controls. Without them the pair could be two invoices of the
-      // same editability and R1 would prove nothing about the story's claim.
-      const editToggle = page.getByTestId('edit-toggle')
-      if (status === 'validated') {
-        await expect(editToggle, 'Edit must really be live here, or this compares two identical statuses').toBeEnabled()
+      if (status === 'failed') {
+        // No allowed action: no empty bordered bar and no empty decision box either.
+        await expect(page.getByTestId('invoice-actions'), 'no empty bar on a failed invoice').toHaveCount(0)
+        await expect(page.getByTestId('detail-decision-actions'), 'no empty decision box on a failed invoice').toHaveCount(0)
       } else {
-        await expect(editToggle, 'Edit must really be dead here, or this compares two identical statuses').toBeDisabled()
-      }
+        await expect(page.getByTestId('edit-toggle'), 'Edit must really be live here').toBeEnabled()
+        const cluster = actionCluster(page)
+        await expect(cluster).toBeVisible()
+        const actions = page.getByTestId('invoice-actions')
 
-      const actions = page.getByTestId('invoice-actions')
-      const decision = page.getByTestId('detail-decision-actions')
+        const entryViewport = page.viewportSize()
+        try {
+          for (const width of WIDE_WIDTHS) {
+            await page.setViewportSize({ width, height: 1080 })
+            // window.innerWidth is the resize's own completion signal, not the
+            // setViewportSize promise -- the sibling geometry blocks' idiom.
+            await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
 
-      const entryViewport = page.viewportSize()
-      try {
-        for (const width of WIDE_WIDTHS) {
-          await page.setViewportSize({ width, height: 1080 })
-          // window.innerWidth is the resize's own completion signal, not the
-          // setViewportSize promise -- the sibling geometry blocks' idiom.
-          await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+            const [editBox, actionsBox, columnBox] = await Promise.all([
+              page.getByTestId('edit-toggle').boundingBox(),
+              actions.boundingBox(),
+              cluster.boundingBox(),
+            ])
+            for (const [name, box] of [['edit-toggle', editBox], ['invoice-actions', actionsBox], ['column', columnBox]] as const) {
+              expect(box, `${name} must render at ${width}px`).toBeTruthy()
+              expect(box!.height, `${name} must have real height at ${width}px`).toBeGreaterThan(0)
+            }
 
-          const boxes = await Promise.all([
-            ...CLUSTER_CONTROLS.map((t) => page.getByTestId(t).boundingBox()),
-            actions.boundingBox(),
-            cluster.boundingBox(),
-            decision.boundingBox(),
-          ])
-          // A null or zero-height box is a control that never laid out; comparing them
-          // would be comparing nothing.
-          for (const [i, box] of boxes.entries()) {
-            expect(box, `box ${i} must render at ${width}px on a ${status} invoice`).toBeTruthy()
-            expect(box!.height, `box ${i} must have real height at ${width}px on a ${status} invoice`).toBeGreaterThan(0)
+            // R2 -- the one allowed control stands in one row.
+            const bands = bandCount([editBox!.y])
+            expect(bands, `the allowed controls must stand in one row at ${width}px`).toBe(1)
+
+            // R3 -- containment, not fill: a right-aligned block is legitimately narrower
+            // than its column, so assertFillsColumn would fail on correct code.
+            const g = gaps(actionsBox!, columnBox!)
+            expect(g.left, `the bar must not start left of its column at ${width}px`).toBeGreaterThanOrEqual(0)
+            expect(g.right, `the bar must not extend right of its column at ${width}px`).toBeGreaterThanOrEqual(0)
+
+            measured.push({ width, bands, columnGapLeft: g.left, columnGapRight: g.right })
           }
-          const controlBoxes = boxes.slice(0, CLUSTER_CONTROLS.length).map((b) => b!)
-          const [actionsBox, columnBox, decisionBox] = boxes.slice(CLUSTER_CONTROLS.length).map((b) => b!)
-
-          // R2 -- row-count stability. Exactly two bands is the geometric form of "the
-          // set does not reflow as the user moves between invoices".
-          const bands = bandCount(controlBoxes.map((b) => b.y))
-          expect(bands, `the five controls must stand in two rows at ${width}px on a ${status} invoice`).toBe(2)
-
-          // R3 -- containment, not fill: a right-aligned block is legitimately narrower
-          // than its column, so assertFillsColumn would fail on correct code (this file's
-          // own recorded judgement for the decision block).
-          const g = gaps(actionsBox, columnBox)
-          expect(g.left, `the bar must not start left of its column at ${width}px on a ${status} invoice`).toBeGreaterThanOrEqual(0)
-          expect(g.right, `the bar must not extend right of its column at ${width}px on a ${status} invoice`).toBeGreaterThanOrEqual(0)
-
-          // R4 -- one right edge for both rows. Each is a direct child of the same
-          // alignItems:'flex-end' column (InvoiceDetail.tsx); a wrapping div around either
-          // breaks this.
-          const rights = [actionsBox, decisionBox].map((b) => b.x + b.width)
-          const rightEdgeSpread = Math.max(...rights) - Math.min(...rights)
-          expect(rightEdgeSpread, `the two rows must share a right edge at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
-
-          // R5 -- the Edit / Re-validate / Submit row never folds onto a second line. This
-          // is the real "uncrowded" oracle, and the one BUG-14-01's always-mounted bar puts
-          // at risk at every status rather than three of seven.
-          const rowTwoYs = ROW_TWO.map((t) => controlBoxes[CLUSTER_CONTROLS.indexOf(t)].y)
-          const rowTwoSpread = Math.max(...rowTwoYs) - Math.min(...rowTwoYs)
-          expect(rowTwoSpread, `the action row must not wrap at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
-
-          measured.push({
-            status,
-            width,
-            bands,
-            columnGapLeft: g.left,
-            columnGapRight: g.right,
-            rightEdgeSpread,
-            rowTwoSpread,
-          })
+        } finally {
+          if (entryViewport) await page.setViewportSize(entryViewport)
         }
-      } finally {
-        if (entryViewport) await page.setViewportSize(entryViewport)
       }
 
-      // R6 -- the cluster prints no sentence a control's title carries. The needle comes
-      // off getInvoice(), never off the DOM and never authored here: a wire read proves the
-      // sentence the BACKEND sent is unprinted, where a title read would only prove the SPA
-      // agrees with itself.
+      // R6 -- the page prints no refusal sentence for a control it does not render. The
+      // needle comes off getInvoice(), never off the DOM and never authored here.
       const wire = await getInvoice(await browserToken(page), ids[status])
       const reasons = [
         wire.revalidate_blocked_reason,
@@ -5307,27 +5226,26 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
       ].filter((r): r is string => r != null && r.length >= 20)
       expect(reasons.length, `the wire must carry a real refusal on a ${status} invoice, or R6 is vacuous`).toBeGreaterThan(0)
       for (const reason of reasons) {
-        await expect(cluster, `the cluster must not print a refusal on a ${status} invoice`).not.toContainText(reason)
-        // The leading clause too: a truncated re-add of the sentence would slip past a
-        // whole-string match (BUG-09's lead() catcher).
-        await expect(cluster, `the cluster must not print a refusal's opening clause on a ${status} invoice`).not.toContainText(
-          reason.slice(0, 20),
-        )
+        await expect(page.getByTestId('invoice-detail'), `the page must not print a refusal on a ${status} invoice`).not.toContainText(reason)
+        // The leading clause too, scoped to the action column (a truncated re-add of the
+        // sentence would slip past a whole-string match; BUG-09's lead() catcher).
+        if (status === 'validated') {
+          await expect(actionCluster(page), `the cluster must not print a refusal's opening clause on a ${status} invoice`).not.toContainText(
+            reason.slice(0, 20),
+          )
+        }
       }
     }
 
-    // Sweep coverage, after both sweeps: a loop that measured nothing leaves `measured`
-    // empty and every claim above passes without ever having run.
-    for (const status of CLUSTER_STATUSES) {
-      expect(
-        measured.filter((m) => m.status === status).map((m) => m.width),
-        `the ${status} sweep measured fewer widths than it swept`,
-      ).toEqual([...WIDE_WIDTHS])
-    }
+    // Sweep coverage: a loop that measured nothing leaves `measured` empty and every claim
+    // above passes without ever having run.
+    expect(
+      measured.map((m) => m.width),
+      'the validated sweep measured fewer widths than it swept',
+    ).toEqual([...WIDE_WIDTHS])
 
-    // R1's cross-status half: the same set, not merely five controls each time.
-    expect(seen.validated, 'the control set must not change with can_edit').toEqual(seen.failed)
-    expect(seen.validated, 'the control set must be the closed five').toEqual([...CLUSTER_CONTROLS])
+    expect(seen.validated, 'the validated seat sees Edit only').toEqual(['edit-toggle'])
+    expect(seen.failed, 'a failed invoice allows no control').toEqual([])
 
     await testInfo.attach('detail-action-cluster-geometry.json', {
       body: JSON.stringify({ entity: entityName, numbers, measured }, null, 2),
@@ -5354,8 +5272,8 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
 // included, so this fixture can never become another spec's default active entity.
 //
 // The approve/reject DECISIONS are driven through the API, not the browser: the e2e member
-// is staffed to no firm approval step -- the "armed decision block" test above proves
-// detail-approve and detail-reject are DISABLED for it, with the AXIS-2 sentence on screen.
+// is staffed to no firm approval step -- the "unstaffed seat" test above proves
+// detail-approve and detail-reject are NOT RENDERED for it (BUG-168), the AXIS-2 sentence staying on the wire.
 // Validation and submission ARE driven from the browser. What this block asserts is that
 // three surfaces agree on one fact, which is a claim about the reader, not the writer.
 test.describe.serial('detail surface: the deployed journey -- strip, approval card, feed and hand-off', () => {
@@ -6625,35 +6543,22 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         activity: page.getByTestId('invoice-activity'),
         failedNode: failedNodes.first().locator('span[aria-hidden="true"]').first(),
         badge: detail.getByTestId('invoice-status-badge'),
-        submit: page.getByTestId('detail-submit'),
-        approve: page.getByTestId('detail-approve'),
-        edit: page.getByTestId('edit-toggle'),
         resolve,
         readOnly: page.getByTestId('invoice-activity').getByText('READ ONLY', { exact: true }),
         h1: detail.locator('h1'),
         rail: page.getByTestId('invoice-rail'),
-        actions: actionCluster(page),
       },
       {
         within: {
           railCards: { of: 'rail', sel: ':scope > *' },
-          clusterButtons: { of: 'actions', sel: 'button' },
         },
         tokens: ['--primary', '--primary-foreground'],
       },
     )
     const t = read.targets
-    const disabledButtons = {
-      approve: page.getByTestId('detail-approve'),
-      edit: page.getByTestId('edit-toggle'),
-      submit: page.getByTestId('detail-submit'),
-    }
-    for (const [name, loc] of Object.entries(disabledButtons) as [keyof typeof disabledButtons, Locator][]) {
-      await expect(loc, `AC 4: ${name} is disabled`).toBeDisabled()
-      expect(t[name].style.opacity, `AC 4: ${name} opacity`).toBe('0.45')
-      expect(t[name].style.cursor, `AC 4: ${name} cursor`).toBe('not-allowed')
-      expect(t[name].style['background-color'], `AC 4: ${name} background is --primary`).toBe(read.tokens['--primary'])
-      expect(t[name].style.color, `AC 4: ${name} colour is --primary-foreground`).toBe(read.tokens['--primary-foreground'])
+    // BUG-168: a failed invoice allows no action, so none of these renders (not disabled).
+    for (const testid of ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit', 'invoice-actions', 'detail-decision-actions']) {
+      await expect(page.getByTestId(testid), `AC 4: ${testid} is not rendered`).toHaveCount(0)
     }
     // Pins: these hold at head already and are read to keep them held.
     for (const name of ['compliance', 'deadEnd', 'activity'] as const) {
@@ -6664,8 +6569,6 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expectColor(t.deadEnd.style['border-top-color'], [181, 59, 59], 0.28, 'failed-dead-end border')
     expectColor(t.failedNode.style['background-color'], [181, 59, 59], 0.08, 'failed strip node')
     dvExpectCorners(t.badge, '4px', 'status badge')
-    dvExpectCorners(t.submit, '7px', 'detail-submit')
-    expect(t.submit.style.height, 'detail-submit height').toBe('34px')
     dvExpectCorners(t.resolve, '7px', 'resolve-outside')
     expect(t.resolve.style.height, 'resolve-outside height').toBe('32px')
     expect(t.resolve.className.split(/\s+/), 'resolve-outside class').toContain('v2-btn-ghost')
@@ -6682,11 +6585,6 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       for (const [j, other] of cards.entries()) {
         if (j > i) expect(rectsOverlap(card.rect, other.rect), `rail cards ${i} and ${j} do not overlap`).toBe(false)
       }
-    }
-    const buttons = read.within.clusterButtons
-    expect(buttons.length, 'the action cluster holds buttons').toBeGreaterThan(0)
-    for (const [i, button] of buttons.entries()) {
-      expect(enclosesRect(t.actions.rect, button.rect, 1), `cluster button ${i} lies inside the action column`).toBe(true)
     }
     await dvAttach(page, testInfo, 'dv-01', { ...read, scroll })
 
@@ -7657,12 +7555,13 @@ test('UN-03 invoice detail: the undo button and its arm step fit the action colu
   await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
   const actions = page.getByTestId('invoice-actions')
   await expect(actions).toBeVisible({ timeout: 60_000 })
-  const submit = page.getByTestId('detail-submit')
+  // Submit is not rendered on an import that is not validated (BUG-168); Edit is the sibling.
+  const edit = page.getByTestId('edit-toggle')
 
-  await assertControlFits(page, page.getByTestId('undo-import'), actions, [submit], null, 'undo-import')
+  await assertControlFits(page, page.getByTestId('undo-import'), actions, [edit], null, 'undo-import')
   await page.getByTestId('undo-import').click()
   for (const id of ['undo-import-cancel', 'undo-import-confirm']) {
-    await assertControlFits(page, page.getByTestId(id), actions, [submit], null, id)
+    await assertControlFits(page, page.getByTestId(id), actions, [edit], null, id)
   }
 
   await page.getByTestId('undo-import-confirm').click()

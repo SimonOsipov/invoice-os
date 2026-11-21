@@ -777,7 +777,7 @@ func GetHandler(
 		// validated/rejected). Not merely !canRevalidate: on queued/submitted/
 		// accepted/failed the copy would be a lie, since those statuses cannot be
 		// edited back to draft either. The SPA renders Re-validate at every status,
-		// disabled off !can_revalidate ([actions-visibility]), so a null reason means
+		// hidden unless can_revalidate (BUG-168), so a null reason means
 		// either the action is permitted (draft) or there is no honest copy for it.
 		subtotals := taxSubtotals(inv.LineItems)
 		if subtotals == nil {

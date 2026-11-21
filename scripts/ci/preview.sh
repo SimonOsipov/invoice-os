@@ -471,13 +471,22 @@ present() {
   return 2
 }
 
+# delete_run <gcloud run delete args>: 0 when deleted or already gone ("Service [x] could not be found."), else gcloud's status.
+delete_run() {
+  local out rc=0
+  out=$(gcloud run "$@" "${gc[@]}" 2>&1) || rc=$?
+  [ -z "$out" ] || echo "$out" >&2
+  [ "$rc" = 0 ] || ! grep -qE "(Service|Job) \\[[^]]*\\] could not be found" <<<"$out" || rc=0
+  return "$rc"
+}
+
 cmd_teardown() {
   local pr=$1 svc job name names out slot failed=0 slotfail=0 rc=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
     rc=0
     present services describe "$svc-$(suffix "$pr")" || rc=$?
     if [ "$rc" = 0 ]; then
-      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+      delete_run services delete "$svc-$(suffix "$pr")" || { failed=1; slotfail=1; }
     elif [ "$rc" = 2 ]; then
       failed=1
       slotfail=1
@@ -488,7 +497,7 @@ cmd_teardown() {
     rc=0
     present jobs describe "$job-$(suffix "$pr")" || rc=$?
     if [ "$rc" = 0 ]; then
-      gcloud run jobs delete "$job-$(suffix "$pr")" "${gc[@]}" || { failed=1; slotfail=1; }
+      delete_run jobs delete "$job-$(suffix "$pr")" || { failed=1; slotfail=1; }
     elif [ "$rc" = 2 ]; then
       failed=1
       slotfail=1

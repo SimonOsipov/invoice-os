@@ -19,6 +19,10 @@ const previewGcloudShim = `echo "${REACH_JOB:+job: }$*" >> "$D/calls"
 echo gcloud >> "$D/order"
 [ ! -e "$D/fail-$1-$2-$3" ] || { echo "ERROR: gcloud $1 $2 $3 failed" >&2; exit 1; }
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
+# gone-<group>-<verb>-<noun>: the delete finds the resource already gone (gcloud exits 1 with "could not be found").
+[ ! -e "$D/gone-$1-$2-$3" ] || { kind=Service; [ "$2" = jobs ] && kind=Job; echo "ERROR: (gcloud.$1.$2.$3) $kind [$4] could not be found." >&2; exit 1; }
+# deleteerr-<group>-<verb>-<noun>: the delete fails with the file's text.
+[ ! -e "$D/deleteerr-$1-$2-$3" ] || { cat "$D/deleteerr-$1-$2-$3" >&2; exit 1; }
 [ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo PARTIAL; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
 runfound() {
   if grep -qxF -- "$4" "$D/describe-run-error" 2>/dev/null; then echo "ERROR: (gcloud.run.describe) UNAVAILABLE: backend error" >&2; return 1; fi
@@ -3503,6 +3507,64 @@ func TestPreviewTeardownKeepsTheClaimWhenAServiceOrJobDeleteFails(t *testing.T) 
 			}
 			if callIdx(calls, "storage rm "+slot1Docs+"/**") < 0 || callIdx(calls, "secrets delete pr-7-gateway-token") < 0 {
 				t.Errorf("a failed delete stopped the rest of the teardown:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// A delete that finds the resource gone (it vanished after the describe) is a delete: the claim is released.
+func TestPreviewTeardownTreatsADeleteThatFindsNothingAsAbsent(t *testing.T) {
+	t.Parallel()
+	for _, gone := range []string{"gone-run-services-delete", "gone-run-jobs-delete"} {
+		t.Run(gone, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, gone, "")
+				writeIn(t, dir, "exists", "gateway-pr-7\nmigrate-pr-7\nreach-pr-7\n")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if callIdx(calls, "run services delete gateway-pr-7 ") < 0 || callIdx(calls, "run jobs delete reach-pr-7 ") < 0 {
+				t.Errorf("a present service or job was not deleted:\n%s", strings.Join(calls, "\n"))
+			}
+			if r.code != 0 || !strings.Contains(r.stdout, "preview deleted") {
+				t.Errorf("exit %d, stdout %q, stderr %q, want exit 0 with %q", r.code, r.stdout, r.stderr, "preview deleted")
+			}
+			if !strings.Contains(r.stderr, "could not be found.") {
+				t.Errorf("gcloud's delete output never reached the log: %q", r.stderr)
+			}
+			if callIdx(calls, "secrets delete slot-1-claim") < 0 {
+				t.Errorf("the claim was kept over a resource that was already gone:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// Only "Service|Job [x] could not be found" counts as gone: any other delete error keeps the claim, and its text reaches the log.
+func TestPreviewTeardownKeepsTheClaimWhenADeleteFailsForAnotherReason(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, text string }{
+		{"permission denied", "ERROR: (gcloud.run.services.delete) PERMISSION_DENIED: Permission 'run.services.delete' denied on Service [gateway-pr-7]"},
+		{"quota", "ERROR: (gcloud.run.services.delete) RESOURCE_EXHAUSTED: quota exceeded"},
+		{"another resource type", "ERROR: (gcloud.run.services.delete) Secret [pr-7-gateway-token] could not be found."},
+		{"partial phrase", "ERROR: (gcloud.run.services.delete) Service [gateway-pr-7] could not be deleted; the revision could not be found later"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have-7", "pr-7-gateway-token\nslot-1-claim\n")
+				writeIn(t, dir, "deleteerr-run-services-delete", c.text+"\n")
+				writeIn(t, dir, "exists", "gateway-pr-7\n")
+			}, "teardown", "7")
+			calls := callLines(r)
+			if callIdx(calls, "run services delete gateway-pr-7 ") < 0 {
+				t.Errorf("a present gateway-pr-7 was not deleted:\n%s", strings.Join(calls, "\n"))
+			}
+			if r.code == 0 || !strings.Contains(r.stderr, "left something behind") || !strings.Contains(r.stderr, c.text) {
+				t.Errorf("exit %d, stderr %q, want non-zero, %q and the delete's own text", r.code, r.stderr, "left something behind")
+			}
+			if i := callIdx(calls, "secrets delete slot-1-claim"); i >= 0 {
+				t.Errorf("the claim was released over a failed delete: %s", calls[i])
 			}
 		})
 	}

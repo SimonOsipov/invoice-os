@@ -88,6 +88,7 @@ describe('IAP boot', () => {
       v: 3,
       token: staffToken('minted'),
     })
+    expect(vi.mocked(AbortSignal.timeout).mock.calls[0]).toEqual([15000])
     const mint = net.calls[0]!
     expect(mint).toMatchObject({
       url: MINT_URL,
@@ -214,6 +215,10 @@ describe('IAP boot', () => {
     const { net } = setup({ local: { [MARKER]: '1' } })
     expect(await boot()).toEqual({ kind: 'signed-out' })
     expect(net.calls).toHaveLength(0)
+    // A record left by another tab does not reopen the console behind the marker.
+    const other = setup({ local: { [MARKER]: '1', [OPS_KEY]: v3Raw(staffToken('old')) } })
+    expect(await boot()).toEqual({ kind: 'signed-out' })
+    expect(other.net.calls).toHaveLength(0)
   })
 
   it('boot_iap_noStaffShowsTheEmail', async () => {
@@ -246,6 +251,10 @@ describe('IAP renewal', () => {
       expect(urls(net)).toEqual([REFRESH, MINT_URL, EXCHANGE])
       expect(JSON.parse(store.local.getItem(OPS_KEY)!).token).toBe(staffToken('minted'))
     }
+    // A refused record is cleared even when the mint that follows gives no session.
+    const refused = setup(stored, { refresh: reply(401), mint: reply(403, NO_STAFF) })
+    expect(await boot()).toEqual({ kind: 'no-staff', email: 'x@y' })
+    expect(refused.store.local.getItem(OPS_KEY)).toBeNull()
   })
 
   it('boot_iap_transientRenewalFailsAndKeepsTheRecord', async () => {
@@ -266,6 +275,15 @@ describe('IAP renewal', () => {
     const off = setup({}, { refresh: reply(401) })
     await expect(renewStaffSession({ ...o, iap: false })).rejects.toMatchObject({ status: 401 })
     expect(urls(off.net)).toEqual([REFRESH])
+    const four = setup({}, { refresh: reply(400) })
+    await expect(renewStaffSession({ ...o, iap: true })).resolves.toMatchObject({ token: staffToken('minted') })
+    expect(urls(four.net)).toEqual([REFRESH, MINT_URL, EXCHANGE])
+    const transient = setup({}, { refresh: reply(502) })
+    await expect(renewStaffSession({ ...o, iap: true })).rejects.toMatchObject({ status: 502 })
+    expect(urls(transient.net)).toEqual([REFRESH])
+    const noSeat = setup({}, { refresh: reply(401), mint: reply(403, NO_STAFF) })
+    await expect(renewStaffSession({ ...o, iap: true })).rejects.toMatchObject({ status: 401 })
+    expect(urls(noSeat.net)).toEqual([REFRESH, MINT_URL])
   })
 })
 
@@ -297,6 +315,8 @@ describe('mintFromIap', () => {
       ['200 empty', { mint: reply(200, {}) }],
       ['200 short code', { mint: reply(200, { code: 'short' }) }],
       ['403 without email', { mint: reply(403, { error: 'no staff account' }) }],
+      ['403 with another error', { mint: reply(403, { error: 'forbidden', email: 'x@y' }) }],
+      ['200 code is not a string', { mint: reply(200, { code: [CODE2] }) }],
       [
         'non-staff exchange',
         {
@@ -403,6 +423,18 @@ describe('switchGoogleAccount', () => {
     expect(store.local.getItem(OPS_KEY)).toBeNull()
     expect(store.local.getItem(MARKER)).toBeNull()
     expect(log).toEqual(['assign'])
+
+    // The revoke is awaited: the page has not left when the sign-out is sent.
+    const w = installWindow()
+    setup({ local: { [OPS_KEY]: v3Raw(staffToken('s')) } })
+    let leftAtRevoke = -1
+    vi.stubGlobal('fetch', async () => {
+      leftAtRevoke = w.assignWrites.length
+      return reply(204)
+    })
+    await switchGoogleAccount({ storageKey: OPS_KEY, gateway: GW })
+    expect(leftAtRevoke).toBe(0)
+    expect(w.assignWrites).toEqual([CHOOSER])
   })
 
   it('switchGoogleAccount_revokesWithoutARecordAndSkipsABorrowedOne', async () => {

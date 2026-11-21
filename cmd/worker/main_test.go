@@ -311,6 +311,7 @@ func TestWorkerMain_IAPAudiencesBootRules(t *testing.T) {
 		{"hosted on Cloud Run, repeated", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": iapOps + "," + iapOps}, true, false},
 		{"hosted on Cloud Run, set", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": iapOps + "," + iapSup}, false, true},
 		{"hosted off Cloud Run, unset", map[string]string{"DEPLOY_ENV": "production"}, false, false},
+		{"preview, bad shape", map[string]string{"DEPLOY_ENV": "pr-12", "IAP_AUDIENCES": "ops.ascomply.com"}, true, false},
 		{"preview, unset", map[string]string{"DEPLOY_ENV": "pr-12"}, false, false},
 		{"nightly, unset", map[string]string{"DEPLOY_ENV": "nightly"}, false, false},
 		{"local, unset", map[string]string{}, false, false},

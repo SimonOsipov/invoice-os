@@ -933,6 +933,15 @@ func TestGenerateRecoveryLink_OtherAnswersAreStatusErrors(t *testing.T) {
 		})
 	}
 
+	t.Run("200 without a hashed_token", func(t *testing.T) {
+		srv, _ := recordingServer(t, http.StatusOK, `{"email_confirmed_at":"2026-01-02T03:04:05Z"}`)
+		link, err := newClient(t, srv.URL, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
+		var se *gotrueadmin.StatusError
+		if !errors.As(err, &se) || se.Status != http.StatusOK || link != (gotrueadmin.RecoveryLink{}) {
+			t.Errorf("GenerateRecoveryLink on a 200 with no hash = %+v, %v; want a zero link and *StatusError{200}", link, err)
+		}
+	})
+
 	t.Run("transport failure", func(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		base := srv.URL

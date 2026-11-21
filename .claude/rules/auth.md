@@ -16,6 +16,7 @@ paths:
   - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
+  - "internal/gateway/iap_session*.go"
   - "internal/gateway/account_events*.go"
   - "internal/gateway/client_ip*.go"
   - "internal/gateway/signout*.go"

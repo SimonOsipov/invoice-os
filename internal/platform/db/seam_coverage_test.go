@@ -1159,6 +1159,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/rules/{key}":                                  {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                         {verdict: scCovered},
 	"POST /auth/console-handoff":                             {verdict: scExempt, reason: "no database; in-process code store"},
+	"POST /auth/iap-session":                                 {verdict: scExempt, reason: "no database; calls the worker and GoTrue, in-process or outbox code store"},
 	"POST /auth/export-code":                                 {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"POST /auth/export-download":                             {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"POST /auth/exchange":                                    {verdict: scExempt, reason: "no database; in-process code store"},

@@ -1639,22 +1639,41 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
     expect(bundle.style.height, 'control needle: the compared geometry must be real, not two empty strings').toBe('38px')
   })
 
+  it('BUG-175 headerButtonLabels_useTheDefaultButtonFont', async () => {
+    await landLoaded()
+    // Same rule as v2-btn header buttons elsewhere: plain label, no mono span, no inline 10.5px.
+    const cases = [
+      ['audit-bundle-open', EVIDENCE_COPY.openCaption],
+      ['audit-export', AUDIT_COPY.exportCaption],
+    ] as const
+    for (const [id, caption] of cases) {
+      const btn = screen.getByTestId(id)
+      expect(btn.textContent?.trim(), `${id}: exact caption kept`).toBe(caption)
+      expect(screen.getByRole('button', { name: caption }), `${id}: accessible name is the caption`).toBe(btn)
+      const nodes = [btn, ...Array.from(btn.querySelectorAll<HTMLElement>('*'))]
+      expect(nodes.length, `${id}: control needle, descendants exist`).toBeGreaterThan(1)
+      expect(btn.querySelectorAll('.mono').length, `${id}: caption must not sit in a .mono element`).toBe(0)
+      expect(
+        nodes.filter((n) => n.style.fontSize === '10.5px').length,
+        `${id}: no element sets an inline 10.5px font size`,
+      ).toBe(0)
+    }
+  })
+
   it('EB-03-2 bundleButton_captionIsTheZipTag', async () => {
     await landLoaded()
     const bundle = screen.getByTestId('audit-bundle-open')
 
-    const mono = bundle.querySelector('.mono')
-    expect(mono, "the caption is a .mono span, the sibling's grammar").toBeTruthy()
-    expect(mono?.textContent, 'the exact format tag, middle dot U+00B7').toBe(ZIP_CAPTION)
+    expect(bundle.textContent?.trim(), 'the exact format tag, middle dot U+00B7').toBe(ZIP_CAPTION)
     expect(
-      mono?.textContent,
+      bundle.textContent?.trim(),
       'the literal must be sourced from EVIDENCE_COPY.openCaption, never typed into the component',
     ).toBe(EVIDENCE_COPY.openCaption)
     expect(ZIP_CAPTION.charCodeAt(4), 'control needle: the pinned string separator is U+00B7, not a bullet').toBe(0x00b7)
 
     // D-08-05: the sibling diff is glyph + caption + class, not wording. Like the ghost, this
     // control carries no aria-label and no prose label such as "Download evidence bundle" --
-    // the visible mono caption is its only text. Nothing here is a missing label to "fix".
+    // the visible caption is its only text. Nothing here is a missing label to "fix".
     expect(bundle.hasAttribute('aria-label'), 'no aria-label: the visible caption is the accessible name').toBe(false)
     expect(bundle.textContent?.trim(), 'no prose label beside the caption').toBe(ZIP_CAPTION)
 

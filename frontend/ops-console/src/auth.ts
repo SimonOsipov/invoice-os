@@ -1,5 +1,5 @@
 import { gatewayBase } from '@invoice-os/api-client'
-import { signOutConsole } from '@invoice-os/console-session'
+import { isIapHost, signOutConsole } from '@invoice-os/console-session'
 
 export const SESSION_KEY = 'invoice-os.ops-session'
 
@@ -15,4 +15,6 @@ export const landingBase = (): string | null => {
   return v || null
 }
 
-export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })
+// iap: on the IAP hosts sign-out stays on the console instead of navigating to landing.
+export const signOut = () =>
+  signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase(), iap: isIapHost(window.location.hostname) })

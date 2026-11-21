@@ -37,7 +37,8 @@ func (*Fake) Validate(_ context.Context, _ Credentials, scope string) error {
 }
 
 // ListChanged pages the company's invoices in seed order. The cursor is a 4-byte
-// big-endian offset; the final cursor returns nothing and itself.
+// big-endian offset followed by the scope it was issued for, so another company's
+// cursor is refused; the final cursor returns nothing and itself.
 func (*Fake) ListChanged(_ context.Context, _ Credentials, scope string, cursor []byte) (Changes, error) {
 	co, ok := fakeSeed[scope]
 	if !ok {
@@ -45,7 +46,7 @@ func (*Fake) ListChanged(_ context.Context, _ Credentials, scope string, cursor 
 	}
 	var off int
 	if len(cursor) != 0 {
-		if len(cursor) != 4 {
+		if len(cursor) < 4 || string(cursor[4:]) != scope {
 			return Changes{}, ErrBadCursor
 		}
 		off = int(binary.BigEndian.Uint32(cursor))
@@ -58,8 +59,8 @@ func (*Fake) ListChanged(_ context.Context, _ Credentials, scope string, cursor 
 	for _, inv := range co.invoices[off:end] {
 		refs = append(refs, DocRef{SourceDocID: inv.id, SourceRevision: fakeRevision, Scope: scope})
 	}
-	next := make([]byte, 4)
-	binary.BigEndian.PutUint32(next, uint32(end))
+	next := binary.BigEndian.AppendUint32(nil, uint32(end))
+	next = append(next, scope...)
 	return Changes{Refs: refs, Cursor: next, More: end < len(co.invoices)}, nil
 }
 

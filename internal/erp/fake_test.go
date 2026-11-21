@@ -95,20 +95,30 @@ func TestFake_ListChangedFinalCursorReturnsNothingNew(t *testing.T) {
 	}
 }
 
-func offset(n uint32) []byte {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, n)
-	return b
+func offset(n uint32, scope string) []byte {
+	return append(binary.BigEndian.AppendUint32(nil, n), scope...)
 }
 
 func TestFake_ListChangedRefusesABadCursor(t *testing.T) {
 	f := NewFake()
-	for name, c := range map[string][]byte{"short": {1, 2, 3}, "past the total": offset(4)} {
+	for name, c := range map[string][]byte{
+		"short":             {1, 2, 3},
+		"past the total":    offset(4, "fake-co-1"),
+		"no scope":          offset(2, ""),
+		"foreign, in range": offset(2, "fake-co-3"),
+	} {
 		if _, err := f.ListChanged(ctx, cr, "fake-co-1", c); !errors.Is(err, ErrBadCursor) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, err := f.ListChanged(ctx, cr, "fake-co-1", offset(2)); err != nil {
+	foreign, err := f.ListChanged(ctx, cr, "fake-co-3", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ListChanged(ctx, cr, "fake-co-1", foreign.Cursor); !errors.Is(err, ErrBadCursor) {
+		t.Errorf("issued foreign cursor: %v", err)
+	}
+	if _, err := f.ListChanged(ctx, cr, "fake-co-1", offset(2, "fake-co-1")); err != nil {
 		t.Errorf("offset 2 on fake-co-1: %v", err)
 	}
 }

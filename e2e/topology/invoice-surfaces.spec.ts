@@ -1291,9 +1291,9 @@ test('register empty state: a filter that matches nothing says so, and offers th
 // The needle comes off getInvoice(), never authored here: the wire read proves the sentence the
 // BACKEND sent is the one that is not printed ([gates-on-the-wire]).
 
-/** The right-aligned action column: detail-decision-actions and invoice-actions. */
+/** The right-aligned action column: the header actions row plus the explanation text below it. */
 function actionCluster(page: Page): Locator {
-  return page.getByTestId('invoice-actions').locator('xpath=..')
+  return page.getByTestId('invoice-header-actions-row').locator('xpath=..')
 }
 
 /**
@@ -3747,7 +3747,7 @@ test('detail surface: an unstaffed seat sees no decision block, and the approval
   // AC-1: containment -- the action bar inside its column (the decision block is absent for
   // this seat). The column carries no testid, so it is read as the bar's parent via xpath.
   const actions = page.getByTestId('invoice-actions')
-  const actionColumn = actions.locator('xpath=..')
+  const actionColumn = actionCluster(page)
   await expect(actions).toBeVisible()
   const entryViewport = page.viewportSize()
   try {
@@ -7557,6 +7557,15 @@ test('UN-03 invoice detail: the undo button and its arm step fit the action colu
   await expect(actions).toBeVisible({ timeout: 60_000 })
   // Submit is not rendered on an import that is not validated (BUG-168); Edit is the sibling.
   const edit = page.getByTestId('edit-toggle')
+
+  // Edit, Re-validate and Undo import stand in one row at desktop width.
+  const tops: number[] = []
+  for (const id of ['edit-toggle', 'revalidate', 'undo-import']) {
+    const box = await page.getByTestId(id).boundingBox()
+    expect(box, `${id} must render`).toBeTruthy()
+    tops.push(Math.round(box!.y))
+  }
+  expect(new Set(tops).size, `Edit, Re-validate and Undo import share one top coordinate: ${tops.join(',')}`).toBe(1)
 
   await assertControlFits(page, page.getByTestId('undo-import'), actions, [edit], null, 'undo-import')
   await page.getByTestId('undo-import').click()

@@ -156,6 +156,50 @@ func (c *Client) call(ctx context.Context, method, userID string) (*http.Respons
 	return c.do(ctx, method, "/admin/users/"+userID, nil)
 }
 
+// ErrNoAccount: GoTrue has no account for the address, or refused the address as invalid.
+var ErrNoAccount = errors.New("gotrueadmin: no account")
+
+// RecoveryLink is what GoTrue answers to a recovery generate_link: the token hash and the account's state.
+type RecoveryLink struct {
+	TokenHash   string
+	Confirmed   bool
+	BannedUntil *time.Time
+}
+
+// GenerateRecoveryLink asks GoTrue for a recovery link. The type is fixed: "recovery" never creates an account.
+// 404, 400 and 422 are ErrNoAccount; any other failure is a *StatusError with the status only.
+//
+// ceiling: one recovery token per account, so a mint overwrites a pending reset token; revisit if users report dead reset links.
+func (c *Client) GenerateRecoveryLink(ctx context.Context, email string) (RecoveryLink, error) {
+	body, err := json.Marshal(map[string]string{"type": "recovery", "email": email})
+	if err != nil {
+		return RecoveryLink{}, err
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/admin/generate_link", bytes.NewReader(body))
+	if err != nil {
+		return RecoveryLink{}, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound, http.StatusBadRequest, http.StatusUnprocessableEntity:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return RecoveryLink{}, ErrNoAccount
+	default:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return RecoveryLink{}, &StatusError{Status: resp.StatusCode}
+	}
+	var out struct {
+		HashedToken      string     `json:"hashed_token"`
+		EmailConfirmedAt *time.Time `json:"email_confirmed_at"`
+		BannedUntil      *time.Time `json:"banned_until"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&out) != nil || out.HashedToken == "" {
+		return RecoveryLink{}, &StatusError{Status: resp.StatusCode}
+	}
+	return RecoveryLink{TokenHash: out.HashedToken, Confirmed: out.EmailConfirmedAt != nil, BannedUntil: out.BannedUntil}, nil
+}
+
 // AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe. The times are
 // GoTrue's; a mail never sent leaves its time nil.
 type AdminUser struct {

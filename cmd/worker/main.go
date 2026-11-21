@@ -22,6 +22,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/consolesession"
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/docadapter"
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -30,6 +31,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
@@ -257,6 +259,13 @@ func main() {
 			AI:  aiClient, Jev: jevClient},
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
+	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
+	if account != nil {
+		linker = account
+	}
+	if err := mountConsoleSession(app, os.Getenv, linker, auth.IAPConfig{}); err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {

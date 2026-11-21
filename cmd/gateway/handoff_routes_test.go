@@ -253,6 +253,12 @@ func handoffPaths() []string {
 	return []string{"/auth/sign-in", "/auth/exchange", "/auth/refresh", "/auth/sign-out"}
 }
 
+// staffAccessToken is handoffAccessToken with app_metadata.staff true, as the IAP session reads it.
+func staffAccessToken(sub string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + enc([]byte(`{"sub":"`+sub+`","app_metadata":{"staff":true}}`)) + "." + enc([]byte("sig"))
+}
+
 // handoffAccessToken is a GoTrue-shaped access token; sign-out reads its sub without verifying it.
 func handoffAccessToken(sub string) string {
 	enc := base64.RawURLEncoding.EncodeToString

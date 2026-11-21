@@ -183,6 +183,9 @@ func main() {
 	exportCode := verifier.Middleware(sessions.Middleware(gateway.ExportCodeHandler(store, app.Logger)))
 	app.Mux.Handle("POST /auth/export-code", withCORS(exportCode))
 	app.Mux.Handle("OPTIONS /auth/export-code", withCORS(exportCode))
+	if err := mountIAPSession(app, os.Getenv, auth.IAPConfig{}, probed["worker"], probed["auth"], gatewayToken, store, app.Logger, gwPool); err != nil {
+		platform.Fatal(app.Logger, "gateway: %v", err)
+	}
 	// A form navigation: no CORS, no bearer; the redeemed code supplies the token.
 	app.Mux.Handle("POST /auth/export-download", gateway.ExportDownloadHandler(store, apiHandler, app.Logger))
 	app.Mux.Handle("POST /auth/refresh", withSessionCORS(h.Refresh))

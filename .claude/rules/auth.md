@@ -4,6 +4,7 @@ paths:
   - "cmd/authsentry/**"
   - "internal/tools/idppin/**"
   - "internal/platform/auth/**"
+  - "internal/consolesession/**"
   - ".github/workflows/idp-release-watch.yml"
   - "internal/gateway/gateway.go"
   - "internal/gateway/register*.go"
@@ -15,6 +16,9 @@ paths:
   - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
+  - "internal/gateway/iap_session*.go"
+  - "frontend/ops-console/src/auth.ts"
+  - "frontend/support-console/src/auth.ts"
   - "internal/gateway/account_events*.go"
   - "internal/gateway/client_ip*.go"
   - "internal/gateway/signout*.go"
@@ -70,7 +74,7 @@ paths:
 - Validate a composed `GOTRUE_JWT_KEYS` offline before you paste it. A malformed value logs the private key at boot.
 
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
-- The worker calls only `GET` and `DELETE /admin/users/{id}`, `GET /admin/users?page=&per_page=` and `PUT /admin/users/{id}` with a body of `user_metadata.unsubscribe` only, each with a 60 s `service_role` token.
+- The worker calls only `GET` and `DELETE /admin/users/{id}`, `GET /admin/users?page=&per_page=` and `PUT /admin/users/{id}` with a body of `user_metadata.unsubscribe` only, and `POST /admin/generate_link` with type `recovery` only, each with a 60 s `service_role` token.
 - Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
 - Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both before the claim and the GoTrue call.
@@ -104,8 +108,8 @@ paths:
 - Fingerprint it by the 6-hour UTC bucket. Each capture then opens a new issue and emails staff.
 - Keep the answer, its timing and the WARN line unchanged.
 - Log no email address, password, token, code or client IP.
-- Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a sign-in session mint (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
-- Count a session mint as `POST /auth/sign-in` only. The gateway writes no `FirstSession` row. The worker still records the device of a queued one and writes no audit row for it.
+- Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a session mint on `POST /auth/sign-in` or a `POST /auth/iap-session` 200 (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
+- Count a session mint as `POST /auth/sign-in` or a `POST /auth/iap-session` 200. The gateway writes no `FirstSession` row. The worker still records the device of a queued one and writes no audit row for it.
 - Keep the answer and its timing as they are when a recorder write fails. Log the event name only, then call `platform.CaptureError`.
 - Read the client IP only through `clientIP`. Hosted takes the `X-Forwarded-For` entry second from the right, preview the rightmost, local the `RemoteAddr` host. A hosted or preview entry that is not a public unicast address gives no IP.
 - Read the confirm token and the `state` from the `POST /auth/invitation/password` form body only. The GET page makes no GoTrue call.
@@ -193,10 +197,14 @@ paths:
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.
 - Serve the mock routes only when `GATEWAY_MOCK_ISSUER` is `true` and `ENVIRONMENT` is not `production`.
 - On a preview or the nightly (`DEPLOY_ENV=pr-<N>` or `nightly`), serve the mock routes only with `X-Mock-Issuer-Token` equal to `GATEWAY_MOCK_ISSUER_TOKEN`. Refuse every request when it is unset.
+- Take only the IAP assertion header on `POST /auth/iap-session`, never an email or body field. Verify it against the audiences in `IAP_AUDIENCES` and read staff from the minted token's claim. Answer a code, never a token. Write one `account.signed_in` row per 200 and none on any other answer (`TestIAPSession_StaffMintRecordsOneSignedIn`, `TestIAPSession_NoEventWithoutACode`, `TestIAPSession_SendsTheVerifiedAssertionNotAClientEmail`).
+- Ask the worker's `/internal/console-sessions/recovery-token` only with a verified assertion; it ignores a body email (`TestRecoveryToken_IgnoresAnEmailInTheBody`).
+- On the no-staff screen, "Use a different Google account" revokes as Sign out does, writes no `<key>:signed-out` marker, then opens `/_gcp_iap/clear_login_cookie`. Sign out never clears IAP's cookie.
+- Production consoles open from IAP and never send a staff member to landing.
 - Check the staff claim on the server in any console that reads real data.
 - Fail the console gate closed when `VITE_LANDING_URL` is unset.
 - Open a console only for a session that the gateway has just renewed or exchanged, with `app_metadata.staff` true.
 - Open an app-borrowed console record only after a fresh exchange. The boot asks the app for a new code.
-- Send an expired app-borrowed console session back through the app, never to the landing.
+- Send an expired app-borrowed console session back through the app, never to the landing. A lapsed IAP session on production reopens from IAP.
 - Answer the app's `?auth=console&console=support&state=<s>` only with a live staff seat. Otherwise take the normal front door.
 - The worker removes an account still unconfirmed 7 days after its last confirmation or reset mail, through `auth.purge_unconfirmed_account`. The function re-checks confirmation and age in its own DELETE.

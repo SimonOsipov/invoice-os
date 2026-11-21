@@ -1,5 +1,5 @@
 import { ApiError } from '@invoice-os/api-client'
-import { renewConsoleSession } from '@invoice-os/console-session'
+import { renewStaffSession } from '@invoice-os/console-session'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { SESSION_KEY } from './auth'
@@ -10,7 +10,7 @@ import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
-  renewConsoleSession: vi.fn(),
+  renewStaffSession: vi.fn(),
   saveConsoleSession: vi.fn(),
 }))
 
@@ -79,11 +79,12 @@ describe('loadBlog', () => {
 })
 
 describe('loadBlog through withSession', () => {
-  const renew = vi.mocked(renewConsoleSession)
+  const renew = vi.mocked(renewStaffSession)
   const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
   beforeEach(() => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test/')
     vi.stubGlobal('localStorage', { getItem: (k: string) => (k === SESSION_KEY ? JSON.stringify({ v: 3, token: 'OLD' }) : null) })
+    vi.stubGlobal('window', { location: { hostname: 'localhost' } })
     renew.mockReset()
   })
   afterEach(() => {

@@ -17,6 +17,8 @@ paths:
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
   - "internal/gateway/iap_session*.go"
+  - "frontend/ops-console/src/auth.ts"
+  - "frontend/support-console/src/auth.ts"
   - "internal/gateway/account_events*.go"
   - "internal/gateway/client_ip*.go"
   - "internal/gateway/signout*.go"

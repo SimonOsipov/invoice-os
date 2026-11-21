@@ -81,7 +81,7 @@ describe('APPR-09-03 QA: each row states its VERSION standing, not an edit time'
 
     // Control: the list really rendered all four rows, so the standings below are read off
     // a populated screen rather than agreeing vacuously with an empty one.
-    expect(screen.getByText('4 POLICIES')).toBeTruthy()
+    expect(screen.getByTestId('policies-list')).toBeTruthy()
     for (const p of rows) expect(screen.getByText(p.name), `${p.id} did not render`).toBeTruthy()
 
     // Four DISTINCT strings, each a function of that row's own version pair — a literal
@@ -164,23 +164,18 @@ describe('APPR-09-04 AC-1/AC-2/AC-3: the surface is chosen by policiesState, nev
     expect(screen.getByTestId('policies-empty'), 'the control needle for the absences below').toBeTruthy()
     for (const p of stale) expect(screen.queryByText(p.name), `${p.id} rendered over a landed-empty fetch`).toBeNull()
   })
+})
 
-  it('the POLICIES count renders only over a landed roster, never over an unlanded or failed fetch', () => {
-    // `{policies.length} POLICIES` says `0 POLICIES` beside a spinner and beside ErrorState —
-    // the same "an errored fetch reads as an empty workspace" claim AC-1 exists to kill, one
-    // node over.
-    for (const state of ['loading', 'error'] as const) {
-      render(<WorkflowsView ctx={listCtx([], { policiesState: state, policiesError: DOWN() })} />)
-      // Control: the toolbar renders over every surface, so a blank screen is not what makes
-      // the count absent.
-      expect(screen.getByText('Approval policies'), `the header must render over '${state}'`).toBeTruthy()
-      expect(screen.queryAllByText(/POLICIES/), `the count claimed a roster over '${state}'`).toHaveLength(0)
-      cleanup()
-    }
+describe('BUG-173: the roster carries no N POLICIES counter', () => {
+  it('a landed roster renders its rows and no "N POLICIES" text', () => {
+    render(<WorkflowsView ctx={listCtx([policy({ id: 'p1', name: 'Alpha' }), policy({ id: 'p2', name: 'Beta' })])} />)
 
-    // AC-6's half: on a landed roster the count is the live list's length, not a constant.
-    render(<WorkflowsView ctx={listCtx([policy({ id: 'p1' }), policy({ id: 'p2' }), policy({ id: 'p3' })])} />)
-    expect(screen.getByText('3 POLICIES')).toBeTruthy()
+    // Control: the roster landed, so the absence below is not an unrendered list.
+    expect(screen.getByTestId('policies-list')).toBeTruthy()
+    expect(screen.getByText('Alpha')).toBeTruthy()
+    expect(screen.getByText('Beta')).toBeTruthy()
+
+    expect(screen.queryByText(/\d+\s+POLICIES/i), 'the counter row still renders').toBeNull()
   })
 })
 
@@ -331,17 +326,15 @@ describe('APPR-09-04 QA: exactly one surface, over every status the fetch can re
     }
   })
 
-  it('the POLICIES count renders on the roster arm and on no other, over all five statuses', () => {
+  it('no N POLICIES counter renders over any of the five statuses', () => {
     for (const state of STATES) {
       render(<WorkflowsView ctx={listCtx([policy({ id: 'polA' })], { policiesState: state, policiesError: DOWN() })} />)
 
-      // Control: the toolbar renders over every surface, so an absent count below is the
-      // gate doing its job rather than a screen that rendered nothing at all.
+      // Control: the toolbar renders over every surface, so an absent counter below is not
+      // a screen that rendered nothing at all.
       expect(screen.getByText('Approval policies'), `the header must render over '${state}'`).toBeTruthy()
 
-      const counts = screen.queryAllByText(/POLICIES/).map((n) => n.textContent)
-      if (state === 'ready') expect(counts, 'the roster arm lost its count').toEqual(['1 POLICIES'])
-      else expect(counts, `the count claimed a roster over '${state}'`).toEqual([])
+      expect(screen.queryAllByText(/POLICIES/), `a counter rendered over '${state}'`).toEqual([])
       cleanup()
     }
   })
@@ -410,7 +403,7 @@ describe('APPR-09-04 QA: the ladder belongs to the LIST and never reaches an ope
     render(<WorkflowsView ctx={listCtx(one(), { editingPolicyId: 'polGone' })} />)
 
     expect(screen.getByText('Approval policies'), 'a stale editingPolicyId blanked the screen').toBeTruthy()
-    expect(screen.getByText('1 POLICIES')).toBeTruthy()
+    expect(screen.getByTestId('policies-list')).toBeTruthy()
     expect(screen.queryByLabelText('Policy name'), 'the builder opened for a policy the list does not hold').toBeNull()
   })
 })
@@ -510,17 +503,12 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
     expect(btn.style.color, 'the label is not primary-foreground').toBe('var(--primary-foreground)')
   })
 
-  it('WL-03 the count sits alone in its own row, apart from the header', () => {
+  it('WL-03 the policy list follows the header directly, with no row between', () => {
     render(<WorkflowsView ctx={listCtx(two())} />)
 
-    const row = screen.getByText('2 POLICIES').parentElement as HTMLElement
     const h1 = screen.getByRole('heading', { level: 1, name: 'Approval policies' })
     const header = h1.parentElement!.parentElement as HTMLElement
-    expect(row, 'the count is in the header row').not.toBe(header)
-    expect(row.contains(h1), 'the count row holds the title').toBe(false)
-    expect(row.children, 'the count row holds more than the count').toHaveLength(1)
-    // Authored value only: jsdom has no layout, so PW-07 owns the rendered edge.
-    expect(row.style.justifyContent).toBe('flex-end')
+    expect(header.nextElementSibling, 'something sits between the header and the list').toBe(screen.getByTestId('policies-list'))
   })
 
   it('WL-04 rows and icon tiles are 6px with no shadow', () => {

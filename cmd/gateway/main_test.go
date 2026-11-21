@@ -27,7 +27,9 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/iaptest"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/net/html"
@@ -1813,5 +1815,62 @@ func TestRegistrationHandlers_HostedResetShareLandsInTheSharedTable(t *testing.T
 	}
 	if n != 1 {
 		t.Errorf("%d reset-mail-hour rows, want 1: the hosted reset share must count in gateway_throttle_counts", n)
+	}
+}
+
+const (
+	iapAudienceOps = "/projects/111111111111/global/backendServices/1111111111111111111"
+	iapAudienceSup = "/projects/111111111111/global/backendServices/2222222222222222222"
+)
+
+// IAP_AUDIENCES decides whether POST /auth/iap-session exists: hosted Cloud Run refuses to boot without it, a bad value never boots.
+func TestGatewayMain_IAPAudiencesBootRules(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	t.Setenv("K_SERVICE", "")
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+		wantOn  bool
+	}{
+		{"hosted on Cloud Run, unset", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "gateway"}, true, false},
+		{"hosted on Cloud Run, blank", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "gateway", "IAP_AUDIENCES": "  "}, true, false},
+		{"hosted on Cloud Run, bad shape", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "gateway", "IAP_AUDIENCES": "ops.ascomply.com"}, true, false},
+		{"hosted on Cloud Run, repeated", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "gateway", "IAP_AUDIENCES": iapAudienceOps + "," + iapAudienceOps}, true, false},
+		{"hosted on Cloud Run, set", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "gateway", "IAP_AUDIENCES": iapAudienceOps + "," + iapAudienceSup}, false, true},
+		{"preview, bad shape", map[string]string{"DEPLOY_ENV": "pr-12", "IAP_AUDIENCES": "not-an-audience"}, true, false},
+		{"hosted off Cloud Run, unset", map[string]string{"DEPLOY_ENV": "production"}, false, false},
+		{"preview, unset", map[string]string{"DEPLOY_ENV": "pr-12"}, false, false},
+		{"nightly, unset", map[string]string{"DEPLOY_ENV": "nightly"}, false, false},
+		{"local, unset", map[string]string{}, false, false},
+		{"preview, set", map[string]string{"DEPLOY_ENV": "pr-12", "IAP_AUDIENCES": iapAudienceOps}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, jwks := iaptest.NewSigner(t)
+			app, err := platform.New("gateway")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dead := &url.URL{Scheme: "http", Host: "127.0.0.1:1"}
+			err = mountIAPSession(app, envOf(tc.env), auth.IAPConfig{JWKSURL: jwks}, dead, dead, "gw-token",
+				gateway.NewHandoffStore(gateway.HandoffTTL, time.Now), slog.New(slog.DiscardHandler), nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("mountIAPSession error = %v, want error: %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "IAP_AUDIENCES") {
+				t.Errorf("error %q does not name IAP_AUDIENCES", err)
+			}
+			// An unmounted route answers 404; a mounted one answers its own 415 to a body that is not JSON.
+			rec := httptest.NewRecorder()
+			app.Mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/iap-session", strings.NewReader("x")))
+			want := http.StatusNotFound
+			if tc.wantOn {
+				want = http.StatusUnsupportedMediaType
+			}
+			if rec.Code != want {
+				t.Errorf("POST /auth/iap-session = %d, want %d (route mounted: %v)", rec.Code, want, tc.wantOn)
+			}
+		})
 	}
 }

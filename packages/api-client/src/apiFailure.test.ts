@@ -366,11 +366,12 @@ describe('transport inventory', () => {
       'frontend/landing/src/signIn.ts': 1,
       'frontend/support-console/src/auditApi.ts': 1,
       'frontend/support-console/src/blogApi.ts': 1,
+      'packages/console-session/src/iap.ts': 1, // POST /auth/iap-session: redirect 'manual', which apiFetch cannot set
       'packages/api-client/src/client.ts': 1,
     })
 
     const reported = Object.keys(hits)
-    expect(reported.length).toBe(10)
+    expect(reported.length).toBe(11)
     expect(reported.filter((f) => !code[f].includes('reportApiFailure('))).toEqual([])
   })
 })

@@ -1,8 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  // Base URL of the marketing landing page (the real sign-in front door). Sign out
-  // sends the browser here. Each PR deploys its own preview on per-PR hostnames,
+  // Base URL of the marketing landing page. Each PR deploys its own preview on per-PR hostnames,
   // so there is no hardcoded default
   // (see `landingBase()` in auth.ts). Mirrors frontend/ops-console/src/vite-env.d.ts.
   readonly VITE_LANDING_URL?: string

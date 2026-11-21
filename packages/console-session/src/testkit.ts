@@ -124,6 +124,7 @@ export const spyTimeouts = () => vi.spyOn(AbortSignal, 'timeout').mockImplementa
 export function installWindow(log: string[] = []) {
   const hrefWrites: string[] = []
   const replaceWrites: string[] = []
+  const assignWrites: string[] = []
   const reload = vi.fn(() => void log.push('reload'))
   vi.stubGlobal('window', {
     location: {
@@ -138,10 +139,14 @@ export function installWindow(log: string[] = []) {
         replaceWrites.push(v)
         log.push('replace')
       },
+      assign(v: string) {
+        assignWrites.push(v)
+        log.push('assign')
+      },
       reload,
     },
   })
-  return { hrefWrites, replaceWrites, reload }
+  return { hrefWrites, replaceWrites, assignWrites, reload }
 }
 
 export const timeoutError = (): DOMException => new DOMException('The operation timed out', 'TimeoutError')

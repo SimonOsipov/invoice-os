@@ -43,7 +43,9 @@ afterEach(() => {
 // Logs the order of fetch, record removal and navigation; the handler also reads the record at request time.
 function setup(local: string | null, answer: () => Response | Error) {
   const log: string[] = []
-  const store = installStorage({ local: local === null ? {} : { [OPS_KEY]: local } })
+  const store = installStorage({
+    local: local === null ? {} : { [OPS_KEY]: local },
+  })
   const removeItem = store.local.removeItem.getMockImplementation()
   store.local.removeItem.mockImplementation((k: string) => {
     log.push('remove')
@@ -62,7 +64,11 @@ function setup(local: string | null, answer: () => Response | Error) {
 describe('signOutConsole (AC-12)', () => {
   it('signOut_revokesThenClearsThenLeaves', async () => {
     const t = setup(RECORD, () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(t.net.calls).toHaveLength(1)
     expect(t.net.calls[0]).toMatchObject({ url: SIGN_OUT, method: 'POST' })
     expect(t.net.calls[0]?.body).toBeUndefined()
@@ -99,9 +105,18 @@ describe('signOutConsole (AC-12)', () => {
 
   it('signOut_landingPostsInCookieModeAndClears', async () => {
     const t = setup(LANDING_V3, () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(t.net.calls).toHaveLength(1)
-    expect(t.net.calls[0]).toMatchObject({ url: SIGN_OUT, method: 'POST', credentials: 'include', headers: { 'x-auth-session': 'cookie' } })
+    expect(t.net.calls[0]).toMatchObject({
+      url: SIGN_OUT,
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'x-auth-session': 'cookie' },
+    })
     expect(t.net.calls[0]?.body).toBeUndefined()
     expect(t.log).toEqual(['fetch', 'remove', 'href'])
     expect(t.store.local.getItem(OPS_KEY)).toBeNull()
@@ -111,11 +126,19 @@ describe('signOutConsole (AC-12)', () => {
   it('signOut_borrowedSendsNothing', async () => {
     // The landing control first: "sends nothing" means little if a landing record sends nothing either.
     const landing = setup(LANDING_V3, () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(landing.net.calls).toHaveLength(1)
 
     const t = setup(v3BorrowedRaw(staffToken('borrowed')), () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(t.net.calls).toHaveLength(0)
     expect(t.store.local.getItem(OPS_KEY)).toBeNull()
     expect(t.store.local.getItem(PENDING)).toBeNull()
@@ -134,7 +157,11 @@ describe('signOutConsole (AC-12)', () => {
     expect(rows.filter(([, , marked]) => marked).length).toBeGreaterThan(0)
     for (const [name, answer, marked] of rows) {
       const t = setup(LANDING_V3, () => answer)
-      await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+      await signOutConsole({
+        storageKey: OPS_KEY,
+        gateway: GW,
+        landing: LANDING,
+      })
       expect(t.net.calls, name).toHaveLength(1)
       expect(t.store.local.getItem(PENDING), name).toBe(marked ? '1' : null)
       expect(t.store.local.getItem(OPS_KEY), name).toBeNull()
@@ -149,14 +176,22 @@ describe('signOutConsole (AC-12)', () => {
 
   it('signOut_withoutGatewayOrRecordSendsNothing', async () => {
     const noGateway = setup(RECORD, () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: null, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: null,
+      landing: LANDING,
+    })
     expect(noGateway.net.calls).toHaveLength(0)
     expect(noGateway.store.local.getItem(OPS_KEY)).toBeNull()
     expect(noGateway.win.hrefWrites).toEqual([LANDING])
     expect(warn).not.toHaveBeenCalled()
 
     const noRecord = setup(null, () => reply(204))
-    await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: OPS_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(noRecord.net.calls).toHaveLength(0)
     expect(noRecord.store.local.removeItem).toHaveBeenCalledWith(OPS_KEY)
     expect(noRecord.win.hrefWrites).toEqual([LANDING])
@@ -186,7 +221,11 @@ describe('signOutConsole edges (AC-12)', () => {
   it('signOut_supportConsoleRevokesAndClearsItsOwnRecord', async () => {
     const t = setup(RECORD, () => reply(204))
     t.store.local.setItem(SUPPORT_KEY, v3Raw(staffToken('support')))
-    await signOutConsole({ storageKey: SUPPORT_KEY, gateway: GW, landing: LANDING })
+    await signOutConsole({
+      storageKey: SUPPORT_KEY,
+      gateway: GW,
+      landing: LANDING,
+    })
     expect(t.net.calls.map((c) => c.body)).toEqual([undefined])
     expect(t.store.local.getItem(SUPPORT_KEY)).toBeNull()
     expect(t.store.local.getItem(OPS_KEY)).toBe(RECORD)
@@ -196,7 +235,11 @@ describe('signOutConsole edges (AC-12)', () => {
     for (const raw of [JSON.stringify({ v: 1, operator: 'developer' }), '{', JSON.stringify({ v: 2, token: 'T', refresh_token: '' })]) {
       warn.mockClear()
       const t = setup(raw, () => reply(204))
-      await signOutConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING })
+      await signOutConsole({
+        storageKey: OPS_KEY,
+        gateway: GW,
+        landing: LANDING,
+      })
       expect(t.net.calls, raw).toHaveLength(0)
       expect(warn, raw).toHaveBeenCalledTimes(1)
       expect(t.store.local.getItem(OPS_KEY), raw).toBeNull()
@@ -251,5 +294,42 @@ describe('borrowed session (SUPP-11-02)', () => {
     expect(noApp.net.calls).toHaveLength(0)
     expect(noApp.store.local.getItem(OPS_KEY)).toBeNull()
     expect(noApp.win.hrefWrites).toEqual([LANDING])
+  })
+})
+
+describe('IAP mode (CSSO-01-06)', () => {
+  const o = { storageKey: OPS_KEY, gateway: GW, landing: LANDING, iap: true }
+  const MARKER = `${OPS_KEY}:signed-out`
+
+  it('signOut_iap_revokesMarksClearsAndReloads', async () => {
+    const t = setup(RECORD, () => reply(204))
+    await signOutConsole(o)
+    expect(t.net.calls).toHaveLength(1)
+    expect(t.net.calls[0]).toMatchObject({
+      url: SIGN_OUT,
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'x-auth-session': 'cookie' },
+    })
+    expect(t.store.local.getItem(MARKER)).toBe('1')
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.win.reload).toHaveBeenCalledTimes(1)
+    expect(t.win.hrefWrites).toEqual([])
+  })
+
+  it('expire_iap_landingRecordKeptAndReloads', async () => {
+    const t = setup(RECORD, () => reply(204))
+    await expireConsole({ ...o, app: APP, target: 'support' })
+    expect(t.net.calls).toHaveLength(0)
+    expect(t.store.local.getItem(OPS_KEY)).not.toBeNull()
+    expect(t.store.local.getItem(MARKER)).toBeNull()
+    expect(t.win.reload).toHaveBeenCalledTimes(1)
+    expect(t.win.hrefWrites).toEqual([])
+    expect(t.win.replaceWrites).toEqual([])
+
+    const b = setup(v3BorrowedRaw(staffToken('borrowed')), () => reply(204))
+    await expireConsole({ ...o, app: APP, target: 'support' })
+    expect(b.win.replaceWrites[0]).toMatch(new RegExp(`^${APP}/\\?auth=console`))
+    expect(b.win.reload).not.toHaveBeenCalled()
   })
 })

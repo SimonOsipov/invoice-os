@@ -1,5 +1,5 @@
 import { gatewayBase } from '@invoice-os/api-client'
-import { expireConsole, signOutConsole } from '@invoice-os/console-session'
+import { expireConsole, isIapHost, signOutConsole } from '@invoice-os/console-session'
 
 export const SESSION_KEY = 'invoice-os.support-session'
 
@@ -21,7 +21,16 @@ export const appBase = (): string | null => {
   return v || null
 }
 
-export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })
+// iap: on the IAP hosts sign-out and expiry stay on the console instead of navigating to landing.
+export const signOut = () =>
+  signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase(), iap: isIapHost(window.location.hostname) })
 
 export const expireSession = () =>
-  expireConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase(), app: appBase(), target: 'support' })
+  expireConsole({
+    storageKey: SESSION_KEY,
+    gateway: gatewayBase(),
+    landing: landingBase(),
+    app: appBase(),
+    target: 'support',
+    iap: isIapHost(window.location.hostname),
+  })

@@ -73,7 +73,7 @@ function rowsForStatus(status: string | null, q: string | null = null): Entity[]
   return subset.filter((e) => matchesQ(e, q))
 }
 
-// The server's q contract (store.go:122-125): case-insensitive substring of name or TIN.
+// The server's q contract (portfolio Store.List): case-insensitive literal substring of name or TIN.
 function matchesQ(e: Entity, q: string | null): boolean {
   if (q == null || q === '') return true
   const needle = q.toLowerCase()

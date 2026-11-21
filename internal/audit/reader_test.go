@@ -266,6 +266,22 @@ func TestAuditScopeOf_PurgeRefusedIsWorkspace(t *testing.T) {
 	}
 }
 
+// ERP connection rows carry no entity_id, so they read as workspace once listed.
+func TestScopeOf_ErpConnectionEventsAreWorkspace(t *testing.T) {
+	if got := audit.ScopeOf("some.unclassified", nil); got != audit.ScopeUnattributed {
+		t.Fatalf("control: ScopeOf(unclassified, nil) = %q, want %q", got, audit.ScopeUnattributed)
+	}
+	entity := uuid.NewString()
+	for _, e := range []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked"} {
+		if got := audit.ScopeOf(e, nil); got != audit.ScopeWorkspace {
+			t.Errorf("ScopeOf(%q, nil) = %q, want %q", e, got, audit.ScopeWorkspace)
+		}
+		if got := audit.ScopeOf(e, &entity); got != audit.ScopeCompany {
+			t.Errorf("ScopeOf(%q, entity) = %q, want %q", e, got, audit.ScopeCompany)
+		}
+	}
+}
+
 // An invite is a workspace act until an entity id is attached.
 func TestAuditScopeOf_InvitationEventsAreWorkspace(t *testing.T) {
 	if got := audit.ScopeOf("some.unclassified", nil); got != audit.ScopeUnattributed {

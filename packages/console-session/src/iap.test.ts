@@ -279,11 +279,14 @@ describe('mintFromIap', () => {
 
   it('mintFromIap_everyOtherOutcomeFails', async () => {
     const rows: [string, Routes][] = [
+      // The browser's opaque redirect has status 0 and ok false. Its body would redeem, so only the status refuses it.
       [
         'opaqueredirect',
         {
-          mint: Object.defineProperty(new Response(null), 'type', {
-            value: 'opaqueredirect',
+          mint: Object.defineProperties(okMint(), {
+            type: { value: 'opaqueredirect' },
+            status: { value: 0 },
+            ok: { value: false },
           }),
         },
       ],

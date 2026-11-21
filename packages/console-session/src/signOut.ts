@@ -46,7 +46,7 @@ export async function signOutConsole(o: { storageKey: string; gateway: string | 
   else window.location.reload()
 }
 
-// A 401 on a borrowed session goes back through the app, keeping the record; anything else signs out.
+// A 401 on a borrowed session goes back through the app, keeping the record.
 export async function expireConsole(o: {
   storageKey: string
   gateway: string | null

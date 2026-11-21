@@ -365,7 +365,7 @@ func TestWorkerMain_RecoveryRouteRefusesACallWithoutTheGatewayToken(t *testing.T
 		"iss": auth.IAPIssuer, "aud": iapOps, "sub": "accounts.google.com:118273645546372819", "email": "sam@ascomply.test",
 		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
 	})
-	// boot builds the app the way main does: routes first, then the gateway guard with no open pattern.
+	// The guard call below restates main's; TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken pins main's.
 	boot := func(t *testing.T, env map[string]string) (http.Handler, *iapLinker) {
 		t.Helper()
 		linker := &iapLinker{}

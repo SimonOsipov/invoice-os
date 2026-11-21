@@ -73,11 +73,11 @@ function rowsForStatus(status: string | null, q: string | null = null): Entity[]
   return subset.filter((e) => matchesQ(e, q))
 }
 
-// The server's q contract (portfolio Store.List): case-insensitive literal substring of name or TIN.
+// The server's q contract (portfolio Store.List): case-insensitive literal substring of name, or of TIN with q's hyphens removed.
 function matchesQ(e: Entity, q: string | null): boolean {
   if (q == null || q === '') return true
   const needle = q.toLowerCase()
-  return e.name.toLowerCase().includes(needle) || (e.tin ?? '').toLowerCase().includes(needle)
+  return e.name.toLowerCase().includes(needle) || (needle.replaceAll('-', '') !== '' && (e.tin ?? '').toLowerCase().includes(needle.replaceAll('-', '')))
 }
 
 function entitiesResponse(rows: Entity[]): MockResponse {

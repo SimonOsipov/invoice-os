@@ -514,8 +514,8 @@ test('search: a TIN fragment finds the client', async ({ page }) => {
   const tin = freshTin()
   const apiToken = await login(PERSONAS.A)
   const entity = await createEntity(apiToken, { name: `${token.toUpperCase()} Textiles Ltd`, tin })
-  // The TIN minus its check digit: the run seed plus this process's counter, which no other client shares.
-  const frag = tin.slice(0, -1)
+  // The row shows the TIN unhyphenated. Minus its check digit it is the run seed plus this process's counter, which no other client shares.
+  const frag = tin.replace('-', '').slice(0, -1)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await goToClients(page)
@@ -526,6 +526,12 @@ test('search: a TIN fragment finds the client', async ({ page }) => {
 
   await expect(page.locator('.pf-list-row').filter({ hasText: entity.name })).toBeVisible()
   await expectAllRowsContain(page, frag)
+
+  // The hyphenated form of the full TIN finds the client too.
+  const hyphenReq = entitiesQuery(page, { q: tin })
+  await page.getByTestId('clients-search').fill(tin)
+  await hyphenReq
+  await expect(page.locator('.pf-list-row').filter({ hasText: entity.name })).toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

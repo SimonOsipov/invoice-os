@@ -108,7 +108,7 @@ func DisconnectHandler(disconnect func(ctx context.Context, entityID, connection
 	}
 }
 
-// statusForErr maps a store error to its status and message; ErrNotFound covers a missing,
+// statusForErr maps a store error to its status and message; ErrNoSuchRecord covers a missing,
 // invisible or out-of-scope client or connection, so all of them answer alike.
 func statusForErr(err error) (int, string) {
 	switch {
@@ -124,7 +124,7 @@ func statusForErr(err error) (int, string) {
 		return http.StatusBadRequest, "unknown system"
 	case errors.Is(err, ErrUnknownExternalKey):
 		return http.StatusBadRequest, "unknown external_key"
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNoSuchRecord):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrAlreadyConnected):
 		return http.StatusConflict, "already connected"

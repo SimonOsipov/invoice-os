@@ -86,10 +86,10 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{ErrNotPermitted, 403, adminMsg},
 		{ErrUnknownSystem, 400, "unknown system"},
 		{ErrUnknownExternalKey, 400, "unknown external_key"},
-		{ErrNotFound, 404, "not found"},
+		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
-		{fmt.Errorf("wrapped: %w", ErrNotFound), 404, "not found"},
+		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
 	} {
 		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err}
 		for name, w := range map[string]*httptest.ResponseRecorder{
@@ -163,7 +163,7 @@ func TestHandlers_ListCallsNoGate(t *testing.T) {
 	if w.Code != 200 || len(got.Connections) != 2 || s.gateCalls != 0 {
 		t.Fatalf("got %d %s gate=%d", w.Code, w.Body.String(), s.gateCalls)
 	}
-	s = &stubs{listErr: ErrNotFound}
+	s = &stubs{listErr: ErrNoSuchRecord}
 	known := do(s.mux(nil), "GET", listPath, "", true)
 	unknown := do(s.mux(nil), "GET", "/v1/entities/nope/erp-connections", "", true)
 	if known.Code != 404 || errText(t, known) != "not found" || known.Body.String() != unknown.Body.String() {

@@ -219,7 +219,7 @@ func idsOf(cs []Connection) []string {
 
 // everyStoreError lets wantErr prove an answer is that error and no other.
 var everyStoreError = []error{
-	ErrNotPermitted, ErrUnknownSystem, ErrUnknownExternalKey, ErrNotFound, ErrAlreadyConnected,
+	ErrNotPermitted, ErrUnknownSystem, ErrUnknownExternalKey, ErrNoSuchRecord, ErrAlreadyConnected,
 	ErrAlreadyDisconnected, ErrSecretStoreMissing, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
 }
 
@@ -364,9 +364,9 @@ func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 	}{
 		{"unknown system", e1, "sage", "fake-co-2", ErrUnknownSystem},
 		{"unknown key", e1, "fake", "fake-co-9", ErrUnknownExternalKey},
-		{"non-UUID client", "not-a-uuid", "fake", "fake-co-2", ErrNotFound},
-		{"unknown client", uuid.NewString(), "fake", "fake-co-2", ErrNotFound},
-		{"other tenant's client", eOther, "fake", "fake-co-2", ErrNotFound},
+		{"non-UUID client", "not-a-uuid", "fake", "fake-co-2", ErrNoSuchRecord},
+		{"unknown client", uuid.NewString(), "fake", "fake-co-2", ErrNoSuchRecord},
+		{"other tenant's client", eOther, "fake", "fake-co-2", ErrNoSuchRecord},
 	}
 	disconnects := []struct {
 		name, entity, conn string
@@ -390,7 +390,7 @@ func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 			_, err := store.Disconnect(caller, d.entity, d.conn)
 			wantErr(t, role+" Disconnect "+d.name, err, ErrNotPermitted)
 			_, err = store.Disconnect(admin, d.entity, d.conn)
-			wantErr(t, "control: admin Disconnect "+d.name, err, ErrNotFound)
+			wantErr(t, "control: admin Disconnect "+d.name, err, ErrNoSuchRecord)
 		}
 		if got := erpState(t, super, tenant); got != before {
 			t.Errorf("%s: ERP rows or audit changed:\nbefore %s\nafter  %s", role, before, got)
@@ -519,9 +519,9 @@ func TestStore_ConnectRefusesBadInputAndWritesNothing(t *testing.T) {
 		{"unknown system (registry lookup)", fakeStore(t, app), e1, "sage", "fake-co-1", ErrUnknownSystem},
 		{"fake with an empty registry (registry lookup)", NewStore(app, empty), e1, "fake", "fake-co-1", ErrUnknownSystem},
 		{"unknown key (Authorize)", fakeStore(t, app), e1, "fake", "fake-co-9", ErrUnknownExternalKey},
-		{"non-UUID client (client lookup)", fakeStore(t, app), "not-a-uuid", "fake", "fake-co-1", ErrNotFound},
-		{"unknown client (client lookup)", fakeStore(t, app), uuid.NewString(), "fake", "fake-co-1", ErrNotFound},
-		{"other tenant's client (client lookup, RLS)", fakeStore(t, app), eOther, "fake", "fake-co-1", ErrNotFound},
+		{"non-UUID client (client lookup)", fakeStore(t, app), "not-a-uuid", "fake", "fake-co-1", ErrNoSuchRecord},
+		{"unknown client (client lookup)", fakeStore(t, app), uuid.NewString(), "fake", "fake-co-1", ErrNoSuchRecord},
+		{"other tenant's client (client lookup, RLS)", fakeStore(t, app), eOther, "fake", "fake-co-1", ErrNoSuchRecord},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -925,7 +925,7 @@ func TestStore_DisconnectScopedToTheClient(t *testing.T) {
 	}
 	for _, c := range cases {
 		_, err := store.Disconnect(c.ctx, c.entity, c.conn)
-		wantErr(t, c.name, err, ErrNotFound)
+		wantErr(t, c.name, err, ErrNoSuchRecord)
 	}
 	if s := stateOf(t, super, c1); s.status != "active" {
 		t.Errorf("c1 status = %q, want active", s.status)
@@ -1309,15 +1309,15 @@ func TestStore_ListOutsideTheCallersClientScopeIsNotFound(t *testing.T) {
 		t.Errorf("control: limited List(e1) = %v, %v, want only [%s]", idsOf(got), err, c1)
 	}
 	_, err := store.List(limited, e2)
-	wantErr(t, "limited member, a client outside the set", err, ErrNotFound)
+	wantErr(t, "limited member, a client outside the set", err, ErrNoSuchRecord)
 	_, err = store.List(unassigned, e1)
-	wantErr(t, "member with no clients", err, ErrNotFound)
+	wantErr(t, "member with no clients", err, ErrNoSuchRecord)
 	_, err = store.List(limited, uuid.NewString())
-	wantErr(t, "limited member, unknown client", err, ErrNotFound)
+	wantErr(t, "limited member, unknown client", err, ErrNoSuchRecord)
 	_, err = store.List(limited, eOther)
-	wantErr(t, "limited member, another tenant's client", err, ErrNotFound)
+	wantErr(t, "limited member, another tenant's client", err, ErrNoSuchRecord)
 	_, err = store.List(limited, "not-a-uuid")
-	wantErr(t, "limited member, non-UUID client", err, ErrNotFound)
+	wantErr(t, "limited member, non-UUID client", err, ErrNoSuchRecord)
 }
 
 // --- AC 13, 14 and state row 15: no identity, locked workspace -------------------------

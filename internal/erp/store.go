@@ -21,6 +21,7 @@ var (
 	ErrUnknownExternalKey  = errors.New("erp: unknown external key")
 	ErrAlreadyConnected    = errors.New("erp: already connected")
 	ErrAlreadyDisconnected = errors.New("erp: already disconnected")
+	ErrNoSuchRecord        = errors.New("erp: no such client or connection")
 	ErrSecretStoreMissing  = errors.New("erp: no secret store to hold a grant secret")
 )
 
@@ -105,6 +106,8 @@ func (s *Store) Connect(ctx context.Context, entityID string, in ConnectInput) (
 		if !ok {
 			return ErrUnknownSystem
 		}
+		// ceiling: a vendor call inside the tenant transaction; fine for the fake. Revisit at the first
+		// connector whose Authorize does network I/O; the exchange then moves to the callback.
 		res, err := connector.Authorize(ctx, AuthorizeRequest{ExternalKey: in.ExternalKey})
 		if err != nil {
 			if errors.Is(err, ErrUnknownScope) {
@@ -188,7 +191,7 @@ func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (
 			return err
 		}
 		if _, err := uuid.Parse(connectionID); err != nil {
-			return ErrNotFound
+			return ErrNoSuchRecord
 		}
 		var status string
 		var grantID *string
@@ -196,7 +199,7 @@ func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (
 			`SELECT status, grant_id FROM erp_connections WHERE id = $1 AND entity_id = $2 FOR UPDATE`,
 			connectionID, entityID).Scan(&status, &grantID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
+				return ErrNoSuchRecord
 			}
 			return err
 		}
@@ -244,15 +247,15 @@ func releaseGrant(ctx context.Context, tx pgx.Tx, grantID string) error {
 	return err
 }
 
-// requireClient finds the client under the seam's RLS client scope; anything else is ErrNotFound.
+// requireClient finds the client under the seam's RLS client scope; anything else is ErrNoSuchRecord.
 func requireClient(ctx context.Context, tx pgx.Tx, entityID string) error {
 	if _, err := uuid.Parse(entityID); err != nil {
-		return ErrNotFound
+		return ErrNoSuchRecord
 	}
 	var one int
 	if err := tx.QueryRow(ctx, `SELECT 1 FROM business_entities WHERE id = $1`, entityID).Scan(&one); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return ErrNoSuchRecord
 		}
 		return err
 	}

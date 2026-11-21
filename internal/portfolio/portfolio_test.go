@@ -2054,6 +2054,62 @@ func TestStoreList_SearchQTINWildcardsAreLiteral(t *testing.T) {
 	}
 }
 
+// TestStoreList_SearchQTINHyphen (CSRCH-01 tin-hyphen): TINs are stored without the hyphen, so the
+// tin arm matches q with its hyphens removed. A hyphen-only q adds no tin match, and the name arm
+// keeps q as typed.
+func TestStoreList_SearchQTINHyphen(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-tin-hyphen tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	tin := "123456780001"
+	seedEntity(t, super, tenantID, "Okafor Ltd", &tin)
+	seedEntity(t, super, tenantID, "Anchor-Point Co", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	for _, tc := range []struct {
+		name string
+		q    string
+		want []string
+	}{
+		{"hyphenated full TIN", "12345678-0001", []string{"Okafor Ltd"}},
+		{"hyphenated fragment spanning the hyphen", "5678-00", []string{"Okafor Ltd"}},
+		{"unhyphenated fragment", "567800", []string{"Okafor Ltd"}},
+		{"hyphen only matches names holding it", "-", []string{"Anchor-Point Co"}},
+		{"hyphenated name search", "Anchor-Po", []string{"Anchor-Point Co"}},
+	} {
+		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
+		if err != nil {
+			t.Fatalf("%s: List(q=%q): %v", tc.name, tc.q, err)
+		}
+		if total != len(tc.want) || len(items) != len(tc.want) {
+			t.Errorf("%s: List(q=%q) = %d items, total %d, want %d", tc.name, tc.q, len(items), total, len(tc.want))
+			continue
+		}
+		for i, w := range tc.want {
+			if items[i].Name != w {
+				t.Errorf("%s: List(q=%q)[%d] = %q, want %q", tc.name, tc.q, i, items[i].Name, w)
+			}
+		}
+	}
+}
+
 // TestStoreList_PaginationPastEnd (QA-added, AC-4 edge): tenant A has 3
 // entities -- List(limit=10, offset=100), an offset past the end of the
 // filtered set, must return an empty slice, but total must still reflect the

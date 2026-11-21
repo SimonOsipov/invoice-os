@@ -130,8 +130,15 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
 		}
 		if f.Q != "" {
+			// TINs are stored without their hyphen, so the tin arm matches q with hyphens
+			// removed; the name arm keeps q as typed. A hyphen-only q adds no tin arm.
 			args = append(args, escapeLike(f.Q))
-			conditions = append(conditions, fmt.Sprintf(`(name ILIKE '%%'||$%d||'%%' ESCAPE '\' OR tin ILIKE '%%'||$%d||'%%' ESCAPE '\')`, len(args), len(args)))
+			clause := fmt.Sprintf(`name ILIKE '%%'||$%d||'%%' ESCAPE '\'`, len(args))
+			if tinQ := strings.ReplaceAll(f.Q, "-", ""); tinQ != "" {
+				args = append(args, escapeLike(tinQ))
+				clause += fmt.Sprintf(` OR tin ILIKE '%%'||$%d||'%%' ESCAPE '\'`, len(args))
+			}
+			conditions = append(conditions, "("+clause+")")
 		}
 
 		where := ""

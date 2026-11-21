@@ -448,6 +448,10 @@ func TestStore_ConnectAndDisconnectRecordTheirEvents(t *testing.T) {
 	if _, err := store.Disconnect(admin, e1, c.ID); err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
+	// A reconnect re-authorises the same row, so its event must read like the first one.
+	if _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"}); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
 
 	rows, err := super.Query(context.Background(),
 		"SELECT event, actor, payload::text, entity_id::text FROM audit_log WHERE tenant_id = $1 AND event LIKE 'erp.connection.%' ORDER BY id", tenant)
@@ -485,7 +489,7 @@ func TestStore_ConnectAndDisconnectRecordTheirEvents(t *testing.T) {
 			t.Errorf("%s entity_id = %s, want NULL (workspace-level)", event, *entity)
 		}
 	}
-	want := []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked"}
+	want := []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked", "erp.connection.authorised"}
 	if !reflect.DeepEqual(events, want) {
 		t.Errorf("events = %v, want %v in that order", events, want)
 	}

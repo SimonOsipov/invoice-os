@@ -459,3 +459,127 @@ test('archive-restore: the row action does not open the edit modal', async ({ pa
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// --- Clients search (CSRCH-01) ------------------------------------------------------
+// Each test seeds its own client under a run-unique token and never asserts a row count:
+// the portfolio holds other specs' rows and the list caps at 200.
+
+function searchToken(): string {
+  return `csrch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+// entitiesQuery(): the next GET of the entities list whose q (and optionally status) match.
+function entitiesQuery(page: Page, match: { q: string | null; status?: string }) {
+  return page.waitForResponse((r) => {
+    if (r.request().method() !== 'GET') return false
+    const u = new URL(r.url())
+    if (!u.pathname.endsWith('/api/portfolio/v1/entities')) return false
+    if (u.searchParams.get('q') !== match.q) return false
+    return match.status === undefined || u.searchParams.get('status') === match.status
+  })
+}
+
+// The response lands before React renders, so poll: every rendered row contains frag.
+async function expectAllRowsContain(page: Page, frag: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const texts = await page.locator('.pf-list-row').allInnerTexts()
+      return texts.length > 0 && texts.every((s) => s.toLowerCase().includes(frag.toLowerCase()))
+    })
+    .toBe(true)
+}
+
+test('search: part of a name, in another letter case, narrows the list to that client', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = searchToken()
+  const apiToken = await login(PERSONAS.A)
+  const entity = await createEntity(apiToken, { name: `${token.toUpperCase()} Textiles Ltd`, tin: freshTin() })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await goToClients(page)
+
+  const req = entitiesQuery(page, { q: token })
+  await page.getByTestId('clients-search').fill(token)
+  await req
+
+  await expect(page.locator('.pf-list-row').filter({ hasText: entity.name })).toBeVisible()
+  await expectAllRowsContain(page, token)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('search: a TIN fragment finds the client', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = searchToken()
+  const tin = freshTin()
+  const apiToken = await login(PERSONAS.A)
+  const entity = await createEntity(apiToken, { name: `${token.toUpperCase()} Textiles Ltd`, tin })
+  const frag = tin.slice(-8)
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await goToClients(page)
+
+  const req = entitiesQuery(page, { q: frag })
+  await page.getByTestId('clients-search').fill(frag)
+  await req
+
+  await expect(page.locator('.pf-list-row').filter({ hasText: entity.name })).toBeVisible()
+  await expectAllRowsContain(page, frag)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('search: the chosen chip and the search apply together', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = searchToken()
+  const apiToken = await login(PERSONAS.A)
+  const active = await createEntity(apiToken, { name: `${token.toUpperCase()} Active Textiles Ltd`, tin: freshTin() })
+  const archived = await createEntity(apiToken, { name: `${token.toUpperCase()} Archived Textiles Ltd`, tin: freshTin() })
+  await offboardEntity(apiToken, archived.id)
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await goToClients(page)
+
+  const chipReq = entitiesQuery(page, { q: null, status: 'archived' })
+  await page.getByRole('button', { name: 'Archived' }).click()
+  await chipReq
+
+  const req = entitiesQuery(page, { q: token, status: 'archived' })
+  await page.getByTestId('clients-search').fill(token)
+  await req
+
+  await expect(page.locator('.pf-list-row').filter({ hasText: archived.name })).toBeVisible()
+  await expect(page.locator('.pf-list-row').filter({ hasText: active.name })).not.toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('search: no match shows the no-match state, and Clear search brings the list back', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = searchToken()
+  const apiToken = await login(PERSONAS.A)
+  await createEntity(apiToken, { name: `${token.toUpperCase()} Textiles Ltd`, tin: freshTin() })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await goToClients(page)
+  await expect(page.locator('.pf-list-row').first()).toBeVisible()
+
+  const missing = `zz-none-${token}`
+  const req = entitiesQuery(page, { q: missing })
+  await page.getByTestId('clients-search').fill(missing)
+  await req
+
+  const noMatch = page.getByTestId('clients-no-match')
+  await expect(noMatch).toBeVisible()
+  await expect(noMatch).toContainText(`No clients match “${missing}”`)
+
+  const clearReq = entitiesQuery(page, { q: null })
+  await page.getByTestId('clients-clear-search').click()
+  await clearReq
+
+  await expect(page.getByTestId('clients-search')).toHaveValue('')
+  await expect(noMatch).not.toBeVisible()
+  await expect(page.locator('.pf-list-row').first()).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

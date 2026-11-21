@@ -15,7 +15,7 @@
 // status filter below adds a SECOND, independent fetch for this view's own rows —
 // ctx.entities itself stays unfiltered ([clients-fetches-its-own-filtered-list]).
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -136,6 +136,9 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
         : Promise.reject(new Error('no gateway configured')),
     { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos, q] },
   )
+  // Latest run: an archive that resolves mid-search must rerun the CURRENT q and chip, not the click-time ones.
+  const runFiltered = useRef(filtered.run)
+  runFiltered.current = filtered.run
   const filteredState = base == null ? 'idle' : filtered.status
   const access = companySetupAccess(ctx.membersState, ctx.members)
   // Only a known non-admin is blocked; loading/error keep today's controls.
@@ -191,7 +194,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       setArmedId(null)
       setArchiveError(null)
       refetchEntities()
-      filtered.run()
+      runFiltered.current()
     } catch (err) {
       setArmedId(null)
       if (err instanceof ApiError && err.status === 403) ctx.refetchMembers()

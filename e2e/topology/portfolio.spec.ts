@@ -460,7 +460,7 @@ test('archive-restore: the row action does not open the edit modal', async ({ pa
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// --- Clients search (CSRCH-01) ------------------------------------------------------
+// --- Clients search ------------------------------------------------------
 // Each test seeds its own client under a run-unique token and never asserts a row count:
 // the portfolio holds other specs' rows and the list caps at 200.
 

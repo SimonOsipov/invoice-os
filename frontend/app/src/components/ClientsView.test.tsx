@@ -913,7 +913,7 @@ describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
   })
 })
 
-// --- the search box (CSRCH-01-02) ---------------------------------------------------
+// --- the search box ---------------------------------------------------
 // Fake timers drive the 300ms debounce; flush() settles fetch promises without moving the clock.
 const SEARCH_ROWS: Entity[] = [
   entity({ id: 's1', name: 'Alpha Co', tin: '11122233301', status: 'active' }),
@@ -1241,5 +1241,37 @@ describe('ClientsView: the search box (CSRCH-01-02)', () => {
     const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
     expect(paramsOf(listUrls.at(-1)!).get('q')).toBe('okafor')
     expect(entitiesListGetCalls(fetchMock), 'the archive refetched the list').toBeGreaterThanOrEqual(3)
+  })
+
+  it('CSRCH an archive that resolves after a newer search reruns the newer search', async () => {
+    vi.useFakeTimers()
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((res) => {
+      release = res
+    })
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) return held
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('okafor')
+    await advance(300)
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm; the POST is held
+    await flush()
+    typeSearch('beta')
+    await advance(300)
+    release({ ok: true, status: 200, json: () => Promise.resolve(null) })
+    await flush()
+    await flush()
+    const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
+    expect(paramsOf(listUrls.at(-1)!).get('q'), 'the archive reran the current search').toBe('beta')
+    expect(searchBox().value).toBe('beta')
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+    expect(screen.queryByText('Okafor & Partners')).toBeNull()
   })
 })

@@ -338,6 +338,23 @@ func TestWorkerMain_IAPAudiencesBootRules(t *testing.T) {
 	}
 }
 
+func TestWorkerMain_IAPAudiencesWithoutAGoTrueAdminClientRefusesToBoot(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	t.Setenv("K_SERVICE", "")
+	_, jwks := iaptest.NewSigner(t)
+	app, err := platform.New("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mountConsoleSession(app, envFrom(map[string]string{"IAP_AUDIENCES": iapOps}), nil, auth.IAPConfig{JWKSURL: jwks})
+	if err == nil || !strings.Contains(err.Error(), "IAP_AUDIENCES") {
+		t.Fatalf("mountConsoleSession with no admin client = %v, want an error naming IAP_AUDIENCES", err)
+	}
+	if _, pattern := app.Mux.Handler(httptest.NewRequest(http.MethodPost, iapRoute, nil)); pattern == "POST "+iapRoute {
+		t.Error("route mounted without a GoTrue admin client")
+	}
+}
+
 func TestWorkerMain_RecoveryRouteRefusesACallWithoutTheGatewayToken(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "")
 	t.Setenv("K_SERVICE", "")

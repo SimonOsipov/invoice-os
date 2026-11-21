@@ -166,9 +166,39 @@ type RecoveryLink struct {
 	BannedUntil *time.Time
 }
 
-// GenerateRecoveryLink is a compile stub for the red tests (CSSO-01-03); the executor replaces it.
+// GenerateRecoveryLink asks GoTrue for a recovery link. The type is fixed: "recovery" never creates an account.
+// 404, 400 and 422 are ErrNoAccount; any other failure is a *StatusError with the status only.
+//
+// ceiling: GoTrue keeps one recovery token per account, so this overwrites a pending password-reset token; the
+// same-minute collision is rare and the user can ask again.
 func (c *Client) GenerateRecoveryLink(ctx context.Context, email string) (RecoveryLink, error) {
-	return RecoveryLink{}, errors.New("gotrueadmin: GenerateRecoveryLink is not implemented")
+	body, err := json.Marshal(map[string]string{"type": "recovery", "email": email})
+	if err != nil {
+		return RecoveryLink{}, err
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/admin/generate_link", bytes.NewReader(body))
+	if err != nil {
+		return RecoveryLink{}, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound, http.StatusBadRequest, http.StatusUnprocessableEntity:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return RecoveryLink{}, ErrNoAccount
+	default:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return RecoveryLink{}, &StatusError{Status: resp.StatusCode}
+	}
+	var out struct {
+		HashedToken      string     `json:"hashed_token"`
+		EmailConfirmedAt *time.Time `json:"email_confirmed_at"`
+		BannedUntil      *time.Time `json:"banned_until"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&out) != nil || out.HashedToken == "" {
+		return RecoveryLink{}, &StatusError{Status: resp.StatusCode}
+	}
+	return RecoveryLink{TokenHash: out.HashedToken, Confirmed: out.EmailConfirmedAt != nil, BannedUntil: out.BannedUntil}, nil
 }
 
 // AdminUser is one account of the admin list; Unsubscribe is user_metadata.unsubscribe. The times are

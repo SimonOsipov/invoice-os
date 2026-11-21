@@ -593,7 +593,7 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
 				"internal/validation/**, a non-rule-set version pin in internal/approval/**, "+
 				"internal/extraction/**, internal/notifications/** or "+
-				"internal/platform/db/contacts_rls_test.go, a "+
+				"internal/platform/db/contacts_rls_test.go, internal/platform/db/erp_connections_rls_test.go, internal/erp/store_test.go, a "+
 				"Policy.version/activeVersion pin in frontend/app/src/**, an ApprovalPolicy."+
 				"version pin in e2e/api/policy-restore.test.ts, the two §c e2e "+
 				"artifacts, validationApi.test.ts, the version-defining seed "+
@@ -622,8 +622,11 @@ func detectionHitAllowed(file, line string) bool {
 		return !namesRuleSetConstruct(line)
 	}
 	// contacts.version is the per-row optimistic-concurrency version, never read from
-	// rule_sets. Narrowed like the entries above.
+	// rule_sets; erp_grants.version is a per-grant counter, likewise. Narrowed like the
+	// entries above.
 	if file == "internal/platform/db/contacts_rls_test.go" ||
+		file == "internal/platform/db/erp_connections_rls_test.go" ||
+		file == "internal/erp/store_test.go" ||
 		strings.HasPrefix(file, "internal/notifications/") {
 		return !namesRuleSetConstruct(line)
 	}
@@ -743,6 +746,12 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/platform/db/contacts_rls_test.go:122:	if version != 1 {`, true},
 		{"a contacts row version in notifications", "internal/notifications/contacts_store.go",
 			`internal/notifications/contacts_store.go:9:  if c.Version != 1 {`, true},
+		{"an erp_grants row version in the ERP RLS test", "internal/platform/db/erp_connections_rls_test.go",
+			`internal/platform/db/erp_connections_rls_test.go:917:	if err != nil || version != 1 {`, true},
+		{"an erp_grants row version in the ERP store test", "internal/erp/store_test.go",
+			`internal/erp/store_test.go:429:	if version != 1 {`, true},
+		{"a rule-set pin smuggled into the ERP store test", "internal/erp/store_test.go",
+			`internal/erp/store_test.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a rule-set pin smuggled into the contacts RLS test", "internal/platform/db/contacts_rls_test.go",
 			`internal/platform/db/contacts_rls_test.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a rule-set pin smuggled into notifications", "internal/notifications/contacts_store.go",

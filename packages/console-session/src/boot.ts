@@ -1,6 +1,6 @@
 import { ApiError, sessionFetch } from '@invoice-os/api-client/client'
 
-import { clearExpiredFresh, clearSignedOut, isSignedOut, mintFromIap } from './iap'
+import { clearSignedOut, consumeExpiredFresh, isSignedOut, markIapOpen, mintFromIap } from './iap'
 import { postSignOut } from './signOut'
 import { clearConsoleSession, decodeJwtPayload, isStaffToken, loadConsoleSession, nonEmpty, saveConsoleSession, type ConsoleSession } from './session'
 import {
@@ -146,10 +146,12 @@ export async function resolveConsoleBoot(o: {
     if (app === null) return iap ? mint() : leave()
     return { kind: 'leave', url: appStartUrl(app, ensureSignInState(now), target), replace: true }
   }
+  // A 401 right after the last open armed the guard: no fetch, "Try again" opens once more.
+  if (iap && consumeExpiredFresh(storageKey)) return { kind: 'failed' }
   try {
     const s = await renewConsoleSession(gateway, stored.legacyRefreshToken)
     if (isStaffToken(s.token)) {
-      if (iap) clearExpiredFresh(storageKey)
+      if (iap) markIapOpen(storageKey, now)
       return open(s)
     }
     clearConsoleSession(storageKey)

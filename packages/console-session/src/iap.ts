@@ -13,11 +13,11 @@ export const isIapHost = (hostname: string): boolean => IAP_HOSTS.includes(hostn
 const IAP_SESSION_URL = '/auth/iap-session'
 const CLEAR_LOGIN_COOKIE = '/_gcp_iap/clear_login_cookie'
 const TIMEOUT_MS = 15000
-// An expiry this soon after a mint is a fault, not a lapse: it stops the reload-mint loop.
+// An expiry this soon after a console open (mint or cookie renewal) is a fault, not a lapse: it stops the reload loop.
 export const IAP_FRESH_MS = 60_000
 
 export const signedOutKey = (storageKey: string): string => `${storageKey}:signed-out`
-export const iapMintedAtKey = (storageKey: string): string => `${storageKey}:iap-minted-at`
+export const iapOpenedAtKey = (storageKey: string): string => `${storageKey}:iap-opened-at`
 export const iapExpiredFreshKey = (storageKey: string): string => `${storageKey}:iap-expired-fresh`
 
 export function isSignedOut(storageKey: string): boolean {
@@ -28,12 +28,24 @@ export function isSignedOut(storageKey: string): boolean {
   }
 }
 
-// A renewal through the cookie disarms the loop guard, which bounds mints only.
-export function clearExpiredFresh(storageKey: string): void {
+// Stamps every IAP-mode console open, a mint and a cookie renewal, for the loop guard.
+export function markIapOpen(storageKey: string, now: number): void {
   try {
-    sessionStorage.removeItem(iapExpiredFreshKey(storageKey))
+    sessionStorage.setItem(iapOpenedAtKey(storageKey), String(now))
   } catch {
-    // storage denied: no guard to disarm
+    // storage denied: the loop guard is off for this open
+  }
+}
+
+// True once after a fresh expiry armed the guard; the next open then shows "failed" instead of looping.
+export function consumeExpiredFresh(storageKey: string): boolean {
+  try {
+    const fresh = iapExpiredFreshKey(storageKey)
+    if (sessionStorage.getItem(fresh) === null) return false
+    sessionStorage.removeItem(fresh)
+    return true
+  } catch {
+    return false // storage denied: no guard to apply
   }
 }
 
@@ -88,26 +100,14 @@ async function requestCode(state: string): Promise<IapMint | string> {
 export async function mintFromIap(o: { gateway: string; storageKey: string; now?: number }): Promise<IapMint> {
   const now = o.now ?? Date.now()
   if (isSignedOut(o.storageKey)) return { kind: 'signed-out' }
-  try {
-    const fresh = iapExpiredFreshKey(o.storageKey)
-    if (sessionStorage.getItem(fresh) !== null) {
-      sessionStorage.removeItem(fresh)
-      return FAILED
-    }
-  } catch {
-    // storage denied: no guard to apply
-  }
+  if (consumeExpiredFresh(o.storageKey)) return FAILED
   try {
     const state = mintSignInState(now)
     const code = await requestCode(state)
     if (typeof code !== 'string') return code
     const session = await redeemHandoffCode(o.gateway, code, state)
     if (!isStaffToken(session.token)) return FAILED
-    try {
-      sessionStorage.setItem(iapMintedAtKey(o.storageKey), String(now))
-    } catch {
-      // storage denied: the loop guard is off for this mint
-    }
+    markIapOpen(o.storageKey, now)
     return { kind: 'session', session }
   } catch {
     return FAILED

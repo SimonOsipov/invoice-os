@@ -1,7 +1,7 @@
 import { ApiError, sessionFetch } from '@invoice-os/api-client/client'
 
 import { clearConsoleSession, loadConsoleSession } from './session'
-import { iapExpiredFreshKey, iapMintedAtKey, IAP_FRESH_MS, markSignedOut } from './iap'
+import { iapExpiredFreshKey, iapOpenedAtKey, IAP_FRESH_MS, markSignedOut } from './iap'
 import { appStartUrl, mintSignInState, type ConsoleTarget } from './state'
 
 const REVOKE_TIMEOUT_MS = 5000
@@ -58,9 +58,9 @@ export async function expireConsole(o: {
   }
   if (!o.iap) return signOutConsole(o)
   // No signed-out marker and the record stays: the next boot renews through the cookie and mints only when it is refused.
-  // A lapse right after a mint arms the guard, so that mint shows "failed" instead; a renewal disarms it.
+  // A lapse right after a console open (mint or renewal) arms the guard: the next boot shows "failed" with no fetch.
   try {
-    const at = Number(sessionStorage.getItem(iapMintedAtKey(o.storageKey)))
+    const at = Number(sessionStorage.getItem(iapOpenedAtKey(o.storageKey)))
     if (at > 0 && Date.now() - at < IAP_FRESH_MS) sessionStorage.setItem(iapExpiredFreshKey(o.storageKey), '1')
   } catch {
     // storage denied: no guard to arm

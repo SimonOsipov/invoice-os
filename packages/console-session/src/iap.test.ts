@@ -2,7 +2,7 @@ import { reportApiFailure } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot, type ConsoleBoot } from './boot'
-import { iapExpiredFreshKey, iapMintedAtKey, isIapHost, mintFromIap, renewStaffSession, signedOutKey, switchGoogleAccount } from './iap'
+import { iapExpiredFreshKey, iapOpenedAtKey, isIapHost, mintFromIap, renewStaffSession, signedOutKey, switchGoogleAccount } from './iap'
 import { expireConsole } from './signOut'
 import {
   APP,
@@ -352,13 +352,13 @@ describe('mintFromIap', () => {
     expect(net.calls).toHaveLength(0)
   })
 
-  it('mintFromIap_recordsTheMintTime', async () => {
+  it('mintFromIap_recordsTheOpenTime', async () => {
     const ok = setup()
     await mintFromIap(o)
-    expect(ok.store.session.getItem(iapMintedAtKey(OPS_KEY))).toBe(String(NOW))
+    expect(ok.store.session.getItem(iapOpenedAtKey(OPS_KEY))).toBe(String(NOW))
     const bad = setup({}, { mint: reply(502) })
     await mintFromIap(o)
-    expect(bad.store.session.getItem(iapMintedAtKey(OPS_KEY))).toBeNull()
+    expect(bad.store.session.getItem(iapOpenedAtKey(OPS_KEY))).toBeNull()
   })
 })
 
@@ -368,7 +368,7 @@ describe('IAP loop guard', () => {
     const { net, store } = setup(
       {
         local: { [OPS_KEY]: v3Raw(staffToken('s')) },
-        session: { [iapMintedAtKey(OPS_KEY)]: String(Date.now() - 10_000) },
+        session: { [iapOpenedAtKey(OPS_KEY)]: String(Date.now() - 10_000) },
       },
       { refresh: reply(401, { error: 'refused' }) },
     )
@@ -383,7 +383,7 @@ describe('IAP loop guard', () => {
     expect(win.reload).toHaveBeenCalledTimes(1)
     expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBe('1')
     expect(await boot()).toEqual({ kind: 'failed' })
-    expect(urls(net)).toEqual([REFRESH])
+    expect(urls(net)).toEqual([])
     expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBeNull()
     expect(await boot()).toMatchObject({ kind: 'open' })
     expect(urls(net)[1]).toBe(MINT_URL)
@@ -396,7 +396,7 @@ describe('IAP loop guard', () => {
     const { net, store } = setup(
       {
         local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) },
-        session: { [iapMintedAtKey(OPS_KEY)]: String(Date.now() - 10_000) },
+        session: { [iapOpenedAtKey(OPS_KEY)]: String(Date.now() - 300_000) },
       },
       routes,
     )
@@ -405,18 +405,40 @@ describe('IAP loop guard', () => {
     expect(store.local.getItem(MARKER)).toBeNull()
     expect(await boot()).toEqual({ kind: 'open', session: { token: renewed, borrowed: false } })
     expect(urls(net)).toEqual([REFRESH])
-    expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBeNull()
+    expect(store.session.getItem(iapOpenedAtKey(OPS_KEY))).toBe(String(NOW))
+  })
 
-    // The renewal disarmed the guard: a later lapse the cookie no longer covers mints, it does not show "failed".
-    routes.refresh = reply(401, { error: 'refused' })
-    expect(await boot()).toMatchObject({ kind: 'open', session: { token: staffToken('minted') } })
-    expect(urls(net)).toEqual([REFRESH, REFRESH, MINT_URL, EXCHANGE])
+  it('expire_iap_renewalThenImmediate401ShowsFailedWithoutFetch', async () => {
+    installWindow()
+    const renewed = staffToken('renewed')
+    const routes: Routes = { refresh: reply(200, { access_token: renewed }) }
+    const { net, store } = setup({ local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) } }, routes)
+    expect(await boot({ now: Date.now() })).toMatchObject({ kind: 'open' })
+    await expireConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING, app: null, target: 'ops', iap: true })
+    expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBe('1')
+    expect(await boot()).toEqual({ kind: 'failed' })
+    expect(urls(net)).toEqual([REFRESH])
+    routes.refresh = reply(200, { access_token: renewed })
+    expect(await boot()).toMatchObject({ kind: 'open' })
+    expect(urls(net)).toEqual([REFRESH, REFRESH])
+  })
+
+  it('expire_iap_renewalThenExpiryAfterTheWindowRenewsAgain', async () => {
+    installWindow()
+    const routes: Routes = { refresh: reply(200, { access_token: staffToken('renewed') }) }
+    const { net, store } = setup({ local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) } }, routes)
+    expect(await boot({ now: Date.now() - 61_000 })).toMatchObject({ kind: 'open' })
+    await expireConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING, app: null, target: 'ops', iap: true })
+    expect(store.session.getItem(iapExpiredFreshKey(OPS_KEY))).toBeNull()
+    routes.refresh = reply(200, { access_token: staffToken('renewed') })
+    expect(await boot()).toMatchObject({ kind: 'open' })
+    expect(urls(net)).toEqual([REFRESH, REFRESH])
   })
 
   it('expire_iap_refusedCookieMints', async () => {
     installWindow()
     const { net } = setup(
-      { local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) }, session: { [iapMintedAtKey(OPS_KEY)]: String(Date.now() - 300_000) } },
+      { local: { [OPS_KEY]: v3Raw(staffToken('lapsed')) }, session: { [iapOpenedAtKey(OPS_KEY)]: String(Date.now() - 300_000) } },
       { refresh: reply(400, { error: 'refused' }) },
     )
     await expireConsole({ storageKey: OPS_KEY, gateway: GW, landing: LANDING, app: null, target: 'ops', iap: true })
@@ -429,7 +451,7 @@ describe('IAP loop guard', () => {
     const { net, store } = setup(
       {
         local: { [OPS_KEY]: v3Raw(staffToken('s')) },
-        session: { [iapMintedAtKey(OPS_KEY)]: String(Date.now() - 61_000) },
+        session: { [iapOpenedAtKey(OPS_KEY)]: String(Date.now() - 61_000) },
       },
       { refresh: reply(401, { error: 'refused' }) },
     )

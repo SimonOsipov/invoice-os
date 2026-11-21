@@ -750,7 +750,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               the bar being mounted. */}
           {showColumn && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
-              {/* One horizontal row for every header action; explanation text goes below it, never between buttons (BUG-171). */}
+              {/* One row for every header action; explanation text goes below it, never between buttons. */}
               {!formOpen && (showDecision || showBar) && (
                 <div data-testid="invoice-header-actions-row" style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10 }}>
               {/* The decision pair: each button renders only on its own can_approve / can_reject
@@ -973,7 +973,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                   {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
                       detail-decision-actions: flexWrap:'wrap' is mandatory, not cosmetic -- the
-                      input plus both button labels don't fit on one line at 320px. */}
+                      input plus both button labels don't fit on one line in a narrow column. */}
                   {rejectOpen && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       <input

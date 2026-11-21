@@ -7558,7 +7558,7 @@ test('UN-03 invoice detail: the undo button and its arm step fit the action colu
   // Submit is not rendered on an import that is not validated (BUG-168); Edit is the sibling.
   const edit = page.getByTestId('edit-toggle')
 
-  // BUG-171: Edit, Re-validate and Undo import stand in one row at desktop width.
+  // Edit, Re-validate and Undo import stand in one row at desktop width.
   const tops: number[] = []
   for (const id of ['edit-toggle', 'revalidate', 'undo-import']) {
     const box = await page.getByTestId(id).boundingBox()

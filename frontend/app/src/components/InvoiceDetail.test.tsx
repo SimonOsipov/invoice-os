@@ -2640,7 +2640,7 @@ const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitte
 function actionColumn(): HTMLElement {
   const column = screen.getByTestId('invoice-header-actions-row').parentElement
   expect(column, 'the actions column must exist').toBeTruthy()
-  expect(column!.style.maxWidth, 'the 320px cap is gone (BUG-171)').toBe('')
+  expect(column!.style.maxWidth, 'the 320px cap is gone').toBe('')
   expect(column!.contains(screen.getByTestId('detail-decision-actions')), 'the decision row is in the column').toBe(true)
   return column!
 }
@@ -7495,7 +7495,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  // BUG-171: Reject and Edit share one row; the reason note sits after it, not between them.
+  // Reject and Edit share one row; the reason note sits after it, not between them.
   it('detail_headerActions_rejectAndEditShareOneRow_reasonFollowsIt', async () => {
     mockDetailFetch(
       detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true }),
@@ -7742,5 +7742,97 @@ describe('SECAUD-50-04: Undo import on invoice detail', () => {
     await screen.findByText('DISCARDED')
     expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith(`/invoices/${ID}`))).toHaveLength(2)
     expect(screen.queryByTestId('undo-import')).toBeNull()
+  })
+})
+
+// The header actions share one row; explanation text sits below it.
+describe('InvoiceDetail: header actions row, edge cases edge cases', () => {
+  const ID = 'inv-hdr-row-1'
+  const SENTENCE = 'You created this invoice, so another approver must approve it.'
+  const row = () => screen.getByTestId('invoice-header-actions-row')
+  const idsIn = (el: HTMLElement) => ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'].filter((id) => within(el).queryByTestId(id))
+
+  it('approve, reject, edit, re-validate and submit all stand in the one row', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true, can_edit: true, can_revalidate: true, can_submit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+    expect(screen.getAllByTestId('invoice-header-actions-row')).toHaveLength(1)
+    expect(idsIn(row())).toEqual(['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'])
+  })
+
+  it('a decision pair alone renders the row without the bar', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+    expect(idsIn(row())).toEqual(['detail-approve', 'detail-reject'])
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+  })
+
+  it('the bar alone renders the row without the decision pair', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('edit-toggle')
+    expect(idsIn(row())).toEqual(['edit-toggle', 'revalidate'])
+    expect(screen.queryByTestId('detail-decision-actions')).toBeNull()
+  })
+
+  it('no action at all renders no row and no column', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('invoice-header-actions-row')).toBeNull()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions')).toBeNull()
+  })
+
+  it('the approve confirm prompt follows the row, not inside it', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true, can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    const prompt = await screen.findByTestId('detail-approve-confirm-prompt')
+    expect(within(row()).getByTestId('detail-approve-confirm')).toBeTruthy()
+    expect(within(row()).getByTestId('detail-reject')).toBeTruthy()
+    expect(within(row()).getByTestId('edit-toggle')).toBeTruthy()
+    expect(row().contains(prompt)).toBe(false)
+    expect(row().compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the open reject row follows the action row, not inside it', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true, can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    const input = await screen.findByTestId('detail-reject-reason')
+    expect(row().contains(input)).toBe(false)
+    expect(row().compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(row()).getByTestId('edit-toggle')).toBeTruthy()
+  })
+
+  it('the creator reason stays below the row when only Reject is available', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const reason = await screen.findByTestId('detail-approve-creator-reason')
+    expect(idsIn(row())).toEqual(['detail-reject'])
+    expect(row().contains(reason)).toBe(false)
+  })
+
+  it('opening the edit form removes the row', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true, can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(await screen.findByTestId('invoice-header-actions-row')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    expect(screen.queryByTestId('invoice-header-actions-row')).toBeNull()
+    expect(screen.queryByTestId('detail-reject')).toBeNull()
+  })
+
+  it('the submit confirm prompt sits under the buttons it explains, inside the bar column', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    const prompt = await screen.findByTestId('detail-submit-confirm-prompt')
+    const confirm = within(row()).getByTestId('detail-submit-confirm')
+    // The prompt is a later sibling of the button line within invoice-actions, never between buttons.
+    expect(screen.getByTestId('invoice-actions').contains(prompt)).toBe(true)
+    expect(confirm.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(prompt.parentElement).toBe(screen.getByTestId('invoice-actions'))
   })
 })

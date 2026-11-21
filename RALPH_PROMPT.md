@@ -81,7 +81,7 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 | Context7 | `mcp__context7__*` — check before writing library code (pgx, River, CEL, goose, Vite, React) |
 | Playwright | `mcp__playwright__*` — fallback when `ctl` or `playwright-cli` cannot do a step (Stage 4 "Frontend") |
 | Sentry | `mcp__sentry__*` — deployed errors |
-| Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
+| Obsidian | `mcp__obsidian__*` — story files |
 | sysmap | `mcp__sysmap__*` — feature records and screen playbooks; read-only, the PM writes |
 
 ## Subtasks
@@ -119,7 +119,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    If it resolves as both, prefer the feature and say so. Error and exit if missing.
 2. **Read the story.**
    - *Feature:* `sysmap_feature_show`. Name + description = Objective; acceptance criteria = Core ACs; `screen` = surface; `depends_on` = prerequisites. Set `PLANNING_REQUIRED=true`, `STORY_SOURCE=sysmap`. Refuse a feature whose status is not `planned` or `building`, and name the status. Do not change its status; the PM sets `building`.
-   - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
+   - *Obsidian:* `vault_read` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
 4. **Subtasks:** `hm subtask list <STORY>`. "has no subtasks" means zero subtasks.
 5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, send the open ones to the coordinator (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)

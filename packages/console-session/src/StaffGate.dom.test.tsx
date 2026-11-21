@@ -1,11 +1,26 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot } from './boot'
 import { StaffGate } from './StaffGate'
-import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, reply, spyTimeouts, SUPPORT_KEY, staffToken, STATE_A, STATE_KEY, stateRaw, v3Raw } from './testkit'
+import {
+  CODE,
+  GW,
+  installFetch,
+  installStorage,
+  LANDING,
+  OPS_KEY,
+  reply,
+  spyTimeouts,
+  SUPPORT_KEY,
+  staffToken,
+  STATE_A,
+  STATE_KEY,
+  stateRaw,
+  v3Raw,
+} from './testkit'
 
 vi.mock('./boot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./boot')>()
@@ -17,11 +32,27 @@ const never = () => new Promise<never>(() => undefined)
 const realLocation = window.location
 let hrefWrites: string[]
 let replaceWrites: string[]
+let assignWrites: string[]
+let reload: ReturnType<typeof vi.fn>
 let store: ReturnType<typeof installStorage>
 
-function gate(o: { landing?: string | null; gateway?: string | null; app?: string | null } = {}) {
+function gate(
+  o: {
+    landing?: string | null
+    gateway?: string | null
+    app?: string | null
+    iap?: boolean
+  } = {},
+) {
   return (
-    <StaffGate storageKey={OPS_KEY} target="ops" gateway={o.gateway === undefined ? GW : o.gateway} landing={o.landing === undefined ? LANDING : o.landing} app={o.app}>
+    <StaffGate
+      storageKey={OPS_KEY}
+      target="ops"
+      gateway={o.gateway === undefined ? GW : o.gateway}
+      landing={o.landing === undefined ? LANDING : o.landing}
+      app={o.app}
+      iap={o.iap}
+    >
       <div>console</div>
     </StaffGate>
   )
@@ -30,6 +61,8 @@ function gate(o: { landing?: string | null; gateway?: string | null; app?: strin
 beforeEach(() => {
   hrefWrites = []
   replaceWrites = []
+  assignWrites = []
+  reload = vi.fn()
   vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   spyTimeouts()
   // jsdom cannot navigate: capture href writes, and read search and pathname from the real location.
@@ -49,6 +82,10 @@ beforeEach(() => {
     replace(v: string) {
       replaceWrites.push(v)
     },
+    assign(v: string) {
+      assignWrites.push(v)
+    },
+    reload,
   })
   window.history.replaceState(null, '', '/')
   // Node 26 exposes an unusable localStorage global that shadows jsdom's.
@@ -71,7 +108,10 @@ describe('StaffGate (AC-11)', () => {
     expect(hrefWrites).toEqual([])
     pending.unmount()
 
-    resolve.mockImplementationOnce(async () => ({ kind: 'open', session: null }))
+    resolve.mockImplementationOnce(async () => ({
+      kind: 'open',
+      session: null,
+    }))
     const open = render(gate())
     expect(await screen.findByText('console')).toBeTruthy()
     expect(hrefWrites).toEqual([])
@@ -139,7 +179,10 @@ describe('StaffGate (AC-11)', () => {
     expect(await screen.findByText('console')).toBeTruthy()
     expect(net.calls.map((c) => c.url)).toEqual([`${GW}/auth/exchange`])
     expect(net.calls[0]?.body).toEqual({ code: CODE, state: STATE_A })
-    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 3, token: access })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({
+      v: 3,
+      token: access,
+    })
     expect(realLocation.search).toBe('')
     expect(hrefWrites).toEqual([])
   })
@@ -186,5 +229,76 @@ describe('StaffGate (AC-11)', () => {
     await waitFor(() => expect(replaceWrites).toHaveLength(1))
     expect(replaceWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=ops&signin=ready$`))
     expect(hrefWrites).toEqual([])
+  })
+})
+
+describe('StaffGate IAP mode (CSSO-01-06)', () => {
+  const SIGN_OUT = `${GW}/auth/sign-out`
+  const MARKER = `${OPS_KEY}:signed-out`
+
+  it('StaffGate_iap_showsOpeningThenTheConsole', async () => {
+    let done!: (b: { kind: 'open'; session: null }) => void
+    resolve.mockImplementationOnce(() => new Promise((r) => (done = r)))
+    const { container } = render(gate({ iap: true }))
+    expect(screen.getByRole('status').textContent).toBe('Opening the console…')
+    expect(screen.queryByText('console')).toBeNull()
+    done({ kind: 'open', session: null })
+    expect(await screen.findByText('console')).toBeTruthy()
+    expect(container.textContent).toBe('console')
+  })
+
+  it('StaffGate_iap_failedOffersTryAgain', async () => {
+    resolve.mockImplementationOnce(async () => ({ kind: 'failed' }))
+    render(gate({ iap: true }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not open the console.')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('StaffGate_iap_noStaffScreen', async () => {
+    resolve.mockImplementationOnce(async () => ({
+      kind: 'no-staff',
+      email: 'x@y',
+    }))
+    const { container } = render(gate({ iap: true }))
+    expect((await screen.findByRole('heading')).textContent).toBe('No staff account for this Google account')
+    expect(screen.getByText('x@y is not an ASComply staff account. Ask an ASComply admin to give this email staff access.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Use a different Google account' }).getAttribute('href')).toBe('/_gcp_iap/clear_login_cookie')
+    expect(container.querySelector('input, form')).toBeNull()
+  })
+
+  it('StaffGate_iap_signedOutReopensOnlyOnPress', async () => {
+    store.local.setItem(MARKER, '1')
+    const net = installFetch(() => new Error('unexpected request'))
+    render(gate({ iap: true }))
+    expect(await screen.findByText('You are signed out of the console.')).toBeTruthy()
+    expect(net.calls).toHaveLength(0)
+    expect(reload).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Open the console' }))
+    expect(store.local.getItem(MARKER)).toBeNull()
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('StaffGate_iap_differentAccountClickSwitches', async () => {
+    resolve.mockImplementationOnce(async () => ({
+      kind: 'no-staff',
+      email: 'x@y',
+    }))
+    store.local.setItem(OPS_KEY, v3Raw(staffToken('s')))
+    const seen: string[] = []
+    const net = installFetch((c) => {
+      seen.push(`fetch ${c.url}`)
+      return reply(204)
+    })
+    render(gate({ iap: true }))
+    const link = await screen.findByRole('link', {
+      name: 'Use a different Google account',
+    })
+    const notPrevented = fireEvent.click(link)
+    expect(notPrevented).toBe(false)
+    await waitFor(() => expect(assignWrites).toEqual(['/_gcp_iap/clear_login_cookie']))
+    expect(net.calls.map((c) => c.url)).toEqual([SIGN_OUT])
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+    expect(store.local.getItem(MARKER)).toBeNull()
   })
 })

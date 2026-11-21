@@ -54,6 +54,7 @@ type gotrueFake struct {
 
 	userGets, passwordGrants, resends, verifies atomic.Int32
 	grantOK                                     atomic.Bool // the password grant mints a session
+	verifyStaff                                 atomic.Bool // /verify mints a staff session
 }
 
 func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
@@ -86,7 +87,11 @@ func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
 			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`"}`)
 		case "POST /verify":
 			g.verifies.Add(1)
-			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
+			at := handoffAccessToken(g.subject)
+			if g.verifyStaff.Load() {
+				at = staffAccessToken(g.subject)
+			}
+			_, _ = io.WriteString(w, `{"access_token":"`+at+`","refresh_token":"rt","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
 		case "POST /logout":
 			w.WriteHeader(http.StatusNoContent)
 		case "POST /recover":

@@ -34,6 +34,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 ## Identity
 
+- The IAP verifier (`internal/platform/auth/iap.go`) checks the assertion signature, issuer and `IAP_AUDIENCES`. The gateway and the worker each verify the assertion (double verification); the worker mints the recovery token only for its own verified result.
 - `Verifier.Verify` in `internal/platform/auth/verify.go` checks the JWT signature against the issuer's JWKS, then the issuer and claims in `validate`.
 - `injectIdentity` in `internal/gateway/gateway.go` deletes every client `X-User-*` header, sets identity from the verified token only, and sets `X-User-Address` from `clientIP`.
 - Every gateway call to GoTrue but the session check and the fleet probe sets `X-User-Address` from `clientIP`. `GOTRUE_RATE_LIMIT_HEADER` names it (`TestDockerfileRateLimitHeader_NamesTheHeaderTheGatewaySends`).
@@ -44,6 +45,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 ## Network
 
+- Caddy on each console host proxies one path, the IAP session request, to the gateway.
 - Only the gateway and the static sites have a public domain. Every other service is on the private network only.
 - `auth` admits the gateway and the worker.
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
@@ -66,8 +68,9 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - docling `POST /v1/read` (`sidecar/docling/app.py`): document bytes forwarded by submission.
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
 - `POST /auth/export-download` (gateway): a form body with an export code. It runs without the verifier until the code is redeemed.
+- `POST /auth/iap-session` (gateway): the IAP assertion header only. It hands back a console code, never a token (`TestIAPSession_StaffGetsACodeAndNoToken`). Worker `/internal/console-sessions/recovery-token` sits behind `RequireGateway` and the ID token, takes no email from the body, and answers a hash only for a verified, confirmed, unbanned account (`TestRecoveryToken_NoAccountUnconfirmedOrBannedIs403`).
 - Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`, `/readiness-check/*`, `/unsubscribe`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`. `/health` and `/healthz` answer status only without `X-Gateway-Token`.
-- Register, resend, reset, invitation register, invitation resend, `/contacts/demo-request`, the two `/blog/subscriptions` POSTs, `/auth/sign-in`, `/auth/exchange` and the invitation preview `/auth/invitation` (gateway) answer 415 after the method check and before any other check when the `Content-Type` is not `application/json`, so a foreign page cannot send them without a preflight (`TestPublicJSONRoutes_RefuseANonJSONBodyBeforeAnyDownstreamCall`).
+- Register, resend, reset, invitation register, invitation resend, `/contacts/demo-request`, the two `/blog/subscriptions` POSTs, `/auth/sign-in`, `/auth/iap-session`, `/auth/exchange` and the invitation preview `/auth/invitation` (gateway) answer 415 after the method check and before any other check when the `Content-Type` is not `application/json`, so a foreign page cannot send them without a preflight (`TestPublicJSONRoutes_RefuseANonJSONBodyBeforeAnyDownstreamCall`).
 - `POST /readiness-check/run` and `/mapping` (gateway): a visitor's multipart file, address and mapping. The gateway keeps the file in memory (`MultipartReader` only, 15 MiB, 4 uploads per instance) and streams it to the worker. It counts 10 runs per client IP in 24 h (IPv6 per /64), holds an upload slot at most 90 s and logs no address, IP or file name.
 - `GET` and `POST /readiness-check/confirm` (gateway) and `POST /internal/public-checks/confirm` (worker): a 256-bit confirm token. The GET changes nothing; the POST consumes the link once within 24 hours and sends the held results. Accepted ceiling: no Armor rule covers the route, since a random token cannot be enumerated.
 - The held results (`readiness_check_requests`): invoice amounts and buyer details of an unconfirmed address, kept at most 25 hours. The file and the client IP are never stored. `invoice_gateway` has no grant on the table.
@@ -93,4 +96,9 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `ceiling:` in `internal/tenancy/invitations.go`: the admin's invitation list shows whether each invited address has an account (`TestIdP_InvitationsListCarriesTheAccountState`).
 - `ceiling:` in `internal/document/document.go`: an upload refusal (`ErrHeldElsewhere`) tells the caller the bytes exist on a document they cannot read, and an uncited document is readable by every member, so a hit on one still answers its id ([dedupe-ceiling], SECAUD-42-01).
 - The production edge buffers the whole upload before the gateway reads it. The 90 s upload limit on `/readiness-check/*` guards local runs and a future HTTP/2 end-to-end port.
+- The recovery link overwrites the account's stored recovery token, so a pending reset link dies when a console opens.
+- Each IAP mint makes one GoTrue session; sessions are not reused.
+- Three overlapping mints for one account can leave the third at 502 (`TestIAPSession_SecondSpentTokenIs502`); the retry covers two (`TestIAPSession_RetriesOnceWhenAConcurrentMintSpentTheToken`).
+- A shared browser profile keeps one stored console session, so the next Google account on it opens as the stored identity until Sign out or "Use a different Google account".
+- The IAP mint's account event carries the console service's egress address as its IP, not the staff member's.
 - Any other `ceiling:` comment on a path above. List them with `git grep -n "ceiling:"`.

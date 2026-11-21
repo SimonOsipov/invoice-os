@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -20,6 +21,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/iaptest"
 )
 
 const unreachableDB = "postgres://invoice_app:app@127.0.0.1:1/invoice_os?sslmode=disable"
@@ -269,4 +275,147 @@ func TestWorkerMain_SnapshotsAtBoot(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Errorf("no rollup_snapshots row for the entity and today's WAT day within 20s of boot\n%s", out.String())
+}
+
+const (
+	iapRoute = "/internal/console-sessions/recovery-token"
+	iapOps   = "/projects/111111111111/global/backendServices/1111111111111111111"
+	iapSup   = "/projects/111111111111/global/backendServices/2222222222222222222"
+)
+
+// iapLinker stands in for GoTrue and counts the addresses it was asked about.
+type iapLinker struct{ emails []string }
+
+func (l *iapLinker) GenerateRecoveryLink(_ context.Context, email string) (gotrueadmin.RecoveryLink, error) {
+	l.emails = append(l.emails, email)
+	return gotrueadmin.RecoveryLink{TokenHash: "HASH-WORKER", Confirmed: true}, nil
+}
+
+func envFrom(vars map[string]string) func(string) string {
+	return func(k string) string { return vars[k] }
+}
+
+func TestWorkerMain_IAPAudiencesBootRules(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	t.Setenv("K_SERVICE", "")
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+		wantOn  bool
+	}{
+		{"hosted on Cloud Run, unset", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker"}, true, false},
+		{"hosted on Cloud Run, blank", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": "  "}, true, false},
+		{"hosted on Cloud Run, bad shape", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": "ops.ascomply.com"}, true, false},
+		{"hosted on Cloud Run, one bad of two", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": iapOps + ",/projects/x/global/backendServices/2"}, true, false},
+		{"hosted on Cloud Run, repeated", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": iapOps + "," + iapOps}, true, false},
+		{"hosted on Cloud Run, set", map[string]string{"DEPLOY_ENV": "production", "K_SERVICE": "worker", "IAP_AUDIENCES": iapOps + "," + iapSup}, false, true},
+		{"hosted off Cloud Run, unset", map[string]string{"DEPLOY_ENV": "production"}, false, false},
+		{"preview, bad shape", map[string]string{"DEPLOY_ENV": "pr-12", "IAP_AUDIENCES": "ops.ascomply.com"}, true, false},
+		{"preview, unset", map[string]string{"DEPLOY_ENV": "pr-12"}, false, false},
+		{"nightly, unset", map[string]string{"DEPLOY_ENV": "nightly"}, false, false},
+		{"local, unset", map[string]string{}, false, false},
+		{"preview, set", map[string]string{"DEPLOY_ENV": "pr-12", "IAP_AUDIENCES": iapOps}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, jwks := iaptest.NewSigner(t)
+			app, err := platform.New("worker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = mountConsoleSession(app, envFrom(tc.env), &iapLinker{}, auth.IAPConfig{JWKSURL: jwks})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("mountConsoleSession error = %v, want error: %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "IAP_AUDIENCES") {
+				t.Errorf("error %q does not name IAP_AUDIENCES", err)
+			}
+			_, pattern := app.Mux.Handler(httptest.NewRequest(http.MethodPost, iapRoute, nil))
+			if on := pattern == "POST "+iapRoute; on != tc.wantOn {
+				t.Errorf("route mounted = %v (pattern %q), want %v", on, pattern, tc.wantOn)
+			}
+		})
+	}
+}
+
+func TestWorkerMain_IAPAudiencesWithoutAGoTrueAdminClientRefusesToBoot(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	t.Setenv("K_SERVICE", "")
+	_, jwks := iaptest.NewSigner(t)
+	app, err := platform.New("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mountConsoleSession(app, envFrom(map[string]string{"IAP_AUDIENCES": iapOps}), nil, auth.IAPConfig{JWKSURL: jwks})
+	if err == nil || !strings.Contains(err.Error(), "IAP_AUDIENCES") {
+		t.Fatalf("mountConsoleSession with no admin client = %v, want an error naming IAP_AUDIENCES", err)
+	}
+	if _, pattern := app.Mux.Handler(httptest.NewRequest(http.MethodPost, iapRoute, nil)); pattern == "POST "+iapRoute {
+		t.Error("route mounted without a GoTrue admin client")
+	}
+}
+
+func TestWorkerMain_RecoveryRouteRefusesACallWithoutTheGatewayToken(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	t.Setenv("K_SERVICE", "")
+	const gatewayToken = "gateway-token-for-this-test"
+	signer, jwks := iaptest.NewSigner(t)
+	now := time.Now()
+	assertion := signer.Sign(map[string]any{
+		"iss": auth.IAPIssuer, "aud": iapOps, "sub": "accounts.google.com:118273645546372819", "email": "sam@ascomply.test",
+		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
+	})
+	// The guard call below restates main's; TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken pins main's.
+	boot := func(t *testing.T, env map[string]string) (http.Handler, *iapLinker) {
+		t.Helper()
+		linker := &iapLinker{}
+		app, err := platform.New("worker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mountConsoleSession(app, envFrom(env), linker, auth.IAPConfig{JWKSURL: jwks}); err != nil {
+			t.Fatalf("mountConsoleSession: %v", err)
+		}
+		app.RequireGateway(gatewayToken)
+		return app.Handler(), linker
+	}
+	call := func(h http.Handler, token string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"assertion": assertion})
+		req := httptest.NewRequest(http.MethodPost, iapRoute, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set(platform.HeaderGatewayToken, token)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("audiences set", func(t *testing.T) {
+		h, linker := boot(t, map[string]string{"IAP_AUDIENCES": iapOps})
+		for name, token := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
+			rec := call(h, token)
+			if rec.Code != http.StatusUnauthorized || rec.Header().Get(platform.HeaderGatewayGuard) != platform.GatewayGuardRefused {
+				t.Errorf("%s: status %d, guard header %q (%s); want the platform guard's 401", name, rec.Code, rec.Header().Get(platform.HeaderGatewayGuard), rec.Body.String())
+			}
+		}
+		if len(linker.emails) != 0 {
+			t.Fatalf("linker called %v without the gateway token, want no call", linker.emails)
+		}
+		rec := call(h, gatewayToken)
+		if rec.Code != http.StatusOK && rec.Code != http.StatusForbidden {
+			t.Errorf("with the gateway token: status %d (%s), want 200 or 403 from the handler", rec.Code, rec.Body.String())
+		}
+		if len(linker.emails) != 1 || linker.emails[0] != "sam@ascomply.test" {
+			t.Errorf("with the gateway token the linker saw %v, want the assertion's address once", linker.emails)
+		}
+	})
+
+	t.Run("audiences unset", func(t *testing.T) {
+		h, linker := boot(t, map[string]string{})
+		if rec := call(h, gatewayToken); rec.Code != http.StatusNotFound || len(linker.emails) != 0 {
+			t.Errorf("status %d, linker calls %v; want 404 and no call", rec.Code, linker.emails)
+		}
+	})
 }

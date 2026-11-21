@@ -14,10 +14,13 @@ name="caddy-headers-$$"
 pname="caddy-headers-policy-$$"
 sname="caddy-headers-strict-$$"
 p2name="caddy-headers-port-$$"
+iname="caddy-headers-iap-$$"
+stub="caddy-headers-stub-$$"
+net="caddy-headers-net-$$"
 site=$(mktemp -d)
 ssite=$(mktemp -d)
 policy=$(mktemp)
-trap 'docker rm -f "$name" "$sname" "$pname" "$p2name" >/dev/null 2>&1; docker rmi -f "$run_img" >/dev/null 2>&1; rm -rf "$site" "$ssite" "$policy"' EXIT INT TERM HUP
+trap 'docker rm -f "$name" "$sname" "$pname" "$p2name" "$iname" "$stub" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1; docker rmi -f "$run_img" >/dev/null 2>&1; rm -rf "$site" "$ssite" "$policy"' EXIT INT TERM HUP
 
 mkdir -p "$site/assets"
 echo '<!doctype html><title>SPA-INDEX</title>' >"$site/index.html"
@@ -233,6 +236,59 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: www.ascomply.com" "http:
 # The 404 must really be the maps rule, or the check above proves nothing.
 curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/assets/index-abc123.js.map" | grep -qx 404 \
   || { echo "FAIL: *.map did not answer 404"; fail=1; }
+# /auth/iap-session: the console hosts proxy a POST to the upstream; every other host and method stays on the SPA.
+# The stub (busybox nc) logs each request it receives to /tmp/req.log and answers 201 STUB-BODY.
+stubsh="$ssite/stub.sh"
+cat >"$stubsh" <<'STUB'
+#!/bin/sh
+cl=0
+{
+  echo REQ
+  while IFS= read -r line; do
+    line=$(printf '%s' "$line" | tr -d '\r')
+    [ -z "$line" ] && break
+    echo "$line"
+    case $line in [Cc]ontent-[Ll]ength:*) cl=${line#*: };; esac
+  done
+  echo BODY; head -c "$cl"; echo
+} >>/tmp/req.log
+printf 'HTTP/1.1 201 Created\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nSTUB-BODY'
+STUB
+chmod 755 "$stubsh"
+docker network create "$net" >/dev/null || exit 1
+docker run -d --name "$stub" --network "$net" --cap-drop ALL -v "$stubsh:/stub.sh:ro" --entrypoint sh "$run_img" \
+  -c ': >/tmp/req.log; while true; do nc -l -p 9000 -e /stub.sh; done' >/dev/null || exit 1
+docker run -d --name "$iname" --network "$net" --cap-drop ALL -p 127.0.0.1::8080 -e "IAP_SESSION_UPSTREAM=http://$stub:9000" \
+  -v "$root/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$site:/srv:ro" "$run_img" >/dev/null || exit 1
+iport=$(docker port "$iname" 8080/tcp | head -n1 | sed 's/.*://')
+for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$iport/health" && break; sleep 0.2; done
+sleep 1
+# iap <host> <method>: sends the request with a fresh stub log; sets iresp (status|body) and ilog (what the stub saw).
+iap() {
+  docker exec "$stub" sh -c ': >/tmp/req.log'
+  if [ "$2" = POST ]; then
+    iresp=$(curl -s -X POST -H "Host: $1" -H 'x-goog-iap-jwt-assertion: JWT-ABC' -H 'Cookie: sid=secret' -A 'UA-iap/1.0' \
+      --data 'payload-xyz' -w '|%{http_code}' "http://127.0.0.1:$iport/auth/iap-session")
+  else
+    iresp=$(curl -s -H "Host: $1" -w '|%{http_code}' "http://127.0.0.1:$iport/auth/iap-session")
+  fi
+  ilog=$(docker exec "$stub" cat /tmp/req.log | tr -d '\r')
+}
+for h in ops.ascomply.com sup.ascomply.com; do
+  iap "$h" POST
+  echo "iap-session $h -> ${iresp##*|}"
+  { [ "${iresp##*|}" = 201 ] && [ "${iresp%|*}" = STUB-BODY ]; } || { echo "FAIL iap-session $h: want the stub's 201 STUB-BODY, got '$iresp'"; fail=1; }
+  for w in 'POST /auth/iap-session HTTP/1.1' 'x-goog-iap-jwt-assertion: JWT-ABC' 'user-agent: UA-iap/1.0' "host: $stub:9000" payload-xyz; do
+    grep -Fxiq -- "$w" <<<"$ilog" || { echo "FAIL iap-session $h: upstream did not see '$w'"; fail=1; }
+  done
+  grep -iq '^cookie:' <<<"$ilog" && { echo "FAIL iap-session $h: Cookie reached the upstream"; fail=1; }
+done
+for c in 'console-pr-1-x.a.run.app POST' 'app.ascomply.com POST' 'ops.ascomply.com GET' 'sup.ascomply.com GET'; do
+  iap ${c% *} ${c#* }
+  echo "iap-session local $c -> ${iresp##*|}"
+  [ -z "$ilog" ] || { echo "FAIL iap-session $c: reached the upstream"; fail=1; }
+  case $iresp in *STUB-BODY*) echo "FAIL iap-session $c: answered by the upstream"; fail=1;; esac
+done
 # PORT=9090: the Caddyfile's listen port follows PORT, which the deployed container sets.
 docker run -d --name "$p2name" --cap-drop ALL -e PORT=9090 -p 127.0.0.1::9090 \
   -v "$root/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$site:/srv:ro" "$run_img" >/dev/null || exit 1

@@ -277,6 +277,7 @@ func TestRecoveryToken_BodyLimitsAndMethod(t *testing.T) {
 		{"form body", http.MethodPost, "application/x-www-form-urlencoded", "assertion=" + good, http.StatusUnsupportedMediaType},
 		{"text body with a valid assertion", http.MethodPost, "text/plain", string(valid), http.StatusUnsupportedMediaType},
 		{"no content type", http.MethodPost, "", string(valid), http.StatusUnsupportedMediaType},
+		{"assertion at the gateway cap is read, then refused as unverifiable", http.MethodPost, "application/json", `{"assertion":"` + strings.Repeat("a", auth.MaxIAPAssertionBytes) + `"}`, http.StatusUnauthorized},
 		{"9 KiB body", http.MethodPost, "application/json", `{"assertion":"` + strings.Repeat("a", 9<<10) + `"}`, http.StatusBadRequest},
 	}
 	for _, tc := range cases {

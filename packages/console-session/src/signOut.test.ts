@@ -317,11 +317,11 @@ describe('IAP mode (CSSO-01-06)', () => {
     expect(t.win.hrefWrites).toEqual([])
   })
 
-  it('expire_iap_landingRecordClearsAndReloads', async () => {
+  it('expire_iap_landingRecordKeptAndReloads', async () => {
     const t = setup(RECORD, () => reply(204))
     await expireConsole({ ...o, app: APP, target: 'support' })
     expect(t.net.calls).toHaveLength(0)
-    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.store.local.getItem(OPS_KEY)).not.toBeNull()
     expect(t.store.local.getItem(MARKER)).toBeNull()
     expect(t.win.reload).toHaveBeenCalledTimes(1)
     expect(t.win.hrefWrites).toEqual([])

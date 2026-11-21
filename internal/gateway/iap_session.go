@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -17,11 +19,14 @@ import (
 
 const (
 	iapAssertionHeader = "X-Goog-Iap-Jwt-Assertion"
-	maxAssertionBytes  = 8 << 10
+	maxAssertionBytes  = auth.MaxIAPAssertionBytes
 	iapNoIdentity      = "no verified Google identity"
 	iapNoStaff         = "no staff account"
 	iapConsoleDown     = "console sign-in is unavailable"
 )
+
+// iapDeadline bounds the whole handler under the browser's 15 s abort, so no event is written after the browser gave up.
+var iapDeadline = 12 * time.Second
 
 // IAPSessionHandler answers POST /auth/iap-session: a verified IAP assertion becomes a hand-off code
 // whose answer is a staff session for the account with that email. The assertion alone selects the account.
@@ -38,6 +43,9 @@ func IAPSessionHandler(v *auth.IAPVerifier, worker *url.URL, workerClient *http.
 		if !jsonOnly(w, r) {
 			return
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), iapDeadline)
+		defer cancel()
+		r = r.WithContext(ctx)
 		var in struct {
 			State string `json:"state"`
 		}
@@ -80,6 +88,9 @@ func IAPSessionHandler(v *auth.IAPVerifier, worker *url.URL, workerClient *http.
 			case status == http.StatusForbidden:
 				noStaff()
 				return
+			case status == http.StatusUnauthorized: // the assertion expired between the two verifications
+				writeError(w, http.StatusUnauthorized, iapNoIdentity)
+				return
 			case status != http.StatusOK || hash == "":
 				log.WarnContext(r.Context(), "iap session: worker refused", slog.Int("upstream_status", status))
 				writeError(w, http.StatusBadGateway, iapConsoleDown)
@@ -109,12 +120,17 @@ func IAPSessionHandler(v *auth.IAPVerifier, worker *url.URL, workerClient *http.
 			break
 		}
 
-		// ceiling: each mint opens one GoTrue session; a non-staff one is ended at once, a staff one expires with its refresh token.
+		// ceiling: each mint opens one GoTrue session, ended only if non-staff; revisit if live sessions pile up.
 		if !hasStaffClaim(sess.AccessToken) {
 			if _, _, err := postGoTrueBearer(r.Context(), gotrue, logoutURL.String(), sess.AccessToken, gotrueAddress(r)); err != nil {
 				log.WarnContext(r.Context(), "iap session: ending the non-staff session failed", slog.String("error", err.Error()))
 			}
 			noStaff()
+			return
+		}
+		if ctx.Err() != nil {
+			log.WarnContext(r.Context(), "iap session: deadline passed before the code was stored")
+			writeError(w, http.StatusBadGateway, iapConsoleDown)
 			return
 		}
 		answer, _ := json.Marshal(map[string]string{"access_token": sess.AccessToken, "refresh_token": sess.RefreshToken}) // cannot fail

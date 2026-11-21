@@ -16,6 +16,9 @@ const (
 	IAPJWKSURL = "https://www.gstatic.com/iap/verify/public_key-jwk"
 	IAPIssuer  = "https://cloud.google.com/iap"
 
+	// MaxIAPAssertionBytes caps the X-Goog-Iap-Jwt-Assertion header the gateway forwards and the worker re-verifies.
+	MaxIAPAssertionBytes = 8 << 10
+
 	iapMaxEmail  = 254
 	iapIATLeeway = 30 * time.Second
 )

@@ -23,15 +23,11 @@ export function jwt(claims: Record<string, unknown>): string {
   return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url(claims)}.c2lnbmF0dXJl`
 }
 
-export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string => jwt({ sub: 'staff-1', exp: expSec, tag, app_metadata: { staff: true } })
+export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
+  jwt({ sub: 'staff-1', exp: expSec, tag, app_metadata: { staff: true } })
 
 export const customerToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
-  jwt({
-    sub: 'cust-1',
-    exp: expSec,
-    tag,
-    app_metadata: { tenant_id: 'tenant-1' },
-  })
+  jwt({ sub: 'cust-1', exp: expSec, tag, app_metadata: { tenant_id: 'tenant-1' } })
 
 // The current records: `{v:3, token}` (landing) and `{v:3, token, from:"app"}` (borrowed).
 export const v3Raw = (token: string): string => JSON.stringify({ v: 3, token })

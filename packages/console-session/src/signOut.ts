@@ -9,11 +9,7 @@ const REVOKE_TIMEOUT_MS = 5000
 // 'unreached': no answer or a 403 (no Set-Cookie), so the cookie may still be on the device.
 export async function postSignOut(gateway: string): Promise<'revoked' | 'failed' | 'unreached'> {
   try {
-    await sessionFetch<string>(`${gateway}/auth/sign-out`, {
-      method: 'POST',
-      responseType: 'text',
-      signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
-    })
+    await sessionFetch<string>(`${gateway}/auth/sign-out`, { method: 'POST', responseType: 'text', signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS) })
     return 'revoked'
   } catch (e) {
     console.warn('[console-session] sign-out request failed:', e)
@@ -61,8 +57,8 @@ export async function expireConsole(o: {
     return
   }
   if (!o.iap) return signOutConsole(o)
-  // No signed-out marker: the next boot mints. A lapse right after a mint makes it show "failed" instead.
-  clearConsoleSession(o.storageKey)
+  // No signed-out marker and the record stays: the next boot renews through the cookie and mints only when it is refused.
+  // A lapse right after a mint arms the guard, so that mint shows "failed" instead; a renewal disarms it.
   try {
     const at = Number(sessionStorage.getItem(iapMintedAtKey(o.storageKey)))
     if (at > 0 && Date.now() - at < IAP_FRESH_MS) sessionStorage.setItem(iapExpiredFreshKey(o.storageKey), '1')

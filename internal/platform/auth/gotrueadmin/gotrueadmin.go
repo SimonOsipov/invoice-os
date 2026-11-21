@@ -169,8 +169,7 @@ type RecoveryLink struct {
 // GenerateRecoveryLink asks GoTrue for a recovery link. The type is fixed: "recovery" never creates an account.
 // 404, 400 and 422 are ErrNoAccount; any other failure is a *StatusError with the status only.
 //
-// ceiling: GoTrue keeps one recovery token per account, so this overwrites a pending password-reset token; the
-// same-minute collision is rare and the user can ask again.
+// ceiling: one recovery token per account, so a mint overwrites a pending reset token; revisit if users report dead reset links.
 func (c *Client) GenerateRecoveryLink(ctx context.Context, email string) (RecoveryLink, error) {
 	body, err := json.Marshal(map[string]string{"type": "recovery", "email": email})
 	if err != nil {

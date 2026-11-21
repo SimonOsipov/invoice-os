@@ -14,7 +14,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 )
 
-const maxBody = 8 << 10
+// The JSON wrapper rides on top of the largest assertion the gateway forwards.
+const maxBody = auth.MaxIAPAssertionBytes + 1<<10
 
 // RecoveryLinker mints a recovery link for an address.
 type RecoveryLinker interface {

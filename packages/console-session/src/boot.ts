@@ -1,6 +1,6 @@
 import { ApiError, sessionFetch } from '@invoice-os/api-client/client'
 
-import { clearSignedOut, isSignedOut, mintFromIap } from './iap'
+import { clearExpiredFresh, clearSignedOut, isSignedOut, mintFromIap } from './iap'
 import { postSignOut } from './signOut'
 import { clearConsoleSession, decodeJwtPayload, isStaffToken, loadConsoleSession, nonEmpty, saveConsoleSession, type ConsoleSession } from './session'
 import {
@@ -108,19 +108,11 @@ export async function resolveConsoleBoot(o: {
   // A usable landing session on the support console stays: StaffGate strips the param and the stored record renews.
   const keepsLanding = auth === 'app' && target === 'support' && loadConsoleSession(storageKey)?.borrowed === false
   if (!keepsLanding && auth === 'app' && app !== null) {
-    return {
-      kind: 'leave',
-      url: appStartUrl(app, mintSignInState(now), target),
-      replace: true,
-    }
+    return { kind: 'leave', url: appStartUrl(app, mintSignInState(now), target), replace: true }
   }
   if (!iap && !keepsLanding && (auth === 'start' || auth === 'app')) {
     // replace drops the ?auth= entry so Back from the landing skips it.
-    return {
-      kind: 'leave',
-      url: landingSignInUrl(landing, mintSignInState(now), target, 'ready'),
-      replace: true,
-    }
+    return { kind: 'leave', url: landingSignInUrl(landing, mintSignInState(now), target, 'ready'), replace: true }
   }
 
   const state = code === null ? null : consumeSignInState(now)
@@ -152,15 +144,14 @@ export async function resolveConsoleBoot(o: {
       return iap ? mint() : leave()
     }
     if (app === null) return iap ? mint() : leave()
-    return {
-      kind: 'leave',
-      url: appStartUrl(app, ensureSignInState(now), target),
-      replace: true,
-    }
+    return { kind: 'leave', url: appStartUrl(app, ensureSignInState(now), target), replace: true }
   }
   try {
     const s = await renewConsoleSession(gateway, stored.legacyRefreshToken)
-    if (isStaffToken(s.token)) return open(s)
+    if (isStaffToken(s.token)) {
+      if (iap) clearExpiredFresh(storageKey)
+      return open(s)
+    }
     clearConsoleSession(storageKey)
     return iap ? mint() : leave('not-staff')
   } catch (e) {

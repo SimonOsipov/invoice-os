@@ -440,6 +440,9 @@ func iapFailures() []iapFailure {
 		{name: "worker 502", upstream: true, setup: func(_ *testing.T, rg *iapRig) {
 			rg.worker = func(int) (int, string) { return 502, `{"error":"console sign-in is unavailable"}` }
 		}, status: 502, msg: msgConsoleDown},
+		{name: "worker 401 (assertion expired)", setup: func(_ *testing.T, rg *iapRig) {
+			rg.worker = func(int) (int, string) { return 401, `{"error":"no verified Google identity"}` }
+		}, status: 401, msg: msgNoIdentity},
 		{name: "worker unreachable", upstream: true, setup: func(t *testing.T, rg *iapRig) { rg.workerURL = closedURL(t) },
 			status: 502, msg: msgConsoleDown},
 		{name: "verify 500", upstream: true, setup: func(_ *testing.T, rg *iapRig) {
@@ -496,6 +499,25 @@ func TestIAPSession_UpstreamFailures(t *testing.T) {
 	}
 	if n != 6 {
 		t.Fatalf("%d upstream cases, want 6 (worker 502, unreachable, verify 500, 429, second otp_expired, store full)", n)
+	}
+}
+
+func TestIAPSession_DeadlineWritesNoEventAndStoresNoCode(t *testing.T) {
+	old := iapDeadline
+	iapDeadline = 50 * time.Millisecond
+	t.Cleanup(func() { iapDeadline = old })
+	rg := newIAPRig(t)
+	rg.worker = func(int) (int, string) {
+		time.Sleep(300 * time.Millisecond)
+		return http.StatusOK, `{"token_hash":"` + iapHash(1) + `"}`
+	}
+
+	rec, state := rg.mint()
+
+	requireRefusal(t, rec, http.StatusBadGateway, msgConsoleDown)
+	rg.events.requireNames(t)
+	if got := rg.store.LiveForTest(); got != 0 {
+		t.Errorf("%d codes stored after the deadline, want none (state %s)", got, state)
 	}
 }
 

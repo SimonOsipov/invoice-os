@@ -6,7 +6,7 @@ paths:
 # ERP connectors
 
 - Build connectors only through `erp.RegistryFromEnv`.
-- Run the fake connector on a preview and the nightly; locally only with `ERP_FAKE=true`. Refuse to boot a hosted deployment with `ERP_FAKE` set. Name the variable in a boot error, never its value.
+- Run the fake connector on a preview and the nightly; locally only with `ERP_FAKE=true`. Refuse to boot a hosted deployment with `ERP_FAKE` set to true. Name the variable in a boot error, never its value.
 - Never let a request choose the connector mode.
 - Check the admin role as the first statement of every ERP connection write transaction.
 - Let every member who can see the client list its connections. Scope the list by the seam's client scope only; answer a client outside it 404.

@@ -60,7 +60,7 @@ func TestRegistry_SystemsOfAnEmptyRegistryIsEmptyNotNil(t *testing.T) {
 	}
 }
 
-// Nothing calls most of these methods through the interface until ERPF-03 to ERPF-06, so a
+// Nothing calls most of these methods through the interface until later stories, so a
 // removed or retyped one would otherwise go unseen.
 func TestConnector_DeclaresItsTenMethods(t *testing.T) {
 	typ := reflect.TypeOf((*Connector)(nil)).Elem()

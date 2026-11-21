@@ -36,9 +36,8 @@ func (*Fake) Validate(_ context.Context, _ Credentials, scope string) error {
 	return nil
 }
 
-// ListChanged pages the company's invoices in seed order. The cursor is a 4-byte
-// big-endian offset followed by the scope it was issued for, so another company's
-// cursor is refused; the final cursor returns nothing and itself.
+// ListChanged pages the company's invoices in seed order. The cursor is a 4-byte offset plus
+// its scope, so another company's cursor is refused; the final cursor returns nothing and itself.
 func (*Fake) ListChanged(_ context.Context, _ Credentials, scope string, cursor []byte) (Changes, error) {
 	co, ok := fakeSeed[scope]
 	if !ok {

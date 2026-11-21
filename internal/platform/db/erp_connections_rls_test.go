@@ -1,7 +1,4 @@
 // Storage suite for erp_grants and erp_connections: shape, RLS, grants, constraints, cascades.
-//
-// Rows are seeded per test through h.super into throwaway tenants, never in the shared harness.seed().
-// A skip is a failure under the CI gate.
 package db_test
 
 import (

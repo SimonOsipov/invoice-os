@@ -34,7 +34,7 @@ func ModeFromEnv(getenv func(string) string, posture platform.PostureKind) (Mode
 	}
 	switch {
 	case fake && posture == platform.PostureHosted:
-		return ModeOff, errors.New("erp: " + flagFake + " must not be set on a hosted deployment")
+		return ModeOff, errors.New("erp: " + flagFake + " must not be enabled on a hosted deployment")
 	case fake:
 		return ModeFake, nil
 	}

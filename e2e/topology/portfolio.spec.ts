@@ -514,7 +514,8 @@ test('search: a TIN fragment finds the client', async ({ page }) => {
   const tin = freshTin()
   const apiToken = await login(PERSONAS.A)
   const entity = await createEntity(apiToken, { name: `${token.toUpperCase()} Textiles Ltd`, tin })
-  const frag = tin.slice(-8)
+  // The TIN minus its check digit: the run seed plus this process's counter, which no other client shares.
+  const frag = tin.slice(0, -1)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await goToClients(page)

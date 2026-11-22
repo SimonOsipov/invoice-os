@@ -6,9 +6,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { fmtDateTime } from '../lib/format'
 import {
-  CONNECTORS_BAD_CONSENT_URL,
   CONNECTORS_ROLE_FAILED,
-  disconnectQuestion,
   type ErpConnectionWire,
   type ErpListing,
 } from '../lib/erpConnections'
@@ -336,7 +334,7 @@ describe('connect', () => {
     await click(connectBtn(rowOf('fake'))!)
     expect(tab!.close).toHaveBeenCalled()
     expect(tab!.location.href).toBe('')
-    expect(screen.getByTestId('erp-connectors-flash').textContent).toBe(CONNECTORS_BAD_CONSENT_URL)
+    expect(screen.getByTestId('erp-connectors-flash').textContent).toBe('The sign-in link was not valid.')
   })
 
   it('connectorsTab_aBlockedTabShowsTheLink', async () => {
@@ -395,7 +393,7 @@ describe('disconnect', () => {
     render(<ConnectorsView ctx={mkCtx(f)} />)
     await screen.findByText('CONNECTED')
     await click(disconnectBtn(rowOf('fake'))!)
-    expect(screen.getByTestId('erp-disconnect-confirm').textContent).toContain(disconnectQuestion('Fake ERP'))
+    expect(screen.getByTestId('erp-disconnect-confirm').textContent).toContain('Disconnect Fake ERP? Sync stops and its sign-in is deleted. Invoices already pulled stay.')
     expect(posts(f)).toHaveLength(0)
     await click(screen.getByTestId('erp-disconnect-keep'))
     expect(screen.queryByTestId('erp-disconnect-confirm')).toBeNull()

@@ -44,8 +44,9 @@ func (IngestArgs) Kind() string { return "erp.ingest" }
 
 func (a IngestArgs) Tenant() string { return a.TenantID }
 
+// InsertOpts omits completed: once per revision is the idempotency key's job, and a completed job must not block a relist after an epoch bump.
 func (IngestArgs) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 8, UniqueOpts: river.UniqueOpts{ByArgs: true}}
+	return river.InsertOpts{MaxAttempts: 8, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: inFlightStates}}
 }
 
 // IngestKey is the EnqueueTx dedupe key of one ingest. Each field is length-prefixed before

@@ -220,9 +220,11 @@ func erpConstraintsWant(table string) []string {
 }
 
 // erpShapeProblems compares the live columns of both tables to erpShape.
-func erpShapeProblems(q erpQuerier) []string {
+func erpShapeProblems(q erpQuerier) []string { return erpShapeProblemsOf(q, erpShape) }
+
+func erpShapeProblemsOf(q erpQuerier, shape map[string]map[string]erpCol) []string {
 	var problems []string
-	for table, want := range erpShape {
+	for table, want := range shape {
 		rows, err := q.Query(context.Background(),
 			`SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
 		  WHERE table_schema = 'public' AND table_name = $1`, table)
@@ -817,22 +819,34 @@ func TestRLS_ErpTablesValueChecks(t *testing.T) {
 }
 
 // A missing privilege and a policy refusal are both 42501 on the wire, so the catalog answers here.
+// Column grants are listed per column: a table-level grant would also answer true to every column probe.
 func TestRLS_ErpTablesGrantMatrix(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 	requireErpTables(t, h.super)
 
 	cases := []struct {
-		table string
-		privs map[string]bool
-		acl   string
+		table      string
+		privs      map[string]bool
+		acl        string
+		updateCols []string // the columns invoice_app may UPDATE through a column grant, sorted
 	}{
 		{"erp_connections", map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": false, "TRUNCATE": false},
-			"invoice_app:INSERT,invoice_app:SELECT,invoice_app:UPDATE"},
+			"invoice_app:INSERT,invoice_app:SELECT,invoice_app:UPDATE", nil},
 		{"erp_grants", map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": false, "DELETE": true, "TRUNCATE": false},
-			"invoice_app:DELETE,invoice_app:INSERT,invoice_app:SELECT"},
+			"invoice_app:DELETE,invoice_app:INSERT,invoice_app:SELECT", []string{"expires_at", "updated_at", "version"}},
+		{"erp_oauth_states", map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": false, "DELETE": true, "TRUNCATE": false},
+			"invoice_app:DELETE,invoice_app:INSERT,invoice_app:SELECT", []string{"used_at"}},
 	}
 	for _, c := range cases {
+		var reg *string
+		if err := h.super.QueryRow(ctx, `SELECT to_regclass($1)::text`, "public."+c.table).Scan(&reg); err != nil {
+			t.Fatalf("to_regclass(public.%s): %v", c.table, err)
+		}
+		if reg == nil {
+			t.Errorf("public.%s does not exist — the erp_token_custody migration is not applied yet", c.table)
+			continue
+		}
 		for priv, want := range c.privs {
 			var got bool
 			if err := h.super.QueryRow(ctx, `SELECT has_table_privilege('invoice_app', $1, $2)`, "public."+c.table, priv).Scan(&got); err != nil {
@@ -866,11 +880,66 @@ func TestRLS_ErpTablesGrantMatrix(t *testing.T) {
 		if got := strings.Join(acl, ","); got != c.acl {
 			t.Errorf("%s non-owner ACL = %q, want %q", c.table, got, c.acl)
 		}
-		var colACLs int
-		if err := h.super.QueryRow(ctx,
-			`SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND attacl IS NOT NULL`, "public."+c.table,
-		).Scan(&colACLs); err != nil || colACLs != 0 {
-			t.Errorf("%s columns with their own ACL = %d (err %v), want 0", c.table, colACLs, err)
+
+		// Column ACLs: exactly the UPDATE columns, to invoice_app and nobody else.
+		crows, err := h.super.Query(ctx,
+			`SELECT att.attname || ':' || coalesce(r.rolname, 'PUBLIC') || ':' || a.privilege_type
+			   FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+			   LEFT JOIN pg_roles r ON r.oid = a.grantee
+			  WHERE att.attrelid = to_regclass($1) AND att.attnum > 0 AND att.attacl IS NOT NULL
+			  ORDER BY 1`, "public."+c.table)
+		if err != nil {
+			t.Fatalf("aclexplode(attacl of %s): %v", c.table, err)
+		}
+		var colACL []string
+		for crows.Next() {
+			var g string
+			if err := crows.Scan(&g); err != nil {
+				crows.Close()
+				t.Fatalf("scan column acl: %v", err)
+			}
+			colACL = append(colACL, g)
+		}
+		crows.Close()
+		var wantColACL []string
+		for _, col := range c.updateCols {
+			wantColACL = append(wantColACL, col+":invoice_app:UPDATE")
+		}
+		if !slices.Equal(colACL, wantColACL) {
+			t.Errorf("%s column ACLs = %v, want %v", c.table, colACL, wantColACL)
+		}
+
+		// Per column: UPDATE only where granted (a table-level UPDATE grants every column), SELECT and INSERT everywhere.
+		var cols []string
+		crow, err := h.super.Query(ctx, `SELECT attname FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY 1`, "public."+c.table)
+		if err != nil {
+			t.Fatalf("columns of %s: %v", c.table, err)
+		}
+		for crow.Next() {
+			var n string
+			if err := crow.Scan(&n); err != nil {
+				crow.Close()
+				t.Fatalf("scan column: %v", err)
+			}
+			cols = append(cols, n)
+		}
+		crow.Close()
+		if len(cols) == 0 {
+			t.Fatalf("%s has no columns in pg_attribute", c.table)
+		}
+		for _, col := range cols {
+			for priv, want := range map[string]bool{
+				"SELECT": true, "INSERT": true,
+				"UPDATE": c.privs["UPDATE"] || slices.Contains(c.updateCols, col),
+			} {
+				var got bool
+				if err := h.super.QueryRow(ctx, `SELECT has_column_privilege('invoice_app', $1, $2, $3)`, "public."+c.table, col, priv).Scan(&got); err != nil {
+					t.Fatalf("has_column_privilege(invoice_app, %s.%s, %s): %v", c.table, col, priv, err)
+				}
+				if got != want {
+					t.Errorf("has_column_privilege(invoice_app, %s.%s, %s) = %v, want %v", c.table, col, priv, got, want)
+				}
+			}
 		}
 	}
 }
@@ -896,23 +965,55 @@ func TestRLS_ErpConnectionsDeleteRefused(t *testing.T) {
 	}
 }
 
-func TestRLS_ErpGrantsUpdateRefused(t *testing.T) {
+// The refresh compare-and-swap may move version, expires_at and updated_at; secret_ref is written at insert only.
+func TestRLS_ErpGrantsUpdateLimitedToTheSwapColumns(t *testing.T) {
 	h := requireHarness(t)
-	a := erpTenant(t)
-	id := erpSeedGrant(t, a)
+	ctx := context.Background()
+	a, b := erpTenant(t), erpTenant(t)
+	id, bid := erpSeedGrant(t, a), erpSeedGrant(t, b)
 
+	// The swap columns: one row, and the counter moved.
+	var n int64
 	err := erpApp(a, nil, func(tx pgx.Tx) error {
-		_, e := tx.Exec(context.Background(), `UPDATE erp_grants SET version = version + 1 WHERE id = $1`, id)
+		tag, e := tx.Exec(ctx, `UPDATE erp_grants SET version = version + 1, expires_at = now(), updated_at = now() WHERE id = $1`, id)
+		n = tag.RowsAffected()
 		return e
 	})
 	failIfErpUndefined(t, "UPDATE of a grant", err)
-	erpWantErr(t, err, "42501", "", "invoice_app updating its own grant")
-	if msg := pgMessage(err); !strings.Contains(msg, "permission denied for table erp_grants") {
-		t.Errorf("UPDATE refusal message = %q, want the missing table privilege, not a policy", msg)
+	if err != nil || n != 1 {
+		t.Fatalf("the swap UPDATE of the own grant = %d rows (err %v), want 1", n, err)
 	}
 	var version int64
-	if err := h.super.QueryRow(context.Background(), `SELECT version FROM erp_grants WHERE id = $1`, id).Scan(&version); err != nil || version != 1 {
-		t.Errorf("grant version after the refused UPDATE = %d (err %v), want 1", version, err)
+	if err := h.super.QueryRow(ctx, `SELECT version FROM erp_grants WHERE id = $1`, id).Scan(&version); err != nil || version != 2 {
+		t.Errorf("grant version after the swap = %d (err %v), want 2", version, err)
+	}
+
+	// Every other column: the privilege refuses, not a policy.
+	for _, set := range []string{
+		"secret_ref = 'x'", "tenant_id = '" + b + "'", "id = gen_random_uuid()", "system = 'other'", "kind = 'api_key'", "created_at = now()",
+	} {
+		err := erpApp(a, nil, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `UPDATE erp_grants SET `+set+` WHERE id = $1`, id)
+			return e
+		})
+		erpWantErr(t, err, "42501", "", "invoice_app running UPDATE erp_grants SET "+set)
+		if msg := pgMessage(err); !strings.Contains(msg, "permission denied for table erp_grants") {
+			t.Errorf("UPDATE SET %s refusal message = %q, want the missing column privilege, not a policy", set, msg)
+		}
+	}
+	var secretRef *string
+	if err := h.super.QueryRow(ctx, `SELECT secret_ref FROM erp_grants WHERE id = $1`, id).Scan(&secretRef); err != nil || secretRef != nil {
+		t.Errorf("grant secret_ref after the refused UPDATEs = %v (err %v), want NULL", secretRef, err)
+	}
+
+	// Another tenant's grant: the policy hides it, so the swap moves no row.
+	err = erpApp(a, nil, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `UPDATE erp_grants SET version = version + 1 WHERE id = $1`, bid)
+		n = tag.RowsAffected()
+		return e
+	})
+	if err != nil || n != 0 {
+		t.Errorf("the swap UPDATE of another tenant's grant = %d rows (err %v), want 0", n, err)
 	}
 }
 
@@ -1029,6 +1130,7 @@ func erpPublicTables(t *testing.T, q erpQuerier, phase string) []string {
 
 // The shipped Down drops exactly the two tables and the shipped Up rebuilds them.
 // Runs on the migrator inside a transaction that is always rolled back, so no other test sees the tables vanish.
+// The token-custody migration is undone first and redone last: erp_oauth_states references erp_connections.
 func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -1046,6 +1148,13 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 	tx := migratorTx(t, ctx)
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
 		t.Fatalf("set lock_timeout: %v", err)
+	}
+	whole := erpPublicTables(t, tx, "before any Down")
+	custody := erpCustodyMigration(t)
+	if custody != "" {
+		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, custody, "Down")); err != nil {
+			t.Fatalf("Down body of %s failed: %v", custody, err)
+		}
 	}
 	before := erpPublicTables(t, tx, "before the Down")
 	for _, table := range []string{"erp_grants", "erp_connections"} {
@@ -1099,11 +1208,17 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 		t.Errorf("after Down then Up: invoice_app holds the Design's verbs = %v (err %v), want true", grants, err)
 	}
 
+	if custody != "" {
+		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, custody, "Up")); err != nil {
+			t.Fatalf("Up body of %s failed: %v", custody, err)
+		}
+	}
+
 	// Nothing committed: once rolled back, the tables the suite already relies on are exactly as before.
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
-	if got := erpPublicTables(t, h.super, "after the rollback"); !slices.Equal(got, before) {
-		t.Errorf("public tables after the rollback = %v, want the %v seen before the Down", got, before)
+	if got := erpPublicTables(t, h.super, "after the rollback"); !slices.Equal(got, whole) {
+		t.Errorf("public tables after the rollback = %v, want the %v seen before the Down", got, whole)
 	}
 }

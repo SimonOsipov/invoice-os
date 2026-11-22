@@ -185,19 +185,6 @@ func main() {
 	aw := &accountevents.AuditWorker{Pool: pool}
 	ndw := &accountevents.NewDeviceWorker{Pool: pool, Sender: nl.Sender, Logger: app.Logger}
 
-	q, err := queue.New(pool, queue.Config{
-		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw),
-		Logger:  app.Logger,
-	})
-	if err != nil {
-		platform.Fatal(app.Logger, "worker: queue: %v", err)
-	}
-	sw.Queue, pw.Queue, xw.River = q, q, q.River()
-	xbw.River = q.River()
-	rw.Store = notifications.NewStore(pool, q.River())
-	app.AddBackgroundWorker(q)
-
 	erpReg, err := erp.RegistryFromEnv(os.Getenv)
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)
@@ -206,6 +193,25 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
+	erpw := &erp.Workers{
+		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: erpReg, Secrets: erpSecrets, Logger: app.Logger},
+		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
+	}
+
+	q, err := queue.New(pool, queue.Config{
+		Queues:  queueConfigs(cw != nil),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw, erpw),
+		Logger:  app.Logger,
+	})
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: queue: %v", err)
+	}
+	sw.Queue, pw.Queue, xw.River = q, q, q.River()
+	erpw.Refresh.Queue = q
+	xbw.River = q.River()
+	rw.Store = notifications.NewStore(pool, q.River())
+	app.AddBackgroundWorker(q)
+
 	erpStore := erp.NewStore(pool, erpReg, erpSecrets, q).WithSecretScope(erp.SecretScopeFromEnv(os.Getenv))
 
 	// Each periodic task runs in one worker instance only.
@@ -424,7 +430,7 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker, erpw *erp.Workers) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
@@ -433,6 +439,7 @@ func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *ex
 	workspacepurge.AddPurgeTo(bundle, pjw)
 	accountevents.AddAuditTo(bundle, aw)
 	accountevents.AddNewDeviceTo(bundle, ndw)
+	erp.AddTo(bundle, erpw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

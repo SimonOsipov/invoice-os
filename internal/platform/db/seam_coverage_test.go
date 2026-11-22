@@ -772,6 +772,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
 	{file: "internal/erp/complete.go", fn: "settleTx2Error"},                                // part of the callback: the tenant comes from the state, there is no request identity to gate
 	{file: "internal/erp/complete.go", fn: "Complete"},                                      // the callback names its tenant in the state; the gateway-token route carries no identity to gate
+	{file: "internal/erp/webhook.go", fn: "Receive"},                                        // a verified vendor webhook carries no identity; the tenant comes from erp_webhook_targets rows
 	{file: "internal/erp/refresh.go", fn: "refresh"},                                        // the refresh River job; the tenant comes from its args and there is no request identity to gate
 	{file: "internal/erp/refresh.go", fn: "claim"},                                          // the refresh River job; the tenant comes from its args and there is no request identity to gate
 	{file: "internal/erp/refresh.go", fn: "reconsent"},                                      // the refresh River job; the tenant comes from its args and there is no request identity to gate
@@ -1244,6 +1245,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/send-again":                              {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                             {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                                {verdict: scCovered},
+	"POST /internal/erp/webhooks/{system}":                           {verdict: scExempt, reason: "gateway-token call with no caller; the connector verifies the vendor signature and erp_webhook_targets names each tenant"},
 	"POST /internal/erp/callback":                                    {verdict: scExempt, reason: "gateway-token call with no caller; the state names the tenant and the connection"},
 	"POST /internal/public-checks/run":                               {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /internal/public-checks/mapping":                           {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},

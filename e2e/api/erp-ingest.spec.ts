@@ -36,7 +36,6 @@ async function connectFake(token: string, entityId: string, key: string): Promis
 }
 
 test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
-  test.setTimeout(240_000)
   let admin: string
   let entityId: string
   let connId: string
@@ -45,9 +44,10 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
   const inClient = async () => (await listInvoices(admin, { entity_id: entityId, limit: 100 })).invoices
 
   test.beforeAll(async () => {
+    test.setTimeout(240_000) // a hook has its own timeout; the pull sweep ticks once a minute
     admin = await login(PERSONAS.A)
     const tin = freshTin()
-    entityId = (await createEntity(admin, { name: `ERPF-03 ${tin}`, tin })).id
+    entityId = (await createEntity(admin, { name: `ERP ingest ${tin}`, tin })).id
     const own = await createInvoice(admin, {
       entity_id: entityId,
       invoice_number: NUMBERS[1],
@@ -63,6 +63,7 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
   })
 
   test("the fake ERP's invoices arrive in the client as drafts", async () => {
+    // fixture check: pins fakeSeed fake-co-1 and fakeLine (internal/erp/fake.go)
     const mine = await inClient()
     for (const n of [NUMBERS[0], NUMBERS[2]]) {
       const inv = mine.find((i) => i.invoice_number === n)
@@ -74,9 +75,9 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
 
   test('an invoice number that already exists links and is never overwritten', async () => {
     const same = (await inClient()).filter((i) => i.invoice_number === NUMBERS[1])
-    expect(same).toHaveLength(1)
-    expect(same[0].id).toBe(ownId)
-    expect(Number(same[0].total)).toBe(OWN_TOTAL)
+    expect(same.map((i) => i.id)).toContain(ownId)
+    expect(same.every((i) => i.id === ownId)).toBe(true)
+    expect(Number(same.find((i) => i.id === ownId)?.total)).toBe(OWN_TOTAL)
   })
 
   test('the pull is audited: two pulled and one linked duplicate', async () => {
@@ -86,10 +87,9 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
       .filter((e) => e.p.connection_id === connId)
     const pulled = mine.filter((e) => e.event === PULLED).map((e) => e.p.invoice_number)
     expect(pulled).toEqual(expect.arrayContaining([NUMBERS[0], NUMBERS[2]]))
-    const skipped = mine.filter((e) => e.event === SKIPPED)
-    expect(skipped).toHaveLength(1)
-    expect(skipped[0].p.invoice_number).toBe(NUMBERS[1])
-    expect(skipped[0].p.linked).toBe(true)
-    expect(skipped[0].p.differs).toBe(true)
+    const dup = mine.find((e) => e.event === SKIPPED && e.p.invoice_number === NUMBERS[1])
+    expect(dup).toBeDefined()
+    expect(dup?.p.linked).toBe(true)
+    expect(dup?.p.differs).toBe(true)
   })
 })

@@ -44,6 +44,7 @@ type stubValidator struct {
 	errs       []error // one per call, consumed in order; nil entries succeed
 	failAlways error
 	blocking   bool // stamp a blocking violation, so the invoice stays a draft
+	skipFirst  bool // leave the first call's invoices unvalidated, as a gate that lost its rule race twice does
 }
 
 func (v *stubValidator) callCount() int {
@@ -76,9 +77,13 @@ func (v *stubValidator) ValidateBatch(ctx context.Context, invs []invoice.Invoic
 		err = v.failAlways
 	}
 	blocking := v.blocking
+	skip := v.skipFirst && len(v.calls) == 1
 	v.mu.Unlock()
 	if err != nil {
 		return invoice.BatchOutcome{}, err
+	}
+	if skip {
+		return invoice.BatchOutcome{Unvalidated: ids}, nil
 	}
 
 	var ruleSet string

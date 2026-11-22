@@ -212,8 +212,6 @@ func wantDocIDs(t *testing.T, js []queuedIngest, want ...string) {
 	}
 }
 
-// --- AC-1 -----------------------------------------------------------------------------
-
 func TestPullArgs_UniquePerConnectionUntilCompleted(t *testing.T) {
 	p := newPull(t, keyOne)
 	other := p.addConnection(p.addClient("second client"), "fake-co-2")
@@ -251,8 +249,6 @@ func TestPullArgs_UniquePerConnectionUntilCompleted(t *testing.T) {
 		t.Error("a pull was skipped as a duplicate of a completed one")
 	}
 }
-
-// --- AC-2 -----------------------------------------------------------------------------
 
 func TestPull_EnqueuesOneIngestPerRefAndSavesTheCursor(t *testing.T) {
 	p := newPull(t, keyOne)
@@ -391,8 +387,6 @@ func TestPull_StopsWhenTheConnectionChangesMidPull(t *testing.T) {
 	}
 }
 
-// --- AC-3 -----------------------------------------------------------------------------
-
 func TestPull_SameRevisionIsEnqueuedOnce(t *testing.T) {
 	p := newPull(t, keyOne)
 	p.mustPull()
@@ -460,8 +454,6 @@ func TestPull_VoidAtTheSameRevisionReachesTheDocument(t *testing.T) {
 	}
 }
 
-// --- AC-4 -----------------------------------------------------------------------------
-
 func TestPull_ConnectorErrorKeepsCommittedPages(t *testing.T) {
 	p := newPull(t, keyOne)
 	p.onList = func(call int, cursor []byte) (Changes, error) {
@@ -488,8 +480,6 @@ func TestPull_ConnectorErrorKeepsCommittedPages(t *testing.T) {
 		t.Errorf("cursor/last_sync_at = %q/%v, want p1 and a time", cursor, lastSync)
 	}
 }
-
-// --- AC-5 -----------------------------------------------------------------------------
 
 func TestPull_SyncStoppedListsNothing(t *testing.T) {
 	cases := []struct {
@@ -549,8 +539,6 @@ func TestPull_SyncStoppedListsNothing(t *testing.T) {
 		})
 	}
 }
-
-// --- AC-6 -----------------------------------------------------------------------------
 
 type sweepEnv struct {
 	t        *testing.T
@@ -690,8 +678,6 @@ func TestSweep_TwiceDoesNotDuplicateAQueuedPull(t *testing.T) {
 	wantPulls(t, s.pulls(tenA, tenB), tenA+"/"+connA, tenB+"/"+connB)
 }
 
-// --- AC-7 -----------------------------------------------------------------------------
-
 func TestPull_StopsAfterFiftyPages(t *testing.T) {
 	p := newPull(t, keyOne)
 	p.onList = func(_ int, cursor []byte) (Changes, error) {
@@ -722,8 +708,6 @@ func TestPull_StopsAfterFiftyPages(t *testing.T) {
 		t.Errorf("ingest jobs after the next pull = %d, want 60", n)
 	}
 }
-
-// --- AC-8 -----------------------------------------------------------------------------
 
 func TestPull_BadCursorRestartsFromTheBeginningWithoutDuplicates(t *testing.T) {
 	p := newPull(t, keyOne)

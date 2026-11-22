@@ -43,13 +43,15 @@ CREATE TABLE erp_source_documents (
         REFERENCES invoices (tenant_id, id) ON DELETE RESTRICT
 );
 CREATE INDEX erp_source_documents_invoice_idx ON erp_source_documents (tenant_id, invoice_id) WHERE invoice_id IS NOT NULL;
+-- The rival-claim check of the ingest: one client's live claims on one number.
+CREATE INDEX erp_source_documents_claim_idx ON erp_source_documents (entity_id, claimed_number) WHERE claimed_number IS NOT NULL;
 ALTER TABLE erp_source_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE erp_source_documents FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON erp_source_documents USING (
     tenant_id = nullif(current_setting('app.current_tenant', true), '')::uuid
     AND (coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
          OR entity_id = ANY (nullif(nullif(current_setting('app.entity_scope', true), ''), '*')::uuid[])));
--- Documents are kept (Q4): no DELETE.
+-- Documents are kept: no DELETE.
 GRANT SELECT, INSERT, UPDATE ON erp_source_documents TO invoice_app;
 
 ALTER TABLE invoices ADD COLUMN erp_connection_id uuid;

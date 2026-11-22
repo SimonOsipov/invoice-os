@@ -61,7 +61,7 @@ func (e *ingestEnv) wantNoAudit(event string) {
 	}
 }
 
-// --- AC-3: a new document becomes a draft ----------------------------------------------------
+// --- a new document becomes a draft ---
 
 func TestIngest_NewDocumentBecomesADraftThroughTheSharedPath(t *testing.T) {
 	e := newIngest(t)
@@ -180,7 +180,7 @@ func TestIngest_UnvoidedDocumentBecomesADraft(t *testing.T) {
 	}
 }
 
-// --- AC-4: a duplicate number links ---------------------------------------------------------------
+// --- a duplicate number links ---
 
 func TestIngest_DuplicateNumberLinksAndCreatesNothing(t *testing.T) {
 	e := newIngest(t)
@@ -269,7 +269,7 @@ func TestIngest_RacingCreateLinksInstead(t *testing.T) {
 	e.wantNoAudit("erp.document.pulled")
 }
 
-// --- AC-5: one invoice, one document per connection -------------------------------------------
+// --- one invoice, one document per connection ---
 
 func TestIngest_SecondDocumentOnALinkedInvoiceIsHeld(t *testing.T) {
 	e := newIngest(t)
@@ -337,7 +337,7 @@ func TestIngest_HeldDocumentDraftsOnceItsNumberIsFree(t *testing.T) {
 	}
 }
 
-// --- AC-6: retries ------------------------------------------------------------------------------
+// --- retries ---
 
 func TestIngest_RetryAfterACommittedCreateAdoptsItsOwnInvoice(t *testing.T) {
 	e := newIngest(t)
@@ -421,7 +421,7 @@ func TestIngest_SameRevisionAgainIsANoOp(t *testing.T) {
 	}
 }
 
-// --- AC-7: changed after acceptance ----------------------------------------------------------------
+// --- changed after acceptance ---
 
 // acceptedDraft takes docOne through the shared path and marks its invoice accepted.
 func acceptedDraft(e *ingestEnv) string {
@@ -569,7 +569,7 @@ func TestIngest_HashVersionChangeNeverMarksAnAcceptedInvoice(t *testing.T) {
 	}
 }
 
-// --- AC-8: a draft is never overwritten ---------------------------------------------------------------
+// --- a draft is never overwritten ---
 
 func TestIngest_NewRevisionOfADraftNeverOverwritesIt(t *testing.T) {
 	e := newIngest(t)
@@ -604,7 +604,7 @@ func TestIngest_NewRevisionOfADraftNeverOverwritesIt(t *testing.T) {
 	}
 }
 
-// --- AC-9: deleted refs ----------------------------------------------------------------------------------
+// --- deleted refs ---
 
 func TestIngest_DeletedRefOnADraftMarksTheDocumentOnly(t *testing.T) {
 	e := newIngest(t)
@@ -683,7 +683,7 @@ func TestIngest_DeletedRefNeverTakenRecordsADeletedDocument(t *testing.T) {
 	}
 }
 
-// --- AC-10: failures that end the document ------------------------------------------------------
+// --- failures that end the document ---
 
 func (e *ingestEnv) wantFailed(docID, failure string) {
 	e.t.Helper()
@@ -761,7 +761,7 @@ func TestIngest_CreateRefusalFails(t *testing.T) {
 	e.wantFailed(docOne, "refused")
 }
 
-// --- AC-11: sync stops, errors retry ---------------------------------------------------------------------
+// --- sync stops, errors retry ---
 
 func TestIngest_SyncStoppedDoesNothing(t *testing.T) {
 	cases := []struct {
@@ -850,8 +850,6 @@ func TestIngest_AnotherTenantsConnectionIsNeverTouched(t *testing.T) {
 		})
 	}
 }
-
-// --- QA adversarial coverage --------------------------------------------------------------------------
 
 // A header amount that differs while every line is equal must still flag differs, one amount at a time.
 func TestIngest_DuplicateWithOnlyAHeaderAmountDifferentFlagsDiffers(t *testing.T) {
@@ -1088,7 +1086,7 @@ func TestIngest_NextRevisionValidatesAnUnvalidatedDraft(t *testing.T) {
 	}
 }
 
-// --- AC-12: concurrency and claims ----------------------------------------------------------------
+// --- concurrency and claims ---
 
 // untilDone runs Work again each time it answers a River snooze, as River would after the delay.
 func (e *ingestEnv) untilDone(w *IngestWorker, a IngestArgs) error {
@@ -1270,7 +1268,7 @@ func TestIngest_LiveClaimOfAnotherRevisionSnoozes(t *testing.T) {
 	}
 }
 
-// --- AC-14: skipped ingests reopen the connection, the final attempt leaves a row ----------------
+// --- skipped ingests reopen the connection, the final attempt leaves a row ---
 
 func TestIngest_SkippedIngestReopensTheConnection(t *testing.T) {
 	e := newIngest(t)
@@ -1352,7 +1350,7 @@ func TestIngest_ExhaustedRowIsFetchedAgainAtItsOwnRevision(t *testing.T) {
 		e.mustWork(docOne, "1")
 
 		if n := e.fetches.Load(); n != 0 {
-			t.Errorf("Fetch called %d times, want 0: row 6 short-circuits a settled failure", n)
+			t.Errorf("Fetch called %d times, want 0: a settled failure is short-circuited", n)
 		}
 		if after := e.docJSON(docOne); after != before {
 			t.Error("the row changed")
@@ -1374,7 +1372,7 @@ func TestIngest_ExhaustedRowIsRetakenAtANewRevision(t *testing.T) {
 	}
 }
 
-// --- AC-16: every taken row stores the hash -------------------------------------------------------
+// --- every taken row stores the hash ---
 
 func TestIngest_EveryTakenRowStoresTheHash(t *testing.T) {
 	cases := []struct {
@@ -1412,7 +1410,7 @@ func TestIngest_EveryTakenRowStoresTheHash(t *testing.T) {
 	}
 }
 
-// --- AC-18: the connection's client only -----------------------------------------------------------
+// --- the connection's client only ---
 
 func TestIngest_DraftLandsInTheConnectionsClient(t *testing.T) {
 	e := newIngest(t)

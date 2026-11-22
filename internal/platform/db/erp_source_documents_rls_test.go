@@ -160,7 +160,7 @@ var esdNamedConstraints = []string{
 }
 
 var esdIndexes = []string{
-	"erp_source_documents_connection_doc_uq", "erp_source_documents_connection_invoice_uq",
+	"erp_source_documents_claim_idx", "erp_source_documents_connection_doc_uq", "erp_source_documents_connection_invoice_uq",
 	"erp_source_documents_invoice_idx", "erp_source_documents_pk", "erp_source_documents_tenant_id_id_uq",
 }
 
@@ -295,6 +295,15 @@ func esdShapeProblems(q erpQuerier) []string {
 		for _, frag := range []string{"(tenant_id, invoice_id)", "WHERE (invoice_id IS NOT NULL)"} {
 			if !strings.Contains(def, frag) {
 				problems = append(problems, "erp_source_documents_invoice_idx = "+def+", want it to contain "+frag)
+			}
+		}
+	}
+	if def, err := esdIndexDef(q, "erp_source_documents_claim_idx"); err != nil {
+		problems = append(problems, "read erp_source_documents_claim_idx: "+err.Error())
+	} else {
+		for _, frag := range []string{"(entity_id, claimed_number)", "WHERE (claimed_number IS NOT NULL)"} {
+			if !strings.Contains(def, frag) {
+				problems = append(problems, "erp_source_documents_claim_idx = "+def+", want it to contain "+frag)
 			}
 		}
 	}

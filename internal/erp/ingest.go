@@ -29,6 +29,8 @@ const (
 	claimSnooze = 30 * time.Second
 )
 
+var errUnvalidated = errors.New("erp: the gate left the draft unvalidated")
+
 var errClaimLost = errors.New("erp: ingest claim is no longer this job's")
 
 // IngestArgs is one document revision to take. The client comes from the connection row, never the args.
@@ -180,7 +182,7 @@ func (w *IngestWorker) ingest(ctx context.Context, a IngestArgs) error {
 		return w.fail(ctx, a, "not_found")
 	}
 	if err != nil {
-		return err
+		return throttled(err)
 	}
 	var party *Party
 	var body struct {
@@ -192,7 +194,7 @@ func (w *IngestWorker) ingest(ctx context.Context, a IngestArgs) error {
 		case err == nil:
 			party = &p
 		case !errors.Is(err, ErrNotFound):
-			return err
+			return throttled(err)
 		}
 	}
 	in, err := mapper(doc, party)
@@ -223,6 +225,9 @@ func (w *IngestWorker) ingest(ctx context.Context, a IngestArgs) error {
 					return nil // the claim stays; the retry adopts what was created
 				}
 				r := out.Results[0]
+				if r.Invoice != nil && r.Unvalidated {
+					return errUnvalidated // the claim stays; the retry adopts the draft and validates it
+				}
 				if r.Invoice != nil {
 					return w.settle(ctx, a, in, hash, r.Invoice.ID, nil)
 				}
@@ -245,10 +250,35 @@ func (w *IngestWorker) stopped(ctx context.Context, tx pgx.Tx, c connInfo, ok bo
 		stop = locked
 	}
 	if stop && ok {
-		_, err := tx.Exec(ctx, `UPDATE erp_connections SET cursor = NULL, ingest_epoch = ingest_epoch + 1, updated_at = now() WHERE id = $1`, connID)
-		return true, err
+		return true, reopen(ctx, tx, connID)
 	}
 	return stop, nil
+}
+
+// reopen clears the cursor and bumps the epoch so the next sweep lists every document under new keys.
+func reopen(ctx context.Context, tx pgx.Tx, connID string) error {
+	_, err := tx.Exec(ctx, `UPDATE erp_connections SET cursor = NULL, ingest_epoch = ingest_epoch + 1, updated_at = now() WHERE id = $1`, connID)
+	return err
+}
+
+const (
+	yieldNone = iota
+	yieldSkip
+	yieldSnooze
+)
+
+// yieldsTo says whether a job at a.SourceRevision must leave the row alone: another revision's live
+// claim is in flight (snooze), or the row is a deleted one that this job's revision does not own (skip).
+func yieldsTo(d docState, found bool, a IngestArgs) int {
+	switch {
+	case !found || d.rev == a.SourceRevision:
+		return yieldNone
+	case d.state == "pending" && d.claimed != nil && d.live:
+		return yieldSnooze
+	case d.state == "deleted" || d.deleted != nil:
+		return yieldSkip
+	}
+	return yieldNone
 }
 
 func readConn(ctx context.Context, tx pgx.Tx, id string, lock bool) (connInfo, bool, error) {
@@ -331,6 +361,15 @@ ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET
 	return err
 }
 
+// throttled turns a vendor rate limit into a snooze, so it does not spend an attempt.
+func throttled(err error) error {
+	var rl *RateLimitError
+	if errors.As(err, &rl) {
+		return river.JobSnooze(rl.RetryAfter)
+	}
+	return err
+}
+
 func (w *IngestWorker) snoozeErr() error { return river.JobSnooze(claimSnooze) }
 
 // claim is TxA: it decides the document under the connection, row and number locks.
@@ -363,7 +402,8 @@ func (w *IngestWorker) claim(ctx context.Context, a IngestArgs, in *invoice.Crea
 		if err := lockNumber(ctx, tx, c.entity, number); err != nil {
 			return err
 		}
-		ownRetry := held && d.rev == a.SourceRevision && *d.claimed == number
+		// A claim of this revision and number is this job's own, however old: River's backoff outlasts claimLife.
+		ownRetry := found && d.state == "pending" && d.claimed != nil && d.rev == a.SourceRevision && *d.claimed == number
 		if held && !ownRetry {
 			return w.snoozeErr()
 		}
@@ -422,7 +462,7 @@ func linkedElsewhere(ctx context.Context, tx pgx.Tx, connID, invoiceID, ownRow s
 	return linked, err
 }
 
-// linkOrHold is rows 3 and 4: the number belongs to an existing invoice, which is never touched.
+// linkOrHold links or holds a document whose number is taken: the number belongs to an existing invoice, which is never touched.
 func (w *IngestWorker) linkOrHold(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, in invoice.CreateInput, hash string, inv invRef, linked bool) error {
 	v := docWrite{state: "held", rev: a.SourceRevision, hash: hash}
 	var differs bool
@@ -466,7 +506,7 @@ func differsFrom(ctx context.Context, tx pgx.Tx, invoiceID string, in invoice.Cr
 	return Differs(in, amounts, lines), nil
 }
 
-// newRevision is rows 6b, 7, 7b and 8: a taken document's new revision never writes the invoice.
+// newRevision handles a taken document's new revision never writes the invoice.
 func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, d docState, in invoice.CreateInput, hash string) error {
 	var status, number string
 	if err := tx.QueryRow(ctx, `SELECT status, invoice_number FROM invoices WHERE id = $1`, *d.invoiceID).Scan(&status, &number); err != nil {
@@ -501,7 +541,7 @@ func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a IngestArgs,
 	}
 }
 
-// markDeleted is rows 9 to 11: a deleted ref marks the document and never touches an invoice.
+// markDeleted: a deleted ref marks the document and never touches an invoice.
 func (w *IngestWorker) markDeleted(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, d docState, found bool) error {
 	if !found || d.invoiceID == nil {
 		_, err := tx.Exec(ctx, `
@@ -586,6 +626,12 @@ func (w *IngestWorker) fail(ctx context.Context, a IngestArgs, failure string) e
 		if err != nil {
 			return err
 		}
+		switch yield := yieldsTo(d, found, a); {
+		case yield == yieldSnooze:
+			return w.snoozeErr()
+		case yield == yieldSkip, found && d.rev != a.SourceRevision && failure == "not_found":
+			return nil // a superseded revision's job leaves the newer revision's row alone
+		}
 		if found && d.invoiceID != nil {
 			_, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, updated_at = now() WHERE id = $1`, d.id, a.SourceRevision)
 			return err
@@ -605,7 +651,13 @@ func (w *IngestWorker) terminal(ctx context.Context, a IngestArgs) error {
 		if err != nil {
 			return err
 		}
+		if yieldsTo(d, found, a) != yieldNone {
+			return nil
+		}
 		if found && d.invoiceID != nil {
+			if d.rev != a.SourceRevision {
+				return reopen(ctx, tx, a.ConnectionID) // the revision's key is spent; the next sweep lists it again
+			}
 			return nil
 		}
 		if found && d.state == "pending" && d.claimed != nil && d.rev == a.SourceRevision {

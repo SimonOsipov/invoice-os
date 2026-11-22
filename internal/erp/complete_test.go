@@ -1088,3 +1088,44 @@ func TestComplete_Tx2NotCommittedByActivateEndedWhenAdminOrWorkspaceChanged(t *t
 		})
 	}
 }
+
+func TestComplete_Tx2ErrorSettlesOnAContextThatIsAlreadyDead(t *testing.T) {
+	cases := []struct {
+		name string
+		// seed returns the connection and the grant id the callback tried to activate.
+		seed      func(t *testing.T, r *completeRig) (conn, grant string)
+		committed bool
+	}{
+		{"the row has no grant", func(t *testing.T, r *completeRig) (string, string) {
+			conn, _ := r.connect(t, r.e1)
+			return conn.ID, uuid.NewString()
+		}, false},
+		{"the row still holds its old grant", func(t *testing.T, r *completeRig) (string, string) {
+			old := seedGrant(t, r.super, r.tenant, "")
+			return seedConnRow(t, r.super, connRow{tenant: r.tenant, entity: r.e1, key: "k", status: "pending", grant: old}), uuid.NewString()
+		}, false},
+		{"the row holds the new grant", func(t *testing.T, r *completeRig) (string, string) {
+			g := seedGrant(t, r.super, r.tenant, "")
+			return seedConnRow(t, r.super, connRow{tenant: r.tenant, entity: r.e1, key: "k", status: "active", grant: g}), g
+		}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newCompleteRig(t)
+			conn, grant := c.seed(t, r)
+			ref := SecretName("", grant)
+			if err := r.sec.Create(context.Background(), ref, []byte("payload")); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // the budget that tx2 failed on is spent
+
+			if got := r.store.settleTx2Error(ctx, r.tenant, conn, grant, ref); got != c.committed {
+				t.Errorf("settle = %v, want %v", got, c.committed)
+			}
+			if kept := holds(r.sec, ref); kept != c.committed {
+				t.Errorf("secret kept = %v, want %v", kept, c.committed)
+			}
+		})
+	}
+}

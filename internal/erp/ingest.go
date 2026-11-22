@@ -652,25 +652,25 @@ func (w *IngestWorker) validateIfDraft(ctx context.Context, tenantID, invoiceID 
 	return err
 }
 
-func docPayload(c connInfo, a IngestArgs, invoiceID *string, number string) map[string]any {
-	return map[string]any{
+func recordPulled(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID, number string) error {
+	return audit.Record(ctx, tx, ingestActor, "erp.document.pulled", map[string]any{
 		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
 		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,
-	}
-}
-
-func recordPulled(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID, number string) error {
-	return audit.Record(ctx, tx, ingestActor, "erp.document.pulled", docPayload(c, a, &invoiceID, number))
+	})
 }
 
 func recordSkipped(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID *string, number string, linked, differs bool) error {
-	p := docPayload(c, a, invoiceID, number)
-	p["linked"], p["differs"] = linked, differs
-	return audit.Record(ctx, tx, ingestActor, "erp.document.skipped_duplicate", p)
+	return audit.Record(ctx, tx, ingestActor, "erp.document.skipped_duplicate", map[string]any{
+		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
+		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,
+		"linked": linked, "differs": differs,
+	})
 }
 
 func recordChanged(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID, number string, deleted bool) error {
-	p := docPayload(c, a, &invoiceID, number)
-	p["deleted"] = deleted
-	return audit.Record(ctx, tx, ingestActor, "erp.document.changed_after_clearance", p)
+	return audit.Record(ctx, tx, ingestActor, "erp.document.changed_after_clearance", map[string]any{
+		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
+		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,
+		"deleted": deleted,
+	})
 }

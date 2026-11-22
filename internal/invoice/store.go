@@ -327,15 +327,15 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
 			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows,
-			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga, document_type, original_invoice_id)
+			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga, document_type, original_invoice_id, erp_connection_id)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
 			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15,
-			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39)
+			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
 			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID, in.SourceDocumentID, in.SourceRows,
-			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA, in.DocumentType, in.OriginalInvoiceID,
+			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA, in.DocumentType, in.OriginalInvoiceID, in.ERPConnectionID,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":

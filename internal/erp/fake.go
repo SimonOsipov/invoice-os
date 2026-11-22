@@ -127,7 +127,7 @@ func (*Fake) ListChanged(_ context.Context, _ Credentials, scope string, cursor 
 	end := min(off+fakePageSize, len(co.invoices))
 	refs := make([]DocRef, 0, end-off)
 	for _, inv := range co.invoices[off:end] {
-		refs = append(refs, DocRef{SourceDocID: inv.id, SourceRevision: fakeRevision, Scope: scope})
+		refs = append(refs, DocRef{SourceDocID: inv.id, SourceRevision: fakeRevision, Scope: scope, Deleted: inv.voided})
 	}
 	next := binary.BigEndian.AppendUint32(nil, uint32(end))
 	next = append(next, scope...)

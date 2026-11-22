@@ -48,6 +48,7 @@ var purgeTables = []string{
 	"line_items",
 	"invoice_status_history",
 	"custom_rule_revisions",
+	"erp_source_documents",
 	"invoices",
 	"import_batches",
 	"import_mappings",

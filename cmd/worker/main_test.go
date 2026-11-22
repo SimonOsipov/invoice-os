@@ -277,6 +277,32 @@ func TestWorkerMain_SnapshotsAtBoot(t *testing.T) {
 	t.Errorf("no rollup_snapshots row for the entity and today's WAT day within 20s of boot\n%s", out.String())
 }
 
+// A hosted boot with ERP_FAKE set refuses, names the variable and never its value.
+func TestWorkerMain_HostedBootWithERPFakeIsFatal(t *testing.T) {
+	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
+	if appURL == "" || readerURL == "" {
+		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL")
+	}
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(down.Close)
+	out, err := run(t, buildWorker(t), map[string]string{
+		"DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL, "VALIDATION_URL": down.URL, "S2S_TOKEN": "tok",
+		"GATEWAY_URL": "http://gateway.invalid", "GATEWAY_TOKEN": "gw-token", "APP_ADAPTER": "mock",
+		"DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
+		"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
+		"DEPLOY_ENV": "production", "ERP_FAKE": "true",
+	})
+	if !exitedOne(err) {
+		t.Fatalf("ended with %v, want exit status 1 through platform.Fatal\n%s", err, out)
+	}
+	if !strings.Contains(out, "ERP_FAKE") {
+		t.Errorf("output does not name ERP_FAKE\n%s", out)
+	}
+	if strings.Contains(out, "ERP_FAKE=true") || strings.Contains(out, "ERP_FAKE is true") {
+		t.Errorf("output quotes the value of ERP_FAKE\n%s", out)
+	}
+}
+
 const (
 	iapRoute = "/internal/console-sessions/recovery-token"
 	iapOps   = "/projects/111111111111/global/backendServices/1111111111111111111"

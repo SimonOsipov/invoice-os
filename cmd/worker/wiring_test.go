@@ -258,6 +258,12 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"erp_secret_delete", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &erp.SecretDeleteWorker{})
 		}},
+		{"erp.pull", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.PullWorker{})
+		}},
+		{"erp.ingest", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.IngestWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -295,7 +301,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -311,7 +317,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
@@ -336,7 +342,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -1869,6 +1875,38 @@ func TestOnlyTheWorkerRunsBackgroundWork(t *testing.T) {
 	}
 }
 
+// The pull sweep has nothing to pull with no connector registered: its ticker sits in a branch on the registry's length.
+func TestWorkerMain_ERPPullTickerOnlyWithAConnector(t *testing.T) {
+	isLit := func(e ast.Expr, v string) bool { l, ok := e.(*ast.BasicLit); return ok && l.Value == v }
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	guarded, found := false, false
+	ast.Inspect(f, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		ast.Inspect(ifs.Body, func(m ast.Node) bool {
+			if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], `"erp-pull"`) {
+				found = true
+				ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+					if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
+						guarded = true
+					}
+					return true
+				})
+			}
+			return true
+		})
+		return true
+	})
+	if !found || !guarded {
+		t.Errorf("the erp-pull task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", found, guarded)
+	}
+}
+
 // wtLedTask renders the task a leader.Lead(name, task) call wraps, or "" for any other expression.
 func wtLedTask(e ast.Expr) string {
 	call, ok := e.(*ast.CallExpr)
@@ -1913,7 +1951,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		return true
 	})
 	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
-		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`}
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}

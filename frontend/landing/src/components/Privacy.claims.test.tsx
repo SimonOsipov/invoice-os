@@ -1266,7 +1266,7 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     expect(sentence('P5')).toContain("only your workspace's admins, and the member a record is about when that member can read the workspace-wide entries, see its IP")
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '"account.signed_out",', '"account.signed_out",\n"invitation.accepted",'))).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(swap(F, 'names := bind(AccountEvents)\n\t\tconditions = append(conditions, "(a.entity_id', 'names := bind(append(AccountEvents, "invitation.accepted"))\n\t\tconditions = append(conditions, "(a.entity_id'), reader, account)).toBe(false)
-    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, '"workspace.provisioned":            {},', ''), account)).toBe(false)
+    expect(createdAcceptedDetailIsAdminOrSelf(filter, swap(R, /"workspace\.provisioned":\s+\{\},/, ''), account)).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"ip_address", "device"}', '[]string{"ip_address"}'))).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(filter, reader, swap(A, '[]string{"workspace.provisioned", "invitation.accepted"}', '[]string{"invitation.accepted"}'))).toBe(false)
     expect(createdAcceptedDetailIsAdminOrSelf(swap(F, /return "\(CASE WHEN a\.event = ANY[\s\S]*?END\)"/, 'return "a.payload"'), reader, account)).toBe(false)

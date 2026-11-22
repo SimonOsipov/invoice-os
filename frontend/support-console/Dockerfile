@@ -29,7 +29,7 @@ ENV VITE_BUILD_SHA=${BUILD_SHA}
 RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN pnpm --filter @invoice-os/support-console build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----
-FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve
+FROM caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 AS serve
 # 8080 needs no capability; a non-root exec of a file-capable binary fails under --cap-drop ALL.
 RUN setcap -r /usr/bin/caddy
 USER nobody:nobody

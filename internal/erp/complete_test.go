@@ -388,6 +388,47 @@ func TestComplete_ConnectsWithAGoodCode(t *testing.T) {
 	if jobs[0].maxAttempts != 8 {
 		t.Errorf("refresh job max_attempts = %d, want 8", jobs[0].maxAttempts)
 	}
+	var version int64
+	mustScan(t, r.super, "SELECT version FROM erp_grants WHERE id = $1", []any{*s.grant}, &version)
+	if jobs[0].args["version"] != float64(version) {
+		t.Errorf("refresh job claims version %v, want the grant's own version %d", jobs[0].args["version"], version)
+	}
+}
+
+// deadlineSecrets records the time left on the context a Create runs under.
+type deadlineSecrets struct {
+	SecretStore
+	left *time.Duration
+}
+
+func (d *deadlineSecrets) Create(ctx context.Context, id string, payload []byte) error {
+	if dl, ok := ctx.Deadline(); ok {
+		*d.left = time.Until(dl)
+	}
+	return d.SecretStore.Create(ctx, id, payload)
+}
+
+// The 10 s exchange and the 20 s callback budgets are observed on the contexts the calls run under: no wait.
+func TestComplete_CallBudgets(t *testing.T) {
+	r := newCompleteRig(t)
+	_, state := r.connect(t, r.e1)
+	var exchangeLeft, createLeft time.Duration
+	r.ex.override = func(ctx context.Context, req ExchangeRequest) (ExchangeResult, error) {
+		if dl, ok := ctx.Deadline(); ok {
+			exchangeLeft = time.Until(dl)
+		}
+		return r.ex.Fake.Exchange(ctx, req)
+	}
+	r.store.secrets = &deadlineSecrets{SecretStore: r.sec, left: &createLeft}
+
+	got, err := r.complete(state, "fake-co-1", "")
+	wantOutcome(t, "good code", got, err, "connected")
+	if exchangeLeft <= 9*time.Second || exchangeLeft > 10*time.Second {
+		t.Errorf("the exchange ran with %v left, want a 10 s deadline", exchangeLeft)
+	}
+	if createLeft <= 19*time.Second || createLeft > 20*time.Second {
+		t.Errorf("the secret create ran with %v left, want the callback's 20 s deadline", createLeft)
+	}
 }
 
 func TestComplete_NilExpiryEnqueuesNoRefresh(t *testing.T) {

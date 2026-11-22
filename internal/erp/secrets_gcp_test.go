@@ -3,6 +3,7 @@ package erp
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net"
 	"reflect"
@@ -165,6 +166,8 @@ func TestGCPSecrets_ErrorsCarryNoPayload(t *testing.T) {
 	g, srv := newGCPFixture(t, nil)
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
+	// Printable: gRPC mangles non-UTF-8 bytes in a status message, so raw random bytes could not leak into an error.
+	raw = []byte(base64.RawURLEncoding.EncodeToString(raw))
 	payload := string(raw)
 	for _, m := range []string{"Create", "Add", "Access", "Disable", "Delete"} {
 		srv.fail[m] = status.Error(codes.Internal, "echo "+payload)

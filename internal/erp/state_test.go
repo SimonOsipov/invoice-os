@@ -27,6 +27,7 @@ func TestState_RoundTripAndShape(t *testing.T) {
 	for name, bad := range map[string]string{
 		"bad uuid":      "not-a-uuid." + tail,
 		"upper uuid":    strings.ToUpper(tenant) + "." + tail,
+		"non-hex uuid":  strings.Repeat("z", 8) + "-zzzz-zzzz-zzzz-" + strings.Repeat("z", 12) + "." + tail,
 		"short tail":    tenant + "." + tail[:42],
 		"long tail":     tenant + "." + tail + "A",
 		"no dot":        tenant + tail,

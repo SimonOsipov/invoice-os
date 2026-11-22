@@ -84,6 +84,7 @@ func TestRegistryFromEnv_RedirectURL(t *testing.T) {
 	}{
 		{"preview unset", map[string]string{"DEPLOY_ENV": "pr-1"}, false},
 		{"preview relative", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "/erp/callback"}, false},
+		{"preview https without a host", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "https:///erp/callback"}, false},
 		{"preview http", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "http://x/erp/callback"}, false},
 		{"preview other scheme", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "ftp://x/erp/callback"}, false},
 		{"nightly http", map[string]string{"DEPLOY_ENV": "nightly", "ERP_REDIRECT_URL": "http://x/erp/callback"}, false},
@@ -103,6 +104,9 @@ func TestRegistryFromEnv_RedirectURL(t *testing.T) {
 				t.Errorf("%s: error %q must name the variable and not the value", c.name, err)
 			}
 		}
+	}
+	if _, err := RegistryFromEnv(env(map[string]string{"DEPLOY_ENV": "pr-1"})); err == nil || !strings.Contains(err.Error(), "is not set") {
+		t.Errorf("an unset redirect: %v, want a not-set error", err)
 	}
 	asked := false
 	get := func(k string) string {

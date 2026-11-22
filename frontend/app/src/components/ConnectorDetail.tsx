@@ -1,6 +1,6 @@
-// Connector detail — the per-connector integration surface behind the connector list's
-// Manage button (SettingsView). Everything numeric on this screen comes from
-// lib/connectors.ts `connectorDetail()`, which derives internally-consistent figures from
+// Connector detail — the per-connector integration surface, unmounted until it gets a route.
+// Everything numeric on this screen comes from
+// lib/connectorDetailMock.ts `connectorDetail()`, which derives internally-consistent figures from
 // the connector id, so each connector reads distinct but never re-rolls between visits.
 //
 // The env pill is a read-only indicator here (both segments disabled) — unlike Header.tsx's,
@@ -9,8 +9,7 @@
 
 import { useMemo } from 'react'
 
-import { CONNECTOR_TAX_CODES, type ConnectorDef } from '../data'
-import { connectorDetail, mappingFor, type SyncEventKind } from '../lib/connectors'
+import { CONNECTOR_TAX_CODES, connectorDetail, mappingFor, type ConnectorDef, type SyncEventKind } from '../lib/connectorDetailMock'
 import { fmtPlain } from '../lib/format'
 import { arrowGlyph, backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'

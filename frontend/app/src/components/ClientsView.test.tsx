@@ -4,7 +4,7 @@
 // filter-specific empty state, and ctx.entities staying untouched by the filter. Mirrors
 // CustomersView.test.tsx/ReportsView.test.tsx's own mock-fetch-by-pathname idiom, since
 // ClientsView also fires an independent rollup fetch.
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -68,10 +68,16 @@ const ALL_ROWS: Entity[] = [...ACTIVE_ROWS, ...ARCHIVED_ROWS]
 
 // Models the real server contract (portfolio.go:215-222): empty/absent status -> both
 // statuses; 'active'/'archived' -> that subset only.
-function rowsForStatus(status: string | null): Entity[] {
-  if (status === 'active') return ACTIVE_ROWS
-  if (status === 'archived') return ARCHIVED_ROWS
-  return ALL_ROWS
+function rowsForStatus(status: string | null, q: string | null = null): Entity[] {
+  const subset = status === 'active' ? ACTIVE_ROWS : status === 'archived' ? ARCHIVED_ROWS : ALL_ROWS
+  return subset.filter((e) => matchesQ(e, q))
+}
+
+// The server's q contract (portfolio Store.List): case-insensitive literal substring of name, or of TIN with q's hyphens removed.
+function matchesQ(e: Entity, q: string | null): boolean {
+  if (q == null || q === '') return true
+  const needle = q.toLowerCase()
+  return e.name.toLowerCase().includes(needle) || (needle.replaceAll('-', '') !== '' && (e.tin ?? '').toLowerCase().includes(needle.replaceAll('-', '')))
 }
 
 function entitiesResponse(rows: Entity[]): MockResponse {
@@ -88,8 +94,8 @@ function entitiesResponse(rows: Entity[]): MockResponse {
 function mockFetch() {
   const fetchMock = vi.fn((url: string) => {
     if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
-    const status = new URL(url).searchParams.get('status')
-    return Promise.resolve(entitiesResponse(rowsForStatus(status)))
+    const params = new URL(url).searchParams
+    return Promise.resolve(entitiesResponse(rowsForStatus(params.get('status'), params.get('q'))))
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
@@ -426,8 +432,9 @@ describe('ClientsView: creating a client refetches BOTH the switcher roster and 
         created = true
         return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(newEntity) })
       }
-      const status = new URL(url).searchParams.get('status')
-      const rows = created ? [...rowsForStatus(status), newEntity] : rowsForStatus(status)
+      const params = new URL(url).searchParams
+      const base = rowsForStatus(params.get('status'), params.get('q'))
+      const rows = created ? [...base, newEntity] : base
       return Promise.resolve(entitiesResponse(rows))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -684,7 +691,8 @@ function clientRow(entityId: string, needsAttention: number) {
 function mockFetchWithRollup(rollup: Rollup) {
   const fetchMock = vi.fn((url: string) => {
     if (isRollupUrl(url)) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(rollup) })
-    return Promise.resolve(entitiesResponse(rowsForStatus(new URL(url).searchParams.get('status'))))
+    const params = new URL(url).searchParams
+    return Promise.resolve(entitiesResponse(rowsForStatus(params.get('status'), params.get('q'))))
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
@@ -779,7 +787,11 @@ describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
   })
 
   it('FBAR the Clients bar renders in loading, error and with no Add client', async () => {
-    const bar = () => within(screen.getByTestId('clients-filter-bar')).getAllByRole('button').map((b) => b.textContent)
+    const bar = () => {
+      const el = screen.getByTestId('clients-filter-bar')
+      expect(within(el).getByRole('textbox', { name: 'Search clients' }), 'the search box stays').toBeTruthy()
+      return within(el).getAllByRole('button').map((b) => b.textContent)
+    }
     const chips = ['All', 'Active', 'Archived']
 
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
@@ -898,5 +910,410 @@ describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
     expect(message.style.color, 'control: the message stays red').toBe('var(--status-red-text)')
     expect(message.style.fontSize).toBe('11.5px')
     expect(message.style.lineHeight).toBe('1.4')
+  })
+})
+
+// --- the search box ---------------------------------------------------
+// Fake timers drive the 300ms debounce; flush() settles fetch promises without moving the clock.
+const SEARCH_ROWS: Entity[] = [
+  entity({ id: 's1', name: 'Alpha Co', tin: '11122233301', status: 'active' }),
+  entity({ id: 's2', name: 'Abby Ltd', tin: '44455566602', status: 'active' }),
+  entity({ id: 's3', name: 'Zed Works', tin: '77788899903', status: 'archived' }),
+]
+
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
+}
+
+const flush = () => advance(0)
+
+function searchBox(): HTMLInputElement {
+  return screen.getByRole('textbox', { name: 'Search clients' }) as HTMLInputElement
+}
+
+function typeSearch(v: string) {
+  fireEvent.change(searchBox(), { target: { value: v } })
+}
+
+async function mountFake(fetchMock: ReturnType<typeof mockFetch>, ctx = clientsCtx(ALL_ROWS)) {
+  render(<ClientsView ctx={ctx} />)
+  await flush()
+  await flush()
+  return { fetchMock, ctx }
+}
+
+const paramsOf = (url: string) => new URL(url).searchParams
+
+describe('ClientsView: the search box (CSRCH-01-02)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('CSRCH the search box leads the Clients bar', async () => {
+    mockFetch()
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+    const bar = screen.getByTestId('clients-filter-bar')
+    const box = within(bar).getByRole('textbox', { name: 'Search clients' }) as HTMLInputElement
+    expect(box.placeholder).toBe('Search name or TIN')
+    expect(box.disabled).toBe(false)
+    expect(box.compareDocumentPosition(within(bar).getByRole('button', { name: 'All' })) & Node.DOCUMENT_POSITION_FOLLOWING, 'the box precedes All').toBeTruthy()
+  })
+
+  it('CSRCH typing waits for a pause, then sends one q request', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = await mountFake(mockFetch())
+    const before = entitiesCallUrls(fetchMock).length
+    for (const v of ['o', 'ok', 'oka']) {
+      typeSearch(v)
+      await advance(80)
+    }
+    expect(entitiesCallUrls(fetchMock).slice(before).filter((u) => paramsOf(u).has('q')), 'no q request before the pause').toHaveLength(0)
+    await advance(300)
+    const withQ = entitiesCallUrls(fetchMock).filter((u) => paramsOf(u).has('q'))
+    expect(withQ).toHaveLength(1)
+    expect(paramsOf(withQ[0]).get('q')).toBe('oka')
+    expect(screen.getByText('Okafor & Partners')).toBeTruthy()
+    expect(screen.queryByText('Beta Traders')).toBeNull()
+  })
+
+  it('CSRCH a TIN fragment narrows the list', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      return Promise.resolve(entitiesResponse(SEARCH_ROWS.filter((e) => matchesQ(e, paramsOf(url).get('q')))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(SEARCH_ROWS)} />)
+    await flush()
+    expect(screen.getByText('Alpha Co')).toBeTruthy()
+    typeSearch('5566')
+    await advance(300)
+    const last = entitiesCallUrls(fetchMock as unknown as ReturnType<typeof mockFetch>).at(-1)!
+    expect(paramsOf(last).get('q')).toBe('5566')
+    expect(screen.getByText('Abby Ltd')).toBeTruthy()
+    expect(screen.queryByText('Alpha Co')).toBeNull()
+  })
+
+  it('CSRCH the typed text is trimmed on the wire', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = await mountFake(mockFetch())
+    typeSearch('  okafor  ')
+    await advance(300)
+    expect(paramsOf(entitiesCallUrls(fetchMock).at(-1)!).get('q')).toBe('okafor')
+    expect(searchBox().value).toBe('  okafor  ')
+  })
+
+  it('CSRCH a spaces-only search sends nothing', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = await mountFake(mockFetch())
+    expect(entitiesCallUrls(fetchMock)).toHaveLength(1)
+    typeSearch('   ')
+    await advance(300)
+    expect(entitiesCallUrls(fetchMock), 'no further entities call').toHaveLength(1)
+    for (const n of ['Okafor & Partners', 'Beta Traders', 'Honeywell Group']) expect(screen.getByText(n)).toBeTruthy()
+  })
+
+  async function committedActiveSearch() {
+    vi.useFakeTimers()
+    const out = await mountFake(mockFetch())
+    fireEvent.click(screen.getByRole('button', { name: 'Active' }))
+    await flush()
+    typeSearch('okafor')
+    await advance(300)
+    expect(screen.queryByText('Beta Traders'), 'the search committed').toBeNull()
+    return out.fetchMock
+  }
+
+  it("CSRCH backspacing a search to empty restores the chip's list", async () => {
+    const fetchMock = await committedActiveSearch()
+    const before = entitiesCallUrls(fetchMock).length
+    for (let v = 'okafor'; v.length > 0; ) {
+      v = v.slice(0, -1)
+      typeSearch(v)
+    }
+    await advance(299)
+    expect(entitiesCallUrls(fetchMock), 'no call before 300ms').toHaveLength(before)
+    await advance(1)
+    const calls = entitiesCallUrls(fetchMock).slice(before)
+    expect(calls).toHaveLength(1)
+    expect(paramsOf(calls[0]).get('status')).toBe('active')
+    expect(paramsOf(calls[0]).has('q')).toBe(false)
+    expect(screen.getByText('Okafor & Partners')).toBeTruthy()
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+  })
+
+  it("CSRCH replacing a search with spaces restores the chip's list", async () => {
+    const fetchMock = await committedActiveSearch()
+    const before = entitiesCallUrls(fetchMock).length
+    typeSearch('   ')
+    await advance(300)
+    const calls = entitiesCallUrls(fetchMock).slice(before)
+    expect(calls).toHaveLength(1)
+    expect(paramsOf(calls[0]).get('status')).toBe('active')
+    expect(paramsOf(calls[0]).has('q')).toBe(false)
+    expect(screen.getByText('Okafor & Partners')).toBeTruthy()
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+  })
+
+  it('CSRCH the chip and the search apply together', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = await mountFake(mockFetch())
+    typeSearch('honey')
+    await advance(300)
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    await flush()
+    let p = paramsOf(entitiesCallUrls(fetchMock).at(-1)!)
+    expect([p.get('status'), p.get('q')]).toEqual(['archived', 'honey'])
+    expect(screen.getByText('Honeywell Group')).toBeTruthy()
+    expect(screen.queryByText('Okafor & Partners')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Active' }))
+    await flush()
+    p = paramsOf(entitiesCallUrls(fetchMock).at(-1)!)
+    expect([p.get('status'), p.get('q')]).toEqual(['active', 'honey'])
+    expect(screen.getByTestId('clients-no-match')).toBeTruthy()
+  })
+
+  it('CSRCH a chip change before the pause ends ends on the typed q and chip', async () => {
+    vi.useFakeTimers()
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((res) => {
+      release = res
+    })
+    let heldOnce = false
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      const p = paramsOf(url)
+      if (p.get('status') === 'archived' && !p.has('q') && !heldOnce) {
+        heldOnce = true
+        return held
+      }
+      return Promise.resolve(entitiesResponse(rowsForStatus(p.get('status'), p.get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('honey')
+    await advance(100)
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    await advance(300)
+    const p = paramsOf(entitiesCallUrls(fetchMock as unknown as ReturnType<typeof mockFetch>).at(-1)!)
+    expect([p.get('status'), p.get('q')]).toEqual(['archived', 'honey'])
+    // The superseded response lands last, with the wrong (unsearched) rows.
+    release(entitiesResponse(ALL_ROWS))
+    await flush()
+    expect(screen.getByText('Honeywell Group')).toBeTruthy()
+    expect(screen.queryByText('Okafor & Partners')).toBeNull()
+  })
+
+  it('CSRCH no match names the search and offers Clear search', async () => {
+    vi.useFakeTimers()
+    await mountFake(mockFetch())
+    typeSearch(' zzz ')
+    await advance(300)
+    const box = screen.getByTestId('clients-no-match')
+    expect(within(box).getByText('No clients match “zzz”')).toBeTruthy()
+    expect(within(box).getByText("Search matches part of a client's name or TIN.")).toBeTruthy()
+    expect(within(box).getByTestId('clients-clear-search').textContent).toBe('Clear search')
+    expect(screen.queryByText('No entities yet')).toBeNull()
+    expect(screen.queryByText('No clients match this filter')).toBeNull()
+  })
+
+  it("CSRCH Clear search restores the chip's list at once", async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = await mountFake(mockFetch())
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    await flush()
+    typeSearch('zzz')
+    await advance(300)
+    expect(screen.getByTestId('clients-no-match')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('clients-clear-search'))
+    await flush() // no timer advance: the clear must not wait for the debounce
+    const p = paramsOf(entitiesCallUrls(fetchMock).at(-1)!)
+    expect([p.get('status'), p.has('q')]).toEqual(['archived', false])
+    expect(searchBox().value).toBe('')
+    expect(screen.getByText('Honeywell Group')).toBeTruthy()
+  })
+
+  it('CSRCH a loading search shows the loading state', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (paramsOf(url).has('q')) return new Promise(() => {})
+      return Promise.resolve(entitiesResponse(ALL_ROWS))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('oka')
+    await advance(300)
+    expect(screen.getByText('Loading entities…')).toBeTruthy()
+    expect(searchBox().value).toBe('oka')
+  })
+
+  it('CSRCH Retry repeats the same search and chip', async () => {
+    vi.useFakeTimers()
+    let failed = false
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      const p = paramsOf(url)
+      if (p.get('q') === 'oka' && !failed) {
+        failed = true
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+      }
+      return Promise.resolve(entitiesResponse(rowsForStatus(p.get('status'), p.get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Active' }))
+    await flush()
+    typeSearch('oka')
+    await advance(300)
+    await flush()
+    expect(screen.getByText('Something went wrong')).toBeTruthy()
+    const urls = () => entitiesCallUrls(fetchMock as unknown as ReturnType<typeof mockFetch>)
+    const failedUrl = urls().at(-1)!
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await flush()
+    expect(urls().at(-1)).toBe(failedUrl)
+    expect(paramsOf(failedUrl).get('status')).toBe('active')
+    expect(paramsOf(failedUrl).get('q')).toBe('oka')
+    expect(screen.getByText('Okafor & Partners')).toBeTruthy()
+  })
+
+  it('CSRCH a stale response does not overwrite a newer search', async () => {
+    vi.useFakeTimers()
+    const pending = new Map<string, (r: MockResponse) => void>()
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      const q = paramsOf(url).get('q')
+      if (q == null) return Promise.resolve(entitiesResponse(SEARCH_ROWS))
+      return new Promise<MockResponse>((res) => pending.set(q, res))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(SEARCH_ROWS)} />)
+    await flush()
+    typeSearch('a')
+    await advance(300)
+    typeSearch('ab')
+    await advance(300)
+    pending.get('ab')!(entitiesResponse(SEARCH_ROWS.filter((e) => matchesQ(e, 'ab'))))
+    await flush()
+    pending.get('a')!(entitiesResponse(SEARCH_ROWS.filter((e) => matchesQ(e, 'a'))))
+    await flush()
+    expect(screen.getByText('Abby Ltd')).toBeTruthy()
+    expect(screen.queryByText('Alpha Co'), 'the late q=a response must not win').toBeNull()
+  })
+
+  it('CSRCH searching leaves the switcher roster alone', async () => {
+    vi.useFakeTimers()
+    mockFetch()
+    const ctx = clientsCtx(ALL_ROWS)
+    const refetchEntities = vi.fn()
+    ctx.refetchEntities = refetchEntities
+    const rosterBefore = ctx.entities
+    render(<ClientsView ctx={ctx} />)
+    await flush()
+    typeSearch('oka')
+    await advance(300)
+    typeSearch('')
+    await advance(300)
+    expect(refetchEntities).not.toHaveBeenCalled()
+    expect(ctx.entities).toBe(rosterBefore)
+    expect(ctx.entities).toEqual(ALL_ROWS)
+  })
+
+  it('CSRCH an archive under a search refetches with that search', async () => {
+    vi.useFakeTimers()
+    const { fetchMock } = mockFetchArchiveAware(rowsForStatus(null, 'okafor'))
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('okafor')
+    await advance(300)
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm
+    await flush()
+    await flush()
+    const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
+    expect(paramsOf(listUrls.at(-1)!).get('q')).toBe('okafor')
+    expect(entitiesListGetCalls(fetchMock), 'the archive refetched the list').toBeGreaterThanOrEqual(3)
+  })
+
+  it('CSRCH an archive that resolves after a newer search reruns the newer search', async () => {
+    vi.useFakeTimers()
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((res) => {
+      release = res
+    })
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) return held
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('okafor')
+    await advance(300)
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm; the POST is held
+    await flush()
+    typeSearch('beta')
+    await advance(300)
+    release({ ok: true, status: 200, json: () => Promise.resolve(null) })
+    await flush()
+    await flush()
+    const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
+    expect(paramsOf(listUrls.at(-1)!).get('q'), 'the archive reran the current search').toBe('beta')
+    expect(searchBox().value).toBe('beta')
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+    expect(screen.queryByText('Okafor & Partners')).toBeNull()
+  })
+
+  it('CSRCH a restore that resolves after a newer search reruns the newer search', async () => {
+    vi.useFakeTimers()
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((res) => {
+      release = res
+    })
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) return held
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    const archiveCalls: string[] = []
+    fetchMock.mockImplementation((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) {
+        if (url.endsWith('/onboard')) archiveCalls.push(url)
+        return held
+      }
+      return Promise.resolve(entitiesResponse(rowsForStatus(null, paramsOf(url).get('q'))))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await flush()
+    typeSearch('honey')
+    await advance(300)
+    const action = within(rowFor('Honeywell Group')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm; the POST is held
+    await flush()
+    typeSearch('beta')
+    await advance(300)
+    release({ ok: true, status: 200, json: () => Promise.resolve(null) })
+    await flush()
+    await flush()
+    const listUrls = fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => !isRollupUrl(u) && !isArchiveUrl(u))
+    expect(paramsOf(listUrls.at(-1)!).get('q'), 'the archive reran the current search').toBe('beta')
+    expect(archiveCalls, 'the held POST was onboard').toHaveLength(1)
+    expect(searchBox().value).toBe('beta')
+    expect(screen.getByText('Beta Traders')).toBeTruthy()
+    expect(screen.queryByText('Honeywell Group')).toBeNull()
   })
 })

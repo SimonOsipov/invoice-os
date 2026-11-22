@@ -12,7 +12,7 @@
 // listEntities/createEntity/updateEntity are thin wrappers around an injected
 // authedFetch (the app-side 401 seam from M3-07-02, src/lib/authedFetch.ts) — these
 // helpers receive authedFetch and know nothing about tokens or onUnauthorized:
-// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=<n>[&status=<s>]`,
+// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=<n>[&status=<s>][&q=<text>]`,
 //   resolves the whole `{entities,pagination}` envelope (no unwrapping).
 // - createEntity:  POST `${base}/api/portfolio/v1/entities`, full EntityInput body; reports `client_added` on success.
 // - updateEntity:  PATCH `${base}/api/portfolio/v1/entities/{id}`, Partial<EntityInput> body.
@@ -99,11 +99,18 @@ export function entityStatusParam(pos: EntityFilterPos): EntityStatus | undefine
 export async function listEntities(
   authedFetch: AuthedFetch,
   base: string,
-  opts?: { status?: EntityStatus; limit?: number },
+  opts?: { status?: EntityStatus; limit?: number; q?: string },
 ): Promise<EntityListResponse> {
   const params = new URLSearchParams({ limit: String(opts?.limit ?? 200) })
   if (opts?.status) params.set('status', opts.status)
+  // The server does not trim q, so a blank search must send no param.
+  const q = opts?.q?.trim()
+  if (q) params.set('q', q)
   return authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?${params.toString()}`)
+}
+
+export function clientSearchNoMatchTitle(q: string): string {
+  return `No clients match \u201C${q}\u201D`
 }
 
 // [empty-is-total-zero], mirroring invoices.ts's invoiceListIsEmpty: a third named

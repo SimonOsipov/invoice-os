@@ -22,6 +22,7 @@ import { trackClientAdded } from '../chat'
 import { createAuthedFetch } from './authedFetch'
 import * as portfolioModule from './portfolio'
 import {
+  clientSearchNoMatchTitle,
   clientsViewState,
   createEntity,
   entityStatusStyle,
@@ -714,5 +715,49 @@ describe('createEntity reports client_added', () => {
     await onboardEntityUnderTest(af, base, 'e1')
 
     expect(trackClientAdded).not.toHaveBeenCalled()
+  })
+})
+
+describe('listEntities: q search param', () => {
+  const empty = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
+  async function urlFor(opts?: Parameters<typeof listEntities>[2]): Promise<string> {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(empty) })
+    await listEntities(createAuthedFetch(() => 'tok', vi.fn()), base, opts)
+    return (fetchMock.mock.calls[0] as [string])[0]
+  }
+
+  it('listEntities_sendsQ', async () => {
+    const p = new URL(await urlFor({ q: 'Kano' })).searchParams
+    expect(p.get('q')).toBe('Kano')
+    expect(p.get('limit')).toBe('200')
+    expect(p.has('status')).toBe(false)
+  })
+
+  it('listEntities_sendsStatusAndQTogether', async () => {
+    const p = new URL(await urlFor({ status: 'archived', q: 'kano' })).searchParams
+    expect(p.get('status')).toBe('archived')
+    expect(p.get('q')).toBe('kano')
+  })
+
+  it('listEntities_encodesQ', async () => {
+    const url = await urlFor({ q: 'A&B 12/3' })
+    expect(new URL(url).searchParams.get('q')).toBe('A&B 12/3')
+    expect(url).not.toContain('&B')
+  })
+
+  it('listEntities_trimsQ', async () => {
+    expect(new URL(await urlFor({ q: '  Kano  ' })).searchParams.get('q')).toBe('Kano')
+  })
+
+  it('listEntities_blankQSendsNoParam', async () => {
+    for (const opts of [{ q: '' }, { q: '   ' }, { q: '\t\n' }, {}]) {
+      expect(new URL(await urlFor(opts)).searchParams.has('q')).toBe(false)
+    }
+  })
+})
+
+describe('clientSearchNoMatchTitle', () => {
+  it('clientSearchNoMatchTitle_quotesTheText', () => {
+    expect(clientSearchNoMatchTitle('Kano')).toBe('No clients match \u201CKano\u201D')
   })
 })

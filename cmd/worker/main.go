@@ -227,7 +227,7 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("readiness-request-purge", (&readinesscheck.Store{Pool: pool}).PurgeExpired)))
 
-	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
+	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Secrets: erpSecrets, Logger: app.Logger}
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
 		um := &notifications.UnsubscribeMetadata{Pool: pool, Account: account, Logger: app.Logger}

@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -317,7 +316,7 @@ func (r *rig) purger() *Purger {
 	if r.accounts != nil { // a nil *fakeAccounts in the interface would not be a nil reader
 		p.Accounts = r.accounts
 	}
-	setSecrets(p, r.secrets)
+	p.Secrets = r.secrets
 	return p
 }
 
@@ -732,7 +731,7 @@ func TestPurge_WritesOneStaffRowWithNoPersonalData(t *testing.T) {
 	_, ref := r.grant(a)
 
 	got, err := r.purger().Purge(context.Background(), a)
-	if err != nil || !got.Purged || got.Members != 1 || got.Objects != 2 || secretsOf(got) != 1 {
+	if err != nil || !got.Purged || got.Members != 1 || got.Objects != 2 || got.Secrets != 1 {
 		t.Fatalf("Purge = %+v, %v; want purged, members 1, objects 2, secrets 1", got, err)
 	}
 
@@ -2030,28 +2029,6 @@ func TestStaffPurgeNow_TheRemovedCreatorCanCreateAWorkspaceAgain(t *testing.T) {
 	}
 }
 
-// Reflection keeps this package compiling before Purger.Secrets and Result.Secrets exist; swap both for plain field access.
-func setSecrets(p *Purger, s erp.SecretStore) {
-	f := reflect.ValueOf(p).Elem().FieldByName("Secrets")
-	if !f.IsValid() {
-		return
-	}
-	if s == nil {
-		f.Set(reflect.Zero(f.Type()))
-		return
-	}
-	f.Set(reflect.ValueOf(s))
-}
-
-// secretsOf is Result.Secrets, or -1 while the field does not exist.
-func secretsOf(res Result) int {
-	f := reflect.ValueOf(res).FieldByName("Secrets")
-	if !f.IsValid() {
-		return -1
-	}
-	return int(f.Int())
-}
-
 type secretCall struct {
 	ref                   string
 	tenantRows, staffRows int // the watched tenant's rows when Delete was called
@@ -2225,7 +2202,7 @@ func TestPurge_DeletesTheTenantsERPSecretsBeforePurgeTenant(t *testing.T) {
 	if err != nil || !got.Purged {
 		t.Fatalf("Purge = %+v, %v; want purged", got, err)
 	}
-	if n := secretsOf(got); n != 3 {
+	if n := got.Secrets; n != 3 {
 		t.Errorf("Result.Secrets = %d, want 3", n)
 	}
 	calls := r.secrets.calls()
@@ -2269,7 +2246,7 @@ func TestPurge_AnAlreadyGoneSecretCountsAsDeleted(t *testing.T) {
 	if err != nil || !got.Purged {
 		t.Fatalf("Purge = %+v, %v; want purged", got, err)
 	}
-	if n := secretsOf(got); n != 2 {
+	if n := got.Secrets; n != 2 {
 		t.Errorf("Result.Secrets = %d, want 2", n)
 	}
 	if n := len(r.secrets.deleted()); n != 2 {
@@ -2336,7 +2313,7 @@ func TestPurge_NilSecretStore(t *testing.T) {
 	clean, held := r.due(r.tenant()), r.due(r.tenant())
 	_, ref := r.grant(held)
 	p := r.purger()
-	setSecrets(p, nil)
+	p.Secrets = nil
 	ctx := context.Background()
 
 	got, err := p.Purge(ctx, clean)
@@ -2347,14 +2324,30 @@ func TestPurge_NilSecretStore(t *testing.T) {
 	// The cause is the missing store: the ref carries the prefix, so no other secrets-step error applies.
 	_, err = p.Purge(ctx, held)
 	requireStepErr(t, err, held, "secrets")
+	if !errors.Is(err, errNoSecretStore) {
+		t.Errorf("err = %v, want errNoSecretStore", err)
+	}
 	if r.tenantRows(held) != 1 || r.grantRows(held) != 1 || !r.held(ref) || len(r.staff(held)) != 0 {
 		t.Errorf("after the refused purge: tenant rows %d, grants %d, secret held %v, staff rows %d; want 1, 1, true, 0",
 			r.tenantRows(held), r.grantRows(held), r.held(ref), len(r.staff(held)))
 	}
 
-	setSecrets(p, r.secrets)
+	p.Secrets = r.secrets
 	if got, err = p.Purge(ctx, held); err != nil || !got.Purged || r.held(ref) {
 		t.Errorf("with a store: Purge = %+v, %v, secret held %v; want purged and deleted", got, err, r.held(ref))
+	}
+}
+
+func TestPurge_AMixedSetDeletesNothing(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	_, good := r.grant(a)
+	r.grantRow(a, "pr-9-gateway-token")
+
+	_, err := r.purger().Purge(context.Background(), a)
+	requireStepErr(t, err, a, "secrets")
+	if n := len(r.secrets.deleted()); n != 0 || !r.held(good) {
+		t.Errorf("Delete calls %d, valid secret held %v; want 0, true", n, r.held(good))
 	}
 }
 
@@ -2457,7 +2450,7 @@ func TestPurge_NoSecretOfAPurgedWorkspaceRemains(t *testing.T) {
 
 			if c.run != nil {
 				c.run(t, r, p, a, refs)
-			} else if got, err := p.Purge(context.Background(), a); err != nil || !got.Purged || secretsOf(got) != c.want {
+			} else if got, err := p.Purge(context.Background(), a); err != nil || !got.Purged || got.Secrets != c.want {
 				t.Fatalf("Purge = %+v, %v; want purged with secrets %d", got, err, c.want)
 			}
 

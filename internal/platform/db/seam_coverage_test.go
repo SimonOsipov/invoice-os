@@ -732,6 +732,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{pkg: "internal/reconciliation"},                                                        // the sweep worker, same shape: a schedule opened it, not a caller
 	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                          // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/workspacepurge/purge.go", fn: "deleteSecrets"},                         // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                             // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/archive/bundle_audit.go", fn: "recordBundleEvent"},                     // audits a bundle download after its READ ONLY read; the read gated the caller; serves a locked workspace
 	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served

@@ -2145,6 +2145,7 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 	accountName, _ := wtOneCall(t, f, "gotrueadmin.FromEnv")
 	qName, _ := wtOneCall(t, f, "queue.New")
 	objName, _ := wtOneCall(t, f, "document.NewS3Store")
+	secretsName, _ := wtOneCall(t, f, "erp.SecretsFromEnv")
 	readerName := ""
 	for _, stmt := range wtMainBody(t, f) {
 		as, ok := stmt.(*ast.AssignStmt)
@@ -2179,7 +2180,7 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 								got[wtExprString(kv.Key)] = wtExprString(kv.Value)
 							}
 						}
-						want := map[string]string{"Pool": poolName, "Reader": readerName, "River": qName + ".River()", "Objects": objName, "Logger": "app.Logger"}
+						want := map[string]string{"Pool": poolName, "Reader": readerName, "River": qName + ".River()", "Objects": objName, "Secrets": secretsName, "Logger": "app.Logger"}
 						if len(got) != len(want) {
 							t.Errorf("Purger literal fields = %v, want exactly %v (Accounts only under account != nil)", got, want)
 						}

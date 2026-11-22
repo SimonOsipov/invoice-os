@@ -2,6 +2,7 @@
 paths:
   - "internal/erp/**"
   - "cmd/portfolio/main.go"
+  - "cmd/worker/main.go"
 ---
 # ERP connectors
 

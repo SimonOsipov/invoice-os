@@ -34,6 +34,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountevents"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -251,6 +252,12 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"workspace_purge", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &workspacepurge.PurgeWorker{})
 		}},
+		{"erp.pull", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.PullWorker{})
+		}},
+		{"erp.ingest", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.IngestWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -288,7 +295,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -304,7 +311,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
@@ -324,7 +331,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -721,8 +728,27 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
 	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
 	//    Work's nil-Audit guard before its nil pool can panic.
-	if len(bundleArgs) != 10 {
-		t.Fatalf("workerBundle is called with %d argument(s), want 10 (sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw)", len(bundleArgs))
+	if len(bundleArgs) != 11 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 11 (sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw, erpw)", len(bundleArgs))
+	}
+	// The 11th is the erp.Workers main built; a bare literal would register the kinds with nil collaborators.
+	erpName := ""
+	ast.Inspect(f, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		if u, ok := as.Rhs[0].(*ast.UnaryExpr); ok {
+			if cl, ok := u.X.(*ast.CompositeLit); ok && wtRender(cl.Type) == "erp.Workers" {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok {
+					erpName = id.Name
+				}
+			}
+		}
+		return true
+	})
+	if id, ok := bundleArgs[10].(*ast.Ident); !ok || erpName == "" || id.Name != erpName {
+		t.Errorf("workerBundle's eleventh argument is %s, want the erp.Workers main built (%q)", wtRender(bundleArgs[10]), erpName)
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
 		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
@@ -1838,6 +1864,38 @@ func TestOnlyTheWorkerRunsBackgroundWork(t *testing.T) {
 	}
 }
 
+// The pull sweep has nothing to pull with no connector registered: its ticker sits in a branch on the registry's length.
+func TestWorkerMain_ERPPullTickerOnlyWithAConnector(t *testing.T) {
+	isLit := func(e ast.Expr, v string) bool { l, ok := e.(*ast.BasicLit); return ok && l.Value == v }
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	guarded, found := false, false
+	ast.Inspect(f, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		ast.Inspect(ifs.Body, func(m ast.Node) bool {
+			if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], `"erp-pull"`) {
+				found = true
+				ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+					if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
+						guarded = true
+					}
+					return true
+				})
+			}
+			return true
+		})
+		return true
+	})
+	if !found || !guarded {
+		t.Errorf("the erp-pull task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", found, guarded)
+	}
+}
+
 // wtLedTask renders the task a leader.Lead(name, task) call wraps, or "" for any other expression.
 func wtLedTask(e ast.Expr) string {
 	call, ok := e.(*ast.CallExpr)
@@ -1882,7 +1940,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		return true
 	})
 	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
-		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`}
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}
@@ -2019,8 +2077,8 @@ func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
 		}
 		return true
 	})
-	if bundle == nil || len(bundle.Args) != 10 {
-		t.Fatal("main() has no ten-argument workerBundle call")
+	if bundle == nil || len(bundle.Args) != 11 {
+		t.Fatal("main() has no eleven-argument workerBundle call")
 	}
 	if got := wtExprString(bundle.Args[5]); got != xwName {
 		t.Errorf("workerBundle sixth argument = %s, want %s, the worker newEraseWorker built", got, xwName)
@@ -2194,7 +2252,7 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 		}
 		return true
 	})
-	if bundleCall == nil || len(bundleCall.Args) != 10 || wtExprString(bundleCall.Args[7]) != pjwName {
+	if bundleCall == nil || len(bundleCall.Args) != 11 || wtExprString(bundleCall.Args[7]) != pjwName {
 		t.Errorf("workerBundle's eighth argument is not %s, the purge worker main() built", pjwName)
 	}
 
@@ -2261,7 +2319,7 @@ func TestWorkerMain_WiresTheAccountEventMover(t *testing.T) {
 		}
 		return true
 	})
-	if bundleCall == nil || len(bundleCall.Args) != 10 || wtExprString(bundleCall.Args[8]) != awName {
+	if bundleCall == nil || len(bundleCall.Args) != 11 || wtExprString(bundleCall.Args[8]) != awName {
 		t.Errorf("workerBundle's ninth argument is not %s, the audit worker main() built", awName)
 	}
 

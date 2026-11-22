@@ -359,6 +359,38 @@ func TestPull_AnotherTenantsConnectionListsNothing(t *testing.T) {
 	}
 }
 
+// A page commits only while the connection is as the pull found it: a disconnect, an epoch bump or a
+// replaced cursor mid-pull leaves the listed page unqueued and the connection as the other writer left it.
+func TestPull_StopsWhenTheConnectionChangesMidPull(t *testing.T) {
+	for _, tc := range []struct{ name, set string }{
+		{"disconnected", "status = 'disconnected', grant_id = NULL"},
+		{"epoch bumped", "ingest_epoch = ingest_epoch + 1"},
+		{"cursor replaced", "cursor = '\\x0f'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPull(t, keyOne)
+			base := testFake(t)
+			p.onList = func(call int, cursor []byte) (Changes, error) {
+				if call == 1 {
+					mustExec(t, p.super, "UPDATE erp_connections SET "+tc.set+" WHERE id = $1", p.conn)
+				}
+				return base.ListChanged(context.Background(), Credentials{}, keyOne, cursor)
+			}
+			if err := p.pullNow(); err != nil {
+				t.Fatalf("pull: %v", err)
+			}
+			if n := len(p.ingestJobs(0)); n != 0 {
+				t.Errorf("ingest jobs = %d, want 0: the page was listed for a connection that changed", n)
+			}
+			if tc.name == "cursor replaced" {
+				if cursor, _, _ := p.connState(); string(cursor) != "\x0f" {
+					t.Errorf("cursor = %x, want the replaced 0f kept", cursor)
+				}
+			}
+		})
+	}
+}
+
 // --- AC-3 -----------------------------------------------------------------------------
 
 func TestPull_SameRevisionIsEnqueuedOnce(t *testing.T) {

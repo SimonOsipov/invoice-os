@@ -107,23 +107,25 @@ func TestMapFake_RoundsEachLineHalfAwayFromZero(t *testing.T) {
 		// Each tax is 0.005, a tie: rounded per line it is 0.01, so VAT sums to 0.02 and not to 0.01.
 		fakeLine{"d", "1", "1.00", "0.5"},
 		fakeLine{"e", "1", "1.00", "0.5"},
+		// Tax is taken on the rounded line total: 0.105 rounds to 0.11, and 0.11 x 50% is 0.055 -> 0.06 (0.105 x 50% would give 0.05).
+		fakeLine{"f", "1", "0.105", "50"},
 	)
 	in, err := mapFake(doc, nil)
 	if err != nil {
 		t.Fatalf("mapFake: %v", err)
 	}
-	if len(in.LineItems) != 5 {
-		t.Fatalf("lines = %d, want 5", len(in.LineItems))
+	if len(in.LineItems) != 6 {
+		t.Fatalf("lines = %d, want 6", len(in.LineItems))
 	}
 	// 3 x 33.335 is 100.005; its tax is taken on the rounded 100.01 (7.50075).
-	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"1.00", "0.01"}, {"1.00", "0.01"}}
+	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"1.00", "0.01"}, {"1.00", "0.01"}, {"0.11", "0.06"}}
 	for i, w := range want {
 		exact(t, "LineTotal", in.LineItems[i].LineTotal, w[0])
 		exact(t, "LineTax", in.LineItems[i].LineTax, w[1])
 	}
-	exact(t, "Subtotal", in.Subtotal, "122.14")
-	exact(t, "VAT", in.VAT, "9.02")
-	exact(t, "Total", in.Total, "131.16")
+	exact(t, "Subtotal", in.Subtotal, "122.25")
+	exact(t, "VAT", in.VAT, "9.08")
+	exact(t, "Total", in.Total, "131.33")
 }
 
 func TestMapFake_NegativeLineRoundsAwayFromZero(t *testing.T) {
@@ -385,6 +387,12 @@ func TestContentHash_DecimalsHashByValue(t *testing.T) {
 	if ContentHash(a) != ContentHash(b) {
 		t.Error("100 and 100.00 must hash alike")
 	}
+	// A change below the second place is a change: the hash keeps each value's exact decimals.
+	c, d := hashBase(), hashBase()
+	c.LineItems[0].Quantity, d.LineItems[0].Quantity = sp("33.335"), sp("33.336")
+	if ContentHash(c) == ContentHash(d) {
+		t.Error("33.335 and 33.336 must hash apart")
+	}
 }
 
 func TestHashedContent_FieldsArePinned(t *testing.T) {
@@ -437,6 +445,7 @@ func TestDiffers_AmountsOrLines(t *testing.T) {
 		{"an extra line", invOf(sp("100.00"), sp("7.50"), sp("107.50")), append(same(), same()[0]), true},
 		{"a missing line", invOf(sp("100.00"), sp("7.50"), sp("107.50")), nil, true},
 		{"same totals, another description", invOf(sp("100.00"), sp("7.50"), sp("107.50")), with(func(l *lineAmounts) { l.Description = sp("Other") }), true},
+		{"a line quantity differs", invOf(sp("100.00"), sp("7.50"), sp("107.50")), with(func(l *lineAmounts) { l.Quantity = sp("2") }), true},
 		{"a line unit price differs", invOf(sp("100.00"), sp("7.50"), sp("107.50")), with(func(l *lineAmounts) { l.UnitPrice = sp("100.01") }), true},
 		{"a line tax differs", invOf(sp("100.00"), sp("7.50"), sp("107.50")), with(func(l *lineAmounts) { l.LineTax = sp("7.51") }), true},
 		{"NULL total against a value", invOf(sp("100.00"), sp("7.50"), nil), same(), true},

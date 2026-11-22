@@ -851,6 +851,150 @@ func TestIngest_AnotherTenantsConnectionIsNeverTouched(t *testing.T) {
 	}
 }
 
+// --- QA adversarial coverage --------------------------------------------------------------------------
+
+// A header amount that differs while every line is equal must still flag differs, one amount at a time.
+func TestIngest_DuplicateWithOnlyAHeaderAmountDifferentFlagsDiffers(t *testing.T) {
+	for _, col := range []string{"subtotal", "vat", "total"} {
+		t.Run(col, func(t *testing.T) {
+			e := newIngest(t)
+			inv := e.plantInvoice(plantInv{number: numOne})
+			mustExec(t, e.super, "UPDATE invoices SET "+col+" = 1.00 WHERE id = $1", inv)
+			e.mustWork(docOne, "1")
+			if d := e.wantState(docOne, "linked"); !d.Differs {
+				t.Errorf("differs_from_erp = false with only the header %s different", col)
+			}
+		})
+	}
+}
+
+// Two different lines in order: a comparison that reads the stored lines in another order flags a false difference.
+func TestIngest_DuplicateWithEqualLinesInOrderDoesNotFlagDiffers(t *testing.T) {
+	e := newIngest(t)
+	e.serve(fakeDocument(docOne, numOne, custOne,
+		fakeLine{"Alpha", "1", "10.00", "7.5"}, fakeLine{"Beta", "2", "20.00", "7.5"}))
+	inv := e.plantInvoice(plantInv{number: numOne})
+	mustExec(t, e.super, "UPDATE invoices SET subtotal = 50.00, vat = 3.75, total = 53.75 WHERE id = $1", inv)
+	mustExec(t, e.super, "DELETE FROM line_items WHERE invoice_id = $1", inv)
+	for i, l := range [][5]string{{"Alpha", "1", "10.00", "10.00", "0.75"}, {"Beta", "2", "20.00", "40.00", "3.00"}} {
+		mustExec(t, e.super, `INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total, line_tax, tax_percent)
+			VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::numeric, $8::numeric, 7.5)`, e.tenant, inv, i+1, l[0], l[1], l[2], l[3], l[4])
+	}
+	e.mustWork(docOne, "1")
+	d := e.wantState(docOne, "linked")
+	if d.Differs {
+		t.Error("differs_from_erp = true for a stored invoice equal to the mapped document, line for line")
+	}
+}
+
+// A settled row at the same revision is never taken again: no fetch, no second audit row.
+func TestIngest_SettledStatesAreNotRetakenAtTheSameRevision(t *testing.T) {
+	t.Run("held", func(t *testing.T) {
+		e := newIngest(t)
+		e.plantDocument(plantDoc{docID: docOne, state: "held", updatedAgo: time.Hour})
+		e.mustWork(docOne, "1")
+		if n := e.fetches.Load(); n != 0 {
+			t.Errorf("Fetch called %d times, want 0", n)
+		}
+		e.wantNoAudit("erp.document.skipped_duplicate")
+	})
+	t.Run("linked", func(t *testing.T) {
+		e := newIngest(t)
+		inv := e.plantInvoice(plantInv{number: numOne})
+		e.takenDoc(docOne, "linked", inv)
+		e.mustWork(docOne, "1")
+		if n := e.fetches.Load(); n != 0 {
+			t.Errorf("Fetch called %d times, want 0", n)
+		}
+		e.wantNoAudit("erp.document.skipped_duplicate")
+	})
+	t.Run("deleted", func(t *testing.T) {
+		e := newIngest(t)
+		e.plantDocument(plantDoc{docID: docOne, state: "deleted", deleted: tp(time.Now().Add(-time.Hour)), updatedAgo: time.Hour})
+		before := e.doc(docOne)
+		e.mustWorkDeleted(docOne, "1")
+		if after := e.doc(docOne); !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Errorf("updated_at moved %v -> %v: a deleted ref at the same revision was taken again", before.UpdatedAt, after.UpdatedAt)
+		}
+	})
+}
+
+// A claim on a number whose invoice another document of the connection already links is held, never adopted.
+func TestIngest_OwnClaimOnAnInvoiceAnotherDocumentLinksIsHeld(t *testing.T) {
+	e := newIngest(t)
+	inv := e.plantInvoice(plantInv{number: numOne, conn: &e.conn})
+	e.plantDocument(plantDoc{docID: "fake-co-1-inv-9", state: "linked", invoiceID: &inv})
+	e.plantDocument(plantDoc{docID: docOne, state: "pending", claimed: sp(numOne)})
+	e.mustWork(docOne, "1")
+	d := e.wantState(docOne, "held")
+	if d.InvoiceID != nil || d.Claimed != nil {
+		t.Errorf("held row invoice_id/claim = %v/%v, want NULL/NULL", d.InvoiceID, d.Claimed)
+	}
+}
+
+func TestIngest_DeletedRefOnAFailedDocumentClearsItsFailure(t *testing.T) {
+	e := newIngest(t)
+	e.plantDocument(plantDoc{docID: docOne, state: "failed", failure: sp("unmappable")})
+	e.mustWorkDeleted(docOne, "2")
+	d := e.wantState(docOne, "deleted")
+	if d.Failure != nil || d.Deleted == nil || d.Revision != "2" {
+		t.Errorf("failure/deleted/revision = %v/%v/%q, want NULL/set/2", d.Failure, d.Deleted, d.Revision)
+	}
+}
+
+// A draft that already carries a verdict (blocking violations) is not validated again by a later revision.
+func TestIngest_NextRevisionDoesNotRevalidateADraftThatHasAVerdict(t *testing.T) {
+	e := newIngest(t)
+	e.val.blocking = true
+	e.mustWork(docOne, "1")
+	id, status, _ := e.invoiceByNumber(e.entity, numOne)
+	if status != "draft" || e.ruleSetOf(id) == nil {
+		t.Fatalf("setup: invoice status %q, verdict %v, want a draft with a verdict", status, e.ruleSetOf(id))
+	}
+	e.mustWork(docOne, "2")
+	if n := e.val.callCount(); n != 1 {
+		t.Errorf("validator calls = %d, want 1: a draft with a verdict is not validated again", n)
+	}
+}
+
+// A failed final attempt at a new revision keeps the invoice the document already has.
+func TestIngest_FinalAttemptFailureKeepsATakenInvoice(t *testing.T) {
+	e := newIngest(t)
+	inv := e.plantInvoice(plantInv{number: numOne, conn: &e.conn})
+	e.takenDoc(docOne, "drafted", inv)
+	e.onFetch = func(context.Context, DocRef) (Document, error) { return Document{}, errVendor }
+	if err := e.workAs(context.Background(), e.worker, e.args(docOne, "2", false), 8); !errors.Is(err, errVendor) {
+		t.Fatalf("Work err = %v, want the vendor error", err)
+	}
+	d := e.wantState(docOne, "drafted")
+	if d.InvoiceID == nil || *d.InvoiceID != inv {
+		t.Errorf("row invoice_id = %v, want %s kept", d.InvoiceID, inv)
+	}
+}
+
+// A new revision that cannot be mapped is recorded but leaves the invoice the document already has.
+func TestIngest_UnmappableNewRevisionKeepsTheTakenInvoice(t *testing.T) {
+	e := newIngest(t)
+	inv := e.plantInvoice(plantInv{number: numOne, conn: &e.conn})
+	e.takenDoc(docOne, "drafted", inv)
+	e.serve(Document{Ref: DocRef{SourceDocID: docOne, SourceRevision: "2"}, ContentType: jsonType, Body: []byte("{")})
+	e.mustWork(docOne, "2")
+	d := e.wantState(docOne, "drafted")
+	if d.InvoiceID == nil || *d.InvoiceID != inv || d.Revision != "2" {
+		t.Errorf("row invoice_id/revision = %v/%q, want %s/2", d.InvoiceID, d.Revision, inv)
+	}
+}
+
+// Another client's live claim on the same number does not hold this client's document.
+func TestIngest_AnotherClientsLiveClaimOnTheNumberDoesNotSnooze(t *testing.T) {
+	e := newIngest(t)
+	y := e.addClient("ingest client Y")
+	yConn := e.addConnection(y, "fake-co-2")
+	e.plantDocument(plantDoc{conn: yConn, docID: "fake-co-2-inv-1", state: "pending", claimed: sp(numOne)})
+	e.mustWork(docOne, "1")
+	e.wantState(docOne, "drafted")
+}
+
 func TestIngest_OperationalErrorIsReturnedForRetry(t *testing.T) {
 	e := newIngest(t)
 	e.onFetch = func(context.Context, DocRef) (Document, error) { return Document{}, errVendor }

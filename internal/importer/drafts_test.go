@@ -103,7 +103,7 @@ func TestCreateDrafts_FinalizeErrorIsReturned(t *testing.T) {
 func TestCreateDrafts_OutcomeCarriesVersionViolationsAndUnvalidated(t *testing.T) {
 	viol := []invoice.Violation{{}}
 	v := &draftValidator{out: invoice.BatchOutcome{
-		RuleSetVersion: 7, Clean: 1, WithViolations: 1,
+		RuleSetVersion: 7, Clean: 2, WithViolations: 1,
 		ByID:        map[string][]invoice.Violation{"id-INV-0": viol},
 		Unvalidated: []string{"id-INV-2"},
 	}}
@@ -121,7 +121,7 @@ func TestCreateDrafts_OutcomeCarriesVersionViolationsAndUnvalidated(t *testing.T
 	if !out.Results[2].Unvalidated || out.Results[1].Unvalidated {
 		t.Fatalf("unvalidated flags wrong: %+v", out.Results)
 	}
-	if out.InvoicesClean != 1 || out.InvoicesWithViolations != 1 {
+	if out.InvoicesClean != 2 || out.InvoicesWithViolations != 1 {
 		t.Fatalf("counts = %d/%d", out.InvoicesClean, out.InvoicesWithViolations)
 	}
 	if fin[0].out.RuleSetVersion == nil {

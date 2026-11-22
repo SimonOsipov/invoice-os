@@ -553,3 +553,35 @@ describe('leaving mid-write or mid-poll', () => {
     expect(gets(f, 'e2')).toHaveLength(1)
   })
 })
+describe('poll edges (QA)', () => {
+  const pendingAnswer = () => ({ ...conn({ status: 'pending', external_key: null }), consent_url: CONSENT })
+
+  it('connectorsTab_aConnectThatLandsActiveAtOnceStopsThePoll', async () => {
+    vi.useFakeTimers()
+    let n = 0
+    const f = mkFetch({ get: () => (++n === 1 ? listing() : listing([conn()])), post: () => pendingAnswer() })
+    spyOpen()
+    render(<ConnectorsView ctx={mkCtx(f)} />)
+    await flush()
+    await click(connectBtn(rowOf('fake'))!)
+    await advance(3000)
+    expect(gets(f)).toHaveLength(2)
+    expect(screen.getByText('CONNECTED')).toBeTruthy()
+    await advance(60000)
+    expect(gets(f)).toHaveLength(2)
+  })
+
+  it('connectorsTab_aClientSwitchStopsThePollForEveryClient', async () => {
+    vi.useFakeTimers()
+    const f = mkFetch({ get: (u) => (u.includes('/e1/') ? listing([conn({ status: 'pending' })]) : listing([], ['beta'])) })
+    const { rerender } = render(<ConnectorsView ctx={mkCtx(f)} />)
+    await flush()
+    await advance(3000)
+    expect(gets(f, 'e1').length, 'the poll ran before the switch').toBeGreaterThanOrEqual(2)
+    rerender(<ConnectorsView ctx={mkCtx(f, {}, 'e2')} />)
+    await flush()
+    const total = gets(f).length
+    await advance(30000)
+    expect(gets(f)).toHaveLength(total)
+  })
+})

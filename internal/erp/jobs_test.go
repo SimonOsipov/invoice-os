@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestIngestArgs_KindTenantAndInsertOpts(t *testing.T) {
@@ -80,5 +81,54 @@ func TestIngestKey_BoundedStableAndPerRevision(t *testing.T) {
 	// The doc id and revision must not run together under one separator.
 	if IngestKey(connX, 0, "a\x00b", "c", false) == IngestKey(connX, 0, "a", "b\x00c", false) {
 		t.Error("(\"a\\x00b\", \"c\") and (\"a\", \"b\\x00c\") share a key")
+	}
+}
+
+func TestPullArgs_KindTenantAndInsertOpts(t *testing.T) {
+	args := PullArgs{TenantID: uuid.NewString(), ConnectionID: uuid.NewString()}
+	if got := args.Kind(); got != "erp.pull" {
+		t.Errorf("Kind() = %q, want erp.pull", got)
+	}
+	if got := args.Tenant(); got != args.TenantID || got == "" {
+		t.Errorf("Tenant() = %q, want the TenantID %q", got, args.TenantID)
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	if want := []string{"connection_id", "tenant_id"}; !slices.Equal(keys, want) {
+		t.Errorf("args JSON keys = %v, want %v", keys, want)
+	}
+	if m["tenant_id"] != args.TenantID {
+		t.Errorf("tenant_id = %v, want %q", m["tenant_id"], args.TenantID)
+	}
+
+	opts := args.InsertOpts()
+	if opts.MaxAttempts != 8 {
+		t.Errorf("MaxAttempts = %d, want 8", opts.MaxAttempts)
+	}
+	if !opts.UniqueOpts.ByArgs {
+		t.Error("UniqueOpts.ByArgs = false, want true")
+	}
+	// Completed is left out so the next tick can enqueue again.
+	got := slices.Clone(opts.UniqueOpts.ByState)
+	want := []rivertype.JobState{
+		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable,
+		rivertype.JobStateRunning, rivertype.JobStateScheduled,
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("UniqueOpts.ByState = %v, want exactly %v", got, want)
 	}
 }

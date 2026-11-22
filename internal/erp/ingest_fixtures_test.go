@@ -543,8 +543,8 @@ func (e *ingestEnv) plantDocument(p plantDoc) string {
 	return id
 }
 
-func tp(t time.Time) *time.Time             { return &t }
-func ip(i int) *int                         { return &i }
+func tp(t time.Time) *time.Time                     { return &t }
+func ip(i int) *int                                 { return &i }
 func contentHashPtr(in invoice.CreateInput) *string { h := ContentHash(in); return &h }
 
 // takenDoc plants a drafted or linked row on invoiceID carrying the hash of what the fake serves.

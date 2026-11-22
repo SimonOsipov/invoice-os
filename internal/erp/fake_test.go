@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"testing"
 
@@ -25,7 +26,11 @@ func TestFake_ImplementsConnector(t *testing.T) {
 }
 
 func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
-	f := NewFake()
+	f := testFake(t)
+	wantCounts := map[string]int{"fake-co-1": 3, "fake-co-2": 4, "fake-co-3": 6}
+	if len(fakeSeed) != len(wantCounts) {
+		t.Fatalf("seed has %d companies, want %d", len(fakeSeed), len(wantCounts))
+	}
 	totals := map[int]bool{}
 	for scope, co := range fakeSeed {
 		var got []string
@@ -66,10 +71,61 @@ func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
 				t.Fatalf("%s got %v want %v", scope, got, want)
 			}
 		}
+		if len(got) != wantCounts[scope] {
+			t.Errorf("%s lists %d refs, want %d", scope, len(got), wantCounts[scope])
+		}
 		if len(got) <= 2 || totals[len(got)] {
 			t.Errorf("%s total %d is not distinct and above one page", scope, len(got))
 		}
 		totals[len(got)] = true
+	}
+}
+
+func TestFake_ListChangedFlagsTheVoidedSeedDocument(t *testing.T) {
+	f := testFake(t)
+	for _, scope := range []string{"fake-co-1", "fake-co-2", "fake-co-3"} {
+		var refs []DocRef
+		var cursor []byte
+		for pages := 0; ; pages++ {
+			if pages > 10 {
+				t.Fatalf("%s: the cursor never ends", scope)
+			}
+			ch, err := f.ListChanged(ctx, cr, scope, cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refs = append(refs, ch.Refs...)
+			cursor = ch.Cursor
+			if !ch.More {
+				break
+			}
+		}
+		if scope == "fake-co-3" && len(refs) != 6 {
+			t.Fatalf("fake-co-3 lists %d refs, want 6", len(refs))
+		}
+		for _, r := range refs {
+			if want := r.SourceDocID == "fake-co-3-inv-6"; r.Deleted != want {
+				t.Errorf("%s Deleted = %v, want %v", r.SourceDocID, r.Deleted, want)
+			}
+		}
+		if scope == "fake-co-3" && !slices.ContainsFunc(refs, func(r DocRef) bool { return r.SourceDocID == "fake-co-3-inv-6" && r.Deleted }) {
+			t.Error("fake-co-3-inv-6 is not listed as deleted")
+		}
+	}
+}
+
+func TestFake_FetchStillServesTheVoidedDocument(t *testing.T) {
+	d, err := testFake(t).Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-3-inv-6", Scope: "fake-co-3"})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	var body struct {
+		Number     string
+		IssueDate  string `json:"issue_date"`
+		CustomerID string `json:"customer_id"`
+	}
+	if err := json.Unmarshal(d.Body, &body); err != nil || body.Number != "FK3-0006" || body.IssueDate != "2026-04-06" || body.CustomerID != "fake-co-3-cust-1" {
+		t.Errorf("body %s: %v", d.Body, err)
 	}
 }
 

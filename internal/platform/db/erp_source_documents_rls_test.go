@@ -145,6 +145,7 @@ var esdShape = map[string]erpCol{
 	"differs_from_erp":           {"boolean", true, "false"},
 	"changed_after_clearance_at": {"timestamp with time zone", false, ""},
 	"deleted_in_erp_at":          {"timestamp with time zone", false, ""},
+	"last_job_id":                {"bigint", false, ""},
 	"created_at":                 {"timestamp with time zone", true, "now()"},
 	"updated_at":                 {"timestamp with time zone", true, "now()"},
 }

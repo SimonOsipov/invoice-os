@@ -15,6 +15,8 @@ CREATE TABLE erp_source_documents (
     differs_from_erp           boolean     NOT NULL DEFAULT false,
     changed_after_clearance_at timestamptz,
     deleted_in_erp_at          timestamptz,
+    -- River id of the last ingest job that wrote a revision: it orders jobs of opaque revisions.
+    last_job_id                bigint,
     created_at                 timestamptz NOT NULL DEFAULT now(),
     updated_at                 timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT erp_source_documents_pk PRIMARY KEY (id),

@@ -95,6 +95,7 @@ type docState struct {
 	failure, invoiceID, hash *string
 	claimed                  *string
 	hashVersion              *int16
+	lastJob                  *int64
 	deleted, changed         *time.Time
 	live                     bool
 }
@@ -116,21 +117,34 @@ const (
 	planAdopt
 )
 
+// ingestJob is the args plus the River job id, which orders the jobs of one document.
+type ingestJob struct {
+	IngestArgs
+	id int64
+}
+
+// stale: a job of another revision that was enqueued before the job that last wrote the row.
+// Revisions are opaque, so the job id is the only order.
+func (a ingestJob) stale(d docState, found bool) bool {
+	return found && d.lastJob != nil && d.rev != a.SourceRevision && a.id < *d.lastJob
+}
+
 func (w *IngestWorker) Work(ctx context.Context, job *river.Job[IngestArgs]) error {
-	err := w.ingest(ctx, job.Args)
+	j := ingestJob{IngestArgs: job.Args, id: job.ID}
+	err := w.ingest(ctx, j)
 	if err == nil {
 		return nil
 	}
 	var snooze *rivertype.JobSnoozeError
 	if !errors.As(err, &snooze) && job.Attempt >= job.MaxAttempts {
-		if terr := w.terminal(context.WithoutCancel(ctx), job.Args); terr != nil && w.Logger != nil {
+		if terr := w.terminal(context.WithoutCancel(ctx), j); terr != nil && w.Logger != nil {
 			w.Logger.Error("erp ingest: terminal row not written", "connection_id", job.Args.ConnectionID, "err", terr)
 		}
 	}
 	return err
 }
 
-func (w *IngestWorker) ingest(ctx context.Context, a IngestArgs) error {
+func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 	var (
 		c       connInfo
 		d       docState
@@ -157,7 +171,7 @@ func (w *IngestWorker) ingest(ctx context.Context, a IngestArgs) error {
 	if err != nil || skipped {
 		return err
 	}
-	if found && shortCircuit(d, a) {
+	if a.stale(d, found) || found && shortCircuit(d, a) {
 		return nil
 	}
 	ictx := auth.WithIdentity(ctx, auth.Identity{Subject: ingestActor, Role: "authenticated", TenantID: a.TenantID})
@@ -269,10 +283,12 @@ const (
 
 // yieldsTo says whether a job at a.SourceRevision must leave the row alone: another revision's live
 // claim is in flight (snooze), or the row is a deleted one that this job's revision does not own (skip).
-func yieldsTo(d docState, found bool, a IngestArgs) int {
+func yieldsTo(d docState, found bool, a ingestJob) int {
 	switch {
 	case !found || d.rev == a.SourceRevision:
 		return yieldNone
+	case a.stale(d, found):
+		return yieldSkip
 	case d.state == "pending" && d.claimed != nil && d.live:
 		return yieldSnooze
 	case d.state == "deleted" || d.deleted != nil:
@@ -294,16 +310,16 @@ func readConn(ctx context.Context, tx pgx.Tx, id string, lock bool) (connInfo, b
 	return c, err == nil, err
 }
 
-func readDoc(ctx context.Context, tx pgx.Tx, a IngestArgs, lock bool) (docState, bool, error) {
+func readDoc(ctx context.Context, tx pgx.Tx, a ingestJob, lock bool) (docState, bool, error) {
 	q := `SELECT id::text, state, source_revision, failure, invoice_id::text, content_hash, claimed_number, hash_version,
-	             changed_after_clearance_at, deleted_in_erp_at, updated_at > now() - interval '` + claimLife + `'
+	             changed_after_clearance_at, deleted_in_erp_at, last_job_id, updated_at > now() - interval '` + claimLife + `'
 	      FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2`
 	if lock {
 		q += " FOR UPDATE"
 	}
 	var d docState
 	err := tx.QueryRow(ctx, q, a.ConnectionID, a.SourceDocID).Scan(&d.id, &d.state, &d.rev, &d.failure, &d.invoiceID,
-		&d.hash, &d.claimed, &d.hashVersion, &d.changed, &d.deleted, &d.live)
+		&d.hash, &d.claimed, &d.hashVersion, &d.changed, &d.deleted, &d.lastJob, &d.live)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return docState{}, false, nil
 	}
@@ -311,7 +327,7 @@ func readDoc(ctx context.Context, tx pgx.Tx, a IngestArgs, lock bool) (docState,
 }
 
 // shortCircuit is the settled-row check: this revision was already taken, in the same live or deleted shape.
-func shortCircuit(d docState, a IngestArgs) bool {
+func shortCircuit(d docState, a ingestJob) bool {
 	switch d.state {
 	case "drafted", "linked", "held", "deleted":
 	case "failed":
@@ -339,7 +355,7 @@ type docWrite struct {
 }
 
 // upsertDoc writes one row and resets every mark: the ref is live. A nil hash keeps the stored one.
-func upsertDoc(ctx context.Context, tx pgx.Tx, a IngestArgs, entity string, v docWrite) error {
+func upsertDoc(ctx context.Context, tx pgx.Tx, a ingestJob, entity string, v docWrite) error {
 	var hash *string
 	var version *int
 	if v.hash != "" {
@@ -348,16 +364,17 @@ func upsertDoc(ctx context.Context, tx pgx.Tx, a IngestArgs, entity string, v do
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, failure,
-                                  claimed_number, invoice_id, differs_from_erp, content_hash, hash_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                  claimed_number, invoice_id, differs_from_erp, content_hash, hash_version, last_job_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET
     source_revision = EXCLUDED.source_revision, state = EXCLUDED.state, failure = EXCLUDED.failure,
     claimed_number = EXCLUDED.claimed_number, invoice_id = EXCLUDED.invoice_id,
     differs_from_erp = EXCLUDED.differs_from_erp,
     content_hash = coalesce(EXCLUDED.content_hash, erp_source_documents.content_hash),
     hash_version = coalesce(EXCLUDED.hash_version, erp_source_documents.hash_version),
+    last_job_id = greatest(erp_source_documents.last_job_id, EXCLUDED.last_job_id),
     deleted_in_erp_at = NULL, changed_after_clearance_at = NULL, updated_at = now()`,
-		a.TenantID, entity, a.ConnectionID, a.SourceDocID, v.rev, v.state, v.failure, v.claimed, v.invoiceID, v.differs, hash, version)
+		a.TenantID, entity, a.ConnectionID, a.SourceDocID, v.rev, v.state, v.failure, v.claimed, v.invoiceID, v.differs, hash, version, a.id)
 	return err
 }
 
@@ -373,7 +390,7 @@ func throttled(err error) error {
 func (w *IngestWorker) snoozeErr() error { return river.JobSnooze(claimSnooze) }
 
 // claim is TxA: it decides the document under the connection, row and number locks.
-func (w *IngestWorker) claim(ctx context.Context, a IngestArgs, in *invoice.CreateInput, hash string) (plan, error) {
+func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.CreateInput, hash string) (plan, error) {
 	p := plan{kind: planDone}
 	err := db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
@@ -387,7 +404,7 @@ func (w *IngestWorker) claim(ctx context.Context, a IngestArgs, in *invoice.Crea
 		if err != nil {
 			return err
 		}
-		if found && shortCircuit(d, a) {
+		if a.stale(d, found) || found && shortCircuit(d, a) {
 			return nil
 		}
 		held := found && d.state == "pending" && d.claimed != nil && d.live
@@ -463,7 +480,7 @@ func linkedElsewhere(ctx context.Context, tx pgx.Tx, connID, invoiceID, ownRow s
 }
 
 // linkOrHold links or holds a document whose number is taken: the number belongs to an existing invoice, which is never touched.
-func (w *IngestWorker) linkOrHold(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, in invoice.CreateInput, hash string, inv invRef, linked bool) error {
+func (w *IngestWorker) linkOrHold(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, in invoice.CreateInput, hash string, inv invRef, linked bool) error {
 	v := docWrite{state: "held", rev: a.SourceRevision, hash: hash}
 	var differs bool
 	if !linked {
@@ -507,27 +524,27 @@ func differsFrom(ctx context.Context, tx pgx.Tx, invoiceID string, in invoice.Cr
 }
 
 // newRevision handles a taken document's new revision never writes the invoice.
-func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, d docState, in invoice.CreateInput, hash string) error {
+func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, d docState, in invoice.CreateInput, hash string) error {
 	var status, number string
 	if err := tx.QueryRow(ctx, `SELECT status, invoice_number FROM invoices WHERE id = $1`, *d.invoiceID).Scan(&status, &number); err != nil {
 		return err
 	}
-	const set = `UPDATE erp_source_documents SET source_revision = $2, deleted_in_erp_at = NULL, updated_at = now()`
+	const set = `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), deleted_in_erp_at = NULL, updated_at = now()`
 	switch {
 	case d.hashVersion == nil || int(*d.hashVersion) != HashVersion:
 		differs, err := differsFrom(ctx, tx, *d.invoiceID, in)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, set+`, content_hash = $3, hash_version = $4, differs_from_erp = $5 WHERE id = $1`,
-			d.id, a.SourceRevision, hash, HashVersion, differs)
+		_, err = tx.Exec(ctx, set+`, content_hash = $4, hash_version = $5, differs_from_erp = $6 WHERE id = $1`,
+			d.id, a.SourceRevision, a.id, hash, HashVersion, differs)
 		return err
 	case d.hash != nil && *d.hash == hash:
-		_, err := tx.Exec(ctx, set+` WHERE id = $1`, d.id, a.SourceRevision)
+		_, err := tx.Exec(ctx, set+` WHERE id = $1`, d.id, a.SourceRevision, a.id)
 		return err
 	case status == string(invoice.StatusAccepted):
-		if _, err := tx.Exec(ctx, set+`, content_hash = $3, changed_after_clearance_at = coalesce(changed_after_clearance_at, now()) WHERE id = $1`,
-			d.id, a.SourceRevision, hash); err != nil {
+		if _, err := tx.Exec(ctx, set+`, content_hash = $4, changed_after_clearance_at = coalesce(changed_after_clearance_at, now()) WHERE id = $1`,
+			d.id, a.SourceRevision, a.id, hash); err != nil {
 			return err
 		}
 		return recordChanged(ctx, tx, c, a, *d.invoiceID, number, false)
@@ -536,20 +553,21 @@ func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a IngestArgs,
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, set+`, content_hash = $3, differs_from_erp = $4 WHERE id = $1`, d.id, a.SourceRevision, hash, differs)
+		_, err = tx.Exec(ctx, set+`, content_hash = $4, differs_from_erp = $5 WHERE id = $1`, d.id, a.SourceRevision, a.id, hash, differs)
 		return err
 	}
 }
 
 // markDeleted: a deleted ref marks the document and never touches an invoice.
-func (w *IngestWorker) markDeleted(ctx context.Context, tx pgx.Tx, a IngestArgs, c connInfo, d docState, found bool) error {
+func (w *IngestWorker) markDeleted(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, d docState, found bool) error {
 	if !found || d.invoiceID == nil {
 		_, err := tx.Exec(ctx, `
-INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, deleted_in_erp_at)
-VALUES ($1, $2, $3, $4, $5, 'deleted', now())
+INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, deleted_in_erp_at, last_job_id)
+VALUES ($1, $2, $3, $4, $5, 'deleted', now(), $6)
 ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET source_revision = EXCLUDED.source_revision, state = 'deleted',
+    last_job_id = greatest(erp_source_documents.last_job_id, EXCLUDED.last_job_id),
     failure = NULL, claimed_number = NULL, invoice_id = NULL, deleted_in_erp_at = now(), updated_at = now()`,
-			a.TenantID, c.entity, a.ConnectionID, a.SourceDocID, a.SourceRevision)
+			a.TenantID, c.entity, a.ConnectionID, a.SourceDocID, a.SourceRevision, a.id)
 		return err
 	}
 	var status, number string
@@ -557,20 +575,20 @@ ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET source_revision = EXCLU
 		return err
 	}
 	if status != string(invoice.StatusAccepted) {
-		_, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, deleted_in_erp_at = now(), updated_at = now() WHERE id = $1`,
-			d.id, a.SourceRevision)
+		_, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), deleted_in_erp_at = now(), updated_at = now() WHERE id = $1`,
+			d.id, a.SourceRevision, a.id)
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, deleted_in_erp_at = now(),
+	if _, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), deleted_in_erp_at = now(),
 		changed_after_clearance_at = coalesce(changed_after_clearance_at, now()), updated_at = now() WHERE id = $1`,
-		d.id, a.SourceRevision); err != nil {
+		d.id, a.SourceRevision, a.id); err != nil {
 		return err
 	}
 	return recordChanged(ctx, tx, c, a, *d.invoiceID, number, true)
 }
 
 // settle is TxB: it writes what the create (or the adopted invoice) came to, under this job's claim.
-func (w *IngestWorker) settle(ctx context.Context, a IngestArgs, in invoice.CreateInput, hash, invoiceID string, refusal error) error {
+func (w *IngestWorker) settle(ctx context.Context, a ingestJob, in invoice.CreateInput, hash, invoiceID string, refusal error) error {
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
 		if err != nil {
@@ -616,7 +634,7 @@ func (w *IngestWorker) settle(ctx context.Context, a IngestArgs, in invoice.Crea
 }
 
 // fail ends the document as failed; a document that already has an invoice only records the revision.
-func (w *IngestWorker) fail(ctx context.Context, a IngestArgs, failure string) error {
+func (w *IngestWorker) fail(ctx context.Context, a ingestJob, failure string) error {
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
 		if err != nil || !ok {
@@ -633,7 +651,7 @@ func (w *IngestWorker) fail(ctx context.Context, a IngestArgs, failure string) e
 			return nil // a superseded revision's job leaves the newer revision's row alone
 		}
 		if found && d.invoiceID != nil {
-			_, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, updated_at = now() WHERE id = $1`, d.id, a.SourceRevision)
+			_, err := tx.Exec(ctx, `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), updated_at = now() WHERE id = $1`, d.id, a.SourceRevision, a.id)
 			return err
 		}
 		return upsertDoc(ctx, tx, a, c.entity, docWrite{state: "failed", rev: a.SourceRevision, failure: &failure})
@@ -641,7 +659,7 @@ func (w *IngestWorker) fail(ctx context.Context, a IngestArgs, failure string) e
 }
 
 // terminal leaves the row an exhausted ingest ends on: drafted when its own create landed, else failed.
-func (w *IngestWorker) terminal(ctx context.Context, a IngestArgs) error {
+func (w *IngestWorker) terminal(ctx context.Context, a ingestJob) error {
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
 		if err != nil || !ok {
@@ -705,14 +723,14 @@ func (w *IngestWorker) validateIfDraft(ctx context.Context, tenantID, invoiceID 
 	return err
 }
 
-func recordPulled(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID, number string) error {
+func recordPulled(ctx context.Context, tx pgx.Tx, c connInfo, a ingestJob, invoiceID, number string) error {
 	return audit.Record(ctx, tx, ingestActor, "erp.document.pulled", map[string]any{
 		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
 		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,
 	})
 }
 
-func recordSkipped(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID *string, number string, linked, differs bool) error {
+func recordSkipped(ctx context.Context, tx pgx.Tx, c connInfo, a ingestJob, invoiceID *string, number string, linked, differs bool) error {
 	return audit.Record(ctx, tx, ingestActor, "erp.document.skipped_duplicate", map[string]any{
 		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
 		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,
@@ -720,7 +738,7 @@ func recordSkipped(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, inv
 	})
 }
 
-func recordChanged(ctx context.Context, tx pgx.Tx, c connInfo, a IngestArgs, invoiceID, number string, deleted bool) error {
+func recordChanged(ctx context.Context, tx pgx.Tx, c connInfo, a ingestJob, invoiceID, number string, deleted bool) error {
 	return audit.Record(ctx, tx, ingestActor, "erp.document.changed_after_clearance", map[string]any{
 		"system": c.system, "connection_id": a.ConnectionID, "source_doc_id": a.SourceDocID,
 		"source_revision": a.SourceRevision, "invoice_id": invoiceID, "invoice_number": number,

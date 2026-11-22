@@ -80,16 +80,21 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
     expect(Number(same.find((i) => i.id === ownId)?.total)).toBe(OWN_TOTAL)
   })
 
-  test('the pull is audited: two pulled and one linked duplicate', async () => {
-    const log = await getAuditLog(admin, { event: [PULLED, SKIPPED], limit: 200 })
-    const mine = log.events
-      .map((e) => ({ event: e.event, p: e.payload as Payload }))
-      .filter((e) => e.p.connection_id === connId)
-    const pulled = mine.filter((e) => e.event === PULLED).map((e) => e.p.invoice_number)
-    expect(pulled).toEqual(expect.arrayContaining([NUMBERS[0], NUMBERS[2]]))
-    const dup = mine.find((e) => e.event === SKIPPED && e.p.invoice_number === NUMBERS[1])
-    expect(dup).toBeDefined()
-    expect(dup?.p.linked).toBe(true)
-    expect(dup?.p.differs).toBe(true)
+  test('the pull is audited: pulled invoices and the linked duplicate with its mark', async () => {
+    // The skipped_duplicate event may land after the invoice list is complete: poll for it.
+    await expect
+      .poll(
+        async () => {
+          const log = await getAuditLog(admin, { event: [PULLED, SKIPPED], limit: 200 })
+          const mine = log.events
+            .map((e) => ({ event: e.event, p: e.payload as Payload }))
+            .filter((e) => e.p.connection_id === connId)
+          const pulled = mine.filter((e) => e.event === PULLED).map((e) => e.p.invoice_number)
+          const dup = mine.find((e) => e.event === SKIPPED && e.p.invoice_number === NUMBERS[1])
+          return { pulled, linked: dup?.p.linked, differs: dup?.p.differs }
+        },
+        { timeout: 20_000 },
+      )
+      .toEqual({ pulled: expect.arrayContaining([NUMBERS[0], NUMBERS[2]]), linked: true, differs: true })
   })
 })

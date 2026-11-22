@@ -202,7 +202,7 @@ func TestFake_AuthorizeBuildsTheConsentURL(t *testing.T) {
 	state := "a b&c=d/é"
 	r, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{State: state})
 	want := "https://gw.example/erp/fake/consent?state=" + url.QueryEscape(state)
-	if err != nil || r.ConsentURL != want || r.Grant != nil {
+	if err != nil || r.ConsentURL != want {
 		t.Fatalf("result = %+v, %v; want %s", r, err, want)
 	}
 	if _, err := NewFake(nil).Authorize(ctx, AuthorizeRequest{State: "s"}); err == nil {
@@ -270,16 +270,6 @@ func TestFake_RefreshRotatesAndCanBeRevoked(t *testing.T) {
 		if _, err := f.Refresh(ctx, Credentials{Secret: s}); err == nil || errors.Is(err, ErrGrantRevoked) {
 			t.Errorf("%q: %v", s, err)
 		}
-	}
-}
-
-func TestFake_LegacyAuthorizeStillGrantsASeededKey(t *testing.T) {
-	r, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{ExternalKey: "fake-co-3"})
-	if err != nil || r.ExternalKey != "fake-co-3" || r.Grant == nil || r.Grant.Kind != GrantAPIKey {
-		t.Fatalf("result = %+v, %v", r, err)
-	}
-	if _, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{ExternalKey: "fake-co-9"}); !errors.Is(err, ErrUnknownScope) {
-		t.Errorf("unknown key: %v", err)
 	}
 }
 

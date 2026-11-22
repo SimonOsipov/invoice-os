@@ -767,6 +767,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 	{file: "internal/tenancy/stranded_alert.go", fn: "recordStrandedAlert"},                 // writes the alert row after the deletion committed, on the deletion's tenant; the actor just left, so the seam would refuse
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
+	{file: "internal/erp/release.go", fn: "Work"},                                           // the secret-delete River job carries its tenant and there is no request identity to gate
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

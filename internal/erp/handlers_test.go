@@ -87,7 +87,6 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
 		{ErrNotPermitted, 403, adminMsg},
 		{ErrUnknownSystem, 400, "unknown system"},
-		{ErrUnknownExternalKey, 400, "unknown external_key"},
 		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
@@ -110,7 +109,7 @@ func TestHandlers_UnknownErrorIs500WithoutLeaking(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	s := &stubs{connectErr: errors.New("pq: secret detail")}
-	w := do(s.mux(log), "POST", listPath, `{"system":"fake","external_key":"k"}`, true)
+	w := do(s.mux(log), "POST", listPath, `{"system":"fake","connection_id":"k"}`, true)
 	if w.Code != 500 || errText(t, w) != "internal server error" {
 		t.Fatalf("got %d %q", w.Code, w.Body.String())
 	}
@@ -137,7 +136,7 @@ func TestHandlers_NoIdentityIs401(t *testing.T) {
 
 func TestHandlers_NonAdminIs403WhateverTheBody(t *testing.T) {
 	big := `{"system":"` + strings.Repeat("a", int(jsonbody.DefaultLimit)+10) + `"}`
-	for _, body := range []string{`{"system":"sage"}`, `{"system":"fake","external_key":"x"}`, `{}`, "not json", big} {
+	for _, body := range []string{`{"system":"sage"}`, `{"system":"fake","connection_id":"x"}`, `{}`, "not json", big} {
 		s := &stubs{gateErr: ErrNotPermitted, disconnectErr: ErrNotPermitted}
 		w := do(s.mux(nil), "POST", listPath, body, true)
 		if w.Code != 403 || errText(t, w) != adminMsg {

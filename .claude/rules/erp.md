@@ -17,4 +17,4 @@ paths:
 - Build a connector with `ERP_REDIRECT_URL` (absolute, https outside local), read only when the registry is non-empty. A missing or invalid value is a boot error that names the variable.
 - Build a state with `erp.NewState` and parse it with `erp.ParseState`; Postgres stores only its sha256. Render the fake consent page with `strings.NewReplacer` and `html.EscapeString`.
 - Disconnect sets `disconnected`, clears `grant_id` and deletes a grant no connection references. Never delete a connection or an invoice.
-- Serialise a grant's release on its advisory lock. Refuse to release a grant whose `secret_ref` is set until a secret deleter exists.
+- Serialise a grant's release on its advisory lock. Release a grant only through `releaseGrant`: when no connection uses it, it deletes the row and enqueues `erp_secret_delete` in the same transaction. Only that job deletes the secret (NOT_FOUND counts as done) and records `erp.token.deleted`; never delete a secret on the request path.

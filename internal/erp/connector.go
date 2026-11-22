@@ -40,17 +40,11 @@ type GrantMaterial struct {
 	ExpiresAt *time.Time
 }
 
-// AuthorizeRequest carries the state the vendor echoes back to the callback. ExternalKey is the
-// immediate-grant path and goes with it.
-type AuthorizeRequest struct{ State, ExternalKey string }
+// AuthorizeRequest carries the state the vendor echoes back to the callback.
+type AuthorizeRequest struct{ State string }
 
-// AuthorizeResult is built locally, with no network call. ExternalKey and Grant are the
-// immediate-grant path and go with it.
-type AuthorizeResult struct {
-	ConsentURL  string
-	ExternalKey string
-	Grant       *GrantMaterial
-}
+// AuthorizeResult is built locally, with no network call.
+type AuthorizeResult struct{ ConsentURL string }
 
 type ExchangeRequest struct{ Code string }
 

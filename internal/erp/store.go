@@ -13,16 +13,15 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
 var (
 	ErrNotPermitted        = errors.New("erp: only an admin can manage ERP connections")
 	ErrUnknownSystem       = errors.New("erp: unknown system")
-	ErrUnknownExternalKey  = errors.New("erp: unknown external key")
 	ErrAlreadyConnected    = errors.New("erp: already connected")
 	ErrAlreadyDisconnected = errors.New("erp: already disconnected")
 	ErrNoSuchRecord        = errors.New("erp: no such client or connection")
-	ErrSecretStoreMissing  = errors.New("erp: no secret store to hold a grant secret")
 )
 
 // Connection is one client's link to one ERP system; it carries no grant field.
@@ -37,15 +36,20 @@ type Connection struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-type ConnectInput struct{ System, ExternalKey string }
+// ConnectInput names the system; ConnectionID, when set, re-authorises that connection.
+type ConnectInput struct{ System, ConnectionID string }
 
 // Store reads and writes erp_connections and erp_grants as invoice_app; every method is one request transaction.
 type Store struct {
-	pool *pgxpool.Pool
-	reg  Registry
+	pool    *pgxpool.Pool
+	reg     Registry
+	secrets SecretStore // nil on portfolio: only the worker touches secrets
+	q       *queue.Client
 }
 
-func NewStore(pool *pgxpool.Pool, reg Registry) *Store { return &Store{pool: pool, reg: reg} }
+func NewStore(pool *pgxpool.Pool, reg Registry, secrets SecretStore, q *queue.Client) *Store {
+	return &Store{pool: pool, reg: reg, secrets: secrets, q: q}
+}
 
 const connectionCols = `id, entity_id, system, external_key, status, last_sync_at, created_at, updated_at`
 
@@ -90,9 +94,15 @@ func (s *Store) List(ctx context.Context, entityID string) ([]Connection, error)
 	return out, nil
 }
 
-// Connect creates the connection, or re-authorises a non-active one; created is true for a new row.
-func (s *Store) Connect(ctx context.Context, entityID string, in ConnectInput) (Connection, bool, error) {
+// connectTTL is how long a consent link lives.
+const connectTTL = "10 minutes"
+
+// Connect starts a consent: it finds or creates the connection (the client's one keyless pending row,
+// or the one named by in.ConnectionID), replaces its states with a fresh single-use one and returns
+// the connector's consent URL. created is true for a new row.
+func (s *Store) Connect(ctx context.Context, entityID string, in ConnectInput) (Connection, string, bool, error) {
 	var conn Connection
+	var consentURL string
 	var created bool
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
@@ -106,80 +116,87 @@ func (s *Store) Connect(ctx context.Context, entityID string, in ConnectInput) (
 		if !ok {
 			return ErrUnknownSystem
 		}
-		// ceiling: a vendor call inside the tenant transaction; fine for the fake. Revisit at the first
-		// connector whose Authorize does network I/O; the exchange then moves to the callback.
-		res, err := connector.Authorize(ctx, AuthorizeRequest{ExternalKey: in.ExternalKey})
+
+		var err error
+		if in.ConnectionID != "" {
+			err = reauthorise(ctx, tx, entityID, in, &conn)
+		} else {
+			created, err = keylessPending(ctx, tx, caller.TenantID, entityID, in.System, &conn)
+		}
 		if err != nil {
-			if errors.Is(err, ErrUnknownScope) {
-				return ErrUnknownExternalKey
-			}
-			return err
-		}
-		if res.Grant == nil {
-			return errors.New("erp: connector returned no grant")
-		}
-		if len(res.Grant.Secret) > 0 {
-			return ErrSecretStoreMissing
-		}
-
-		var existingID, status string
-		var oldGrant *string
-		err = tx.QueryRow(ctx,
-			`SELECT id, status, grant_id FROM erp_connections
-			 WHERE entity_id = $1 AND system = $2 AND external_key = $3 FOR UPDATE`,
-			entityID, in.System, res.ExternalKey).Scan(&existingID, &status, &oldGrant)
-		exists := err == nil
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if exists && status == "active" {
-			return ErrAlreadyConnected
-		}
-
-		var grantID string
-		if err := tx.QueryRow(ctx,
-			`INSERT INTO erp_grants (tenant_id, system, kind, expires_at) VALUES ($1, $2, $3, $4) RETURNING id`,
-			caller.TenantID, in.System, string(res.Grant.Kind), res.Grant.ExpiresAt).Scan(&grantID); err != nil {
 			return err
 		}
 
-		if !exists {
-			err := scanConnection(tx.QueryRow(ctx,
-				`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id)
-				 VALUES ($1, $2, $3, $4, 'active', $5) RETURNING `+connectionCols,
-				caller.TenantID, entityID, in.System, res.ExternalKey, grantID), &conn)
-			if err != nil {
-				if pgCode(err) == "23505" {
-					return ErrAlreadyConnected
-				}
-				return err
-			}
-			created = true
-			if err := audit.Record(ctx, tx, caller.Subject, "erp.connection.created", map[string]any{"system": conn.System, "connection_id": conn.ID}); err != nil {
-				return err
-			}
-			return audit.Record(ctx, tx, caller.Subject, "erp.connection.authorised", map[string]any{"system": conn.System, "connection_id": conn.ID})
-		}
-
-		if err := scanConnection(tx.QueryRow(ctx,
-			`UPDATE erp_connections SET status = 'active', grant_id = $2, updated_at = now()
-			 WHERE id = $1 RETURNING `+connectionCols, existingID, grantID), &conn); err != nil {
+		// A newer consent link replaces the older one.
+		if _, err := tx.Exec(ctx, `DELETE FROM erp_oauth_states WHERE connection_id = $1`, conn.ID); err != nil {
 			return err
 		}
-		if oldGrant != nil {
-			if err := releaseGrant(ctx, tx, *oldGrant); err != nil {
-				return err
-			}
+		state, hash := NewState(caller.TenantID)
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO erp_oauth_states (tenant_id, state_hash, connection_id, user_id, expires_at)
+			 VALUES ($1, $2, $3, $4, now() + $5::interval)`,
+			caller.TenantID, hash, conn.ID, caller.Subject, connectTTL); err != nil {
+			return err
 		}
-		return audit.Record(ctx, tx, caller.Subject, "erp.connection.authorised", map[string]any{"system": conn.System, "connection_id": conn.ID})
+		res, err := connector.Authorize(ctx, AuthorizeRequest{State: state})
+		if err != nil {
+			return err
+		}
+		consentURL = res.ConsentURL
+		if created {
+			return audit.Record(ctx, tx, caller.Subject, "erp.connection.created", map[string]any{"system": conn.System, "connection_id": conn.ID})
+		}
+		return nil
 	})
 	if err != nil {
-		return Connection{}, false, err
+		return Connection{}, "", false, err
 	}
-	return conn, created, nil
+	return conn, consentURL, created, nil
 }
 
-// Disconnect keeps the row, clears its grant and deletes the grant once no connection uses it.
+// keylessPending returns the client's one keyless pending row for the system, inserting it when absent.
+func keylessPending(ctx context.Context, tx pgx.Tx, tenantID, entityID, system string, conn *Connection) (created bool, err error) {
+	err = scanConnection(tx.QueryRow(ctx,
+		`INSERT INTO erp_connections (tenant_id, entity_id, system, status) VALUES ($1, $2, $3, 'pending')
+		 ON CONFLICT (tenant_id, entity_id, system) WHERE external_key IS NULL AND status = 'pending' DO NOTHING
+		 RETURNING `+connectionCols, tenantID, entityID, system), conn)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	// The conflicting row is committed (the insert waited for it); FOR UPDATE serialises the two connects.
+	err = scanConnection(tx.QueryRow(ctx,
+		`SELECT `+connectionCols+` FROM erp_connections
+		 WHERE entity_id = $1 AND system = $2 AND external_key IS NULL AND status = 'pending' FOR UPDATE`,
+		entityID, system), conn)
+	return false, err
+}
+
+// reauthorise sets the client's non-active connection of that system pending, keeping its grant.
+func reauthorise(ctx context.Context, tx pgx.Tx, entityID string, in ConnectInput, conn *Connection) error {
+	if _, err := uuid.Parse(in.ConnectionID); err != nil {
+		return ErrNoSuchRecord
+	}
+	var status string
+	if err := tx.QueryRow(ctx,
+		`SELECT status FROM erp_connections WHERE id = $1 AND entity_id = $2 AND system = $3 FOR UPDATE`,
+		in.ConnectionID, entityID, in.System).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoSuchRecord
+		}
+		return err
+	}
+	if status == "active" {
+		return ErrAlreadyConnected
+	}
+	return scanConnection(tx.QueryRow(ctx,
+		`UPDATE erp_connections SET status = 'pending', updated_at = now() WHERE id = $1 RETURNING `+connectionCols,
+		in.ConnectionID), conn)
+}
+
+// Disconnect keeps the row, clears its grant and, once no connection uses the grant, deletes it and enqueues its secret delete.
 func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (Connection, error) {
 	var conn Connection
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -212,7 +229,7 @@ func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (
 			return err
 		}
 		if grantID != nil {
-			if err := releaseGrant(ctx, tx, *grantID); err != nil {
+			if err := releaseGrant(ctx, tx, s.q, *grantID, connectionID); err != nil {
 				return err
 			}
 		}
@@ -225,27 +242,6 @@ func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (
 }
 
 func (s *Store) Systems() []string { return s.reg.Systems() }
-
-// releaseGrant runs after the caller cleared its connection's grant_id. It serialises on an
-// advisory lock because invoice_app cannot row-lock erp_grants.
-func releaseGrant(ctx context.Context, tx pgx.Tx, grantID string) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('erp_grant:' || $1::text, 0))`, grantID); err != nil {
-		return err
-	}
-	var secretRef *string
-	if err := tx.QueryRow(ctx, `SELECT secret_ref FROM erp_grants WHERE id = $1`, grantID).Scan(&secretRef); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil // a sibling already deleted it
-		}
-		return err
-	}
-	if secretRef != nil {
-		return ErrSecretStoreMissing
-	}
-	_, err := tx.Exec(ctx,
-		`DELETE FROM erp_grants WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM erp_connections WHERE grant_id = $1)`, grantID)
-	return err
-}
 
 // requireClient finds the client under the seam's RLS client scope; anything else is ErrNoSuchRecord.
 func requireClient(ctx context.Context, tx pgx.Tx, entityID string) error {

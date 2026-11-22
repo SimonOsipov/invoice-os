@@ -758,7 +758,7 @@ func TestStore_NonAdminRefusedOnGateConnectAndDisconnect(t *testing.T) {
 				before := erpState(t, super, tenant)
 
 				wantErr(t, "Gate", store.Gate(caller), ErrNotPermitted)
-				_, created, err := store.Connect(caller, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
+				_, _, created, err := store.Connect(caller, e1, ConnectInput{System: "fake"})
 				wantErr(t, "Connect", err, ErrNotPermitted)
 				if created {
 					t.Error("Connect created = true for a refused caller")
@@ -887,40 +887,6 @@ func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 
 // --- AC 2, 3: connect and its events ---------------------------------------------------
 
-func TestStore_ConnectFakeCreatesAnActiveConnectionAndGrant(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-
-	got, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	if !created {
-		t.Error("created = false, want true for a new row")
-	}
-	if got.Status != "active" || got.System != "fake" || got.EntityID != e1 || deref(got.ExternalKey) != "fake-co-1" {
-		t.Errorf("connection = %+v, want active fake/fake-co-1 on %s", got, e1)
-	}
-	if _, perr := uuid.Parse(got.ID); perr != nil {
-		t.Errorf("connection id %q is not a UUID", got.ID)
-	}
-	var kind, system string
-	var secretRef *string
-	var version int64
-	mustScan(t, super,
-		"SELECT g.kind, g.secret_ref, g.version, g.system FROM erp_connections c JOIN erp_grants g ON g.id = c.grant_id WHERE c.id = $1",
-		[]any{got.ID}, &kind, &secretRef, &version, &system)
-	if kind != "api_key" || secretRef != nil || version != 1 || system != "fake" {
-		t.Errorf("grant = kind %q secret_ref %v version %d system %q, want api_key NULL 1 fake", kind, secretRef, version, system)
-	}
-	if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 1 || g != 1 {
-		t.Errorf("rows = %d connections, %d grants, want 1 and 1", n, g)
-	}
-}
-
 func TestStore_ConnectAndDisconnectRecordTheirEvents(t *testing.T) {
 	super, app := storePools(t)
 	store := fakeStore(t, app)
@@ -928,15 +894,15 @@ func TestStore_ConnectAndDisconnectRecordTheirEvents(t *testing.T) {
 	admin := seedMember(t, super, tenant, "admin", "active", true)
 	e1 := seedClient(t, super, tenant, "Client One")
 
-	c, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
+	c, _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	if _, err := store.Disconnect(admin, e1, c.ID); err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
-	// A reconnect re-authorises the same row, so its event must read like the first one.
-	if _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"}); err != nil {
+	// A reconnect re-authorises the same row and records nothing: authorised comes with the callback.
+	if _, _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: c.ID}); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
 
@@ -976,7 +942,7 @@ func TestStore_ConnectAndDisconnectRecordTheirEvents(t *testing.T) {
 			t.Errorf("%s entity_id = %s, want NULL (workspace-level)", event, *entity)
 		}
 	}
-	want := []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked", "erp.connection.authorised"}
+	want := []string{"erp.connection.created", "erp.connection.revoked"}
 	if !reflect.DeepEqual(events, want) {
 		t.Errorf("events = %v, want %v in that order", events, want)
 	}
@@ -1000,19 +966,17 @@ func TestStore_ConnectRefusesBadInputAndWritesNothing(t *testing.T) {
 		store  *Store
 		entity string
 		system string
-		key    string
-		want   error // names the clause that refuses: registry, Authorize or the client lookup
+		want   error // names the clause that refuses: registry or the client lookup
 	}{
-		{"unknown system (registry lookup)", fakeStore(t, app), e1, "sage", "fake-co-1", ErrUnknownSystem},
-		{"fake with an empty registry (registry lookup)", NewStore(app, empty), e1, "fake", "fake-co-1", ErrUnknownSystem},
-		{"unknown key (Authorize)", fakeStore(t, app), e1, "fake", "fake-co-9", ErrUnknownExternalKey},
-		{"non-UUID client (client lookup)", fakeStore(t, app), "not-a-uuid", "fake", "fake-co-1", ErrNoSuchRecord},
-		{"unknown client (client lookup)", fakeStore(t, app), uuid.NewString(), "fake", "fake-co-1", ErrNoSuchRecord},
-		{"other tenant's client (client lookup, RLS)", fakeStore(t, app), eOther, "fake", "fake-co-1", ErrNoSuchRecord},
+		{"unknown system (registry lookup)", fakeStore(t, app), e1, "sage", ErrUnknownSystem},
+		{"fake with an empty registry (registry lookup)", NewStore(app, empty, nil, nil), e1, "fake", ErrUnknownSystem},
+		{"non-UUID client (client lookup)", fakeStore(t, app), "not-a-uuid", "fake", ErrNoSuchRecord},
+		{"unknown client (client lookup)", fakeStore(t, app), uuid.NewString(), "fake", ErrNoSuchRecord},
+		{"other tenant's client (client lookup, RLS)", fakeStore(t, app), eOther, "fake", ErrNoSuchRecord},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, created, err := c.store.Connect(admin, c.entity, ConnectInput{System: c.system, ExternalKey: c.key})
+			_, _, created, err := c.store.Connect(admin, c.entity, ConnectInput{System: c.system})
 			wantErr(t, "Connect", err, c.want)
 			if created {
 				t.Error("created = true on a refused connect")
@@ -1024,240 +988,15 @@ func TestStore_ConnectRefusesBadInputAndWritesNothing(t *testing.T) {
 			t.Errorf("tenant %s wrote %d connections, %d grants, %d audit rows, want none", tn, c, g, a)
 		}
 	}
-	if _, _, err := fakeStore(t, app).Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"}); err != nil {
+	if _, _, _, err := fakeStore(t, app).Connect(admin, e1, ConnectInput{System: "fake"}); err != nil {
 		t.Errorf("control: the valid input is refused: %v", err)
 	}
 }
 
-// --- AC 5: double submit ---------------------------------------------------------------
+// secondSystem is a registry entry that is not the fake.
+type secondSystem struct{ *Fake }
 
-func TestStore_ConnectActiveTripleAgainIsAlreadyConnected(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-	in := ConnectInput{System: "fake", ExternalKey: "fake-co-1"}
-
-	first, _, err := store.Connect(admin, e1, in)
-	if err != nil {
-		t.Fatalf("first Connect: %v", err)
-	}
-	before := erpState(t, super, tenant)
-	again, created, err := store.Connect(admin, e1, in)
-	wantErr(t, "second Connect", err, ErrAlreadyConnected)
-	if created || again.ID != "" {
-		t.Errorf("second Connect = %+v created %v, want the zero connection and false", again, created)
-	}
-	if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 1 || g != 1 {
-		t.Errorf("rows = %d connections, %d grants, want 1 and 1", n, g)
-	}
-	if got := erpState(t, super, tenant); got != before {
-		t.Errorf("a refused connect changed the rows or audit:\nbefore %s\nafter  %s", before, got)
-	}
-	if s := stateOf(t, super, first.ID); s.status != "active" {
-		t.Errorf("status = %q, want active", s.status)
-	}
-}
-
-func TestStore_ConcurrentIdenticalConnectsLeaveOneRow(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := bounded(t, seedMember(t, super, tenant, "admin", "active", true))
-	for i := 0; i < 10; i++ {
-		e := seedClient(t, super, tenant, fmt.Sprintf("Client %d", i))
-		var createdN [2]bool
-		errs := race(
-			func() error {
-				_, c, err := store.Connect(admin, e, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
-				createdN[0] = c
-				return err
-			},
-			func() error {
-				_, c, err := store.Connect(admin, e, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
-				createdN[1] = c
-				return err
-			},
-		)
-		ok, dup := 0, 0
-		for j, err := range errs {
-			switch {
-			case err == nil && createdN[j]:
-				ok++
-			case errors.Is(err, ErrAlreadyConnected) && !createdN[j]:
-				dup++
-			default:
-				t.Errorf("round %d call %d: err = %v created %v, want success-created or ErrAlreadyConnected", i, j, err, createdN[j])
-			}
-		}
-		if ok != 1 || dup != 1 {
-			t.Errorf("round %d: %d successes and %d ErrAlreadyConnected, want 1 and 1", i, ok, dup)
-		}
-		if n := countOf(t, super, "SELECT count(*) FROM erp_connections WHERE entity_id = $1", e); n != 1 {
-			t.Errorf("round %d: %d connections, want 1", i, n)
-		}
-	}
-	if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 10 || g != 10 {
-		t.Errorf("after 10 rounds: %d connections, %d grants, want 10 and 10 (a loser's grant must roll back)", n, g)
-	}
-
-	// A double-submitted reconnect of a disconnected row takes the same row lock as a new connect.
-	for i := 0; i < 10; i++ {
-		e := seedClient(t, super, tenant, fmt.Sprintf("Reconnect %d", i))
-		in := ConnectInput{System: "fake", ExternalKey: "fake-co-2"}
-		first, _, err := store.Connect(admin, e, in)
-		if err != nil {
-			t.Fatalf("round %d: connect: %v", i, err)
-		}
-		if _, err := store.Disconnect(admin, e, first.ID); err != nil {
-			t.Fatalf("round %d: disconnect: %v", i, err)
-		}
-		call := func() error { _, _, err := store.Connect(admin, e, in); return err }
-		errs := race(call, call)
-		ok, dup := 0, 0
-		for _, err := range errs {
-			switch {
-			case err == nil:
-				ok++
-			case errors.Is(err, ErrAlreadyConnected):
-				dup++
-			default:
-				t.Errorf("reconnect round %d: err = %v, want nil or ErrAlreadyConnected", i, err)
-			}
-		}
-		if ok != 1 || dup != 1 {
-			t.Errorf("reconnect round %d: %d successes and %d ErrAlreadyConnected, want 1 and 1", i, ok, dup)
-		}
-		if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 11+i || g != 11+i {
-			t.Errorf("reconnect round %d: %d connections, %d grants, want %d each (a lost grant is an orphan)", i, n, g, 11+i)
-		}
-	}
-}
-
-// --- AC 6: reconnect -------------------------------------------------------------------
-
-func TestStore_ReconnectReusesTheRow(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-	in := ConnectInput{System: "fake", ExternalKey: "fake-co-1"}
-
-	first, created, err := store.Connect(admin, e1, in)
-	if err != nil || !created {
-		t.Fatalf("Connect = %v created %v", err, created)
-	}
-	oldGrant := deref(stateOf(t, super, first.ID).grant)
-	if _, err := store.Disconnect(admin, e1, first.ID); err != nil {
-		t.Fatalf("Disconnect: %v", err)
-	}
-	second, created, err := store.Connect(admin, e1, in)
-	if err != nil {
-		t.Fatalf("reconnect: %v", err)
-	}
-	if created {
-		t.Error("created = true on a reconnect")
-	}
-	if second.ID != first.ID || second.Status != "active" {
-		t.Errorf("reconnect = %+v, want the same id %s and active", second, first.ID)
-	}
-	st := stateOf(t, super, first.ID)
-	if st.status != "active" || st.grant == nil || *st.grant == oldGrant {
-		t.Errorf("row = %+v, want active on a grant other than %s", st, oldGrant)
-	}
-	if grantExists(t, super, oldGrant) {
-		t.Error("the old grant still exists")
-	}
-	if n, g := connCount(t, super, tenant), grantCount(t, super, tenant); n != 1 || g != 1 {
-		t.Errorf("rows = %d connections, %d grants, want 1 and 1", n, g)
-	}
-	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 1 {
-		t.Errorf("created events = %d, want 1 (a reconnect adds none)", n)
-	}
-	if n := eventCount(t, super, tenant, "erp.connection.authorised"); n != 2 {
-		t.Errorf("authorised events = %d, want 2", n)
-	}
-	if n := eventCount(t, super, tenant, "erp.connection.revoked"); n != 1 {
-		t.Errorf("revoked events = %d, want 1", n)
-	}
-}
-
-func TestStore_ReconnectFromReconsentReleasesTheOldGrant(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-	g := seedGrant(t, super, tenant, "")
-	unrelated := seedGrant(t, super, tenant, "")
-	c := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-1", status: "reconsent", grant: g})
-
-	got, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	if created || got.ID != c || got.Status != "active" {
-		t.Errorf("Connect = %+v created %v, want the reconsent row %s, active, created false", got, created, c)
-	}
-	st := stateOf(t, super, c)
-	if st.status != "active" || st.grant == nil || *st.grant == g {
-		t.Errorf("row = %+v, want active on a new grant", st)
-	}
-	if grantExists(t, super, g) {
-		t.Error("the old grant still exists")
-	}
-	if !grantExists(t, super, unrelated) {
-		t.Error("an unrelated unreferenced grant was deleted: the release must delete only the old grant")
-	}
-	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 0 {
-		t.Errorf("created events = %d, want 0", n)
-	}
-	if n := eventCount(t, super, tenant, "erp.connection.authorised"); n != 1 {
-		t.Errorf("authorised events = %d, want 1", n)
-	}
-}
-
-// --- AC 7: no tokens in Postgres -------------------------------------------------------
-
-// secretConnector hands back secret bytes, which the store must refuse to keep.
-type secretConnector struct{ *Fake }
-
-func (secretConnector) System() string { return "secretful" }
-
-func (c secretConnector) Authorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
-	res, err := c.Fake.Authorize(ctx, req)
-	if err != nil {
-		return res, err
-	}
-	res.Grant = &GrantMaterial{Kind: GrantAPIKey, Secret: []byte("x")}
-	return res, nil
-}
-
-func TestStore_ConnectRefusesAGrantWithSecretBytes(t *testing.T) {
-	super, app := storePools(t)
-	reg, err := NewRegistry(NewFake(testRedirect), secretConnector{NewFake(testRedirect)})
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-	store := NewStore(app, reg)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-
-	_, created, err := store.Connect(admin, e1, ConnectInput{System: "secretful", ExternalKey: "fake-co-1"})
-	wantErr(t, "Connect with secret bytes", err, ErrSecretStoreMissing)
-	if created {
-		t.Error("created = true for a refused grant")
-	}
-	if c, g, a := connCount(t, super, tenant), grantCount(t, super, tenant), erpAuditCount(t, super, tenant); c+g+a != 0 {
-		t.Errorf("wrote %d connections, %d grants, %d audit rows, want none", c, g, a)
-	}
-	if _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"}); err != nil {
-		t.Errorf("control: the secret-free connector is refused too: %v", err)
-	}
-}
+func (secondSystem) System() string { return "second" }
 
 // --- AC 8, 9: disconnect ---------------------------------------------------------------
 
@@ -1268,12 +1007,8 @@ func TestStore_DisconnectReleasesAnUnsharedGrant(t *testing.T) {
 	admin := seedMember(t, super, tenant, "admin", "active", true)
 	e1, e2 := seedClient(t, super, tenant, "Client One"), seedClient(t, super, tenant, "Client Two")
 	_, otherGrant := seedActiveConn(t, super, tenant, e2, "fake-co-2")
-	c, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	g := deref(stateOf(t, super, c.ID).grant)
-
+	cID, g := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	c := Connection{ID: cID}
 	got, err := store.Disconnect(admin, e1, c.ID)
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
@@ -1343,10 +1078,8 @@ func TestStore_DisconnectLeavesTheClientsInvoicesAlone(t *testing.T) {
 	if n := countOf(t, super, "SELECT count(*) FROM invoices WHERE tenant_id = $1", tenant); n != 5 {
 		t.Fatalf("seeded %d invoices, want 5", n)
 	}
-	c, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
+	cID, _ := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	c := Connection{ID: cID}
 	before := snapshot()
 
 	if _, err := store.Disconnect(admin, e1, c.ID); err != nil {
@@ -1431,14 +1164,12 @@ func TestStore_DisconnectTwiceIsAlreadyDisconnected(t *testing.T) {
 	tenant := seedTenant(t, super, "firm")
 	admin := seedMember(t, super, tenant, "admin", "active", true)
 	e1 := seedClient(t, super, tenant, "Client One")
-	c, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
+	cID, _ := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	c := Connection{ID: cID}
 	if _, err := store.Disconnect(admin, e1, c.ID); err != nil {
 		t.Fatalf("first Disconnect: %v", err)
 	}
-	_, err = store.Disconnect(admin, e1, c.ID)
+	_, err := store.Disconnect(admin, e1, c.ID)
 	wantErr(t, "second Disconnect", err, ErrAlreadyDisconnected)
 	if n := eventCount(t, super, tenant, "erp.connection.revoked"); n != 1 {
 		t.Errorf("revoked events = %d, want 1", n)
@@ -1476,61 +1207,15 @@ func TestStore_ConcurrentDisconnectsOfASharedGrantLeaveNoGrant(t *testing.T) {
 	}
 }
 
-func TestStore_ReconnectRacingASiblingDisconnectLeavesNoGrant(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := bounded(t, seedMember(t, super, tenant, "admin", "active", true))
-	for i := 0; i < 10; i++ {
-		e1, e2 := seedClient(t, super, tenant, fmt.Sprintf("A%d", i)), seedClient(t, super, tenant, fmt.Sprintf("B%d", i))
-		g := seedGrant(t, super, tenant, "")
-		c1 := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-1", status: "reconsent", grant: g})
-		c2 := seedConnRow(t, super, connRow{tenant: tenant, entity: e2, key: "fake-co-1", status: "active", grant: g})
-
-		var created bool
-		errs := race(
-			func() error {
-				_, c, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-1"})
-				created = c
-				return err
-			},
-			func() error { _, err := store.Disconnect(admin, e2, c2); return err },
-		)
-		for j, err := range errs {
-			if err != nil {
-				t.Errorf("round %d call %d: %v (a 42501 means a row lock on erp_grants, a 40P01 a lock-order deadlock)", i, j, err)
-			}
-		}
-		if created {
-			t.Errorf("round %d: created = true for a reconsent row", i)
-		}
-		if grantExists(t, super, g) {
-			t.Errorf("round %d: old grant %s survives", i, g)
-		}
-		s1 := stateOf(t, super, c1)
-		if s1.status != "active" || s1.grant == nil || *s1.grant == g || !grantExists(t, super, *s1.grant) {
-			t.Errorf("round %d: c1 = %+v, want active on a new, existing grant", i, s1)
-		}
-		if s := stateOf(t, super, c2); s.status != "disconnected" || s.grant != nil {
-			t.Errorf("round %d: c2 = %+v, want disconnected with grant_id NULL", i, s)
-		}
-		if n := orphanGrants(t, super, tenant); n != 0 {
-			t.Errorf("round %d: %d grants with no connection", i, n)
-		}
-	}
-}
-
 func TestStore_ConcurrentDisconnectsOfOneConnection(t *testing.T) {
 	super, app := storePools(t)
 	store := fakeStore(t, app)
 	tenant := seedTenant(t, super, "firm")
 	admin := bounded(t, seedMember(t, super, tenant, "admin", "active", true))
 	e1 := seedClient(t, super, tenant, "Client One")
-	in := ConnectInput{System: "fake", ExternalKey: "fake-co-1"}
-	c, _, err := store.Connect(admin, e1, in)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
+	cID, _ := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	c := Connection{ID: cID}
+	in := ConnectInput{System: "fake", ConnectionID: cID}
 	for i := 0; i < 10; i++ {
 		errs := race(
 			func() error { _, err := store.Disconnect(admin, e1, c.ID); return err },
@@ -1556,7 +1241,7 @@ func TestStore_ConcurrentDisconnectsOfOneConnection(t *testing.T) {
 		if n := grantCount(t, super, tenant); n != 0 {
 			t.Errorf("round %d: grants = %d, want 0 after the disconnect", i, n)
 		}
-		if _, _, err := store.Connect(admin, e1, in); err != nil {
+		if _, _, _, err := store.Connect(admin, e1, in); err != nil {
 			t.Fatalf("round %d: reconnect: %v", i, err)
 		}
 	}
@@ -1568,84 +1253,27 @@ func TestStore_ConnectRacingDisconnectOnOneRowSerialises(t *testing.T) {
 	tenant := seedTenant(t, super, "firm")
 	admin := bounded(t, seedMember(t, super, tenant, "admin", "active", true))
 	e1 := seedClient(t, super, tenant, "Client One")
-	in := ConnectInput{System: "fake", ExternalKey: "fake-co-1"}
-	c, _, err := store.Connect(admin, e1, in)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
+	c := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, status: "pending"})
+	in := ConnectInput{System: "fake", ConnectionID: c}
 	for i := 0; i < 20; i++ {
-		var created bool
 		errs := race(
-			func() error { _, err := store.Disconnect(admin, e1, c.ID); return err },
-			func() error { _, cr, err := store.Connect(admin, e1, in); created = cr; return err },
+			func() error { _, err := store.Disconnect(admin, e1, c); return err },
+			func() error { _, _, _, err := store.Connect(admin, e1, in); return err },
 		)
-		if errs[0] != nil {
-			t.Errorf("round %d: Disconnect = %v, want nil", i, errs[0])
-		}
-		st := stateOf(t, super, c.ID)
-		switch {
-		case errors.Is(errs[1], ErrAlreadyConnected):
-			if st.status != "disconnected" || st.grant != nil {
-				t.Errorf("round %d: connect lost the race but the row is %+v, want disconnected with grant_id NULL", i, st)
-			}
-			if n := grantCount(t, super, tenant); n != 0 {
-				t.Errorf("round %d: %d grants after the disconnect won last, want 0", i, n)
-			}
-		case errs[1] == nil:
-			if created {
-				t.Errorf("round %d: created = true for a re-authorisation", i)
-			}
-			if st.status != "active" || st.grant == nil {
-				t.Errorf("round %d: connect won after the disconnect but the row is %+v, want active with a grant", i, st)
-			}
-			if n := grantCount(t, super, tenant); n != 1 {
-				t.Errorf("round %d: %d grants, want exactly 1", i, n)
-			}
-		default:
-			t.Errorf("round %d: Connect = %v, want nil or ErrAlreadyConnected", i, errs[1])
-		}
-		if n := orphanGrants(t, super, tenant); n != 0 {
-			t.Errorf("round %d: %d grants with no connection", i, n)
-		}
-		if st.status == "disconnected" {
-			if _, _, err := store.Connect(admin, e1, in); err != nil {
-				t.Fatalf("round %d: back to active: %v", i, err)
+		for j, err := range errs {
+			if err != nil {
+				t.Errorf("round %d call %d: %v, want nil from either order", i, j, err)
 			}
 		}
-	}
-}
-
-func TestStore_ReleasingAGrantWithASecretRefIsRefused(t *testing.T) {
-	super, app := storePools(t)
-	store := fakeStore(t, app)
-	tenant := seedTenant(t, super, "firm")
-	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
-	g := seedGrant(t, super, tenant, "erp-grant-held")
-	g2 := seedGrant(t, super, tenant, "erp-grant-held-2")
-	c1 := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-1", status: "active", grant: g})
-	c2 := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-2", status: "reconsent", grant: g2})
-	before := erpState(t, super, tenant)
-
-	_, err := store.Disconnect(admin, e1, c1)
-	wantErr(t, "Disconnect releasing a secret_ref grant", err, ErrSecretStoreMissing)
-	_, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
-	wantErr(t, "Connect re-authorising over a secret_ref grant", err, ErrSecretStoreMissing)
-	if created {
-		t.Error("created = true on a refused reconnect")
-	}
-
-	if s := stateOf(t, super, c1); s.status != "active" || deref(s.grant) != g {
-		t.Errorf("c1 = %+v, want active on %s", s, g)
-	}
-	if s := stateOf(t, super, c2); s.status != "reconsent" || deref(s.grant) != g2 {
-		t.Errorf("c2 = %+v, want reconsent on %s", s, g2)
-	}
-	if !grantExists(t, super, g) || !grantExists(t, super, g2) {
-		t.Error("a held grant was deleted")
-	}
-	if got := erpState(t, super, tenant); got != before {
-		t.Errorf("a refused release changed the rows or audit (the reconnect's new grant must roll back):\nbefore %s\nafter  %s", before, got)
+		if s := stateOf(t, super, c); s.status != "pending" && s.status != "disconnected" {
+			t.Errorf("round %d: status %q, want pending or disconnected", i, s.status)
+		}
+		if n := countOf(t, super, "SELECT count(*) FROM erp_oauth_states WHERE connection_id = $1", c); n > 1 {
+			t.Errorf("round %d: %d state rows, want at most the newest", i, n)
+		}
+		if _, _, _, err := store.Connect(admin, e1, in); err != nil { // back to pending for the next round
+			t.Fatalf("round %d: reset: %v", i, err)
+		}
 	}
 }
 
@@ -1701,7 +1329,7 @@ func TestStore_SystemsFollowsTheRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	two, err := NewRegistry(secretConnector{NewFake(testRedirect)}, NewFake(testRedirect))
+	two, err := NewRegistry(secondSystem{NewFake(testRedirect)}, NewFake(testRedirect))
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -1715,10 +1343,10 @@ func TestStore_SystemsFollowsTheRegistry(t *testing.T) {
 		want []string
 	}{
 		{"fake only", one, []string{"fake"}},
-		{"two, sorted", two, []string{"fake", "secretful"}},
+		{"two, sorted", two, []string{"fake", "second"}},
 		{"empty is [] not null", none, []string{}},
 	} {
-		if got := NewStore(nil, c.reg).Systems(); !reflect.DeepEqual(got, c.want) {
+		if got := NewStore(nil, c.reg, nil, nil).Systems(); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: Systems() = %#v, want %#v", c.name, got, c.want)
 		}
 	}
@@ -1882,7 +1510,7 @@ func TestStore_MemberListReadsThroughTheReadOnlySeam(t *testing.T) {
 		t.Errorf("preparer List in a locked workspace = %v, %v, want [%s]", idsOf(got), err, c1)
 	}
 	// The seam refuses the read-write transaction before requireAdmin runs.
-	_, _, err = store.Connect(preparer, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
+	_, _, _, err = store.Connect(preparer, e1, ConnectInput{System: "fake"})
 	wantErr(t, "control: preparer Connect", err, db.ErrWorkspaceLocked)
 	if got := erpState(t, super, tenant); got != before {
 		t.Errorf("ERP rows or audit changed:\nbefore %s\nafter  %s", before, got)

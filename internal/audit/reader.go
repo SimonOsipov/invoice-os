@@ -127,6 +127,7 @@ var firmWideEvents = map[string]struct{}{
 	"erp.connection.created":           {},
 	"erp.connection.authorised":        {},
 	"erp.connection.revoked":           {},
+	"erp.token.deleted":                {},
 	"membership.suspended":             {},
 	"membership.reactivated":           {},
 	"membership.removed":               {},

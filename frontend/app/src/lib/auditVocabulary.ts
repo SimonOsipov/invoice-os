@@ -68,6 +68,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'erp.connection.created': { label: 'ERP connection added', domain: 'companies' },
   'erp.connection.authorised': { label: 'ERP connection authorised', domain: 'companies' },
   'erp.connection.revoked': { label: 'ERP disconnected', domain: 'companies' },
+  'erp.token.deleted': { label: 'ERP token deleted', domain: 'companies' },
   'portfolio.entity.updated': { label: 'Company updated', domain: 'companies' },
   'portfolio.entity.onboarded': { label: 'Company onboarded', domain: 'companies' },
   'portfolio.entity.offboarded': { label: 'Company offboarded', domain: 'companies' },

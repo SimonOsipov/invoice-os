@@ -30,15 +30,8 @@ func NewFake(redirect *url.URL) *Fake { return &Fake{redirect: redirect} }
 func (*Fake) System() string             { return fakeSystem }
 func (*Fake) Capabilities() Capabilities { return Capabilities{} }
 
-// Authorize builds the fake consent page's URL. A request with an ExternalKey is the immediate-grant
-// path, which goes when connect issues consent URLs.
+// Authorize builds the fake consent page's URL.
 func (f *Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
-	if req.ExternalKey != "" {
-		if _, ok := fakeSeed[req.ExternalKey]; !ok {
-			return AuthorizeResult{}, ErrUnknownScope
-		}
-		return AuthorizeResult{ExternalKey: req.ExternalKey, Grant: &GrantMaterial{Kind: GrantAPIKey}}, nil
-	}
 	if f.redirect == nil || req.State == "" {
 		return AuthorizeResult{}, errors.New("erp: fake authorize needs a redirect and a state")
 	}

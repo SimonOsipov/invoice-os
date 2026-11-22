@@ -972,6 +972,18 @@ func TestIngest_FinalAttemptFailureKeepsATakenInvoice(t *testing.T) {
 	}
 }
 
+// The number is state-blind, as the unique index is: a discarded invoice still holds it, so the
+// document links to it and nothing is created.
+func TestIngest_DiscardedInvoiceWithTheNumberIsStillLinked(t *testing.T) {
+	e := newIngest(t)
+	inv := e.plantInvoice(plantInv{number: numOne, status: "discarded"})
+	e.mustWork(docOne, "1")
+	d := e.wantState(docOne, "linked")
+	if d.InvoiceID == nil || *d.InvoiceID != inv || e.invoices() != 1 {
+		t.Errorf("row invoice_id = %v, invoices = %d, want a link to the discarded %s and no new invoice", d.InvoiceID, e.invoices(), inv)
+	}
+}
+
 // A new revision that cannot be mapped is recorded but leaves the invoice the document already has.
 func TestIngest_UnmappableNewRevisionKeepsTheTakenInvoice(t *testing.T) {
 	e := newIngest(t)

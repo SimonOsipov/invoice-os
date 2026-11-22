@@ -649,6 +649,17 @@ func TestSweep_EnqueuesOnePullPerActiveConnectionAcrossTenants(t *testing.T) {
 	wantPulls(t, s.pulls(tenA, tenB), tenA+"/"+activeA, tenB+"/"+activeB)
 }
 
+// A pull does not skip an archived client: disconnecting the connection is what stops sync.
+func TestSweep_StillPullsAnArchivedClientsConnection(t *testing.T) {
+	s := newSweepEnv(t)
+	ten := seedTenant(t, s.super, "firm")
+	ent := seedClient(t, s.super, ten, "sweep archived client")
+	conn, _ := seedActiveConn(t, s.super, ten, ent, "fake-co-1")
+	mustExec(t, s.super, "UPDATE business_entities SET status = 'archived' WHERE id = $1", ent)
+	s.sweep()
+	wantPulls(t, s.pulls(ten), ten+"/"+conn)
+}
+
 func TestSweep_SkipsALockedWorkspace(t *testing.T) {
 	s := newSweepEnv(t)
 	tenA := seedTenant(t, s.super, "firm")

@@ -1,6 +1,6 @@
 // Package erpweb holds the parts of the ERP seam the public gateway serves: the mode, the state
 // shape and the fake consent page. It imports no database, queue or Google client, so the gateway
-// binary stays free of them (TestProductionGatewayBinaryCannotMint).
+// binary stays free of them (TestGatewayBinaryLinksNeitherSecretManagerNorTheERPStore).
 package erpweb
 
 import (

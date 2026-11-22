@@ -1478,3 +1478,54 @@ func TestIngest_AnotherClientsInvoiceIsNeverAdopted(t *testing.T) {
 		t.Errorf("invoices in client X = %d, want 1", n)
 	}
 }
+
+func TestIngest_NumberLockSerializesDocumentsOfOneNumber(t *testing.T) {
+	e := newIngest(t)
+	docA := fakeDocument("doc-A", numOne, custOne, fakeLine{"Doc A line", "1", "100.00", "7.5"})
+	docB := fakeDocument("doc-B", numOne, custOne, fakeLine{"Doc B line", "1", "100.00", "7.5"})
+	e.onFetch = func(_ context.Context, ref DocRef) (Document, error) {
+		if ref.SourceDocID == "doc-A" {
+			return docA, nil
+		}
+		return docB, nil
+	}
+	// Without the lock both claims pass the rival check together and the loser links to the winner's
+	// invoice before the winner settles; here the lock is held from outside so the claims must wait.
+	ctx := context.Background()
+	holder, err := e.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('erp_number:' || $1 || ':' || $2, 0))`, e.entity, numOne); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	for _, id := range []string{"doc-A", "doc-B"} {
+		go func() { errs <- e.untilDone(e.worker, e.args(id, "1", false)) }()
+	}
+	time.Sleep(700 * time.Millisecond)
+	e.noDoc("doc-A")
+	e.noDoc("doc-B")
+
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("Work: %v, want nil (no 23505 may surface)", err)
+		}
+	}
+	if n := e.invoices(); n != 1 {
+		t.Fatalf("invoices = %d, want 1", n)
+	}
+	states := map[string]int{}
+	for _, id := range []string{"doc-A", "doc-B"} {
+		var s string
+		mustScan(t, e.super, "SELECT state FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2", []any{e.conn, id}, &s)
+		states[s]++
+	}
+	if states["drafted"] != 1 || states["held"] != 1 {
+		t.Errorf("states = %v, want one drafted and one held", states)
+	}
+}

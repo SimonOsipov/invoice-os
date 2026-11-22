@@ -151,7 +151,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions", "erp_source_documents"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions", "erp_source_documents", "erp_writebacks"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -166,7 +166,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; erp_oauth_states -> erp_connections; customers -> tenants),
+// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; erp_oauth_states -> erp_connections; erp_writebacks -> erp_source_documents; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -289,12 +289,22 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	}
 
 	requireEsdTable(t, pool)
-	if _, err := pool.Exec(ctx,
+	var erpDocID string
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id)
-		 VALUES ($1, $2, $3, $4, 'r1', 'drafted', $5)`,
+		 VALUES ($1, $2, $3, $4, 'r1', 'drafted', $5) RETURNING id`,
 		tenantID, entityID, erpConnID, marker, invoiceID,
-	); err != nil {
+	).Scan(&erpDocID); err != nil {
 		t.Fatalf("seed erp_source_documents fixture: %v", err)
+	}
+
+	requireEwbTable(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_writebacks (tenant_id, entity_id, connection_id, source_document_id, invoice_id, result_version, outcome, attempt, state, river_job_id)
+		 VALUES ($1, $2, $3, $4, $5, 1, 'accepted', 1, 'succeeded', 1)`,
+		tenantID, entityID, erpConnID, erpDocID, invoiceID,
+	); err != nil {
+		t.Fatalf("seed erp_writebacks fixture: %v", err)
 	}
 
 	// approval_runs' RESTRICT FK to invoices is exactly what makes a bare TRUNCATE
@@ -601,7 +611,7 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
-	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents"} {
+	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents", "erp_writebacks"} {
 		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
 			t.Errorf("%s rows after Reset = %d, want 0", table, n)
 		}

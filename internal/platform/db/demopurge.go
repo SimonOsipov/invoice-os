@@ -55,6 +55,7 @@ var purgeTables = []string{
 	"membership_clients",
 	"invitation_clients",
 	"rollup_snapshots",
+	"erp_oauth_states",
 	"erp_connections",
 	"erp_grants",
 	"business_entities",

@@ -61,6 +61,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 - `platform.Posture` reads `DEPLOY_ENV`: empty is local, `pr-<N>` is preview, the exact name `nightly` is nightly, any other name is hosted.
 - Only a preview logs the gateway's per-address limits without refusing. A preview captures account mail.
+- Only a preview, the nightly and a local run with `ERP_FAKE=true` register the fake ERP connector.
 
 ## Untrusted entry points
 

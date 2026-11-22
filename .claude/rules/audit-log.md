@@ -1,6 +1,7 @@
 ---
 paths:
   - "internal/audit/**"
+  - "internal/erp/**"
   - "internal/actor/**"
   - "internal/staffjobs/**"
   - "internal/accountevents/**"
@@ -20,6 +21,7 @@ paths:
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Write `erp.connection.created`, `erp.connection.authorised` and `erp.connection.revoked` only from `internal/erp`, with payload `system` and `connection_id` only.
 - Write `evidence_bundle.exported` and `evidence_bundle.export_failed` only from `internal/archive`, with payload `entity_id`, `from`, `to`, `files` and `bytes`.
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.

@@ -32,20 +32,21 @@ const (
 
 // bcNoBodyRoutes must compute to no-body; a handler that starts reading the body fails as stale.
 var bcNoBodyRoutes = map[string]string{
-	"PATCH /v1/rules/{key}":                   "reads only the path key",
-	"POST /v1/approval-policies/{id}/publish": "reads only the path id",
-	"POST /v1/customers/{id}/archive":         "status change from the path",
-	"POST /v1/customers/{id}/restore":         "status change from the path",
-	"POST /v1/entities/{id}/offboard":         "status change from the path",
-	"POST /v1/entities/{id}/onboard":          "status change from the path",
-	"POST /v1/imports/{id}/undo":              "reads only the path id",
-	"POST /v1/invitations/{id}/resend":        "reads only the path id",
-	"POST /v1/invitations/{id}/revoke":        "reads only the path id",
-	"POST /v1/invoices/{id}/send-again":       "reads only the path id",
-	"POST /v1/invoices/{id}/validate":         "reads only the path id",
-	"POST /v1/memberships/{user_id}/remove":   "reads only the path user id",
-	"POST /v1/staff/rule-versions/draft":      "takes no request body",
-	"POST /v1/workspace/deletion/cancel":      "takes no request body",
+	"PATCH /v1/rules/{key}":                                          "reads only the path key",
+	"POST /v1/approval-policies/{id}/publish":                        "reads only the path id",
+	"POST /v1/customers/{id}/archive":                                "status change from the path",
+	"POST /v1/customers/{id}/restore":                                "status change from the path",
+	"POST /v1/entities/{id}/erp-connections/{connection}/disconnect": "status change from the path",
+	"POST /v1/entities/{id}/offboard":                                "status change from the path",
+	"POST /v1/entities/{id}/onboard":                                 "status change from the path",
+	"POST /v1/imports/{id}/undo":                                     "reads only the path id",
+	"POST /v1/invitations/{id}/resend":                               "reads only the path id",
+	"POST /v1/invitations/{id}/revoke":                               "reads only the path id",
+	"POST /v1/invoices/{id}/send-again":                              "reads only the path id",
+	"POST /v1/invoices/{id}/validate":                                "reads only the path id",
+	"POST /v1/memberships/{user_id}/remove":                          "reads only the path user id",
+	"POST /v1/staff/rule-versions/draft":                             "takes no request body",
+	"POST /v1/workspace/deletion/cancel":                             "takes no request body",
 }
 
 // bcExemptRoutes may not compute to capped-413; one that does is stale.

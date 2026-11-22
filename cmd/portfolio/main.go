@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/portfolio"
@@ -21,6 +22,12 @@ func main() {
 	app, err := platform.New("portfolio")
 	if err != nil {
 		platform.Fatal(slog.Default(), "portfolio: startup: %v", err)
+	}
+
+	// A hosted boot with ERP_FAKE set to true is refused here, before the pool.
+	erpRegistry, err := erp.RegistryFromEnv(os.Getenv)
+	if err != nil {
+		platform.Fatal(app.Logger, "portfolio: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — a
@@ -61,6 +68,11 @@ func main() {
 		func(ctx context.Context, id string) (portfolio.Entity, error) {
 			return store.SetStatus(ctx, id, "active")
 		}, app.Logger))
+
+	erpStore := erp.NewStore(pool, erpRegistry)
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections", erp.ListHandler(erpStore.List, erpStore.Systems, app.Logger))
+	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections", erp.ConnectHandler(erpStore.Gate, erpStore.Connect, app.Logger))
+	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections/{connection}/disconnect", erp.DisconnectHandler(erpStore.Disconnect, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

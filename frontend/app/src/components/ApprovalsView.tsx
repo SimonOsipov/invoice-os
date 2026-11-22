@@ -451,8 +451,9 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                   <span data-testid="approval-buyer-cell" title={r.buyer_name ?? undefined} style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>{av.stepLabel}</span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <span style={{ fontSize: 13, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{av.roleLabel}</span>
+                  {/* Stacked: a one-line row left the role name only "C…" beside the note. */}
+                  <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+                    <span style={{ maxWidth: '100%', fontSize: 13, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{av.roleLabel}</span>
                     {av.pendingHolderWarn && (
                       <span
                         data-testid="approval-unstaffed-warning"

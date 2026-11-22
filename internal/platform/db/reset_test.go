@@ -166,7 +166,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots -> business_entities; customers -> tenants),
+// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -236,6 +236,21 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID,
 	); err != nil {
 		t.Fatalf("seed rollup_snapshots fixture: %v", err)
+	}
+
+	erpGrantID := uuid.NewString()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_grants (id, tenant_id, system, kind) VALUES ($1, $2, 'fake', 'api_key')`,
+		erpGrantID, tenantID,
+	); err != nil {
+		t.Fatalf("seed erp_grants fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id)
+		 VALUES ($1, $2, 'fake', 'fake-co-1', 'active', $3)`,
+		tenantID, entityID, erpGrantID,
+	); err != nil {
+		t.Fatalf("seed erp_connections fixture: %v", err)
 	}
 
 	crrRequireTable(t, pool)
@@ -568,6 +583,11 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	}
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
+	}
+	for _, table := range []string{"erp_connections", "erp_grants"} {
+		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
+			t.Errorf("%s rows after Reset = %d, want 0", table, n)
+		}
 	}
 }
 

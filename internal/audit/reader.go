@@ -111,8 +111,7 @@ const (
 	ScopeUnattributed CompanyScope = "unattributed"
 )
 
-// firmWideEvents are the genuinely firm-wide event names (§2 rule 2): the whole of the
-// Policies, Roles, Memberships, Validation-rule, Buyers and Custom-rule domains. A client-scoped
+// firmWideEvents are the genuinely firm-wide event names (§2 rule 2). A client-scoped
 // custom rule's event carries its entity_id, so only the firm-wide ones read as workspace.
 // Hand-maintained: nothing derives this set from the SQL resolver.
 var firmWideEvents = map[string]struct{}{
@@ -125,6 +124,9 @@ var firmWideEvents = map[string]struct{}{
 	"workflow_role.updated":            {},
 	"workflow_role.deleted":            {},
 	"workflow_role.staffed":            {},
+	"erp.connection.created":           {},
+	"erp.connection.authorised":        {},
+	"erp.connection.revoked":           {},
 	"membership.suspended":             {},
 	"membership.reactivated":           {},
 	"membership.removed":               {},

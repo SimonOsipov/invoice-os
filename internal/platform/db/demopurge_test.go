@@ -218,6 +218,8 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	anchorRuleID := uuid.NewString()
 	batchID := uuid.NewString()
 	mappingID := uuid.NewString()
+	erpGrantID := uuid.NewString()
+	erpConnID := uuid.NewString()
 	customerID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -301,6 +303,13 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO rollup_snapshots (tenant_id, entity_id, day, total, readiness_num, needs_attention, not_submitted, vat_kobo)
 		 VALUES ($1,$2,'2026-10-21',1,1,0,0,0)`,
 		tenantID, entityID)
+	plant("erp_grants", "id", erpGrantID,
+		`INSERT INTO erp_grants (id, tenant_id, system, kind) VALUES ($1,$2,'fake','api_key')`,
+		erpGrantID, tenantID)
+	plant("erp_connections", "id", erpConnID,
+		`INSERT INTO erp_connections (id, tenant_id, entity_id, system, external_key, status, grant_id)
+		 VALUES ($1,$2,$3,'fake','fake-co-1','active',$4)`,
+		erpConnID, tenantID, entityID, erpGrantID)
 	plant("customers", "id", customerID,
 		`INSERT INTO customers (id, tenant_id, tin) VALUES ($1,$2,'90000000-0001')`,
 		customerID, tenantID)

@@ -617,7 +617,7 @@ test('PW-06 Workflows list at 1440: heading, policy row, pill, standing, buttons
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-07 Workflows list row and count fit at every wide width and at 860px', async ({ page }, testInfo) => {
+test('PW-07 Workflows list row fits at every wide width and at 860px', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openWorkflows(page)
@@ -631,7 +631,6 @@ test('PW-07 Workflows list row and count fit at every wide width and at 860px', 
     moveDown: row.getByRole('button', { name: /^Move .* down$/ }),
     edit: row.getByRole('button', { name: 'Edit', exact: true }),
     delete: row.getByRole('button', { name: /^Delete / }),
-    count: screen(page).getByText(/^\d+ POLICIES$/),
     header: h1Of(page, 'Approval policies').locator('xpath=../..'),
     newPolicy: screen(page).getByRole('button', { name: 'New policy' }),
   }
@@ -646,9 +645,9 @@ test('PW-07 Workflows list row and count fit at every wide width and at 860px', 
   }
   const measured = await sweepWide(page, 'Workflows list', async () => {
     const { rects, problems } = await read()
-    const { count, header, newPolicy } = rects
-    if (count && header && count.y < header.y + header.height - 1) problems.push('the count starts above the header row')
-    if (count && newPolicy && Math.abs(count.x + count.width - (newPolicy.x + newPolicy.width)) > 1) problems.push('the count and New policy differ in right edge')
+    const { row: rowRect, header } = rects
+    if (rowRect && header && rowRect.y < header.y + header.height - 1) problems.push('the row starts above the header row')
+    if ((await screen(page).getByText(/^\d+ POLICIES$/).count()) > 0) problems.push('the N POLICIES counter is back')
     return { problems, rects }
   })
   const entry = page.viewportSize()
@@ -658,7 +657,7 @@ test('PW-07 Workflows list row and count fit at every wide width and at 860px', 
     await expect
       .poll(async () => {
         const { rects, problems } = await read()
-        for (const k of ['count', 'newPolicy']) {
+        for (const k of ['newPolicy']) {
           const r = rects[k]
           if (r && (r.x < 0 || r.x + r.width > 860)) problems.push(`${k} is outside the 860px viewport`)
         }
@@ -895,8 +894,12 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     }
     if (rects.back && rects.left && rects.back.y + rects.back.height > rects.left.y + 1) problems.push('the back link is not above the header row')
     scopeCardLayout(rects, problems)
-    for (const n of ['reason', 'consequence']) {
-      if (rects[n] && rects.publish && Math.abs(rects[n].x + rects[n].width - (rects.publish.x + rects.publish.width)) > 1) problems.push(`${n} right edge differs from Publish`)
+    const { consequence: cons, reason, nameRow } = rects
+    if (cons && rects.publish && Math.abs(cons.x + cons.width - (rects.publish.x + rects.publish.width)) > 1) problems.push('consequence right edge differs from Publish')
+    inside(rects, 'left', ['reason'], problems)
+    if (reason && nameRow) {
+      if (reason.y < nameRow.y + nameRow.height - 1) problems.push('reason is not below the name row')
+      if (Math.abs(reason.x - nameRow.x) > 1) problems.push('reason left edge differs from the name row')
     }
     return { problems, rects }
   })

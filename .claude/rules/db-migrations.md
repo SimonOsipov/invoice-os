@@ -150,3 +150,4 @@ ceiling: a rollout runs old and new revisions together; one new instance per ser
 Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.
 Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `readiness_check_requests`. It is global: no RLS. `invoice_gateway` gets no grant.
 Give `invoice_app` SELECT, DELETE and UPDATE (`unsubscribed_at`) on `mail_unsubscribes`, and EXECUTE on `mail_unsubscribe_token`. Give `invoice_gateway` EXECUTE only. It is global: no RLS. Only the erase routine deletes a row.
+Give `invoice_app` SELECT, INSERT and UPDATE on `erp_connections`, and SELECT, INSERT and DELETE on `erp_grants`. Disconnect keeps a connection; only the purge, the reset and the cascade remove one.

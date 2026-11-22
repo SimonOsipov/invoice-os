@@ -593,7 +593,7 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
 				"internal/validation/**, a non-rule-set version pin in internal/approval/**, "+
 				"internal/extraction/**, internal/notifications/** or "+
-				"internal/platform/db/contacts_rls_test.go, internal/platform/db/erp_connections_rls_test.go, internal/erp/store_test.go, a "+
+				"internal/platform/db/contacts_rls_test.go, internal/platform/db/erp_connections_rls_test.go, internal/erp/store_test.go, internal/erp/mapping.go, internal/erp/mapping_test.go, a "+
 				"Policy.version/activeVersion pin in frontend/app/src/**, an ApprovalPolicy."+
 				"version pin in e2e/api/policy-restore.test.ts, the two §c e2e "+
 				"artifacts, validationApi.test.ts, the version-defining seed "+
@@ -622,11 +622,14 @@ func detectionHitAllowed(file, line string) bool {
 		return !namesRuleSetConstruct(line)
 	}
 	// contacts.version is the per-row optimistic-concurrency version, never read from
-	// rule_sets; erp_grants.version is a per-grant counter, likewise. Narrowed like the
+	// rule_sets; erp_grants.version is a per-grant counter, likewise, and erp.HashVersion
+	// versions the content-hash projection. Narrowed like the
 	// entries above.
 	if file == "internal/platform/db/contacts_rls_test.go" ||
 		file == "internal/platform/db/erp_connections_rls_test.go" ||
 		file == "internal/erp/store_test.go" ||
+		file == "internal/erp/mapping.go" ||
+		file == "internal/erp/mapping_test.go" ||
 		strings.HasPrefix(file, "internal/notifications/") {
 		return !namesRuleSetConstruct(line)
 	}
@@ -750,6 +753,12 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/platform/db/erp_connections_rls_test.go:917:	if err != nil || version != 1 {`, true},
 		{"an erp_grants row version in the ERP store test", "internal/erp/store_test.go",
 			`internal/erp/store_test.go:429:	if version != 1 {`, true},
+		{"the erp content-hash version const", "internal/erp/mapping.go",
+			`internal/erp/mapping.go:25:const HashVersion = 1`, true},
+		{"the erp content-hash version test", "internal/erp/mapping_test.go",
+			`internal/erp/mapping_test.go:408:	if HashVersion != 1 {`, true},
+		{"a rule-set pin smuggled into the ERP mapping", "internal/erp/mapping.go",
+			`internal/erp/mapping.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a rule-set pin smuggled into the ERP store test", "internal/erp/store_test.go",
 			`internal/erp/store_test.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a rule-set pin smuggled into the contacts RLS test", "internal/platform/db/contacts_rls_test.go",

@@ -83,6 +83,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Accepted ceilings
 
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `invoice_app` can name one invite per known token across tenants.
+- `ceiling:` in `migrations/20261122220218_erp_webhook_targets.sql`: `invoice_app` can list the connection ids of one vendor company key across tenants (`public.erp_webhook_targets`).
 - `ceiling:` in `migrations/20261026120002_membership_removed.sql`: `provision_workspace` and every `accept_invitation` and `accept_invitation_by_id` overload are the membership writers behind the identity lock. `SetMembershipStatus` and `RemoveMember` take no identity lock; they change a status in the caller's tenant and never make a non-`removed` row.
 - `ceiling:` in `migrations/20261026120001_purge_tenant.sql`: any `invoice_app` service can purge the tenant it binds.
 - `ceiling:` in `migrations/20261027010037_erase_invitation_emails.sql`: any `invoice_app` service can erase the invitations of one address in every tenant.

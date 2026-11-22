@@ -1028,6 +1028,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /.well-known/jwks.json":                                     {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
 	"GET /auth/reset-password":                                       {verdict: scExempt, reason: "no database; renders the reset page"},
 	"GET /erp/callback":                                              {verdict: scExempt, reason: "no database; forwards the redirect to the worker with the gateway token and renders a fixed page"},
+	"POST /erp/webhooks/fake":                                        {verdict: scExempt, reason: "no database; forwards a bounded vendor webhook to the worker with the gateway token, mounted only when the ERP mode is fake"},
 	"GET /erp/fake/consent":                                          {verdict: scExempt, reason: "no database; static fake-vendor consent form, mounted only when the ERP mode is fake"},
 	"GET /readiness-check/confirm":                                   {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                               {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},

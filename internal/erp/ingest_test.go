@@ -818,6 +818,39 @@ func TestIngest_SyncStoppedDoesNothing(t *testing.T) {
 	}
 }
 
+// A job whose args name another tenant's connection sees no row under RLS: it must fetch, write and
+// bump nothing, in the other tenant and in its own.
+func TestIngest_AnotherTenantsConnectionIsNeverTouched(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deleted=%v", deleted), func(t *testing.T) {
+			a := newIngest(t)
+			b := newIngestOn(t, a.super, a.app, keyOne)
+			mustExec(t, b.super, "UPDATE erp_connections SET cursor = '\\x0102' WHERE id = $1", b.conn)
+			args := a.args(docOne, "1", deleted)
+			args.ConnectionID = b.conn
+
+			if err := a.workAs(context.Background(), a.worker, args, 1); err != nil {
+				t.Fatalf("Work: %v, want nil: the connection is not visible to the args' tenant", err)
+			}
+			if n := countOf(t, a.super, "SELECT count(*) FROM erp_source_documents WHERE connection_id = $1", b.conn); n != 0 {
+				t.Errorf("documents on B's connection = %d, want 0", n)
+			}
+			if a.invoices() != 0 || b.invoices() != 0 {
+				t.Errorf("invoices in A/B = %d/%d, want 0/0", a.invoices(), b.invoices())
+			}
+			if n := a.fetches.Load(); n != 0 {
+				t.Errorf("Fetch called %d times, want 0", n)
+			}
+			var cursor []byte
+			var epoch int64
+			mustScan(t, b.super, "SELECT cursor, ingest_epoch FROM erp_connections WHERE id = $1", []any{b.conn}, &cursor, &epoch)
+			if string(cursor) != "\x01\x02" || epoch != 0 {
+				t.Errorf("B's cursor/ingest_epoch = %x/%d, want 0102/0: A's skipped ingest must not reopen B's connection", cursor, epoch)
+			}
+		})
+	}
+}
+
 func TestIngest_OperationalErrorIsReturnedForRetry(t *testing.T) {
 	e := newIngest(t)
 	e.onFetch = func(context.Context, DocRef) (Document, error) { return Document{}, errVendor }

@@ -104,23 +104,26 @@ func TestMapFake_RoundsEachLineHalfAwayFromZero(t *testing.T) {
 		fakeLine{"a", "3", "33.335", "7.5"},
 		fakeLine{"b", "1", "0.125", "0"},
 		fakeLine{"c", "2", "10.00", "7.5"},
+		// Each tax is 0.005, a tie: rounded per line it is 0.01, so VAT sums to 0.02 and not to 0.01.
+		fakeLine{"d", "1", "1.00", "0.5"},
+		fakeLine{"e", "1", "1.00", "0.5"},
 	)
 	in, err := mapFake(doc, nil)
 	if err != nil {
 		t.Fatalf("mapFake: %v", err)
 	}
-	if len(in.LineItems) != 3 {
-		t.Fatalf("lines = %d, want 3", len(in.LineItems))
+	if len(in.LineItems) != 5 {
+		t.Fatalf("lines = %d, want 5", len(in.LineItems))
 	}
 	// 3 x 33.335 is 100.005; its tax is taken on the rounded 100.01 (7.50075).
-	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}}
+	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"1.00", "0.01"}, {"1.00", "0.01"}}
 	for i, w := range want {
 		exact(t, "LineTotal", in.LineItems[i].LineTotal, w[0])
 		exact(t, "LineTax", in.LineItems[i].LineTax, w[1])
 	}
-	exact(t, "Subtotal", in.Subtotal, "120.14")
-	exact(t, "VAT", in.VAT, "9.00")
-	exact(t, "Total", in.Total, "129.14")
+	exact(t, "Subtotal", in.Subtotal, "122.14")
+	exact(t, "VAT", in.VAT, "9.02")
+	exact(t, "Total", in.Total, "131.16")
 }
 
 func TestMapFake_NegativeLineRoundsAwayFromZero(t *testing.T) {

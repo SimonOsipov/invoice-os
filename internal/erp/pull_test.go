@@ -340,6 +340,25 @@ func TestPull_TenantComesFromTheArgs(t *testing.T) {
 	}
 }
 
+// A pull whose args name another tenant's connection sees no row under RLS: it lists and enqueues nothing.
+func TestPull_AnotherTenantsConnectionListsNothing(t *testing.T) {
+	a := newPull(t, keyOne)
+	b := newPullOn(t, a.super, a.app, keyOne)
+
+	if err := a.pullAs(context.Background(), PullArgs{TenantID: a.tenant, ConnectionID: b.conn}, 1); err != nil {
+		t.Fatalf("pull: %v, want nil: the connection is not visible to the args' tenant", err)
+	}
+	if len(a.cursors) != 0 || len(b.cursors) != 0 {
+		t.Errorf("ListChanged calls A/B = %d/%d, want 0/0", len(a.cursors), len(b.cursors))
+	}
+	if n := len(a.ingestJobs(0)) + len(b.ingestJobs(0)); n != 0 {
+		t.Errorf("ingest jobs = %d, want 0", n)
+	}
+	if cursor, epoch, lastSync := b.connState(); cursor != nil || epoch != 0 || lastSync != nil {
+		t.Errorf("B's cursor/epoch/last_sync_at = %x/%d/%v, want untouched", cursor, epoch, lastSync)
+	}
+}
+
 // --- AC-3 -----------------------------------------------------------------------------
 
 func TestPull_SameRevisionIsEnqueuedOnce(t *testing.T) {

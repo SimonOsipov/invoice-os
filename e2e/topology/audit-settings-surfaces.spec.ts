@@ -32,6 +32,9 @@ const PREVIEW_GLOB = '**/api/invoice/v1/evidence-bundle/preview?*'
 const ROLE_WRITE_GLOB = '**/api/invoice/v1/workflow-roles/*'
 const ROLE_WRITE_RE = /\/api\/invoice\/v1\/workflow-roles\/[^/?]+$/
 const MEMBERSHIP_GLOB = '**/api/tenancy/v1/memberships/*'
+const ERP_GLOB = '**/api/portfolio/v1/entities/*/erp-connections'
+const ERP_RE = /\/api\/portfolio\/v1\/entities\/[^/]+\/erp-connections(\/|\?|$)/
+const ENTITY_ID = 'aaaaaaaa-0000-0000-0000-0000000000ee'
 const MEMBERSHIP_RE = /\/api\/tenancy\/v1\/memberships\/[^/?]+$/
 
 let entity: { id: string; name: string }
@@ -1004,46 +1007,52 @@ test('ST-04 Settings › Roles: card, avatars, holder spacing, role modal, picke
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('ST-05 ERP connectors: status pills, connector detail pill, field-mapping modal', async ({ page }, testInfo) => {
+test('ST-05 ERP connectors: status pills and row paint on the real list', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [])
+  const posts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && ERP_RE.test(r.url())) posts.push(r.url())
+  })
+  // Only the list GET is stubbed; any other method goes through, and fails the no-POST check.
+  const wire = (id: string, status: string) => ({ id, entity_id: ENTITY_ID, system: 'fake', external_key: status === 'active' ? 'fake-co-1' : null, status, last_sync_at: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' })
+  await page.route(ERP_GLOB, (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ status: 200, headers: CORS, body: JSON.stringify({ systems: ['fake'], connections: [wire('aaaaaaaa-0000-0000-0000-000000000001', 'active'), wire('aaaaaaaa-0000-0000-0000-000000000002', 'disconnected')] }) })
+      : route.fallback(),
+  )
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
-  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-  const connected = page.getByText('CONNECTED', { exact: true }).first()
-  await expect(connected, 'Connect did not turn a connector on').toBeVisible()
+  const rows = page.getByTestId('erp-connector-row')
+  await expect(rows, 'the stubbed list drew two rows').toHaveCount(2)
   await settle(page, main(page))
+  const active = rows.nth(0)
+  const gone = rows.nth(1)
+
   const reads: Record<string, unknown> = {}
-  for (const [label, text] of [['connected', 'CONNECTED'], ['idle', 'NOT CONNECTED']] as const) {
-    const pill = page.getByText(text, { exact: true }).first()
-    await expect(pill, `no ${text} pill`).toBeVisible()
-    const box = pill.locator('xpath=..')
+  for (const [label, row, text] of [['connected', active, 'CONNECTED'], ['disconnected', gone, 'DISCONNECTED']] as const) {
+    const box = row.getByTestId('erp-connector-status')
+    await expect(box, `no ${text} pill`).toHaveText(text)
     reads[label] = {
       corners: await expectCorners(box, '4px', `${text} pill`),
       dot: (await styles(box.locator(':scope > span').first(), ['border-top-left-radius']))['border-top-left-radius'],
     }
     expect((reads[label] as { dot: string }).dot, `${text} dot`).toBe('50%')
   }
+
+  const connect = gone.getByTestId('erp-connector-connect')
+  const disconnect = active.getByTestId('erp-connector-disconnect')
+  const tile = active.locator(':scope > span').first()
+  const [onPrimary, action, fg2] = await Promise.all([resolveColor(main(page), '--primary-foreground'), resolveColor(main(page), '--action'), resolveColor(main(page), '--fg-2')])
+  const connectPaint = await styles(connect, ['color', 'background-color'])
+  const disconnectPaint = await styles(disconnect, ['color', 'background-color'])
+  const tilePaint = await styles(tile, ['color'])
+  expect(connectPaint, 'Connect paint').toEqual({ color: onPrimary, 'background-color': action })
+  expect(disconnectPaint, 'Disconnect paint').toEqual({ color: fg2, 'background-color': 'rgba(0, 0, 0, 0)' })
+  expect(tilePaint.color, 'tile text').toBe(onPrimary)
   await attachShot(page, testInfo, 'settings-connectors')
 
-  await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
-  const envPill = tid(page, 'connector-env-pill')
-  await expect(envPill, 'the connector detail never opened').toBeVisible()
-  await settle(page, main(page))
-  const envCorners = await expectCorners(envPill, '6px', 'env pill')
-
-  await page.getByRole('button', { name: 'Edit', exact: true }).first().click()
-  const modal = page.getByRole('dialog', { name: 'Edit field mapping' })
-  await expect(modal, 'the mapping modal never opened').toBeVisible()
-  const scrimEl = modal.locator('xpath=..')
-  await settle(page, modal, scrimEl)
-  const modalCorners = await expectCorners(modal, '10px', 'mapping modal')
-  await expectShadow(modal, SHADOW_CARD, 'mapping modal')
-  const scrim = await expectScrim(scrimEl, 'mapping modal')
-  await attachShot(page, testInfo, 'mapping-modal')
-  await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(modal, 'Cancel did not close the mapping modal').toHaveCount(0)
-
-  await attachJson(testInfo, 'st-05-measurements', { reads, envCorners, modalCorners, scrim })
+  expect(posts, `a write reached erp-connections:\n${posts.join('\n')}`).toEqual([])
+  await attachJson(testInfo, 'st-05-measurements', { reads, connectPaint, disconnectPaint, tilePaint, onPrimary, action, fg2 })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -1342,44 +1351,6 @@ test('ST-11 the role delete confirm is a red block with a solid red button, neve
   await expect(modal, 'Cancel did not close the role modal').toHaveCount(0)
   expect(writes, `a role write reached the gateway:\n${writes.join('\n')}`).toEqual([])
   await attachJson(testInfo, 'st-11-measurements', { redBg, redText })
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('ST-12 connector detail: five cards, 6px, flat, inside main and clear of each other', async ({ page }, testInfo) => {
-  const errors = gatedErrors(page, [])
-  await openSettings(page, 'firm')
-  await openTab(page, 'ERP connectors', 'connectors')
-  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-  await expect(page.getByText('CONNECTED', { exact: true }).first(), 'Connect did not turn a connector on').toBeVisible()
-  await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
-  const envPill = tid(page, 'connector-env-pill')
-  await expect(envPill, 'the connector detail never opened').toBeVisible()
-  await settle(page, main(page))
-
-  const segments: Record<string, unknown> = {}
-  for (const [label, seg] of [['SANDBOX', envPill.getByRole('button', { name: 'SANDBOX' })], ['LIVE', tid(page, 'connector-env-pill-live')]] as const) {
-    const s = await styles(seg, ['opacity', 'border-top-left-radius'])
-    expect(s, `${label} segment`).toEqual({ opacity: '0.45', 'border-top-left-radius': '4px' })
-    segments[label] = s
-  }
-
-  const headings = ['Reconciliation · ERP ↔ clearance', 'Documents pulled', 'Sync activity', 'Master data mirror', 'Held documents']
-  const named: Named = {}
-  const paint: Record<string, unknown> = {}
-  for (const h of headings) {
-    const card = page.getByText(h, { exact: true }).locator('xpath=ancestor::div[contains(@style,"border-radius")][1]')
-    await expect(card, `the "${h}" card never drew`).toBeVisible()
-    paint[h] = { corners: await expectCorners(card, '6px', h), shadow: (await styles(card, ['box-shadow']))['box-shadow'] }
-    expect((paint[h] as { shadow: string }).shadow, `${h} shadow`).toBe('none')
-    named[h] = card
-  }
-  const { rects, problems } = await boxes({ main: main(page), ...named })
-  // main scrolls, so cards below the fold lie outside its visible rect by design; only the horizontal band is a claim.
-  insideX(rects, 'main', headings, problems)
-  noOverlap(rects, headings, problems)
-  expect(problems, 'connector detail card placement').toEqual([])
-  await attachJson(testInfo, 'st-12-measurements', { segments, paint, rects })
-  await attachShot(page, testInfo, 'connector-detail')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

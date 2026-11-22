@@ -62,7 +62,7 @@ func TestModeFromEnv_UnreadableFlagRefuses(t *testing.T) {
 
 func TestRegistryFromEnv_SystemsPerDeployEnv(t *testing.T) {
 	for _, d := range []string{"pr-12", "nightly"} {
-		r, err := RegistryFromEnv(env(map[string]string{"DEPLOY_ENV": d}))
+		r, err := RegistryFromEnv(env(map[string]string{"DEPLOY_ENV": d, "ERP_REDIRECT_URL": "https://gw.example/erp/callback"}))
 		if err != nil || strings.Join(r.Systems(), ",") != "fake" {
 			t.Errorf("%s: %v, %v", d, r.Systems(), err)
 		}
@@ -73,5 +73,45 @@ func TestRegistryFromEnv_SystemsPerDeployEnv(t *testing.T) {
 	}
 	if _, err := RegistryFromEnv(env(map[string]string{"DEPLOY_ENV": "production", "ERP_FAKE": "true"})); err == nil {
 		t.Error("production with ERP_FAKE=true accepted")
+	}
+}
+func TestRegistryFromEnv_RedirectURL(t *testing.T) {
+	const good = "https://gw.example/erp/callback"
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{"preview unset", map[string]string{"DEPLOY_ENV": "pr-1"}, false},
+		{"preview relative", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "/erp/callback"}, false},
+		{"preview http", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "http://x/erp/callback"}, false},
+		{"preview other scheme", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": "ftp://x/erp/callback"}, false},
+		{"nightly http", map[string]string{"DEPLOY_ENV": "nightly", "ERP_REDIRECT_URL": "http://x/erp/callback"}, false},
+		{"preview https", map[string]string{"DEPLOY_ENV": "pr-1", "ERP_REDIRECT_URL": good}, true},
+		{"local unset", map[string]string{"ERP_FAKE": "true"}, false},
+		{"local http", map[string]string{"ERP_FAKE": "true", "ERP_REDIRECT_URL": "http://localhost:8080/erp/callback"}, true},
+	} {
+		r, err := RegistryFromEnv(env(c.env))
+		if c.ok != (err == nil) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if c.ok && len(r) != 1 {
+			t.Errorf("%s: systems %v", c.name, r.Systems())
+		}
+		if err != nil {
+			if !strings.Contains(err.Error(), "ERP_REDIRECT_URL") || strings.Contains(err.Error(), "erp/callback") {
+				t.Errorf("%s: error %q must name the variable and not the value", c.name, err)
+			}
+		}
+	}
+	asked := false
+	get := func(k string) string {
+		if k == "ERP_REDIRECT_URL" {
+			asked = true
+		}
+		return map[string]string{"DEPLOY_ENV": "production"}[k]
+	}
+	if _, err := RegistryFromEnv(get); err != nil || asked {
+		t.Errorf("hosted off: %v, asked = %v", err, asked)
 	}
 }

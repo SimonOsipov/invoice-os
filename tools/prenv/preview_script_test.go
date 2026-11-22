@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 )
 
 const previewGcloudShim = `echo "${REACH_JOB:+job: }$*" >> "$D/calls"
@@ -4388,9 +4390,10 @@ func TestPreviewReachNeverPrintsTheValueOfASecretItRefuses(t *testing.T) {
 	}
 }
 
-const (
-	erpOwn   = "erp-grant-slot-1-0b1f6a52-3c1e-4d1a-9a57-6f4b2e8d9c01"
-	erpOther = "erp-grant-slot-2-5d0e9c34-7b2a-4e68-8f13-a1c4d7e2b360"
+// Built with the store's own naming, so a prefix that differs from preview.sh fails the reach run.
+var (
+	erpOwn   = erp.SecretName("slot-1", "0b1f6a52-3c1e-4d1a-9a57-6f4b2e8d9c01")
+	erpOther = erp.SecretName("slot-2", "5d0e9c34-7b2a-4e68-8f13-a1c4d7e2b360")
 )
 
 // erpReach lists an own-slot ERP secret labelled for PR 7 and another slot's, labelled for another PR; denied names the ones the job may not read.

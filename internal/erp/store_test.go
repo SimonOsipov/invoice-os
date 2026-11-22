@@ -48,7 +48,7 @@ func storePools(t *testing.T) (super, app *pgxpool.Pool) {
 
 func fakeStore(t *testing.T, app *pgxpool.Pool) *Store {
 	t.Helper()
-	reg, err := NewRegistry(NewFake())
+	reg, err := NewRegistry(NewFake(testRedirect))
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -750,7 +750,7 @@ func (c secretConnector) Authorize(ctx context.Context, req AuthorizeRequest) (A
 
 func TestStore_ConnectRefusesAGrantWithSecretBytes(t *testing.T) {
 	super, app := storePools(t)
-	reg, err := NewRegistry(NewFake(), secretConnector{NewFake()})
+	reg, err := NewRegistry(NewFake(testRedirect), secretConnector{NewFake(testRedirect)})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -1210,11 +1210,11 @@ func TestStore_ListReturnsOnlyTheClientsConnections(t *testing.T) {
 }
 
 func TestStore_SystemsFollowsTheRegistry(t *testing.T) {
-	one, err := NewRegistry(NewFake())
+	one, err := NewRegistry(NewFake(testRedirect))
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	two, err := NewRegistry(secretConnector{NewFake()}, NewFake())
+	two, err := NewRegistry(secretConnector{NewFake(testRedirect)}, NewFake(testRedirect))
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}

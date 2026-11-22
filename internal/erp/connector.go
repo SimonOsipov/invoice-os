@@ -40,11 +40,25 @@ type GrantMaterial struct {
 	ExpiresAt *time.Time
 }
 
-type AuthorizeRequest struct{ ExternalKey string }
+// AuthorizeRequest carries the state the vendor echoes back to the callback. ExternalKey is the
+// immediate-grant path and goes with it.
+type AuthorizeRequest struct{ State, ExternalKey string }
 
+// AuthorizeResult is built locally, with no network call. ExternalKey and Grant are the
+// immediate-grant path and go with it.
 type AuthorizeResult struct {
+	ConsentURL  string
 	ExternalKey string
 	Grant       *GrantMaterial
+}
+
+type ExchangeRequest struct{ Code string }
+
+// ExchangeResult is what the callback stores: the vendor's company key and the grant, whose Secret
+// is connector-owned opaque bytes.
+type ExchangeResult struct {
+	ExternalKey string
+	Grant       GrantMaterial
 }
 
 // DocRef identifies one revision of one vendor document.
@@ -98,6 +112,8 @@ var (
 	ErrUnknownScope = errors.New("erp: unknown vendor scope")
 	ErrNotFound     = errors.New("erp: not found in the vendor")
 	ErrBadCursor    = errors.New("erp: cursor not recognised")
+	// ErrGrantRevoked is permanent: the vendor ended the grant, so a refresh never retries it.
+	ErrGrantRevoked = errors.New("erp: grant revoked by the vendor")
 )
 
 // Connector is one vendor. WriteBack returns the new revision for vendors that
@@ -106,6 +122,8 @@ type Connector interface {
 	System() string
 	Capabilities() Capabilities
 	Authorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error)
+	Exchange(ctx context.Context, req ExchangeRequest) (ExchangeResult, error)
+	Refresh(ctx context.Context, c Credentials) (GrantMaterial, error)
 	Validate(ctx context.Context, c Credentials, scope string) error
 	ListChanged(ctx context.Context, c Credentials, scope string, cursor []byte) (Changes, error)
 	Fetch(ctx context.Context, c Credentials, ref DocRef) (Document, error)

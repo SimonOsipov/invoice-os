@@ -6,11 +6,16 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/portfolio"
 )
+
+var testRedirect = &url.URL{Scheme: "https", Host: "gw.example", Path: "/erp/callback"}
 
 var (
 	_   Connector = (*Fake)(nil)
@@ -19,13 +24,13 @@ var (
 )
 
 func TestFake_ImplementsConnector(t *testing.T) {
-	if got := NewFake().System(); got != "fake" {
+	if got := NewFake(testRedirect).System(); got != "fake" {
 		t.Fatalf("System = %q", got)
 	}
 }
 
 func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	totals := map[int]bool{}
 	for scope, co := range fakeSeed {
 		var got []string
@@ -74,7 +79,7 @@ func TestFake_ListChangedPagesThroughEachCompanyOnce(t *testing.T) {
 }
 
 func TestFake_ListChangedFinalCursorReturnsNothingNew(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	var cursor []byte
 	for pages := 0; ; pages++ {
 		if pages > 10 {
@@ -100,7 +105,7 @@ func offset(n uint32, scope string) []byte {
 }
 
 func TestFake_ListChangedRefusesABadCursor(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	for name, c := range map[string][]byte{
 		"short":             {1, 2, 3},
 		"past the total":    offset(4, "fake-co-1"),
@@ -124,14 +129,14 @@ func TestFake_ListChangedRefusesABadCursor(t *testing.T) {
 }
 
 func TestFake_ListChangedUnknownScope(t *testing.T) {
-	if _, err := NewFake().ListChanged(ctx, cr, "fake-co-9", nil); !errors.Is(err, ErrUnknownScope) {
+	if _, err := NewFake(testRedirect).ListChanged(ctx, cr, "fake-co-9", nil); !errors.Is(err, ErrUnknownScope) {
 		t.Fatal(err)
 	}
 }
 
 func TestFake_FetchReturnsTheSeededInvoice(t *testing.T) {
 	seed := fakeSeed["fake-co-2"].invoices[1]
-	d, err := NewFake().Fetch(ctx, cr, DocRef{SourceDocID: seed.id, Scope: "fake-co-2"})
+	d, err := NewFake(testRedirect).Fetch(ctx, cr, DocRef{SourceDocID: seed.id, Scope: "fake-co-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +159,7 @@ func TestFake_FetchReturnsTheSeededInvoice(t *testing.T) {
 }
 
 func TestFake_FetchOutsideItsScopeIsNotFound(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	id := fakeSeed["fake-co-1"].invoices[0].id
 	if _, err := f.Fetch(ctx, cr, DocRef{SourceDocID: id, Scope: "fake-co-2"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign scope: %v", err)
@@ -165,7 +170,7 @@ func TestFake_FetchOutsideItsScopeIsNotFound(t *testing.T) {
 }
 
 func TestFake_FetchPartyReturnsTheSeededCustomer(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	for scope, co := range fakeSeed {
 		for _, c := range co.customers {
 			p, err := f.FetchParty(ctx, cr, scope, c.id)
@@ -193,25 +198,93 @@ func TestFake_SeededCustomerTINsAreValid(t *testing.T) {
 	}
 }
 
-func TestFake_AuthorizeSeededKeyReturnsAnAPIKeyGrant(t *testing.T) {
-	r, err := NewFake().Authorize(ctx, AuthorizeRequest{ExternalKey: "fake-co-3"})
-	if err != nil || r.ExternalKey != "fake-co-3" || r.Grant == nil ||
-		r.Grant.Kind != "api_key" || len(r.Grant.Secret) != 0 || r.Grant.ExpiresAt != nil {
-		t.Fatalf("result = %+v, %v", r, err)
+func TestFake_AuthorizeBuildsTheConsentURL(t *testing.T) {
+	state := "a b&c=d/é"
+	r, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{State: state})
+	want := "https://gw.example/erp/fake/consent?state=" + url.QueryEscape(state)
+	if err != nil || r.ConsentURL != want || r.Grant != nil {
+		t.Fatalf("result = %+v, %v; want %s", r, err, want)
+	}
+	if _, err := NewFake(nil).Authorize(ctx, AuthorizeRequest{State: "s"}); err == nil {
+		t.Error("no redirect accepted")
+	}
+	if _, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{}); err == nil {
+		t.Error("empty state accepted")
 	}
 }
 
-func TestFake_AuthorizeUnknownOrEmptyKeyRefused(t *testing.T) {
-	for _, k := range []string{"", "fake-co-9"} {
-		r, err := NewFake().Authorize(ctx, AuthorizeRequest{ExternalKey: k})
-		if !errors.Is(err, ErrUnknownScope) || r.Grant != nil || r.ExternalKey != "" {
-			t.Errorf("%q: %+v, %v", k, r, err)
+func TestFake_ExchangeCodes(t *testing.T) {
+	f := NewFake(testRedirect)
+	codes := fakeCodes()
+	if len(codes) != 9 {
+		t.Fatalf("%d codes, want 9", len(codes))
+	}
+	for _, code := range codes {
+		key, suffix, _ := strings.Cut(code, "~")
+		r, err := f.Exchange(ctx, ExchangeRequest{Code: code})
+		if err != nil || r.ExternalKey != key || r.Grant.Kind != GrantOAuthRefresh || len(r.Grant.Secret) == 0 || r.Grant.ExpiresAt == nil {
+			t.Errorf("%s: %+v, %v", code, r, err)
+			continue
+		}
+		past := r.Grant.ExpiresAt.Before(time.Now())
+		if past != (suffix != "") {
+			t.Errorf("%s: expiry %v, past = %v", code, r.Grant.ExpiresAt, past)
+		}
+		if !past && time.Until(*r.Grant.ExpiresAt) < 59*time.Minute {
+			t.Errorf("%s: expiry %v is not about an hour away", code, r.Grant.ExpiresAt)
+		}
+	}
+	for _, bad := range []string{"fake-co-9", "", "fake-co-1~x", "fake-co-1~", "~expired", "FAKE-CO-1"} {
+		if _, err := f.Exchange(ctx, ExchangeRequest{Code: bad}); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	one, _ := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-1"})
+	two, _ := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-1"})
+	if bytes.Equal(one.Grant.Secret, two.Grant.Secret) {
+		t.Error("two exchanges returned the same secret")
+	}
+}
+
+func TestFake_RefreshRotatesAndCanBeRevoked(t *testing.T) {
+	f := NewFake(testRedirect)
+	ex, _ := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-1~expired"})
+	g, err := f.Refresh(ctx, Credentials{Kind: ex.Grant.Kind, Secret: ex.Grant.Secret})
+	if err != nil || bytes.Equal(g.Secret, ex.Grant.Secret) || g.Kind != GrantOAuthRefresh || g.ExpiresAt == nil ||
+		time.Until(*g.ExpiresAt) < 59*time.Minute {
+		t.Fatalf("refresh = %+v, %v", g, err)
+	}
+	var before, after fakeToken
+	_ = json.Unmarshal(ex.Grant.Secret, &before)
+	_ = json.Unmarshal(g.Secret, &after)
+	if before.Access == after.Access || before.Refresh == after.Refresh {
+		t.Error("a token was not rotated")
+	}
+	bad, _ := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-2~refresh_fails"})
+	for range 2 {
+		if _, err := f.Refresh(ctx, Credentials{Secret: bad.Grant.Secret}); !errors.Is(err, ErrGrantRevoked) {
+			t.Errorf("revoked refresh: %v", err)
+		}
+	}
+	for _, s := range [][]byte{[]byte("garbage"), nil, []byte("{}")} {
+		if _, err := f.Refresh(ctx, Credentials{Secret: s}); err == nil || errors.Is(err, ErrGrantRevoked) {
+			t.Errorf("%q: %v", s, err)
 		}
 	}
 }
 
+func TestFake_LegacyAuthorizeStillGrantsASeededKey(t *testing.T) {
+	r, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{ExternalKey: "fake-co-3"})
+	if err != nil || r.ExternalKey != "fake-co-3" || r.Grant == nil || r.Grant.Kind != GrantAPIKey {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	if _, err := NewFake(testRedirect).Authorize(ctx, AuthorizeRequest{ExternalKey: "fake-co-9"}); !errors.Is(err, ErrUnknownScope) {
+		t.Errorf("unknown key: %v", err)
+	}
+}
+
 func TestFake_ValidateKnownScopeOnly(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	if err := f.Validate(ctx, cr, "fake-co-1"); err != nil {
 		t.Error(err)
 	}
@@ -221,7 +294,7 @@ func TestFake_ValidateKnownScopeOnly(t *testing.T) {
 }
 
 func TestFake_UnsupportedOperations(t *testing.T) {
-	f := NewFake()
+	f := NewFake(testRedirect)
 	if _, err := f.WriteBack(ctx, cr, DocRef{}, WriteBack{}); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("WriteBack: %v", err)
 	}

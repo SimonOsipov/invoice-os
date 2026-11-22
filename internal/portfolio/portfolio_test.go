@@ -1938,31 +1938,17 @@ func TestStoreList_SearchQNoMatch(t *testing.T) {
 	}
 }
 
-// TestStoreList_SearchQWildcardIsNotEscaped (QA-added -- documents ACTUAL
-// behavior, not asserted as a bug): f.Q is always passed as a BOUND
-// parameter ('%'||$n||'%'), never string-interpolated into the SQL text, so
-// there is NO SQL-injection risk from q. However, Store.List does NOT
-// LIKE-escape q's contents before binding it -- so a literal "%" or "_"
-// TYPED BY THE USER into q is interpreted by Postgres as an ILIKE wildcard,
-// not a literal character. q="%" here becomes the pattern '%'||'%'||'%' =
-// '%%%', which ILIKE collapses to "match anything" -- List(q="%") matches
-// EVERY row in the tenant, regardless of name/tin content.
-//
-// QA ruling: acceptable for this MVP/demo search box (M3-03-03, task-36).
-// Nigerian business names/TINs containing a literal "%" or "_" are
-// vanishingly rare, and the failure mode if one occurs is "search returns
-// more rows than the literal string would suggest" -- not a security issue,
-// not a cross-tenant leak, not data corruption. NOT bounced as a defect;
-// flagged here for the human's awareness in case a future story wants
-// stricter literal-search semantics (would require escaping "%", "_", and
-// "\" in q before binding).
-func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
+// TestStoreList_SearchQWildcardsAreLiteral (CSRCH-01): LIKE metacharacters in q
+// match literally. "_" and "%" match no client whose name lacks them, a name
+// holding a literal "%" / "_" is found by that character, and "\" is literal.
+// Supersedes the earlier ruling that q was left unescaped.
+func TestStoreList_SearchQWildcardsAreLiteral(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
 	if _, err := super.Exec(ctx,
-		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-wildcard tenant', 'firm')`, tenantID); err != nil {
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-literal tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
@@ -1977,17 +1963,153 @@ func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
 
 	seedEntity(t, super, tenantID, "Okafor Ltd", nil)
 	seedEntity(t, super, tenantID, "Lagos Foods", nil)
-	seedEntity(t, super, tenantID, "Acme Traders", nil)
+	seedEntity(t, super, tenantID, "50% Off Traders", nil)
+	seedEntity(t, super, tenantID, "Snake_Case Co", nil)
+	seedEntity(t, super, tenantID, `Back\slash Ltd`, nil)
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	items, total, err := store.List(c, ListFilter{Q: "%", Limit: 50})
-	if err != nil {
-		t.Fatalf(`List(q="%%"): %v`, err)
+	for _, tc := range []struct {
+		q    string
+		want string
+	}{
+		{"%", "50% Off Traders"},
+		{"_", "Snake_Case Co"},
+		{`\`, `Back\slash Ltd`},
+		{"a\\", ""},
+	} {
+		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", tc.q, err)
+		}
+		wantN := 1
+		if tc.want == "" {
+			wantN = 0
+		}
+		if total != wantN || len(items) != wantN {
+			t.Errorf("List(q=%q) = %d items, total %d, want %d", tc.q, len(items), total, wantN)
+			continue
+		}
+		if wantN == 1 && items[0].Name != tc.want {
+			t.Errorf("List(q=%q) = %q, want %q", tc.q, items[0].Name, tc.want)
+		}
 	}
-	if total != 3 || len(items) != 3 {
-		t.Fatalf("total=%d len(items)=%d, want 3/3 (a literal %% in q is treated as an ILIKE wildcard here, matching every row in the tenant -- see comment above)", total, len(items))
+}
+
+// TestStoreList_SearchQTINWildcardsAreLiteral (CSRCH-01 QA): the tin arm escapes q too. The TIN holds a
+// literal _, % and \; each is found as itself, and a wildcard reading of it matches nothing.
+func TestStoreList_SearchQTINWildcardsAreLiteral(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-tin-literal tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	seedEntity(t, super, tenantID, "Okafor Ltd", nil)
+	tinLit := `12_34%56\78`
+	seedEntity(t, super, tenantID, "Plain Name", &tinLit)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	for _, tc := range []struct {
+		q    string
+		want string
+	}{
+		{"2_3", "Plain Name"},
+		{"4%5", "Plain Name"},
+		{`6\7`, "Plain Name"},
+		{"2%3", ""},
+		{"4_5", ""},
+		{`6\\7`, ""},
+	} {
+		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", tc.q, err)
+		}
+		wantN := 1
+		if tc.want == "" {
+			wantN = 0
+		}
+		if total != wantN || len(items) != wantN {
+			t.Errorf("List(q=%q) = %d items, total %d, want %d", tc.q, len(items), total, wantN)
+			continue
+		}
+		if wantN == 1 && items[0].Name != tc.want {
+			t.Errorf("List(q=%q) = %q, want %q", tc.q, items[0].Name, tc.want)
+		}
+	}
+}
+
+// TestStoreList_SearchQTINHyphen (CSRCH-01 tin-hyphen): TINs are stored without the hyphen, so the
+// tin arm matches q with its hyphens removed. A hyphen-only q adds no tin match, and the name arm
+// keeps q as typed.
+func TestStoreList_SearchQTINHyphen(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-tin-hyphen tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	tin := "123456780001"
+	seedEntity(t, super, tenantID, "Okafor Ltd", &tin)
+	seedEntity(t, super, tenantID, "Anchor-Point Co", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	for _, tc := range []struct {
+		name string
+		q    string
+		want []string
+	}{
+		{"hyphenated full TIN", "12345678-0001", []string{"Okafor Ltd"}},
+		{"hyphenated fragment spanning the hyphen", "5678-00", []string{"Okafor Ltd"}},
+		{"unhyphenated fragment", "567800", []string{"Okafor Ltd"}},
+		{"hyphen only matches names holding it", "-", []string{"Anchor-Point Co"}},
+		{"hyphenated name search", "Anchor-Po", []string{"Anchor-Point Co"}},
+		{"hyphens only, no name holds them", "--", nil},
+		{"hyphen plus wildcard stays literal on the tin arm", "5678-%", nil},
+		{"hyphen plus underscore stays literal on the tin arm", "5678-_", nil},
+	} {
+		items, total, err := store.List(c, ListFilter{Q: tc.q, Limit: 50})
+		if err != nil {
+			t.Fatalf("%s: List(q=%q): %v", tc.name, tc.q, err)
+		}
+		if total != len(tc.want) || len(items) != len(tc.want) {
+			t.Errorf("%s: List(q=%q) = %d items, total %d, want %d", tc.name, tc.q, len(items), total, len(tc.want))
+			continue
+		}
+		for i, w := range tc.want {
+			if items[i].Name != w {
+				t.Errorf("%s: List(q=%q)[%d] = %q, want %q", tc.name, tc.q, i, items[i].Name, w)
+			}
+		}
 	}
 }
 

@@ -15,13 +15,14 @@
 // status filter below adds a SECOND, independent fetch for this view's own rows —
 // ctx.entities itself stays unfiltered ([clients-fetches-its-own-filtered-list]).
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
 import {
   archiveActionFor,
+  clientSearchNoMatchTitle,
   entityListIsEmpty,
   entityStatusParam,
   entityStatusStyle,
@@ -39,6 +40,7 @@ import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/
 import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { EntityFormModal } from './EntityFormModal'
 import { FilterBar } from './FilterBar'
+import { SearchBox } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
 // filter:none outranks .v2-btn:hover's lift (same recipe as MembersView's Invite people).
@@ -49,6 +51,8 @@ const FILTER_POSITIONS: Array<{ pos: EntityFilterPos; label: string }> = [
   { pos: 'active', label: 'Active' },
   { pos: 'archived', label: 'Archived' },
 ]
+
+const CLIENT_SEARCH_DEBOUNCE_MS = 300
 
 // Local avatar-bubble helper — deliberately NOT reused from lib/customers.ts (that
 // module is the customer/buyer domain; this surface is the portfolio-entity domain,
@@ -115,16 +119,26 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const { refetchEntities } = ctx
 
   const [pos, setPos] = useState<EntityFilterPos>('all')
+  // `draft` is the box; `q` is the trimmed text committed after a pause and sent on the wire.
+  const [draft, setDraft] = useState('')
+  const [q, setQ] = useState('')
+  useEffect(() => {
+    const t = window.setTimeout(() => setQ(draft.trim()), CLIENT_SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [draft])
 
   // Own filtered fetch, not a client-side filter over ctx.entities -- the switcher's
   // roster (ctx.entities) must stay unfiltered ([clients-fetches-its-own-filtered-list]).
   const filtered = useAsync<EntityListResponse>(
     () =>
       base
-        ? listEntities(ctx.authedFetch, base, { status: entityStatusParam(pos) })
+        ? listEntities(ctx.authedFetch, base, { status: entityStatusParam(pos), q })
         : Promise.reject(new Error('no gateway configured')),
-    { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos] },
+    { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos, q] },
   )
+  // Latest run: an archive that resolves mid-search must rerun the CURRENT q and chip, not the click-time ones.
+  const runFiltered = useRef(filtered.run)
+  runFiltered.current = filtered.run
   const filteredState = base == null ? 'idle' : filtered.status
   const access = companySetupAccess(ctx.membersState, ctx.members)
   // Only a known non-admin is blocked; loading/error keep today's controls.
@@ -180,7 +194,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       setArmedId(null)
       setArchiveError(null)
       refetchEntities()
-      filtered.run()
+      runFiltered.current()
     } catch (err) {
       setArmedId(null)
       if (err instanceof ApiError && err.status === 403) ctx.refetchMembers()
@@ -226,6 +240,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       <FilterBar testId="clients-filter-bar">
+        <SearchBox value={draft} onChange={setDraft} placeholder="Search name or TIN" label="Search clients" testId="clients-search" />
         {FILTER_POSITIONS.map(({ pos: p, label }) => (
           <button
             key={p}
@@ -254,7 +269,26 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       {filteredState === 'idle' && <EmptyState title={noClients.title} message={noClients.message} />}
 
       {filteredState === 'empty' &&
-        (pos === 'all' ? (
+        (q !== '' ? (
+          <div data-testid="clients-no-match" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>
+            <EmptyState
+              title={clientSearchNoMatchTitle(q)}
+              message="Search matches part of a client's name or TIN."
+              action={
+                <button
+                  data-testid="clients-clear-search"
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  onClick={() => {
+                    setDraft('')
+                    setQ('')
+                  }}
+                >
+                  Clear search
+                </button>
+              }
+            />
+          </div>
+        ) : pos === 'all' ? (
           viewerHasNoClients(ctx.members) ? (
             <EmptyState title="No clients assigned" message={NO_ASSIGNED_CLIENTS} />
           ) : (

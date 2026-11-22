@@ -639,4 +639,36 @@ func TestRelease_NoSecretOfAReleasedGrantRemains(t *testing.T) {
 		}
 		r.wantSecrets(t, "after the fourth attempt", []string{g}, []string{neighbour})
 	})
+
+	t.Run("a reconsent connection re-authorised", func(t *testing.T) {
+		r := newReleaseRig(t, 0)
+		e1, e2 := r.client(t, "Client One"), r.client(t, "Client Two")
+		reg, err := NewRegistry(NewFake(testRedirect))
+		if err != nil {
+			t.Fatalf("registry: %v", err)
+		}
+		// The callback runs on the worker, which holds the secret store.
+		worker := NewStore(r.app, reg, r.mem, r.q)
+		c, g1 := connectActive(t, worker, r.admin, r.super, e1, "fake-co-1")
+		_, neighbour := connectActive(t, worker, r.admin, r.super, e2, "fake-co-2")
+		mustExec(t, r.super, "UPDATE erp_connections SET status = 'reconsent' WHERE id = $1", c)
+		r.wantSecrets(t, "before the re-authorisation", nil, []string{g1, neighbour})
+
+		_, consent, _, err := worker.Connect(r.admin, e1, ConnectInput{System: "fake", ConnectionID: c})
+		if err != nil {
+			t.Fatalf("Connect by id: %v", err)
+		}
+		out, err := worker.Complete(context.Background(), CallbackInput{State: consentState(t, consent), Code: "fake-co-1"})
+		if err != nil || string(out) != "connected" {
+			t.Fatalf("Complete = %q, %v, want connected", out, err)
+		}
+		g2 := stateOf(t, r.super, c).grant
+		if g2 == nil || *g2 == g1 {
+			t.Fatalf("connection grant = %v, want a new grant (old %s)", g2, g1)
+		}
+		if got := r.runJobs(t, nil); !reflect.DeepEqual(got, []int{0}) {
+			t.Errorf("job errors = %v, want one job with none", got)
+		}
+		r.wantSecrets(t, "after the job", []string{g1}, []string{*g2, neighbour})
+	})
 }

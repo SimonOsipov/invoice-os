@@ -2,8 +2,9 @@
 // Status codes only; the connected case acts on a client this run created.
 import { createHmac } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { login, createEntity, rawFetch, apiBase, PERSONAS } from './client'
+import { login, createEntity, apiBase, PERSONAS } from './client'
 import { freshTin } from './fixtures'
+import { connectFake } from './erpFake'
 
 const FAKE = 'fake' // fakeSystem in internal/erp/fake.go
 const FAKE_KEY = 'fake-co-1' // fakeSeed key in internal/erp/fake_seed.go
@@ -22,23 +23,6 @@ const post = (system: string, body: string, signature?: string) =>
     },
     body,
   })
-
-// Copy of connectFake in erp-ingest.spec.ts: create the pending fake connection, then complete consent.
-async function connectFake(token: string, entityId: string, key: string): Promise<string> {
-  const res = await rawFetch(`/api/portfolio/v1/entities/${entityId}/erp-connections`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: { system: FAKE },
-  })
-  expect(res.status).toBe(201)
-  const conn = res.body as { id: string; consent_url: string }
-  const state = new URL(conn.consent_url).searchParams.get('state') ?? ''
-  const done = await fetch(`${apiBase()}/erp/callback?${new URLSearchParams({ state, code: key })}`, {
-    redirect: 'manual',
-  })
-  expect(done.status).toBe(200)
-  return conn.id
-}
 
 test.describe('ERP webhooks (API E2E, over the deployed gateway)', () => {
   test('an unsigned POST and a wrong signature answer 401', async () => {

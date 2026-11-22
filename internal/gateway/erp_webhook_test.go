@@ -60,6 +60,7 @@ func TestERPWebhook_ForwardsTheExactBodyAndVendorHeaders(t *testing.T) {
 	rec := postHook(hookHandler(u, nil), body, map[string]string{
 		"X-Fake-Signature": "sig", "Content-Type": "text/plain", "Cookie": "s=1",
 		"X-Forwarded-For": "1.2.3.4", "Forwarded": "for=1.2.3.4", "X-Real-Ip": "1.2.3.4",
+		"X-Forwarded-Host": "evil.example", "Via": "1.1 proxy",
 	})
 	if rec.Code != 200 || hw.calls.Load() != 1 || hw.path != "/internal/erp/webhooks/fake" || hw.token != "gw-token" {
 		t.Fatalf("code %d calls %d path %q token %q", rec.Code, hw.calls.Load(), hw.path, hw.token)
@@ -74,7 +75,7 @@ func TestERPWebhook_ForwardsTheExactBodyAndVendorHeaders(t *testing.T) {
 	if env.Headers["X-Fake-Signature"][0] != "sig" || env.Headers["Content-Type"][0] != "text/plain" {
 		t.Errorf("vendor headers missing: %v", env.Headers)
 	}
-	for _, h := range []string{"Cookie", "X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
+	for _, h := range []string{"Cookie", "X-Forwarded-For", "Forwarded", "X-Real-Ip", "X-Forwarded-Host", "Via"} {
 		if _, ok := env.Headers[h]; ok {
 			t.Errorf("%s forwarded", h)
 		}
@@ -181,6 +182,9 @@ func TestERPWebhook_LogsNoBodyHeaderOrAddress(t *testing.T) {
 			req.RemoteAddr = "8.8.8.8:1234"
 			hookHandler(u, log).ServeHTTP(httptest.NewRecorder(), req)
 		}
+	}
+	if !strings.Contains(buf.String(), "upstream_status=500") {
+		t.Fatalf("the 500 path logged nothing to check: %q", buf.String())
 	}
 	for _, needle := range []string{"body-needle", "sig-needle", "9.9.9.9", "8.8.8.8"} {
 		if strings.Contains(buf.String(), needle) {

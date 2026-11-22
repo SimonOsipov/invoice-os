@@ -367,13 +367,16 @@ func TestReceive_OneKeyOnSeveralTenantsEnqueuesEach(t *testing.T) {
 	tenB, entB := e.firm("webhook client B")
 	key := hookKey("shared")
 	a1, a2, b := e.active(tenA, entA1, key), e.active(tenA, entA2, key), e.active(tenB, entB, key)
+	// A third firm holds the same key on a pending connection: it is not a target.
+	tenC, entC := e.firm("webhook client C")
+	c := seedConnRow(t, e.super, connRow{tenant: tenC, entity: entC, key: key, status: "pending"})
 	h, body := signedEvents(Hint{key, key + "-inv-2"})
 
 	n, err := e.receive(h, body)
 	if n != 3 || err != nil {
 		t.Fatalf("Receive = %d, %v, want 3, nil", n, err)
 	}
-	wantPulls(t, e.pulls(a1, a2, b), tenA+"/"+a1, tenA+"/"+a2, tenB+"/"+b)
+	wantPulls(t, e.pulls(a1, a2, b, c), tenA+"/"+a1, tenA+"/"+a2, tenB+"/"+b)
 }
 
 func TestReceive_UnknownOrInactiveTargetsEnqueueNothing(t *testing.T) {
@@ -759,6 +762,9 @@ func TestWebhookHandler_LogsNoBodyHeaderKeyOrAddress(t *testing.T) {
 		if w := serveHook(rec, log, "fake", tc.raw, forwarded); w.Code != tc.status {
 			t.Fatalf("%s path: status = %d, want %d", tc.name, w.Code, tc.status)
 		}
+	}
+	if !strings.Contains(logs.String(), "erp: webhook received") {
+		t.Fatalf("the 200 path logged nothing to check: %q", logs.String())
 	}
 	for _, needle := range []string{needleBody, needleSig, needleAddr, needleKey, base64.StdEncoding.EncodeToString([]byte(events))} {
 		if strings.Contains(logs.String(), needle) {

@@ -52,6 +52,9 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'erp.connection.created',
     'erp.connection.authorised',
     'erp.connection.revoked',
+    'erp.document.pulled',
+    'erp.document.skipped_duplicate',
+    'erp.document.changed_after_clearance',
     'erp.token.deleted',
     'erp.token.refreshed',
     'erp.token.refresh_failed',
@@ -142,6 +145,9 @@ describe('audit vocabulary', () => {
       }
     }
     expect(AUDIT_EVENTS['approval_policy.reordered']?.label).toBe('Policies reordered')
+    expect(AUDIT_EVENTS['erp.document.pulled']?.label).toBe('ERP invoice pulled')
+    expect(AUDIT_EVENTS['erp.document.skipped_duplicate']?.label).toBe('ERP invoice number already exists, no new invoice made')
+    expect(AUDIT_EVENTS['erp.document.changed_after_clearance']?.label).toBe('ERP invoice changed after NRS accepted it')
   })
 
   it('auditVocabulary_accountLabels', () => {

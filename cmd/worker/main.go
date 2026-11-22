@@ -193,9 +193,13 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
+	// The re-check and the ERP ingest share one gate.
+	gate := invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil))
 	erpw := &erp.Workers{
 		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: erpReg, Secrets: erpSecrets, Logger: app.Logger},
 		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
+		Pull:         &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
+		Ingest:       &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
 	}
 
 	q, err := queue.New(pool, queue.Config{
@@ -208,6 +212,7 @@ func main() {
 	}
 	sw.Queue, pw.Queue, xw.River = q, q, q.River()
 	erpw.Refresh.Queue = q
+	erpw.Pull.Queue = q
 	xbw.River = q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
@@ -256,12 +261,18 @@ func main() {
 	rechecker := &invoice.Rechecker{
 		Pool:    pool,
 		Store:   invStore,
-		Gate:    invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil)),
+		Gate:    gate,
 		Tenants: tenants,
 		Logger:  app.Logger,
 	}
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck", rechecker.RunOnce)))
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck-custom", rechecker.RunCustomOnce)))
+
+	// With no connector registered there is nothing to pull.
+	if len(erpReg) > 0 {
+		sweeper := &erp.Sweeper{Reader: readerPool, Pool: pool, River: q.River(), Registry: erpReg, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(erp.PullInterval, leader.Lead("erp-pull", sweeper.SweepOnce)))
+	}
 
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, leader.Lead("rollup-snapshot", snap.RunOnce)))

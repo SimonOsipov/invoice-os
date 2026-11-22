@@ -336,6 +336,9 @@ type CreateInput struct {
 	// invoiceColumns -- that projection feeds a POSITIONAL scanInvoice and the
 	// gate's MBS payload (TestInvoiceColumns_OmitsSourceDocumentID).
 	SourceDocumentID *string
+	// ERPConnectionID is the ERP connection a pull created this invoice for; nil for every other
+	// create. Absent from Invoice and invoiceColumns for the same reason as SourceDocumentID.
+	ERPConnectionID *string
 	// SourceRows is the sorted 1-based sheet rows of that document which became
 	// this invoice; nil for a manual create. Absent from Invoice/invoiceColumns
 	// for the same reason as SourceDocumentID (TestInvoiceColumns_OmitsSourceRows).

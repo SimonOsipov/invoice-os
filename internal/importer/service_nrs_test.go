@@ -429,7 +429,7 @@ func TestInvoiceFromCreateInput_CopiesEveryInputField(t *testing.T) {
 	}
 	var in invoice.CreateInput
 	var li invoice.LineItemInput
-	want := fill(reflect.ValueOf(&in).Elem(), map[string]bool{"SourceDocumentID": true}) // absent from Invoice by design
+	want := fill(reflect.ValueOf(&in).Elem(), map[string]bool{"SourceDocumentID": true, "ERPConnectionID": true}) // absent from Invoice by design
 	in.DocumentType = submission.CreditNote
 	want = append(want, "credit_note")
 	want = append(want, fill(reflect.ValueOf(&li).Elem(), map[string]bool{"ID": true})...)

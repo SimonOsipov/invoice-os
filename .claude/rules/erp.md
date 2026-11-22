@@ -2,6 +2,7 @@
 paths:
   - "internal/erp/**"
   - "cmd/portfolio/main.go"
+  - "cmd/worker/main.go"
 ---
 # ERP connectors
 
@@ -22,3 +23,6 @@ paths:
 - Delete the tenant's ERP secrets in the workspace purge, before `purge_tenant`: every `erp_grants.secret_ref` and every `erp_secret_delete` job ref of the tenant (`erp.TenantSecretRefs`). NOT_FOUND counts as deleted; a failed delete stops the purge at step `secrets`; a ref without `erp-grant-` stops it with no store call.
 - Refresh a grant only in `RefreshWorker`: the claim (`version + 1` under `OncePerJob`) comes first, then Access, `Refresh` and `AddVersion` with no transaction held, then one transaction for `expires_at`, `erp.token.refreshed` and the next job (`erp_refresh:<grant>:<version>`, at expiry − 5 min). Retry `AddVersion` in the attempt: the vendor may have spent the refresh token. A failed disable of the old version is logged, not retried.
 - End a grant only through the reconsent update (`active` → `reconsent`): on `ErrGrantRevoked` (job cancelled) and on the 8th failed attempt (`exhausted`, error returned). The status change is the once-guard; never call `OncePerJob` a second time in a job. Put no token in an event, error or log.
+- Create an ERP draft only through `importer.CreateDrafts`. Never write an `invoices` row from `internal/erp`: link a duplicate number, mark a change on the document, never re-sign or submit. Take a document's client only from its connection row.
+- Pull from the stored cursor; enqueue each ingest through `EnqueueTx` with `IngestKey` and save the cursor in the same transaction. Pull and ingest only an active connection.
+- A bad cursor nulls the cursor and keeps `ingest_epoch`; only a skipped ingest bumps it.

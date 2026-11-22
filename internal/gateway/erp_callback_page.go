@@ -76,6 +76,10 @@ func (p *erpCallbackPage) serve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if r.Method == http.MethodHead { // a link scanner's HEAD must not spend the single-use state
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	q := r.URL.Query()
 	state, code, vendorErr := q.Get("state"), q.Get("code"), q.Get("error")
 	if !erpStateRE.MatchString(state) || len(code) > erpMaxCode {

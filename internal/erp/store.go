@@ -22,6 +22,7 @@ var (
 	ErrAlreadyConnected    = errors.New("erp: already connected")
 	ErrAlreadyDisconnected = errors.New("erp: already disconnected")
 	ErrNoSuchRecord        = errors.New("erp: no such client or connection")
+	ErrKeylessPending      = errors.New("erp: another connection of this system is already waiting for consent")
 )
 
 // Connection is one client's link to one ERP system; it carries no grant field.
@@ -165,6 +166,15 @@ func (s *Store) Connect(ctx context.Context, entityID string, in ConnectInput) (
 
 // keylessPending returns the client's one keyless pending row for the system, inserting it when absent.
 func keylessPending(ctx context.Context, tx pgx.Tx, tenantID, entityID, system string, conn *Connection) (created bool, err error) {
+	created, err = insertKeylessPending(ctx, tx, tenantID, entityID, system, conn)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A callback activated the conflicting row between the two statements; the slot is free again.
+		return insertKeylessPending(ctx, tx, tenantID, entityID, system, conn)
+	}
+	return created, err
+}
+
+func insertKeylessPending(ctx context.Context, tx pgx.Tx, tenantID, entityID, system string, conn *Connection) (created bool, err error) {
 	err = scanConnection(tx.QueryRow(ctx,
 		`INSERT INTO erp_connections (tenant_id, entity_id, system, status) VALUES ($1, $2, $3, 'pending')
 		 ON CONFLICT (tenant_id, entity_id, system) WHERE external_key IS NULL AND status = 'pending' DO NOTHING
@@ -200,9 +210,14 @@ func reauthorise(ctx context.Context, tx pgx.Tx, entityID string, in ConnectInpu
 	if status == "active" {
 		return ErrAlreadyConnected
 	}
-	return scanConnection(tx.QueryRow(ctx,
+	err := scanConnection(tx.QueryRow(ctx,
 		`UPDATE erp_connections SET status = 'pending', updated_at = now() WHERE id = $1 RETURNING `+connectionCols,
 		in.ConnectionID), conn)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "erp_connections_one_keyless_pending" {
+		return ErrKeylessPending // a keyless row cannot go pending beside the client's other one
+	}
+	return err
 }
 
 // Disconnect keeps the row, clears its grant and, once no connection uses the grant, deletes it and enqueues its secret delete.

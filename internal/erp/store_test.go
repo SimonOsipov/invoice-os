@@ -237,7 +237,7 @@ func idsOf(cs []Connection) []string {
 // everyStoreError lets wantErr prove an answer is that error and no other.
 var everyStoreError = []error{
 	ErrNotPermitted, ErrUnknownSystem, ErrNoSuchRecord, ErrAlreadyConnected,
-	ErrAlreadyDisconnected, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
+	ErrAlreadyDisconnected, ErrKeylessPending, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
 }
 
 func wantErr(t *testing.T, label string, got, want error) {

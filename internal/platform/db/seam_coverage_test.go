@@ -768,6 +768,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 	{file: "internal/tenancy/stranded_alert.go", fn: "recordStrandedAlert"},                 // writes the alert row after the deletion committed, on the deletion's tenant; the actor just left, so the seam would refuse
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
+	{file: "internal/erp/complete.go", fn: "settleTx2Error"},                                // part of the callback: the tenant comes from the state, there is no request identity to gate
 	{file: "internal/erp/complete.go", fn: "Complete"},                                      // the callback names its tenant in the state; the gateway-token route carries no identity to gate
 	{file: "internal/erp/refresh.go", fn: "refresh"},                                        // the refresh River job; the tenant comes from its args and there is no request identity to gate
 	{file: "internal/erp/refresh.go", fn: "claim"},                                          // the refresh River job; the tenant comes from its args and there is no request identity to gate

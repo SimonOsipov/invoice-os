@@ -39,6 +39,7 @@ const (
 	refreshAddVersionTries = 5
 	refreshAddVersionDelay = time.Second
 	refreshAddVersionLimit = 30 * time.Second
+	reconsentLimit         = 10 * time.Second
 )
 
 // errNotClaimed rolls the claim back when the grant is gone or at another version.
@@ -203,6 +204,9 @@ func (w *RefreshWorker) addVersion(ctx context.Context, ref string, payload []by
 // reconsent moves every active connection on the grant to reconsent and records why. The status
 // change is the once-guard: a repeat finds no active row and writes nothing.
 func (w *RefreshWorker) reconsent(ctx context.Context, a RefreshArgs, reason string) error {
+	// The attempt's context may be dead (job timeout, shutdown); the transition must still land.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reconsentLimit)
+	defer cancel()
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE erp_connections SET status = 'reconsent', updated_at = now() WHERE grant_id = $1 AND status = 'active' RETURNING id::text, system`, a.GrantID)
 		if err != nil {

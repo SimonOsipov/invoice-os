@@ -90,6 +90,7 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
+		{ErrKeylessPending, 409, "another connection of this system is already waiting for consent"},
 		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
 	} {
 		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err}

@@ -132,6 +132,8 @@ func statusForErr(err error) (int, string) {
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrAlreadyConnected):
 		return http.StatusConflict, "already connected"
+	case errors.Is(err, ErrKeylessPending):
+		return http.StatusConflict, "another connection of this system is already waiting for consent"
 	case errors.Is(err, ErrAlreadyDisconnected):
 		return http.StatusConflict, "already disconnected"
 	}

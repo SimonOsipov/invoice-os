@@ -48,7 +48,7 @@ type consent struct{ connectionID, adminID, system string }
 
 // Complete finishes a consent. tx1 consumes the single-use state and checks that it can still act; the
 // exchange and the secret create hold no transaction; tx2 activates the connection. A failure after the
-// secret exists deletes it inline. An error comes back only when tx1 could not run, so the state is unspent.
+// secret exists deletes it inline unless tx2 turns out to have committed. An error comes back only when tx1 could not run, so the state is unspent.
 func (s *Store) Complete(ctx context.Context, in CallbackInput) (Outcome, error) {
 	ctx, cancel := context.WithTimeout(ctx, completeBudget)
 	defer cancel()
@@ -102,7 +102,10 @@ func (s *Store) Complete(ctx context.Context, in CallbackInput) (Outcome, error)
 		final = OutcomeConflict
 	case err != nil:
 		slog.WarnContext(ctx, "erp: activate connection failed", slog.String("system", c.system), slog.Any("err", err))
-		final = OutcomeFailed
+		if s.settleTx2Error(ctx, tenantID, c.connectionID, grantID, ref) {
+			return OutcomeConnected, nil
+		}
+		return OutcomeFailed, nil
 	}
 	if final == OutcomeConnected {
 		return final, nil
@@ -152,6 +155,18 @@ func consumeState(ctx context.Context, tx pgx.Tx, hash []byte, denied bool) (con
 
 // activate is tx2. A non-connected Outcome with a nil error commits nothing but the row lock.
 func (s *Store) activate(ctx context.Context, tx pgx.Tx, tenantID string, c consent, res ExchangeResult, grantID, ref string) (Outcome, error) {
+	if err := requireAdmin(ctx, tx, c.adminID); err != nil {
+		if errors.Is(err, ErrNotPermitted) {
+			return OutcomeEnded, nil
+		}
+		return "", err
+	}
+	if locked, err := db.WorkspaceLocked(ctx, tx); err != nil || locked {
+		if err != nil {
+			return "", err
+		}
+		return OutcomeEnded, nil
+	}
 	var key, oldGrant *string
 	err := tx.QueryRow(ctx,
 		`SELECT external_key, grant_id::text FROM erp_connections WHERE id = $1 AND status = 'pending' FOR UPDATE`,
@@ -203,6 +218,27 @@ func (s *Store) deleteUnused(ctx context.Context, ref string) {
 	if err := s.secrets.Delete(dctx, ref); err != nil {
 		slog.ErrorContext(ctx, "erp: delete unused grant secret failed", slog.String("secret", ref), slog.Any("err", err))
 	}
+}
+
+// settleTx2Error runs when tx2 returned an error, which may follow a COMMIT the server applied. It
+// re-reads the connection on its own context and deletes the secret only when the new grant is not
+// the connection's; it reports whether the commit applied. When the re-read fails the secret stays.
+func (s *Store) settleTx2Error(ctx context.Context, tenantID, connectionID, grantID, ref string) (committed bool) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inlineDeleteBudget)
+	defer cancel()
+	var held *string
+	err := db.WithinTenantTx(rctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(rctx, `SELECT grant_id::text FROM erp_connections WHERE id = $1`, connectionID).Scan(&held)
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "erp: could not confirm whether the connection activated; secret kept")
+		return false
+	}
+	if held != nil && *held == grantID {
+		return true
+	}
+	s.deleteUnused(ctx, ref)
+	return false
 }
 
 type callbackRequest struct {

@@ -2,9 +2,12 @@ package erp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
 // --- fixtures ---------------------------------------------------------------------------
@@ -48,11 +52,22 @@ func storePools(t *testing.T) (super, app *pgxpool.Pool) {
 
 func fakeStore(t *testing.T, app *pgxpool.Pool) *Store {
 	t.Helper()
-	reg, err := NewRegistry(NewFake(testRedirect))
+	return storeOver(t, app, nil, NewFake(testRedirect))
+}
+
+// storeOver wires the store as portfolio does: an insert-only queue client and, unless a test needs
+// one, no secret store.
+func storeOver(t *testing.T, app *pgxpool.Pool, secrets SecretStore, cs ...Connector) *Store {
+	t.Helper()
+	reg, err := NewRegistry(cs...)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	return NewStore(app, reg)
+	q, err := queue.New(app, queue.Config{})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	return NewStore(app, reg, secrets, q)
 }
 
 func mustExec(t *testing.T, pool *pgxpool.Pool, q string, args ...any) {
@@ -162,7 +177,7 @@ func eventCount(t *testing.T, super *pgxpool.Pool, tenant, event string) int {
 }
 
 func erpAuditCount(t *testing.T, super *pgxpool.Pool, tenant string) int {
-	return countOf(t, super, "SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event LIKE 'erp.connection.%'", tenant)
+	return countOf(t, super, "SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event LIKE 'erp.%'", tenant)
 }
 
 func orphanGrants(t *testing.T, super *pgxpool.Pool, tenant string) int {
@@ -174,16 +189,18 @@ func grantExists(t *testing.T, super *pgxpool.Pool, id string) bool {
 	return countOf(t, super, "SELECT count(*) FROM erp_grants WHERE id = $1", id) == 1
 }
 
-// erpState is every ERP row of the tenant plus the ERP audit count, so "nothing written" also
-// catches an update that leaves the row counts alone.
+// erpState is every ERP row of the tenant (connections, grants, OAuth states), its queued ERP jobs and
+// the ERP audit count, so "nothing written" also catches an update that leaves the row counts alone.
 func erpState(t *testing.T, super *pgxpool.Pool, tenant string) string {
 	t.Helper()
-	var conns, grants string
+	var conns, grants, states string
 	mustScan(t, super,
 		"SELECT coalesce((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM erp_connections c WHERE c.tenant_id = $1), '[]')::text,"+
-			" coalesce((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM erp_grants g WHERE g.tenant_id = $1), '[]')::text",
-		[]any{tenant}, &conns, &grants)
-	return fmt.Sprintf("connections=%s grants=%s audit=%d", conns, grants, erpAuditCount(t, super, tenant))
+			" coalesce((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM erp_grants g WHERE g.tenant_id = $1), '[]')::text,"+
+			" coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM erp_oauth_states s WHERE s.tenant_id = $1), '[]')::text",
+		[]any{tenant}, &conns, &grants, &states)
+	jobs := countOf(t, super, "SELECT count(*) FROM river_job WHERE kind LIKE 'erp%' AND args->>'tenant_id' = $1", tenant)
+	return fmt.Sprintf("connections=%s grants=%s states=%s jobs=%d audit=%d", conns, grants, states, jobs, erpAuditCount(t, super, tenant))
 }
 
 type connState struct {
@@ -219,8 +236,8 @@ func idsOf(cs []Connection) []string {
 
 // everyStoreError lets wantErr prove an answer is that error and no other.
 var everyStoreError = []error{
-	ErrNotPermitted, ErrUnknownSystem, ErrUnknownExternalKey, ErrNoSuchRecord, ErrAlreadyConnected,
-	ErrAlreadyDisconnected, ErrSecretStoreMissing, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
+	ErrNotPermitted, ErrUnknownSystem, ErrNoSuchRecord, ErrAlreadyConnected,
+	ErrAlreadyDisconnected, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
 }
 
 func wantErr(t *testing.T, label string, got, want error) {
@@ -273,10 +290,455 @@ func allCalls(s *Store, entity, conn string) []storeCall {
 		{"Gate", func(ctx context.Context) error { return s.Gate(ctx) }},
 		{"List", func(ctx context.Context) error { _, err := s.List(ctx, entity); return err }},
 		{"Connect", func(ctx context.Context) error {
-			_, _, err := s.Connect(ctx, entity, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
+			_, _, _, err := s.Connect(ctx, entity, ConnectInput{System: "fake"})
 			return err
 		}},
 		{"Disconnect", func(ctx context.Context) error { _, err := s.Disconnect(ctx, entity, conn); return err }},
+	}
+}
+
+// --- connect issues a consent URL and a single-use state ---------------------------------
+
+// consentState returns the state of a consent URL after checking it points at the fake's consent page.
+func consentState(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil || u.Host != testRedirect.Host || u.Path != "/erp/fake/consent" {
+		t.Fatalf("consent URL = %q (%v), want the fake consent page on %s", raw, err, testRedirect.Host)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("consent URL %q carries no state", raw)
+	}
+	return state
+}
+
+func hashOf(state string) []byte {
+	h := sha256.Sum256([]byte(state))
+	return h[:]
+}
+
+type stateRow struct {
+	hash        []byte
+	user, conn  string
+	used        *time.Time
+	secondsLeft float64
+}
+
+// statesOf lists the tenant's OAuth state rows; secondsLeft is measured by the database clock.
+func statesOf(t *testing.T, super *pgxpool.Pool, tenant string) []stateRow {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		"SELECT state_hash, user_id::text, connection_id::text, used_at, extract(epoch FROM expires_at - now())::float8"+
+			" FROM erp_oauth_states WHERE tenant_id = $1 ORDER BY created_at, id", tenant)
+	if err != nil {
+		t.Fatalf("read erp_oauth_states: %v", err)
+	}
+	defer rows.Close()
+	var out []stateRow
+	for rows.Next() {
+		var r stateRow
+		if err := rows.Scan(&r.hash, &r.user, &r.conn, &r.used, &r.secondsLeft); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read erp_oauth_states: %v", err)
+	}
+	return out
+}
+
+func TestStore_ConnectCreatesAKeylessPendingRowAndAState(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+
+	conn, consent, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !created {
+		t.Error("created = false for the first connect of a client")
+	}
+	if conn.Status != "pending" || conn.ExternalKey != nil || conn.System != "fake" || conn.EntityID != e1 {
+		t.Errorf("Connect = %+v, want a keyless pending fake connection of %s", conn, e1)
+	}
+	if s := stateOf(t, super, conn.ID); s.status != "pending" || s.key != nil || s.grant != nil {
+		t.Errorf("row = %+v, want pending with no key and no grant", s)
+	}
+	if n := grantCount(t, super, tenant); n != 0 {
+		t.Errorf("%d grant rows after connect, want 0 (a grant comes from the callback)", n)
+	}
+
+	state := consentState(t, consent)
+	prefix, hash, ok := ParseState(state)
+	if !ok || prefix != tenant {
+		t.Errorf("state tenant prefix = %q (well-formed %v), want %s", prefix, ok, tenant)
+	}
+	rows := statesOf(t, super, tenant)
+	if len(rows) != 1 {
+		t.Fatalf("%d state rows, want 1", len(rows))
+	}
+	r := rows[0]
+	if !reflect.DeepEqual(r.hash, hashOf(state)) || !reflect.DeepEqual(r.hash, hash) {
+		t.Error("the stored hash is not the sha256 of the consent URL's state")
+	}
+	if r.user != subjectOf(admin) || r.conn != conn.ID || r.used != nil {
+		t.Errorf("state row = user %s connection %s used %v, want the admin %s, connection %s, unused", r.user, r.conn, r.used, subjectOf(admin), conn.ID)
+	}
+	if r.secondsLeft <= 570 || r.secondsLeft > 600 {
+		t.Errorf("state expires in %.0f s, want about 600 (10 minutes)", r.secondsLeft)
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 1 {
+		t.Errorf("%d erp.connection.created events, want 1", n)
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.authorised"); n != 0 {
+		t.Errorf("%d erp.connection.authorised events at connect, want 0 (the callback authorises)", n)
+	}
+}
+
+func TestStore_ConnectAgainReusesTheRowAndKeepsOnlyTheNewestState(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1, e2 := seedClient(t, super, tenant, "Client One"), seedClient(t, super, tenant, "Client Two")
+
+	neighbour, neighbourURL, created, err := store.Connect(admin, e2, ConnectInput{System: "fake"})
+	if err != nil || !created {
+		t.Fatalf("Connect on the other client = %v, created %v", err, created)
+	}
+	first, firstURL, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil || !created {
+		t.Fatalf("first Connect = %v, created %v", err, created)
+	}
+	if first.ID == neighbour.ID {
+		t.Fatal("two clients share a keyless pending row")
+	}
+	var last string
+	seen := map[string]bool{consentState(t, firstURL): true}
+	for i := range 2 {
+		again, consent, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+		if err != nil {
+			t.Fatalf("Connect again #%d: %v", i+1, err)
+		}
+		if again.ID != first.ID || created {
+			t.Errorf("Connect again #%d = %s created %v, want the same row %s, not created", i+1, again.ID, created, first.ID)
+		}
+		last = consentState(t, consent)
+		if seen[last] {
+			t.Errorf("Connect again #%d answered a state it had answered before", i+1)
+		}
+		seen[last] = true
+	}
+
+	var mine, theirs [][]byte
+	for _, r := range statesOf(t, super, tenant) {
+		if r.conn == first.ID {
+			mine = append(mine, r.hash)
+		} else {
+			theirs = append(theirs, r.hash)
+		}
+	}
+	if len(mine) != 1 || !reflect.DeepEqual(mine[0], hashOf(last)) {
+		t.Errorf("the connection has %d state rows, want exactly one, the newest", len(mine))
+	}
+	if len(theirs) != 1 || !reflect.DeepEqual(theirs[0], hashOf(consentState(t, neighbourURL))) {
+		t.Errorf("the other client's connection has %d state rows, want its own, untouched", len(theirs))
+	}
+	if n := connCount(t, super, tenant); n != 2 {
+		t.Errorf("%d connection rows, want 2", n)
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 2 {
+		t.Errorf("%d erp.connection.created events, want 2 (one per client, none for a reuse)", n)
+	}
+}
+
+func TestStore_ConcurrentConnectsShareOneKeylessRow(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admins := [2]context.Context{
+		bounded(t, seedMember(t, super, tenant, "admin", "active", true)),
+		bounded(t, seedMember(t, super, tenant, "admin", "active", true)),
+	}
+	for i := 0; i < 10; i++ {
+		e := seedClient(t, super, tenant, fmt.Sprintf("Client %d", i))
+		var conns [2]Connection
+		var urls [2]string
+		var created [2]bool
+		errs := race(
+			func() (err error) {
+				conns[0], urls[0], created[0], err = store.Connect(admins[0], e, ConnectInput{System: "fake"})
+				return
+			},
+			func() (err error) {
+				conns[1], urls[1], created[1], err = store.Connect(admins[1], e, ConnectInput{System: "fake"})
+				return
+			},
+		)
+		for j, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: connect %d: %v", i, j, err)
+			}
+		}
+		if conns[0].ID != conns[1].ID || created[0] == created[1] {
+			t.Errorf("round %d: connections %s and %s, created %v, want one row and exactly one creator", i, conns[0].ID, conns[1].ID, created)
+		}
+		if n := countOf(t, super, "SELECT count(*) FROM erp_connections WHERE entity_id = $1", e); n != 1 {
+			t.Errorf("round %d: %d connection rows, want 1", i, n)
+		}
+		var rows []stateRow
+		for _, r := range statesOf(t, super, tenant) {
+			if r.conn == conns[0].ID {
+				rows = append(rows, r)
+			}
+		}
+		if len(rows) != 1 {
+			t.Fatalf("round %d: %d state rows, want 1", i, len(rows))
+		}
+		// Whichever connect ran last owns the row's one state, and that state names its own admin.
+		winners := 0
+		for j := range admins {
+			if reflect.DeepEqual(rows[0].hash, hashOf(consentState(t, urls[j]))) {
+				winners++
+				if rows[0].user != subjectOf(admins[j]) {
+					t.Errorf("round %d: the surviving state names %s, want its minter %s", i, rows[0].user, subjectOf(admins[j]))
+				}
+			}
+		}
+		if winners != 1 {
+			t.Errorf("round %d: the surviving state matches %d of the two answered URLs, want exactly 1", i, winners)
+		}
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 10 {
+		t.Errorf("%d erp.connection.created events, want 10 (one per client)", n)
+	}
+}
+
+func TestStore_ConnectByIDReauthorises(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	g := seedGrant(t, super, tenant, "erp-grant-held")
+	rows := []struct {
+		name, status, key, grant string
+	}{
+		{"disconnected", "disconnected", "fake-co-1", ""},
+		{"reconsent", "reconsent", "fake-co-2", g},
+		{"keyed pending", "pending", "fake-co-3", ""},
+		{"keyless pending", "pending", "", ""},
+	}
+	for _, r := range rows {
+		id := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: r.key, status: r.status, grant: r.grant})
+		conn, consent, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: id})
+		if err != nil {
+			t.Fatalf("%s: Connect: %v", r.name, err)
+		}
+		if conn.ID != id || created || conn.Status != "pending" {
+			t.Errorf("%s: Connect = %s %s created %v, want %s pending, not created", r.name, conn.ID, conn.Status, created, id)
+		}
+		st := stateOf(t, super, id)
+		if st.status != "pending" || deref(st.key) != deref(strOrNil(r.key)) || deref(st.grant) != deref(strOrNil(r.grant)) {
+			t.Errorf("%s: row = %+v, want pending with its key %q and grant %q kept", r.name, st, r.key, r.grant)
+		}
+		state := consentState(t, consent)
+		var mine [][]byte
+		for _, sr := range statesOf(t, super, tenant) {
+			if sr.conn == id {
+				mine = append(mine, sr.hash)
+			}
+		}
+		if len(mine) != 1 || !reflect.DeepEqual(mine[0], hashOf(state)) {
+			t.Errorf("%s: %d state rows for the connection, want exactly the answered state", r.name, len(mine))
+		}
+	}
+	if !grantExists(t, super, g) {
+		t.Error("the re-authorised row's grant was deleted before the callback replaced it")
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 0 {
+		t.Errorf("%d erp.connection.created events for re-authorised rows, want 0", n)
+	}
+	if n := countOf(t, super, "SELECT count(*) FROM river_job WHERE kind = 'erp_secret_delete' AND args->>'tenant_id' = $1", tenant); n != 0 {
+		t.Errorf("%d delete jobs at connect, want 0 (the grant is kept)", n)
+	}
+}
+
+func strOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func TestStore_ConnectActiveByIDIsAlreadyConnected(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	active, g := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	sibling := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-2", status: "disconnected"})
+	before := erpState(t, super, tenant)
+
+	_, consent, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: active})
+	wantErr(t, "Connect on an active row", err, ErrAlreadyConnected)
+	if consent != "" || created {
+		t.Errorf("consent URL %q, created %v on a refusal", consent, created)
+	}
+	if got := erpState(t, super, tenant); got != before {
+		t.Errorf("a refused connect changed the rows, states or audit:\nbefore %s\nafter  %s", before, got)
+	}
+	if s := stateOf(t, super, active); s.status != "active" || deref(s.grant) != g {
+		t.Errorf("active row = %+v, want active on %s", s, g)
+	}
+	// The same client connects a non-active row, so the 409 came from the status.
+	if _, consent, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: sibling}); err != nil || consent == "" {
+		t.Errorf("control: Connect on a disconnected sibling = %q, %v, want a consent URL", consent, err)
+	}
+}
+
+func TestStore_ConnectByForeignIDIsNotFound(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant, other := seedTenant(t, super, "firm"), seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1, e2 := seedClient(t, super, tenant, "Client One"), seedClient(t, super, tenant, "Client Two")
+	eOther := seedClient(t, super, other, "Foreign Client")
+	mine := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-1", status: "disconnected"})
+	theirs := seedConnRow(t, super, connRow{tenant: tenant, entity: e2, key: "fake-co-1", status: "disconnected"})
+	foreign := seedConnRow(t, super, connRow{tenant: other, entity: eOther, key: "fake-co-1", status: "disconnected"})
+	var otherSystem string
+	mustScan(t, super,
+		"INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status) VALUES ($1, $2, 'other', 'k', 'disconnected') RETURNING id",
+		[]any{tenant, e1}, &otherSystem)
+	before := erpState(t, super, tenant)
+	beforeOther := erpState(t, super, other)
+
+	for name, id := range map[string]string{
+		"another client's connection": theirs,
+		"another system's connection": otherSystem,
+		"another tenant's connection": foreign,
+		"an unknown id":               uuid.NewString(),
+		"a malformed id":              "abc",
+	} {
+		_, consent, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: id})
+		wantErr(t, name, err, ErrNoSuchRecord)
+		if consent != "" || created {
+			t.Errorf("%s: consent URL %q, created %v on a refusal", name, consent, created)
+		}
+	}
+	if got := erpState(t, super, tenant); got != before {
+		t.Errorf("refused connects changed the rows, states or audit:\nbefore %s\nafter  %s", before, got)
+	}
+	if got := erpState(t, super, other); got != beforeOther {
+		t.Errorf("refused connects changed the other tenant:\nbefore %s\nafter  %s", beforeOther, got)
+	}
+	if _, consent, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: mine}); err != nil || consent == "" {
+		t.Errorf("control: Connect on the client's own row = %q, %v, want a consent URL", consent, err)
+	}
+}
+
+// callRecorder counts every connector call; Fake does the work.
+type callRecorder struct {
+	*Fake
+	mu    sync.Mutex
+	calls map[string]int
+	state string
+}
+
+func newCallRecorder() *callRecorder {
+	return &callRecorder{Fake: NewFake(testRedirect), calls: map[string]int{}}
+}
+
+func (r *callRecorder) note(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls[name]++
+}
+
+func (r *callRecorder) Authorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
+	r.note("Authorize")
+	r.mu.Lock()
+	r.state = req.State
+	r.mu.Unlock()
+	return r.Fake.Authorize(ctx, req)
+}
+
+func (r *callRecorder) Exchange(ctx context.Context, req ExchangeRequest) (ExchangeResult, error) {
+	r.note("Exchange")
+	return r.Fake.Exchange(ctx, req)
+}
+
+func (r *callRecorder) Refresh(ctx context.Context, c Credentials) (GrantMaterial, error) {
+	r.note("Refresh")
+	return r.Fake.Refresh(ctx, c)
+}
+
+func (r *callRecorder) Validate(ctx context.Context, c Credentials, scope string) error {
+	r.note("Validate")
+	return r.Fake.Validate(ctx, c, scope)
+}
+
+func (r *callRecorder) ListChanged(ctx context.Context, c Credentials, scope string, cursor []byte) (Changes, error) {
+	r.note("ListChanged")
+	return r.Fake.ListChanged(ctx, c, scope, cursor)
+}
+
+func (r *callRecorder) Fetch(ctx context.Context, c Credentials, ref DocRef) (Document, error) {
+	r.note("Fetch")
+	return r.Fake.Fetch(ctx, c, ref)
+}
+
+func (r *callRecorder) FetchParty(ctx context.Context, c Credentials, scope, partyID string) (Party, error) {
+	r.note("FetchParty")
+	return r.Fake.FetchParty(ctx, c, scope, partyID)
+}
+
+func (r *callRecorder) WriteBack(ctx context.Context, c Credentials, ref DocRef, wb WriteBack) (DocRef, error) {
+	r.note("WriteBack")
+	return r.Fake.WriteBack(ctx, c, ref, wb)
+}
+
+func (r *callRecorder) VerifyWebhook(ctx context.Context, h http.Header, body []byte) ([]Hint, error) {
+	r.note("VerifyWebhook")
+	return r.Fake.VerifyWebhook(ctx, h, body)
+}
+
+func (r *callRecorder) EnsureSubscriptions(ctx context.Context, c Credentials, scope string) error {
+	r.note("EnsureSubscriptions")
+	return r.Fake.EnsureSubscriptions(ctx, c, scope)
+}
+
+func TestStore_ConnectCallsOnlyAuthorize(t *testing.T) {
+	super, app := storePools(t)
+	rec := newCallRecorder()
+	store := storeOver(t, app, nil, rec)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	reconnectable := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-1", status: "disconnected"})
+
+	_, consent, _, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if got := consentState(t, consent); rec.state != got {
+		t.Errorf("Authorize received state %q, want the one in the consent URL %q", rec.state, got)
+	}
+	if prefix, _, ok := ParseState(rec.state); !ok || prefix != tenant {
+		t.Errorf("Authorize received state %q, want one that binds the tenant %s", rec.state, tenant)
+	}
+	if _, _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: reconnectable}); err != nil {
+		t.Fatalf("Connect by id: %v", err)
+	}
+	if want := map[string]int{"Authorize": 2}; !reflect.DeepEqual(rec.calls, want) {
+		t.Errorf("connector calls = %v, want %v (one Authorize per connect, nothing else)", rec.calls, want)
 	}
 }
 
@@ -348,25 +810,37 @@ func TestStore_InactiveCallerRefusedBySeam(t *testing.T) {
 }
 
 // The preparer reaches each input; only the gate clause can be what refuses it, because the
-// admin control gets the downstream error for the same input.
+// admin control gets the downstream error for the same input. A row the admin could connect is
+// left without a control, so a refused role is the only thing standing between it and a state row.
 func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 	super, app := storePools(t)
 	store := fakeStore(t, app)
 	tenant, other := seedTenant(t, super, "firm"), seedTenant(t, super, "firm")
 	admin := seedMember(t, super, tenant, "admin", "active", true)
-	e1 := seedClient(t, super, tenant, "Client One")
+	e1, e2 := seedClient(t, super, tenant, "Client One"), seedClient(t, super, tenant, "Client Two")
 	eOther := seedClient(t, super, other, "Foreign Client")
 	c1, _ := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	c2, _ := seedActiveConn(t, super, tenant, e2, "fake-co-1")
+	cOther := seedConnRow(t, super, connRow{tenant: other, entity: eOther, key: "fake-co-1", status: "disconnected"})
+	reconnectable := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-3", status: "disconnected"})
+	keyless := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, status: "pending"})
 
 	connects := []struct {
-		name, entity, system, key string
-		downstream                error
+		name, entity string
+		in           ConnectInput
+		downstream   error // nil: the admin would succeed, so there is no control
 	}{
-		{"unknown system", e1, "sage", "fake-co-2", ErrUnknownSystem},
-		{"unknown key", e1, "fake", "fake-co-9", ErrUnknownExternalKey},
-		{"non-UUID client", "not-a-uuid", "fake", "fake-co-2", ErrNoSuchRecord},
-		{"unknown client", uuid.NewString(), "fake", "fake-co-2", ErrNoSuchRecord},
-		{"other tenant's client", eOther, "fake", "fake-co-2", ErrNoSuchRecord},
+		{"unknown system", e1, ConnectInput{System: "sage"}, ErrUnknownSystem},
+		{"non-UUID client", "not-a-uuid", ConnectInput{System: "fake"}, ErrNoSuchRecord},
+		{"unknown client", uuid.NewString(), ConnectInput{System: "fake"}, ErrNoSuchRecord},
+		{"other tenant's client", eOther, ConnectInput{System: "fake"}, ErrNoSuchRecord},
+		{"active connection", e1, ConnectInput{System: "fake", ConnectionID: c1}, ErrAlreadyConnected},
+		{"another client's connection", e1, ConnectInput{System: "fake", ConnectionID: c2}, ErrNoSuchRecord},
+		{"another tenant's connection", e1, ConnectInput{System: "fake", ConnectionID: cOther}, ErrNoSuchRecord},
+		{"unknown connection", e1, ConnectInput{System: "fake", ConnectionID: uuid.NewString()}, ErrNoSuchRecord},
+		{"non-UUID connection", e1, ConnectInput{System: "fake", ConnectionID: "abc"}, ErrNoSuchRecord},
+		{"disconnected connection of the client", e1, ConnectInput{System: "fake", ConnectionID: reconnectable}, nil},
+		{"keyless pending connection of the client", e1, ConnectInput{System: "fake", ConnectionID: keyless}, nil},
 	}
 	disconnects := []struct {
 		name, entity, conn string
@@ -380,11 +854,15 @@ func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 		caller := seedMember(t, super, tenant, role, "active", true)
 		before := erpState(t, super, tenant)
 		for _, c := range connects {
-			in := ConnectInput{System: c.system, ExternalKey: c.key}
-			_, _, err := store.Connect(caller, c.entity, in)
+			_, consent, created, err := store.Connect(caller, c.entity, c.in)
 			wantErr(t, role+" Connect "+c.name, err, ErrNotPermitted)
-			_, _, err = store.Connect(admin, c.entity, in)
-			wantErr(t, "control: admin Connect "+c.name, err, c.downstream)
+			if consent != "" || created {
+				t.Errorf("%s Connect %s: consent URL %q, created %v on a refusal", role, c.name, consent, created)
+			}
+			if c.downstream != nil {
+				_, _, _, err = store.Connect(admin, c.entity, c.in)
+				wantErr(t, "control: admin Connect "+c.name, err, c.downstream)
+			}
 		}
 		for _, d := range disconnects {
 			_, err := store.Disconnect(caller, d.entity, d.conn)
@@ -393,7 +871,16 @@ func TestStore_NonAdminRefusedWhateverTheInput(t *testing.T) {
 			wantErr(t, "control: admin Disconnect "+d.name, err, ErrNoSuchRecord)
 		}
 		if got := erpState(t, super, tenant); got != before {
-			t.Errorf("%s: ERP rows or audit changed:\nbefore %s\nafter  %s", role, before, got)
+			t.Errorf("%s: ERP rows, states, jobs or audit changed:\nbefore %s\nafter  %s", role, before, got)
+		}
+	}
+	if n := countOf(t, super, "SELECT count(*) FROM erp_oauth_states WHERE tenant_id = $1", tenant); n != 0 {
+		t.Errorf("%d OAuth state rows after only refused connects, want 0", n)
+	}
+	// The same two rows connect for the admin, so the refusals above were the role's.
+	for _, in := range []ConnectInput{{System: "fake", ConnectionID: reconnectable}, {System: "fake", ConnectionID: keyless}} {
+		if _, consent, _, err := store.Connect(admin, e1, in); err != nil || consent == "" {
+			t.Errorf("control: admin Connect %+v = %q, %v, want a consent URL", in, consent, err)
 		}
 	}
 }
@@ -1345,15 +1832,21 @@ func TestStore_LockedWorkspaceRefusesWritesOnly(t *testing.T) {
 	admin := seedMember(t, super, tenant, "admin", "active", true)
 	e1 := seedClient(t, super, tenant, "Client One")
 	c1, g1 := seedActiveConn(t, super, tenant, e1, "fake-co-1")
+	reconnectable := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, key: "fake-co-2", status: "disconnected"})
 	lockWorkspace(t, super, tenant, subjectOf(admin))
 	before := erpState(t, super, tenant)
 
-	_, created, err := store.Connect(admin, e1, ConnectInput{System: "fake", ExternalKey: "fake-co-2"})
-	wantErr(t, "Connect", err, db.ErrWorkspaceLocked)
-	if created {
-		t.Error("created = true in a locked workspace")
+	for _, in := range []ConnectInput{{System: "fake"}, {System: "fake", ConnectionID: reconnectable}} {
+		_, consent, created, err := store.Connect(admin, e1, in)
+		wantErr(t, fmt.Sprintf("Connect %+v", in), err, db.ErrWorkspaceLocked)
+		if created || consent != "" {
+			t.Errorf("Connect %+v in a locked workspace: created %v, consent URL %q", in, created, consent)
+		}
 	}
-	_, err = store.Disconnect(admin, e1, c1)
+	if n := countOf(t, super, "SELECT count(*) FROM erp_oauth_states WHERE tenant_id = $1", tenant); n != 0 {
+		t.Errorf("%d OAuth state rows in a locked workspace, want 0", n)
+	}
+	_, err := store.Disconnect(admin, e1, c1)
 	wantErr(t, "Disconnect", err, db.ErrWorkspaceLocked)
 	if got := erpState(t, super, tenant); got != before {
 		t.Errorf("ERP rows or audit changed in a locked workspace:\nbefore %s\nafter  %s", before, got)
@@ -1365,8 +1858,11 @@ func TestStore_LockedWorkspaceRefusesWritesOnly(t *testing.T) {
 		t.Errorf("Gate in a locked workspace = %v, want nil (read-only seam)", err)
 	}
 	got, err := store.List(admin, e1)
-	if err != nil || !reflect.DeepEqual(idsOf(got), []string{c1}) {
-		t.Errorf("List in a locked workspace = %v, %v, want [%s]", idsOf(got), err, c1)
+	gotIDs, wantIDs := idsOf(got), []string{c1, reconnectable}
+	sort.Strings(gotIDs)
+	sort.Strings(wantIDs)
+	if err != nil || !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Errorf("List in a locked workspace = %v, %v, want %v", gotIDs, err, wantIDs)
 	}
 }
 

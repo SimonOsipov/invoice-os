@@ -2499,7 +2499,7 @@ func refreshAfterTheStep(t *testing.T, r *rig, p *Purger, a string, refs []strin
 	work := func(id int64) error {
 		return w.Work(ctx, &river.Job[erp.RefreshArgs]{
 			JobRow: &rivertype.JobRow{ID: id, Kind: "erp_token_refresh", Attempt: 1, MaxAttempts: 8},
-			Args:   erp.RefreshArgs{TenantID: a, GrantID: grant, Version: 1},
+			Args:   erp.RefreshArgs{TenantID: a, GrantID: grant, Version: erp.FirstGrantVersion},
 		})
 	}
 	if err := work(1); !errors.Is(err, erp.ErrSecretNotFound) {

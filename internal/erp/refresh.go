@@ -16,6 +16,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
+// FirstGrantVersion is the version a grant's first secret version carries.
+const FirstGrantVersion int64 = 1
+
 // RefreshArgs renews one grant's access token. The tenant key is tenant_id: purge_tenant deletes a
 // purged tenant's jobs by it. Version is the grant version the job claims.
 type RefreshArgs struct {

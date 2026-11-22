@@ -188,7 +188,7 @@ func (s *Store) activate(ctx context.Context, tx pgx.Tx, tenantID string, c cons
 	}
 	if exp := res.Grant.ExpiresAt; exp != nil {
 		if _, err := s.q.EnqueueTx(ctx, tx, tenantID, "erp_refresh:"+grantID+":1",
-			RefreshArgs{TenantID: tenantID, GrantID: grantID, Version: 1}, &river.InsertOpts{ScheduledAt: exp.Add(-refreshLead)}); err != nil {
+			RefreshArgs{TenantID: tenantID, GrantID: grantID, Version: FirstGrantVersion}, &river.InsertOpts{ScheduledAt: exp.Add(-refreshLead)}); err != nil {
 			return "", err
 		}
 	}

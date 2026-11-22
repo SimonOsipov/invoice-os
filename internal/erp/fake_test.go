@@ -354,3 +354,131 @@ func TestFake_UnsupportedOperations(t *testing.T) {
 		t.Error("capabilities not zero")
 	}
 }
+
+func TestFakeDefaultMapping_CoversEveryTargetAndResolves(t *testing.T) {
+	f := testFake(t)
+	m := f.DefaultMapping()
+	if err := ValidateMapping(m); err != nil {
+		t.Fatalf("ValidateMapping: %v", err)
+	}
+	doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "fake-co-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	party, err := f.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-cust-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := decodeBody(doc.Body)
+	pbody, _ := decodeBody(party.Body)
+	if len(m) != len(Targets()) {
+		t.Errorf("default has %d paths for %d targets", len(m), len(Targets()))
+	}
+	for _, tg := range Targets() {
+		path, ok := m[tg.Key]
+		if !ok {
+			t.Errorf("no path for %s", tg.Key)
+			continue
+		}
+		p, _ := parsePath(path)
+		var v any
+		switch {
+		case p.party:
+			v = walk(pbody, p.segs)
+		case tg.Line:
+			els, _ := walk(body, p.segs[:p.arrAt+1]).([]any)
+			if len(els) == 0 {
+				t.Errorf("%s: no line", tg.Key)
+				continue
+			}
+			v = walk(els[0], p.segs[p.arrAt+1:])
+		default:
+			v = walk(body, p.segs)
+		}
+		if s, err := leaf(tg.Key, v); err != nil || s == nil {
+			t.Errorf("%s (%s) resolves to nothing", tg.Key, path)
+		}
+	}
+	if _, err := Apply(m, doc, &party); err != nil {
+		t.Errorf("Apply: %v", err)
+	}
+}
+
+func TestFakeInvoiceBody_RoundsEachLineHalfAwayFromZero(t *testing.T) {
+	inv := seedInvoice{id: "d", number: "R-1", date: "2026-05-01", customerID: "c"}
+	body, err := fakeInvoiceBody(inv, []fakeLine{
+		{"a", "3", "33.335", "7.5"}, {"b", "1", "0.125", "0"}, {"c", "2", "10.00", "7.5"}, {"d", "1", "-0.125", "0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Subtotal, VAT, Total string
+		Lines                []struct {
+			LineTotal string `json:"line_total"`
+			LineTax   string `json:"line_tax"`
+		}
+	}
+	// The body uses lower-case keys; decode them by hand.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for k, dst := range map[string]*string{"subtotal": &got.Subtotal, "vat": &got.VAT, "total": &got.Total} {
+		if err := json.Unmarshal(raw[k], dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := json.Unmarshal(raw["lines"], &got.Lines); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"-0.13", "0.00"}}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("lines = %d", len(got.Lines))
+	}
+	for i, w := range want {
+		if got.Lines[i].LineTotal != w[0] || got.Lines[i].LineTax != w[1] {
+			t.Errorf("line %d = %s/%s, want %s/%s", i, got.Lines[i].LineTotal, got.Lines[i].LineTax, w[0], w[1])
+		}
+	}
+	// 100.01 + 0.13 + 20.00 - 0.13 and 7.50 + 0.00 + 1.50 + 0.00.
+	if got.Subtotal != "120.01" || got.VAT != "9.00" || got.Total != "129.01" {
+		t.Errorf("header = %s %s %s, want 120.01 9.00 129.01", got.Subtotal, got.VAT, got.Total)
+	}
+}
+
+func TestFakeInvoiceBody_RefusesAnUnparseableAmount(t *testing.T) {
+	inv := seedInvoice{id: "d", number: "R-1", date: "2026-05-01", customerID: "c"}
+	if _, err := fakeInvoiceBody(inv, []fakeLine{{"a", "1,5", "1", "0"}}); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+func TestFake_FetchCarriesTheSeededAmounts(t *testing.T) {
+	f := testFake(t)
+	doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "fake-co-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	party, err := f.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-cust-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Apply(f.DefaultMapping(), doc, &party)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := mapped.In
+	exact(t, "Subtotal", in.Subtotal, "100000.00")
+	exact(t, "VAT", in.VAT, "7500.00")
+	exact(t, "Total", in.Total, "107500.00")
+	if len(in.LineItems) != 1 {
+		t.Fatalf("lines = %d", len(in.LineItems))
+	}
+	exact(t, "LineTotal", in.LineItems[0].LineTotal, "100000.00")
+	exact(t, "LineTax", in.LineItems[0].LineTax, "7500.00")
+	exact(t, "BuyerTIN", in.BuyerTIN, "1234567897")
+	if mapped.CustomerID != "fake-co-1-cust-1" || mapped.TaxCodes[0] == "" || mapped.Items[0] == "" {
+		t.Errorf("lookup keys = %q %v %v", mapped.CustomerID, mapped.TaxCodes, mapped.Items)
+	}
+}

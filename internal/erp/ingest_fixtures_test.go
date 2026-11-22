@@ -233,9 +233,7 @@ func snoozeOf(err error) (time.Duration, bool) {
 // --- documents -----------------------------------------------------------------------
 
 func fakeDocument(docID, number, customerID string, lines ...fakeLine) Document {
-	body, err := json.Marshal(map[string]any{
-		"number": number, "issue_date": "2026-01-05", "currency": "NGN", "customer_id": customerID, "lines": lines,
-	})
+	body, err := fakeInvoiceBody(seedInvoice{id: docID, number: number, date: "2026-01-05", customerID: customerID}, lines)
 	if err != nil {
 		panic(err)
 	}
@@ -247,27 +245,27 @@ func (e *ingestEnv) serve(doc Document) {
 	e.onFetch = func(context.Context, DocRef) (Document, error) { return doc, nil }
 }
 
-// mappedFrom is what the fixed mapping makes of doc, through the fake's own party.
+// mappedFrom is what the fake's default mapping makes of doc, through the fake's own party.
 func (e *ingestEnv) mappedFrom(doc Document) invoice.CreateInput {
 	e.t.Helper()
-	var body struct {
-		CustomerID string `json:"customer_id"`
-	}
-	if err := json.Unmarshal(doc.Body, &body); err != nil {
-		e.t.Fatalf("decode body: %v", err)
+	f := testFake(e.t)
+	m := f.DefaultMapping()
+	customerID, err := CustomerIDOf(m, doc)
+	if err != nil {
+		e.t.Fatalf("customer: %v", err)
 	}
 	var party *Party
-	if body.CustomerID != "" {
-		p, err := testFake(e.t).FetchParty(context.Background(), Credentials{}, e.key, body.CustomerID)
+	if customerID != "" {
+		p, err := f.FetchParty(context.Background(), Credentials{}, e.key, customerID)
 		if err == nil {
 			party = &p
 		}
 	}
-	in, err := mapFake(doc, party)
+	mapped, err := Apply(m, doc, party)
 	if err != nil {
 		e.t.Fatalf("map: %v", err)
 	}
-	return in
+	return mapped.In
 }
 
 // mapped is the mapped content of a seeded document as the fake serves it.

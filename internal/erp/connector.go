@@ -125,6 +125,8 @@ type Connector interface {
 	WriteBack(ctx context.Context, c Credentials, ref DocRef, wb WriteBack) (DocRef, error)
 	VerifyWebhook(ctx context.Context, h http.Header, body []byte) ([]Hint, error)
 	EnsureSubscriptions(ctx context.Context, c Credentials, scope string) error
+	// DefaultMapping is the target -> source path table this vendor's documents map through.
+	DefaultMapping() Mapping
 }
 
 // Registry maps System() to its connector.

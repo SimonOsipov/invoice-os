@@ -7,7 +7,7 @@ import { freshTin } from './fixtures'
 const FAKE = 'fake' // fakeSystem in internal/erp/fake.go
 const FAKE_KEY = 'fake-co-1' // fakeSeed key in internal/erp/fake_seed.go
 const NUMBERS = ['FK1-0001', 'FK1-0002', 'FK1-0003'] // fakeSeed fake-co-1 invoice numbers
-const FAKE_TOTAL = 107500 // fake line 100000.00 at 7.5% (fakeLine in internal/erp/fake.go)
+const FAKE_TOTAL = 107500 // fake line 100000.00 at 7.5% (fakeInvoiceBody in internal/erp/fake.go)
 const OWN_TOTAL = 5000
 const PULLED = 'erp.document.pulled' // recordPulled in internal/erp/ingest.go
 const SKIPPED = 'erp.document.skipped_duplicate' // recordSkipped in internal/erp/ingest.go
@@ -63,7 +63,7 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
   })
 
   test("the fake ERP's invoices arrive in the client as drafts", async () => {
-    // fixture check: pins fakeSeed fake-co-1 and fakeLine (internal/erp/fake.go)
+    // fixture check: pins fakeSeed fake-co-1 and fakeInvoiceBody (internal/erp/fake.go)
     const mine = await inClient()
     for (const n of [NUMBERS[0], NUMBERS[2]]) {
       const inv = mine.find((i) => i.invoice_number === n)

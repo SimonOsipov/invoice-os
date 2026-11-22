@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -187,8 +186,8 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 		return err
 	}
 
-	mapper, err := mapperFor(c.system)
-	if errors.Is(err, ErrNoMapping) {
+	m := w.Registry[c.system].DefaultMapping()
+	if ValidateMapping(m) != nil {
 		return w.fail(ctx, a, "no_mapping")
 	}
 	doc, err := w.Registry[c.system].Fetch(ctx, creds, DocRef{SourceDocID: a.SourceDocID, SourceRevision: a.SourceRevision, Scope: c.externalKey})
@@ -198,12 +197,16 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 	if err != nil {
 		return throttled(err)
 	}
-	var party *Party
-	var body struct {
-		CustomerID string `json:"customer_id"`
+	customerID, err := CustomerIDOf(m, doc)
+	if errors.Is(err, ErrUnmappable) {
+		return w.fail(ctx, a, "unmappable")
 	}
-	if json.Unmarshal(doc.Body, &body) == nil && body.CustomerID != "" {
-		p, err := w.Registry[c.system].FetchParty(ctx, creds, c.externalKey, body.CustomerID)
+	if err != nil {
+		return err
+	}
+	var party *Party
+	if customerID != "" {
+		p, err := w.Registry[c.system].FetchParty(ctx, creds, c.externalKey, customerID)
 		switch {
 		case err == nil:
 			party = &p
@@ -211,13 +214,14 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 			return throttled(err)
 		}
 	}
-	in, err := mapper(doc, party)
+	mapped, err := Apply(m, doc, party)
 	if errors.Is(err, ErrUnmappable) {
 		return w.fail(ctx, a, "unmappable")
 	}
 	if err != nil {
 		return err
 	}
+	in := mapped.In
 	in.EntityID = c.entity
 	in.ERPConnectionID = &a.ConnectionID
 	hash := ContentHash(in)

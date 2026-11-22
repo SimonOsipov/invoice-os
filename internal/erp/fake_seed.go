@@ -7,6 +7,12 @@ type seedInvoice struct {
 
 type seedCustomer struct{ id, name, tin, email string }
 
+// Every seeded customer sits in one state and LGA from the code-list fixtures.
+const (
+	fakeState = "NG-AB"
+	fakeLGA   = "NG-AB-ANO"
+)
+
 type seedCompany struct {
 	invoices  []seedInvoice
 	customers []seedCustomer

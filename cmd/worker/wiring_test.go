@@ -1882,28 +1882,30 @@ func TestWorkerMain_ERPPullTickerOnlyWithAConnector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse cmd/worker/main.go: %v", err)
 	}
-	guarded, found := false, false
-	ast.Inspect(f, func(n ast.Node) bool {
-		ifs, ok := n.(*ast.IfStmt)
-		if !ok {
-			return true
-		}
-		ast.Inspect(ifs.Body, func(m ast.Node) bool {
-			if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], `"erp-pull"`) {
-				found = true
-				ast.Inspect(ifs.Cond, func(c ast.Node) bool {
-					if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
-						guarded = true
-					}
-					return true
-				})
+	for _, task := range []string{`"erp-pull"`, `"erp-subscriptions"`} {
+		guarded, found := false, false
+		ast.Inspect(f, func(n ast.Node) bool {
+			ifs, ok := n.(*ast.IfStmt)
+			if !ok {
+				return true
 			}
+			ast.Inspect(ifs.Body, func(m ast.Node) bool {
+				if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], task) {
+					found = true
+					ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+						if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
+							guarded = true
+						}
+						return true
+					})
+				}
+				return true
+			})
 			return true
 		})
-		return true
-	})
-	if !found || !guarded {
-		t.Errorf("the erp-pull task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", found, guarded)
+		if !found || !guarded {
+			t.Errorf("the %s task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", task, found, guarded)
+		}
 	}
 }
 
@@ -1951,7 +1953,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		return true
 	})
 	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
-		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`}
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`, `"erp-subscriptions"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}

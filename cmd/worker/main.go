@@ -272,6 +272,8 @@ func main() {
 	if len(erpReg) > 0 {
 		sweeper := &erp.Sweeper{Reader: readerPool, Pool: pool, River: q.River(), Registry: erpReg, Logger: app.Logger}
 		app.AddBackgroundWorker(codelist.NewWorker(erp.PullInterval, leader.Lead("erp-pull", sweeper.SweepOnce)))
+		keeper := &erp.SubscriptionKeeper{Reader: readerPool, Pool: pool, Registry: erpReg, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(erp.SubscriptionInterval, leader.Lead("erp-subscriptions", keeper.RunOnce)))
 	}
 
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}

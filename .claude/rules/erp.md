@@ -27,3 +27,4 @@ paths:
 - Pull from the stored cursor; enqueue each ingest through `EnqueueTx` with `IngestKey` and save the cursor in the same transaction. Pull and ingest only an active connection.
 - A bad cursor nulls the cursor and keeps `ingest_epoch`; only a skipped ingest bumps it.
 - Receive a vendor webhook only in `erp.Webhooks.Receive`: call `VerifyWebhook` before any database read, resolve connections only through `public.erp_webhook_targets`, enqueue `erp.pull` in each target's tenant and skip a locked workspace. Answer 200 when nothing matches. Log no body, header, signature, key or address.
+- Ensure vendor subscriptions only in the `erp-subscriptions` leader task, per active connection of a system that reports `Webhooks`, with no transaction held during the vendor call.

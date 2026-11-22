@@ -1,11 +1,13 @@
 // Storage suite for erp_source_documents and the two columns the ERP ingest adds to shipped ERP tables
-// (invoices.erp_connection_id, erp_connections.ingest_epoch, pinned by erpShape).
+// (invoices.erp_connection_id, erp_connections.ingest_epoch, pinned by erpShape). The mapping_fingerprint
+// column of the erp_mappings migration is pinned here as well; its check is exercised in erp_mappings_rls_test.go.
 package db_test
 
 import (
 	"context"
 	"errors"
 	"io/fs"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -150,6 +152,12 @@ var esdShape = map[string]erpCol{
 	"updated_at":                 {"timestamp with time zone", true, "now()"},
 }
 
+// The column and check the erp_mappings migration adds; esdShapeProblems takes them on request, since the
+// erp_source_documents migration alone does not create them.
+var esdFingerprintCol = erpCol{"text", false, ""}
+
+const esdFingerprintCheck = "erp_source_documents_mapping_fingerprint_check"
+
 // The NOT NULLs are derived from esdShape, as erpConstraintsWant does (PG18 names each one).
 var esdNamedConstraints = []string{
 	"erp_source_documents_pk", "erp_source_documents_tenant_id_id_uq", "erp_source_documents_connection_doc_uq",
@@ -200,7 +208,8 @@ func esdIndexDef(q erpQuerier, name string) (string, error) {
 }
 
 // esdShapeProblems compares the live table to the Design: columns, constraint names and definitions, indexes.
-func esdShapeProblems(q erpQuerier) []string {
+// withFingerprint adds mapping_fingerprint and its check.
+func esdShapeProblems(q erpQuerier, withFingerprint bool) []string {
 	ctx := context.Background()
 	var problems []string
 
@@ -226,8 +235,12 @@ func esdShapeProblems(q erpQuerier) []string {
 	if len(got) == 0 {
 		return append(problems, "information_schema.columns returned no column for erp_source_documents")
 	}
-	if !reflect.DeepEqual(got, esdShape) {
-		problems = append(problems, "columns of erp_source_documents differ from the Design: got "+fmtCols(got)+" want "+fmtCols(esdShape))
+	wantCols := maps.Clone(esdShape)
+	if withFingerprint {
+		wantCols["mapping_fingerprint"] = esdFingerprintCol
+	}
+	if !reflect.DeepEqual(got, wantCols) {
+		problems = append(problems, "columns of erp_source_documents differ from the Design: got "+fmtCols(got)+" want "+fmtCols(wantCols))
 	}
 
 	cons, err := q.Query(ctx, `SELECT conname FROM pg_constraint WHERE conrelid = 'public.erp_source_documents'::regclass ORDER BY conname`)
@@ -245,6 +258,9 @@ func esdShapeProblems(q erpQuerier) []string {
 	}
 	cons.Close()
 	wantCons := slices.Clone(esdNamedConstraints)
+	if withFingerprint {
+		wantCons = append(wantCons, esdFingerprintCheck)
+	}
 	for col, c := range esdShape {
 		if c.notNull {
 			wantCons = append(wantCons, esdTable+"_"+col+"_not_null")
@@ -272,6 +288,14 @@ func esdShapeProblems(q erpQuerier) []string {
 		{"erp_source_documents_tenant_invoice_fk",
 			[]string{"FOREIGN KEY (tenant_id, invoice_id)", "REFERENCES invoices(tenant_id, id)", "ON DELETE RESTRICT"}, nil},
 	})...)
+	if withFingerprint {
+		problems = append(problems, esdConstraintDefs(q, esdTable, []struct {
+			name       string
+			has, lacks []string
+		}{
+			{esdFingerprintCheck, []string{"mapping_fingerprint IS NULL", "'^[0-9a-f]{64}$'"}, nil},
+		})...)
+	}
 
 	idx, err := q.Query(ctx, `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'erp_source_documents' ORDER BY indexname`)
 	if err != nil {
@@ -355,7 +379,7 @@ func boolStr(b bool) string {
 func TestRLS_ErpSourceDocumentsShape(t *testing.T) {
 	h := requireHarness(t)
 	requireEsdTable(t, h.super)
-	for _, p := range esdShapeProblems(h.super) {
+	for _, p := range esdShapeProblems(h.super, true) {
 		t.Error(p)
 	}
 }
@@ -931,7 +955,7 @@ func TestRLS_ErpSourceDocumentsMigrationDownUp(t *testing.T) {
 		t.Fatalf("Up body of %s failed: %v", migration, err)
 	}
 	requireEsdTable(t, tx)
-	for _, p := range esdShapeProblems(tx) {
+	for _, p := range esdShapeProblems(tx, false) {
 		t.Errorf("after Down then Up: %s", p)
 	}
 	for _, p := range invErpProblems(tx) {

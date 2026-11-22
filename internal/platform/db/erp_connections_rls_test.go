@@ -796,10 +796,11 @@ func TestRLS_ErpTablesValueChecks(t *testing.T) {
 		t.Errorf("rows after the cases = %d, want the %d accepted", n, accepted)
 	}
 
-	// The default status is a valid one.
+	// The default status is a valid one. A second client: the first already holds its one keyless pending row.
+	other := erpEntity(t, a, "erp-checks-default")
 	var status string
 	if err := h.super.QueryRow(ctx,
-		`INSERT INTO erp_connections (tenant_id, entity_id, system) VALUES ($1, $2, 'fake') RETURNING status`, a, ent).Scan(&status); err != nil || status != "pending" {
+		`INSERT INTO erp_connections (tenant_id, entity_id, system) VALUES ($1, $2, 'fake') RETURNING status`, a, other).Scan(&status); err != nil || status != "pending" {
 		t.Errorf("default status = %q (err %v), want pending", status, err)
 	}
 

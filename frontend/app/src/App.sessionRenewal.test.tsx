@@ -814,8 +814,7 @@ describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)'
 
   it('a hand-off seat shows no demo state', async () => {
     await mountFresh()
-    const connected = Object.values(capturedCtx!.connectors).filter(Boolean).length
-    expect(connected).toBe(0)
+    expect(Object.keys(capturedCtx!).filter((k) => /^(connectors|toggleConn\w+)$/.test(k))).toEqual([])
   })
 })
 

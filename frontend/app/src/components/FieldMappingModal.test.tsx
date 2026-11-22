@@ -3,8 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CONNECTOR_DEFS } from '../data'
-import { mappingFor } from '../lib/connectors'
+import { CONNECTOR_DEFS, mappingFor } from '../lib/connectorDetailMock'
 import type { PlatformCtx } from '../types'
 import { FieldMappingModal } from './FieldMappingModal'
 

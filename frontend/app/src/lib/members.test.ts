@@ -528,23 +528,22 @@ describe('constants (T1.39–T1.40, §3/§6)', () => {
     expect(CAPABILITY_ROWS.map((r) => r.preparer)).toEqual([true, true, true, false, false, false, false, false, false, false, false, false])
   })
 
-  it('CAPABILITY_ROWS ends with the two Coming soon rows', () => {
-    expect(CAPABILITY_ROWS.slice(-2).map((r) => [r.label, r.soon])).toEqual([
-      ['manage ERP connectors', true],
-      ['manage signing certificates', true],
-    ])
-    expect(CAPABILITY_ROWS.slice(0, -2).some((r) => 'soon' in r)).toBe(false)
+  it('CAPABILITY_ROWS ends with the one Coming soon row', () => {
+    expect(CAPABILITY_ROWS.slice(-1).map((r) => [r.label, r.soon])).toEqual([['manage signing certificates', true]])
+    expect(CAPABILITY_ROWS.slice(0, -1).some((r) => 'soon' in r)).toBe(false)
   })
 
-  it('no live row label says ERP; the import row reads as a file import', () => {
+  it('the only live row that says ERP is manage ERP connectors, admin only; the import row reads as a file import', () => {
     const live = CAPABILITY_ROWS.filter((r) => !r.soon)
-    expect(live.some((r) => /ERP/.test(r.label))).toBe(false)
+    const erp = live.filter((r) => /ERP/.test(r.label))
+    expect(erp).toHaveLength(1)
+    expect([erp[0].label, erp[0].admin, erp[0].preparer, erp[0].reviewer]).toEqual(['manage ERP connectors', true, false, false])
     expect(CAPABILITY_ROWS[1].label).toBe('import invoices from a file')
   })
 
-  it('at most ten live rows, no department row, unique labels', () => {
+  it('at most eleven live rows, no department row, unique labels', () => {
     const labels = CAPABILITY_ROWS.map((r) => r.label)
-    expect(CAPABILITY_ROWS.filter((r) => !r.soon).length).toBeLessThanOrEqual(10)
+    expect(CAPABILITY_ROWS.filter((r) => !r.soon).length).toBeLessThanOrEqual(11)
     expect(labels.some((l) => /department/i.test(l))).toBe(false)
     expect(new Set(labels).size).toBe(labels.length)
   })

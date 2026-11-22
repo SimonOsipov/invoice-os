@@ -270,7 +270,10 @@ func TestERPCallbackPage_WorkerErrorIsFailedAndTimeoutIsUnknown(t *testing.T) {
 		{"a worker that outlasts the client timeout", sleepPastTheClient, &http.Client{Timeout: 150 * time.Millisecond}, "unknown"},
 		{"a worker that closes the connection", hijackAndClose, nil, "unknown"},
 		{"an outcome the page has no text for", ecOutcome("bogus"), nil, "unknown"},
-		{"a worker refusal that is not a 500", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }, nil, "unknown"},
+		{"a worker refusal that is not a 500", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			ecOutcome("connected")(w, r) // a body that reads as success must not count on a refusal
+		}, nil, "unknown"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

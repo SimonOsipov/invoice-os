@@ -4387,3 +4387,96 @@ func TestPreviewReachNeverPrintsTheValueOfASecretItRefuses(t *testing.T) {
 		t.Errorf("the value reached the step summary")
 	}
 }
+
+const (
+	erpOwn   = "erp-grant-slot-1-0b1f6a52-3c1e-4d1a-9a57-6f4b2e8d9c01"
+	erpOther = "erp-grant-slot-2-5d0e9c34-7b2a-4e68-8f13-a1c4d7e2b360"
+)
+
+// erpReach lists an own-slot ERP secret labelled for PR 7 and another slot's, labelled for another PR; denied names the ones the job may not read.
+func erpReach(t *testing.T, denied ...string) func(map[string]string) {
+	return func(f map[string]string) {
+		f["have"] += linesOf([]string{erpOwn, erpOther})
+		f["have-7"] += linesOf([]string{erpOwn})
+		f["denied"] += linesOf(denied)
+	}
+}
+
+func TestReach_SkipsOwnSlotERPGrantSecrets(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, erpReach(t, erpOther))
+	if r.code != 0 {
+		t.Fatalf("reach exited %d, want 0:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	read := map[string]bool{}
+	for _, l := range callsWith(r, "job: secrets versions access") {
+		read[flagValue(l, "--secret")] = true
+	}
+	if !read[erpOther] || read[erpOwn] {
+		t.Errorf("the job read %v, want %s and not %s", read, erpOther, erpOwn)
+	}
+	for _, l := range callsWith(r, "secrets get-iam-policy ") {
+		if strings.Contains(l, erpOwn) {
+			t.Errorf("reach read the policy of its own ERP secret: %s", l)
+		}
+	}
+}
+
+func TestReach_FailsAnotherSlotsERPSecretItCanRead(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, erpReach(t))
+	reachFails(t, r)
+	if len(errLines(r, "can read", erpOther)) == 0 {
+		t.Errorf("no ::error:: line says it can read %s: %q", erpOther, errLines(r))
+	}
+}
+
+func TestReach_StillFailsAForeignReadableSecret(t *testing.T) {
+	t.Parallel()
+	r := runReach(t, func(f map[string]string) {
+		erpReach(t, erpOther)(f)
+		f["denied"] = notDenied(t, "pr-9-gateway-token") + erpOther + "\n"
+	})
+	reachFails(t, r)
+	if len(errLines(r, "can read", "pr-9-gateway-token")) == 0 {
+		t.Errorf("no ::error:: line says it can read pr-9-gateway-token: %q", errLines(r))
+	}
+}
+
+func TestEnvFile_ERPRedirectAndScope(t *testing.T) {
+	t.Parallel()
+	deploy := func(t *testing.T, env []string, pr string, setup func(string)) previewRun {
+		t.Helper()
+		r := runPreviewEnv(t, env, setup, append([]string{"deploy", pr, "abc123"}, prAll(t)...)...)
+		if r.code != 0 {
+			t.Fatalf("deploy exited %d: %s", r.code, r.stderr)
+		}
+		return r
+	}
+	check := func(t *testing.T, r previewRun, suffix, gateway, scope string) {
+		t.Helper()
+		for _, svc := range prAll(t) {
+			env := r.file(t, "env-"+svc+"-"+suffix)
+			wantURL := regexp.MustCompile(`(?m)^ERP_REDIRECT_URL: ` + regexp.QuoteMeta(gateway) + `\S*\.run\.app/erp/callback$`)
+			if has := wantURL.MatchString(env); has != (svc == "portfolio" || svc == "worker") {
+				t.Errorf("%s has ERP_REDIRECT_URL = %v, want a %s gateway URL for portfolio and worker only:\n%s", svc, has, gateway, env)
+			}
+			if has := strings.Contains(env, "ERP_SECRET_SCOPE: "+scope+"\n"); has != (svc == "worker") {
+				t.Errorf("%s has ERP_SECRET_SCOPE %s = %v", svc, scope, has)
+			}
+			if svc != "worker" && strings.Contains(env, "ERP_SECRET_SCOPE") {
+				t.Errorf("%s carries ERP_SECRET_SCOPE", svc)
+			}
+		}
+	}
+	t.Run("pr on slot-2", func(t *testing.T) {
+		t.Parallel()
+		r := deploy(t, nil, "12", func(dir string) { slots(t, map[string]string{"slot-2": "12"}, nil)(dir) })
+		check(t, r, "pr-12", "https://gateway-pr-12-", "slot-2")
+	})
+	t.Run("nightly", func(t *testing.T) {
+		t.Parallel()
+		r := deploy(t, []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}, "nightly", nil)
+		check(t, r, "nightly", "https://gateway-nightly-", "nightly")
+	})
+}

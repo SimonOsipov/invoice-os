@@ -45,6 +45,15 @@ type Store struct {
 	reg     Registry
 	secrets SecretStore // nil on portfolio: only the worker touches secrets
 	q       *queue.Client
+
+	newGrantID  func() string // nil: uuid.NewString; a test seam
+	secretScope string        // the slot on a preview or the nightly, else empty
+}
+
+// WithSecretScope sets the scope of the secret names Complete creates (SecretName).
+func (s *Store) WithSecretScope(scope string) *Store {
+	s.secretScope = scope
+	return s
 }
 
 func NewStore(pool *pgxpool.Pool, reg Registry, secrets SecretStore, q *queue.Client) *Store {

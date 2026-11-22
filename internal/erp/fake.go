@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/erp/erpweb"
 )
 
 const (
@@ -47,20 +49,13 @@ type fakeToken struct {
 }
 
 const (
-	fakeExpired       = "expired"
-	fakeRefreshFails  = "refresh_fails"
+	fakeExpired       = erpweb.FakeExpired
+	fakeRefreshFails  = erpweb.FakeRefreshFails
 	fakeTokenLifetime = time.Hour
 )
 
-// fakeCodes are the nine consent codes: each company, plain and with each suffix.
-func fakeCodes() []string {
-	var out []string
-	for key := range fakeSeed {
-		out = append(out, key, key+"~"+fakeExpired, key+"~"+fakeRefreshFails)
-	}
-	slices.Sort(out)
-	return out
-}
+// fakeCodes are the nine consent codes; erpweb owns the list so the gateway page shows the same.
+func fakeCodes() []string { return erpweb.FakeCodes() }
 
 func randomToken() string {
 	b := make([]byte, 32)

@@ -26,6 +26,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/docadapter"
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
@@ -197,6 +198,16 @@ func main() {
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
 
+	erpReg, err := erp.RegistryFromEnv(os.Getenv)
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
+	erpSecrets, err := erp.SecretsFromEnv(ctx, os.Getenv, erpReg)
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
+	erpStore := erp.NewStore(pool, erpReg, erpSecrets, q).WithSecretScope(erp.SecretScopeFromEnv(os.Getenv))
+
 	// Each periodic task runs in one worker instance only.
 	leader := db.NewLeader(mustEnv("DATABASE_URL"))
 
@@ -259,6 +270,7 @@ func main() {
 			AI:  aiClient, Jev: jevClient},
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
+	app.Mux.Handle("POST /internal/erp/callback", erp.CallbackHandler(erpStore.Complete, app.Logger))
 	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
 	if account != nil {
 		linker = account

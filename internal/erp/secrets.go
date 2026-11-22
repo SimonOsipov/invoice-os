@@ -16,6 +16,9 @@ const SecretPrefix = "erp-grant-"
 // envSecretScope names the slot on a preview or the nightly; error text names it, never its value.
 const envSecretScope = "ERP_SECRET_SCOPE"
 
+// SecretScopeFromEnv is the slot a preview or the nightly names its secrets after; empty elsewhere.
+func SecretScopeFromEnv(getenv func(string) string) string { return getenv(envSecretScope) }
+
 // SecretName is the secret id of a grant. scope is empty in production and locally, and the slot
 // (slot-1, slot-2, nightly) on a preview or the nightly, so a slot's identity reads only its own.
 func SecretName(scope, grantID string) string {

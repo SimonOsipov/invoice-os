@@ -767,6 +767,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 	{file: "internal/tenancy/stranded_alert.go", fn: "recordStrandedAlert"},                 // writes the alert row after the deletion committed, on the deletion's tenant; the actor just left, so the seam would refuse
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
+	{file: "internal/erp/complete.go", fn: "Complete"},                                      // the callback names its tenant in the state; the gateway-token route carries no identity to gate
 	{file: "internal/erp/release.go", fn: "Work"},                                           // the secret-delete River job carries its tenant and there is no request identity to gate
 }
 
@@ -1018,6 +1019,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"DELETE /v1/workflow-roles/{key}":                                {verdict: scCovered},
 	"GET /.well-known/jwks.json":                                     {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
 	"GET /auth/reset-password":                                       {verdict: scExempt, reason: "no database; renders the reset page"},
+	"GET /erp/callback":                                              {verdict: scExempt, reason: "no database; forwards the redirect to the worker with the gateway token and renders a fixed page"},
+	"GET /erp/fake/consent":                                          {verdict: scExempt, reason: "no database; static fake-vendor consent form, mounted only when the ERP mode is fake"},
 	"GET /readiness-check/confirm":                                   {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                               {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /auth/verify":                                               {verdict: scExempt, reason: "reads one masked address by token hash as invoice_gateway, no tenant; renders the set-password page, or redirects a stateless open to landing"},
@@ -1234,6 +1237,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/send-again":                              {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                             {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                                {verdict: scCovered},
+	"POST /internal/erp/callback":                                    {verdict: scExempt, reason: "gateway-token call with no caller; the state names the tenant and the connection"},
 	"POST /internal/public-checks/run":                               {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /internal/public-checks/mapping":                           {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /internal/console-sessions/recovery-token":                 {verdict: scExempt, reason: "gateway-token call with no caller; verifies an IAP assertion and asks GoTrue for a recovery link, no tenant table"},

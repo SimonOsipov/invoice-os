@@ -565,3 +565,29 @@ func TestERPEvents_PayloadKeysAreExact(t *testing.T) {
 		}
 	}
 }
+
+func TestRefresh_FinalAttemptReconsentsWhenTheJobContextIsDead(t *testing.T) {
+	r := newRefreshRig(t)
+	g, _ := r.grant(t)
+	e := seedClient(t, r.super, r.tenant, "One")
+	c := seedConnRow(t, r.super, connRow{tenant: r.tenant, entity: e, key: "k", status: "active", grant: g})
+	r.stub.fn = func(Credentials) ([]byte, error) { return nil, errors.New("vendor down") }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // River's job timeout or a worker shutdown ended attempt 8
+	err := r.worker.Work(ctx, &river.Job[RefreshArgs]{
+		JobRow: &rivertype.JobRow{ID: 1101, Kind: "erp_token_refresh", Attempt: 8, MaxAttempts: 8},
+		Args:   RefreshArgs{TenantID: r.tenant, GrantID: g, Version: int64(r.version(t, g))},
+	})
+	if err == nil || isCancel(err) {
+		t.Fatalf("Work = %v, want the attempt's error", err)
+	}
+	if s := stateOf(t, r.super, c); s.status != "reconsent" {
+		t.Errorf("connection is %s, want reconsent", s.status)
+	}
+	if f := r.events(t, "erp.token.refresh_failed"); len(f) != 1 || f[0].payload["reason"] != "exhausted" {
+		t.Errorf("refresh_failed = %+v, want one exhausted", f)
+	}
+	if n := len(r.events(t, "erp.connection.reauth_required")); n != 1 {
+		t.Errorf("%d reauth_required, want 1", n)
+	}
+}

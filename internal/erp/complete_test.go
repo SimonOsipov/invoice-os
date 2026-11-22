@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -991,6 +992,98 @@ func TestCallbackHandler_BodyLimitAndNoEcho(t *testing.T) {
 				if strings.Contains(logs.text(), leak) {
 					t.Errorf("a log record carries %q:\n%s", leak, logs.text())
 				}
+			}
+		})
+	}
+}
+
+func TestComplete_CommitAppliedButReportedLostKeepsTheSecret(t *testing.T) {
+	r := newCompleteRig(t)
+	lost := &atomic.Bool{}
+	var commits atomic.Int32
+	pool := tracedAppPool(t, sqlTracer{onStart: func(sql string) {
+		if sql == "commit" && commits.Add(1) == 2 { // tx1 is the first, tx2 the second
+			lost.Store(true)
+		}
+	}}, lost)
+	store := storeOver(t, pool, r.sec, r.ex)
+	conn, state := r.connect(t, r.e1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := store.Complete(ctx, CallbackInput{State: state, Code: "fake-co-1"})
+	wantOutcome(t, "commit applied", string(out), err, "connected")
+
+	if s := stateOf(t, r.super, conn.ID); s.status != "active" || s.grant == nil {
+		t.Fatalf("connection = %+v, want active with a grant", s)
+	}
+	if ids := secretIDs(r.sec.MemorySecrets); len(ids) != 1 {
+		t.Errorf("store holds %v, want the active grant's secret kept", ids)
+	}
+	if _, deleted := r.sec.counts(); deleted != 0 {
+		t.Errorf("%d secret deletes, want 0", deleted)
+	}
+}
+
+func TestComplete_Tx2ErrorKeepsTheSecretWhenTheReReadFails(t *testing.T) {
+	r := newCompleteRig(t)
+	logs := captureLogs(t)
+	pool := tracedAppPool(t, sqlTracer{}, nil)
+	store := storeOver(t, pool, r.sec, r.ex)
+	pool.Close()
+	ref := SecretName("", "grant-1")
+	if err := r.sec.Create(context.Background(), ref, []byte("payload-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if store.settleTx2Error(context.Background(), r.tenant, "9d9c2b3e-0000-4000-8000-000000000001", "grant-1", ref) {
+		t.Error("settle reported a commit it could not read")
+	}
+	if !holds(r.sec, ref) {
+		t.Error("the secret was deleted although the re-read failed")
+	}
+	if strings.Contains(logs.text(), "payload-1") {
+		t.Error("a log line carries the secret payload")
+	}
+}
+
+func TestComplete_Tx2NotCommittedByActivateEndedWhenAdminOrWorkspaceChanged(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(t *testing.T, r *completeRig)
+	}{
+		{"the admin was demoted", func(t *testing.T, r *completeRig) {
+			mustExec(t, r.super, "UPDATE memberships SET role = 'preparer' WHERE tenant_id = $1 AND user_id = $2", r.tenant, subjectOf(r.admin))
+		}},
+		{"the admin was suspended", func(t *testing.T, r *completeRig) {
+			mustExec(t, r.super, "UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2", r.tenant, subjectOf(r.admin))
+		}},
+		{"the workspace is scheduled for deletion", func(t *testing.T, r *completeRig) {
+			lockWorkspace(t, r.super, r.tenant, subjectOf(r.admin))
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newCompleteRig(t)
+			conn, state := r.connect(t, r.e1)
+			// The change lands between tx1 and tx2, while the vendor exchange runs.
+			r.ex.override = func(ctx context.Context, req ExchangeRequest) (ExchangeResult, error) {
+				c.mutate(t, r)
+				return r.ex.Fake.Exchange(ctx, req)
+			}
+
+			out, err := r.complete(state, "fake-co-1", "")
+			wantOutcome(t, c.name, out, err, "ended")
+
+			r.wantPending(t, c.name, conn.ID, nil)
+			if n := grantCount(t, r.super, r.tenant); n != 0 {
+				t.Errorf("%d grants, want 0", n)
+			}
+			if ids := secretIDs(r.sec.MemorySecrets); len(ids) != 0 {
+				t.Errorf("store holds %v, want the new secret deleted", ids)
+			}
+			if n := eventCount(t, r.super, r.tenant, "erp.connection.authorised"); n != 0 {
+				t.Errorf("%d erp.connection.authorised events, want 0", n)
 			}
 		})
 	}

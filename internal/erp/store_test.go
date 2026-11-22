@@ -6,16 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -1514,5 +1519,125 @@ func TestStore_MemberListReadsThroughTheReadOnlySeam(t *testing.T) {
 	wantErr(t, "control: preparer Connect", err, db.ErrWorkspaceLocked)
 	if got := erpState(t, super, tenant); got != before {
 		t.Errorf("ERP rows or audit changed:\nbefore %s\nafter  %s", before, got)
+	}
+}
+
+// sqlTracer calls onStart before a statement is sent and onEnd once it has finished.
+type sqlTracer struct {
+	onStart func(sql string)
+	onEnd   func(sql string)
+}
+
+type sqlKey struct{}
+
+func (s sqlTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	if s.onStart != nil {
+		s.onStart(d.SQL)
+	}
+	return context.WithValue(ctx, sqlKey{}, d.SQL)
+}
+
+func (s sqlTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+	if s.onEnd != nil {
+		sql, _ := ctx.Value(sqlKey{}).(string)
+		s.onEnd(sql)
+	}
+}
+
+// lossyConn fails its next Read once lost is set, after the server has had time to apply what was written.
+type lossyConn struct {
+	net.Conn
+	lost *atomic.Bool
+}
+
+func (c lossyConn) Read(p []byte) (int, error) {
+	if c.lost.CompareAndSwap(true, false) {
+		time.Sleep(300 * time.Millisecond)
+		return 0, io.ErrUnexpectedEOF
+	}
+	return c.Conn.Read(p)
+}
+
+// tracedAppPool is the app pool with a tracer and, when lost is set, a dialer whose connections can lose a reply.
+func tracedAppPool(t *testing.T, tr pgx.QueryTracer, lost *atomic.Bool) *pgxpool.Pool {
+	t.Helper()
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("erp store test skipped: DATABASE_URL unset")
+	}
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	cfg.ConnConfig.Tracer = tr
+	if lost != nil {
+		cfg.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return lossyConn{Conn: c, lost: lost}, nil
+		}
+	}
+	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(p.Close)
+	return p
+}
+
+func TestStore_ReauthoriseWhileAnotherKeylessPendingExistsIsRefused(t *testing.T) {
+	super, app := storePools(t)
+	store := fakeStore(t, app)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+
+	a, _, _, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil {
+		t.Fatalf("connect A: %v", err)
+	}
+	if _, err := store.Disconnect(admin, e1, a.ID); err != nil {
+		t.Fatalf("disconnect A: %v", err)
+	}
+	b, _, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil || !created || b.ID == a.ID {
+		t.Fatalf("connect B = %+v created %v err %v, want a new row", b, created, err)
+	}
+	before := erpState(t, super, tenant)
+
+	_, _, _, err = store.Connect(admin, e1, ConnectInput{System: "fake", ConnectionID: a.ID})
+	wantErr(t, "re-authorise A beside pending B", err, ErrKeylessPending)
+	if after := erpState(t, super, tenant); after != before {
+		t.Errorf("a refused re-authorise changed state:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestStore_ConnectRetriesWhenTheConflictingRowIsGoneBeforeTheSelect(t *testing.T) {
+	super, _ := storePools(t)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	p := seedConnRow(t, super, connRow{tenant: tenant, entity: e1, status: "pending"})
+	g := seedGrant(t, super, tenant, "")
+	var once sync.Once
+	pool := tracedAppPool(t, sqlTracer{onEnd: func(sql string) {
+		if !strings.Contains(sql, "ON CONFLICT") {
+			return
+		}
+		// A callback activates the conflicting row between the insert and the select.
+		once.Do(func() {
+			mustExec(t, super, "UPDATE erp_connections SET status = 'active', external_key = 'k', grant_id = $2 WHERE id = $1", p, g)
+		})
+	}}, nil)
+	store := storeOver(t, pool, nil, NewFake(testRedirect))
+
+	conn, _, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"})
+	if err != nil {
+		t.Fatalf("Connect = %v, want a new pending row", err)
+	}
+	if !created || conn.ID == p || conn.Status != "pending" {
+		t.Errorf("Connect = %s %s created %v, want a new pending row beside active %s", conn.ID, conn.Status, created, p)
 	}
 }

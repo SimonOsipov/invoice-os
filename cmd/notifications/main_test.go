@@ -156,7 +156,7 @@ func qaStartWithWorker(t *testing.T, bin string, vars map[string]string) *qaProc
 		"GATEWAY_URL":         "http://gateway.invalid", "VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok",
 		"APP_ADAPTER": "mock", "DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
 		"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
-	}, vars)
+	}, vars, qaERPBootEnv(t, vars["DEPLOY_ENV"]))
 	w := exec.Command(wbin)
 	w.Env = qaBootEnv(qaFreePort(t), wvars)
 	w.Stdout, w.Stderr = p.out, p.out

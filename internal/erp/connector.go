@@ -33,7 +33,7 @@ type Credentials struct {
 	Secret []byte
 }
 
-// GrantMaterial is what Authorize hands back for the caller to store.
+// GrantMaterial is what Exchange and Refresh hand back for the caller to store.
 type GrantMaterial struct {
 	Kind      GrantKind
 	Secret    []byte

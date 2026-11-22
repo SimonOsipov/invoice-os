@@ -331,6 +331,11 @@ env_file() {
       blog) echo "VITE_GATEWAY_URL: $(url gateway "$pr")" ;;
     esac
     case "$svc" in
+      portfolio | worker) echo "ERP_REDIRECT_URL: $(url gateway "$pr")/erp/callback" ;;
+    esac
+    # The slot prefixes the worker's ERP grant secret names; nightly answers for itself.
+    [ "$svc" != worker ] || echo "ERP_SECRET_SCOPE: ${SLOT:?no slot claimed}"
+    case "$svc" in
       notifications | worker) [ "$pr" != nightly ] || echo "HUBSPOT_DEAL_STAGE: $(deal_stage)" ;;
     esac
     case "$svc" in
@@ -801,8 +806,9 @@ cmd_reach() {
   errf=$(mktemp)
   all=$(gcloud secrets list --project "$PROJECT" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
   mine=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)' 2>"$errf") || { n=$(tail -n 1 "$errf"); rm -f "$errf"; die "could not list the secrets: $n"; }
-  all=$(grep -vE '^slot-.*-claim$' <<<"$all" || true)
-  mine=$(grep -vE '^slot-.*-claim$' <<<"$mine" || true)
+  # The slot's runtime reaches its own erp-grant secrets by a name-prefix condition, not a per-secret binding.
+  all=$(grep -vE "^slot-.*-claim$|^erp-grant-$slot-" <<<"$all" || true)
+  mine=$(grep -vE "^slot-.*-claim$|^erp-grant-$slot-" <<<"$mine" || true)
   allowed="$mine"$'\n'"$slot-document-access-key-id"$'\n'"$slot-document-secret-key"
   for n in "${SHARED_SECRETS[@]}"; do allowed+=$'\n'"$n"; done
   allowed=$(grep -v '^$' <<<"$allowed" | sort -u)

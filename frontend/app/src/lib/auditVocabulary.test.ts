@@ -52,6 +52,10 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'erp.connection.created',
     'erp.connection.authorised',
     'erp.connection.revoked',
+    'erp.token.deleted',
+    'erp.token.refreshed',
+    'erp.token.refresh_failed',
+    'erp.connection.reauth_required',
   ],
   documents: [
     'document.created',

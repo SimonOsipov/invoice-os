@@ -2,9 +2,18 @@ package erp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/erp/erpweb"
 )
 
 const (
@@ -15,18 +24,80 @@ const (
 )
 
 // Fake is an in-memory connector over a fixed seed. It makes no network call.
-type Fake struct{}
+type Fake struct{ redirect *url.URL }
 
-func NewFake() *Fake { return &Fake{} }
+// NewFake serves its consent page on the origin of redirect, the gateway's callback URL.
+func NewFake(redirect *url.URL) *Fake { return &Fake{redirect: redirect} }
 
 func (*Fake) System() string             { return fakeSystem }
 func (*Fake) Capabilities() Capabilities { return Capabilities{} }
 
-func (*Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
-	if _, ok := fakeSeed[req.ExternalKey]; !ok {
-		return AuthorizeResult{}, ErrUnknownScope
+// Authorize builds the fake consent page's URL.
+func (f *Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
+	if f.redirect == nil || req.State == "" {
+		return AuthorizeResult{}, errors.New("erp: fake authorize needs a redirect and a state")
 	}
-	return AuthorizeResult{ExternalKey: req.ExternalKey, Grant: &GrantMaterial{Kind: GrantAPIKey}}, nil
+	u := url.URL{Scheme: f.redirect.Scheme, Host: f.redirect.Host, Path: "/erp/fake/consent", RawQuery: url.Values{"state": {req.State}}.Encode()}
+	return AuthorizeResult{ConsentURL: u.String()}, nil
+}
+
+// fakeToken is the grant's opaque secret: random tokens, and whether the vendor ends the grant at refresh.
+type fakeToken struct {
+	Access       string `json:"access"`
+	Refresh      string `json:"refresh"`
+	RefreshFails bool   `json:"refresh_fails,omitempty"`
+}
+
+const (
+	fakeExpired       = erpweb.FakeExpired
+	fakeRefreshFails  = erpweb.FakeRefreshFails
+	fakeTokenLifetime = time.Hour
+)
+
+// fakeCodes are the nine consent codes; erpweb owns the list so the gateway page shows the same.
+func fakeCodes() []string { return erpweb.FakeCodes() }
+
+func randomToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func newFakeGrant(refreshFails, expired bool) (GrantMaterial, error) {
+	secret, err := json.Marshal(fakeToken{Access: randomToken(), Refresh: randomToken(), RefreshFails: refreshFails})
+	if err != nil {
+		return GrantMaterial{}, err
+	}
+	exp := time.Now().Add(fakeTokenLifetime)
+	if expired {
+		exp = time.Now().Add(-time.Minute)
+	}
+	return GrantMaterial{Kind: GrantOAuthRefresh, Secret: secret, ExpiresAt: &exp}, nil
+}
+
+// Exchange accepts exactly the codes of fakeCodes.
+func (*Fake) Exchange(_ context.Context, req ExchangeRequest) (ExchangeResult, error) {
+	if !slices.Contains(fakeCodes(), req.Code) {
+		return ExchangeResult{}, errors.New("erp: unknown fake code")
+	}
+	key, suffix, _ := strings.Cut(req.Code, "~")
+	g, err := newFakeGrant(suffix == fakeRefreshFails, suffix != "")
+	if err != nil {
+		return ExchangeResult{}, err
+	}
+	return ExchangeResult{ExternalKey: key, Grant: g}, nil
+}
+
+// Refresh rotates both tokens and gives a normal hour; a ~refresh_fails grant is revoked.
+func (*Fake) Refresh(_ context.Context, c Credentials) (GrantMaterial, error) {
+	var t fakeToken
+	if err := json.Unmarshal(c.Secret, &t); err != nil || t.Access == "" || t.Refresh == "" {
+		return GrantMaterial{}, errors.New("erp: fake grant secret unreadable")
+	}
+	if t.RefreshFails {
+		return GrantMaterial{}, ErrGrantRevoked
+	}
+	return newFakeGrant(false, false)
 }
 
 func (*Fake) Validate(_ context.Context, _ Credentials, scope string) error {

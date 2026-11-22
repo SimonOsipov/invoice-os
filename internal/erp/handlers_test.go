@@ -27,6 +27,8 @@ type stubs struct {
 	conns                                       []Connection
 	gateCalls, connectCalls, disconnectCalls    int
 	gotEntity, gotConn                          string
+	consentURL                                  string
+	gotInput                                    ConnectInput
 }
 
 func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
@@ -36,10 +38,10 @@ func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
 		func() []string { return nil }, log))
 	m.HandleFunc("POST /v1/entities/{id}/erp-connections", ConnectHandler(
 		func(context.Context) error { s.gateCalls++; return s.gateErr },
-		func(_ context.Context, e string, _ ConnectInput) (Connection, bool, error) {
+		func(_ context.Context, e string, in ConnectInput) (Connection, string, bool, error) {
 			s.connectCalls++
-			s.gotEntity = e
-			return Connection{ID: "c1"}, s.created, s.connectErr
+			s.gotEntity, s.gotInput = e, in
+			return Connection{ID: "c1"}, s.consentURL, s.created, s.connectErr
 		}, log))
 	m.HandleFunc("POST /v1/entities/{id}/erp-connections/{connection}/disconnect", DisconnectHandler(
 		func(_ context.Context, e, c string) (Connection, error) {
@@ -85,10 +87,10 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
 		{ErrNotPermitted, 403, adminMsg},
 		{ErrUnknownSystem, 400, "unknown system"},
-		{ErrUnknownExternalKey, 400, "unknown external_key"},
 		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
+		{ErrKeylessPending, 409, "another connection of this system is already waiting for consent"},
 		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
 	} {
 		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err}
@@ -108,7 +110,7 @@ func TestHandlers_UnknownErrorIs500WithoutLeaking(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	s := &stubs{connectErr: errors.New("pq: secret detail")}
-	w := do(s.mux(log), "POST", listPath, `{"system":"fake","external_key":"k"}`, true)
+	w := do(s.mux(log), "POST", listPath, `{"system":"fake","connection_id":"k"}`, true)
 	if w.Code != 500 || errText(t, w) != "internal server error" {
 		t.Fatalf("got %d %q", w.Code, w.Body.String())
 	}
@@ -135,7 +137,7 @@ func TestHandlers_NoIdentityIs401(t *testing.T) {
 
 func TestHandlers_NonAdminIs403WhateverTheBody(t *testing.T) {
 	big := `{"system":"` + strings.Repeat("a", int(jsonbody.DefaultLimit)+10) + `"}`
-	for _, body := range []string{`{"system":"sage"}`, `{"system":"fake","external_key":"x"}`, `{}`, "not json", big} {
+	for _, body := range []string{`{"system":"sage"}`, `{"system":"fake","connection_id":"x"}`, `{}`, "not json", big} {
 		s := &stubs{gateErr: ErrNotPermitted, disconnectErr: ErrNotPermitted}
 		w := do(s.mux(nil), "POST", listPath, body, true)
 		if w.Code != 403 || errText(t, w) != adminMsg {
@@ -245,5 +247,37 @@ func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 	do(s.mux(nil), "GET", listPath, "", true)
 	if s.gotEntity != "E" {
 		t.Errorf("list got entity %q, want E", s.gotEntity)
+	}
+}
+
+func TestHandlers_ConnectAnswersConsentURL(t *testing.T) {
+	const consent = "https://gw.example/erp/fake/consent?state=s"
+	want := []string{"consent_url", "created_at", "entity_id", "external_key", "id", "last_sync_at", "status", "system", "updated_at"}
+	for _, c := range []struct {
+		created bool
+		status  int
+	}{{true, 201}, {false, 200}} {
+		s := &stubs{created: c.created, consentURL: consent}
+		w := do(s.mux(nil), "POST", listPath, `{"system":"fake","connection_id":"X"}`, true)
+		if w.Code != c.status {
+			t.Errorf("created=%v: status %d, want %d", c.created, w.Code, c.status)
+		}
+		if got := keys(t, w.Body.Bytes()); !slices.Equal(got, want) {
+			t.Errorf("created=%v: body keys = %v, want every Connection field and consent_url %v", c.created, got, want)
+		}
+		var body map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if body["consent_url"] != consent || body["id"] != "c1" {
+			t.Errorf("created=%v: body = %v, want consent_url %q on connection c1", c.created, body, consent)
+		}
+		if s.gotInput != (ConnectInput{System: "fake", ConnectionID: "X"}) {
+			t.Errorf("created=%v: the store got %+v, want the system and connection_id of the body", c.created, s.gotInput)
+		}
+	}
+	// A refusal answers no consent URL.
+	s := &stubs{connectErr: ErrAlreadyConnected, consentURL: consent}
+	w := do(s.mux(nil), "POST", listPath, `{"system":"fake","connection_id":"X"}`, true)
+	if got := keys(t, w.Body.Bytes()); w.Code != 409 || !slices.Equal(got, []string{"error"}) {
+		t.Errorf("already connected: %d with keys %v, want 409 and only error", w.Code, got)
 	}
 }

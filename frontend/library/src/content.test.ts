@@ -301,6 +301,18 @@ describe('content', () => {
     expect(JSON.stringify(byId('delete-account'))).not.toMatch(/e-?mail/i)
   })
 
+  it('content_portfolioOffersClientSearch', () => {
+    expect(byId('portfolio').benefits).toEqual([
+      'What needs attention, per client',
+      'Filter the list by active or archived',
+      'Find a client by name or TIN',
+    ])
+  })
+
+  it('content_portfolioStillNamesTheSwitcher', () => {
+    expect(byId('portfolio').desc).toMatch(/workspace switcher/)
+  })
+
   it('content_membersCopyNamesTheRoleChange', () => {
     expect(byId('invite-members').benefits[2]).toMatch(/role and client access can be changed/i)
     const roles = byId('roles')

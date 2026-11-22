@@ -92,6 +92,25 @@ func TestPortfolioMain_HostedWithERPFakeRefusesToBoot(t *testing.T) {
 	}
 }
 
+func TestPortfolioMain_PreviewWithoutRedirectRefusesToBoot(t *testing.T) {
+	bin := buildPortfolio(t)
+	ctx, cancel := context.WithTimeout(t.Context(), bootWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = bootEnv(freePort(t), map[string]string{"DEPLOY_ENV": "pr-1"})
+	var out lockedBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("portfolio ended with %v, want exit status 1 through platform.Fatal\n%s", err, &out)
+	}
+	if !strings.Contains(out.String(), "ERP_REDIRECT_URL") {
+		t.Errorf("output does not name ERP_REDIRECT_URL\n%s", &out)
+	}
+}
+
 func TestPortfolioMain_HostedWithoutERPFakeBoots(t *testing.T) {
 	bin := buildPortfolio(t)
 	port := freePort(t)

@@ -13,8 +13,14 @@ import (
 )
 
 type connectRequest struct {
-	System      string `json:"system"`
-	ExternalKey string `json:"external_key"`
+	System       string `json:"system"`
+	ConnectionID string `json:"connection_id"`
+}
+
+// connectResponse is the Connection plus the URL the admin visits to consent.
+type connectResponse struct {
+	Connection
+	ConsentURL string `json:"consent_url"`
 }
 
 type listResponse struct {
@@ -52,7 +58,7 @@ func ListHandler(list func(ctx context.Context, entityID string) ([]Connection, 
 // so a non-admin gets 403 whatever it sent.
 func ConnectHandler(
 	gate func(ctx context.Context) error,
-	connect func(ctx context.Context, entityID string, in ConnectInput) (Connection, bool, error),
+	connect func(ctx context.Context, entityID string, in ConnectInput) (Connection, string, bool, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -76,7 +82,7 @@ func ConnectHandler(
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		conn, created, err := connect(r.Context(), r.PathValue("id"), ConnectInput{System: req.System, ExternalKey: req.ExternalKey})
+		conn, consentURL, created, err := connect(r.Context(), r.PathValue("id"), ConnectInput{System: req.System, ConnectionID: req.ConnectionID})
 		if err != nil {
 			fail(w, r, log, "connect erp", err)
 			return
@@ -85,7 +91,7 @@ func ConnectHandler(
 		if created {
 			status = http.StatusCreated
 		}
-		writeJSON(w, status, conn)
+		writeJSON(w, status, connectResponse{Connection: conn, ConsentURL: consentURL})
 	}
 }
 
@@ -122,12 +128,12 @@ func statusForErr(err error) (int, string) {
 		return http.StatusForbidden, "only an admin can manage ERP connections"
 	case errors.Is(err, ErrUnknownSystem):
 		return http.StatusBadRequest, "unknown system"
-	case errors.Is(err, ErrUnknownExternalKey):
-		return http.StatusBadRequest, "unknown external_key"
 	case errors.Is(err, ErrNoSuchRecord):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrAlreadyConnected):
 		return http.StatusConflict, "already connected"
+	case errors.Is(err, ErrKeylessPending):
+		return http.StatusConflict, "another connection of this system is already waiting for consent"
 	case errors.Is(err, ErrAlreadyDisconnected):
 		return http.StatusConflict, "already disconnected"
 	}

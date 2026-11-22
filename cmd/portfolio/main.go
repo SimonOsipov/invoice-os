@@ -13,6 +13,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/portfolio"
 )
 
@@ -69,7 +70,12 @@ func main() {
 			return store.SetStatus(ctx, id, "active")
 		}, app.Logger))
 
-	erpStore := erp.NewStore(pool, erpRegistry)
+	// Insert-only River client: disconnect enqueues the secret delete in its transaction.
+	erpQueue, err := queue.New(pool, queue.Config{})
+	if err != nil {
+		platform.Fatal(app.Logger, "portfolio: queue: %v", err)
+	}
+	erpStore := erp.NewStore(pool, erpRegistry, nil, erpQueue)
 	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections", erp.ListHandler(erpStore.List, erpStore.Systems, app.Logger))
 	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections", erp.ConnectHandler(erpStore.Gate, erpStore.Connect, app.Logger))
 	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections/{connection}/disconnect", erp.DisconnectHandler(erpStore.Disconnect, app.Logger))

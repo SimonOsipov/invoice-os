@@ -295,9 +295,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                 }}
               >
                 <span style={{ display: 'inline-flex' }}>{shieldGlyph15}</span>
-                <span className="mono" style={{ fontSize: 10.5, letterSpacing: '0.05em' }}>
-                  {EVIDENCE_COPY.openCaption}
-                </span>
+                {EVIDENCE_COPY.openCaption}
               </button>
               <button
                 type="button"
@@ -315,9 +313,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                 }}
               >
                 <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
-                <span className="mono" style={{ fontSize: 10.5, letterSpacing: '0.05em' }}>
-                  {AUDIT_COPY.exportCaption}
-                </span>
+                {AUDIT_COPY.exportCaption}
               </button>
             </div>
             {zeroRows && (

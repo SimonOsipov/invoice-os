@@ -272,7 +272,7 @@ func TestScopeOf_ErpConnectionEventsAreWorkspace(t *testing.T) {
 		t.Fatalf("control: ScopeOf(unclassified, nil) = %q, want %q", got, audit.ScopeUnattributed)
 	}
 	entity := uuid.NewString()
-	for _, e := range []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked"} {
+	for _, e := range []string{"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked", "erp.token.deleted", "erp.token.refreshed", "erp.token.refresh_failed", "erp.connection.reauth_required"} {
 		if got := audit.ScopeOf(e, nil); got != audit.ScopeWorkspace {
 			t.Errorf("ScopeOf(%q, nil) = %q, want %q", e, got, audit.ScopeWorkspace)
 		}

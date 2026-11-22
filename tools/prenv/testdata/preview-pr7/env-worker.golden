@@ -6,6 +6,8 @@ VALIDATION_URL: https://validation-pr-7-944095690109.africa-south1.run.app
 GATEWAY_URL: https://gateway-pr-7-944095690109.africa-south1.run.app
 DOCLING_URL: https://docling-pr-7-944095690109.africa-south1.run.app
 AUTH_URL: https://auth-pr-7-944095690109.africa-south1.run.app
+ERP_REDIRECT_URL: https://gateway-pr-7-944095690109.africa-south1.run.app/erp/callback
+ERP_SECRET_SCOPE: slot-1
 AI_FAKE: 'true'
 JEV_FAKE: 'true'
 DOCUMENT_BUCKET: ascomply-preview-docs-slot-1

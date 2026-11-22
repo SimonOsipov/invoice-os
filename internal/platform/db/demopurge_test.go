@@ -220,6 +220,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	mappingID := uuid.NewString()
 	erpGrantID := uuid.NewString()
 	erpConnID := uuid.NewString()
+	erpStateID := uuid.NewString()
 	customerID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -310,6 +311,10 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO erp_connections (id, tenant_id, entity_id, system, external_key, status, grant_id)
 		 VALUES ($1,$2,$3,'fake','fake-co-1','active',$4)`,
 		erpConnID, tenantID, entityID, erpGrantID)
+	plant("erp_oauth_states", "id", erpStateID,
+		`INSERT INTO erp_oauth_states (id, tenant_id, state_hash, connection_id, user_id, expires_at)
+		 VALUES ($1,$2,$3,$4,$5, now() + interval '10 minutes')`,
+		erpStateID, tenantID, tokenHash(t, 32), erpConnID, userID)
 	plant("customers", "id", customerID,
 		`INSERT INTO customers (id, tenant_id, tin) VALUES ($1,$2,'90000000-0001')`,
 		customerID, tenantID)
@@ -653,6 +658,13 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 		if !slices.Contains(live, want) {
 			t.Errorf("%s is not among the live tenant_id tables — the client_access migration is not applied yet", want)
 		}
+	}
+	if !slices.Contains(live, "erp_oauth_states") {
+		t.Errorf("erp_oauth_states is not among the live tenant_id tables — the erp_token_custody migration is not applied yet")
+	}
+	// Leaf-first: a state references its connection, so the purge deletes the states first.
+	if si, ci := slices.Index(db.PurgeTablesForTest, "erp_oauth_states"), slices.Index(db.PurgeTablesForTest, "erp_connections"); si < 0 || ci < 0 || si > ci {
+		t.Errorf("purgeTables index of erp_oauth_states = %d, of erp_connections = %d, want both present and the states first", si, ci)
 	}
 
 	declared := map[string]int{}

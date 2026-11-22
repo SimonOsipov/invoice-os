@@ -611,11 +611,12 @@ describe('poll edges (QA)', () => {
   it('connectorsTab_aConnectThatLandsActiveAtOnceStopsThePoll', async () => {
     vi.useFakeTimers()
     let n = 0
-    const f = mkFetch({ get: () => (++n === 1 ? listing() : listing([conn()])), post: () => pendingAnswer() })
+    const f = mkFetch({ get: () => (++n === 1 ? listing() : listing([conn()])), post: () => ({ ...conn(), consent_url: CONSENT }) })
     spyOpen()
     render(<ConnectorsView ctx={mkCtx(f)} />)
     await flush()
     await click(connectBtn(rowOf('fake'))!)
+    // The answer is active: no pending row, so only the connect's own run ends it after one refetch.
     await advance(3000)
     expect(gets(f)).toHaveLength(2)
     expect(screen.getByText('CONNECTED')).toBeTruthy()

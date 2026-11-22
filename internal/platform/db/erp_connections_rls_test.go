@@ -191,6 +191,7 @@ var erpShape = map[string]map[string]erpCol{
 		"grant_id":     {"uuid", false, ""},
 		"cursor":       {"bytea", false, ""},
 		"last_sync_at": {"timestamp with time zone", false, ""},
+		"ingest_epoch": {"bigint", true, "0"},
 		"created_at":   {"timestamp with time zone", true, "now()"},
 		"updated_at":   {"timestamp with time zone", true, "now()"},
 	},
@@ -1027,7 +1028,8 @@ func erpPublicTables(t *testing.T, q erpQuerier, phase string) []string {
 	return out
 }
 
-// The shipped Down drops exactly the two tables and the shipped Up rebuilds them.
+// The shipped Down drops exactly the two tables and the shipped Up rebuilds them. The later
+// erp_source_documents migration references both, so its Down runs first and its Up last.
 // Runs on the migrator inside a transaction that is always rolled back, so no other test sees the tables vanish.
 func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 	h := requireHarness(t)
@@ -1041,6 +1043,7 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 		t.Fatalf("migrations matching %s = %v, want exactly 1 — the erp_connections migration is not written yet", erpMigrationGlob, matches)
 	}
 	migration := matches[0]
+	later := esdMigration(t)
 	requireErpTables(t, h.super)
 
 	tx := migratorTx(t, ctx)
@@ -1054,6 +1057,9 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 		}
 	}
 
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, later, "Down")); err != nil {
+		t.Fatalf("Down body of %s failed: %v", later, err)
+	}
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Down")); err != nil {
 		t.Fatalf("Down body of %s failed: %v", migration, err)
 	}
@@ -1064,15 +1070,18 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 			dropped = append(dropped, table)
 		}
 	}
-	if want := []string{"erp_connections", "erp_grants"}; !slices.Equal(dropped, want) {
-		t.Errorf("tables the Down dropped = %v, want exactly %v", dropped, want)
+	if want := []string{"erp_connections", "erp_grants", "erp_source_documents"}; !slices.Equal(dropped, want) {
+		t.Errorf("tables the Downs dropped = %v, want exactly %v", dropped, want)
 	}
-	if len(after) != len(before)-2 {
-		t.Errorf("public tables after the Down = %d, want %d: it created or dropped something else", len(after), len(before)-2)
+	if len(after) != len(before)-3 {
+		t.Errorf("public tables after the Downs = %d, want %d: it created or dropped something else", len(after), len(before)-3)
 	}
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", migration, err)
+	}
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, later, "Up")); err != nil {
+		t.Fatalf("Up body of %s failed: %v", later, err)
 	}
 	requireErpTables(t, tx)
 	for _, p := range erpShapeProblems(tx) {

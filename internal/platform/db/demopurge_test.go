@@ -220,6 +220,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	mappingID := uuid.NewString()
 	erpGrantID := uuid.NewString()
 	erpConnID := uuid.NewString()
+	erpDocID := uuid.NewString()
 	customerID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -317,6 +318,11 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO invoices (id, tenant_id, entity_id, import_batch_id, invoice_number, status, currency, total)
 		 VALUES ($1,$2,$3,$4,'PURGE-WITNESS-1','draft','NGN',100.00)`,
 		invoiceID, tenantID, entityID, batchID)
+	requireEsdTable(t, pool)
+	plant("erp_source_documents", "id", erpDocID,
+		`INSERT INTO erp_source_documents (id, tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id)
+		 VALUES ($1,$2,$3,$4,'purge-witness-doc','r1','drafted',$5)`,
+		erpDocID, tenantID, entityID, erpConnID, invoiceID)
 	plant("line_items", "id", lineID,
 		`INSERT INTO line_items (id, tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
 		 VALUES ($1,$2,$3,1,'witness line',1.000,100.00,100.00)`,
@@ -649,10 +655,15 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 	}
 
 	// Control: the new join tables are in the live set, so their coverage below is not vacuous.
-	for _, want := range []string{"membership_clients", "invitation_clients"} {
+	for _, want := range []string{"membership_clients", "invitation_clients", "erp_source_documents"} {
 		if !slices.Contains(live, want) {
 			t.Errorf("%s is not among the live tenant_id tables — the client_access migration is not applied yet", want)
 		}
+	}
+
+	// The document references invoices and erp_connections, so its DELETE runs right before invoices'.
+	if i, j := indexOfTable(t, db.PurgeTablesForTest, "erp_source_documents"), indexOfTable(t, db.PurgeTablesForTest, "invoices"); i != j-1 {
+		t.Errorf("erp_source_documents is at %d in purgeTables and invoices at %d, want it immediately before invoices", i, j)
 	}
 
 	declared := map[string]int{}

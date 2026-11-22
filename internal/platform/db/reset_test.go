@@ -151,7 +151,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions", "erp_source_documents"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -245,11 +245,12 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	); err != nil {
 		t.Fatalf("seed erp_grants fixture: %v", err)
 	}
-	if _, err := pool.Exec(ctx,
+	var erpConnID string
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id)
-		 VALUES ($1, $2, 'fake', 'fake-co-1', 'active', $3)`,
+		 VALUES ($1, $2, 'fake', 'fake-co-1', 'active', $3) RETURNING id`,
 		tenantID, entityID, erpGrantID,
-	); err != nil {
+	).Scan(&erpConnID); err != nil {
 		t.Fatalf("seed erp_connections fixture: %v", err)
 	}
 
@@ -278,6 +279,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, marker, marker,
 	).Scan(&invoiceID); err != nil {
 		t.Fatalf("seed invoices fixture: %v", err)
+	}
+
+	requireEsdTable(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id)
+		 VALUES ($1, $2, $3, $4, 'r1', 'drafted', $5)`,
+		tenantID, entityID, erpConnID, marker, invoiceID,
+	); err != nil {
+		t.Fatalf("seed erp_source_documents fixture: %v", err)
 	}
 
 	// approval_runs' RESTRICT FK to invoices is exactly what makes a bare TRUNCATE
@@ -584,7 +594,7 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
-	for _, table := range []string{"erp_connections", "erp_grants"} {
+	for _, table := range []string{"erp_connections", "erp_grants", "erp_source_documents"} {
 		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
 			t.Errorf("%s rows after Reset = %d, want 0", table, n)
 		}

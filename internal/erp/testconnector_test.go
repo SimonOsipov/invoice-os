@@ -8,7 +8,7 @@ import (
 // testFake is the one place these tests build the fake.
 func testFake(t *testing.T) *Fake {
 	t.Helper()
-	return NewFake()
+	return NewFake(testRedirect)
 }
 
 // scriptConnector overrides ListChanged, Fetch and FetchParty; a nil script delegates to the

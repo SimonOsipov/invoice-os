@@ -274,6 +274,7 @@ func TestScopeOf_ErpConnectionEventsAreWorkspace(t *testing.T) {
 	entity := uuid.NewString()
 	for _, e := range []string{
 		"erp.connection.created", "erp.connection.authorised", "erp.connection.revoked",
+		"erp.token.deleted", "erp.token.refreshed", "erp.token.refresh_failed", "erp.connection.reauth_required",
 		"erp.document.pulled", "erp.document.skipped_duplicate", "erp.document.changed_after_clearance",
 	} {
 		if got := audit.ScopeOf(e, nil); got != audit.ScopeWorkspace {

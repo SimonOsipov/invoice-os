@@ -189,11 +189,17 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
+	erpSecrets, err := erp.SecretsFromEnv(ctx, os.Getenv, erpReg)
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
 	// The re-check and the ERP ingest share one gate.
 	gate := invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil))
 	erpw := &erp.Workers{
-		Pull:   &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
-		Ingest: &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
+		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: erpReg, Secrets: erpSecrets, Logger: app.Logger},
+		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
+		Pull:         &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
+		Ingest:       &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
 	}
 
 	q, err := queue.New(pool, queue.Config{
@@ -205,10 +211,13 @@ func main() {
 		platform.Fatal(app.Logger, "worker: queue: %v", err)
 	}
 	sw.Queue, pw.Queue, xw.River = q, q, q.River()
+	erpw.Refresh.Queue = q
 	erpw.Pull.Queue = q
 	xbw.River = q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
+
+	erpStore := erp.NewStore(pool, erpReg, erpSecrets, q).WithSecretScope(erp.SecretScopeFromEnv(os.Getenv))
 
 	// Each periodic task runs in one worker instance only.
 	leader := db.NewLeader(mustEnv("DATABASE_URL"))
@@ -223,7 +232,7 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("readiness-request-purge", (&readinesscheck.Store{Pool: pool}).PurgeExpired)))
 
-	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
+	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Secrets: erpSecrets, Logger: app.Logger}
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
 		um := &notifications.UnsubscribeMetadata{Pool: pool, Account: account, Logger: app.Logger}
@@ -278,6 +287,7 @@ func main() {
 			AI:  aiClient, Jev: jevClient},
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
+	app.Mux.Handle("POST /internal/erp/callback", erp.CallbackHandler(erpStore.Complete, app.Logger))
 	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
 	if account != nil {
 		linker = account

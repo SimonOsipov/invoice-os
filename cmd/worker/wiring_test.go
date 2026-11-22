@@ -252,6 +252,12 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"workspace_purge", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &workspacepurge.PurgeWorker{})
 		}},
+		{"erp_token_refresh", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.RefreshWorker{})
+		}},
+		{"erp_secret_delete", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.SecretDeleteWorker{})
+		}},
 		{"erp.pull", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &erp.PullWorker{})
 		}},
@@ -295,7 +301,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -311,7 +317,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
@@ -324,6 +330,11 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	if err := probes[6].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; a staff purge now runs in every mode", probes[6].kind)
 	}
+	for _, p := range probes[7:] {
+		if err := p.add(off); err == nil {
+			t.Errorf("workerBundle with contacts off does not carry %q; ERP jobs run in every mode", p.kind)
+		}
+	}
 	for _, p := range contactProbes {
 		if err := p.add(off); err != nil {
 			t.Errorf("workerBundle with contacts off carries %q (%v), want it absent", p.kind, err)
@@ -331,7 +342,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -2172,6 +2183,7 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 	accountName, _ := wtOneCall(t, f, "gotrueadmin.FromEnv")
 	qName, _ := wtOneCall(t, f, "queue.New")
 	objName, _ := wtOneCall(t, f, "document.NewS3Store")
+	secretsName, _ := wtOneCall(t, f, "erp.SecretsFromEnv")
 	readerName := ""
 	for _, stmt := range wtMainBody(t, f) {
 		as, ok := stmt.(*ast.AssignStmt)
@@ -2206,7 +2218,7 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 								got[wtExprString(kv.Key)] = wtExprString(kv.Value)
 							}
 						}
-						want := map[string]string{"Pool": poolName, "Reader": readerName, "River": qName + ".River()", "Objects": objName, "Logger": "app.Logger"}
+						want := map[string]string{"Pool": poolName, "Reader": readerName, "River": qName + ".River()", "Objects": objName, "Secrets": secretsName, "Logger": "app.Logger"}
 						if len(got) != len(want) {
 							t.Errorf("Purger literal fields = %v, want exactly %v (Accounts only under account != nil)", got, want)
 						}

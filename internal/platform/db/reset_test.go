@@ -166,7 +166,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; customers -> tenants),
+// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; erp_oauth_states -> erp_connections; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -252,6 +252,13 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, erpGrantID,
 	).Scan(&erpConnID); err != nil {
 		t.Fatalf("seed erp_connections fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_oauth_states (tenant_id, state_hash, connection_id, user_id, expires_at)
+		 VALUES ($1, $2, $3, $4, now() + interval '10 minutes')`,
+		tenantID, tokenHash(t, 32), erpConnID, userID,
+	); err != nil {
+		t.Fatalf("seed erp_oauth_states fixture: %v", err)
 	}
 
 	crrRequireTable(t, pool)
@@ -594,7 +601,7 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
-	for _, table := range []string{"erp_connections", "erp_grants", "erp_source_documents"} {
+	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents"} {
 		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
 			t.Errorf("%s rows after Reset = %d, want 0", table, n)
 		}

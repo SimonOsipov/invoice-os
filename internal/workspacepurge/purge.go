@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -24,10 +26,13 @@ var workerActor = uuid.NewSHA1(uuid.NameSpaceURL, []byte("https://ascomply.com/a
 
 var errNoAccountReader = errors.New("no account client to read a member's email")
 
+var errNoSecretStore = errors.New("no secret store to delete the workspace's ERP secrets")
+
 const (
-	stepErase = "erase"
-	stepFiles = "files"
-	stepPurge = "purge"
+	stepErase   = "erase"
+	stepFiles   = "files"
+	stepSecrets = "secrets"
+	stepPurge   = "purge"
 )
 
 // AccountReader reads the email a member's sign-in account holds; "" means the account is gone.
@@ -41,6 +46,7 @@ type Purger struct {
 	Reader   *pgxpool.Pool
 	River    *river.Client[pgx.Tx]
 	Objects  document.ObjectStore
+	Secrets  erp.SecretStore // nil = no ERP store
 	Accounts AccountReader
 	Logger   *slog.Logger // nil = slog.Default()
 }
@@ -50,6 +56,7 @@ type Result struct {
 	Purged  bool
 	Members int
 	Objects int
+	Secrets int // deletes called
 }
 
 type stepError struct {
@@ -103,7 +110,7 @@ func (p *Purger) purgeLogged(ctx context.Context, log *slog.Logger, id string) e
 		return err
 	}
 	if res.Purged {
-		log.InfoContext(ctx, "workspace purge: purged", "tenant_id", id, "members", res.Members, "objects", res.Objects)
+		log.InfoContext(ctx, "workspace purge: purged", "tenant_id", id, "members", res.Members, "objects", res.Objects, "secrets", res.Secrets)
 	}
 	return nil
 }
@@ -160,6 +167,11 @@ func (p *Purger) Purge(ctx context.Context, tenantID string) (Result, error) {
 		return Result{}, &stepError{tenantID, stepFiles, err}
 	}
 
+	secrets, err := p.deleteSecrets(ctx, tenantID)
+	if err != nil {
+		return Result{}, &stepError{tenantID, stepSecrets, err}
+	}
+
 	purged, err := p.purgeRows(ctx, tenantID, members, objects)
 	if err != nil {
 		return Result{}, &stepError{tenantID, stepPurge, err}
@@ -167,7 +179,7 @@ func (p *Purger) Purge(ctx context.Context, tenantID string) (Result, error) {
 	if !purged {
 		return Result{}, nil
 	}
-	return Result{Purged: true, Members: members, Objects: objects}, nil
+	return Result{Purged: true, Members: members, Objects: objects, Secrets: secrets}, nil
 }
 
 // dueTenants lists the tenants whose deletion is due or already started, earliest first.
@@ -275,6 +287,38 @@ func (p *Purger) eraseMembers(ctx context.Context, tenantID string) (queued, byI
 		return 0, 0, false, err
 	}
 	return queued, byID, due, nil
+}
+
+// deleteSecrets deletes every ERP secret the tenant holds or has queued for deletion; NOT_FOUND is nil
+// by the store contract. Every ref is checked before the first call, and no transaction is held across the calls.
+func (p *Purger) deleteSecrets(ctx context.Context, tenantID string) (int, error) {
+	var refs []string
+	err := db.WithinTenantTx(ctx, p.Pool, tenantID, func(tx pgx.Tx) (err error) {
+		refs, err = erp.TenantSecretRefs(ctx, tx, tenantID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(refs) == 0 {
+		return 0, nil
+	}
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref, erp.SecretPrefix) {
+			return 0, fmt.Errorf("a secret ref lacks the %q prefix", erp.SecretPrefix)
+		}
+	}
+	if p.Secrets == nil {
+		return 0, errNoSecretStore
+	}
+	n := 0
+	for _, ref := range refs {
+		n++
+		if err := p.Secrets.Delete(ctx, ref); err != nil {
+			return n, fmt.Errorf("delete secret %s: %w", ref, err)
+		}
+	}
+	return n, nil
 }
 
 // purgeRows writes the staff row, then removes the tenant's rows, in one transaction.

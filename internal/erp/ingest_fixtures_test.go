@@ -399,13 +399,13 @@ func (e *ingestEnv) withoutValidation(invoiceID string) string {
 	return s
 }
 
-type auditRow struct {
+type ingestAuditRow struct {
 	Actor   string
 	Entity  *string
 	Payload map[string]any
 }
 
-func (e *ingestEnv) audits(event string) []auditRow {
+func (e *ingestEnv) audits(event string) []ingestAuditRow {
 	e.t.Helper()
 	rows, err := e.super.Query(context.Background(),
 		"SELECT actor, entity_id::text, payload FROM audit_log WHERE tenant_id = $1 AND event = $2 ORDER BY id", e.tenant, event)
@@ -413,9 +413,9 @@ func (e *ingestEnv) audits(event string) []auditRow {
 		e.t.Fatalf("read audit_log: %v", err)
 	}
 	defer rows.Close()
-	var out []auditRow
+	var out []ingestAuditRow
 	for rows.Next() {
-		var r auditRow
+		var r ingestAuditRow
 		var raw []byte
 		if err := rows.Scan(&r.Actor, &r.Entity, &raw); err != nil {
 			e.t.Fatalf("scan audit_log: %v", err)
@@ -432,15 +432,6 @@ func (e *ingestEnv) erpAudits() int {
 	return countOf(e.t, e.super, "SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event LIKE 'erp.document.%'", e.tenant)
 }
 
-func keysOf(m map[string]any) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
-	}
-	slices.Sort(ks)
-	return ks
-}
-
 var (
 	pulledKeys  = []string{"connection_id", "invoice_id", "invoice_number", "source_doc_id", "source_revision", "system"}
 	dupKeys     = append(slices.Clone(pulledKeys), "differs", "linked")
@@ -453,7 +444,7 @@ func init() {
 }
 
 // wantAudit asserts exactly one row of event, as actor system, workspace-level, with exactly keys.
-func (e *ingestEnv) wantAudit(event string, keys []string) auditRow {
+func (e *ingestEnv) wantAudit(event string, keys []string) ingestAuditRow {
 	e.t.Helper()
 	rows := e.audits(event)
 	if len(rows) != 1 {
@@ -554,12 +545,12 @@ func (e *ingestEnv) plantDocument(p plantDoc) string {
 
 func tp(t time.Time) *time.Time             { return &t }
 func ip(i int) *int                         { return &i }
-func hashOf(in invoice.CreateInput) *string { h := ContentHash(in); return &h }
+func contentHashPtr(in invoice.CreateInput) *string { h := ContentHash(in); return &h }
 
 // takenDoc plants a drafted or linked row on invoiceID carrying the hash of what the fake serves.
 func (e *ingestEnv) takenDoc(docID, state, invoiceID string) {
 	e.t.Helper()
-	e.plantDocument(plantDoc{docID: docID, state: state, invoiceID: &invoiceID, hash: hashOf(e.mapped(docID)), hashVersion: ip(HashVersion)})
+	e.plantDocument(plantDoc{docID: docID, state: state, invoiceID: &invoiceID, hash: contentHashPtr(e.mapped(docID)), hashVersion: ip(HashVersion)})
 }
 
 func poolWithOneConn(t *testing.T) *pgxpool.Pool {

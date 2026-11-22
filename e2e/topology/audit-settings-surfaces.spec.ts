@@ -1023,7 +1023,7 @@ test('ST-05 ERP connectors: status pills and row paint on the real list', async 
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
   const rows = page.getByTestId('erp-connector-row')
-  await expect(rows, 'the stubbed list drew two rows').toHaveCount(2)
+  await expect(rows, 'fixture check: the stubbed list drew two rows').toHaveCount(2)
   await settle(page, main(page))
   const active = rows.nth(0)
   const gone = rows.nth(1)
@@ -1031,12 +1031,12 @@ test('ST-05 ERP connectors: status pills and row paint on the real list', async 
   const reads: Record<string, unknown> = {}
   for (const [label, row, text] of [['connected', active, 'CONNECTED'], ['disconnected', gone, 'DISCONNECTED']] as const) {
     const box = row.getByTestId('erp-connector-status')
-    await expect(box, `no ${text} pill`).toHaveText(text)
+    await expect(box, `fixture check: no ${text} pill`).toHaveText(text)
     reads[label] = {
       corners: await expectCorners(box, '4px', `${text} pill`),
       dot: (await styles(box.locator(':scope > span').first(), ['border-top-left-radius']))['border-top-left-radius'],
     }
-    expect((reads[label] as { dot: string }).dot, `${text} dot`).toBe('50%')
+    expect((reads[label] as { dot: string }).dot, `fixture check: ${text} dot`).toBe('50%')
   }
 
   const connect = gone.getByTestId('erp-connector-connect')
@@ -1046,9 +1046,9 @@ test('ST-05 ERP connectors: status pills and row paint on the real list', async 
   const connectPaint = await styles(connect, ['color', 'background-color'])
   const disconnectPaint = await styles(disconnect, ['color', 'background-color'])
   const tilePaint = await styles(tile, ['color'])
-  expect(connectPaint, 'Connect paint').toEqual({ color: onPrimary, 'background-color': action })
-  expect(disconnectPaint, 'Disconnect paint').toEqual({ color: fg2, 'background-color': 'rgba(0, 0, 0, 0)' })
-  expect(tilePaint.color, 'tile text').toBe(onPrimary)
+  expect(connectPaint, 'fixture check: Connect paint').toEqual({ color: onPrimary, 'background-color': action })
+  expect(disconnectPaint, 'fixture check: Disconnect paint').toEqual({ color: fg2, 'background-color': 'rgba(0, 0, 0, 0)' })
+  expect(tilePaint.color, 'fixture check: tile text').toBe(onPrimary)
   await attachShot(page, testInfo, 'settings-connectors')
 
   expect(posts, `a write reached erp-connections:\n${posts.join('\n')}`).toEqual([])

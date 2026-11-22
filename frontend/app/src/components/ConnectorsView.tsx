@@ -69,7 +69,11 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
   )
   // The last landed listing: a refetch nulls list.data, and the rows must stay put meanwhile.
   const [mirror, setMirror] = useState<Landed | null>(null)
-  if (list.data && list.data !== mirror) setMirror(list.data)
+  const [seen, setSeen] = useState<Landed | null>(null)
+  if (list.data && list.data !== seen) {
+    setSeen(list.data)
+    setMirror(list.data)
+  }
   const shown = mirror && mirror.entityId === entityId ? mirror.listing : null
   const pendingNow = shown !== null && anyPending(shown)
 
@@ -92,6 +96,8 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
   const pendingRef = useRef(pendingNow)
   pendingRef.current = pendingNow
   const pollRef = useRef<number | null>(null)
+  const loadingRef = useRef(false)
+  loadingRef.current = list.status === 'loading'
 
   useEffect(() => {
     aliveRef.current = true
@@ -110,6 +116,8 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
     pollRef.current = window.setInterval(() => {
       // After the first refetch, a listing with nothing pending ends the run.
       if (ticks >= POLL_MAX_TICKS || (ticks > 0 && !pendingRef.current)) return stopPoll()
+      // A slow list answer must land: a new run would discard it.
+      if (loadingRef.current) return
       ticks++
       runRef.current()
     }, POLL_MS)
@@ -154,6 +162,13 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
       if (tab) tab.location.href = url
       if (!aliveRef.current || entityRef.current !== eid) return
       if (!tab) setBlocked({ entityId: eid, system: row.system, url })
+      // The row shows the answered connection now, so it reads pending and the poll has a pending listing to read.
+      const { consent_url: _consent, ...landed } = answer
+      setMirror((m) =>
+        m && m.entityId === eid
+          ? { ...m, listing: { ...m.listing, connections: [...m.listing.connections.filter((c) => c.id !== landed.id), landed] } }
+          : m,
+      )
       startPoll()
     } catch (err) {
       tab?.close()

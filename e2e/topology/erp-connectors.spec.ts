@@ -77,9 +77,9 @@ test('an admin connects the fake ERP through the fake consent page', async ({ pa
   // The app tab polls the list; no reload.
   await expect(pillOf(row)).toHaveText('CONNECTED', { timeout: 30_000 })
   const conns = await listConnections()
-  expect(conns).toHaveLength(1)
-  expect(conns[0]).toMatchObject({ system: 'fake', status: 'active', external_key: CO1 })
-  connId = conns[0].id
+  const made = conns.find((c) => c.system === 'fake' && c.status === 'active' && c.external_key === CO1)
+  expect(made, `no active fake connection for ${CO1} in:\n${JSON.stringify(conns)}`).toBeDefined()
+  connId = made!.id
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -254,6 +254,7 @@ describe('connect', () => {
     await flush()
     await click(connectBtn(rowOf('fake'))!)
     expect(gets(f)).toHaveLength(1)
+    expect(screen.getByText('WAITING FOR SIGN-IN')).toBeTruthy()
     await advance(3000)
     expect(gets(f)).toHaveLength(2)
     expect(screen.getByText('WAITING FOR SIGN-IN')).toBeTruthy()
@@ -553,6 +554,59 @@ describe('leaving mid-write or mid-poll', () => {
 })
 describe('poll edges (QA)', () => {
   const pendingAnswer = () => ({ ...conn({ status: 'pending', external_key: null }), consent_url: CONSENT })
+
+  it('connectorsTab_aSlowListAnswerIsNotSupersededByThePoll', async () => {
+    vi.useFakeTimers()
+    let n = 0
+    const f = mkFetch({
+      get: () => (++n === 1 ? listing() : new Promise((r) => setTimeout(() => r(listing([conn()])), 3500))),
+      post: () => pendingAnswer(),
+    })
+    spyOpen()
+    render(<ConnectorsView ctx={mkCtx(f)} />)
+    await flush()
+    await click(connectBtn(rowOf('fake'))!)
+    await advance(3000)
+    await advance(3000)
+    await advance(2000)
+    expect(screen.getByText('CONNECTED')).toBeTruthy()
+    expect(gets(f)).toHaveLength(2)
+  })
+
+  it('connectorsTab_aFailedFirstPollRefetchDoesNotEndThePoll', async () => {
+    vi.useFakeTimers()
+    let n = 0
+    const f = mkFetch({
+      get: () => {
+        n++
+        if (n === 1) return listing()
+        if (n === 2) throw new Error('boom')
+        return n === 3 ? listing([conn({ status: 'pending' })]) : listing([conn()])
+      },
+      post: () => pendingAnswer(),
+    })
+    spyOpen()
+    render(<ConnectorsView ctx={mkCtx(f)} />)
+    await flush()
+    await click(connectBtn(rowOf('fake'))!)
+    await advance(3000)
+    expect(gets(f)).toHaveLength(2)
+    await advance(6000)
+    expect(gets(f)).toHaveLength(4)
+    expect(screen.getByText('CONNECTED')).toBeTruthy()
+  })
+
+  it('connectorsTab_theRowReadsPendingAtOnceAfterConnect', async () => {
+    vi.useFakeTimers()
+    const f = mkFetch({ get: () => listing(), post: () => pendingAnswer() })
+    spyOpen()
+    render(<ConnectorsView ctx={mkCtx(f)} />)
+    await flush()
+    await click(connectBtn(rowOf('fake'))!)
+    expect(screen.getByText('WAITING FOR SIGN-IN')).toBeTruthy()
+    expect(posts(f)).toHaveLength(1)
+    expect(gets(f)).toHaveLength(1)
+  })
 
   it('connectorsTab_aConnectThatLandsActiveAtOnceStopsThePoll', async () => {
     vi.useFakeTimers()

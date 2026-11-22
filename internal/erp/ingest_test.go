@@ -1481,16 +1481,23 @@ func TestIngest_AnotherClientsInvoiceIsNeverAdopted(t *testing.T) {
 
 func TestIngest_NumberLockSerializesDocumentsOfOneNumber(t *testing.T) {
 	e := newIngest(t)
-	docA := fakeDocument("doc-A", numOne, custOne, fakeLine{"Doc A line", "1", "100.00", "7.5"})
-	docB := fakeDocument("doc-B", numOne, custOne, fakeLine{"Doc B line", "1", "100.00", "7.5"})
-	e.onFetch = func(_ context.Context, ref DocRef) (Document, error) {
-		if ref.SourceDocID == "doc-A" {
-			return docA, nil
-		}
-		return docB, nil
+	// The connection row lock already serializes one connection's claims, so the number lock is
+	// what orders two connections of one client; a third, with another number, must not wait.
+	const numTwo = "FK1-0002"
+	c2 := e.addConnection(e.entity, "fake-co-2")
+	c3 := e.addConnection(e.entity, "fake-co-3")
+	docs := map[string]Document{
+		"doc-A": fakeDocument("doc-A", numOne, custOne, fakeLine{"Doc A line", "1", "100.00", "7.5"}),
+		"doc-B": fakeDocument("doc-B", numOne, custOne, fakeLine{"Doc B line", "1", "100.00", "7.5"}),
+		"doc-C": fakeDocument("doc-C", numTwo, custOne, fakeLine{"Doc C line", "1", "100.00", "7.5"}),
 	}
-	// Without the lock both claims pass the rival check together and the loser links to the winner's
-	// invoice before the winner settles; here the lock is held from outside so the claims must wait.
+	e.onFetch = func(_ context.Context, ref DocRef) (Document, error) { return docs[ref.SourceDocID], nil }
+	ingest := func(conn, docID string) error {
+		a := e.args(docID, "1", false)
+		a.ConnectionID = conn
+		return e.untilDone(e.worker, a)
+	}
+	// Without the lock both claims read "no invoice" together; here it is held from outside so they must wait.
 	ctx := context.Background()
 	holder, err := e.super.Begin(ctx)
 	if err != nil {
@@ -1500,13 +1507,40 @@ func TestIngest_NumberLockSerializesDocumentsOfOneNumber(t *testing.T) {
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('erp_number:' || $1 || ':' || $2, 0))`, e.entity, numOne); err != nil {
 		t.Fatal(err)
 	}
-	errs := make(chan error, 2)
-	for _, id := range []string{"doc-A", "doc-B"} {
-		go func() { errs <- e.untilDone(e.worker, e.args(id, "1", false)) }()
+	errs, other := make(chan error, 2), make(chan error, 1)
+	go func() { errs <- ingest(e.conn, "doc-A") }()
+	go func() { errs <- ingest(c2, "doc-B") }()
+	// Both claims are parked on the advisory lock, not merely slow.
+	deadline := time.Now().Add(5 * time.Second)
+	for waiting := 0; waiting < 2; {
+		waiting = countOf(t, e.super, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+		if waiting < 2 && time.Now().After(deadline) {
+			t.Errorf("claims waiting on the number lock = %d, want 2", waiting)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	time.Sleep(700 * time.Millisecond)
-	e.noDoc("doc-A")
-	e.noDoc("doc-B")
+	for _, c := range []string{e.conn, c2} {
+		if d, ok := e.docOn(c, "doc-A"); ok {
+			t.Errorf("a claim wrote a row in state %q while the number lock was held", d.State)
+		}
+		if d, ok := e.docOn(c, "doc-B"); ok {
+			t.Errorf("a claim wrote a row in state %q while the number lock was held", d.State)
+		}
+	}
+	go func() { other <- ingest(c3, "doc-C") }()
+	select {
+	case err := <-other:
+		if err != nil {
+			t.Errorf("another number's document: %v, want nil", err)
+		}
+		if d, ok := e.docOn(c3, "doc-C"); !ok || d.State != "drafted" {
+			t.Errorf("doc-C = %+v (found %v) while the lock of %s is held, want drafted", d, ok, numOne)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a document of another number waited on the lock of " + numOne)
+	}
 
 	if err := holder.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -1516,16 +1550,18 @@ func TestIngest_NumberLockSerializesDocumentsOfOneNumber(t *testing.T) {
 			t.Fatalf("Work: %v, want nil (no 23505 may surface)", err)
 		}
 	}
-	if n := e.invoices(); n != 1 {
-		t.Fatalf("invoices = %d, want 1", n)
+	if n := e.invoices(); n != 2 {
+		t.Fatalf("invoices = %d, want 2 (one for %s, one for %s)", n, numOne, numTwo)
 	}
 	states := map[string]int{}
-	for _, id := range []string{"doc-A", "doc-B"} {
-		var s string
-		mustScan(t, e.super, "SELECT state FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2", []any{e.conn, id}, &s)
-		states[s]++
+	for conn, id := range map[string]string{e.conn: "doc-A", c2: "doc-B"} {
+		d, ok := e.docOn(conn, id)
+		if !ok {
+			t.Fatalf("no row for %s", id)
+		}
+		states[d.State]++
 	}
-	if states["drafted"] != 1 || states["held"] != 1 {
-		t.Errorf("states = %v, want one drafted and one held", states)
+	if states["drafted"] != 1 || states["linked"] != 1 {
+		t.Errorf("states = %v, want one drafted and one linked to its invoice", states)
 	}
 }

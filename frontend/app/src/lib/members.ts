@@ -93,7 +93,7 @@ export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer
   { label: 'manage custom rules', admin: true, preparer: false, reviewer: false },
   { label: 'add, edit and archive clients', admin: true, preparer: false, reviewer: false },
   { label: 'export the workspace; schedule or cancel its deletion', admin: true, preparer: false, reviewer: false },
-  { label: 'manage ERP connectors', admin: true, preparer: false, reviewer: false, soon: true },
+  { label: 'manage ERP connectors', admin: true, preparer: false, reviewer: false },
   { label: 'manage signing certificates', admin: true, preparer: false, reviewer: false, soon: true },
 ]
 

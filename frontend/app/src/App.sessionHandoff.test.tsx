@@ -49,12 +49,12 @@ vi.mock('./chat', async (importOriginal) => ({
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []
-let seenDemoState: { handoff: boolean; connected: number }[] = []
+let seenDemoState: { handoff: boolean; hasConnectors: boolean }[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
     seenUsers.push(p.ctx.user)
-    seenDemoState.push({ handoff: p.ctx.handoff, connected: Object.values(p.ctx.connectors).filter(Boolean).length })
+    seenDemoState.push({ handoff: p.ctx.handoff, hasConnectors: 'connectors' in p.ctx })
     return null
   },
 }))
@@ -451,27 +451,25 @@ describe('the identity card names the person /me names (AUTH-09-02)', () => {
 })
 
 describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
-  const NO_CONNECTORS = { sap: false, quickbooks: false, oracle: false, sage: false, odoo: false, dynamics: false }
-
-  it("a hand-off session's workspace carries handoff:true and blank demo state", async () => {
+  it("a hand-off session's workspace carries handoff:true and no connectors atom", async () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
     interceptHref()
     await bootApp()
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     expect(capturedCtx?.handoff).toBe(true)
-    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect('connectors' in capturedCtx!).toBe(false)
   })
 
   // Control: green before and after.
-  it('a stored persona session keeps handoff:false and the demo state', async () => {
+  it('a stored persona session keeps handoff:false', async () => {
     configure()
     localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
     interceptHref()
     await bootApp()
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     expect(capturedCtx?.handoff).toBe(false)
-    expect(capturedCtx?.connectors.sap).toBe(true)
+    expect('connectors' in capturedCtx!).toBe(false)
   })
 
   it("a hand-off workspace's draft carries no demo invoice", async () => {
@@ -586,7 +584,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await bootApp()
     await waitForVerifiedWorkspace()
     expect(capturedCtx?.handoff).toBe(true)
-    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect('connectors' in capturedCtx!).toBe(false)
   })
 
   it('no render of a hand-off boot shows demo state, stored or redeemed', async () => {
@@ -597,7 +595,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0)).toEqual([])
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.hasConnectors)).toEqual([])
 
     cleanup()
     seenDemoState = []
@@ -608,7 +606,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitForVerifiedWorkspace()
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0)).toEqual([])
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.hasConnectors)).toEqual([])
   })
 
   // Control: the same capture reads the demo state on a persona session.
@@ -620,7 +618,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== false || r.connected !== 2)).toEqual([])
+    expect(seenDemoState.filter((r) => r.handoff !== false || r.hasConnectors)).toEqual([])
   })
 })
 

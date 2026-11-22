@@ -1,5 +1,5 @@
 // RED specs (task-396, BUG-03-07 item 6, Mode A) — pin the '19-check MBS rule pack' copy
-// and the untouched readinessNote fence before the executor edits data.tsx/connectors.ts.
+// and the untouched readinessNote fence before the executor edits data.tsx/lib/connectorDetailMock.ts.
 // vitest environment is 'node' (vitest.config.ts) — no jsdom, no component rendered.
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { CFG, CONNECTOR_DEFS } from './data'
-import { connectorDetail } from './lib/connectors'
+import { CFG } from './data'
+import { CONNECTOR_DEFS, connectorDetail } from './lib/connectorDetailMock'
 
 // Recursively walks `rootDir` for .ts/.tsx files containing `needle`. Duplicated from
 // importFlow.test.ts's own scanForIdentifier — test-only helper in an independently

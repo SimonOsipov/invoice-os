@@ -34,7 +34,7 @@ export type AuditedAtom = {
 // `correctly-reset` covers TWO shapes, deliberately not split into a fifth verdict:
 // (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
-// Shape (b): suspended, bootPath/bootSearch, seed, sandbox, connectors,
+// Shape (b): suspended, bootPath/bootSearch, seed, sandbox,
 // connectorMappings, policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
@@ -312,15 +312,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     verdict: 'deliberate',
     citation: { text: '// settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.' },
     note: 'Durable by design (App.tsx#navigate); popstate re-clamps it by `mode` at App.tsx#onPopState. A tab choice is not company data.',
-  },
-  {
-    binding: 'connectors, setConnectors',
-    name: 'connectors',
-    kind: 'useState',
-    resetBySwitchClient: false,
-    routes: ['/settings', '/settings/<tab>'],
-    verdict: 'correctly-reset',
-    note: 'Never fetched -- seeded from the initialConnectors literal (lib/connectors.ts#initialConnectors) and toggled locally, so it has no company dimension to go stale.',
   },
   {
     binding: 'connectorMappings, setConnectorMappings',

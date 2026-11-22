@@ -2209,6 +2209,9 @@ describe('the capability matrix card', () => {
     const soonRows = CAPABILITY_ROWS.filter((c) => c.soon)
     expect(soonRows.length).toBeGreaterThan(0)
     expect(within(body).getAllByTestId('role-soon-mark')).toHaveLength(soonRows.length)
+    expect(soonRows).toHaveLength(1)
+    const erpRow = rows[1 + CAPABILITY_ROWS.findIndex((c) => c.label === 'manage ERP connectors')]
+    expect(within(erpRow).getAllByRole('cell').map((c) => c.textContent)).toEqual(['Yes', 'No', 'No'])
     expect(body.textContent).toContain(CAPABILITY_FOOTNOTE)
 
     fireEvent.click(toggle)

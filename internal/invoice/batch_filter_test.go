@@ -552,10 +552,7 @@ func TestStoreList_RuleKeyFilterIsParameterised(t *testing.T) {
 // matches only via invoice_number ("zebra"), a second matches only via
 // buyer_name ("acme") -- proving the OR spans both columns, not just one.
 // {Query: "%"} must match NOTHING (0 rows): the literal "%" is escaped
-// before binding, deliberately reversing portfolio's own unescaped ILIKE
-// idiom (portfolio_test.go's TestStoreList_SearchQWildcardIsNotEscaped,
-// which asserts q="%" matches EVERY row there) -- portfolio/* is untouched
-// by this change.
+// before binding.
 func TestStoreList_QueryMatchesNumberOrBuyer(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

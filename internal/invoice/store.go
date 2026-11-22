@@ -753,14 +753,8 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 // ESCAPE '\' clause. Order matters: backslash FIRST, or the backslashes this
 // function itself introduces get escaped a second time.
 //
-// This deliberately diverges from internal/portfolio's List, whose q is bound
-// but NOT escaped -- a ruling pinned there by
-// TestStoreList_SearchQWildcardIsNotEscaped, whose own comment anticipated a
-// future story wanting literal-search semantics. This is that story
-// (INVCR-01-06): across a 500-row import review, a stray "%" silently
-// matching all 500 is a worse lie than 0 results. portfolio/* is NOT changed,
-// so the same typed "%" matches everything on Entities and nothing here --
-// an accepted, flagged divergence.
+// A stray "%" silently matching all rows is a worse lie than 0 results
+// (INVCR-01-06); internal/portfolio's List escapes q the same way.
 func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "%", `\%`)

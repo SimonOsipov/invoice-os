@@ -99,6 +99,16 @@ func requireAdmin(ctx context.Context, tx pgx.Tx, subject string) error {
 	return nil
 }
 
+// escapeLike makes LIKE metacharacters in q match literally under ESCAPE '\'.
+// Package-local copy (as internal/audit does): internal/invoice imports this
+// package, so it cannot be shared from there. Backslash first.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 // List returns the caller's tenant's business_entities filtered by f
 // (status, name/tin search), ordered name ASC, id ASC, paginated by
 // f.Limit/f.Offset, plus the total filtered count (ignoring limit/offset)
@@ -120,8 +130,15 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
 		}
 		if f.Q != "" {
-			args = append(args, f.Q)
-			conditions = append(conditions, fmt.Sprintf("(name ILIKE '%%'||$%d||'%%' OR tin ILIKE '%%'||$%d||'%%')", len(args), len(args)))
+			// TINs are stored without their hyphen, so the tin arm matches q with hyphens
+			// removed; the name arm keeps q as typed. A hyphen-only q adds no tin arm.
+			args = append(args, escapeLike(f.Q))
+			clause := fmt.Sprintf(`name ILIKE '%%'||$%d||'%%' ESCAPE '\'`, len(args))
+			if tinQ := strings.ReplaceAll(f.Q, "-", ""); tinQ != "" {
+				args = append(args, escapeLike(tinQ))
+				clause += fmt.Sprintf(` OR tin ILIKE '%%'||$%d||'%%' ESCAPE '\'`, len(args))
+			}
+			conditions = append(conditions, "("+clause+")")
 		}
 
 		where := ""

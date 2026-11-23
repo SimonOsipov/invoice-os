@@ -339,10 +339,48 @@ func TestFake_ValidateKnownScopeOnly(t *testing.T) {
 	}
 }
 
-func TestFake_UnsupportedOperations(t *testing.T) {
+func TestFake_WriteBackStoresPerDocument(t *testing.T) {
 	f := NewFake(testRedirect)
-	if _, err := f.WriteBack(ctx, cr, DocRef{}, WriteBack{}); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("WriteBack: %v", err)
+	r1 := DocRef{SourceDocID: "fake-co-1-inv-1", SourceRevision: "1", Scope: "fake-co-1"}
+	r2 := DocRef{SourceDocID: "fake-co-2-inv-1", SourceRevision: "1", Scope: "fake-co-2"}
+	if _, ok := f.LastWriteBack("fake-co-1", r1.SourceDocID); ok {
+		t.Fatal("an unwritten document reads as written")
+	}
+	for ref, irn := range map[*DocRef]string{&r1: "IRN-1", &r2: "IRN-2"} {
+		got, err := f.WriteBack(ctx, cr, *ref, WriteBack{IRN: irn, Fields: []string{"accepted"}, Note: "n " + irn})
+		if err != nil || got != *ref {
+			t.Fatalf("WriteBack %s = %+v, %v; want the ref unchanged", irn, got, err)
+		}
+	}
+	for _, c := range []struct {
+		ref DocRef
+		irn string
+	}{{r1, "IRN-1"}, {r2, "IRN-2"}} {
+		wb, ok := f.LastWriteBack(c.ref.Scope, c.ref.SourceDocID)
+		if !ok || wb.IRN != c.irn || wb.Note != "n "+c.irn || len(wb.Fields) != 1 {
+			t.Errorf("LastWriteBack(%s) = %+v, %v", c.ref.Scope, wb, ok)
+		}
+	}
+	if _, ok := f.LastWriteBack("fake-co-1", "fake-co-1-inv-2"); ok {
+		t.Error("another document of the company reads as written")
+	}
+}
+
+func TestFake_WriteBackRefusesUnknownScopeAndDocument(t *testing.T) {
+	f := NewFake(testRedirect)
+	if _, err := f.WriteBack(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "nope"}, WriteBack{IRN: "x"}); !errors.Is(err, ErrUnknownScope) {
+		t.Errorf("unknown scope: %v", err)
+	}
+	if _, err := f.WriteBack(ctx, cr, DocRef{SourceDocID: "fake-co-2-inv-1", Scope: "fake-co-1"}, WriteBack{IRN: "x"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another company's document: %v", err)
+	}
+	if _, err := f.WriteBack(ctx, cr, DocRef{SourceDocID: "missing", Scope: "fake-co-1"}, WriteBack{IRN: "x"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown document: %v", err)
+	}
+	for _, c := range [][2]string{{"fake-co-1", "fake-co-2-inv-1"}, {"fake-co-1", "missing"}, {"nope", "fake-co-1-inv-1"}} {
+		if _, ok := f.LastWriteBack(c[0], c[1]); ok {
+			t.Errorf("a refused write was stored under %v", c)
+		}
 	}
 }
 

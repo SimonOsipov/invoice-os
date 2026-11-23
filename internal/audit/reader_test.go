@@ -277,6 +277,7 @@ func TestScopeOf_ErpConnectionEventsAreWorkspace(t *testing.T) {
 		"erp.token.deleted", "erp.token.refreshed", "erp.token.refresh_failed", "erp.connection.reauth_required",
 		"erp.document.pulled", "erp.document.skipped_duplicate", "erp.document.changed_after_clearance",
 		"erp.mapping.changed",
+		"erp.writeback.succeeded", "erp.writeback.failed",
 	} {
 		if got := audit.ScopeOf(e, nil); got != audit.ScopeWorkspace {
 			t.Errorf("ScopeOf(%q, nil) = %q, want %q", e, got, audit.ScopeWorkspace)

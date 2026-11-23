@@ -28,6 +28,7 @@ paths:
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
 - Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled`, `workspace.purge_started` or `workspace.purge_refused` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload. A refusal row also carries `refusal`, one of `name_mismatch`, `underway`, `not_scheduled`, `house`, `same_approver`, `waiting_period`. A not-found tenant, a non-staff caller and a 400 from request-body or reason validation write no row.
+- Write `erp.writeback.succeeded` and `erp.writeback.failed` only from `internal/erp/writeback.go`, actor `system`, with `system`, `connection_id`, `source_doc_id`, `invoice_id`, `invoice_number`, `outcome` and `result_version`; plus `irn` on a succeeded accepted write and `failure` on a failed one. Both are workspace-level.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.

@@ -920,6 +920,7 @@ func TestRLS_ErpSourceDocumentsMigrationDownUp(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 	migration := esdMigration(t)
+	latest := ewbMigration(t)
 	requireEsdTable(t, h.super)
 
 	tx := migratorTx(t, ctx)
@@ -929,6 +930,10 @@ func TestRLS_ErpSourceDocumentsMigrationDownUp(t *testing.T) {
 	before := erpPublicTables(t, tx, "before the Down")
 	if !slices.Contains(before, esdTable) {
 		t.Fatalf("%s is not among the public tables before the Down: %v", esdTable, before)
+	}
+
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, latest, "Down")); err != nil {
+		t.Fatalf("Down body of %s failed: %v", latest, err)
 	}
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Down")); err != nil {
@@ -941,8 +946,8 @@ func TestRLS_ErpSourceDocumentsMigrationDownUp(t *testing.T) {
 			dropped = append(dropped, table)
 		}
 	}
-	if !slices.Equal(dropped, []string{esdTable}) || len(after) != len(before)-1 {
-		t.Errorf("tables the Down dropped = %v (public tables %d -> %d), want exactly [%s]", dropped, len(before), len(after), esdTable)
+	if !slices.Equal(dropped, []string{esdTable, ewbTable}) || len(after) != len(before)-2 {
+		t.Errorf("tables the Downs dropped = %v (public tables %d -> %d), want exactly [%s %s]", dropped, len(before), len(after), esdTable, ewbTable)
 	}
 	if esdHasColumn(t, tx, "invoices", "erp_connection_id") {
 		t.Error("invoices.erp_connection_id is still there after the Down")
@@ -953,6 +958,9 @@ func TestRLS_ErpSourceDocumentsMigrationDownUp(t *testing.T) {
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", migration, err)
+	}
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, latest, "Up")); err != nil {
+		t.Fatalf("Up body of %s failed: %v", latest, err)
 	}
 	requireEsdTable(t, tx)
 	for _, p := range esdShapeProblems(tx, false) {

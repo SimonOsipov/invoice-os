@@ -108,6 +108,8 @@ var (
 	ErrBadCursor    = errors.New("erp: cursor not recognised")
 	// ErrGrantRevoked is permanent: the vendor ended the grant, so a refresh never retries it.
 	ErrGrantRevoked = errors.New("erp: grant revoked by the vendor")
+	// ErrRevisionConflict: a write named a revision the vendor no longer holds.
+	ErrRevisionConflict = errors.New("erp: the document changed in the vendor")
 )
 
 // Connector is one vendor. WriteBack returns the new revision for vendors that

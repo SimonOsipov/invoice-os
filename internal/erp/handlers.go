@@ -249,16 +249,44 @@ func DisconnectHandler(disconnect func(ctx context.Context, entityID, connection
 	}
 }
 
-// Red-test stubs (ERPF-08-01): replaced by the implementation.
+// OverviewHandler serves GET /v1/entities/{id}/erp-connections/{connection}/overview. It calls no gate.
 func OverviewHandler(overview func(ctx context.Context, entityID, connectionID string) (Overview, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		v, err := overview(r.Context(), r.PathValue("id"), r.PathValue("connection"))
+		if err != nil {
+			fail(w, r, log, "read erp overview", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, v)
 	}
 }
 
+// MarksHandler serves GET /v1/entities/{id}/invoices/{invoice}/erp-marks. It calls no gate.
 func MarksHandler(marks func(ctx context.Context, entityID, invoiceID string) ([]DocumentMark, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		m, err := marks(r.Context(), r.PathValue("id"), r.PathValue("invoice"))
+		if err != nil {
+			fail(w, r, log, "read erp marks", err)
+			return
+		}
+		if m == nil {
+			m = []DocumentMark{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"marks": m})
 	}
 }
 

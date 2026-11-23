@@ -30,4 +30,5 @@ paths:
 - Save a mapping or lookup only through `Store.SaveMapping` or `Store.SaveLookups`: the admin check first, values checked against `nrs_codes`, one `erp.mapping.changed`.
 - Enqueue `erp.writeback` only through `submission.ResultSink` inside the terminal `OncePerJob` closure, before its audit call. Write back only what `Capabilities` allow; never write `invoices` or `erp_source_documents` from the write-back.
 - Receive a vendor webhook only in `erp.Webhooks.Receive`: call `VerifyWebhook` before any database read, resolve connections only through `public.erp_webhook_targets`, enqueue `erp.pull` in each target's tenant and skip a locked workspace. Answer 200 when nothing matches. Log no body, header, signature, key or address.
+- Read a connection's documents, write-backs and invoice marks only through `Store.Overview` and `Store.Marks`: read-only seam, no role check, the client checked in SQL, 404 for anything outside it.
 - Ensure vendor subscriptions only in the `erp-subscriptions` leader task, per active connection of a system that reports `Webhooks`, with no transaction held during the vendor call.

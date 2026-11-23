@@ -29,6 +29,8 @@ import {
   DISCONNECT_KEEP,
   disconnectQuestion,
   listErpConnections,
+  POLL_MAX_TICKS,
+  POLL_MS,
   safeConsentUrl,
   statusPill,
   syncLine,
@@ -38,10 +40,6 @@ import {
 } from '../lib/erpConnections'
 import { viewerIsAdmin } from '../lib/members'
 import type { PlatformCtx } from '../types'
-
-const POLL_MS = 3000
-// A consent state lives 10 minutes, so a run is 200 ticks of 3 s.
-const POLL_MAX_TICKS = 200
 
 // The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
 const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }

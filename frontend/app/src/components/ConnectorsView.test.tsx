@@ -649,7 +649,7 @@ describe('manage', () => {
       render(<ConnectorsView ctx={mkCtx(f, { members: me(role) })} />)
       await screen.findByText('Fake ERP')
       expect(screen.getAllByTestId('erp-connector-manage'), role).toHaveLength(2)
-      expect(manageBtn(rowOf('fake')), role).toBeTruthy()
+      expect(manageBtn(rowOf('fake'))?.textContent, role).toBe('Manage')
       expect(manageBtn(rowOf('other')), role).toBeTruthy()
       expect(manageBtn(rowOf('third')), role).toBeNull()
       cleanup()

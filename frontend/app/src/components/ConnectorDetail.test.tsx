@@ -331,6 +331,8 @@ describe('field mapping', () => {
     await screen.findByText('Lookups open once the connection is signed in.')
     expect(m.f.mock.calls.filter((c) => c[0].includes('erp-lookups'))).toHaveLength(0)
     expect(screen.getByTestId('erp-detail-header').textContent).toContain('ERP company not chosen yet')
+    // No company means no lookups to wait for: the modal still opens for the field rows.
+    await waitFor(() => expect(screen.getByTestId('erp-detail-mapping-edit')).toBeTruthy())
   })
 
   it('connectorDetail_editWaitsForAFailedLookupsRead', async () => {

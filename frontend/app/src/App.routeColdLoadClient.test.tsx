@@ -270,7 +270,8 @@ describe('cold load of /settings/connectors/<id>', () => {
   const conn = { id: CONN_ID, entity_id: ENTITY_SECOND, system: 'fake', external_key: null, status: 'active', last_sync_at: null, created_at: '', updated_at: '' }
   const missing = () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) })
 
-  function routeConnectorFetch(ownerEntity: string | null) {
+  type ListOpts = { listGate?: Promise<void>; listFails?: boolean }
+  function routeConnectorFetch(ownerEntity: string | null, o: ListOpts = {}) {
     const base = routeFetchImpl()
     vi.stubGlobal(
       'fetch',
@@ -281,7 +282,11 @@ describe('cold load of /settings/connectors/<id>', () => {
             ? ok({ connection: conn, activity: { since: '', counts: { pulled: 0, pending: 0, drafted: 0, linked: 0, held: 0, failed: 0, deleted: 0 }, documents: [] }, writebacks: [], held: [] })
             : missing()
         }
-        if (m) return ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+        if (m) {
+          if (o.listFails) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+          const list = ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+          return o.listGate ? o.listGate.then(() => list) : list
+        }
         // The catch-all body has no `fields`; the real mapping read always carries it.
         if (/\/erp-mappings\//.test(url)) return ok({ fields: [{ target: 'invoice_no', label: 'Invoice no', source_path: 'DocNum', origin: 'platform' }] })
         if (/\/erp-lookups\//.test(url)) return ok({ lookups: [] })
@@ -294,8 +299,8 @@ describe('cold load of /settings/connectors/<id>', () => {
     return (globalThis.fetch as unknown as (u: string) => Promise<unknown>).bind(globalThis)
   }
 
-  async function boot() {
-    window.history.replaceState(null, '', `/settings/connectors/${CONN_ID}`)
+  async function boot(state: unknown = null) {
+    window.history.replaceState(state, '', `/settings/connectors/${CONN_ID}`)
     localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
     vi.resetModules()
     const { default: App } = await import('./App')
@@ -311,6 +316,47 @@ describe('cold load of /settings/connectors/<id>', () => {
     expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
     expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
     expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  // A reload keeps the stamp {e, m} of the entry; the boot reads none of it, so the owner is found by the search.
+  it('coldLoad_aReloadOfTheDetailKeepsItUnderItsClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot({ e: ENTITY_SECOND, m: 'an-earlier-mount' })
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  it('coldLoad_theOwnerLoadsWithoutAFrameOfNotInTheClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    let flashed = false
+    const watch = new MutationObserver((records) => {
+      for (const r of records)
+        for (const n of r.addedNodes)
+          if (n instanceof Element && (n.matches('[data-testid="erp-detail-not-found"]') || n.querySelector('[data-testid="erp-detail-not-found"]'))) flashed = true
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    watch.disconnect()
+    expect(flashed, 'a committed "This connection is not in ..." between the adoption and the owner overview').toBe(false)
+  })
+
+  it('coldLoad_theNotInSentenceWaitsForTheSearch', async () => {
+    let release!: () => void
+    const listGate = new Promise<void>((r) => (release = r))
+    routeConnectorFetch(null, { listGate })
+    await boot()
+    await waitFor(() => expect((fetch as unknown as { mock: { calls: string[][] } }).mock.calls.some((c) => /entities\/[^/]+\/erp-connections$/.test(c[0])), 'the search read a list').toBe(true))
+    expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
+    await act(async () => release())
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found')).toBeTruthy())
+  })
+
+  it('coldLoad_aListThatFailsEndsTheSearchAsNotFound', async () => {
+    routeConnectorFetch(ENTITY_SECOND, { listFails: true })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found').textContent).toContain('Alpha'))
   })
 
   it('coldLoad_aConnectionOfNoClientStaysNotFound', async () => {

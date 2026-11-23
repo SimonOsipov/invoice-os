@@ -22,7 +22,7 @@ var ErrUnknownWebhookSystem = errors.New("erp: no webhook receiver for this syst
 // ErrWebhookUnverified is a webhook the connector refused.
 var ErrWebhookUnverified = errors.New("erp: webhook not verified")
 
-// webhookEnvelopeLimit bounds the gateway's forwarded envelope (D16, D33).
+// webhookEnvelopeLimit bounds the gateway's forwarded envelope.
 const webhookEnvelopeLimit = 128 << 10
 
 // Webhooks turns a verified vendor webhook into one erp.pull per active target connection.
@@ -54,6 +54,7 @@ func (w *Webhooks) Receive(ctx context.Context, system string, h http.Header, bo
 		if hint.Scope == "" || seen[hint.Scope] {
 			continue
 		}
+		// ceiling: scopes past maxWebhookScopes wait for the pull sweep; revisit if a vendor batches more companies
 		if len(scopes) == maxWebhookScopes {
 			break
 		}

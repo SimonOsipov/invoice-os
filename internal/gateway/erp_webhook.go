@@ -13,7 +13,7 @@ import (
 
 const (
 	erpWebhookMaxBody   = 64 << 10
-	erpWebhookMaxHeader = 16 << 10         // of the JSON encoding, so the envelope stays under the worker's 128 KiB (D33)
+	erpWebhookMaxHeader = 16 << 10         // of the JSON encoding, so the envelope stays under the worker's 128 KiB
 	ERPWebhookTimeout   = 10 * time.Second // the client timeout cmd/gateway sets; past it the vendor gets 503 and retries
 )
 

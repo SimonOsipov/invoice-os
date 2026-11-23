@@ -640,7 +640,7 @@ func TestWebhookHandler_StatusMapping(t *testing.T) {
 	}
 }
 
-// The gateway forwards at most 64 KiB of body and 16 KiB of JSON-encoded headers (D16, D33).
+// The gateway forwards at most 64 KiB of body and 16 KiB of JSON-encoded headers.
 func TestWebhookHandler_AcceptsTheLargestForwardedEnvelope(t *testing.T) {
 	const name = "X-Fake-Signature"
 	overhead := len(mustJSON(t, http.Header{name: {""}}))

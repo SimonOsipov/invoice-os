@@ -1,10 +1,8 @@
 // A signed fake webhook is accepted and an unsigned one refused, over the deployed gateway (the preview runs the fake).
-// Status codes only; the connected case acts on a client this run created.
+// Status codes only; the enqueue is proven by the DB-backed TestReceive_* tests in internal/erp.
 import { createHmac } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { login, createEntity, apiBase, PERSONAS } from './client'
-import { freshTin } from './fixtures'
-import { connectFake } from './erpFake'
+import { apiBase } from './client'
 
 const FAKE = 'fake' // fakeSystem in internal/erp/fake.go
 const FAKE_KEY = 'fake-co-1' // fakeSeed key in internal/erp/fake_seed.go
@@ -33,18 +31,6 @@ test.describe('ERP webhooks (API E2E, over the deployed gateway)', () => {
 
   test('a signed POST naming an unknown company answers 200', async () => {
     const body = event('no-such-company')
-    expect((await post(FAKE, body, sign(body))).status).toBe(200)
-  })
-
-  test('a signed POST naming a company connected by this run answers 200', async () => {
-    const admin = await login(PERSONAS.A)
-    const tin = freshTin()
-    const entity = await createEntity(admin, {
-      name: `ERP webhook ${tin}`,
-      tin,
-    })
-    await connectFake(admin, entity.id, FAKE_KEY)
-    const body = event(FAKE_KEY)
     expect((await post(FAKE, body, sign(body))).status).toBe(200)
   })
 

@@ -6,8 +6,7 @@
 
 import { useState } from 'react'
 
-import type { ConnectorDef } from '../data'
-import { mappingFor } from '../lib/connectors'
+import { mappingFor, type ConnectorDef } from '../lib/connectorDetailMock'
 import { arrowGlyph, closeGlyph } from '../glyphs'
 import type { FieldMapRow, PlatformCtx } from '../types'
 

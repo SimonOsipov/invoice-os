@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/url"
 	"slices"
 	"strings"
@@ -36,8 +35,10 @@ func NewFake(redirect *url.URL) *Fake {
 	return &Fake{redirect: redirect, writes: map[string]WriteBack{}}
 }
 
-func (*Fake) System() string             { return fakeSystem }
-func (*Fake) Capabilities() Capabilities { return Capabilities{Note: true, CustomFieldSlots: 2} }
+func (*Fake) System() string { return fakeSystem }
+func (*Fake) Capabilities() Capabilities {
+	return Capabilities{Webhooks: true, Note: true, CustomFieldSlots: 2}
+}
 
 // Authorize builds the fake consent page's URL.
 func (f *Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
@@ -209,8 +210,10 @@ func (f *Fake) LastWriteBack(scope, docID string) (WriteBack, bool) {
 	return wb, ok
 }
 
-func (*Fake) VerifyWebhook(context.Context, http.Header, []byte) ([]Hint, error) {
-	return nil, ErrUnsupported
+// EnsureSubscriptions has nothing to register; it only refuses an unseeded company.
+func (*Fake) EnsureSubscriptions(_ context.Context, _ Credentials, scope string) error {
+	if _, ok := fakeSeed[scope]; !ok {
+		return ErrUnknownScope
+	}
+	return nil
 }
-
-func (*Fake) EnsureSubscriptions(context.Context, Credentials, string) error { return ErrUnsupported }

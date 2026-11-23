@@ -277,6 +277,8 @@ func main() {
 	if len(erpReg) > 0 {
 		sweeper := &erp.Sweeper{Reader: readerPool, Pool: pool, River: q.River(), Registry: erpReg, Logger: app.Logger}
 		app.AddBackgroundWorker(codelist.NewWorker(erp.PullInterval, leader.Lead("erp-pull", sweeper.SweepOnce)))
+		keeper := &erp.SubscriptionKeeper{Reader: readerPool, Pool: pool, Registry: erpReg, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(erp.SubscriptionInterval, leader.Lead("erp-subscriptions", keeper.RunOnce)))
 	}
 
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}
@@ -293,6 +295,8 @@ func main() {
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
 	app.Mux.Handle("POST /internal/erp/callback", erp.CallbackHandler(erpStore.Complete, app.Logger))
+	hooks := &erp.Webhooks{Pool: pool, River: q.River(), Registry: erpReg}
+	app.Mux.Handle("POST /internal/erp/webhooks/{system}", erp.WebhookHandler(hooks.Receive, app.Logger))
 	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
 	if account != nil {
 		linker = account

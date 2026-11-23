@@ -398,8 +398,16 @@ func TestRLS_ErpTablesForceRLSAndPolicyDeclared(t *testing.T) {
 			got[name] = p
 		}
 		rows.Close()
-		if len(got) != 1 {
-			t.Errorf("policies on %s = %d (%v), want exactly 1 (tenant_isolation)", table, len(got), got)
+		// erp_connections also carries the webhook lookup role's SELECT policy.
+		wantN := 1
+		if table == "erp_connections" {
+			wantN = 2
+			if wl := got["erp_connection_webhook_lookup"]; wl.cmd != "SELECT" || strings.Join(wl.roles, ",") != "auth_hook_reader" {
+				t.Errorf("erp_connection_webhook_lookup cmd/roles = %s/%v, want SELECT/[auth_hook_reader]", wl.cmd, wl.roles)
+			}
+		}
+		if len(got) != wantN {
+			t.Errorf("policies on %s = %d (%v), want %d", table, len(got), got, wantN)
 		}
 		iso, ok := got["tenant_isolation"]
 		if !ok {
@@ -904,6 +912,12 @@ func TestRLS_ErpTablesGrantMatrix(t *testing.T) {
 		}
 		crows.Close()
 		var wantColACL []string
+		if c.table == "erp_connections" {
+			// The webhook lookup role's SELECT on the key columns.
+			for _, col := range []string{"external_key", "id", "status", "system", "tenant_id"} {
+				wantColACL = append(wantColACL, col+":auth_hook_reader:SELECT")
+			}
+		}
 		for _, col := range c.updateCols {
 			wantColACL = append(wantColACL, col+":invoice_app:UPDATE")
 		}

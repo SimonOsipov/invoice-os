@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/publiccheck"
 	"github.com/SimonOsipov/invoice-os/internal/readinesscheck"
 )
@@ -295,5 +297,33 @@ func TestWorkerRoutes_ERPCallbackNeedsTheGatewayToken(t *testing.T) {
 	answer, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(answer)) != `{"outcome":"invalid"}` {
 		t.Errorf("POST %s with the gateway token = %d %s, want 200 {\"outcome\":\"invalid\"}", route, resp.StatusCode, answer)
+	}
+}
+
+// The gateway forwards a vendor webhook here; the ID token is checked by Cloud Run, so only the gateway token is observable.
+func TestWorkerRoutes_ERPWebhookNeedsTheGatewayToken(t *testing.T) {
+	base := bootWorker(t, "pr-1")
+	const route = "/internal/erp/webhooks/fake"
+	b := []byte(`{"events":[{"company":"fake-co-none","invoice":"x"}]}`)
+	envelope := `{"headers":{"X-Fake-Signature":["` + erp.FakeWebhookSignature(b) + `"]},"body":"` + base64.StdEncoding.EncodeToString(b) + `"}`
+	for name, tok := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
+		if got := post(t, base+route, tok, strings.NewReader(envelope)); got != http.StatusUnauthorized {
+			t.Errorf("POST %s with %s = %d, want 401", route, name, got)
+		}
+	}
+	// The control: with the token a signed envelope for an unknown company is accepted, which only the mounted handler answers (an unmounted route is 404).
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+route, strings.NewReader(envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Gateway-Token", "gw-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(answer)) != `{"outcome":"accepted"}` {
+		t.Errorf("POST %s with the gateway token = %d %s, want 200 {\"outcome\":\"accepted\"}", route, resp.StatusCode, answer)
 	}
 }

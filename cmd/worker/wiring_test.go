@@ -1878,35 +1878,45 @@ func TestOnlyTheWorkerRunsBackgroundWork(t *testing.T) {
 	}
 }
 
-// The pull sweep has nothing to pull with no connector registered: its ticker sits in a branch on the registry's length.
+// The pull sweep and the subscription keeper have nothing to run with no connector registered: each ticker sits in a branch on the registry's length, at its own interval.
 func TestWorkerMain_ERPPullTickerOnlyWithAConnector(t *testing.T) {
 	isLit := func(e ast.Expr, v string) bool { l, ok := e.(*ast.BasicLit); return ok && l.Value == v }
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse cmd/worker/main.go: %v", err)
 	}
-	guarded, found := false, false
-	ast.Inspect(f, func(n ast.Node) bool {
-		ifs, ok := n.(*ast.IfStmt)
-		if !ok {
-			return true
-		}
-		ast.Inspect(ifs.Body, func(m ast.Node) bool {
-			if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], `"erp-pull"`) {
-				found = true
-				ast.Inspect(ifs.Cond, func(c ast.Node) bool {
-					if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
-						guarded = true
-					}
-					return true
-				})
+	for _, task := range []struct{ name, interval string }{{`"erp-pull"`, "erp.PullInterval"}, {`"erp-subscriptions"`, "erp.SubscriptionInterval"}} {
+		guarded, found, ticks := false, false, ""
+		ast.Inspect(f, func(n ast.Node) bool {
+			if nw, ok := n.(*ast.CallExpr); ok && wtCallName(nw.Fun) == "codelist.NewWorker" && len(nw.Args) == 2 {
+				if lead, ok := nw.Args[1].(*ast.CallExpr); ok && len(lead.Args) == 2 && isLit(lead.Args[0], task.name) {
+					ticks = wtCallName(nw.Args[0])
+				}
 			}
+			ifs, ok := n.(*ast.IfStmt)
+			if !ok {
+				return true
+			}
+			ast.Inspect(ifs.Body, func(m ast.Node) bool {
+				if call, ok := m.(*ast.CallExpr); ok && wtCallName(call.Fun) == "leader.Lead" && len(call.Args) == 2 && isLit(call.Args[0], task.name) {
+					found = true
+					ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+						if lc, ok := c.(*ast.CallExpr); ok && wtCallName(lc.Fun) == "len" {
+							guarded = true
+						}
+						return true
+					})
+				}
+				return true
+			})
 			return true
 		})
-		return true
-	})
-	if !found || !guarded {
-		t.Errorf("the erp-pull task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", found, guarded)
+		if !found || !guarded {
+			t.Errorf("the %s task is found=%v guarded by a len() branch=%v, want both: it must run only with a connector", task.name, found, guarded)
+		}
+		if ticks != task.interval {
+			t.Errorf("the %s task ticks every %q, want %s", task.name, ticks, task.interval)
+		}
 	}
 }
 
@@ -1954,7 +1964,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		return true
 	})
 	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
-		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`}
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`, `"account-event-handoff"`, `"unsubscribe-metadata"`, `"readiness-request-purge"`, `"unconfirmed-purge"`, `"erp-pull"`, `"erp-subscriptions"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}

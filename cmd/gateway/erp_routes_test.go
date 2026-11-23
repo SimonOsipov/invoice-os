@@ -54,6 +54,11 @@ func TestGatewayRoutes_ERPPagesFollowTheMode(t *testing.T) {
 				mux.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
 				return rec
 			}
+			hookBefore := workerCalls.Load()
+			hook := do(http.MethodPost, "/erp/webhooks/fake")
+			if forwarded := workerCalls.Load() == hookBefore+1; forwarded != c.pages || (!c.pages && hook.Code != http.StatusNotFound) {
+				t.Errorf("POST /erp/webhooks/fake = %d, forwarded %v, want forwarded exactly where the pages are mounted (404 elsewhere)", hook.Code, forwarded)
+			}
 			callback := do(http.MethodGet, "/erp/callback?state="+state+"&code=fake-co-1")
 			consent := do(http.MethodGet, "/erp/fake/consent?state="+state)
 			if !c.pages {

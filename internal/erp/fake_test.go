@@ -383,16 +383,3 @@ func TestFake_WriteBackRefusesUnknownScopeAndDocument(t *testing.T) {
 		}
 	}
 }
-
-func TestFake_UnsupportedOperations(t *testing.T) {
-	f := NewFake(testRedirect)
-	if _, err := f.VerifyWebhook(ctx, nil, nil); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("VerifyWebhook: %v", err)
-	}
-	if err := f.EnsureSubscriptions(ctx, cr, "fake-co-1"); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("EnsureSubscriptions: %v", err)
-	}
-	if f.Capabilities() != (Capabilities{Note: true, CustomFieldSlots: 2}) {
-		t.Errorf("capabilities = %+v", f.Capabilities())
-	}
-}

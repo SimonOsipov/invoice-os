@@ -258,7 +258,7 @@ const CONN_ID = 'aaaaaaaa-0000-4000-8000-0000000000c1'
 const ENT_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const ENT_B = 'aaaaaaaa-0000-4000-8000-000000000002'
 
-function stubEntities() {
+function stubEntities(erpList: unknown = { connections: [], systems: [] }) {
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
   const row = (id: string, name: string, tin: string) => ({ id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' })
   vi.stubGlobal(
@@ -269,7 +269,9 @@ function stubEntities() {
         status: 200,
         json: () =>
           Promise.resolve(
-            url.includes('/portfolio/v1/entities')
+            url.includes('/erp-connections')
+              ? erpList
+              : url.includes('/portfolio/v1/entities')
               ? { entities: [row(ENT_A, 'Alpha Ltd', '11111111-0001'), row(ENT_B, 'Beta Ltd', '22222222-0001')], pagination: { limit: 200, offset: 0, total: 2 } }
               : { entities: [], policies: [], members: [], roles: [], invoices: [], total: 0, clients: [], totals: {}, top_violations: [], rules: [] },
           ),
@@ -288,6 +290,18 @@ describe('ERPF-08-05: the connector detail route', () => {
     await bootAt(`/settings/connectors/${CONN_ID}`)
     await waitFor(() => expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN_ID))
     expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  it('drillDown_aMalformedConnectionsListIsNotThisClientAndRejectsNothing', async () => {
+    const unhandled: unknown[] = []
+    const on = (e: unknown) => unhandled.push(e)
+    process.on('unhandledRejection', on)
+    stubEntities({})
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN_ID))
+    await new Promise((r) => setTimeout(r, 20))
+    process.off('unhandledRejection', on)
+    expect(unhandled).toEqual([])
   })
 
   it('drillDown_aBadConnectionLinkIsCorrectedToTheList', async () => {

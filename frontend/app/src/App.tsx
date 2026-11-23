@@ -528,10 +528,10 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     let live = true
     Promise.all(
       entitiesList.map((e) =>
-        listErpConnections(authedFetch, base, e.id).then(
-          (l) => (l.connections.some((c) => c.id === bootConnectionId) ? e.id : null),
-          () => null,
-        ),
+        // .catch, not .then(ok, err): a malformed body throws inside ok, which err would not see.
+        listErpConnections(authedFetch, base, e.id)
+          .then((l) => (l.connections.some((c) => c.id === bootConnectionId) ? e.id : null))
+          .catch(() => null),
       ),
     ).then((owners) => {
       if (!live) return

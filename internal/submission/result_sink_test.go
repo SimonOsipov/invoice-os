@@ -162,38 +162,29 @@ func TestResultSink_CalledOnceOnEveryTerminalPath(t *testing.T) {
 	}
 }
 
-func TestResultSink_ErrorRollsBackTheResult(t *testing.T) {
+func TestResultSink_ErrorOnTheFirstAttemptKeepsTheResultAndNeverResubmits(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
 	defer cleanup()
 	idem := "req-" + uuid.NewString() + ":" + invoiceID
 	args := submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idem}
-	boom := errors.New("sink boom")
-	a := newScriptedAdapter(rsPaths[0].submit)
+	a := newScriptedAdapter(rsPaths[0].submit, rsPaths[0].submit)
 
-	err := rsSubmitWorker(f, a, &recSink{err: boom}, nil).Work(ctx, newSubmitJob(1, 1, 8, args))
-	if !errors.Is(err, boom) {
-		t.Fatalf("Work = %v, want the sink error", err)
-	}
-	if s := wiRead(t, f, tenantID, invoiceID).status; s != "queued" {
-		t.Errorf("invoice status = %q, want queued", s)
-	}
-	if wj := wjRequire(t, f, tenantID, idem); wj.state == "accepted" {
-		t.Errorf("job state = accepted, want it rolled back")
-	}
-	if n := exchangeCount(t, f, tenantID); n != 0 {
-		t.Errorf("app_exchange rows = %d, want 0", n)
-	}
-	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
-		t.Errorf("submission.accepted audit rows = %d, want 0", n)
-	}
-	// The OncePerJob marker rolled back too: the retry of the same job applies.
-	if err := rsSubmitWorker(f, a, nil, nil).Work(ctx, newSubmitJob(1, 2, 8, args)); err != nil {
-		t.Fatalf("retry: %v", err)
+	if err := rsSubmitWorker(f, a, &recSink{err: errors.New("sink boom")}, nil).Work(ctx, newSubmitJob(1, 1, 8, args)); err != nil {
+		t.Fatalf("Work = %v, want nil: the result stays", err)
 	}
 	if s := wiRead(t, f, tenantID, invoiceID).status; s != "accepted" {
-		t.Errorf("invoice status after retry = %q, want accepted", s)
+		t.Errorf("invoice status = %q, want accepted", s)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows = %d, want 1", n)
+	}
+	if err := rsSubmitWorker(f, a, nil, nil).Work(ctx, newSubmitJob(1, 2, 8, args)); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	if a.submitCalls != 1 {
+		t.Errorf("adapter.Submit calls = %d, want 1: NRS already answered", a.submitCalls)
 	}
 }
 

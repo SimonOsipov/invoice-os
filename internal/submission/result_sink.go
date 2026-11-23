@@ -15,17 +15,12 @@ type ResultSink interface {
 	ResultReached(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string) error
 }
 
-// reachResult calls the sink on the closure's tx; a nil sink is a no-op.
-// Before the final attempt its error rolls the closure back and the job retries. On the final
-// attempt the sink runs in a savepoint, so its error cannot strand the invoice: the result commits
-// and one Sentry issue names the job.
-// ceiling: that one result is never written back.
+// reachResult runs the sink in a savepoint, so its error cannot undo the result or re-submit it.
+// A nil sink is a no-op.
+// ceiling: a sink error loses that one write-back; one Sentry issue names the job.
 func reachResult(ctx context.Context, tx pgx.Tx, sink ResultSink, logger *slog.Logger, job *rivertype.JobRow, tenantID, invoiceID string) error {
 	if sink == nil {
 		return nil
-	}
-	if job.Attempt < job.MaxAttempts {
-		return sink.ResultReached(ctx, tx, tenantID, invoiceID)
 	}
 	sp, err := tx.Begin(ctx)
 	if err != nil {
@@ -39,7 +34,7 @@ func reachResult(ctx context.Context, tx pgx.Tx, sink ResultSink, logger *slog.L
 		return err
 	}
 	if logger != nil {
-		logger.Error("submission: result sink failed on the final attempt; result kept",
+		logger.Error("submission: result sink failed; result kept",
 			"job_id", job.ID, "invoice_id", invoiceID, "error", sinkErr)
 	}
 	queue.ReportJobError(job, sinkErr)

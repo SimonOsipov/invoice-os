@@ -702,3 +702,61 @@ func TestWriteBack_RateLimitAtTheCapOnTheLastAttemptStillAudits(t *testing.T) {
 		t.Errorf("failed audits = %+v, want one rate_limited", au)
 	}
 }
+
+func TestWriteBack_RateLimitWithoutRetryAfterStillSnoozes(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	e.writeScript = func(int, DocRef) (DocRef, error) { return DocRef{}, &RateLimitError{} }
+	if _, ok := snoozeOf(e.run(e.args(1), 1)); !ok {
+		t.Fatal("a rate limit with no RetryAfter did not snooze; the job would complete with nothing written")
+	}
+}
+
+func TestWriteBack_FinalAttemptAuditsARateLimitedDocumentBesideAFailure(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	c2 := e.secondConn()
+	e.doc(c2, "fake-co-2-inv-1", "linked", e.invoiceID, false)
+	e.writeScript = func(_ int, ref DocRef) (DocRef, error) {
+		if ref.Scope == keyOne {
+			return DocRef{}, &RateLimitError{RetryAfter: time.Minute}
+		}
+		return DocRef{}, errors.New("down")
+	}
+	if err := e.run(e.args(1), 8); err == nil {
+		t.Fatal("the last attempt returned nil")
+	}
+	au := e.audits("erp.writeback.failed")
+	got := map[any]string{}
+	for _, a := range au {
+		got[a["connection_id"]] = a["failure"].(string)
+	}
+	if len(au) != 2 || got[e.conn] != "rate_limited" || got[c2] != "vendor" {
+		t.Errorf("failed audits = %+v, want one per connection %s (rate_limited) and %s (vendor)", au, e.conn, c2)
+	}
+}
+
+func TestWriteBack_FinalAttemptRateLimitBelowTheCapStillSnoozesUnaudited(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	e.writeScript = func(int, DocRef) (DocRef, error) { return DocRef{}, &RateLimitError{RetryAfter: time.Minute} }
+	if _, ok := snoozeOf(e.run(e.args(1), 8)); !ok {
+		t.Fatal("want a snooze")
+	}
+	if n := len(e.audits("erp.writeback.failed")); n != 0 {
+		t.Errorf("failed audits = %d, want 0 while the job is only snoozed", n)
+	}
+}
+
+func TestWriteBack_RecordErrorAfterAVendorErrorFailsTheAttempt(t *testing.T) {
+	e := newWB(t, nil)
+	docID := e.drafted()
+	e.writeScript = func(int, DocRef) (DocRef, error) {
+		mustExec(t, e.super, "DELETE FROM erp_source_documents WHERE id = $1", docID) // the attempt row's FK then fails
+		return DocRef{}, &RateLimitError{RetryAfter: time.Minute}
+	}
+	err := e.run(e.args(1), 1)
+	if _, snoozed := snoozeOf(err); err == nil || snoozed {
+		t.Fatalf("err = %v, want the record error, not a snooze that would never grow the cap count", err)
+	}
+}

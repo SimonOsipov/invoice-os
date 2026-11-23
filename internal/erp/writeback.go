@@ -63,7 +63,7 @@ type wbDoc struct {
 	rateLimited                          int
 }
 
-// wbPlan is D20: write only what the connector's capabilities allow. ok is false for an empty plan.
+// wbPlan writes only what the connector's capabilities allow. ok is false for an empty plan.
 func wbPlan(caps Capabilities, a WriteBackArgs) (wb WriteBack, ok bool) {
 	if a.Outcome == "accepted" && caps.CustomFieldSlots >= 1 && a.IRN != "" {
 		wb.IRN = a.IRN // the IRN takes the first slot
@@ -92,20 +92,34 @@ func (w *WriteBackWorker) Work(ctx context.Context, job *river.Job[WriteBackArgs
 	final := job.Attempt >= job.MaxAttempts
 	var failure error
 	var snooze time.Duration
+	var limited []wbDoc
 	for _, d := range docs {
-		if err := w.write(ctx, job, d, final); err != nil {
-			var rl *RateLimitError
-			if errors.As(err, &rl) && d.rateLimited < rateLimitSnoozes {
-				snooze = max(snooze, rl.RetryAfter)
-			} else if failure == nil {
-				failure = err
-			}
+		err, rerr := w.write(ctx, job, d, final)
+		var rl *RateLimitError
+		switch {
+		case rerr != nil:
+			failure = errors.Join(failure, rerr)
+		case err == nil:
+		case errors.As(err, &rl) && d.rateLimited < rateLimitSnoozes:
+			limited = append(limited, d)
+			snooze = max(snooze, rl.RetryAfter)
+		case failure == nil:
+			failure = err
 		}
 	}
 	if failure != nil {
+		if final {
+			// The job ends here, so a document still rate-limited ends failed too.
+			for _, d := range limited {
+				aerr := w.recordTx(ctx, job.Args, func(tx pgx.Tx) error { return auditFailed(ctx, tx, job.Args, d, "rate_limited") })
+				if aerr != nil {
+					failure = errors.Join(failure, aerr)
+				}
+			}
+		}
 		return failure
 	}
-	if snooze > 0 {
+	if len(limited) > 0 {
 		return river.JobSnooze(snooze)
 	}
 	return nil
@@ -207,10 +221,11 @@ func (w *WriteBackWorker) load(ctx context.Context, job *river.Job[WriteBackArgs
 }
 
 // write sends one document's write with no transaction held, then records the attempt.
-func (w *WriteBackWorker) write(ctx context.Context, job *river.Job[WriteBackArgs], d wbDoc, final bool) error {
+// vendorErr is the connector's error; recordErr is the failure to record the attempt.
+func (w *WriteBackWorker) write(ctx context.Context, job *river.Job[WriteBackArgs], d wbDoc, final bool) (vendorErr, recordErr error) {
 	written, newRef, err := w.send(ctx, w.Registry[d.conn.system], d)
 	a := job.Args
-	return w.record(ctx, a, func(tx pgx.Tx) error {
+	return err, w.recordTx(ctx, a, func(tx pgx.Tx) error {
 		if err == nil {
 			rev := newRef.SourceRevision
 			if e := insertAttempt(ctx, tx, job, d, "succeeded", nil, &written, &rev); e != nil {
@@ -237,20 +252,20 @@ func (w *WriteBackWorker) write(ctx context.Context, job *river.Job[WriteBackArg
 		if !final || (errors.As(err, &rl) && d.rateLimited < rateLimitSnoozes) {
 			return nil
 		}
-		return audit.Record(ctx, tx, writeBackActor, "erp.writeback.failed", map[string]any{
-			"system": d.conn.system, "connection_id": d.connID, "source_doc_id": d.sourceDocID,
-			"invoice_id": a.InvoiceID, "invoice_number": a.InvoiceNumber, "outcome": a.Outcome,
-			"result_version": a.ResultVersion, "failure": reason,
-		})
-	}, err)
+		return auditFailed(ctx, tx, a, d, reason)
+	})
 }
 
-// record runs the attempt's transaction; the vendor error wins over a record error.
-func (w *WriteBackWorker) record(ctx context.Context, a WriteBackArgs, fn func(pgx.Tx) error, vendorErr error) error {
-	if rerr := db.WithinTenantTx(ctx, w.Pool, a.TenantID, fn); rerr != nil && vendorErr == nil {
-		return rerr
-	}
-	return vendorErr
+func auditFailed(ctx context.Context, tx pgx.Tx, a WriteBackArgs, d wbDoc, reason string) error {
+	return audit.Record(ctx, tx, writeBackActor, "erp.writeback.failed", map[string]any{
+		"system": d.conn.system, "connection_id": d.connID, "source_doc_id": d.sourceDocID,
+		"invoice_id": a.InvoiceID, "invoice_number": a.InvoiceNumber, "outcome": a.Outcome,
+		"result_version": a.ResultVersion, "failure": reason,
+	})
+}
+
+func (w *WriteBackWorker) recordTx(ctx context.Context, a WriteBackArgs, fn func(pgx.Tx) error) error {
+	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, fn)
 }
 
 // send fetches the current revision first when the vendor needs it, and retries one conflict.

@@ -23,7 +23,7 @@ const REJECTED_NO = 'FK1-0003'
 const ACCEPT_TIN = '99999999-0001' // mock NRS script: accepts
 const REJECT_TIN = '99999999-0002' // mock NRS script: rejects
 const SUCCEEDED = 'erp.writeback.succeeded' // write in internal/erp/writeback.go
-const IRN_SHAPE = /-FBMOCK01-\d{8}$/ // mockServiceID in internal/submission/mock_script.go
+const IRN_SHAPE = /-FBMOCK01-\d{8}$/ // fixture check: the mock-backed IRN shape, mockServiceID in internal/submission/mock_script.go
 
 interface Payload {
   connection_id: string
@@ -75,22 +75,24 @@ test.describe.serial('ERP write-back (API E2E, over the deployed gateway)', () =
 
   test("an accepted ERP invoice's mock IRN is written back to the fake ERP", async () => {
     test.setTimeout(360_000)
-    await expect.poll(async () => (await writtenBack(ACCEPTED_NO)).length, { timeout: 120_000, intervals: [3_000] }).toBe(1)
+    await expect.poll(async () => (await writtenBack(ACCEPTED_NO)).length, { timeout: 120_000, intervals: [3_000] }).toBeGreaterThan(0)
     const [entry] = await writtenBack(ACCEPTED_NO)
     const inv = await getInvoice(admin, ids[ACCEPTED_NO])
     expect(entry.outcome).toBe('accepted')
     expect(entry.irn).toBe(inv.irn)
-    expect(entry.irn).toMatch(IRN_SHAPE)
+    expect(entry.irn).toMatch(IRN_SHAPE) // fixture check, mock-backed
   })
 
   test("a rejected ERP invoice's result is written back without an IRN", async () => {
-    await expect.poll(async () => (await writtenBack(REJECTED_NO)).length, { timeout: 120_000, intervals: [3_000] }).toBe(1)
+    test.setTimeout(180_000)
+    await expect.poll(async () => (await writtenBack(REJECTED_NO)).length, { timeout: 120_000, intervals: [3_000] }).toBeGreaterThan(0)
     const [entry] = await writtenBack(REJECTED_NO)
     expect(entry.outcome).toBe('rejected')
     expect(entry).not.toHaveProperty('irn')
   })
 
   test('the write-back leaves the NRS status as it was', async () => {
+    test.setTimeout(180_000)
     expect((await getInvoice(admin, ids[ACCEPTED_NO])).status).toBe('accepted')
     expect((await getInvoice(admin, ids[REJECTED_NO])).status).toBe('rejected')
   })

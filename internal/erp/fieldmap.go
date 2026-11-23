@@ -199,9 +199,23 @@ func (m Mapping) Merge(over Mapping) Mapping {
 	return out
 }
 
-// Fingerprint is the SHA-256 hex of the mapping's JSON (map keys sort), so equal mappings match.
+// hashedTargets are the targets whose values feed ContentHash.
+var hashedTargets = map[string]bool{
+	"invoice_number": true, "issue_date": true, "currency": true, "buyer_name": true, "buyer_tin": true, "buyer_email": true,
+	"subtotal": true, "vat": true, "total": true, "line_description": true, "line_quantity": true,
+	"line_unit_price": true, "line_tax_percent": true, "line_total": true, "line_tax": true,
+}
+
+// Fingerprint is the SHA-256 hex of the hashed targets' paths (map keys sort), so mappings that
+// project the same content match; an edit of any other target does not move it.
 func Fingerprint(m Mapping) string {
-	b, _ := json.Marshal(m) // a map of strings cannot fail to marshal
+	hashed := Mapping{}
+	for k, v := range m {
+		if hashedTargets[k] {
+			hashed[k] = v
+		}
+	}
+	b, _ := json.Marshal(hashed) // a map of strings cannot fail to marshal
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }

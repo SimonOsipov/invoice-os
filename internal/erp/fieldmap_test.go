@@ -255,19 +255,24 @@ func TestCustomerIDOf_ReadsTheMappedCustomer(t *testing.T) {
 
 func TestFingerprint_IsStableAndKeyOrderFree(t *testing.T) {
 	a, b := Mapping{}, Mapping{}
-	for _, k := range []string{"a", "b", "c", "d"} {
+	for _, k := range []string{"invoice_number", "total", "vat", "line_total"} {
 		a[k] = "p." + k
 	}
-	for _, k := range []string{"d", "c", "b", "a"} {
+	for _, k := range []string{"line_total", "vat", "total", "invoice_number"} {
 		b[k] = "p." + k
 	}
 	fa := Fingerprint(a)
 	if !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(fa) || fa != Fingerprint(b) {
 		t.Errorf("fingerprints = %q, %q", fa, Fingerprint(b))
 	}
-	b["c"] = "p.other"
+	b["vat"] = "p.other"
 	if Fingerprint(b) == fa {
-		t.Error("a changed path left the fingerprint unchanged")
+		t.Error("a changed hashed path left the fingerprint unchanged")
+	}
+	b["vat"] = "p.vat"
+	b["line_hsn_code"] = "p.hsn"
+	if Fingerprint(b) != fa {
+		t.Error("a target outside the content hash moved the fingerprint")
 	}
 }
 

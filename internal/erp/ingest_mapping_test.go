@@ -223,9 +223,9 @@ func TestIngest_MappedTaxCodeItemAndCustomerReachTheDraft(t *testing.T) {
 	inv := e.draftOn(e.conn, docOne)
 	ls := e.draftLines(inv)
 	want := []draftLine{
-		{TaxCategory: sp("ZERO_VAT"), HSN: sp("H"), ISIC: sp("body-isic-1")},
+		{TaxCategory: sp("ZERO_VAT"), HSN: sp("H"), ISIC: sp("<NULL>")},
 		{TaxCategory: sp("EXEMPTED"), HSN: sp("body-hsn-2"), ISIC: sp("body-isic-2")},
-		{TaxCategory: sp("ZERO_VAT"), HSN: sp("body-hsn-3"), ISIC: sp("S")},
+		{TaxCategory: sp("ZERO_VAT"), HSN: sp("<NULL>"), ISIC: sp("S")},
 	}
 	if len(ls) != 3 {
 		t.Fatalf("lines = %d, want 3", len(ls))
@@ -443,26 +443,41 @@ func TestIngest_UnchangedMappingStillMarksAChangedAcceptedInvoice(t *testing.T) 
 	e.wantAudit("erp.document.changed_after_clearance", changedKeys)
 }
 
-func TestIngest_NullFingerprintRebaselinesOnce(t *testing.T) {
+func TestIngest_NullFingerprintReadsAsTheDefaultMapping(t *testing.T) {
 	e := newIngest(t)
 	acceptedDraft(e)
 	mustExec(t, e.super, "UPDATE erp_source_documents SET mapping_fingerprint = NULL WHERE connection_id = $1 AND source_doc_id = $2", e.conn, docOne)
 
 	e.serve(pricier())
 	e.mustWork(docOne, "2")
-	d := e.wantState(docOne, "drafted")
-	var fp *string
-	mustScan(t, e.super, "SELECT mapping_fingerprint FROM erp_source_documents WHERE id = $1", []any{d.ID}, &fp)
-	if d.Changed != nil || fp == nil || *fp != Fingerprint(testFake(t).DefaultMapping()) {
-		t.Fatalf("after rev 2: changed = %v, fingerprint = %v; want no mark and the fingerprint written", d.Changed, fp)
+	if d := e.wantState(docOne, "drafted"); d.Changed == nil {
+		t.Error("changed_after_clearance_at is NULL, want set: a NULL fingerprint is the default mapping's")
+	}
+	e.wantAudit("erp.document.changed_after_clearance", changedKeys)
+}
+
+func TestIngest_EditOfANonHashedTargetStillMarksAChangedAcceptedInvoice(t *testing.T) {
+	e := newIngest(t)
+	acceptedDraft(e)
+	e.override(e.entity, "fake", "line_hsn_code", "lines[].isic_code")
+	e.serve(pricier())
+	e.mustWork(docOne, "2")
+	if d := e.wantState(docOne, "drafted"); d.Changed == nil {
+		t.Error("changed_after_clearance_at is NULL, want set: the edited target is outside the content hash")
+	}
+	e.wantAudit("erp.document.changed_after_clearance", changedKeys)
+}
+
+func TestIngest_EditOfAHashedTargetRebaselinesWithoutAMark(t *testing.T) {
+	e := newIngest(t)
+	acceptedDraft(e)
+	e.override(e.entity, "fake", "line_description", "lines[].item_id")
+	e.serve(pricier())
+	e.mustWork(docOne, "2")
+	if d := e.wantState(docOne, "drafted"); d.Changed != nil {
+		t.Errorf("changed_after_clearance_at = %v, want NULL: a hashed mapping edit re-baselines", d.Changed)
 	}
 	e.wantNoAudit("erp.document.changed_after_clearance")
-
-	e.serve(fakeDocument(docOne, numOne, custOne, fakeLine{"Consulting services", "1", "300000.00", "7.5"}))
-	e.mustWork(docOne, "3")
-	if d := e.wantState(docOne, "drafted"); d.Changed == nil {
-		t.Error("rev 3: changed_after_clearance_at is NULL, want set once the fingerprint is current")
-	}
 }
 
 func TestIngest_LookupsReadHoldsOneConnection(t *testing.T) {

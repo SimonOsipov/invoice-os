@@ -550,10 +550,15 @@ func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a ingestJob, 
 	if err := tx.QueryRow(ctx, `SELECT status, invoice_number FROM invoices WHERE id = $1`, *d.invoiceID).Scan(&status, &number); err != nil {
 		return err
 	}
+	stored := Fingerprint(w.Registry[c.system].DefaultMapping())
+	if d.fingerprint != nil {
+		stored = *d.fingerprint
+	}
 	const set = `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), deleted_in_erp_at = NULL, updated_at = now()`
 	switch {
-	// A new projection (version or mapping) re-baselines: a mapping edit is not an ERP change.
-	case d.hashVersion == nil || int(*d.hashVersion) != HashVersion || d.fingerprint == nil || *d.fingerprint != fp:
+	// A new projection (version or hashed mapping) re-baselines: a mapping edit is not an ERP change.
+	// A row from before fingerprints was ingested with the connector's default mapping.
+	case d.hashVersion == nil || int(*d.hashVersion) != HashVersion || stored != fp:
 		differs, err := differsFrom(ctx, tx, *d.invoiceID, in)
 		if err != nil {
 			return err

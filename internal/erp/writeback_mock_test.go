@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
@@ -18,11 +19,28 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
+// seedCommercialInvoiceType gives SubmitWorker's invoice-type self-check its synced 381 row (CI's DB has no
+// synced lists) and removes only what it inserted.
+func seedCommercialInvoiceType(t *testing.T, super *pgxpool.Pool) {
+	t.Helper()
+	tag, err := super.Exec(context.Background(),
+		`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', '381', '[{"code":"381","value":"Commercial Invoice"}]'::jsonb) ON CONFLICT DO NOTHING`)
+	if err != nil {
+		t.Fatalf("seed invoice-types 381: %v", err)
+	}
+	if tag.RowsAffected() == 1 {
+		t.Cleanup(func() {
+			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = 'invoice-types' AND code = '381'`)
+		})
+	}
+}
+
 // mockWriteBack drives a pulled fake invoice with the given buyer TIN through the real SubmitWorker
 // (mock adapter, invoice store, the enqueuer as sink), then runs the enqueued job.
 func mockWriteBack(t *testing.T, tin string) (e *ingestEnv, invoiceID string) {
 	t.Helper()
 	e = newIngest(t)
+	seedCommercialInvoiceType(t, e.super)
 	e.mustWork(docOne, "1")
 	d := e.wantState(docOne, "drafted")
 	invoiceID = *d.InvoiceID

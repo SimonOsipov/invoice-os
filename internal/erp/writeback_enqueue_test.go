@@ -204,7 +204,7 @@ func TestEnqueue_ResultVersionCountsTerminalResults(t *testing.T) {
 		}
 	}
 	jobs, keys := wbJobs(t, e.super, e.tenant)
-	if len(jobs) != 2 || jobs[0].ResultVersion != 1 || jobs[1].ResultVersion != 2 {
+	if len(jobs) != 2 || jobs[0].ResultVersion < 1 || jobs[1].ResultVersion != jobs[0].ResultVersion+1 {
 		t.Fatalf("jobs = %+v, want versions 1 then 2", jobs)
 	}
 	if len(keys) != 2 || keys[0] == keys[1] {

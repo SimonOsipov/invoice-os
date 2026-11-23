@@ -191,6 +191,21 @@ describe('reconnect', () => {
     expect(err).not.toHaveBeenCalled()
   })
 
+  it('connectorDetail_unmountMidReconnectFailureRefetchesNothing', async () => {
+    const { tab } = spyOpen()
+    const held = deferred<unknown>()
+    const m = mount({ overview: reconsent, post: () => held.promise })
+    await screen.findByTestId('erp-detail-header')
+    await click(reconnectBtn())
+    m.unmount()
+    await act(async () => {
+      held.resolve(Promise.reject(new ApiError('http', 'boom', 500)))
+      await Promise.resolve()
+    })
+    expect(tab.close).toHaveBeenCalled()
+    expect(ovGets(m)).toBe(1)
+  })
+
   it('connectorDetail_unmountStopsThePoll', async () => {
     vi.useFakeTimers()
     const m = mount({ overview: () => ov({ connection: conn({ status: 'pending' }) }) })
@@ -330,6 +345,35 @@ describe('field mapping', () => {
     expect(row.textContent).toContain('new.no')
     expect(row.textContent).toContain('CUSTOM')
     expect(gets(m, MAP)).toBe(1)
+    expect(gets(m, LOOK)).toBe(1)
+  })
+
+  it('connectorDetail_mappingShowsLookups', async () => {
+    const lk = (o: object) => ({ kind: 'item', erp_key: 'k', tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null, ...o })
+    mount({ lookups: () => ({ system: 'fake', external_key: 'fake-co-3', lookups: [lk({ erp_key: 'sku-1', hsn_code: '1234' }), lk({ kind: 'customer', erp_key: 'acme', tin: 'T-9' })] }) })
+    const rows = await screen.findAllByTestId('erp-lookup-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain('Item')
+    expect(rows[0].textContent).toContain('sku-1')
+    expect(rows[0].textContent).toContain('HSN code 1234')
+    expect(rows[1].textContent).toContain('Customer')
+    expect(rows[1].textContent).toContain('TIN T-9')
+    expect(screen.queryByText('No lookups yet.')).toBeNull()
+  })
+
+  it('connectorDetail_savedLookupsUpdateThePanel', async () => {
+    const lk = (o: object) => ({ kind: 'customer', erp_key: 'acme', tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null, ...o })
+    const m = mount({
+      lookups: () => ({ system: 'fake', external_key: 'fake-co-3', lookups: [lk({ tin: 'OLD' })] }),
+      put: () => ({ system: 'fake', external_key: 'fake-co-3', lookups: [lk({ tin: 'NEWTIN' })] }),
+    })
+    await screen.findByText(/TIN OLD/)
+    await waitFor(() => expect(screen.getByTestId('erp-detail-mapping-edit')).toBeTruthy())
+    await click(screen.getByTestId('erp-detail-mapping-edit'))
+    fireEvent.change(screen.getByLabelText('TIN'), { target: { value: 'NEWTIN' } })
+    await click(screen.getByTestId('field-mapping-save'))
+    await waitFor(() => expect(screen.queryByTestId('field-mapping-modal')).toBeNull())
+    expect(screen.getByTestId('erp-lookup-row').textContent).toContain('TIN NEWTIN')
     expect(gets(m, LOOK)).toBe(1)
   })
 

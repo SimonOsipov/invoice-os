@@ -14,6 +14,7 @@ import {
   mappingChanges,
   saveErpLookups,
   saveErpMapping,
+  writebackResultText,
   writebackText,
   type DocumentMark,
   type FieldView,
@@ -106,7 +107,20 @@ describe('lookupChanges', () => {
   })
 })
 
+describe('lookupChanges edges', () => {
+  it('lookupChanges_blankAddedIsNotSent', () => {
+    expect(lookupChanges([], [lk('item', 'new')])).toEqual([])
+  })
+})
+
 describe('label helpers', () => {
+  it('writebackResultText_everyOutcome', () => {
+    expect(writebackResultText('accepted')).toBe('ACCEPTED')
+    expect(writebackResultText('rejected')).toBe('REJECTED')
+    expect(writebackResultText('failed')).toBe('FAILED')
+    expect(writebackResultText('mystery')).toBe('mystery')
+  })
+
   it('heldReasonText_everyReasonAndFailure', () => {
     expect(heldReasonText('differs_from_erp', null)).toBe('Differs from the ERP')
     expect(heldReasonText('changed_after_clearance', null)).toBe('Changed in the ERP after NRS accepted it')
@@ -155,6 +169,10 @@ describe('label helpers', () => {
     expect(activitySummary(zero)).toBe('Nothing pulled in the last 24 hours.')
     expect(activitySummary({ pulled: 6, pending: 1, drafted: 1, linked: 1, held: 1, failed: 1, deleted: 1 })).toBe(
       '6 pulled · 1 new drafts · 1 linked · 1 held · 1 failed · 1 deleted in the ERP · 1 in progress',
+    )
+    // Distinct counts: with every part 1, a swapped part reads the same.
+    expect(activitySummary({ pulled: 27, pending: 2, drafted: 3, linked: 5, held: 7, failed: 11, deleted: 13 })).toBe(
+      '27 pulled · 3 new drafts · 5 linked · 7 held · 11 failed · 13 deleted in the ERP · 2 in progress',
     )
   })
 })

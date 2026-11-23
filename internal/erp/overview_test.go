@@ -524,3 +524,93 @@ func TestMarks_ReturnsTheInvoicesMarks(t *testing.T) {
 		t.Errorf("Marks of an unlinked invoice = %#v, %v, want an empty non-nil slice", none, err)
 	}
 }
+
+func TestOverview_WritebacksAreTheFiftyLatest(t *testing.T) {
+	e := newIngest(t)
+	s := fakeStore(t, e.app)
+	ctx := ovMember(t, e, "admin")
+	inv := e.plantInvoice(plantInv{number: "FK1-0001"})
+	doc := e.plantDocument(plantDoc{docID: "d1", state: "linked", invoiceID: &inv})
+
+	var want []string
+	for i := range 51 {
+		id := ovWriteback(e, e.conn, doc, inv, "accepted", i+1, "succeeded", nil, time.Duration(i+1)*time.Minute)
+		if i < 50 {
+			want = append(want, id)
+		}
+	}
+	ov, _ := readOverview(t, s, ctx, e.entity, e.conn)
+	var got []string
+	for _, w := range ov.Writebacks {
+		got = append(got, w.ID)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("writebacks = %d rows, want the 50 newest in order (the oldest absent)", len(got))
+	}
+}
+
+func TestOverview_HeldIsCappedAtOneHundred(t *testing.T) {
+	e := newIngest(t)
+	s := fakeStore(t, e.app)
+	ctx := ovMember(t, e, "admin")
+
+	var want []string
+	for i := range 101 {
+		id := fmt.Sprintf("h%03d", i)
+		e.plantDocument(plantDoc{docID: id, state: "held", updatedAgo: time.Duration(i) * time.Second})
+		if i < 100 {
+			want = append(want, id)
+		}
+	}
+	ov, _ := readOverview(t, s, ctx, e.entity, e.conn)
+	if got := heldIDs(ov.Held); !slices.Equal(got, want) {
+		t.Errorf("held = %d rows, want the 100 newest in order (h100 absent)", len(got))
+	}
+	if ov.Activity.Counts["held"] != 101 {
+		t.Errorf("counts = %v, want all 101 held rows counted", ov.Activity.Counts)
+	}
+}
+
+// Rows with one timestamp read in id order (documents, held) and id descending (write-backs).
+func TestOverview_TiesBreakByID(t *testing.T) {
+	e := newIngest(t)
+	s := fakeStore(t, e.app)
+	ctx := ovMember(t, e, "admin")
+	inv := e.plantInvoice(plantInv{number: "FK1-0001"})
+
+	docByID := map[string]string{}
+	var ids []string
+	for _, n := range []string{"a", "b", "c", "d"} {
+		id := e.plantDocument(plantDoc{docID: "t-" + n, state: "failed", failure: sp("refused")})
+		docByID[id] = "t-" + n
+		ids = append(ids, id)
+	}
+	var wbs []string
+	for i := range 4 {
+		wbs = append(wbs, ovWriteback(e, e.conn, ids[0], inv, "accepted", i+1, "succeeded", nil, time.Minute))
+	}
+	mustExec(t, e.super, `UPDATE erp_source_documents SET updated_at = '2026-01-01T00:00:00Z' WHERE connection_id = $1`, e.conn)
+	mustExec(t, e.super, `UPDATE erp_writebacks SET created_at = '2026-01-01T00:00:00Z' WHERE connection_id = $1`, e.conn)
+
+	slices.Sort(ids)
+	var wantDocs []string
+	for _, id := range ids {
+		wantDocs = append(wantDocs, docByID[id])
+	}
+	ov, _ := readOverview(t, s, ctx, e.entity, e.conn)
+	if got := docIDs(ov.Activity.Documents); !slices.Equal(got, wantDocs) {
+		t.Errorf("documents = %v, want id order %v", got, wantDocs)
+	}
+	if got := heldIDs(ov.Held); !slices.Equal(got, wantDocs) {
+		t.Errorf("held = %v, want id order %v", got, wantDocs)
+	}
+	slices.Sort(wbs)
+	slices.Reverse(wbs)
+	var got []string
+	for _, w := range ov.Writebacks {
+		got = append(got, w.ID)
+	}
+	if !slices.Equal(got, wbs) {
+		t.Errorf("writebacks = %v, want id descending %v", got, wbs)
+	}
+}

@@ -90,6 +90,8 @@ describe('InvoiceDetail ERP changed mark', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByTestId('invoice-erp-changed-mark')).toBeNull()
     expect(screen.queryByText(/something went wrong|try again/i)).toBeNull()
+    // Still mounted: a render that threw on the body would have unmounted the view.
+    expect(screen.getByText('INV-ERP-1')).toBeTruthy()
   })
 
   it('invoiceDetail_inHouseSendsNoMarksRead', async () => {

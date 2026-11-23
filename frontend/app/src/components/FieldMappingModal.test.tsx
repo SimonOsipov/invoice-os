@@ -106,6 +106,28 @@ describe('FieldMappingModal', () => {
     expect(p[0][0]).toBe(LOOK_URL)
   })
 
+  it('fieldMappingModal_onlyFieldsChangedSkipsTheLookupsPut', async () => {
+    const f = mount()
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'new.date')
+    await clickSave()
+    const p = puts(f.f)
+    expect(p).toHaveLength(1)
+    expect(p[0][0]).toBe(MAP_URL)
+    expect(f.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('fieldMappingModal_theScrimDoesNotCloseItWhileSaving', async () => {
+    const held = deferred<MappingView>()
+    const f = mount({ fetch: () => held.promise })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    fireEvent.click(screen.getByTestId('field-mapping-modal').parentElement!)
+    expect(f.onClose).not.toHaveBeenCalled()
+    await act(async () => held.resolve(mapping()))
+    fireEvent.click(screen.getByTestId('field-mapping-modal').parentElement!)
+    expect(f.onClose).toHaveBeenCalled()
+  })
+
   it('fieldMappingModal_saveDisabledUntilAChange', async () => {
     const held = deferred<MappingView>()
     const f = mount({ fetch: () => held.promise })

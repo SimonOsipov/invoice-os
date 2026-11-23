@@ -1238,9 +1238,8 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
 // Verified no exact-text collision for Import/Map/Enter anywhere else on this
 // screen: CreateUpload's card title is 'Import invoices · X', CreateMapping's are
 // 'Map fields to columns · X' / 'Import N rows' / 'Map invoice number to continue' --
-// none is an exact match for the bare word -- and ConnectorDetail.tsx's own 'Review'
-// is a different, unmounted view (Review itself stays checked by leg 1's own
-// assertions above, on the import path).
+// none is an exact match for the bare word. (Review itself stays checked by leg 1's own
+// assertions above, on the import path.)
 //
 // E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
 // validate -> results run) is deleted by an earlier subtask, so nothing is left to guard.

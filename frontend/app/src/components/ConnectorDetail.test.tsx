@@ -409,7 +409,7 @@ describe('write-back and held', () => {
       overview: () =>
         ov({
           held: [
-            { ...doc({ id: 'h1', source_doc_id: 'erp-9', state: 'linked', differs_from_erp: true, invoice_id: 'inv-9', invoice_number: 'INV-9' }), reasons: ['differs_from_erp'] },
+            { ...doc({ id: 'h1', source_doc_id: 'erp-9', state: 'linked', differs_from_erp: true, invoice_id: 'inv-9', invoice_number: 'INV-9' }), reasons: ['differs_from_erp', 'changed_after_clearance'] },
             { ...doc({ id: 'h2', source_doc_id: 'erp-10', state: 'deleted', deleted_in_erp_at: AT }), reasons: ['deleted_in_erp'] },
           ],
         }),
@@ -417,7 +417,7 @@ describe('write-back and held', () => {
     const card = await screen.findByTestId('erp-detail-held')
     const rows = within(card).getAllByTestId('erp-held-row')
     expect(rows.map((r) => r.dataset.sourceDocId)).toEqual(['erp-9', 'erp-10'])
-    expect(rows[0].textContent).toContain('Differs from the ERP')
+    expect(rows[0].textContent).toContain('Differs from the ERP · Changed in the ERP after NRS accepted it')
     expect(rows[1].textContent).toContain('Deleted or voided in the ERP')
     expect(within(rows[0]).getByTestId('erp-held-open')).toBeTruthy()
     expect(within(rows[1]).queryByTestId('erp-held-open')).toBeNull()

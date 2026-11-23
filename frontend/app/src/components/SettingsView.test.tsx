@@ -9,7 +9,12 @@ import type { PlatformCtx, SettingsTab } from '../types'
 import { SettingsView } from './SettingsView'
 
 vi.mock('./ConnectorDetail', () => ({
-  ConnectorDetail: (p: { connectionId: string }) => <div data-testid="connector-detail-stub">{p.connectionId}</div>,
+  ConnectorDetail: (p: { connectionId: string; onBack: () => void }) => (
+    <div data-testid="connector-detail-stub">
+      {p.connectionId}
+      <button type="button" onClick={p.onBack}>stub back</button>
+    </div>
+  ),
 }))
 
 function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, unknown> = {}): PlatformCtx {
@@ -604,20 +609,14 @@ describe('Settings > ERP connectors detail', () => {
   it('settingsView_theOpenConnectionRendersTheDetailAndBackClosesIt', () => {
     const ctx = open()
     render(<SettingsView ctx={ctx} />)
-    expect(screen.getByTestId('connector-detail-stub').textContent).toBe('c1')
+    expect(screen.getByTestId('connector-detail-stub').textContent).toContain('c1')
     expect(screen.queryByTestId('erp-connector-row')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'stub back' }))
+    expect(ctx.openErpConnection).toHaveBeenCalledWith(null)
   })
 
   it('settingsView_noOpenConnectionRendersTheList', async () => {
     render(<SettingsView ctx={open({ erpConnectionId: null })} />)
     expect(screen.queryByTestId('connector-detail-stub')).toBeNull()
-  })
-
-  it('settingsView_aTabClickClosesTheDetail', () => {
-    const ctx = open()
-    render(<SettingsView ctx={ctx} />)
-    fireEvent.click(screen.getByRole('button', { name: /Members/ }))
-    // SettingsView only asks; App's setSettingsTab clears the connection (drillDown_settingsTabClearsTheConnection).
-    expect(ctx.setSettingsTab).toHaveBeenCalledWith('members')
   })
 })

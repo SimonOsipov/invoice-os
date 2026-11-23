@@ -580,13 +580,13 @@ func TestOverview_TiesBreakByID(t *testing.T) {
 
 	docByID := map[string]string{}
 	var ids []string
-	for _, n := range []string{"a", "b", "c", "d"} {
+	for _, n := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
 		id := e.plantDocument(plantDoc{docID: "t-" + n, state: "failed", failure: sp("refused")})
 		docByID[id] = "t-" + n
 		ids = append(ids, id)
 	}
 	var wbs []string
-	for i := range 4 {
+	for i := range 8 {
 		wbs = append(wbs, ovWriteback(e, e.conn, ids[0], inv, "accepted", i+1, "succeeded", nil, time.Minute))
 	}
 	mustExec(t, e.super, `UPDATE erp_source_documents SET updated_at = '2026-01-01T00:00:00Z' WHERE connection_id = $1`, e.conn)

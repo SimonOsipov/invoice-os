@@ -108,6 +108,11 @@ describe('lookupChanges', () => {
 })
 
 describe('lookupChanges edges', () => {
+  it('lookupChanges_aRemovedEntryClearsEveryValue', () => {
+    const full = { tax_category: 'a', exemption_code: 'b', hsn_code: 'c', service_code: 'd', tin: 'e', state: 'f', lga: 'g' }
+    expect(lookupChanges([lk('customer', 'c1', full)], [])).toEqual([lk('customer', 'c1')])
+  })
+
   it('lookupChanges_blankAddedIsNotSent', () => {
     expect(lookupChanges([], [lk('item', 'new')])).toEqual([])
   })

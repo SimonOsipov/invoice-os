@@ -114,7 +114,7 @@ func TestERPWebhook_MaxShapeEnvelopeFits(t *testing.T) {
 	hdr := map[string]string{"X-A": strings.Repeat("<", 2700)}
 	for {
 		enc, _ := json.Marshal(http.Header{"X-A": {hdr["X-A"]}})
-		if len(enc) <= erpWebhookMaxHeader-6 {
+		if len(enc) <= 16<<10-6 { // AC-3's 16 KiB, not the constant under test
 			break
 		}
 		hdr["X-A"] = hdr["X-A"][1:]

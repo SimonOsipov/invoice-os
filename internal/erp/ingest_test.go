@@ -192,6 +192,7 @@ func TestIngest_DuplicateNumberLinksAndCreatesNothing(t *testing.T) {
 	if d.InvoiceID == nil || *d.InvoiceID != inv {
 		t.Errorf("row invoice_id = %v, want %s", d.InvoiceID, inv)
 	}
+	e.wantFingerprint(docOne)
 	if d.Differs {
 		t.Error("differs_from_erp = true for identical amounts and lines")
 	}
@@ -288,6 +289,7 @@ func TestIngest_SecondDocumentOnALinkedInvoiceIsHeld(t *testing.T) {
 	if d.Revision != "1" || d.Hash == nil {
 		t.Errorf("held row revision/hash = %q/%v, want the revision and hash it read", d.Revision, d.Hash)
 	}
+	e.wantFingerprint(docOne)
 	if after := e.snapshot(inv); after != before {
 		t.Error("the linked invoice changed")
 	}

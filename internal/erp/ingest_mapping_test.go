@@ -160,6 +160,16 @@ func (e *ingestEnv) seededDoc(docID string) Document {
 	return doc
 }
 
+// wantFingerprint is the default mapping's fingerprint on the document's row: every state that stores a hash stores it.
+func (e *ingestEnv) wantFingerprint(docID string) {
+	e.t.Helper()
+	var fp *string
+	mustScan(e.t, e.super, "SELECT mapping_fingerprint FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2", []any{e.conn, docID}, &fp)
+	if want := Fingerprint(testFake(e.t).DefaultMapping()); fp == nil || *fp != want {
+		e.t.Errorf("document %s mapping_fingerprint = %v, want %s", docID, fp, want)
+	}
+}
+
 func TestIngest_ClientOverrideWinsOverTheDefault(t *testing.T) {
 	e := newIngest(t)
 	e.override(e.entity, "fake", "line_description", "lines[].item_id")

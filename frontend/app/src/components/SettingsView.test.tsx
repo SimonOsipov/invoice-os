@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Settings shows empty states, not the demo tenant. ctx-cast idiom of Sidebar.test.tsx.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
@@ -10,7 +11,7 @@ import { SettingsView } from './SettingsView'
 
 vi.mock('./ConnectorDetail', () => ({
   ConnectorDetail: (p: { connectionId: string; onBack: () => void }) => (
-    <div data-testid="connector-detail-stub">
+    <div data-testid="connector-detail-stub" data-first={useState(p.connectionId)[0]}>
       {p.connectionId}
       <button type="button" onClick={p.onBack}>stub back</button>
     </div>
@@ -613,6 +614,12 @@ describe('Settings > ERP connectors detail', () => {
     expect(screen.queryByTestId('erp-connector-row')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'stub back' }))
     expect(ctx.openErpConnection).toHaveBeenCalledWith(null)
+  })
+
+  it('settingsView_anotherConnectionRemountsTheDetail', () => {
+    const { rerender } = render(<SettingsView ctx={open()} />)
+    rerender(<SettingsView ctx={open({ erpConnectionId: 'c2' })} />)
+    expect(screen.getByTestId('connector-detail-stub').dataset.first).toBe('c2')
   })
 
   it('settingsView_noOpenConnectionRendersTheList', async () => {

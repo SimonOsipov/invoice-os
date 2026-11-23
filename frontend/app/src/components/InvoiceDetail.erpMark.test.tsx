@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The "changed in the ERP" banner on the invoice view (ERPF-08-06).
+// The "changed in the ERP" banner on the invoice view.
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

@@ -84,8 +84,11 @@ describe('mappingChanges', () => {
   it('mappingChanges_namesOnlyChangedTargets', () => {
     expect(mappingChanges(fields, { a: 'x.a', b: 'd.b', c: 'new.c' })).toEqual([{ target: 'c', source_path: 'new.c' }])
   })
-  it('mappingChanges_blankRevertsADefaultedRow', () => {
-    expect(mappingChanges(fields, { b: '' })).toEqual([{ target: 'b', source_path: null }])
+  it('mappingChanges_blankOnADefaultRowIsNoChange', () => {
+    expect(mappingChanges(fields, { b: '' })).toEqual([])
+  })
+  it('mappingChanges_blankOnAClientRowIsUseDefault', () => {
+    expect(mappingChanges(fields, { a: '  ' })).toEqual([{ target: 'a', source_path: null }])
   })
   it('mappingChanges_blankOnAnUnmappedRowIsNoChange', () => {
     expect(mappingChanges(fields, { c: '  ' })).toEqual([])
@@ -111,6 +114,16 @@ describe('lookupChanges edges', () => {
   it('lookupChanges_aRemovedEntryClearsEveryValue', () => {
     const full = { tax_category: 'a', exemption_code: 'b', hsn_code: 'c', service_code: 'd', tin: 'e', state: 'f', lga: 'g' }
     expect(lookupChanges([lk('customer', 'c1', full)], [])).toEqual([lk('customer', 'c1')])
+  })
+
+  it('lookupChanges_trailingWhitespaceOnTheKeyIsNoChange', () => {
+    expect(lookupChanges([lk('item', 'K', { hsn_code: '1' })], [lk('item', 'K ', { hsn_code: '1' })])).toEqual([])
+  })
+
+  it('lookupChanges_removeThenReAddTheSameKeySendsOneUpsert', () => {
+    const before = [lk('item', 'K', { hsn_code: '1' })]
+    const after = [lk('item', 'K'), lk('item', 'K ', { hsn_code: '2' })]
+    expect(lookupChanges(before, after)).toEqual([lk('item', 'K', { hsn_code: '2' })])
   })
 
   it('lookupChanges_blankAddedIsNotSent', () => {

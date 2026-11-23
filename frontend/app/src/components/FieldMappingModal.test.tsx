@@ -128,6 +128,19 @@ describe('FieldMappingModal', () => {
     expect(f.onClose).toHaveBeenCalled()
   })
 
+  it('fieldMappingModal_clearingADefaultRowLeavesSaveDisabled', () => {
+    mount()
+    edit(screen.getByLabelText('ISSUE_DATE path'), '')
+    expect(save().disabled).toBe(true)
+  })
+
+  it('fieldMappingModal_clearingAClientRowSaysItUsesTheDefault', () => {
+    mount()
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), '')
+    expect(within(row('invoice_number')).getByText('Blank saves as Use default')).toBeTruthy()
+    expect(save().disabled).toBe(false)
+  })
+
   it('fieldMappingModal_saveDisabledUntilAChange', async () => {
     const held = deferred<MappingView>()
     const f = mount({ fetch: () => held.promise })

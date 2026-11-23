@@ -161,6 +161,7 @@ WHERE d.connection_id = $1 ORDER BY d.updated_at DESC, d.id LIMIT $2`, connectio
 			return err
 		}
 
+		// ceiling: erp_writebacks has no connection_id index; add one when a connection's write-backs pass ~10k rows.
 		rows, err = tx.Query(ctx, `SELECT w.id::text, w.invoice_id::text, i.invoice_number, w.outcome, w.state, w.reason, w.attempt, w.created_at
 FROM erp_writebacks w LEFT JOIN invoices i ON i.id = w.invoice_id
 WHERE w.connection_id = $1 ORDER BY w.created_at DESC, w.id DESC LIMIT $2`, connectionID, overviewWritebacks)

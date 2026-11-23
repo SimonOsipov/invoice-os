@@ -21,6 +21,7 @@ import {
   lookupKindText,
   lookupValueLabel,
   mappingChanges,
+  BLANK_USES_DEFAULT,
   saveErpLookups,
   saveErpMapping,
   type Lookup,
@@ -186,10 +187,12 @@ export function FieldMappingModal({
                   onChange={(e) => setEdits((s) => ({ ...s, [f.target]: e.target.value }))}
                   style={{ ...MONO_INPUT, color: 'var(--action)' }}
                 />
-                {f.origin === 'client' && edit !== null ? (
+                {f.origin === 'client' && edit !== null && edit?.trim() !== '' ? (
                   <button type="button" data-testid="field-mapping-default" disabled={busy} onClick={() => setEdits((s) => ({ ...s, [f.target]: null }))} className="pf-btn" style={SMALL_BTN}>
                     {USE_DEFAULT}
                   </button>
+                ) : f.origin === 'client' && edit !== undefined && edit !== null ? (
+                  <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>{BLANK_USES_DEFAULT}</span>
                 ) : (
                   <span />
                 )}

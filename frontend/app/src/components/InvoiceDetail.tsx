@@ -259,7 +259,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     { immediate: shouldFetchInvoices(base) && notesWanted, deps: [invoiceId, notesWanted] },
   )
 
-  // A failed read is silent (D6): the mark is an extra, never a reason to fail the view. Firm only (D26).
+  // A failed read is silent: the mark is an extra, never a reason to fail the view. Firm only.
   const erpEntityId = inv?.entity_id ?? null
   const erpMarks = useAsync<DocumentMark[]>(
     () => (base && erpEntityId ? getInvoiceErpMarks(ctx.authedFetch, base, erpEntityId, invoiceId) : Promise.resolve([])),

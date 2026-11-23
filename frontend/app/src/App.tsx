@@ -520,22 +520,27 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     bootView === 'settings' && availableSettingsTab(seed.settingsTab, mode) === 'connectors' ? seed.connectionId : null,
   )
   // A cold connector link with no usable stamp: the owner is the client whose list holds the connection.
-  // Lists answer 200 for any client, so the search issues no 404; the detail reads once, under the owner.
+  // The detail reads once, under the owner. ceiling: 4 list reads in flight; raise it if a firm's client count makes the search slow.
   useEffect(() => {
     if (!ownerPending || entitiesList.length === 0) return
     const done = () => setOwnerPending(false)
     if (erpConnectionId !== bootConnectionId || !base || clients.some((c) => c.entityId === bootStampId)) return done()
     let live = true
-    Promise.all(
-      entitiesList.map((e) =>
+    let owner: string | null = null
+    let next = 0
+    const worker = async () => {
+      while (live && owner === null && next < entitiesList.length) {
+        const e = entitiesList[next++]
         // .catch, not .then(ok, err): a malformed body throws inside ok, which err would not see.
-        listErpConnections(authedFetch, base, e.id)
-          .then((l) => (l.connections.some((c) => c.id === bootConnectionId) ? e.id : null))
-          .catch(() => null),
-      ),
-    ).then((owners) => {
+        await listErpConnections(authedFetch, base, e.id)
+          .then((l) => {
+            if (l.connections.some((c) => c.id === bootConnectionId)) owner = e.id
+          })
+          .catch(() => undefined)
+      }
+    }
+    Promise.all(Array.from({ length: Math.min(4, entitiesList.length) }, worker)).then(() => {
       if (!live) return
-      const owner = owners.find((o) => o !== null)
       if (owner) adoptBatchClient(owner)
       done()
     })

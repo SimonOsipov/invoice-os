@@ -112,6 +112,7 @@ export const MODAL_TITLE = 'Edit field mapping'
 export const MODAL_FIELDS = 'Fields'
 export const MODAL_LOOKUPS = 'Lookups'
 export const USE_DEFAULT = 'Use default'
+export const BLANK_USES_DEFAULT = 'Blank saves as Use default'
 export const ADD_LOOKUP = 'Add lookup'
 export const SAVE = 'Save'
 export const SAVING = 'Saving…'
@@ -176,12 +177,12 @@ const WRITEBACK_REASON: Record<string, string> = {
 }
 const WRITEBACK_RESULT: Record<string, string> = { accepted: 'ACCEPTED', rejected: 'REJECTED', failed: 'FAILED' }
 
-// An unknown code reads as itself, so a server that learns a new one still shows something true.
 export function activitySummary(c: ActivityCounts): string {
   if (c.pulled === 0) return ACTIVITY_NONE
   return `${c.pulled} pulled · ${c.drafted} new drafts · ${c.linked} linked · ${c.held} held · ${c.failed} failed · ${c.deleted} deleted in the ERP · ${c.pending} in progress`
 }
 
+// The mappers below read an unknown code as itself, so a server that learns a new one still shows something true.
 export function documentOutcome(doc: Pick<SourceDocWire, 'state'>): string {
   return OUTCOME[doc.state] ?? doc.state
 }
@@ -210,8 +211,9 @@ export function writebackText(w: Pick<WritebackWire, 'state' | 'reason'>): strin
 }
 
 /**
- * The changed rows only. An edit of null is "Use default" (a client row only). A blank on a client or
- * defaulted row is null; a blank on an unmapped row is no change.
+ * The changed rows only. An edit of null is "Use default" (a client row only), and so is a blank on a client
+ * row. A blank on a default or unmapped row is no change: the server cannot store "unmapped", and a null
+ * path there would only delete an override that does not exist.
  */
 export function mappingChanges(fields: FieldView[], edits: Record<string, string | null>): FieldChange[] {
   const out: FieldChange[] = []
@@ -219,10 +221,8 @@ export function mappingChanges(fields: FieldView[], edits: Record<string, string
     if (!(f.target in edits)) continue
     const e = edits[f.target]
     const text = e === null ? '' : e.trim()
-    if (e === null) {
+    if (text === '') {
       if (f.origin === 'client') out.push({ target: f.target, source_path: null })
-    } else if (text === '') {
-      if (f.origin !== 'none') out.push({ target: f.target, source_path: null })
     } else if (text !== (f.source_path ?? '')) {
       out.push({ target: f.target, source_path: text })
     }
@@ -232,22 +232,26 @@ export function mappingChanges(fields: FieldView[], edits: Record<string, string
 
 const sameLookup = (a: Lookup, b: Lookup) => LOOKUP_VALUE_KEYS.every((k) => (a[k] ?? null) === (b[k] ?? null))
 const noValues = (l: Lookup) => LOOKUP_VALUE_KEYS.every((k) => (l[k] ?? null) === null)
-const lookupId = (l: Lookup) => JSON.stringify([l.kind, l.erp_key])
+// The server trims each erp_key and refuses a duplicate, so identity is the trimmed key.
+const lookupId = (l: Lookup) => JSON.stringify([l.kind, l.erp_key.trim()])
 
 /** Added and edited entries as they are; a removed one as its key with every value null; an unchanged one absent. */
 export function lookupChanges(before: Lookup[], after: Lookup[]): Lookup[] {
   const was = new Map(before.map((l) => [lookupId(l), l]))
   const out: Lookup[] = []
-  const kept = new Set<string>()
+  // A removed key re-added keeps both rows in the draft; the one with values is the upsert.
+  const now = new Map<string, Lookup>()
   for (const l of after) {
     const id = lookupId(l)
-    kept.add(id)
+    if (!(now.has(id) && noValues(l))) now.set(id, { ...l, erp_key: l.erp_key.trim() })
+  }
+  for (const [id, l] of now) {
     const old = was.get(id)
     if (old ? !sameLookup(old, l) : !noValues(l)) out.push(l)
   }
   for (const [id, old] of was) {
-    if (kept.has(id)) continue
-    out.push({ kind: old.kind, erp_key: old.erp_key, tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null })
+    if (now.has(id)) continue
+    out.push({ kind: old.kind, erp_key: old.erp_key.trim(), tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null })
   }
   return out
 }
@@ -303,7 +307,7 @@ export function saveErpLookups(
   return f<LookupsView>(lookupsPath(base, entityId, system, externalKey), { method: 'PUT', body: { lookups } })
 }
 
-/** A 200 body without a marks array reads as no marks (D22): a loose test mock must not break the invoice view. */
+/** A 200 body without a marks array reads as no marks: a body without marks is empty. */
 export async function getInvoiceErpMarks(
   f: AuthedFetch,
   base: string,

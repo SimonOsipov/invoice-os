@@ -233,6 +233,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {settingsTab === 'connectors' &&
         (activeEntity && ctx.erpConnectionId ? (
           <ConnectorDetail
+            key={`${activeEntity.id}/${ctx.erpConnectionId}`}
             ctx={ctx}
             entityId={activeEntity.id}
             connectionId={ctx.erpConnectionId}

@@ -965,7 +965,7 @@ func TestRLS_ErpMappingTablesMigrationDownUp(t *testing.T) {
 		var policies int
 		var grants bool
 		if err := tx.QueryRow(ctx,
-			`SELECT c.relrowsecurity AND c.relforcerowsecurity, (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = $1), has_table_privilege('invoice_app', c.oid, 'SELECT, INSERT, UPDATE, DELETE') FROM pg_class c WHERE c.oid = to_regclass($2)`,
+			`SELECT c.relrowsecurity AND c.relforcerowsecurity, (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = $1 AND policyname = 'tenant_isolation'), has_table_privilege('invoice_app', c.oid, 'SELECT') AND has_table_privilege('invoice_app', c.oid, 'INSERT') AND has_table_privilege('invoice_app', c.oid, 'UPDATE') AND has_table_privilege('invoice_app', c.oid, 'DELETE') FROM pg_class c WHERE c.oid = to_regclass($2)`,
 			table, "public."+table).Scan(&forced, &policies, &grants); err != nil || !forced || policies != 1 || !grants {
 			t.Errorf("after Down then Up: %s FORCE RLS = %v, policies = %d, app grants = %v (err %v), want true, 1, true", table, forced, policies, grants, err)
 		}

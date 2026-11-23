@@ -128,7 +128,8 @@ func TestValidateMapping_RefusesEachBreach(t *testing.T) {
 		{"space", "issue_date", "a b", reasonPath},
 		{"index", "issue_date", "a[0]", reasonPath},
 		{"17 segments", "issue_date", strings.TrimSuffix(strings.Repeat("a.", 17), "."), reasonPath},
-		{"257 characters", "issue_date", strings.Repeat("a", 257), reasonPath},
+		// Valid segments throughout, so only the length refuses it.
+		{"257 characters", "issue_date", strings.Repeat("a", 64) + "." + strings.Repeat("b", 64) + "." + strings.Repeat("c", 64) + "." + strings.Repeat("d", 62), reasonPath},
 		{"header reads []", "issue_date", "lines[].date", reasonHeaderArr},
 		{"line reads none", "line_quantity", "qty", reasonLineArr},
 		{"line reads two", "line_quantity", "a[].b[].c", reasonLineArr},

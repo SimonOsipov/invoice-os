@@ -12,10 +12,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 )
 
-var (
-	ErrNoMapping  = errors.New("erp: no fixed mapping for this system")
-	ErrUnmappable = errors.New("erp: document cannot be mapped")
-)
+var ErrUnmappable = errors.New("erp: document cannot be mapped")
 
 // HashVersion versions the hashedContent projection; a stored hash of another version is never compared.
 const HashVersion = 1

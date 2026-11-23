@@ -378,8 +378,9 @@ func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 		s.gotFields[0].SourcePath == nil || *s.gotFields[0].SourcePath != "x.y" || s.gotFields[1].SourcePath != nil {
 		t.Errorf("save mapping: %d %+v", w.Code, s.gotFields)
 	}
+	s.gotEntity = ""
 	w = do(s.mux(nil), "PUT", lookupsPath, `{"lookups":[{"kind":"item","erp_key":"k"}]}`, true)
-	if w.Code != 200 || s.gotSystem != "fake" || s.gotExternalKey != "co-1" || len(s.gotLookups) != 1 || s.gotLookups[0].ERPKey != "k" {
+	if w.Code != 200 || s.gotEntity != "E" || s.gotSystem != "fake" || s.gotExternalKey != "co-1" || len(s.gotLookups) != 1 || s.gotLookups[0].ERPKey != "k" {
 		t.Errorf("save lookups: %d %+v key %q", w.Code, s.gotLookups, s.gotExternalKey)
 	}
 	s.gotEntity, s.gotSystem, s.gotExternalKey = "", "", ""

@@ -132,6 +132,7 @@ type ingestEnv struct {
 	val          *stubValidator
 	worker       *IngestWorker
 	fetches      atomic.Int64
+	partyFetches atomic.Int64
 	onFetch      func(ctx context.Context, ref DocRef) (Document, error) // nil: the fake
 	jobSeq       atomic.Int64
 }
@@ -159,6 +160,10 @@ func newIngestOn(t *testing.T, super, app *pgxpool.Pool, key string) *ingestEnv 
 				return e.onFetch(ctx, ref)
 			}
 			return base.Fetch(ctx, c, ref)
+		},
+		fetchParty: func(ctx context.Context, c Credentials, scope, id string) (Party, error) {
+			e.partyFetches.Add(1)
+			return base.FetchParty(ctx, c, scope, id)
 		},
 	}
 	reg, err := NewRegistry(e.script)

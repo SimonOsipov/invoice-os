@@ -359,6 +359,9 @@ func TestIngest_NoCustomerIdReadsNoCustomerLookup(t *testing.T) {
 			t.Errorf("%s buyer = %s/%s, want nothing: no customer id", id, str0(b.TIN), str0(b.State))
 		}
 	}
+	if n := e.partyFetches.Load(); n != 0 {
+		t.Errorf("FetchParty called %d times, want 0: no customer id to ask for", n)
+	}
 }
 
 func TestIngest_LookupsDoNotMoveTheContentHash(t *testing.T) {
@@ -389,6 +392,11 @@ func TestIngest_InvalidEffectiveMappingFails(t *testing.T) {
 func TestIngest_MappingEditDoesNotMarkAnAcceptedInvoice(t *testing.T) {
 	e := newIngest(t)
 	inv := acceptedDraft(e)
+	var first *string
+	mustScan(t, e.super, "SELECT mapping_fingerprint FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2", []any{e.conn, docOne}, &first)
+	if first == nil || *first != Fingerprint(testFake(t).DefaultMapping()) {
+		t.Fatalf("first ingest wrote mapping_fingerprint %v, want the default mapping's", first)
+	}
 	e.override(e.entity, "fake", "line_description", "lines[].item_id")
 	e.mustWork(docOne, "2")
 

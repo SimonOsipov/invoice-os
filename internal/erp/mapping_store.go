@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -107,6 +108,8 @@ func (s *Store) SaveMapping(ctx context.Context, entityID, system string, change
 		if !ok {
 			return ErrUnknownSystem
 		}
+		id, _ := uuid.Parse(entityID) // requireClient parsed it; the lock key needs the one canonical spelling
+		entityID = id.String()
 		// ValidateMapping reads across rows; the lock keeps two saves from each passing against the other's old state.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('erp_mapping:' || $1::text || ':' || $2::text, 0))`, entityID, system); err != nil {
 			return err

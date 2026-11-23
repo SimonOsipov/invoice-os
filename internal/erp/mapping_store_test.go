@@ -410,6 +410,8 @@ func TestStore_MappingOfAnUnregisteredSystemIsRefused(t *testing.T) {
 	before := f.stored(t)
 	_, err := f.store.Mapping(f.admin, f.x, "quickbooks")
 	wantErr(t, "Mapping", err, ErrUnknownSystem)
+	_, err = f.store.Lookups(f.admin, f.x, "quickbooks", "co-1")
+	wantErr(t, "Lookups", err, ErrUnknownSystem)
 	_, err = f.store.SaveMapping(f.admin, f.x, "quickbooks", validFields())
 	wantErr(t, "SaveMapping", err, ErrUnknownSystem)
 	_, err = f.store.SaveLookups(f.admin, f.x, "quickbooks", "co-1", validLookups())
@@ -493,9 +495,10 @@ func TestStore_SaveMappingRefusesEachInvalidChange(t *testing.T) {
 	}{
 		{"unknown target", f.store, []FieldChange{good, chg("no_such_target", "lines[].x")}, []string{"no_such_target", reasonUnknown}},
 		{"the same target twice", f.store, []FieldChange{chg("line_description", "lines[].item_id"), chg("line_description", "lines[].description")}, []string{"line_description"}},
-		{"no rows", f.store, nil, nil},
-		{"an empty list", f.store, []FieldChange{}, nil},
-		{"one row more than the targets", f.store, append(slices.Clone(all), chg(all[0].Target, "number")), nil},
+		{"no rows", f.store, nil, []string{"fields"}},
+		{"an empty list", f.store, []FieldChange{}, []string{"fields"}},
+		// One past the limit repeats a target, so only the row count says "fields".
+		{"one row more than the targets", f.store, append(slices.Clone(all), chg(all[0].Target, "number")), []string{"fields"}},
 		{"a header target reading an array", f.store, []FieldChange{good, chg("issue_date", "lines[].d")}, []string{"issue_date", reasonHeaderArr}},
 		{"a line target on another array", f.store, []FieldChange{good, chg("line_quantity", "Line[].Qty")}, []string{"line_quantity", reasonOneArray}},
 		{"a malformed path", f.store, []FieldChange{good, chg("line_total", "lines[].a b")}, []string{"line_total", reasonPath}},
@@ -528,14 +531,22 @@ func TestStore_SaveMappingWaitsForTheClientSystemLock(t *testing.T) {
 		t.Fatalf("hold lock: %v", err)
 	}
 
-	done := make(chan error, 1)
+	done, doneUpper := make(chan error, 1), make(chan error, 1)
 	go func() {
 		_, err := f.store.SaveMapping(bounded(t, f.admin), f.x, "fake", validFields())
 		done <- err
 	}()
+	// The same client spelled in capitals is the same client and the same lock.
+	go func() {
+		_, err := f.store.SaveMapping(bounded(t, f.admin), strings.ToUpper(f.x), "fake", validFields())
+		doneUpper <- err
+	}()
 	select {
 	case err := <-done:
 		t.Errorf("SaveMapping(X, fake) returned %v while the lock was held, want it to wait", err)
+		return
+	case err := <-doneUpper:
+		t.Errorf("SaveMapping(X in capitals, fake) returned %v while the lock was held, want it to wait", err)
 		return
 	case <-time.After(300 * time.Millisecond):
 	}
@@ -565,6 +576,14 @@ func TestStore_SaveMappingWaitsForTheClientSystemLock(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Error("SaveMapping(X, fake) did not return after the lock was released")
+	}
+	select {
+	case err := <-doneUpper:
+		if err != nil {
+			t.Errorf("SaveMapping(X in capitals, fake) after the release = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("SaveMapping(X in capitals, fake) did not return after the lock was released")
 	}
 }
 

@@ -397,44 +397,56 @@ func TestFakeDefaultMapping_CoversEveryTargetAndResolves(t *testing.T) {
 
 func TestFakeInvoiceBody_RoundsEachLineHalfAwayFromZero(t *testing.T) {
 	inv := seedInvoice{id: "d", number: "R-1", date: "2026-05-01", customerID: "c"}
-	body, err := fakeInvoiceBody(inv, []fakeLine{
-		{"a", "3", "33.335", "7.5"}, {"b", "1", "0.125", "0"}, {"c", "2", "10.00", "7.5"}, {"d", "1", "-0.125", "0"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Subtotal, VAT, Total string
-		Lines                []struct {
-			LineTotal string `json:"line_total"`
-			LineTax   string `json:"line_tax"`
-		}
-	}
-	// The body uses lower-case keys; decode them by hand.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		t.Fatal(err)
-	}
-	for k, dst := range map[string]*string{"subtotal": &got.Subtotal, "vat": &got.VAT, "total": &got.Total} {
-		if err := json.Unmarshal(raw[k], dst); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := json.Unmarshal(raw["lines"], &got.Lines); err != nil {
-		t.Fatal(err)
-	}
-	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"-0.13", "0.00"}}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("lines = %d", len(got.Lines))
-	}
-	for i, w := range want {
-		if got.Lines[i].LineTotal != w[0] || got.Lines[i].LineTax != w[1] {
-			t.Errorf("line %d = %s/%s, want %s/%s", i, got.Lines[i].LineTotal, got.Lines[i].LineTax, w[0], w[1])
-		}
-	}
-	// 100.01 + 0.13 + 20.00 - 0.13 and 7.50 + 0.00 + 1.50 + 0.00.
-	if got.Subtotal != "120.01" || got.VAT != "9.00" || got.Total != "129.01" {
-		t.Errorf("header = %s %s %s, want 120.01 9.00 129.01", got.Subtotal, got.VAT, got.Total)
+	for _, c := range []struct {
+		name      string
+		lines     []fakeLine
+		wantLines [][2]string // line total, line tax
+		wantHdr   [3]string   // subtotal, vat, total
+	}{
+		{"ties round away from zero",
+			[]fakeLine{{"a", "3", "33.335", "7.5"}, {"b", "1", "0.125", "0"}, {"c", "2", "10.00", "7.5"}, {"d", "1", "-0.125", "0"}},
+			[][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"-0.13", "0.00"}},
+			[3]string{"120.01", "9.00", "129.01"}},
+		// Two 0.004 lines sum to 0.00, not the unrounded 0.01; two 0.4% taxes on 1.00 sum to 0.00, not 0.01.
+		{"the header sums the rounded lines",
+			[]fakeLine{{"a", "1", "0.004", "0"}, {"b", "1", "0.004", "0"}, {"c", "1", "1.00", "0.4"}, {"d", "1", "1.00", "0.4"}},
+			[][2]string{{"0.00", "0.00"}, {"0.00", "0.00"}, {"1.00", "0.00"}, {"1.00", "0.00"}},
+			[3]string{"2.00", "0.00", "2.00"}},
+		// 0.005 rounds to a 0.01 total, and 50% of that is 0.005, which rounds to 0.01; on the unrounded 0.005 it would be 0.00.
+		{"the tax is taken on the rounded line total",
+			[]fakeLine{{"e", "1", "0.005", "50"}},
+			[][2]string{{"0.01", "0.01"}},
+			[3]string{"0.01", "0.01", "0.02"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body, err := fakeInvoiceBody(inv, c.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Subtotal string `json:"subtotal"`
+				VAT      string `json:"vat"`
+				Total    string `json:"total"`
+				Lines    []struct {
+					LineTotal string `json:"line_total"`
+					LineTax   string `json:"line_tax"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Lines) != len(c.wantLines) || len(c.wantLines) == 0 {
+				t.Fatalf("lines = %d, want %d", len(got.Lines), len(c.wantLines))
+			}
+			for i, w := range c.wantLines {
+				if got.Lines[i].LineTotal != w[0] || got.Lines[i].LineTax != w[1] {
+					t.Errorf("line %d = %s/%s, want %s/%s", i, got.Lines[i].LineTotal, got.Lines[i].LineTax, w[0], w[1])
+				}
+			}
+			if h := [3]string{got.Subtotal, got.VAT, got.Total}; h != c.wantHdr {
+				t.Errorf("header = %v, want %v", h, c.wantHdr)
+			}
+		})
 	}
 }
 

@@ -96,6 +96,10 @@ func TestApplyLookups_EmptyKeysMatchNothing(t *testing.T) {
 		{Kind: "customer", ERPKey: "x", TIN: sp("12345678-0001")},
 		{Kind: "tax_code", ERPKey: "x", TaxCategory: sp("ZERO_VAT")},
 		{Kind: "item", ERPKey: "x", HSNCode: sp("H")},
+		// The table forbids an empty key; the guard holds even so.
+		{Kind: "customer", ERPKey: "", TIN: sp("12345678-0001")},
+		{Kind: "tax_code", ERPKey: "", TaxCategory: sp("ZERO_VAT")},
+		{Kind: "item", ERPKey: "", HSNCode: sp("H")},
 	})
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("input changed: %+v", m.In)

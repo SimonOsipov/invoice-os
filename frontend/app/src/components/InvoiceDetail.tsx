@@ -83,6 +83,8 @@ import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../
 import { NotesCard } from './NotesCard'
 import { UndoImportControl } from './UndoImportControl'
 import { useUndoableBatch } from '../lib/useUndoableBatch'
+import { changedAfterClearance, getInvoiceErpMarks, type DocumentMark } from '../lib/erpConnectionDetail'
+import { systemLabel } from '../lib/erpConnections'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ExplainPanel } from './ExplainPanel'
@@ -256,6 +258,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     () => (base ? getInvoiceNotes(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base) && notesWanted, deps: [invoiceId, notesWanted] },
   )
+
+  // A failed read is silent (D6): the mark is an extra, never a reason to fail the view. Firm only (D26).
+  const erpEntityId = inv?.entity_id ?? null
+  const erpMarks = useAsync<DocumentMark[]>(
+    () => (base && erpEntityId ? getInvoiceErpMarks(ctx.authedFetch, base, erpEntityId, invoiceId) : Promise.resolve([])),
+    { immediate: shouldFetchInvoices(base) && ctx.mode === 'firm' && erpEntityId != null, deps: [invoiceId, erpEntityId] },
+  )
+  const erpChanged = erpMarks.data ? changedAfterClearance(erpMarks.data) : null
 
   // `gen` closes the in-flight-tick race ([poll-overlay-not-rerun], mirrors InvoicesList's
   // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). `can_edit`
@@ -1051,6 +1061,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
           )}
         </div>
+
+        {erpChanged && (
+          <div data-testid="invoice-erp-changed-mark" style={{ marginBottom: 18, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}>
+            <div>Changed in the ERP after NRS accepted it</div>
+            <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{systemLabel(erpChanged.system).name} · {fmtDateTime(erpChanged.changed_after_clearance_at!)}</div>
+          </div>
+        )}
 
         {/* Gated on the approval fetch settling: useAsync carries data:null while loading,
             and a null run captions node 3 `Not required` -- a false compliance claim on an

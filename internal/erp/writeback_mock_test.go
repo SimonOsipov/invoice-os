@@ -19,19 +19,21 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
-// seedCommercialInvoiceType gives SubmitWorker's invoice-type self-check its synced 381 row (CI's DB has no
-// synced lists) and removes only what it inserted.
-func seedCommercialInvoiceType(t *testing.T, super *pgxpool.Pool) {
+// seedInvoiceTypes gives SubmitWorker's invoice-type self-check its synced 380, 381 and 384 rows (CI's DB
+// has no synced lists) and removes only what it inserted.
+func seedInvoiceTypes(t *testing.T, super *pgxpool.Pool) {
 	t.Helper()
-	tag, err := super.Exec(context.Background(),
-		`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', '381', '[{"code":"381","value":"Commercial Invoice"}]'::jsonb) ON CONFLICT DO NOTHING`)
-	if err != nil {
-		t.Fatalf("seed invoice-types 381: %v", err)
-	}
-	if tag.RowsAffected() == 1 {
-		t.Cleanup(func() {
-			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = 'invoice-types' AND code = '381'`)
-		})
+	for code, label := range map[string]string{"380": "Credit Note", "381": "Commercial Invoice", "384": "Debit Note"} {
+		tag, err := super.Exec(context.Background(),
+			`INSERT INTO nrs_codes (list, code, entries) VALUES ('invoice-types', $1, jsonb_build_array(jsonb_build_object('code', $1::text, 'value', $2::text))) ON CONFLICT DO NOTHING`, code, label)
+		if err != nil {
+			t.Fatalf("seed invoice-types %s: %v", code, err)
+		}
+		if tag.RowsAffected() == 1 {
+			t.Cleanup(func() {
+				_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = 'invoice-types' AND code = $1`, code)
+			})
+		}
 	}
 }
 
@@ -40,7 +42,7 @@ func seedCommercialInvoiceType(t *testing.T, super *pgxpool.Pool) {
 func mockWriteBack(t *testing.T, tin string) (e *ingestEnv, invoiceID string) {
 	t.Helper()
 	e = newIngest(t)
-	seedCommercialInvoiceType(t, e.super)
+	seedInvoiceTypes(t, e.super)
 	e.mustWork(docOne, "1")
 	d := e.wantState(docOne, "drafted")
 	invoiceID = *d.InvoiceID

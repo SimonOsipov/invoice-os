@@ -973,7 +973,6 @@ func TestStore_AdminSaveOutsideItsReachIsNotFound(t *testing.T) {
 	f := newMapFx(t)
 	other := seedTenant(t, f.super, "firm")
 	foreign := seedClient(t, f.super, other, "Foreign Client")
-	limitedAdmin := seedMember(t, f.super, f.tenant, "admin", "active", false, f.x)
 	count := func() int {
 		return f.rowCount(t) + countOf(t, f.super, "SELECT count(*) FROM erp_field_mappings WHERE tenant_id = $1", other)
 	}
@@ -984,7 +983,6 @@ func TestStore_AdminSaveOutsideItsReachIsNotFound(t *testing.T) {
 		entity string
 	}{
 		{"admin of another tenant", f.admin, foreign},
-		{"admin limited to X saving to Y", limitedAdmin, f.y},
 	} {
 		_, err := f.store.SaveMapping(c.ctx, c.entity, "fake", validFields())
 		wantErr(t, c.name+" SaveMapping", err, ErrNoSuchRecord)
@@ -997,12 +995,56 @@ func TestStore_AdminSaveOutsideItsReachIsNotFound(t *testing.T) {
 	if n := f.changed(t) + eventCount(t, f.super, other, "erp.mapping.changed"); n != 0 {
 		t.Errorf("%d erp.mapping.changed rows after refused saves, want 0", n)
 	}
-	// The same bodies save inside the admin's reach.
-	if _, err := f.store.SaveMapping(limitedAdmin, f.x, "fake", validFields()); err != nil {
-		t.Errorf("control: the limited admin's SaveMapping on X = %v, want nil", err)
+	// The same bodies save for the admin inside its own tenant.
+	if _, err := f.store.SaveMapping(f.admin, f.x, "fake", validFields()); err != nil {
+		t.Errorf("control: the admin's SaveMapping on X = %v, want nil", err)
 	}
-	if _, err := f.store.SaveLookups(limitedAdmin, f.x, "fake", "co-1", validLookups()); err != nil {
-		t.Errorf("control: the limited admin's SaveLookups on X = %v, want nil", err)
+	if _, err := f.store.SaveLookups(f.admin, f.x, "fake", "co-1", validLookups()); err != nil {
+		t.Errorf("control: the admin's SaveLookups on X = %v, want nil", err)
+	}
+}
+
+// A firm admin's scope is every client, so only a non-admin member can be out of reach.
+func TestStore_LimitedMemberSaveOutsideItsScopeIsRefusedAndReadIsNotFound(t *testing.T) {
+	f := newMapFx(t)
+	before := f.stored(t)
+	_, err := f.store.SaveMapping(f.limited, f.y, "fake", validFields())
+	wantErr(t, "limited SaveMapping on Y", err, ErrNotPermitted)
+	_, err = f.store.SaveLookups(f.limited, f.y, "fake", "co-1", validLookups())
+	wantErr(t, "limited SaveLookups on Y", err, ErrNotPermitted)
+	if got := f.stored(t); got != before {
+		t.Errorf("rows or audit changed after refused saves:\nbefore %s\nafter  %s", before, got)
+	}
+	_, err = f.store.Mapping(f.limited, f.y, "fake")
+	wantErr(t, "limited Mapping of Y", err, ErrNoSuchRecord)
+	_, err = f.store.Lookups(f.limited, f.y, "fake", "co-1")
+	wantErr(t, "limited Lookups of Y", err, ErrNoSuchRecord)
+}
+
+func TestReadOverrides_FiltersByClientAndSystem(t *testing.T) {
+	f := newMapFx(t)
+	f.override(t, f.x, "fake", "line_description", "lines[].item_id")
+	f.override(t, f.x, "second", "line_unit_price", "lines[].price")
+	f.override(t, f.y, "fake", "line_quantity", "lines[].qty")
+	ctx := context.Background()
+	tx, err := f.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, c := range []struct {
+		entity, system string
+		want           Mapping
+	}{
+		{f.x, "fake", Mapping{"line_description": "lines[].item_id"}},
+		{f.x, "second", Mapping{"line_unit_price": "lines[].price"}},
+		{f.y, "fake", Mapping{"line_quantity": "lines[].qty"}},
+		{f.y, "second", Mapping{}},
+	} {
+		got, err := readOverrides(ctx, tx, c.entity, c.system)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("readOverrides(%s, %s) = %v, %v, want %v", c.entity, c.system, got, err, c.want)
+		}
 	}
 }
 

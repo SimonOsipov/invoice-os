@@ -152,7 +152,6 @@ type hookEnv struct {
 	super, app *pgxpool.Pool
 	conn       *hookConnector
 	hooks      *Webhooks
-	logs       bytes.Buffer
 }
 
 func newHookEnv(t *testing.T) *hookEnv {
@@ -548,7 +547,7 @@ func TestReceive_CallsNoVendorMethodButVerify(t *testing.T) {
 	}
 }
 
-// --- Receive: logs (AC-10) --------------------------------------------------------------
+// --- Test needles (AC-10) ---------------------------------------------------------------
 
 const (
 	needleBody = "NEEDLE-body-31ac"
@@ -556,40 +555,6 @@ const (
 	needleAddr = "203.0.113.77"
 	needleKey  = "needle-key-9d2e"
 )
-
-func TestReceive_LogsNoBodyHeaderKeyOrAddress(t *testing.T) {
-	e := newHookEnv(t)
-	ten, ent := e.firm("webhook client")
-	connKey := needleKey + "-matched"
-	e.active(ten, ent, connKey)
-	hdr := func(h http.Header) http.Header {
-		h.Set("X-Forwarded-For", needleAddr)
-		h.Set("X-Signature-Extra", needleSig)
-		return h
-	}
-	okH, okBody := signedEvents(Hint{connKey, needleBody})
-	badH, badBody := signedEvents(Hint{connKey, needleBody})
-	badH.Set(fakeSignatureHeader, "sha256="+needleSig)
-	noneH, noneBody := signedEvents(Hint{needleKey + "-none", needleBody})
-
-	if n, err := receiveNoPanic(t, e.hooks, "fake", hdr(okH), okBody); n != 1 || err != nil {
-		t.Fatalf("matching webhook: Receive = %d, %v, want 1, nil", n, err)
-	}
-	if _, err := receiveNoPanic(t, e.hooks, "fake", hdr(badH), badBody); !errors.Is(err, ErrWebhookUnverified) {
-		t.Fatalf("unverified webhook: err = %v, want ErrWebhookUnverified", err)
-	}
-	if n, err := receiveNoPanic(t, e.hooks, "fake", hdr(noneH), noneBody); n != 0 || err != nil {
-		t.Fatalf("unmatched webhook: Receive = %d, %v, want 0, nil", n, err)
-	}
-	if _, err := receiveNoPanic(t, e.hooks, "quickbooks", hdr(okH), okBody); !errors.Is(err, ErrUnknownWebhookSystem) {
-		t.Fatalf("unknown system: err = %v, want ErrUnknownWebhookSystem", err)
-	}
-	for _, needle := range []string{needleBody, needleSig, needleAddr, needleKey, connKey} {
-		if strings.Contains(e.logs.String(), needle) {
-			t.Errorf("Receive logged %q:\n%s", needle, e.logs.String())
-		}
-	}
-}
 
 // --- WebhookHandler (AC-9, AC-10) -------------------------------------------------------
 

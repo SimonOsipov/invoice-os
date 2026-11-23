@@ -22,7 +22,6 @@ import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
 import type { LineTarget } from './lib/validationApi'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
-import { initialConnectors } from './lib/connectors'
 import {
   addFiles,
   attachDocumentIds,
@@ -147,7 +146,6 @@ import type {
   Client,
   ConnectorId,
   ConnectorMappings,
-  ConnectorsState,
   CreateStep,
   Draft,
   DraftLineNRSKey,
@@ -484,7 +482,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // Settings opens on Members: parseLocation returns that tab for a URL that names none.
   // SETTINGS_TABS' array order decides only which renders first.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => availableSettingsTab(seed.settingsTab, mode))
-  const [connectors, setConnectors] = useState<ConnectorsState>(() => initialConnectors(session.handoff === true))
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
@@ -1622,10 +1619,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     window.history.replaceState(replaceStamp(), '', url)
   }
 
-  function toggleConnector(id: ConnectorId) {
-    setConnectors((c) => ({ ...c, [id]: !c[id] }))
-  }
-
   function saveConnectorMapping(id: ConnectorId, rows: FieldMapRow[]) {
     setConnectorMappings((m) => ({ ...m, [id]: rows }))
   }
@@ -1791,7 +1784,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     switcherOpen,
     sandbox,
     settingsTab,
-    connectors,
     connectorMappings,
     filing,
     filingError,
@@ -1871,7 +1863,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     openDocumentReview,
     setSandbox,
     setSettingsTab,
-    toggleConnector,
     saveConnectorMapping,
     openRule,
     closeRule,

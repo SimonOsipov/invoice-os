@@ -31,7 +31,7 @@ type Fake struct{ redirect *url.URL }
 func NewFake(redirect *url.URL) *Fake { return &Fake{redirect: redirect} }
 
 func (*Fake) System() string             { return fakeSystem }
-func (*Fake) Capabilities() Capabilities { return Capabilities{} }
+func (*Fake) Capabilities() Capabilities { return Capabilities{Webhooks: true} }
 
 // Authorize builds the fake consent page's URL.
 func (f *Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
@@ -258,8 +258,10 @@ func (*Fake) WriteBack(context.Context, Credentials, DocRef, WriteBack) (DocRef,
 	return DocRef{}, ErrUnsupported
 }
 
-func (*Fake) VerifyWebhook(context.Context, http.Header, []byte) ([]Hint, error) {
-	return nil, ErrUnsupported
+// EnsureSubscriptions has nothing to register; it only refuses an unseeded company.
+func (*Fake) EnsureSubscriptions(_ context.Context, _ Credentials, scope string) error {
+	if _, ok := fakeSeed[scope]; !ok {
+		return ErrUnknownScope
+	}
+	return nil
 }
-
-func (*Fake) EnsureSubscriptions(context.Context, Credentials, string) error { return ErrUnsupported }

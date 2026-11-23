@@ -344,15 +344,6 @@ func TestFake_UnsupportedOperations(t *testing.T) {
 	if _, err := f.WriteBack(ctx, cr, DocRef{}, WriteBack{}); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("WriteBack: %v", err)
 	}
-	if _, err := f.VerifyWebhook(ctx, nil, nil); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("VerifyWebhook: %v", err)
-	}
-	if err := f.EnsureSubscriptions(ctx, cr, "fake-co-1"); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("EnsureSubscriptions: %v", err)
-	}
-	if f.Capabilities() != (Capabilities{}) {
-		t.Error("capabilities not zero")
-	}
 }
 
 func TestFakeDefaultMapping_CoversEveryTargetAndResolves(t *testing.T) {

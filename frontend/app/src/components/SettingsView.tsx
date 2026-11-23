@@ -1,14 +1,8 @@
 // Settings — tabbed: Members (the workspace's people — MembersView, MEMB-01), Roles (the
 // approval seats those people hold — RolesView), ERP
-// connectors (toggle connect/disconnect, plus a per-connector detail view behind Manage),
-// API & webhooks (base URL, keys, endpoints, webhooks), and
+// connectors (ConnectorsView), API & webhooks (base URL, keys, endpoints, webhooks), and
 // signing & certificates. The last three are ported from Platform.dc.html ~L847-951 +
 // the settings slices of renderVals() (~L1397-1435).
-//
-// The open connector and the mapping modal are view state scoped to this tab, so they live
-// here rather than in ctx (the EntityFormModal/ClientsView precedent).
-// Saved mappings are the exception — those are workspace state (ctx.connectorMappings),
-// so they outlive navigating away from Settings.
 //
 // Company tab (task-304, INVCR-01-19, AC-4) — IN-HOUSE ONLY, prepended ahead of the
 // shared SETTINGS_TABS list. Placement call: a firm workspace already has a dedicated
@@ -26,18 +20,17 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
-import { API_BASE, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
+import { API_BASE, CERTS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
 import { COMPANY_ADMIN_ONLY, companySetupAccess } from '../lib/members'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
-import { ConnectorDetail } from './ConnectorDetail'
+import { ConnectorsView } from './ConnectorsView'
 import { EntityFormModal } from './EntityFormModal'
-import { FieldMappingModal } from './FieldMappingModal'
 import type { Entity } from '../lib/portfolio'
 import { MembersView } from './MembersView'
 import { RolesView } from './RolesView'
 import { WorkspaceSettings } from './WorkspaceSettings'
-import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
+import type { PlatformCtx, SettingsTab } from '../types'
 
 // The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
 const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
@@ -49,15 +42,10 @@ function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
 }
 
 export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
-  const { settingsTab, connectors, mode, activeEntity, entitiesState, refetchEntities } = ctx
+  const { settingsTab, mode, activeEntity, entitiesState, refetchEntities } = ctx
   const companyAccess = companySetupAccess(ctx.membersState, ctx.members)
   const adminOnly = companyAccess === 'wait'
   const companyNoteId = useId()
-  const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
-  const [openId, setOpenId] = useState<ConnectorId | null>(null)
-  const [mappingOpen, setMappingOpen] = useState(false)
-  // A connector disconnected from another surface must not leave its detail view mounted.
-  const openDef = CONNECTOR_DEFS.find((c) => c.id === openId && connectors[c.id]) ?? null
 
   // Company tab's add/edit modal state — local, not ctx, same precedent as ClientsView's
   // own `modal` state: it derives from this view's own resolved entity + refetch handle,
@@ -90,14 +78,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
     return () => ro.disconnect()
   }, [settingsTab, tabs.length])
 
-  function goList() {
-    setOpenId(null)
-    setMappingOpen(false)
-  }
-
   function selectTab(t: SettingsTab) {
     ctx.setSettingsTab(t)
-    goList()
   }
 
   return (
@@ -247,72 +229,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
       {settingsTab === 'workspace' && <WorkspaceSettings ctx={ctx} />}
 
-      {/* Connector detail — replaces the list while a connector is open */}
-      {settingsTab === 'connectors' && openDef && (
-        <>
-          <ConnectorDetail
-            ctx={ctx}
-            def={openDef}
-            env="SANDBOX"
-            onBack={goList}
-            onEditMapping={() => setMappingOpen(true)}
-          />
-          {mappingOpen && <FieldMappingModal ctx={ctx} def={openDef} onClose={() => setMappingOpen(false)} />}
-        </>
-      )}
-
-      {/* Connectors */}
-      {settingsTab === 'connectors' && !openDef && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: 0, maxWidth: 560, lineHeight: 1.55 }}>
-              Sync invoices automatically from your ERP or accounting system. Documents are pulled, validated, and queued for transmission.
-            </p>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none' }}>
-              {connCount} / 6 CONNECTED
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {CONNECTOR_DEFS.map((c) => {
-              const on = !!connectors[c.id]
-              return (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}>
-                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                      <span style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</span>
-                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '1px 5px', letterSpacing: '0.06em' }}>{c.cat}</span>
-                    </div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>
-                      {on ? 'Synced 2 min ago' : 'No sync yet'}
-                    </div>
-                  </div>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: on ? 'var(--status-green-bg)' : 'var(--bg-3)', border: `1px solid ${on ? 'var(--status-green-border)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-sm)', padding: '4px 10px' }}>
-                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: on ? 'var(--status-green-text)' : 'var(--fg-3)' }} />
-                    <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: on ? 'var(--status-green-text)' : 'var(--fg-3)', letterSpacing: '0.04em' }}>{on ? 'CONNECTED' : 'NOT CONNECTED'}</span>
-                  </span>
-                  {on && (
-                    <button
-                      onClick={() => setOpenId(c.id)}
-                      className="pf-btn"
-                      style={{ flex: 'none', height: 34, padding: '0 15px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-1)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
-                    >
-                      Manage
-                    </button>
-                  )}
-                  <button
-                    onClick={() => ctx.toggleConnector(c.id)}
-                    className="pf-btn"
-                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: `1px solid ${on ? 'var(--line-2)' : 'var(--action)'}`, background: on ? 'transparent' : 'var(--action)', color: on ? 'var(--fg-2)' : 'var(--primary-foreground)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
-                  >
-                    {on ? 'Disconnect' : 'Connect'}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </>
-      )}
+      {settingsTab === 'connectors' && <ConnectorsView ctx={ctx} />}
 
       {/* API & webhooks */}
       {settingsTab === 'api' && (

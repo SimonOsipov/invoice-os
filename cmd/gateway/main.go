@@ -360,7 +360,7 @@ func readinessCheckHandlers(worker *url.URL, gatewayToken string, log *slog.Logg
 }
 
 // registerERPPages mounts the vendor's redirect target when the ERP mode is not off, and the fake
-// consent form when it is fake. The parameter is named Mux so the route scan reads the literals.
+// consent form and webhook route when it is fake. The parameter is named Mux so the route scan reads the literals.
 func registerERPPages(Mux *http.ServeMux, getenv func(string) string, worker *url.URL, gatewayToken string, log *slog.Logger) error {
 	mode, err := erpweb.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)))
 	if err != nil {
@@ -374,6 +374,8 @@ func registerERPPages(Mux *http.ServeMux, getenv func(string) string, worker *ur
 	Mux.Handle("GET /erp/callback", gateway.ERPCallbackPageHandler(worker, client, gatewayToken, log))
 	if mode == erpweb.ModeFake {
 		Mux.Handle("GET /erp/fake/consent", erpweb.FakeConsentPage(erpweb.FakeCodes()))
+		hookClient := &http.Client{Timeout: gateway.ERPWebhookTimeout, Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
+		Mux.Handle("POST /erp/webhooks/fake", gateway.ERPWebhookHandler(worker, hookClient, gatewayToken, "fake", log))
 	}
 	return nil
 }

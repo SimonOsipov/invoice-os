@@ -1,10 +1,10 @@
 // The fake ERP's invoices arrive as drafts over the deployed gateway: the preview runs the fake connector.
 // Every step acts on a client this run created; assertions are containment, never a tenant total.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, listInvoices, getAuditLog, rawFetch, apiBase, PERSONAS } from './client'
+import { login, createEntity, createInvoice, listInvoices, getAuditLog, PERSONAS } from './client'
 import { freshTin } from './fixtures'
+import { connectFake } from './erpFake'
 
-const FAKE = 'fake' // fakeSystem in internal/erp/fake.go
 const FAKE_KEY = 'fake-co-1' // fakeSeed key in internal/erp/fake_seed.go
 const NUMBERS = ['FK1-0001', 'FK1-0002', 'FK1-0003'] // fakeSeed fake-co-1 invoice numbers
 const FAKE_TOTAL = 107500 // fake line 100000.00 at 7.5% (fakeInvoiceBody in internal/erp/fake.go)
@@ -17,22 +17,6 @@ interface Payload {
   invoice_number: string
   linked?: boolean
   differs?: boolean
-}
-
-// The one connect step in this file: create the pending fake connection, then complete its consent
-// through the gateway's /erp/callback with the company code, as the consent page does.
-async function connectFake(token: string, entityId: string, key: string): Promise<string> {
-  const res = await rawFetch(`/api/portfolio/v1/entities/${entityId}/erp-connections`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: { system: FAKE },
-  })
-  expect(res.status).toBe(201)
-  const conn = res.body as { id: string; consent_url: string }
-  const state = new URL(conn.consent_url).searchParams.get('state') ?? ''
-  const done = await fetch(`${apiBase()}/erp/callback?${new URLSearchParams({ state, code: key })}`, { redirect: 'manual' })
-  expect(done.status).toBe(200)
-  return conn.id
 }
 
 test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {

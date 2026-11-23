@@ -3,8 +3,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CONNECTOR_DEFS } from '../data'
-import { connectorDetail } from '../lib/connectors'
+import { CONNECTOR_DEFS, connectorDetail } from '../lib/connectorDetailMock'
 import type { PlatformCtx } from '../types'
 import { ConnectorDetail } from './ConnectorDetail'
 

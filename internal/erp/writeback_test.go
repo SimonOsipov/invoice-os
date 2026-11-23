@@ -684,3 +684,21 @@ func TestWriteBack_AnotherTenantsArgsWriteNothing(t *testing.T) {
 		t.Errorf("a job bound to another tenant wrote %d times and recorded %d rows", e.writeCount(), n)
 	}
 }
+
+func TestWriteBack_RateLimitAtTheCapOnTheLastAttemptStillAudits(t *testing.T) {
+	e := newWB(t, nil)
+	docID := e.drafted()
+	for range 8 {
+		mustExec(t, e.super,
+			`INSERT INTO erp_writebacks (tenant_id, entity_id, connection_id, source_document_id, invoice_id, result_version, outcome, attempt, state, reason, river_job_id)
+			 VALUES ($1, $2, $3, $4, $5, 1, 'accepted', 1, 'failed', 'rate_limited', 1)`, e.tenant, e.entity, e.conn, docID, e.invoiceID)
+	}
+	e.writeScript = func(int, DocRef) (DocRef, error) { return DocRef{}, &RateLimitError{RetryAfter: time.Second} }
+	err := e.run(e.args(1), 8)
+	if _, snoozed := snoozeOf(err); err == nil || snoozed {
+		t.Fatalf("err = %v, want a plain error at the cap", err)
+	}
+	if au := e.audits("erp.writeback.failed"); len(au) != 1 || au[0]["failure"] != "rate_limited" {
+		t.Errorf("failed audits = %+v, want one rate_limited", au)
+	}
+}

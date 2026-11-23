@@ -170,9 +170,17 @@ func TestResultSink_ErrorOnTheFirstAttemptKeepsTheResultAndNeverResubmits(t *tes
 	idem := "req-" + uuid.NewString() + ":" + invoiceID
 	args := submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idem}
 	a := newScriptedAdapter(rsPaths[0].submit, rsPaths[0].submit)
+	capture := &capLog{}
 
-	if err := rsSubmitWorker(f, a, &recSink{err: errors.New("sink boom")}, nil).Work(ctx, newSubmitJob(1, 1, 8, args)); err != nil {
+	sink := &recSink{err: errors.New("sink boom"), insertKey: true}
+	if err := rsSubmitWorker(f, a, sink, slog.New(capture)).Work(ctx, newSubmitJob(1, 1, 8, args)); err != nil {
 		t.Fatalf("Work = %v, want nil: the result stays", err)
+	}
+	if keys := rsSinkKeys(t, f, tenantID); keys != 0 {
+		t.Errorf("sink key rows = %d, want 0 (rolled back to the savepoint)", keys)
+	}
+	if len(capture.errs) != 1 {
+		t.Errorf("Error log records = %d, want 1", len(capture.errs))
 	}
 	if s := wiRead(t, f, tenantID, invoiceID).status; s != "accepted" {
 		t.Errorf("invoice status = %q, want accepted", s)

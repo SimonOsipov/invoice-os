@@ -693,6 +693,8 @@ func TestRLS_ErpWritebacksMigrationDownUp(t *testing.T) {
 	ctx := context.Background()
 	migration := ewbMigration(t)
 	requireEwbTable(t, h.super)
+	// Built before the Down: the re-applied Up is judged on how it behaves, not only on its catalog entries.
+	wa, wb := ewbNewWorld(t, "du-a"), ewbNewWorld(t, "du-b")
 
 	tx := migratorTx(t, ctx)
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
@@ -733,10 +735,128 @@ func TestRLS_ErpWritebacksMigrationDownUp(t *testing.T) {
 		t.Errorf("after Down then Up: FORCE RLS = %v, policies = %d, grants as designed = %v (err %v), want true, 1, true", forced, policies, grants, err)
 	}
 
+	ewbBehaviourOfReappliedUp(t, tx, wa, wb)
+
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
 	if got := erpPublicTables(t, h.super, "after the rollback"); !slices.Equal(got, before) {
 		t.Errorf("public tables after the rollback = %v, want the %v seen before the Down", got, before)
+	}
+}
+
+// ewbBehaviourOfReappliedUp drives the table the migration's own Up just made, as its owner bound by FORCE:
+// the live-table tests cannot see a change to the migration file. Each case runs in a rolled-back savepoint.
+func ewbBehaviourOfReappliedUp(t *testing.T, tx pgx.Tx, a, b ewbWorld) {
+	t.Helper()
+	ctx := context.Background()
+	bind := func(q pgx.Tx, tenant, scope string) {
+		t.Helper()
+		if _, err := q.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true), set_config('app.entity_scope', $2, true)`, tenant, scope); err != nil {
+			t.Fatalf("bind the tenant: %v", err)
+		}
+	}
+	try := func(fn func(sp pgx.Tx) error) error {
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			t.Fatalf("savepoint: %v", err)
+		}
+		defer func() { _ = sp.Rollback(ctx) }()
+		return fn(sp)
+	}
+	bind(tx, a.tenant, "")
+	s := erpStr
+	const reasonCk = "erp_writebacks_reason_check"
+
+	for _, c := range []struct {
+		name string
+		row  ewbRow
+	}{
+		{"succeeded", ewbRow{}},
+		{"failed vendor", ewbRow{state: "failed", reason: s("vendor")}},
+		{"skipped superseded", ewbRow{state: "skipped", reason: s("superseded")}},
+	} {
+		if err := try(func(sp pgx.Tx) error { return ewbInsert(sp, a.tenant, a, c.row) }); err != nil {
+			t.Errorf("re-applied Up refused a valid %s row: %v", c.name, err)
+		}
+	}
+	for _, c := range []struct {
+		name, constraint string
+		row              ewbRow
+	}{
+		{"unknown outcome", "erp_writebacks_outcome_check", ewbRow{outcome: "x"}},
+		{"unknown state", "", ewbRow{state: "x"}},
+		{"result_version 0", "erp_writebacks_result_version_check", ewbRow{version: ewbInt(0)}},
+		{"attempt 0", "erp_writebacks_attempt_check", ewbRow{attempt: ewbInt(0)}},
+		{"succeeded with a reason", reasonCk, ewbRow{reason: s("vendor")}},
+		{"failed without a reason", reasonCk, ewbRow{state: "failed"}},
+		{"failed with a skipped reason", reasonCk, ewbRow{state: "failed", reason: s("superseded")}},
+		{"failed with deleted_in_erp", reasonCk, ewbRow{state: "failed", reason: s("deleted_in_erp")}},
+		{"skipped without a reason", reasonCk, ewbRow{state: "skipped"}},
+		{"skipped with a failed reason", reasonCk, ewbRow{state: "skipped", reason: s("vendor")}},
+	} {
+		err := try(func(sp pgx.Tx) error { return ewbInsert(sp, a.tenant, a, c.row) })
+		if c.constraint == "" { // reason_check also refuses an unknown state and sorts before state_check
+			ewbWantErr(t, err, "23514", "", "re-applied Up, "+c.name)
+			if got := pgConstraint(err); got != "erp_writebacks_state_check" && got != reasonCk {
+				t.Errorf("re-applied Up, %s tripped %q", c.name, got)
+			}
+			continue
+		}
+		ewbWantErr(t, err, "23514", c.constraint, "re-applied Up, "+c.name)
+	}
+
+	own := func(edit func(w *ewbWorld)) ewbWorld { w := a; edit(&w); return w }
+	for _, c := range []struct {
+		w          ewbWorld
+		constraint string
+	}{
+		{own(func(w *ewbWorld) { w.entity = b.entity }), "erp_writebacks_tenant_entity_fk"},
+		{own(func(w *ewbWorld) { w.conn = b.conn }), "erp_writebacks_tenant_connection_fk"},
+		{own(func(w *ewbWorld) { w.doc = b.doc }), "erp_writebacks_tenant_document_fk"},
+		{own(func(w *ewbWorld) { w.invoice = b.invoice }), "erp_writebacks_tenant_invoice_fk"},
+	} {
+		err := try(func(sp pgx.Tx) error { return ewbInsert(sp, a.tenant, c.w, ewbRow{}) })
+		ewbWantErr(t, err, "23503", c.constraint, "re-applied Up, a row on another tenant's "+c.constraint)
+	}
+
+	// The policy: own tenant only, then the client scope, and nothing without a tenant.
+	if err := try(func(sp pgx.Tx) error {
+		if err := ewbInsert(sp, a.tenant, a, ewbRow{}); err != nil {
+			return err
+		}
+		for _, c := range []struct {
+			name, tenant, scope string
+			want                int
+		}{
+			{"own tenant, every client", a.tenant, "", 1},
+			{"own tenant, scope *", a.tenant, "*", 1},
+			{"own tenant, its client", a.tenant, "{" + a.entity + "}", 1},
+			{"own tenant, another client", a.tenant, "{" + b.entity + "}", 0},
+			{"another tenant", b.tenant, "", 0},
+			{"no tenant", "", "", 0},
+		} {
+			bind(sp, c.tenant, c.scope)
+			var n int
+			if err := sp.QueryRow(ctx, `SELECT count(*) FROM erp_writebacks`).Scan(&n); err != nil {
+				return err
+			}
+			if n != c.want {
+				t.Errorf("re-applied Up, %s: rows visible = %d, want %d", c.name, n, c.want)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Errorf("re-applied Up, the policy cases: %v", err)
+	}
+	for _, c := range []struct{ name, bound, row string }{{"no tenant bound", "", a.tenant}, {"another tenant's tenant_id", a.tenant, b.tenant}} {
+		err := try(func(sp pgx.Tx) error {
+			bind(sp, c.bound, "")
+			return ewbInsert(sp, c.row, a, ewbRow{})
+		})
+		assertRLSViolation(t, err)
+		if err == nil {
+			t.Errorf("re-applied Up accepted an INSERT with %s", c.name)
+		}
 	}
 }

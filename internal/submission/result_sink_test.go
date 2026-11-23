@@ -103,7 +103,7 @@ func rsDrive(t *testing.T, f *effectsFixture, i int, sink submission.ResultSink,
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
 	t.Cleanup(cleanup)
-	idem := "req-" + uuid.NewString() + ":" + invoiceID
+	idem := rsIdem(invoiceID)
 	args := submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idem}
 	if p.poll == nil {
 		a := newScriptedAdapter()
@@ -123,6 +123,20 @@ func rsDrive(t *testing.T, f *effectsFixture, i int, sink submission.ResultSink,
 	pw := newTestPollWorker(f.app, a)
 	pw.Results, pw.Logger = sink, lg
 	return tenantID, invoiceID, 2, pw.Work(ctx, newPollJob(2, attempt, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1}))
+}
+
+func rsIdem(invoiceID string) string { return "req-rs:" + invoiceID }
+
+// rsSinkKeys counts the idempotency_keys rows a recSink with insertKey left behind.
+func rsSinkKeys(t *testing.T, f *effectsFixture, tenantID string) int {
+	t.Helper()
+	var keys int
+	if err := db.WithinTenantTx(context.Background(), f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT count(*) FROM idempotency_keys WHERE key LIKE 'sink:%'`).Scan(&keys)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return keys
 }
 
 func rsAttempt(i int) int {
@@ -206,13 +220,7 @@ func TestResultSink_FinalAttemptSinkErrorKeepsTheResult(t *testing.T) {
 			if n := auditCount(t, f, tenantID, ev); n != 1 {
 				t.Errorf("%s audit rows = %d, want 1", ev, n)
 			}
-			var keys int
-			if e := db.WithinTenantTx(context.Background(), f.app, tenantID, func(tx pgx.Tx) error {
-				return tx.QueryRow(context.Background(), `SELECT count(*) FROM idempotency_keys WHERE key LIKE 'sink:%'`).Scan(&keys)
-			}); e != nil {
-				t.Fatal(e)
-			}
-			if keys != 0 {
+			if keys := rsSinkKeys(t, f, tenantID); keys != 0 {
 				t.Errorf("sink key rows = %d, want 0 (rolled back to the savepoint)", keys)
 			}
 			if len(capture.errs) != 1 {
@@ -223,13 +231,42 @@ func TestResultSink_FinalAttemptSinkErrorKeepsTheResult(t *testing.T) {
 	}
 }
 
+// A sink that succeeds on the final attempt keeps its writes: the savepoint commits.
+func TestResultSink_FinalAttemptSinkSuccessKeepsItsWrites(t *testing.T) {
+	f := requireExchangeDB(t)
+	for i, p := range rsPaths {
+		t.Run(p.name, func(t *testing.T) {
+			capture := &capLog{}
+			sink := &recSink{insertKey: true}
+			tenantID, invoiceID, _, err := rsDrive(t, f, i, sink, slog.New(capture), 8)
+			if sink.count() != 1 {
+				t.Fatalf("sink calls = %d, want 1 (Work = %v)", sink.count(), err)
+			}
+			if keys := rsSinkKeys(t, f, tenantID); keys != 1 {
+				t.Errorf("sink key rows = %d, want the sink's 1 kept", keys)
+			}
+			if s := wiRead(t, f, tenantID, invoiceID).status; s != p.want {
+				t.Errorf("invoice status = %q, want %q", s, p.want)
+			}
+			if len(capture.errs) != 0 {
+				t.Errorf("Error log records = %d, want 0", len(capture.errs))
+			}
+		})
+	}
+}
+
 func TestResultSink_RedeliveryDoesNotCallAgain(t *testing.T) {
 	f := requireExchangeDB(t)
 	sink := &recSink{}
 	tenantID, invoiceID, _, _ := rsDrive(t, f, 0, sink, nil, 1)
-	// Job id 1 already applied in rsDrive: the same job again must not reach the sink.
-	args := submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: "req-redeliver:" + invoiceID}
-	_ = rsSubmitWorker(f, newScriptedAdapter(rsPaths[0].submit), sink, nil).Work(context.Background(), newSubmitJob(1, 1, 8, args))
+	if n := sink.count(); n != 1 {
+		t.Fatalf("sink calls after the first delivery = %d, want 1", n)
+	}
+	// Job id 1 already applied in rsDrive: the same job and key again must not reach the sink.
+	args := submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: rsIdem(invoiceID)}
+	if err := rsSubmitWorker(f, newScriptedAdapter(rsPaths[0].submit), sink, nil).Work(context.Background(), newSubmitJob(1, 1, 8, args)); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
 	if n := sink.count(); n != 1 {
 		t.Errorf("sink calls after the redelivery = %d, want 1", n)
 	}

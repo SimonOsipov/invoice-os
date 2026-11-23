@@ -150,6 +150,8 @@ describe('audit vocabulary', () => {
     expect(AUDIT_EVENTS['erp.document.pulled']?.label).toBe('ERP invoice pulled')
     expect(AUDIT_EVENTS['erp.document.skipped_duplicate']?.label).toBe('ERP invoice number already exists, no new invoice made')
     expect(AUDIT_EVENTS['erp.document.changed_after_clearance']?.label).toBe('ERP invoice changed after NRS accepted it')
+    expect(AUDIT_EVENTS['erp.writeback.succeeded']?.label).toBe('Result written back to the ERP')
+    expect(AUDIT_EVENTS['erp.writeback.failed']?.label).toBe('Result could not be written back to the ERP')
   })
 
   it('auditVocabulary_accountLabels', () => {

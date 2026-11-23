@@ -609,3 +609,81 @@ func TestWriteBack_MissingInvoiceCompletes(t *testing.T) {
 		t.Error("a missing invoice was written or recorded")
 	}
 }
+
+func TestWriteBack_FinalAttemptAuditsEveryFailingDocument(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	c2 := e.secondConn()
+	e.doc(c2, "fake-co-2-inv-1", "linked", e.invoiceID, false)
+	e.writeScript = func(int, DocRef) (DocRef, error) { return DocRef{}, errors.New("down") }
+	if err := e.run(e.args(1), 8); err == nil {
+		t.Fatal("the last attempt returned nil")
+	}
+	au := e.audits("erp.writeback.failed")
+	got := map[any]bool{}
+	for _, a := range au {
+		got[a["connection_id"]] = true
+	}
+	if len(au) != 2 || !got[e.conn] || !got[c2] {
+		t.Errorf("failed audits = %+v, want one per connection %s and %s", au, e.conn, c2)
+	}
+	if n := len(e.rows()); n != 2 {
+		t.Errorf("rows = %d, want 2", n)
+	}
+}
+
+func TestWriteBack_RateLimitNeverHidesAnotherDocumentsOutcome(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	c2 := e.secondConn()
+	e.doc(c2, "fake-co-2-inv-1", "linked", e.invoiceID, false)
+	limited := true
+	e.writeScript = func(_ int, ref DocRef) (DocRef, error) {
+		switch {
+		case ref.Scope == keyOne && limited:
+			return DocRef{}, &RateLimitError{RetryAfter: time.Minute}
+		case ref.Scope == wbCo2:
+			return DocRef{}, errors.New("down")
+		}
+		return ref, nil
+	}
+	err := e.run(e.args(1), 1)
+	if _, snoozed := snoozeOf(err); err == nil || snoozed {
+		t.Fatalf("err = %v, want the other document's plain error, not a snooze", err)
+	}
+	// The other document now succeeds: only the rate-limited one is left, so the job snoozes.
+	e.writeScript = func(_ int, ref DocRef) (DocRef, error) {
+		if ref.Scope == keyOne {
+			return DocRef{}, &RateLimitError{RetryAfter: time.Minute}
+		}
+		return ref, nil
+	}
+	before := e.writeCount()
+	if d, ok := snoozeOf(e.run(e.args(1), 2)); !ok || d != time.Minute {
+		t.Fatalf("second attempt snooze = %v, %v", d, ok)
+	}
+	if got := e.writes[before:]; len(got) != 2 {
+		t.Errorf("second attempt wrote %d documents, want both still open", len(got))
+	}
+	limited = false
+	e.writeScript = nil
+	before = e.writeCount()
+	e.mustRun(e.args(1), 3)
+	if got := e.writes[before:]; len(got) != 1 || got[0].Scope != keyOne {
+		t.Errorf("third attempt wrote %+v, want only fake-co-1", got)
+	}
+}
+
+func TestWriteBack_AnotherTenantsArgsWriteNothing(t *testing.T) {
+	e := newWB(t, nil)
+	e.drafted()
+	other := seedTenant(t, e.super, "firm")
+	a := e.args(1)
+	a.TenantID = other
+	e.mustRun(a, 1)
+	var n int
+	mustScan(t, e.super, "SELECT count(*) FROM erp_writebacks WHERE invoice_id = $1", []any{e.invoiceID}, &n)
+	if e.writeCount() != 0 || n != 0 {
+		t.Errorf("a job bound to another tenant wrote %d times and recorded %d rows", e.writeCount(), n)
+	}
+}

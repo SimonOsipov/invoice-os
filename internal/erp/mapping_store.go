@@ -285,20 +285,19 @@ func contains(ss []string, s string) bool {
 
 // checkCodes refuses the first value that is not on its NRS list, one query per list.
 func checkCodes(ctx context.Context, tx pgx.Tx, entries []Lookup) error {
-	type use struct{ kind, field string }
-	codes := map[string]map[string][]use{} // list -> code -> first use
+	unknown := map[string]map[string]bool{} // list -> codes asked, then those not found
 	for i := range entries {
 		for _, f := range lookupFields(&entries[i]) {
 			if f.list == "" || *f.val == nil {
 				continue
 			}
-			if codes[f.list] == nil {
-				codes[f.list] = map[string][]use{}
+			if unknown[f.list] == nil {
+				unknown[f.list] = map[string]bool{}
 			}
-			codes[f.list][**f.val] = append(codes[f.list][**f.val], use{entries[i].Kind, f.name})
+			unknown[f.list][**f.val] = true
 		}
 	}
-	for list, byCode := range codes {
+	for list, byCode := range unknown {
 		asked := make([]string, 0, len(byCode))
 		for c := range byCode {
 			asked = append(asked, c)
@@ -319,8 +318,12 @@ func checkCodes(ctx context.Context, tx pgx.Tx, entries []Lookup) error {
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		for _, uses := range byCode {
-			return invalidLookup(uses[0].kind + " " + uses[0].field + ": not on the NRS " + list + " list")
+	}
+	for i := range entries {
+		for _, f := range lookupFields(&entries[i]) {
+			if f.list != "" && *f.val != nil && unknown[f.list][**f.val] {
+				return invalidLookup(entries[i].Kind + " " + f.name + ": not on the NRS " + f.list + " list")
+			}
 		}
 	}
 	return nil

@@ -836,6 +836,22 @@ func TestStore_SaveLookupsChecksEachCodeAgainstItsOwnList(t *testing.T) {
 	}
 }
 
+func TestStore_SaveLookupsNamesTheFirstUnknownCodeInRequestOrder(t *testing.T) {
+	f := newMapFx(t)
+	seedNRSCodes(t, f.super)
+	entries := []Lookup{
+		{Kind: "customer", ERPKey: "a", TIN: strp(tinOne), State: strp("NG-AB"), LGA: strp("NG-ZZ-NOPE")},
+		{Kind: "item", ERPKey: "b", HSNCode: strp("9999.99")},
+		{Kind: "customer", ERPKey: "c", State: strp("NG-ZZ")},
+	}
+	const want = "customer lga: not on the NRS lgas list"
+	for i := range 20 {
+		if _, err := f.store.SaveLookups(f.admin, f.x, "fake", "co-1", entries); err == nil || err.Error() != want {
+			t.Fatalf("call %d: err = %v, want %q", i, err, want)
+		}
+	}
+}
+
 func TestStore_SaveLookupsRefusesEachBadEntry(t *testing.T) {
 	f := newMapFx(t)
 	seedNRSCodes(t, f.super)

@@ -51,7 +51,6 @@ import {
   CONNECTORS_POPUP_LINK,
   connectBody,
   connectErp,
-  listErpConnections,
   POLL_MAX_TICKS,
   POLL_MS,
   statusPill,
@@ -114,7 +113,8 @@ export function ConnectorDetail({
       base
         ? getErpOverview(ctx.authedFetch, base, entityId, connectionId).then((o) => ({ key, overview: o }))
         : Promise.reject(new Error('no gateway configured')),
-    { deps: [entityId, connectionId] },
+    // A cold link reads nothing until its owner client is known (App's search).
+    { immediate: !ctx.erpOwnerPending, deps: [entityId, connectionId, ctx.erpOwnerPending] },
   )
   // The last landed overview: a refetch nulls overview.data, and the panels must stay put meanwhile.
   const [mirror, setMirror] = useState<Landed | null>(null)
@@ -174,33 +174,6 @@ export function ConnectorDetail({
       aliveRef.current = false
     }
   }, [])
-
-  // A cold link names no client: on a 404, find the connection's owner among the clients and adopt it
-  // (adoptBatchClient is a no-op once a client is picked, so a stale link still reads "not in").
-  const [searched, setSearched] = useState<string | null>(null)
-  const missed = overview.status === 'error' && overview.error?.status === 404
-  useEffect(() => {
-    if (!missed || !base || searched === connectionId) return
-    let live = true
-    Promise.all(
-      ctx.entities
-        .filter((e) => e.id !== entityId)
-        .map((e) =>
-          listErpConnections(ctx.authedFetch, base, e.id).then(
-            (l) => (l.connections.some((c) => c.id === connectionId) ? e.id : null),
-            () => null,
-          ),
-        ),
-    ).then((owners) => {
-      if (!live) return
-      const owner = owners.find((o) => o !== null)
-      if (owner) ctx.adoptBatchClient(owner)
-      setSearched(connectionId)
-    })
-    return () => {
-      live = false
-    }
-  }, [missed, connectionId])
 
   // The poll runs while the connection waits for sign-in; it ends with the connection, the view or the cap.
   useEffect(() => {
@@ -273,7 +246,7 @@ export function ConnectorDetail({
     let body: React.ReactNode = <Loading label={LOADING_CONNECTION} />
     if (overview.status === 'error' && overview.error) {
       body =
-        overview.error.status === 404 && searched === connectionId ? (
+        overview.error.status === 404 ? (
           <div data-testid="erp-detail-not-found" style={{ ...CARD, padding: '20px 22px', fontSize: 14, fontWeight: 600 }}>
             {notFoundTitle(clientName)}
           </div>

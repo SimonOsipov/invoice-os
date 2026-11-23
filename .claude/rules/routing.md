@@ -33,6 +33,7 @@ paths:
 - Resolve an entry of this mount's pre-load window to `bootEntityIdRef`. The window is a null stamp that carries this mount's `m`, and the backfill stamp (`p`). Treat every other entry with no stamp as unknown. Never clamp it.
 - Stamp every replace of the current entry through `replaceStamp`. It keeps `p` on a window entry while it names `bootEntityIdRef`'s company.
 - Re-point `bootEntityIdRef` in `adoptBatchClient` only while the current entry is in the window. Never re-point it later.
+- Read `history.state.e` once at mount, before the mount alignment, only for a boot at `/settings/connectors/<id>`. Start on that client when the portfolio lists it. Otherwise search the client lists for the owner, and let the detail read nothing until that ends (`ownerPending`).
 - Never rely on RLS to hide another company's data inside one tenant. Entities of one firm share a tenant, so the clamp does that job.
 - Write the `auditPrefilter` atom and the `/audit?invoice=` param together. They are one fact.
 - Clear `auditPrefilter` and its param when `navigate` leaves `audit`. Keep `invoiceQuery` and `settingsTab` durable.

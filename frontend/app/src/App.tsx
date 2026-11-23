@@ -15,6 +15,7 @@ import { consoleHandoffUrl, readConsoleStart, requestConsoleCode } from './lib/c
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
+import { listErpConnections } from './lib/erpConnections'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber, withSupplierDefaults } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
@@ -328,6 +329,43 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // Derived, not mirrored: `active` must resolve in the commit the fetch lands, before any navigation.
   const clients = useMemo(() => buildClients(entitiesList), [entitiesList])
 
+  // --- boot deep link (INVCR-01-09, D4) — the READ half -------------------------------
+  //
+  // ONE lazy parse of the boot URL, here in Workspace rather than App: App renders
+  // <Workspace> only once `session != null`, so a read up there would run before the
+  // session exists on the deep-link hand-off path. The three initializers below are
+  // DERIVED from this single value — there is deliberately no boot effect that navigates,
+  // because StrictMode double-invokes effects and a navigating one would fire twice.
+  //
+  // A stored destination only applies to a boot that landed on the bare root — the landing
+  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
+  // Path and query come from the SAME source in one shot, so a restored destination's own
+  // query (now captured alongside the path) can never be swapped for the live bare root's.
+  const [{ path: bootPath, search: bootSearch }] = useState(() => {
+    if (window.location.pathname !== '/') {
+      return { path: window.location.pathname, search: window.location.search }
+    }
+    const restored = readDestination()
+    return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
+  })
+  // One parse of the boot URL; the seeds below all read it, so path and query stay one
+  // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
+  // arrives back at the bare root with the path in storage, and reading the live pathname
+  // would open the detail view with a null id. Covered by
+  // App.signedOutDeepLink.test.tsx's restored-drill-down specs.
+  const [seed] = useState(() => parseLocation(bootPath, bootSearch))
+  // The connector detail a boot URL names, and the client its history entry was stamped with: a reload
+  // keeps history.state, so it names the client the member was on. Read here, before the mount alignment overwrites it.
+  const [bootConnectionId] = useState(() =>
+    seed.view === 'settings' && seed.settingsTab === 'connectors' ? seed.connectionId : null,
+  )
+  const [bootStampId] = useState(() => {
+    const e = (window.history.state as { e?: unknown } | null)?.e
+    return bootConnectionId !== null && typeof e === 'string' ? e : null
+  })
+  // True until the owner of a cold connector link is known: the detail reads nothing before then.
+  const [ownerPending, setOwnerPending] = useState(bootConnectionId !== null)
+
   // [entity-picker] keystone: the active selection is a real entity id, never an index
   // into a mock array. null until the user (or the fallback below) picks one.
   const [activeEntityId, setActiveEntityId] = useState<string | null>(null)
@@ -343,8 +381,12 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // with nothing chosen, or the shared emptyClient() placeholder with genuinely nothing
   // to resolve (AC-3's bootstrap window, either persona).
   const active: Client = useMemo(
-    () => resolveActiveClient(clients, activeEntityId),
-    [clients, activeEntityId],
+    () =>
+      resolveActiveClient(
+        clients,
+        activeEntityId ?? (clients.some((c) => c.entityId === bootStampId) ? bootStampId : null),
+      ),
+    [clients, activeEntityId, bootStampId],
   )
 
   // Latest-value mirror of active.entityId for the popstate handler, whose deps are [] --
@@ -389,31 +431,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     [entitiesList, active.entityId],
   )
 
-  // --- boot deep link (INVCR-01-09, D4) — the READ half -------------------------------
-  //
-  // ONE lazy parse of the boot URL, here in Workspace rather than App: App renders
-  // <Workspace> only once `session != null`, so a read up there would run before the
-  // session exists on the deep-link hand-off path. The three initializers below are
-  // DERIVED from this single value — there is deliberately no boot effect that navigates,
-  // because StrictMode double-invokes effects and a navigating one would fire twice.
-  //
-  // A stored destination only applies to a boot that landed on the bare root — the landing
-  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
-  // Path and query come from the SAME source in one shot, so a restored destination's own
-  // query (now captured alongside the path) can never be swapped for the live bare root's.
-  const [{ path: bootPath, search: bootSearch }] = useState(() => {
-    if (window.location.pathname !== '/') {
-      return { path: window.location.pathname, search: window.location.search }
-    }
-    const restored = readDestination()
-    return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
-  })
-  // One parse of the boot URL; the seeds below all read it, so path and query stay one
-  // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
-  // arrives back at the bare root with the path in storage, and reading the live pathname
-  // would open the detail view with a null id. Covered by
-  // App.signedOutDeepLink.test.tsx's restored-drill-down specs.
-  const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
   const bootView: View = availableView(seed.view, mode)
@@ -502,6 +519,30 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   const [erpConnectionId, setErpConnectionId] = useState<string | null>(
     bootView === 'settings' && availableSettingsTab(seed.settingsTab, mode) === 'connectors' ? seed.connectionId : null,
   )
+  // A cold connector link with no usable stamp: the owner is the client whose list holds the connection.
+  // Lists answer 200 for any client, so the search issues no 404; the detail reads once, under the owner.
+  useEffect(() => {
+    if (!ownerPending || entitiesList.length === 0) return
+    const done = () => setOwnerPending(false)
+    if (erpConnectionId !== bootConnectionId || !base || clients.some((c) => c.entityId === bootStampId)) return done()
+    let live = true
+    Promise.all(
+      entitiesList.map((e) =>
+        listErpConnections(authedFetch, base, e.id).then(
+          (l) => (l.connections.some((c) => c.id === bootConnectionId) ? e.id : null),
+          () => null,
+        ),
+      ),
+    ).then((owners) => {
+      if (!live) return
+      const owner = owners.find((o) => o !== null)
+      if (owner) adoptBatchClient(owner)
+      done()
+    })
+    return () => {
+      live = false
+    }
+  }, [ownerPending, entitiesList, erpConnectionId])
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
   // one persona is one tenant and the server answers for that tenant alone.
@@ -1802,6 +1843,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     refetchPolicies: policiesAsync.run,
     editingPolicyId,
     erpConnectionId,
+    erpOwnerPending: ownerPending,
     members,
     membersState,
     membersError: membersAsync.error,

@@ -317,6 +317,8 @@ export type PlatformCtx = {
   editingPolicyId: string | null
   /** Id of the ERP connection open in the connector detail; null shows the connector list. */
   erpConnectionId: string | null
+  /** A cold connector link whose owner client is still being found; the detail reads nothing meanwhile. */
+  erpOwnerPending: boolean
 
   // --- Settings › Members tab -----------------------------------------------
   // The tenant's live membership directory, fetched ONCE in App.tsx and shared by the

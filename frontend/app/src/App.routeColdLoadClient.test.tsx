@@ -318,13 +318,40 @@ describe('cold load of /settings/connectors/<id>', () => {
     expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
   })
 
-  // A reload keeps the stamp {e, m} of the entry; the boot reads none of it, so the owner is found by the search.
+  const urls = () => (fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0])
+  const overviewReads = (entity: string) => urls().filter((u) => u.includes(`entities/${entity}/erp-connections/${CONN_ID}/overview`))
+  const listReads = () => urls().filter((u) => /entities\/[^/]+\/erp-connections$/.test(u))
+
+  // A reload keeps the stamp {e, m} of the entry: the boot starts on that client, so no search and no read under the default.
   it('coldLoad_aReloadOfTheDetailKeepsItUnderItsClient', async () => {
     routeConnectorFetch(ENTITY_SECOND)
     await boot({ e: ENTITY_SECOND, m: 'an-earlier-mount' })
     await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
     expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
     expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+    expect(overviewReads(ENTITY_FIRST), 'no overview read under the default client').toHaveLength(0)
+    expect(listReads(), 'no search').toHaveLength(0)
+    expect(overviewReads(ENTITY_SECOND)).toHaveLength(1)
+    await waitFor(() => expect(window.history.state?.e).toBe(ENTITY_SECOND))
+  })
+
+  it('coldLoad_aLinkWithNoStampSearchesThenReadsOnceUnderTheOwner', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(listReads().length).toBeGreaterThan(0)
+    expect(overviewReads(ENTITY_SECOND)).toHaveLength(1)
+    expect(overviewReads(ENTITY_FIRST), 'no overview read, so no 404, under the default client').toHaveLength(0)
+  })
+
+  it('coldLoad_aStampNamingAClientTheMemberCannotSeeIsIgnored', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot({ e: ENTITY_UNKNOWN, m: 'an-earlier-mount' })
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(overviewReads(ENTITY_UNKNOWN)).toHaveLength(0)
+    expect(overviewReads(ENTITY_FIRST)).toHaveLength(0)
+    expect(listReads().length).toBeGreaterThan(0)
   })
 
   it('coldLoad_theOwnerLoadsWithoutAFrameOfNotInTheClient', async () => {

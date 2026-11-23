@@ -131,6 +131,7 @@ var firmWideEvents = map[string]struct{}{
 	"erp.token.refreshed":                  {},
 	"erp.token.refresh_failed":             {},
 	"erp.connection.reauth_required":       {},
+	"erp.mapping.changed":                  {},
 	"erp.document.pulled":                  {},
 	"erp.document.skipped_duplicate":       {},
 	"erp.document.changed_after_clearance": {},

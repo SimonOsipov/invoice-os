@@ -282,6 +282,9 @@ describe('cold load of /settings/connectors/<id>', () => {
             : missing()
         }
         if (m) return ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+        // The catch-all body has no `fields`; the real mapping read always carries it.
+        if (/\/erp-mappings\//.test(url)) return ok({ fields: [{ target: 'invoice_no', label: 'Invoice no', source_path: 'DocNum', origin: 'platform' }] })
+        if (/\/erp-lookups\//.test(url)) return ok({ lookups: [] })
         return base(url)
       }),
     )
@@ -303,6 +306,8 @@ describe('cold load of /settings/connectors/<id>', () => {
     routeConnectorFetch(ENTITY_SECOND)
     await boot()
     await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    // The mapping read lands in every run, not only a loaded one: the test no longer races it.
+    await waitFor(() => expect(screen.getAllByTestId('erp-mapping-row')).toHaveLength(1))
     expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
     expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
     expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)

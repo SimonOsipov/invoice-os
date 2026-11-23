@@ -1,6 +1,7 @@
 package erp
 
 import (
+	"encoding/json"
 	"reflect"
 	"regexp"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 func sp(s string) *string { return &s }
@@ -273,5 +275,68 @@ func TestDiffers_AmountsOrLines(t *testing.T) {
 				t.Errorf("Differs = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// Fingerprint drops targets ContentHash never reads, so the two must name the same set.
+func TestHashedTargets_MatchWhatContentHashReads(t *testing.T) {
+	targets := Targets()
+	if len(targets) == 0 {
+		t.Fatal("no targets")
+	}
+	m := Mapping{}
+	for _, tg := range targets {
+		if tg.Line {
+			m[tg.Key] = "lines[].f_" + tg.Key
+		} else {
+			m[tg.Key] = "f_" + tg.Key
+		}
+	}
+	value := func(tg Target, alt bool) string {
+		switch {
+		case tg.Type == invoicefields.Date && alt:
+			return "2026-01-06"
+		case tg.Type == invoicefields.Date:
+			return "2026-01-05"
+		case alt:
+			return "11"
+		}
+		return "10"
+	}
+	hashWith := func(changed string) string {
+		head, line := map[string]any{}, map[string]any{}
+		for _, tg := range targets {
+			v := value(tg, tg.Key == changed)
+			if tg.Line {
+				line["f_"+tg.Key] = v
+			} else {
+				head["f_"+tg.Key] = v
+			}
+		}
+		head["lines"] = []any{line}
+		body, err := json.Marshal(head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapped, err := Apply(m, Document{Body: body}, nil)
+		if err != nil {
+			t.Fatalf("Apply changing %q: %v", changed, err)
+		}
+		if len(mapped.In.LineItems) != 1 {
+			t.Fatalf("want one line, got %d", len(mapped.In.LineItems))
+		}
+		return ContentHash(mapped.In)
+	}
+	base := hashWith("")
+	for _, tg := range targets {
+		moved := hashWith(tg.Key) != base
+		if want := hashedTargets[tg.Key]; moved != want {
+			t.Errorf("%s: ContentHash moves = %v, hashedTargets = %v", tg.Key, moved, want)
+		}
+	}
+	for k := range hashedTargets {
+		if _, ok := targetOf(k); !ok {
+			t.Errorf("hashedTargets names %q, which is not a target", k)
+		}
 	}
 }

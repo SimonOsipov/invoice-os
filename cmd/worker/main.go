@@ -110,6 +110,7 @@ func main() {
 	invStore := invoice.NewStore(pool)
 
 	// Queue is backfilled once queue.New, which needs this bundle, returns.
+	wbq := &erp.WriteBackEnqueuer{}
 	sw := &submission.SubmitWorker{
 		Pool:        pool,
 		Adapter:     adapter,
@@ -117,6 +118,7 @@ func main() {
 		Limiter:     limiter,
 		RateLimit:   rateLimit,
 		Logger:      app.Logger,
+		Results:     wbq,
 
 		InvoiceTypeLabels: codelist.LabelsTx,
 	}
@@ -125,6 +127,7 @@ func main() {
 		Adapter:     adapter,
 		InvoicePort: invStore,
 		Logger:      app.Logger,
+		Results:     wbq,
 	}
 
 	// One EXTRACTOR read selects both the extractor and the text reader, so the two cannot drift.
@@ -200,6 +203,7 @@ func main() {
 		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
 		Pull:         &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
 		Ingest:       &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
+		WriteBack:    &erp.WriteBackWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
 	}
 
 	q, err := queue.New(pool, queue.Config{
@@ -213,6 +217,7 @@ func main() {
 	sw.Queue, pw.Queue, xw.River = q, q, q.River()
 	erpw.Refresh.Queue = q
 	erpw.Pull.Queue = q
+	wbq.Queue = q
 	xbw.River = q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)

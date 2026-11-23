@@ -40,6 +40,13 @@ func ReportCancelled(job *rivertype.JobRow, err error) {
 	}
 }
 
+// ReportJobError reports an error a worker absorbed to let its job succeed, on any attempt.
+func ReportJobError(job *rivertype.JobRow, err error) {
+	if hub := reportHub(job, "absorbed", ""); hub != nil {
+		hub.CaptureException(err)
+	}
+}
+
 // finalAttemptHub returns a scoped hub when this attempt ends the job and Sentry is on, else nil.
 func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	if job.Attempt < job.MaxAttempts {

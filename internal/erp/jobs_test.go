@@ -132,3 +132,57 @@ func TestPullArgs_KindTenantAndInsertOpts(t *testing.T) {
 		t.Errorf("UniqueOpts.ByState = %v, want exactly %v", got, want)
 	}
 }
+
+func TestWriteBackArgs_KindTenantAndInsertOpts(t *testing.T) {
+	args := WriteBackArgs{
+		TenantID: uuid.NewString(), InvoiceID: uuid.NewString(), InvoiceNumber: "N-1",
+		ResultVersion: 2, Outcome: "accepted", IRN: "IRN-1", Reason: "r",
+	}
+	if got := args.Kind(); got != "erp.writeback" {
+		t.Errorf("Kind() = %q, want erp.writeback", got)
+	}
+	if (WriteBackArgs{}).Kind() != "erp.writeback" {
+		t.Error("zero args have another kind")
+	}
+	if got := args.Tenant(); got != args.TenantID || got == "" {
+		t.Errorf("Tenant() = %q, want the TenantID %q", got, args.TenantID)
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	want := []string{"invoice_id", "invoice_number", "irn", "outcome", "reason", "result_version", "tenant_id"}
+	if !slices.Equal(keys, want) {
+		t.Errorf("args JSON keys = %v, want %v", keys, want)
+	}
+	if m["tenant_id"] != args.TenantID {
+		t.Errorf("tenant_id = %v, want %q", m["tenant_id"], args.TenantID)
+	}
+	opts := args.InsertOpts()
+	if opts.MaxAttempts != 8 || !opts.UniqueOpts.ByArgs {
+		t.Errorf("InsertOpts = %+v, want MaxAttempts 8 and ByArgs", opts)
+	}
+}
+
+func TestWriteBackKey_ShapeAndLength(t *testing.T) {
+	inv := uuid.NewString()
+	k1, k2 := WriteBackKey(inv, 1), WriteBackKey(inv, 2)
+	if k1 != "erp.writeback:"+inv+":1" || k2 != "erp.writeback:"+inv+":2" {
+		t.Errorf("keys = %q, %q", k1, k2)
+	}
+	if k1 == k2 {
+		t.Error("two versions share a key")
+	}
+	if len(k1) > 255 {
+		t.Errorf("key is %d characters, want at most 255", len(k1))
+	}
+}

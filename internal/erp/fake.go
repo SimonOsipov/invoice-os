@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/erp/erpweb"
@@ -23,13 +24,21 @@ const (
 )
 
 // Fake is an in-memory connector over a fixed seed. It makes no network call.
-type Fake struct{ redirect *url.URL }
+type Fake struct {
+	redirect *url.URL
+	mu       sync.Mutex
+	writes   map[string]WriteBack // by scope and document id
+}
 
 // NewFake serves its consent page on the origin of redirect, the gateway's callback URL.
-func NewFake(redirect *url.URL) *Fake { return &Fake{redirect: redirect} }
+func NewFake(redirect *url.URL) *Fake {
+	return &Fake{redirect: redirect, writes: map[string]WriteBack{}}
+}
 
-func (*Fake) System() string             { return fakeSystem }
-func (*Fake) Capabilities() Capabilities { return Capabilities{Webhooks: true} }
+func (*Fake) System() string { return fakeSystem }
+func (*Fake) Capabilities() Capabilities {
+	return Capabilities{Webhooks: true, Note: true, CustomFieldSlots: 2}
+}
 
 // Authorize builds the fake consent page's URL.
 func (f *Fake) Authorize(_ context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
@@ -178,8 +187,27 @@ func (*Fake) FetchParty(_ context.Context, _ Credentials, scope, partyID string)
 	return Party{}, ErrNotFound
 }
 
-func (*Fake) WriteBack(context.Context, Credentials, DocRef, WriteBack) (DocRef, error) {
-	return DocRef{}, ErrUnsupported
+// WriteBack stores the write under its company and document and returns ref unchanged.
+func (f *Fake) WriteBack(_ context.Context, _ Credentials, ref DocRef, wb WriteBack) (DocRef, error) {
+	co, ok := fakeSeed[ref.Scope]
+	if !ok {
+		return DocRef{}, ErrUnknownScope
+	}
+	if !slices.ContainsFunc(co.invoices, func(i seedInvoice) bool { return i.id == ref.SourceDocID }) {
+		return DocRef{}, ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writes[ref.Scope+"\x00"+ref.SourceDocID] = wb
+	return ref, nil
+}
+
+// LastWriteBack is the latest write to the company's document, for tests and the deployed proof.
+func (f *Fake) LastWriteBack(scope, docID string) (WriteBack, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wb, ok := f.writes[scope+"\x00"+docID]
+	return wb, ok
 }
 
 // EnsureSubscriptions has nothing to register; it only refuses an unseeded company.

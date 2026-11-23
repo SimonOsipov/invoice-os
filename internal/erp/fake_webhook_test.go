@@ -16,9 +16,9 @@ func signedHeader(body []byte) http.Header {
 	return http.Header{fakeSignatureHeader: {FakeWebhookSignature(body)}}
 }
 
-func TestFake_CapabilitiesReportWebhooks(t *testing.T) {
-	if !NewFake(testRedirect).Capabilities().Webhooks {
-		t.Error("Webhooks = false")
+func TestFake_Capabilities(t *testing.T) {
+	if got := NewFake(testRedirect).Capabilities(); got != (Capabilities{Webhooks: true, Note: true, CustomFieldSlots: 2}) {
+		t.Errorf("capabilities = %+v", got)
 	}
 }
 

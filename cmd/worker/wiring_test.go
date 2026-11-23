@@ -264,6 +264,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"erp.ingest", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &erp.IngestWorker{})
 		}},
+		{"erp.writeback", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &erp.WriteBackWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -301,7 +304,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}, WriteBack: &erp.WriteBackWorker{}})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -317,7 +320,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}, WriteBack: &erp.WriteBackWorker{}})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
@@ -342,7 +345,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{}, &erp.Workers{Refresh: &erp.RefreshWorker{}, SecretDelete: &erp.SecretDeleteWorker{}, Pull: &erp.PullWorker{}, Ingest: &erp.IngestWorker{}, WriteBack: &erp.WriteBackWorker{}})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -2432,5 +2435,82 @@ func TestWorkerMain_HandsThePoolTokensToTheMailSender(t *testing.T) {
 	_, args := wtOneCall(t, f, "notifications.NewsletterClients")
 	if want := "accountmail.PoolTokens(" + poolName + ")"; len(args) != 5 || wtExprString(args[4]) != want {
 		t.Errorf("notifications.NewsletterClients arguments = %d, last %q; want 5, last %q", len(args), wtRender(args[len(args)-1]), want)
+	}
+}
+
+// One enqueuer is the result sink of both submission workers, gets the queue after queue.New,
+// and the erp.Workers literal carries the write-back worker.
+func TestWorkerMain_WiresTheResultSink(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	fieldOf := func(lit *ast.CompositeLit, name string) ast.Expr {
+		for _, el := range lit.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok && wtExprString(kv.Key) == name {
+				return kv.Value
+			}
+		}
+		return nil
+	}
+	var wbq string
+	results := map[string]string{}
+	var writeBackSet bool
+	var queueNewPos, backfillPos token.Pos
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for i, rhs := range as.Rhs {
+			if c, ok := rhs.(*ast.CallExpr); ok && wtCallName(c.Fun) == "queue.New" {
+				queueNewPos = as.Pos()
+			}
+			u, ok := rhs.(*ast.UnaryExpr)
+			if !ok || u.Op != token.AND || len(as.Lhs) != len(as.Rhs) {
+				continue
+			}
+			lit, ok := u.X.(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			switch wtCallName(lit.Type) {
+			case "erp.WriteBackEnqueuer":
+				wbq = wtExprString(as.Lhs[i])
+			case "submission.SubmitWorker", "submission.PollWorker":
+				if v := fieldOf(lit, "Results"); v != nil {
+					results[wtCallName(lit.Type)] = wtExprString(v)
+				}
+			case "erp.Workers":
+				writeBackSet = fieldOf(lit, "WriteBack") != nil
+			}
+		}
+		if len(as.Lhs) == 1 && len(as.Rhs) == 1 && wbq != "" && wtExprString(as.Lhs[0]) == wbq+".Queue" {
+			backfillPos = as.Pos()
+		}
+	}
+	if wbq == "" {
+		t.Fatal("main() builds no erp.WriteBackEnqueuer")
+	}
+	for _, k := range []string{"submission.SubmitWorker", "submission.PollWorker"} {
+		if results[k] != wbq {
+			t.Errorf("%s Results = %q, want %s", k, results[k], wbq)
+		}
+	}
+	if !writeBackSet {
+		t.Error("the erp.Workers literal sets no WriteBack")
+	}
+	if backfillPos == token.NoPos || queueNewPos == token.NoPos || backfillPos < queueNewPos {
+		t.Errorf("%s.Queue is not backfilled after queue.New", wbq)
+	}
+	var bundle *ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && wtCallName(c.Fun) == "workerBundle" {
+			bundle = c
+		}
+		return true
+	})
+	if bundle == nil || len(bundle.Args) != 11 {
+		t.Error("workerBundle no longer takes 11 arguments")
 	}
 }

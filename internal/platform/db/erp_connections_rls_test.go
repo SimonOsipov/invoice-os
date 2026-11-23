@@ -1161,6 +1161,7 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 	}
 	migration := matches[0]
 	later := esdMigration(t)
+	latest := ewbMigration(t)
 	requireErpTables(t, h.super)
 
 	tx := migratorTx(t, ctx)
@@ -1181,8 +1182,10 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 		}
 	}
 
-	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, later, "Down")); err != nil {
-		t.Fatalf("Down body of %s failed: %v", later, err)
+	for _, m := range []string{latest, later} {
+		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, m, "Down")); err != nil {
+			t.Fatalf("Down body of %s failed: %v", m, err)
+		}
 	}
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Down")); err != nil {
 		t.Fatalf("Down body of %s failed: %v", migration, err)
@@ -1194,18 +1197,20 @@ func TestRLS_ErpConnectionsMigrationIsReversible(t *testing.T) {
 			dropped = append(dropped, table)
 		}
 	}
-	if want := []string{"erp_connections", "erp_grants", "erp_source_documents"}; !slices.Equal(dropped, want) {
+	if want := []string{"erp_connections", "erp_grants", "erp_source_documents", "erp_writebacks"}; !slices.Equal(dropped, want) {
 		t.Errorf("tables the Downs dropped = %v, want exactly %v", dropped, want)
 	}
-	if len(after) != len(before)-3 {
-		t.Errorf("public tables after the Downs = %d, want %d: it created or dropped something else", len(after), len(before)-3)
+	if len(after) != len(before)-4 {
+		t.Errorf("public tables after the Downs = %d, want %d: it created or dropped something else", len(after), len(before)-4)
 	}
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", migration, err)
 	}
-	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, later, "Up")); err != nil {
-		t.Fatalf("Up body of %s failed: %v", later, err)
+	for _, m := range []string{later, latest} {
+		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, m, "Up")); err != nil {
+			t.Fatalf("Up body of %s failed: %v", m, err)
+		}
 	}
 	requireErpTables(t, tx)
 	for _, p := range erpShapeProblems(tx) {

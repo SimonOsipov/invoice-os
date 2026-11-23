@@ -71,6 +71,8 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'erp.document.pulled': { label: 'ERP invoice pulled', domain: 'companies' },
   'erp.document.skipped_duplicate': { label: 'ERP invoice number already exists, no new invoice made', domain: 'companies' },
   'erp.document.changed_after_clearance': { label: 'ERP invoice changed after NRS accepted it', domain: 'companies' },
+  'erp.writeback.succeeded': { label: 'Result written back to the ERP', domain: 'companies' },
+  'erp.writeback.failed': { label: 'Result could not be written back to the ERP', domain: 'companies' },
   'erp.token.deleted': { label: 'ERP token deleted', domain: 'companies' },
   'erp.token.refreshed': { label: 'ERP token refreshed', domain: 'companies' },
   'erp.token.refresh_failed': { label: 'ERP token refresh failed', domain: 'companies' },

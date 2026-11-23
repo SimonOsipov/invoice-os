@@ -8,6 +8,7 @@ type Workers struct {
 	SecretDelete *SecretDeleteWorker
 	Pull         *PullWorker
 	Ingest       *IngestWorker
+	WriteBack    *WriteBackWorker
 }
 
 // AddTo registers the ERP kinds on the bundle queue.New reads. A nil worker is skipped.
@@ -23,5 +24,8 @@ func AddTo(bundle *river.Workers, w *Workers) {
 	}
 	if w.Ingest != nil {
 		river.AddWorker(bundle, w.Ingest)
+	}
+	if w.WriteBack != nil {
+		river.AddWorker(bundle, w.WriteBack)
 	}
 }

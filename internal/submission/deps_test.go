@@ -30,9 +30,13 @@ func TestSubmissionPackage_DoesNotImportInvoicePackage(t *testing.T) {
 		t.Fatalf("go list -deps ./internal/submission: %v\n%s", err, out)
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == "github.com/SimonOsipov/invoice-os/internal/invoice" {
+		switch strings.TrimSpace(line) {
+		case "github.com/SimonOsipov/invoice-os/internal/invoice":
 			t.Errorf("internal/submission imports internal/invoice -- forbidden by [mapper-lives-in-03]: " +
 				"the mapper lives in internal/invoice and imports internal/submission, never the reverse")
+			return
+		case "github.com/SimonOsipov/invoice-os/internal/erp":
+			t.Errorf("internal/submission imports internal/erp -- the ERP side implements submission.ResultSink, never the reverse")
 			return
 		}
 	}

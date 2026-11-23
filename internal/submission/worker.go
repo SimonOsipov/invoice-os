@@ -76,6 +76,8 @@ type SubmitWorker struct {
 	// follow-up PollArgs job at river.InsertOpts.ScheduledAt == Pending.PollAfter (M5-04-06).
 	Queue  *queue.Client
 	Logger *slog.Logger
+	// Results is told of each terminal result in its closure; nil is off.
+	Results ResultSink
 	// InvoiceTypeLabels is codelist.LabelsTx; nil fails every submission loudly.
 	InvoiceTypeLabels LabelsFunc
 }
@@ -270,6 +272,9 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
 					return err
 				}
+				if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
+					return err
+				}
 				// Last statement, like the verdict branches: OncePerJob's guarantee then covers
 				// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
 				return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind, canonical.InvoiceNumber)
@@ -300,6 +305,9 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := w.InvoicePort.MarkAccepted(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
 					return err
 				}
+				if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
+					return err
+				}
 				// M5-05-04 (task-240): the 08 audit event. Must stay the closure's LAST
 				// statement so OncePerJob's exactly-once guarantee covers it too (AC#5).
 				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "accepted", r.IRN, canonical.InvoiceNumber)
@@ -318,6 +326,9 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					return err
 				}
 				if err := w.InvoicePort.MarkRejected(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
+					return err
+				}
+				if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
 					return err
 				}
 				// M5-05-04 (task-240): the 08 audit event, no reference on Rejected
@@ -364,6 +375,9 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					// means bytes may have reached the wire -- non-delivery isn't provable here.
 					kind := FailureNeverAcknowledged
 					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
 						return err
 					}
 					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
@@ -441,6 +455,8 @@ type PollWorker struct {
 	InvoicePort InvoicePort
 	Queue       *queue.Client
 	Logger      *slog.Logger
+	// Results is told of each terminal result in its closure; nil is off.
+	Results ResultSink
 }
 
 // Work drives PollWorker's own tx1 / adapter / tx2 decision flow, structurally mirroring
@@ -527,6 +543,9 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 				if err := w.InvoicePort.MarkAccepted(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
 					return err
 				}
+				if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
+					return err
+				}
 				// M5-05-05 (task-241): the 08 audit event, same helper SubmitWorker's synchronous
 				// Accepted branch uses (M5-05-04 (task-240), System Design §6). Must stay the
 				// closure's LAST statement so OncePerJob's exactly-once guarantee covers it too.
@@ -549,6 +568,9 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					return err
 				}
 				if err := w.InvoicePort.MarkRejected(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
+					return err
+				}
+				if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
 					return err
 				}
 				// M5-05-05 (task-241): the 08 audit event, no reference on Rejected
@@ -596,6 +618,9 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					// submission -- it just never returned a verdict within the poll budget.
 					kind := FailureAcknowledgedNoVerdict
 					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					if err := reachResult(ctx, tx, w.Results, w.Logger, job.JobRow, args.TenantID, args.InvoiceID); err != nil {
 						return err
 					}
 					// Last statement, like the verdict branches: OncePerJob's guarantee then covers

@@ -134,6 +134,8 @@ var firmWideEvents = map[string]struct{}{
 	"erp.document.pulled":                  {},
 	"erp.document.skipped_duplicate":       {},
 	"erp.document.changed_after_clearance": {},
+	"erp.writeback.succeeded":              {},
+	"erp.writeback.failed":                 {},
 	"membership.suspended":                 {},
 	"membership.reactivated":               {},
 	"membership.removed":                   {},

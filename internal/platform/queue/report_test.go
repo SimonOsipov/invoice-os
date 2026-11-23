@@ -302,3 +302,11 @@ func TestFinalAttemptHub_NilWhenOffAndSetWhenOn(t *testing.T) {
 		t.Error("finalAttemptHub returned a hub for a retrying attempt, want nil")
 	}
 }
+
+func TestReportJobError_OpensOneIssueOnAnyAttempt(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "submission")
+
+	ReportJobError(jobRow(2, 8), errors.New("sink: boom"))
+
+	assertJobEvent(t, rec.One(t, want), "absorbed", 2, 8)
+}

@@ -26,3 +26,4 @@ paths:
 - Create an ERP draft only through `importer.CreateDrafts`. Never write an `invoices` row from `internal/erp`: link a duplicate number, mark a change on the document, never re-sign or submit. Take a document's client only from its connection row.
 - Pull from the stored cursor; enqueue each ingest through `EnqueueTx` with `IngestKey` and save the cursor in the same transaction. Pull and ingest only an active connection.
 - A bad cursor nulls the cursor and keeps `ingest_epoch`; only a skipped ingest bumps it.
+- Enqueue `erp.writeback` only through `submission.ResultSink` inside the terminal `OncePerJob` closure, before its audit call. Write back only what `Capabilities` allow; never write `invoices` or `erp_source_documents` from the write-back.

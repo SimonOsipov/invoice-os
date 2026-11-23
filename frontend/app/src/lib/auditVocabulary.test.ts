@@ -55,6 +55,8 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'erp.document.pulled',
     'erp.document.skipped_duplicate',
     'erp.document.changed_after_clearance',
+    'erp.writeback.succeeded',
+    'erp.writeback.failed',
     'erp.token.deleted',
     'erp.token.refreshed',
     'erp.token.refresh_failed',

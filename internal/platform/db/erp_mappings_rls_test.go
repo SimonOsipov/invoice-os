@@ -757,7 +757,7 @@ func TestRLS_ErpLookupsChecks(t *testing.T) {
 		{"customer with a service_code", cust(func(r *elkRow) { r.service = s("S1") }), values},
 	}
 	// Each shape of a bad tin, on a customer that is otherwise valid.
-	for _, bad := range []string{"1234567897", "1234567-0001", "12345678-00001", "x12345678-0001", "12345678-0001x", "RN-", "rn-123", "RN-12a", ""} {
+	for _, bad := range []string{"1234567897", "123456780001", "1234567-0001", "12345678-00001", "x12345678-0001", "12345678-0001x", "RN-", "rn-123", "RN-12a", ""} {
 		cases = append(cases, tc{"customer with the tin '" + bad + "'", cust(func(r *elkRow) { r.tin = s(bad) }), tin})
 	}
 	cases = append(cases,

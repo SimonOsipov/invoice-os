@@ -132,13 +132,21 @@ describe('FieldMappingModal', () => {
     mount()
     edit(screen.getByLabelText('ISSUE_DATE path'), '')
     expect(save().disabled).toBe(true)
+    expect(within(row('issue_date')).queryByText('Blank saves as Use default'), 'a default row has no override to drop').toBeNull()
+    expect(within(row('issue_date')).queryByTestId('field-mapping-default')).toBeNull()
   })
 
   it('fieldMappingModal_clearingAClientRowSaysItUsesTheDefault', () => {
     mount()
     edit(screen.getByLabelText('INVOICE_NUMBER path'), '')
     expect(within(row('invoice_number')).getByText('Blank saves as Use default')).toBeTruthy()
+    expect(within(row('invoice_number')).queryByTestId('field-mapping-default')).toBeNull()
     expect(save().disabled).toBe(false)
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), '   ')
+    expect(within(row('invoice_number')).getByText('Blank saves as Use default')).toBeTruthy()
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), 'x.y')
+    expect(within(row('invoice_number')).queryByText('Blank saves as Use default')).toBeNull()
+    expect(within(row('invoice_number')).getByTestId('field-mapping-default')).toBeTruthy()
   })
 
   it('fieldMappingModal_saveDisabledUntilAChange', async () => {

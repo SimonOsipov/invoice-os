@@ -118,12 +118,18 @@ describe('lookupChanges edges', () => {
 
   it('lookupChanges_trailingWhitespaceOnTheKeyIsNoChange', () => {
     expect(lookupChanges([lk('item', 'K', { hsn_code: '1' })], [lk('item', 'K ', { hsn_code: '1' })])).toEqual([])
+    // What is sent is the trimmed key, for an edit, an add and a removal alike.
+    expect(lookupChanges([lk('item', 'K', { hsn_code: '1' })], [lk('item', 'K ', { hsn_code: '2' })])).toEqual([lk('item', 'K', { hsn_code: '2' })])
+    expect(lookupChanges([], [lk('item', ' N ', { hsn_code: '3' })])).toEqual([lk('item', 'N', { hsn_code: '3' })])
+    expect(lookupChanges([lk('item', 'R ', { hsn_code: '1' })], [])).toEqual([lk('item', 'R')])
   })
 
   it('lookupChanges_removeThenReAddTheSameKeySendsOneUpsert', () => {
     const before = [lk('item', 'K', { hsn_code: '1' })]
     const after = [lk('item', 'K'), lk('item', 'K ', { hsn_code: '2' })]
     expect(lookupChanges(before, after)).toEqual([lk('item', 'K', { hsn_code: '2' })])
+    // Whichever of the two rows comes last, the one with values is the upsert.
+    expect(lookupChanges(before, [lk('item', 'K ', { hsn_code: '2' }), lk('item', 'K')])).toEqual([lk('item', 'K', { hsn_code: '2' })])
   })
 
   it('lookupChanges_blankAddedIsNotSent', () => {

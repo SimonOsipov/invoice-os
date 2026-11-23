@@ -270,12 +270,17 @@ describe('cold load of /settings/connectors/<id>', () => {
   const conn = { id: CONN_ID, entity_id: ENTITY_SECOND, system: 'fake', external_key: null, status: 'active', last_sync_at: null, created_at: '', updated_at: '' }
   const missing = () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) })
 
-  type ListOpts = { listGate?: Promise<void>; listFails?: boolean; failList?: string }
+  type ListOpts = { listGate?: Promise<void>; listFails?: boolean; failList?: string; clientCount?: number; track?: { active: number; max: number } }
   function routeConnectorFetch(ownerEntity: string | null, o: ListOpts = {}) {
     const base = routeFetchImpl()
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
+        if (o.clientCount && url.includes('/portfolio/v1/entities?')) {
+          const extra = Array.from({ length: o.clientCount - 2 }, (_, i) => entityRow(`aaaaaaaa-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, `Mid ${i} Ltd`, `3333${String(i).padStart(4, '0')}-0001`))
+          const all = [entityRow(ENTITY_FIRST, 'Alpha Ltd', '11111111-0001'), entityRow(ENTITY_SECOND, 'Zulu Ltd', '22222222-0001'), ...extra]
+          return ok({ entities: all, pagination: { limit: 200, offset: 0, total: all.length } })
+        }
         const m = /entities\/([^/]+)\/erp-connections(\/[^/]+\/overview)?$/.exec(url)
         if (m && m[2]) {
           return m[1] === ownerEntity
@@ -285,6 +290,14 @@ describe('cold load of /settings/connectors/<id>', () => {
         if (m) {
           if (o.listFails || m[1] === o.failList) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
           const list = ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+          if (o.track) {
+            const t = o.track
+            t.max = Math.max(t.max, ++t.active)
+            return new Promise<void>((r) => setTimeout(r, 5)).then(() => {
+              t.active--
+              return list
+            })
+          }
           return o.listGate ? o.listGate.then(() => list) : list
         }
         // The catch-all body has no `fields`; the real mapping read always carries it.
@@ -408,6 +421,15 @@ describe('cold load of /settings/connectors/<id>', () => {
     expect(screen.getByTestId('company-switcher').textContent).toContain('Alpha')
     expect(screen.queryByTestId('erp-detail-header')).toBeNull()
     expect(window.history.state?.e ?? null, 'no adoption stamped the owner').not.toBe(ENTITY_SECOND)
+  })
+
+  it('coldLoad_theOwnerSearchHasAtMostFourListReadsInFlight', async () => {
+    const track = { active: 0, max: 0 }
+    routeConnectorFetch(null, { clientCount: 10, track })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found')).toBeTruthy())
+    expect(listReads(), 'every client was searched').toHaveLength(10)
+    expect(track.max).toBe(4)
   })
 
   it('coldLoad_aConnectionOfNoClientStaysNotFound', async () => {

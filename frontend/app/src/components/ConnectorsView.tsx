@@ -237,6 +237,18 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.text }} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>{pill.text}</span>
                 </span>
+                {row.connection && (
+                  <button
+                    type="button"
+                    data-testid="erp-connector-manage"
+                    disabled={busy}
+                    onClick={() => ctx.openErpConnection(row.connection!.id)}
+                    className="pf-btn"
+                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, ...(busy ? DISABLED : null) }}
+                  >
+                    Manage
+                  </button>
+                )}
                 {admin && canConnect(row, shown.systems) && (
                   <button
                     type="button"

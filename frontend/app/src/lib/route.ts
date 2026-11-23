@@ -120,6 +120,8 @@ export type RouteParams = {
   q?: string
   auditInvoice?: string | null
   reviewBatchIds?: string[]
+  // Only the connectors tab carries it; routeUrl drops it on every other tab.
+  connectionId?: string | null
 }
 
 // TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId/policyId
@@ -133,6 +135,7 @@ export type ParsedLocation = {
   q: string
   auditInvoice: string | null
   reviewBatchIds: string[]
+  connectionId: string | null
 }
 
 // Path plus query, never a hash. Every settings tab is named including `members`, so each tab has
@@ -142,7 +145,10 @@ export type ParsedLocation = {
 export function routeUrl(view: View, params: RouteParams = {}): string {
   const path = routePath(view, params.id)
   if (view === 'settings') {
-    return `${path}/${params.settingsTab ?? 'members'}`
+    const tab = params.settingsTab ?? 'members'
+    return tab === 'connectors' && params.connectionId
+      ? `${path}/${tab}/${encodeURIComponent(params.connectionId)}`
+      : `${path}/${tab}`
   }
   if (view === 'create') {
     const ids = params.reviewBatchIds
@@ -176,6 +182,7 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   const policyId = route?.view === 'workflows' ? route.id : null
   let settingsTab: SettingsTab = 'members'
   let reviewBatchIds: string[] = []
+  let connectionId: string | null = null
 
   if (route === null) {
     const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
@@ -188,9 +195,20 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
     if (normalized === '/settings/buyers') view = 'customers' // the old Buyers tab lives on Customers
     else if (normalized.startsWith('/settings/')) {
       const seg = normalized.slice('/settings/'.length)
-      if (seg.length > 0 && !/[/?#]/.test(seg)) {
+      const [first, second, ...rest] = seg.split('/')
+      if (seg.length > 0 && !/[?#]/.test(seg) && second === undefined) {
         view = 'settings'
         settingsTab = SETTINGS_TAB_IDS.has(seg) ? (seg as SettingsTab) : 'members'
+      } else if (
+        second !== undefined &&
+        rest.length === 0 &&
+        SETTINGS_TAB_IDS.has(first) &&
+        (first === 'connectors' || INVOICE_ID.test(second))
+      ) {
+        // A third segment is the connection on connectors only; anywhere else it is ignored.
+        view = 'settings'
+        settingsTab = first as SettingsTab
+        if (first === 'connectors' && INVOICE_ID.test(second)) connectionId = second
       }
     }
   }
@@ -203,7 +221,7 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   // renders an error state where the ordinary unfiltered list is correct.
   const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
 
-  return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }
+  return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds, connectionId }
 }
 
 // Bounded name for Sentry grouping: a pattern, never a segment of the input.
@@ -220,5 +238,7 @@ export function routeName(pathname: string): string {
   if (parseReviewPath(normalized) !== null) return '/imports/:ids/review'
   const seg = normalized.startsWith('/settings/') ? normalized.slice('/settings/'.length) : ''
   if (seg.length > 0 && !/[/?#]/.test(seg)) return '/settings/:tab'
+  const conn = /^connectors\/([^/?#]+)$/.exec(seg)
+  if (conn !== null && INVOICE_ID.test(conn[1])) return '/settings/connectors/:id'
   return '<unmatched>'
 }

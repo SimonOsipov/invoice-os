@@ -625,13 +625,14 @@ describe('the workflows drill-down — /workflows/:policyId (ROUTE-07-03)', () =
     return keys
   }
 
-  it('parseLocation_returnsEightFieldsAndDeclaresEight', () => {
+  it('parseLocation_returnsNineFieldsAndDeclaresNine', () => {
     const declared = parsedLocationDeclaredKeys()
     // Vacuity floor: a renamed type or a nested brace reads [] here, which would compare
     // nothing against nothing.
-    expect(declared.length, `ParsedLocation declares: ${declared.join(', ')}`).toBe(8)
+    expect(declared.length, `ParsedLocation declares: ${declared.join(', ')}`).toBe(9)
     expect([...declared].sort()).toEqual([
       'auditInvoice',
+      'connectionId',
       'invoiceId',
       'jobId',
       'policyId',
@@ -1050,5 +1051,29 @@ describe('routeName — the bounded name Sentry groups a page by', () => {
       expect(parseRoute(`/${seg}/x`), seg).toBeNull()
       expect(parseLocation(`/${seg}/x`, '').view, seg).toBe('dashboard')
     }
+  })
+})
+
+describe('ERPF-08-05: the connection segment', () => {
+  const CONN = 'aaaaaaaa-0000-4000-8000-000000000001'
+  it('parseLocation_readsTheConnectionSegment', () => {
+    const at = parseLocation(`/settings/connectors/${CONN}`, '')
+    expect(at.view).toBe('settings')
+    expect(at.settingsTab).toBe('connectors')
+    expect(at.connectionId).toBe(CONN)
+  })
+  it('parseLocation_aBadConnectionSegmentIsTheList', () => {
+    const bad = parseLocation('/settings/connectors/x', '')
+    expect([bad.view, bad.settingsTab, bad.connectionId]).toEqual(['settings', 'connectors', null])
+    const other = parseLocation(`/settings/members/${CONN}`, '')
+    expect([other.view, other.settingsTab, other.connectionId]).toEqual(['settings', 'members', null])
+  })
+  it('routeUrl_writesTheConnectionOnlyOnConnectors', () => {
+    expect(routeUrl('settings', { settingsTab: 'connectors', connectionId: CONN })).toBe(`/settings/connectors/${CONN}`)
+    expect(routeUrl('settings', { settingsTab: 'members', connectionId: CONN })).toBe('/settings/members')
+    expect(routeUrl('settings', { settingsTab: 'connectors' })).toBe('/settings/connectors')
+  })
+  it('routeName_namesTheConnectionPattern', () => {
+    expect(routeName(`/settings/connectors/${CONN}`)).toBe('/settings/connectors/:id')
   })
 })

@@ -498,6 +498,10 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(
     bootView === 'workflows' ? seed.policyId : null,
   )
+  // Screen lifetime, like editingPolicyId: only the connectors tab carries it.
+  const [erpConnectionId, setErpConnectionId] = useState<string | null>(
+    bootView === 'settings' && availableSettingsTab(seed.settingsTab, mode) === 'connectors' ? seed.connectionId : null,
+  )
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
   // one persona is one tenant and the server answers for that tenant alone.
@@ -658,6 +662,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
       q: invoiceQuery,
       auditInvoice: auditPrefilter?.invoiceId ?? null,
       reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
+      connectionId: bootView === 'settings' ? erpConnectionId : null,
     })
     window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
     clearDestination()
@@ -714,6 +719,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
       setDetailLine(null)
       setExtractionJobId(at.jobId)
       setEditingPolicyId(at.policyId)
+      setErpConnectionId(
+        at.view === 'settings' && availableSettingsTab(at.settingsTab, mode) === 'connectors' ? at.connectionId : null,
+      )
       // History is one stack across identities, so a Company entry from an earlier in-house
       // session resurfaces here; `mode` is stable for this mount, so the [] closure holds.
       // popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace
@@ -781,7 +789,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
     setEditingPolicyId(policyNext)
-    const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
+    const connNext = view === 'settings' && tabNext === 'connectors' ? (params?.connectionId ?? null) : null
+    setErpConnectionId(connNext)
+    const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext, connectionId: connNext })
     window.history.pushState({ e: active.entityId, m: mountKey }, '', url)
     reportAppPage()
   }
@@ -852,6 +862,8 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     // dashboard, and leaving this set means the next visit to Workflows reopens the
     // builder mid-edit instead of the policy list the user asked for.
     setEditingPolicyId(null)
+    // A connection belongs to ONE client; the detail must never render under another.
+    setErpConnectionId(null)
     // A job belongs to ONE entity. Routing makes /extraction reachable by Back, so leaving
     // this set renders the company just left under the incoming company's chrome.
     setExtractionJobId(null)
@@ -1609,6 +1621,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // A tab click stays on the same screen, so it replaces.
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
+    setErpConnectionId(null)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
     window.history.replaceState(replaceStamp(), '', url)
   }
@@ -1619,6 +1632,11 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
 
   function closeRule() {
     setOpenRuleKey(null)
+  }
+
+  function openErpConnection(id: string | null) {
+    if (id === erpConnectionId) return
+    navigate('settings', { settingsTab: 'connectors', connectionId: id })
   }
 
   function openPolicy(id: string) {
@@ -1783,6 +1801,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     policiesError: policiesAsync.error,
     refetchPolicies: policiesAsync.run,
     editingPolicyId,
+    erpConnectionId,
     members,
     membersState,
     membersError: membersAsync.error,
@@ -1855,6 +1874,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     openRule,
     closeRule,
     openPolicy,
+    openErpConnection,
     closePolicy,
     createPolicy,
     deletePolicy,

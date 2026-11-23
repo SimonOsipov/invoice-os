@@ -315,6 +315,8 @@ export type PlatformCtx = {
   refetchPolicies: () => void
   /** Id of the policy open in the builder; null shows the policy list. */
   editingPolicyId: string | null
+  /** Id of the ERP connection open in the connector detail; null shows the connector list. */
+  erpConnectionId: string | null
 
   // --- Settings › Members tab -----------------------------------------------
   // The tenant's live membership directory, fetched ONCE in App.tsx and shared by the
@@ -524,6 +526,8 @@ export type PlatformCtx = {
   // Publishing is its own verb because saving no longer publishes: the server seals a
   // version, and sealing on every Save would silently override the policy in force.
   openPolicy: (id: string) => void
+  /** Pushes the detail of a connection, or the list for null; a no-op for the one already open. */
+  openErpConnection: (id: string | null) => void
   closePolicy: () => void
   createPolicy: () => Promise<void>
   deletePolicy: (id: string) => Promise<void>

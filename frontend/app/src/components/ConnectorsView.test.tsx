@@ -638,3 +638,41 @@ describe('poll edges (QA)', () => {
     expect(gets(f)).toHaveLength(total)
   })
 })
+
+describe('manage', () => {
+  const two = () => listing([conn(), conn({ id: 'c2', system: 'other', status: 'disconnected' })], ['fake', 'other', 'third'])
+  const manageBtn = (r: HTMLElement) => within(r).queryByTestId('erp-connector-manage') as HTMLButtonElement | null
+
+  it('connectorsView_manageOnEveryConnectionRow', async () => {
+    for (const role of ['admin', 'preparer']) {
+      const f = mkFetch({ get: () => two() })
+      render(<ConnectorsView ctx={mkCtx(f, { members: me(role) })} />)
+      await screen.findByText('Fake ERP')
+      expect(screen.getAllByTestId('erp-connector-manage'), role).toHaveLength(2)
+      expect(manageBtn(rowOf('fake')), role).toBeTruthy()
+      expect(manageBtn(rowOf('other')), role).toBeTruthy()
+      expect(manageBtn(rowOf('third')), role).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('connectorsView_manageDisabledWhileTheRowWrites', async () => {
+    const post = deferred<unknown>()
+    const f = mkFetch({ get: () => two(), post: () => post.promise })
+    render(<ConnectorsView ctx={mkCtx(f)} />)
+    await screen.findByText('Fake ERP')
+    await click(disconnectBtn(rowOf('fake'))!)
+    await click(screen.getByTestId('erp-disconnect-confirmed'))
+    expect(posts(f)).toHaveLength(1)
+    expect(manageBtn(rowOf('fake'))!.disabled).toBe(true)
+    expect(manageBtn(rowOf('other'))!.disabled).toBe(false)
+  })
+
+  it('connectorsView_manageCallsOpenErpConnection', async () => {
+    const open = vi.fn()
+    render(<ConnectorsView ctx={mkCtx(mkFetch({ get: () => two() }), { openErpConnection: open })} />)
+    await screen.findByText('Fake ERP')
+    await click(manageBtn(rowOf('other'))!)
+    expect(open).toHaveBeenCalledWith('c2')
+  })
+})

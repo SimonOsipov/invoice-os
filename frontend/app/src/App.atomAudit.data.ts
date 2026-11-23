@@ -344,6 +344,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /workflows/<id> entry at App.tsx#onPopState (ROUTE-07-04). App.tsx#navigate writes it too -- screen lifetime, so a bare Workflows visit clears it itself. Reaches WorkflowsView as ctx.editingPolicyId. Collapsed cross-company by ROUTE-06-02.',
   },
   {
+    binding: 'erpConnectionId, setErpConnectionId',
+    name: 'erpConnectionId',
+    kind: 'useState',
+    resetBySwitchClient: true,
+    routes: ['/settings/connectors', '/settings/connectors/<id>'],
+    verdict: 'stale-and-reachable',
+    citation: { in: 'function switchClient(id: string)', text: 'setErpConnectionId(null)' },
+    note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /settings/connectors/<id> entry at App.tsx#onPopState; the stale-entry clamp reduces that path to /settings first. App.tsx#navigate writes it too -- screen lifetime. Reaches SettingsView as ctx.erpConnectionId.',
+  },
+  {
     binding: 'members, setMembers',
     name: 'members',
     kind: 'useState',

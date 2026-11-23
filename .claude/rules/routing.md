@@ -16,6 +16,8 @@ paths:
 - Never read `location.search` in a path writer. Re-serialise through `routeUrl`, because an echoed query keeps a one-shot param in history.
 - Omit a defaulted query param. Always write the settings tab, `members` included.
 - Keep bare `/settings` as an accepted alias of `/settings/members`. Canonicalise it with `replaceState`.
+- Let `settings` own a third segment on `connectors` only: `/settings/connectors/<connection uuid>`. A non-UUID segment parses as the list.
+- Clear `erpConnectionId` in `switchClient` and `setSettingsTab`; re-derive it in the `popstate` handler.
 - Clamp an unknown or unavailable settings tab to `members`. Clamp `clients` to `dashboard` in an in-house workspace.
 - Drop a non-UUID `invoice` param. Cap `q` with `clampFilterText`.
 - Reject a review path with a bad id or more than `REVIEW_PATH_MAX_IDS` ids. Never truncate the list.

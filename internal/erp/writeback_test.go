@@ -258,10 +258,7 @@ func TestWriteBack_PlanFollowsCapabilities(t *testing.T) {
 			for _, att := range []bool{false, true} {
 				for _, outcome := range []string{"accepted", "failed"} {
 					caps := Capabilities{Note: note, Attachment: att, CustomFieldSlots: slots}
-					a := WriteBackArgs{Outcome: outcome, IRN: "IRN-9", Reason: "why"}
-					if outcome == "failed" {
-						a.IRN = ""
-					}
+					a := WriteBackArgs{Outcome: outcome, IRN: "IRN-9", Reason: "why"} // a failed result must not write an IRN either
 					got, ok := wbPlan(caps, a)
 					var want WriteBack
 					if outcome == "accepted" && slots >= 1 {

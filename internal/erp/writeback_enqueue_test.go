@@ -158,6 +158,8 @@ func TestEnqueue_ArgsSnapshotTheResult(t *testing.T) {
 		wantIRN, wantReason              string
 	}{
 		{"accepted", "accepted", wbIRN, "[]", "", wbIRN, ""},
+		{"rejected after an accepted result keeps its IRN column", "rejected", wbIRN, "[]", "", "", "no reason given"},
+		{"failed after an accepted result keeps its IRN column", "failed", wbIRN, "[]", "never_acknowledged", "", "NRS did not acknowledge the submission"},
 		{"rejected two reasons", "rejected", "", `[{"code":"E1","message":"bad TIN"},{"code":"E2","message":"bad date","path":"x"}]`, "", "", "E1: bad TIN; E2: bad date"},
 		{"rejected no reasons", "rejected", "", "[]", "", "", "no reason given"},
 		{"rejected long reason", "rejected", "", `[{"code":"E1","message":"` + long + `"}]`, "", "", string([]rune("E1: " + long)[:500])},

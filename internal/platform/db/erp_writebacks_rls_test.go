@@ -730,7 +730,7 @@ func TestRLS_ErpWritebacksMigrationDownUp(t *testing.T) {
 	var policies int
 	var grants bool
 	if err := tx.QueryRow(ctx,
-		`SELECT c.relrowsecurity AND c.relforcerowsecurity, (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'erp_writebacks'), has_table_privilege('invoice_app', c.oid, 'SELECT, INSERT') AND NOT has_table_privilege('invoice_app', c.oid, 'UPDATE') AND NOT has_table_privilege('invoice_app', c.oid, 'DELETE') FROM pg_class c WHERE c.oid = to_regclass('public.erp_writebacks')`,
+		`SELECT c.relrowsecurity AND c.relforcerowsecurity, (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'erp_writebacks'), has_table_privilege('invoice_app', c.oid, 'SELECT') AND has_table_privilege('invoice_app', c.oid, 'INSERT') AND NOT has_table_privilege('invoice_app', c.oid, 'UPDATE') AND NOT has_table_privilege('invoice_app', c.oid, 'DELETE') FROM pg_class c WHERE c.oid = to_regclass('public.erp_writebacks')`,
 	).Scan(&forced, &policies, &grants); err != nil || !forced || policies != 1 || !grants {
 		t.Errorf("after Down then Up: FORCE RLS = %v, policies = %d, grants as designed = %v (err %v), want true, 1, true", forced, policies, grants, err)
 	}

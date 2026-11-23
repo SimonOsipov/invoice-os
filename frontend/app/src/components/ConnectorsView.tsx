@@ -37,6 +37,7 @@ import {
   type ConnectorRow,
   type ErpListing,
 } from '../lib/erpConnections'
+import { MANAGE } from '../lib/erpConnectionDetail'
 import { closeConsentTab, openConsentTab, sendToConsent } from '../lib/erpConsent'
 import { viewerIsAdmin } from '../lib/members'
 import type { PlatformCtx } from '../types'
@@ -246,7 +247,7 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
                     className="pf-btn"
                     style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, ...(busy ? DISABLED : null) }}
                   >
-                    Manage
+                    {MANAGE}
                   </button>
                 )}
                 {admin && canConnect(row, shown.systems) && (

@@ -70,6 +70,8 @@ function mount(o: Opts = {}) {
     refetchMembers: vi.fn(),
     openImportedInvoice: vi.fn(),
     authedFetch: f,
+    entities: [],
+    adoptBatchClient: vi.fn(),
   } as unknown as PlatformCtx
   const onBack = vi.fn()
   const r = render(<ConnectorDetail ctx={ctx} entityId="e1" connectionId="c1" onBack={onBack} />)
@@ -329,6 +331,13 @@ describe('field mapping', () => {
     await screen.findByText('Lookups open once the connection is signed in.')
     expect(m.f.mock.calls.filter((c) => c[0].includes('erp-lookups'))).toHaveLength(0)
     expect(screen.getByTestId('erp-detail-header').textContent).toContain('ERP company not chosen yet')
+  })
+
+  it('connectorDetail_editWaitsForAFailedLookupsRead', async () => {
+    mount({ lookups: () => { throw new ApiError('http', 'lookups broke', 500) } })
+    await screen.findByText('lookups broke')
+    await screen.findByText('a.invoice_number')
+    expect(screen.queryByTestId('erp-detail-mapping-edit')).toBeNull()
   })
 
   it('connectorDetail_savedMappingUpdatesThePanel', async () => {

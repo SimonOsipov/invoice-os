@@ -83,7 +83,7 @@ import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../
 import { NotesCard } from './NotesCard'
 import { UndoImportControl } from './UndoImportControl'
 import { useUndoableBatch } from '../lib/useUndoableBatch'
-import { changedAfterClearance, getInvoiceErpMarks, type DocumentMark } from '../lib/erpConnectionDetail'
+import { changedAfterClearance, getInvoiceErpMarks, MARK_CHANGED_AFTER_CLEARANCE, type DocumentMark } from '../lib/erpConnectionDetail'
 import { systemLabel } from '../lib/erpConnections'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
@@ -1064,7 +1064,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 
         {erpChanged && (
           <div data-testid="invoice-erp-changed-mark" style={{ marginBottom: 18, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}>
-            <div>Changed in the ERP after NRS accepted it</div>
+            <div>{MARK_CHANGED_AFTER_CLEARANCE}</div>
             <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{systemLabel(erpChanged.system).name} · {fmtDateTime(erpChanged.changed_after_clearance_at!)}</div>
           </div>
         )}

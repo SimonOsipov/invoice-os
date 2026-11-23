@@ -1066,7 +1066,8 @@ describe('ERPF-08-05: the connection segment', () => {
     const bad = parseLocation('/settings/connectors/x', '')
     expect([bad.view, bad.settingsTab, bad.connectionId]).toEqual(['settings', 'connectors', null])
     const other = parseLocation(`/settings/members/${CONN}`, '')
-    expect([other.view, other.settingsTab, other.connectionId]).toEqual(['settings', 'members', null])
+    expect([other.view, other.settingsTab, other.connectionId]).toEqual(['dashboard', 'members', null])
+    expect(parseLocation('/settings/members/x', '').view).toBe('dashboard')
   })
   it('routeUrl_writesTheConnectionOnlyOnConnectors', () => {
     expect(routeUrl('settings', { settingsTab: 'connectors', connectionId: CONN })).toBe(`/settings/connectors/${CONN}`)
@@ -1075,5 +1076,7 @@ describe('ERPF-08-05: the connection segment', () => {
   })
   it('routeName_namesTheConnectionPattern', () => {
     expect(routeName(`/settings/connectors/${CONN}`)).toBe('/settings/connectors/:id')
+    expect(routeName('/settings/connectors/x')).toBe('/settings/connectors/:id')
+    expect(routeName(`/settings/members/${CONN}`)).toBe('<unmatched>')
   })
 })

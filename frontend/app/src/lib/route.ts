@@ -199,16 +199,11 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
       if (seg.length > 0 && !/[?#]/.test(seg) && second === undefined) {
         view = 'settings'
         settingsTab = SETTINGS_TAB_IDS.has(seg) ? (seg as SettingsTab) : 'members'
-      } else if (
-        second !== undefined &&
-        rest.length === 0 &&
-        SETTINGS_TAB_IDS.has(first) &&
-        (first === 'connectors' || INVOICE_ID.test(second))
-      ) {
-        // A third segment is the connection on connectors only; anywhere else it is ignored.
+      } else if (first === 'connectors' && second !== undefined && rest.length === 0) {
+        // A third segment is the connection on connectors only; a non-UUID one is the list.
         view = 'settings'
-        settingsTab = first as SettingsTab
-        if (first === 'connectors' && INVOICE_ID.test(second)) connectionId = second
+        settingsTab = 'connectors'
+        if (INVOICE_ID.test(second)) connectionId = second
       }
     }
   }
@@ -239,6 +234,6 @@ export function routeName(pathname: string): string {
   const seg = normalized.startsWith('/settings/') ? normalized.slice('/settings/'.length) : ''
   if (seg.length > 0 && !/[/?#]/.test(seg)) return '/settings/:tab'
   const conn = /^connectors\/([^/?#]+)$/.exec(seg)
-  if (conn !== null && INVOICE_ID.test(conn[1])) return '/settings/connectors/:id'
+  if (conn !== null) return '/settings/connectors/:id'
   return '<unmatched>'
 }

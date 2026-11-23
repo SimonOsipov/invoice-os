@@ -9,7 +9,6 @@ import { backGlyph, warnTriGlyph } from '../glyphs'
 import {
   ACTIVITY_EMPTY,
   ACTIVITY_HEAD,
-  ACTIVITY_SUB,
   activitySummary,
   BACK_TO_CONNECTORS,
   clientLine,
@@ -52,6 +51,7 @@ import {
   CONNECTORS_POPUP_LINK,
   connectBody,
   connectErp,
+  listErpConnections,
   POLL_MAX_TICKS,
   POLL_MS,
   statusPill,
@@ -175,6 +175,33 @@ export function ConnectorDetail({
     }
   }, [])
 
+  // A cold link names no client: on a 404, find the connection's owner among the clients and adopt it
+  // (adoptBatchClient is a no-op once a client is picked, so a stale link still reads "not in").
+  const [searched, setSearched] = useState<string | null>(null)
+  const missed = overview.status === 'error' && overview.error?.status === 404
+  useEffect(() => {
+    if (!missed || !base || searched === connectionId) return
+    let live = true
+    Promise.all(
+      ctx.entities
+        .filter((e) => e.id !== entityId)
+        .map((e) =>
+          listErpConnections(ctx.authedFetch, base, e.id).then(
+            (l) => (l.connections.some((c) => c.id === connectionId) ? e.id : null),
+            () => null,
+          ),
+        ),
+    ).then((owners) => {
+      if (!live) return
+      const owner = owners.find((o) => o !== null)
+      if (owner) ctx.adoptBatchClient(owner)
+      setSearched(connectionId)
+    })
+    return () => {
+      live = false
+    }
+  }, [missed, connectionId])
+
   // The poll runs while the connection waits for sign-in; it ends with the connection, the view or the cap.
   useEffect(() => {
     if (!pendingNow) return
@@ -246,7 +273,7 @@ export function ConnectorDetail({
     let body: React.ReactNode = <Loading label={LOADING_CONNECTION} />
     if (overview.status === 'error' && overview.error) {
       body =
-        overview.error.status === 404 ? (
+        overview.error.status === 404 && searched === connectionId ? (
           <div data-testid="erp-detail-not-found" style={{ ...CARD, padding: '20px 22px', fontSize: 14, fontWeight: 600 }}>
             {notFoundTitle(clientName)}
           </div>
@@ -267,8 +294,8 @@ export function ConnectorDetail({
   const pill = statusPill(row)
   const tone = PILL[pill.tone]
   const link = blocked && blocked.key === key && conn.status !== 'active' ? blocked : null
-  const lookupsLoading = externalKey !== null && lookupsRead.status === 'loading' && !lookups
-  const canEdit = admin && mapping != null && !lookupsLoading
+  // The modal edits the lookups too: it opens only once they are read, or when there are none to read.
+  const canEdit = admin && mapping != null && (externalKey === null || lookups != null)
 
   let mappingBody: React.ReactNode
   if (mapping == null) {
@@ -392,7 +419,6 @@ export function ConnectorDetail({
         <div data-testid="erp-detail-activity" style={{ ...CARD, overflow: 'hidden' }}>
           <div style={CARD_HEAD}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>{ACTIVITY_HEAD}</span>
-            <span className="mono" style={SUB}>{ACTIVITY_SUB}</span>
           </div>
           <div style={{ padding: '4px 20px 12px' }}>
             <div style={{ ...NOTE, padding: '10px 0' }}>{activitySummary(counts)}</div>

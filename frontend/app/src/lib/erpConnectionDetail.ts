@@ -97,7 +97,6 @@ export const BACK_TO_CONNECTORS = 'All connectors'
 export const RECONNECT = 'Reconnect'
 export const COMPANY_NOT_CHOSEN = 'ERP company not chosen yet'
 export const ACTIVITY_HEAD = 'Sync activity'
-export const ACTIVITY_SUB = 'LAST 24 HOURS'
 export const ACTIVITY_NONE = 'Nothing pulled in the last 24 hours.'
 export const ACTIVITY_EMPTY = 'No documents pulled yet.'
 export const MAPPING_HEAD = 'Field mapping'
@@ -153,7 +152,7 @@ const OUTCOME: Record<string, string> = {
 }
 const HELD_REASON: Record<string, string> = {
   differs_from_erp: 'Differs from the ERP',
-  changed_after_clearance: 'Changed in the ERP after NRS accepted it',
+  changed_after_clearance: MARK_CHANGED_AFTER_CLEARANCE,
   deleted_in_erp: 'Deleted or voided in the ERP',
   number_held: 'Its number is held by another ERP document',
 }

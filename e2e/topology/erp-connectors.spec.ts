@@ -1,5 +1,5 @@
 // Settings > ERP connectors on the deployed preview: connect and disconnect the fake ERP through its
-// consent tab, and the row's layout. Every step acts on a client this run created.
+// consent tab, the row's layout, and the connection detail. Every step acts on a client this run created.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login, createEntity, rawFetch, listInvoices, editInvoice, validateInvoice, approveUntilClosed, firmApproverTokens, submitAndAwait, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'

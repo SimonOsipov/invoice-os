@@ -262,3 +262,55 @@ describe('cold load of /imports/<id>/review', () => {
     )
   })
 })
+
+// The overview answers per client, and the client is chosen by the real App: a stub that answers
+// every client alike (as the drill-down suite's does) could not tell the default from the owner.
+describe('cold load of /settings/connectors/<id>', () => {
+  const CONN_ID = 'cccccccc-3333-4333-8333-333333333333'
+  const conn = { id: CONN_ID, entity_id: ENTITY_SECOND, system: 'fake', external_key: null, status: 'active', last_sync_at: null, created_at: '', updated_at: '' }
+  const missing = () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) })
+
+  function routeConnectorFetch(ownerEntity: string | null) {
+    const base = routeFetchImpl()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const m = /entities\/([^/]+)\/erp-connections(\/[^/]+\/overview)?$/.exec(url)
+        if (m && m[2]) {
+          return m[1] === ownerEntity
+            ? ok({ connection: conn, activity: { since: '', counts: { pulled: 0, pending: 0, drafted: 0, linked: 0, held: 0, failed: 0, deleted: 0 }, documents: [] }, writebacks: [], held: [] })
+            : missing()
+        }
+        if (m) return ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+        return base(url)
+      }),
+    )
+  }
+  function routeFetchImpl() {
+    routeFetch()
+    return (globalThis.fetch as unknown as (u: string) => Promise<unknown>).bind(globalThis)
+  }
+
+  async function boot() {
+    window.history.replaceState(null, '', `/settings/connectors/${CONN_ID}`)
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(<App />)
+  }
+
+  it('coldLoad_aConnectionOfANonDefaultClientOpensUnderItsOwnClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  it('coldLoad_aConnectionOfNoClientStaysNotFound', async () => {
+    routeConnectorFetch(null)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found').textContent).toContain('Alpha'))
+  })
+})

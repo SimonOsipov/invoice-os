@@ -249,6 +249,19 @@ func DisconnectHandler(disconnect func(ctx context.Context, entityID, connection
 	}
 }
 
+// Red-test stubs (ERPF-08-01): replaced by the implementation.
+func OverviewHandler(overview func(ctx context.Context, entityID, connectionID string) (Overview, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+func MarksHandler(marks func(ctx context.Context, entityID, invoiceID string) ([]DocumentMark, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // statusForErr maps a store error to its status and message; ErrNoSuchRecord covers a missing,
 // invisible or out-of-scope client or connection, so all of them answer alike.
 func statusForErr(err error) (int, string) {

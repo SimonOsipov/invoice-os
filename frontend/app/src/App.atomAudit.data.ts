@@ -35,7 +35,7 @@ export type AuditedAtom = {
 // (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
 // Shape (b): suspended, bootPath/bootSearch, seed, sandbox,
-// connectorMappings, policies, members, roles. Named, not indexed --
+// policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
 // Every route a screen reading an always-mounted atom can be on: the 14 ROUTE_PATHS
@@ -312,15 +312,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     verdict: 'deliberate',
     citation: { text: '// settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.' },
     note: 'Durable by design (App.tsx#navigate); popstate re-clamps it by `mode` at App.tsx#onPopState. A tab choice is not company data.',
-  },
-  {
-    binding: 'connectorMappings, setConnectorMappings',
-    name: 'connectorMappings',
-    kind: 'useState',
-    resetBySwitchClient: false,
-    routes: ['/settings', '/settings/<tab>'],
-    verdict: 'correctly-reset',
-    note: 'Never fetched; keyed by ConnectorId only (App.tsx#saveConnectorMapping), never by entity, so it has no company dimension to go stale.',
   },
   {
     binding: 'openRuleKey, setOpenRuleKey',

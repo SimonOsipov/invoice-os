@@ -31,13 +31,13 @@ import {
   listErpConnections,
   POLL_MAX_TICKS,
   POLL_MS,
-  safeConsentUrl,
   statusPill,
   syncLine,
   systemLabel,
   type ConnectorRow,
   type ErpListing,
 } from '../lib/erpConnections'
+import { closeConsentTab, openConsentTab, sendToConsent } from '../lib/erpConsent'
 import { viewerIsAdmin } from '../lib/members'
 import type { PlatformCtx } from '../types'
 
@@ -147,17 +147,14 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
     if (busyRef.current || !base || entityId === null) return
     busyRef.current = true
     const eid = entityId
-    // Opened before any await: a window opened after one is a blocked popup.
-    const tab = window.open('', '_blank')
-    if (tab) tab.opener = null
+    const tab = openConsentTab()
     setBusyKey(row.key)
     setBlocked(null)
     try {
       const answer = await connectErp(ctx.authedFetch, base, eid, connectBody(row))
-      const url = safeConsentUrl(answer.consent_url)
-      if (url === null) throw new ApiError('malformed', CONNECTORS_BAD_CONSENT_URL)
       // The user asked for this consent, so it opens even when the view is gone.
-      if (tab) tab.location.href = url
+      const url = sendToConsent(tab, answer)
+      if (url === null) throw new ApiError('malformed', CONNECTORS_BAD_CONSENT_URL)
       if (!aliveRef.current || entityRef.current !== eid) return
       if (!tab) setBlocked({ entityId: eid, system: row.system, url })
       // The row shows the answered connection now, so it reads pending and the poll has a pending listing to read.
@@ -169,7 +166,7 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
       )
       startPoll()
     } catch (err) {
-      tab?.close()
+      closeConsentTab(tab)
       if (aliveRef.current && entityRef.current === eid) failed(err)
     } finally {
       busyRef.current = false

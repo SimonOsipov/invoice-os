@@ -144,12 +144,9 @@ import { ExtractionReview } from './components/ExtractionReview'
 import type {
   AuditPrefilter,
   Client,
-  ConnectorId,
-  ConnectorMappings,
   CreateStep,
   Draft,
   DraftLineNRSKey,
-  FieldMapRow,
   Mapping,
   Mode,
   PlatformCtx,
@@ -482,9 +479,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // Settings opens on Members: parseLocation returns that tab for a URL that names none.
   // SETTINGS_TABS' array order decides only which renders first.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => availableSettingsTab(seed.settingsTab, mode))
-  // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
-  // mapping survives navigating away from Settings and back.
-  const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
@@ -1619,10 +1613,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     window.history.replaceState(replaceStamp(), '', url)
   }
 
-  function saveConnectorMapping(id: ConnectorId, rows: FieldMapRow[]) {
-    setConnectorMappings((m) => ({ ...m, [id]: rows }))
-  }
-
   function openRule(key: string) {
     setOpenRuleKey(key)
   }
@@ -1784,7 +1774,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     switcherOpen,
     sandbox,
     settingsTab,
-    connectorMappings,
     filing,
     filingError,
     handOffReading,
@@ -1863,7 +1852,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     openDocumentReview,
     setSandbox,
     setSettingsTab,
-    saveConnectorMapping,
     openRule,
     closeRule,
     openPolicy,

@@ -205,8 +205,8 @@ export const ENDPOINTS: EndpointDef[] = [
 export type WebhookDef = { event: string; url: string; st: string }
 
 export const WEBHOOKS: WebhookDef[] = [
-  { event: 'invoice.validated', url: 'https://erp.honeywell.ng/hooks/validated', st: 'ACTIVE' },
-  { event: 'invoice.transmitted', url: 'https://erp.honeywell.ng/hooks/transmitted', st: 'ACTIVE' },
+  { event: 'invoice.validated', url: 'https://hooks.honeywell.ng/validated', st: 'ACTIVE' },
+  { event: 'invoice.transmitted', url: 'https://hooks.honeywell.ng/transmitted', st: 'ACTIVE' },
   { event: 'invoice.rejected', url: 'https://ops.honeywell.ng/alerts/firs', st: 'ACTIVE' },
 ]
 

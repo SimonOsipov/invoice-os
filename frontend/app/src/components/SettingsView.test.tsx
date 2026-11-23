@@ -14,7 +14,6 @@ function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, un
     handoff,
     settingsTab: tab,
     sandbox: true,
-    connectorMappings: {},
     activeEntity: null,
     entitiesState: 'ready',
     entitiesError: null,

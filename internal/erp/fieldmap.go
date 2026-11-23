@@ -407,7 +407,7 @@ func Apply(m Mapping, doc Document, party *Party) (Mapped, error) {
 			return out, err
 		}
 		switch {
-		case s == nil && t.Key == "invoice_number":
+		case s == nil && (t.Key == "invoice_number" || t.Key == "issue_date"):
 			return out, unmappable(t.Key)
 		case s == nil:
 		case t.Key == TargetCustomerID:

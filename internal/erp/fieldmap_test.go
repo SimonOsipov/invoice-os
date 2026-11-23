@@ -204,6 +204,17 @@ func TestApply_AbsentNullAndBlankAreNil(t *testing.T) {
 	}
 }
 
+func TestApply_RefusesAMissingOrBlankIssueDate(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing": `{"number":"N"}`, "null": `{"number":"N","d":null}`, "blank": `{"number":"N","d":"  "}`,
+	} {
+		_, err := Apply(Mapping{"invoice_number": "number", "issue_date": "d"}, docOf(t, body), nil)
+		if !errors.Is(err, ErrUnmappable) || !strings.Contains(err.Error(), "issue_date") {
+			t.Errorf("%s: err = %v, want unmappable naming issue_date", name, err)
+		}
+	}
+}
+
 func TestApply_RefusesEachUnmappableValue(t *testing.T) {
 	for _, c := range []struct{ name, target, path, body, bad string }{
 		{"date", "issue_date", "d", `{"number":"N","d":"05/01/2026"}`, "05/01/2026"},

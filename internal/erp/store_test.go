@@ -243,6 +243,7 @@ func idsOf(cs []Connection) []string {
 var everyStoreError = []error{
 	ErrNotPermitted, ErrUnknownSystem, ErrNoSuchRecord, ErrAlreadyConnected,
 	ErrAlreadyDisconnected, ErrKeylessPending, db.ErrNotActiveMember, db.ErrNoTenant, db.ErrWorkspaceLocked,
+	ErrInvalidMapping, ErrInvalidLookup,
 }
 
 func wantErr(t *testing.T, label string, got, want error) {

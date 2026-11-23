@@ -59,6 +59,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'erp.token.refreshed',
     'erp.token.refresh_failed',
     'erp.connection.reauth_required',
+    'erp.mapping.changed',
   ],
   documents: [
     'document.created',
@@ -148,6 +149,7 @@ describe('audit vocabulary', () => {
     expect(AUDIT_EVENTS['erp.document.pulled']?.label).toBe('ERP invoice pulled')
     expect(AUDIT_EVENTS['erp.document.skipped_duplicate']?.label).toBe('ERP invoice number already exists, no new invoice made')
     expect(AUDIT_EVENTS['erp.document.changed_after_clearance']?.label).toBe('ERP invoice changed after NRS accepted it')
+    expect(AUDIT_EVENTS['erp.mapping.changed']?.label).toBe('ERP field mapping changed')
   })
 
   it('auditVocabulary_accountLabels', () => {

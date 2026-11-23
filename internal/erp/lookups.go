@@ -49,8 +49,15 @@ func ApplyLookups(m *Mapped, ls []Lookup) {
 		}
 		if k := strings.TrimSpace(at(m.Items, i)); k != "" {
 			if l, ok := by[[2]string{"item", k}]; ok {
-				set(&line.HSNCode, l.HSNCode)
-				set(&line.ISICCode, l.ServiceCode)
+				// A line carries one code: the one the lookup names replaces the other.
+				if l.HSNCode != nil {
+					set(&line.HSNCode, l.HSNCode)
+					line.ISICCode = nil
+				}
+				if l.ServiceCode != nil {
+					set(&line.ISICCode, l.ServiceCode)
+					line.HSNCode = nil
+				}
 			}
 		}
 	}

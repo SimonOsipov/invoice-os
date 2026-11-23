@@ -32,11 +32,11 @@ func TestApplyLookups_WritesEachFoundValue(t *testing.T) {
 	if *ls[0].TaxCategory != "ZERO_VAT" || *ls[1].TaxCategory != "cat2" {
 		t.Errorf("tax categories = %q, %q", *ls[0].TaxCategory, *ls[1].TaxCategory)
 	}
-	if *ls[0].HSNCode != "H" || *ls[1].HSNCode != "hsn2" {
-		t.Errorf("hsn = %q, %q", *ls[0].HSNCode, *ls[1].HSNCode)
+	if *ls[0].HSNCode != "H" || ls[1].HSNCode != nil {
+		t.Errorf("hsn = %v, %v, want H and nil", ls[0].HSNCode, ls[1].HSNCode)
 	}
-	if *ls[0].ISICCode != "isic1" || *ls[1].ISICCode != "S" {
-		t.Errorf("isic = %q, %q", *ls[0].ISICCode, *ls[1].ISICCode)
+	if ls[0].ISICCode != nil || *ls[1].ISICCode != "S" {
+		t.Errorf("isic = %v, %v, want nil and S", ls[0].ISICCode, ls[1].ISICCode)
 	}
 	if *m.In.BuyerTIN != "12345678-0001" || *m.In.BuyerState != "Lagos" || *m.In.BuyerLGA != "Ikeja" {
 		t.Errorf("buyer = %q %q %q", *m.In.BuyerTIN, *m.In.BuyerState, *m.In.BuyerLGA)
@@ -52,8 +52,8 @@ func TestApplyLookups_NilFieldsLeaveMappedValues(t *testing.T) {
 	if *m.In.BuyerTIN != "1234567897" || *m.In.BuyerLGA != "mapped-lga" || *m.In.BuyerState != "Lagos" {
 		t.Errorf("buyer = %q %q %q", *m.In.BuyerTIN, *m.In.BuyerState, *m.In.BuyerLGA)
 	}
-	if l := m.In.LineItems[0]; *l.ISICCode != "isic1" || *l.HSNCode != "H" || *l.TaxCategory != "cat1" {
-		t.Errorf("line = %q %q %q", *l.ISICCode, *l.HSNCode, *l.TaxCategory)
+	if l := m.In.LineItems[0]; l.ISICCode != nil || *l.HSNCode != "H" || *l.TaxCategory != "cat1" {
+		t.Errorf("line = %v %v %v, want ISIC cleared by the hsn lookup", l.ISICCode, l.HSNCode, l.TaxCategory)
 	}
 }
 

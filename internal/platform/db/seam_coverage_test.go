@@ -739,6 +739,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
 	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
 	{file: "internal/erp/pull.go"},                                                          // the ERP pull River worker and sweep: the job row carries the tenant, no request identity to gate
+	{file: "internal/erp/subscriptions.go"},                                                 // the subscription ticker in cmd/worker; a schedule opened it, not a caller
 	{file: "internal/erp/ingest.go"},                                                        // the ERP ingest River worker: the job row carries the tenant, no request identity to gate
 	{file: "internal/extraction/worker.go"},                                                 // the extraction River worker itself, same shape: the job row carries the tenant
 	{file: "internal/extraction/anchor_store.go"},                                           // the learned-rule read, same shape as store.go: no request path reaches it
@@ -772,6 +773,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
 	{file: "internal/erp/complete.go", fn: "settleTx2Error"},                                // part of the callback: the tenant comes from the state, there is no request identity to gate
 	{file: "internal/erp/complete.go", fn: "Complete"},                                      // the callback names its tenant in the state; the gateway-token route carries no identity to gate
+	{file: "internal/erp/webhook.go", fn: "Receive"},                                        // a verified vendor webhook carries no identity; the tenant comes from erp_webhook_targets rows
 	{file: "internal/erp/refresh.go", fn: "refresh"},                                        // the refresh River job; the tenant comes from its args and there is no request identity to gate
 	{file: "internal/erp/refresh.go", fn: "claim"},                                          // the refresh River job; the tenant comes from its args and there is no request identity to gate
 	{file: "internal/erp/refresh.go", fn: "reconsent"},                                      // the refresh River job; the tenant comes from its args and there is no request identity to gate
@@ -1027,6 +1029,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /.well-known/jwks.json":                                     {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
 	"GET /auth/reset-password":                                       {verdict: scExempt, reason: "no database; renders the reset page"},
 	"GET /erp/callback":                                              {verdict: scExempt, reason: "no database; forwards the redirect to the worker with the gateway token and renders a fixed page"},
+	"POST /erp/webhooks/fake":                                        {verdict: scExempt, reason: "no database; forwards a bounded vendor webhook to the worker with the gateway token, mounted only when the ERP mode is fake"},
 	"GET /erp/fake/consent":                                          {verdict: scExempt, reason: "no database; static fake-vendor consent form, mounted only when the ERP mode is fake"},
 	"GET /readiness-check/confirm":                                   {verdict: scExempt, reason: "no database; renders the confirm page and calls nothing upstream"},
 	"GET /unsubscribe":                                               {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
@@ -1244,6 +1247,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/send-again":                              {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                             {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                                {verdict: scCovered},
+	"POST /internal/erp/webhooks/{system}":                           {verdict: scExempt, reason: "gateway-token call with no caller; the connector verifies the vendor signature and erp_webhook_targets names each tenant"},
 	"POST /internal/erp/callback":                                    {verdict: scExempt, reason: "gateway-token call with no caller; the state names the tenant and the connection"},
 	"POST /internal/public-checks/run":                               {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},
 	"POST /internal/public-checks/mapping":                           {verdict: scExempt, reason: "gateway-token call with no caller; readiness checks and the rule tables carry no tenant"},

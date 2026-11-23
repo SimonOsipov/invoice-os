@@ -92,6 +92,7 @@ type connInfo struct {
 type docState struct {
 	id, state, rev           string
 	failure, invoiceID, hash *string
+	fingerprint              *string
 	claimed                  *string
 	hashVersion              *int16
 	lastJob                  *int64
@@ -145,11 +146,12 @@ func (w *IngestWorker) Work(ctx context.Context, job *river.Job[IngestArgs]) err
 
 func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 	var (
-		c       connInfo
-		d       docState
-		found   bool
-		skipped bool
-		creds   Credentials
+		c         connInfo
+		d         docState
+		found     bool
+		skipped   bool
+		creds     Credentials
+		overrides Mapping
 	)
 	err := db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		var ok bool
@@ -164,7 +166,10 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 		if creds, err = credentialsFor(ctx, tx, c.grantID); err != nil {
 			return err
 		}
-		d, found, err = readDoc(ctx, tx, a, false)
+		if d, found, err = readDoc(ctx, tx, a, false); err != nil {
+			return err
+		}
+		overrides, err = readOverrides(ctx, tx, c.entity, c.system)
 		return err
 	})
 	if err != nil || skipped {
@@ -182,11 +187,11 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 		}
 	}
 	if a.Deleted {
-		_, err := w.claim(ctx, a, nil, "")
+		_, err := w.claim(ctx, a, nil, "", "")
 		return err
 	}
 
-	m := w.Registry[c.system].DefaultMapping()
+	m := w.Registry[c.system].DefaultMapping().Merge(overrides)
 	if ValidateMapping(m) != nil {
 		return w.fail(ctx, a, "no_mapping")
 	}
@@ -221,12 +226,22 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 	if err != nil {
 		return err
 	}
+	mapped.In.EntityID = c.entity
+	mapped.In.ERPConnectionID = &a.ConnectionID
+	// The hash is of the ERP's content; a lookup is the firm's input and must not move it.
+	hash := ContentHash(mapped.In)
+	fp := Fingerprint(m)
+	var ls []Lookup
+	if err := db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) (err error) {
+		ls, err = readLookups(ctx, tx, c.entity, c.system, c.externalKey, mapped)
+		return err
+	}); err != nil {
+		return err
+	}
+	ApplyLookups(&mapped, ls)
 	in := mapped.In
-	in.EntityID = c.entity
-	in.ERPConnectionID = &a.ConnectionID
-	hash := ContentHash(in)
 
-	p, err := w.claim(ctx, a, &in, hash)
+	p, err := w.claim(ctx, a, &in, hash, fp)
 	if err != nil {
 		return err
 	}
@@ -235,7 +250,7 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 		if err := w.validateIfDraft(ictx, a.TenantID, p.invoiceID); err != nil {
 			return err
 		}
-		return w.settle(ctx, a, in, hash, p.invoiceID, nil)
+		return w.settle(ctx, a, in, hash, fp, p.invoiceID, nil)
 	case planCreate:
 		_, err := importer.CreateDrafts(ictx, w.Invoices, w.Gate, []invoice.CreateInput{in},
 			func(ctx context.Context, out importer.DraftOutcome, status string) error {
@@ -247,9 +262,9 @@ func (w *IngestWorker) ingest(ctx context.Context, a ingestJob) error {
 					return errUnvalidated // the claim stays; the retry adopts the draft and validates it
 				}
 				if r.Invoice != nil {
-					return w.settle(ctx, a, in, hash, r.Invoice.ID, nil)
+					return w.settle(ctx, a, in, hash, fp, r.Invoice.ID, nil)
 				}
-				return w.settle(ctx, a, in, hash, "", r.Err)
+				return w.settle(ctx, a, in, hash, fp, "", r.Err)
 			})
 		return err
 	}
@@ -315,7 +330,7 @@ func readConn(ctx context.Context, tx pgx.Tx, id string, lock bool) (connInfo, b
 }
 
 func readDoc(ctx context.Context, tx pgx.Tx, a ingestJob, lock bool) (docState, bool, error) {
-	q := `SELECT id::text, state, source_revision, failure, invoice_id::text, content_hash, claimed_number, hash_version,
+	q := `SELECT id::text, state, source_revision, failure, invoice_id::text, content_hash, claimed_number, hash_version, mapping_fingerprint,
 	             changed_after_clearance_at, deleted_in_erp_at, last_job_id, updated_at > now() - interval '` + claimLife + `'
 	      FROM erp_source_documents WHERE connection_id = $1 AND source_doc_id = $2`
 	if lock {
@@ -323,7 +338,7 @@ func readDoc(ctx context.Context, tx pgx.Tx, a ingestJob, lock bool) (docState, 
 	}
 	var d docState
 	err := tx.QueryRow(ctx, q, a.ConnectionID, a.SourceDocID).Scan(&d.id, &d.state, &d.rev, &d.failure, &d.invoiceID,
-		&d.hash, &d.claimed, &d.hashVersion, &d.changed, &d.deleted, &d.lastJob, &d.live)
+		&d.hash, &d.claimed, &d.hashVersion, &d.fingerprint, &d.changed, &d.deleted, &d.lastJob, &d.live)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return docState{}, false, nil
 	}
@@ -356,29 +371,31 @@ type docWrite struct {
 	invoiceID  *string
 	differs    bool
 	hash       string
+	fp         string
 }
 
 // upsertDoc writes one row and resets every mark: the ref is live. A nil hash keeps the stored one.
 func upsertDoc(ctx context.Context, tx pgx.Tx, a ingestJob, entity string, v docWrite) error {
-	var hash *string
+	var hash, fp *string
 	var version *int
 	if v.hash != "" {
-		hash, version = &v.hash, new(int)
+		hash, fp, version = &v.hash, &v.fp, new(int)
 		*version = HashVersion
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, failure,
-                                  claimed_number, invoice_id, differs_from_erp, content_hash, hash_version, last_job_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                  claimed_number, invoice_id, differs_from_erp, content_hash, hash_version, last_job_id, mapping_fingerprint)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET
     source_revision = EXCLUDED.source_revision, state = EXCLUDED.state, failure = EXCLUDED.failure,
     claimed_number = EXCLUDED.claimed_number, invoice_id = EXCLUDED.invoice_id,
     differs_from_erp = EXCLUDED.differs_from_erp,
     content_hash = coalesce(EXCLUDED.content_hash, erp_source_documents.content_hash),
     hash_version = coalesce(EXCLUDED.hash_version, erp_source_documents.hash_version),
+    mapping_fingerprint = coalesce(EXCLUDED.mapping_fingerprint, erp_source_documents.mapping_fingerprint),
     last_job_id = greatest(erp_source_documents.last_job_id, EXCLUDED.last_job_id),
     deleted_in_erp_at = NULL, changed_after_clearance_at = NULL, updated_at = now()`,
-		a.TenantID, entity, a.ConnectionID, a.SourceDocID, v.rev, v.state, v.failure, v.claimed, v.invoiceID, v.differs, hash, version, a.id)
+		a.TenantID, entity, a.ConnectionID, a.SourceDocID, v.rev, v.state, v.failure, v.claimed, v.invoiceID, v.differs, hash, version, a.id, fp)
 	return err
 }
 
@@ -394,7 +411,7 @@ func throttled(err error) error {
 func (w *IngestWorker) snoozeErr() error { return river.JobSnooze(claimSnooze) }
 
 // claim is TxA: it decides the document under the connection, row and number locks.
-func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.CreateInput, hash string) (plan, error) {
+func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.CreateInput, hash, fp string) (plan, error) {
 	p := plan{kind: planDone}
 	err := db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
@@ -442,7 +459,7 @@ func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.Creat
 			return w.snoozeErr()
 		}
 		if found && (d.state == "drafted" || d.state == "linked") && d.invoiceID != nil {
-			return w.newRevision(ctx, tx, a, c, d, *in, hash)
+			return w.newRevision(ctx, tx, a, c, d, *in, hash, fp)
 		}
 
 		inv, exists, err := lookupInvoice(ctx, tx, c.entity, number)
@@ -451,7 +468,7 @@ func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.Creat
 		}
 		if !exists {
 			p = plan{kind: planCreate}
-			return upsertDoc(ctx, tx, a, c.entity, docWrite{state: "pending", rev: a.SourceRevision, claimed: &number, hash: hash})
+			return upsertDoc(ctx, tx, a, c.entity, docWrite{state: "pending", rev: a.SourceRevision, claimed: &number, hash: hash, fp: fp})
 		}
 		linked, err := linkedElsewhere(ctx, tx, a.ConnectionID, inv.id, rowID)
 		if err != nil {
@@ -461,7 +478,7 @@ func (w *IngestWorker) claim(ctx context.Context, a ingestJob, in *invoice.Creat
 			p = plan{kind: planAdopt, invoiceID: inv.id}
 			return nil
 		}
-		return w.linkOrHold(ctx, tx, a, c, *in, hash, inv, linked)
+		return w.linkOrHold(ctx, tx, a, c, *in, hash, fp, inv, linked)
 	})
 	return p, err
 }
@@ -484,15 +501,15 @@ func linkedElsewhere(ctx context.Context, tx pgx.Tx, connID, invoiceID, ownRow s
 }
 
 // linkOrHold links or holds a document whose number is taken: the number belongs to an existing invoice, which is never touched.
-func (w *IngestWorker) linkOrHold(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, in invoice.CreateInput, hash string, inv invRef, linked bool) error {
-	v := docWrite{state: "held", rev: a.SourceRevision, hash: hash}
+func (w *IngestWorker) linkOrHold(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, in invoice.CreateInput, hash, fp string, inv invRef, linked bool) error {
+	v := docWrite{state: "held", rev: a.SourceRevision, hash: hash, fp: fp}
 	var differs bool
 	if !linked {
 		var err error
 		if differs, err = differsFrom(ctx, tx, inv.id, in); err != nil {
 			return err
 		}
-		v = docWrite{state: "linked", rev: a.SourceRevision, invoiceID: &inv.id, differs: differs, hash: hash}
+		v = docWrite{state: "linked", rev: a.SourceRevision, invoiceID: &inv.id, differs: differs, hash: hash, fp: fp}
 	}
 	if err := upsertDoc(ctx, tx, a, c.entity, v); err != nil {
 		return err
@@ -528,20 +545,21 @@ func differsFrom(ctx context.Context, tx pgx.Tx, invoiceID string, in invoice.Cr
 }
 
 // newRevision handles a taken document's new revision never writes the invoice.
-func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, d docState, in invoice.CreateInput, hash string) error {
+func (w *IngestWorker) newRevision(ctx context.Context, tx pgx.Tx, a ingestJob, c connInfo, d docState, in invoice.CreateInput, hash, fp string) error {
 	var status, number string
 	if err := tx.QueryRow(ctx, `SELECT status, invoice_number FROM invoices WHERE id = $1`, *d.invoiceID).Scan(&status, &number); err != nil {
 		return err
 	}
 	const set = `UPDATE erp_source_documents SET source_revision = $2, last_job_id = greatest(last_job_id, $3), deleted_in_erp_at = NULL, updated_at = now()`
 	switch {
-	case d.hashVersion == nil || int(*d.hashVersion) != HashVersion:
+	// A new projection (version or mapping) re-baselines: a mapping edit is not an ERP change.
+	case d.hashVersion == nil || int(*d.hashVersion) != HashVersion || d.fingerprint == nil || *d.fingerprint != fp:
 		differs, err := differsFrom(ctx, tx, *d.invoiceID, in)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, set+`, content_hash = $4, hash_version = $5, differs_from_erp = $6 WHERE id = $1`,
-			d.id, a.SourceRevision, a.id, hash, HashVersion, differs)
+		_, err = tx.Exec(ctx, set+`, content_hash = $4, hash_version = $5, mapping_fingerprint = $6, differs_from_erp = $7 WHERE id = $1`,
+			d.id, a.SourceRevision, a.id, hash, HashVersion, fp, differs)
 		return err
 	case d.hash != nil && *d.hash == hash:
 		_, err := tx.Exec(ctx, set+` WHERE id = $1`, d.id, a.SourceRevision, a.id)
@@ -592,7 +610,7 @@ ON CONFLICT (connection_id, source_doc_id) DO UPDATE SET source_revision = EXCLU
 }
 
 // settle is TxB: it writes what the create (or the adopted invoice) came to, under this job's claim.
-func (w *IngestWorker) settle(ctx context.Context, a ingestJob, in invoice.CreateInput, hash, invoiceID string, refusal error) error {
+func (w *IngestWorker) settle(ctx context.Context, a ingestJob, in invoice.CreateInput, hash, fp, invoiceID string, refusal error) error {
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
 		c, ok, err := readConn(ctx, tx, a.ConnectionID, true)
 		if err != nil {
@@ -613,7 +631,7 @@ func (w *IngestWorker) settle(ctx context.Context, a ingestJob, in invoice.Creat
 		}
 		switch {
 		case invoiceID != "":
-			if err := upsertDoc(ctx, tx, a, c.entity, docWrite{state: "drafted", rev: a.SourceRevision, invoiceID: &invoiceID, hash: hash}); err != nil {
+			if err := upsertDoc(ctx, tx, a, c.entity, docWrite{state: "drafted", rev: a.SourceRevision, invoiceID: &invoiceID, hash: hash, fp: fp}); err != nil {
 				return err
 			}
 			return recordPulled(ctx, tx, c, a, invoiceID, in.InvoiceNumber)
@@ -629,10 +647,10 @@ func (w *IngestWorker) settle(ctx context.Context, a ingestJob, in invoice.Creat
 			if err != nil {
 				return err
 			}
-			return w.linkOrHold(ctx, tx, a, c, in, hash, inv, linked)
+			return w.linkOrHold(ctx, tx, a, c, in, hash, fp, inv, linked)
 		default:
 			failure := "refused"
-			return upsertDoc(ctx, tx, a, c.entity, docWrite{state: "failed", rev: a.SourceRevision, failure: &failure, hash: hash})
+			return upsertDoc(ctx, tx, a, c.entity, docWrite{state: "failed", rev: a.SourceRevision, failure: &failure, hash: hash, fp: fp})
 		}
 	})
 }

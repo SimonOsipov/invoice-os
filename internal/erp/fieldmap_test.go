@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -248,6 +249,24 @@ func TestCustomerIDOf_ReadsTheMappedCustomer(t *testing.T) {
 	}
 	if _, err := CustomerIDOf(m, docOf(t, `{"customer_id":{"a":1}}`)); !errors.Is(err, ErrUnmappable) {
 		t.Errorf("object leaf: %v", err)
+	}
+}
+
+func TestFingerprint_IsStableAndKeyOrderFree(t *testing.T) {
+	a, b := Mapping{}, Mapping{}
+	for _, k := range []string{"a", "b", "c", "d"} {
+		a[k] = "p." + k
+	}
+	for _, k := range []string{"d", "c", "b", "a"} {
+		b[k] = "p." + k
+	}
+	fa := Fingerprint(a)
+	if !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(fa) || fa != Fingerprint(b) {
+		t.Errorf("fingerprints = %q, %q", fa, Fingerprint(b))
+	}
+	b["c"] = "p.other"
+	if Fingerprint(b) == fa {
+		t.Error("a changed path left the fingerprint unchanged")
 	}
 }
 

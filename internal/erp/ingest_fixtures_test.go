@@ -519,6 +519,7 @@ type plantDoc struct {
 	invoiceID, failure      *string
 	claimed                 *string
 	hash                    *string
+	fingerprint             *string // default: the fake's default mapping, when a hash is planted
 	hashVersion             *int
 	differs                 bool
 	changed, deleted        *time.Time
@@ -536,13 +537,17 @@ func (e *ingestEnv) plantDocument(p plantDoc) string {
 	if p.state == "" {
 		p.state = "pending"
 	}
+	if p.fingerprint == nil && p.hash != nil {
+		fp := Fingerprint(testFake(e.t).DefaultMapping())
+		p.fingerprint = &fp
+	}
 	var id string
 	mustScan(e.t, e.super,
 		`INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id, failure,
-		   claimed_number, content_hash, hash_version, differs_from_erp, changed_after_clearance_at, deleted_in_erp_at, updated_at)
-		 VALUES ($1, (SELECT entity_id FROM erp_connections WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now() - $14::bigint * interval '1 second')
+		   claimed_number, content_hash, hash_version, differs_from_erp, changed_after_clearance_at, deleted_in_erp_at, updated_at, mapping_fingerprint)
+		 VALUES ($1, (SELECT entity_id FROM erp_connections WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now() - $14::bigint * interval '1 second', $15)
 		 RETURNING id::text`,
-		[]any{e.tenant, p.conn, p.docID, p.rev, p.state, p.invoiceID, p.failure, p.claimed, p.hash, p.hashVersion, p.differs, p.changed, p.deleted, int64(p.updatedAgo.Seconds())}, &id)
+		[]any{e.tenant, p.conn, p.docID, p.rev, p.state, p.invoiceID, p.failure, p.claimed, p.hash, p.hashVersion, p.differs, p.changed, p.deleted, int64(p.updatedAgo.Seconds()), p.fingerprint}, &id)
 	return id
 }
 

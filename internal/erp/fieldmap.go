@@ -2,6 +2,8 @@ package erp
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -195,6 +197,13 @@ func (m Mapping) Merge(over Mapping) Mapping {
 	}
 	maps.Copy(out, over)
 	return out
+}
+
+// Fingerprint is the SHA-256 hex of the mapping's JSON (map keys sort), so equal mappings match.
+func Fingerprint(m Mapping) string {
+	b, _ := json.Marshal(m) // a map of strings cannot fail to marshal
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 // Mapped is one document after the mapping, before lookups.

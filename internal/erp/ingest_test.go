@@ -192,6 +192,7 @@ func TestIngest_DuplicateNumberLinksAndCreatesNothing(t *testing.T) {
 	if d.InvoiceID == nil || *d.InvoiceID != inv {
 		t.Errorf("row invoice_id = %v, want %s", d.InvoiceID, inv)
 	}
+	e.wantFingerprint(docOne)
 	if d.Differs {
 		t.Error("differs_from_erp = true for identical amounts and lines")
 	}
@@ -288,6 +289,7 @@ func TestIngest_SecondDocumentOnALinkedInvoiceIsHeld(t *testing.T) {
 	if d.Revision != "1" || d.Hash == nil {
 		t.Errorf("held row revision/hash = %q/%v, want the revision and hash it read", d.Revision, d.Hash)
 	}
+	e.wantFingerprint(docOne)
 	if after := e.snapshot(inv); after != before {
 		t.Error("the linked invoice changed")
 	}
@@ -711,13 +713,22 @@ func TestIngest_UnmappableDocumentFails(t *testing.T) {
 	e.wantFailed(docOne, "unmappable")
 }
 
-// renamedConnector answers to another system name with the same behaviour.
+// renamedConnector answers to another system name with the same behaviour; own replaces the default mapping.
 type renamedConnector struct {
 	Connector
 	name string
+	own  bool
+	m    Mapping
 }
 
 func (r renamedConnector) System() string { return r.name }
+
+func (r renamedConnector) DefaultMapping() Mapping {
+	if r.own {
+		return r.m
+	}
+	return r.Connector.DefaultMapping()
+}
 
 func TestIngest_SystemWithoutAMappingFails(t *testing.T) {
 	e := newIngest(t)
@@ -726,7 +737,7 @@ func TestIngest_SystemWithoutAMappingFails(t *testing.T) {
 	mustScan(t, e.super,
 		"INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id) VALUES ($1, $2, 'nomap', $3, 'active', $4) RETURNING id::text",
 		[]any{e.tenant, e.entity, keyOne, grant}, &conn)
-	reg, err := NewRegistry(renamedConnector{Connector: e.script, name: "nomap"})
+	reg, err := NewRegistry(renamedConnector{Connector: e.script, name: "nomap", own: true})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -737,6 +748,34 @@ func TestIngest_SystemWithoutAMappingFails(t *testing.T) {
 		t.Fatalf("Work: %v, want nil", err)
 	}
 	e.wantFailed(docOne, "no_mapping")
+}
+
+func TestIngest_InvalidDefaultMappingFails(t *testing.T) {
+	e := newIngest(t)
+	var grant, conn string
+	mustScan(t, e.super, "INSERT INTO erp_grants (tenant_id, system, kind) VALUES ($1, 'badmap', 'api_key') RETURNING id::text", []any{e.tenant}, &grant)
+	mustScan(t, e.super,
+		"INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id) VALUES ($1, $2, 'badmap', $3, 'active', $4) RETURNING id::text",
+		[]any{e.tenant, e.entity, keyOne, grant}, &conn)
+	bad := testFake(t).DefaultMapping()
+	bad["line_quantity"] = "qty"
+	reg, err := NewRegistry(renamedConnector{Connector: e.script, name: "badmap", own: true, m: bad})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	e.reg, e.conn = reg, conn
+	e.worker = e.workerWith(invoiceStore(e))
+
+	if err := e.work(docOne, "1"); err != nil {
+		t.Fatalf("Work: %v, want nil", err)
+	}
+	e.wantFailed(docOne, "no_mapping")
+	if n := e.invoices(); n != 0 {
+		t.Errorf("invoices = %d, want 0", n)
+	}
+	if n := e.erpAudits(); n != 0 {
+		t.Errorf("erp audits = %d, want 0", n)
+	}
 }
 
 func TestIngest_FetchNotFoundFails(t *testing.T) {

@@ -22,6 +22,7 @@ paths:
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
 - Write `erp.document.pulled`, `erp.document.skipped_duplicate` and `erp.document.changed_after_clearance` only from `internal/erp`, with actor `system` and payload `system`, `connection_id`, `source_doc_id`, `source_revision`, `invoice_id`, `invoice_number`, plus `linked` and `differs` on the duplicate and `deleted` on the change.
+- Write `erp.mapping.changed` only from `internal/erp`, with the caller as actor and payload `system` and `part` only.
 - Write `erp.connection.created`, `erp.connection.authorised`, `erp.connection.revoked` and `erp.token.deleted` only from `internal/erp`, with payload `system` and `connection_id` only. Write `erp.connection.reauth_required` (`system`, `connection_id`), `erp.token.refreshed` (`system`, `grant_id`) and `erp.token.refresh_failed` (`system`, `grant_id`, `reason`: `revoked` or `exhausted`) there too.
 - Write `evidence_bundle.exported` and `evidence_bundle.export_failed` only from `internal/archive`, with payload `entity_id`, `from`, `to`, `files` and `bytes`.
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.

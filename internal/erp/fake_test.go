@@ -383,3 +383,143 @@ func TestFake_WriteBackRefusesUnknownScopeAndDocument(t *testing.T) {
 		}
 	}
 }
+
+func TestFakeDefaultMapping_CoversEveryTargetAndResolves(t *testing.T) {
+	f := testFake(t)
+	m := f.DefaultMapping()
+	if err := ValidateMapping(m); err != nil {
+		t.Fatalf("ValidateMapping: %v", err)
+	}
+	doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "fake-co-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	party, err := f.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-cust-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := decodeBody(doc.Body)
+	pbody, _ := decodeBody(party.Body)
+	if len(m) != len(Targets()) {
+		t.Errorf("default has %d paths for %d targets", len(m), len(Targets()))
+	}
+	for _, tg := range Targets() {
+		path, ok := m[tg.Key]
+		if !ok {
+			t.Errorf("no path for %s", tg.Key)
+			continue
+		}
+		p, _ := parsePath(path)
+		var v any
+		switch {
+		case p.party:
+			v = walk(pbody, p.segs)
+		case tg.Line:
+			els, _ := walk(body, p.segs[:p.arrAt+1]).([]any)
+			if len(els) == 0 {
+				t.Errorf("%s: no line", tg.Key)
+				continue
+			}
+			v = walk(els[0], p.segs[p.arrAt+1:])
+		default:
+			v = walk(body, p.segs)
+		}
+		if s, err := leaf(tg.Key, v); err != nil || s == nil {
+			t.Errorf("%s (%s) resolves to nothing", tg.Key, path)
+		}
+	}
+	if _, err := Apply(m, doc, &party); err != nil {
+		t.Errorf("Apply: %v", err)
+	}
+}
+
+func TestFakeInvoiceBody_RoundsEachLineHalfAwayFromZero(t *testing.T) {
+	inv := seedInvoice{id: "d", number: "R-1", date: "2026-05-01", customerID: "c"}
+	for _, c := range []struct {
+		name      string
+		lines     []fakeLine
+		wantLines [][2]string // line total, line tax
+		wantHdr   [3]string   // subtotal, vat, total
+	}{
+		{"ties round away from zero",
+			[]fakeLine{{"a", "3", "33.335", "7.5"}, {"b", "1", "0.125", "0"}, {"c", "2", "10.00", "7.5"}, {"d", "1", "-0.125", "0"}},
+			[][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"-0.13", "0.00"}},
+			[3]string{"120.01", "9.00", "129.01"}},
+		// Two 0.004 lines sum to 0.00, not the unrounded 0.01; two 0.4% taxes on 1.00 sum to 0.00, not 0.01.
+		{"the header sums the rounded lines",
+			[]fakeLine{{"a", "1", "0.004", "0"}, {"b", "1", "0.004", "0"}, {"c", "1", "1.00", "0.4"}, {"d", "1", "1.00", "0.4"}},
+			[][2]string{{"0.00", "0.00"}, {"0.00", "0.00"}, {"1.00", "0.00"}, {"1.00", "0.00"}},
+			[3]string{"2.00", "0.00", "2.00"}},
+		// 0.005 rounds to a 0.01 total, and 50% of that is 0.005, which rounds to 0.01; on the unrounded 0.005 it would be 0.00.
+		{"the tax is taken on the rounded line total",
+			[]fakeLine{{"e", "1", "0.005", "50"}},
+			[][2]string{{"0.01", "0.01"}},
+			[3]string{"0.01", "0.01", "0.02"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body, err := fakeInvoiceBody(inv, c.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Subtotal string `json:"subtotal"`
+				VAT      string `json:"vat"`
+				Total    string `json:"total"`
+				Lines    []struct {
+					LineTotal string `json:"line_total"`
+					LineTax   string `json:"line_tax"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Lines) != len(c.wantLines) || len(c.wantLines) == 0 {
+				t.Fatalf("lines = %d, want %d", len(got.Lines), len(c.wantLines))
+			}
+			for i, w := range c.wantLines {
+				if got.Lines[i].LineTotal != w[0] || got.Lines[i].LineTax != w[1] {
+					t.Errorf("line %d = %s/%s, want %s/%s", i, got.Lines[i].LineTotal, got.Lines[i].LineTax, w[0], w[1])
+				}
+			}
+			if h := [3]string{got.Subtotal, got.VAT, got.Total}; h != c.wantHdr {
+				t.Errorf("header = %v, want %v", h, c.wantHdr)
+			}
+		})
+	}
+}
+
+func TestFakeInvoiceBody_RefusesAnUnparseableAmount(t *testing.T) {
+	inv := seedInvoice{id: "d", number: "R-1", date: "2026-05-01", customerID: "c"}
+	if _, err := fakeInvoiceBody(inv, []fakeLine{{"a", "1,5", "1", "0"}}); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+func TestFake_FetchCarriesTheSeededAmounts(t *testing.T) {
+	f := testFake(t)
+	doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "fake-co-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	party, err := f.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-cust-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Apply(f.DefaultMapping(), doc, &party)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := mapped.In
+	exact(t, "Subtotal", in.Subtotal, "100000.00")
+	exact(t, "VAT", in.VAT, "7500.00")
+	exact(t, "Total", in.Total, "107500.00")
+	if len(in.LineItems) != 1 {
+		t.Fatalf("lines = %d", len(in.LineItems))
+	}
+	exact(t, "LineTotal", in.LineItems[0].LineTotal, "100000.00")
+	exact(t, "LineTax", in.LineItems[0].LineTax, "7500.00")
+	exact(t, "BuyerTIN", in.BuyerTIN, "1234567897")
+	if mapped.CustomerID != "fake-co-1-cust-1" || mapped.TaxCodes[0] == "" || mapped.Items[0] == "" {
+		t.Errorf("lookup keys = %q %v %v", mapped.CustomerID, mapped.TaxCodes, mapped.Items)
+	}
+}

@@ -261,6 +261,22 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed erp_oauth_states fixture: %v", err)
 	}
 
+	requireEmpTables(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_field_mappings (tenant_id, entity_id, system, target, source_path)
+		 VALUES ($1, $2, 'fake', 'line_description', 'description')`,
+		tenantID, entityID,
+	); err != nil {
+		t.Fatalf("seed erp_field_mappings fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_lookups (tenant_id, entity_id, system, external_key, kind, erp_key, tax_category)
+		 VALUES ($1, $2, 'fake', 'fake-co-1', 'tax_code', 'reset-fixture', 'T1')`,
+		tenantID, entityID,
+	); err != nil {
+		t.Fatalf("seed erp_lookups fixture: %v", err)
+	}
+
 	crrRequireTable(t, pool)
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO custom_rule_revisions (tenant_id, rule_id, revision, entity_id, type, target, severity, message, enabled, created_by)
@@ -611,7 +627,7 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
-	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents", "erp_writebacks"} {
+	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents", "erp_writebacks", "erp_field_mappings", "erp_lookups"} {
 		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
 			t.Errorf("%s rows after Reset = %d, want 0", table, n)
 		}

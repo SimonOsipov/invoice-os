@@ -29,6 +29,14 @@ type stubs struct {
 	gotEntity, gotConn                          string
 	consentURL                                  string
 	gotInput                                    ConnectInput
+
+	mappingErr, saveMappingErr, lookupsErr, saveLookupsErr         error
+	mappingView                                                    MappingView
+	lookupsView                                                    LookupsView
+	mappingCalls, saveMappingCalls, lookupsCalls, saveLookupsCalls int
+	gotSystem, gotExternalKey                                      string
+	gotFields                                                      []FieldChange
+	gotLookups                                                     []Lookup
 }
 
 func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
@@ -48,6 +56,31 @@ func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
 			s.disconnectCalls++
 			s.gotEntity, s.gotConn = e, c
 			return Connection{ID: c, Status: "disconnected"}, s.disconnectErr
+		}, log))
+	gate := func(context.Context) error { s.gateCalls++; return s.gateErr }
+	m.HandleFunc("GET /v1/entities/{id}/erp-mappings/{system}", MappingHandler(
+		func(_ context.Context, e, sys string) (MappingView, error) {
+			s.mappingCalls++
+			s.gotEntity, s.gotSystem = e, sys
+			return s.mappingView, s.mappingErr
+		}, log))
+	m.HandleFunc("PUT /v1/entities/{id}/erp-mappings/{system}", SaveMappingHandler(gate,
+		func(_ context.Context, e, sys string, f []FieldChange) (MappingView, error) {
+			s.saveMappingCalls++
+			s.gotEntity, s.gotSystem, s.gotFields = e, sys, f
+			return s.mappingView, s.saveMappingErr
+		}, log))
+	m.HandleFunc("GET /v1/entities/{id}/erp-lookups/{system}", LookupsHandler(
+		func(_ context.Context, e, sys, k string) (LookupsView, error) {
+			s.lookupsCalls++
+			s.gotEntity, s.gotSystem, s.gotExternalKey = e, sys, k
+			return s.lookupsView, s.lookupsErr
+		}, log))
+	m.HandleFunc("PUT /v1/entities/{id}/erp-lookups/{system}", SaveLookupsHandler(gate,
+		func(_ context.Context, e, sys, k string, l []Lookup) (LookupsView, error) {
+			s.saveLookupsCalls++
+			s.gotEntity, s.gotSystem, s.gotExternalKey, s.gotLookups = e, sys, k, l
+			return s.lookupsView, s.saveLookupsErr
 		}, log))
 	return m
 }
@@ -74,6 +107,8 @@ func errText(t *testing.T, w *httptest.ResponseRecorder) string {
 const (
 	listPath       = "/v1/entities/E/erp-connections"
 	disconnectPath = "/v1/entities/E/erp-connections/C/disconnect"
+	mappingPath    = "/v1/entities/E/erp-mappings/fake"
+	lookupsPath    = "/v1/entities/E/erp-lookups/fake?external_key=co-1"
 )
 
 func TestHandlers_StatusForEveryStoreError(t *testing.T) {
@@ -92,12 +127,18 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
 		{ErrKeylessPending, 409, "another connection of this system is already waiting for consent"},
 		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
+		{invalidMapping("line_quantity", "a line field reads one []"), 400, "line_quantity: a line field reads one []"},
+		{invalidLookup("external_key: required"), 400, "external_key: required"},
 	} {
-		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err}
+		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err, mappingErr: c.err, saveMappingErr: c.err, lookupsErr: c.err, saveLookupsErr: c.err}
 		for name, w := range map[string]*httptest.ResponseRecorder{
 			"connect":    do(s.mux(nil), "POST", listPath, `{"system":"fake"}`, true),
 			"disconnect": do(s.mux(nil), "POST", disconnectPath, "", true),
 			"list":       do(s.mux(nil), "GET", listPath, "", true),
+			"mapping":    do(s.mux(nil), "GET", mappingPath, "", true),
+			"saveMap":    do(s.mux(nil), "PUT", mappingPath, "{}", true),
+			"lookups":    do(s.mux(nil), "GET", lookupsPath, "", true),
+			"saveLook":   do(s.mux(nil), "PUT", lookupsPath, "{}", true),
 		} {
 			if w.Code != c.status || errText(t, w) != c.msg {
 				t.Errorf("%v on %s: got %d %q, want %d %q", c.err, name, w.Code, errText(t, w), c.status, c.msg)
@@ -120,17 +161,30 @@ func TestHandlers_UnknownErrorIs500WithoutLeaking(t *testing.T) {
 	if !strings.Contains(logs.String(), "connect erp") {
 		t.Errorf("log lacks the operation name: %s", logs.String())
 	}
+	boom := errors.New("pq: secret detail")
+	s = &stubs{mappingErr: boom, saveMappingErr: boom, lookupsErr: boom, saveLookupsErr: boom}
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"mapping":  do(s.mux(log), "GET", mappingPath, "", true),
+		"saveMap":  do(s.mux(log), "PUT", mappingPath, "{}", true),
+		"lookups":  do(s.mux(log), "GET", lookupsPath, "", true),
+		"saveLook": do(s.mux(log), "PUT", lookupsPath, "{}", true),
+	} {
+		if w.Code != 500 || errText(t, w) != "internal server error" || strings.Contains(w.Body.String(), "secret") {
+			t.Errorf("%s: got %d %q", name, w.Code, w.Body.String())
+		}
+	}
 }
 
 func TestHandlers_NoIdentityIs401(t *testing.T) {
 	s := &stubs{}
 	m := s.mux(nil)
-	for _, c := range [][3]string{{"GET", listPath, ""}, {"POST", listPath, "{}"}, {"POST", disconnectPath, ""}} {
+	for _, c := range [][3]string{{"GET", listPath, ""}, {"POST", listPath, "{}"}, {"POST", disconnectPath, ""},
+		{"GET", mappingPath, ""}, {"PUT", mappingPath, "{}"}, {"GET", lookupsPath, ""}, {"PUT", lookupsPath, "{}"}} {
 		if w := do(m, c[0], c[1], c[2], false); w.Code != 401 {
 			t.Errorf("%s %s = %d, want 401", c[0], c[1], w.Code)
 		}
 	}
-	if s.gateCalls+s.connectCalls+s.disconnectCalls != 0 {
+	if s.gateCalls+s.connectCalls+s.disconnectCalls+s.mappingCalls+s.saveMappingCalls+s.lookupsCalls+s.saveLookupsCalls != 0 {
 		t.Error("store called without an identity")
 	}
 }
@@ -145,6 +199,15 @@ func TestHandlers_NonAdminIs403WhateverTheBody(t *testing.T) {
 		}
 		if s.connectCalls != 0 {
 			t.Errorf("connect stub called for %.20q", body)
+		}
+		for _, gerr := range []error{ErrNotPermitted, db.ErrNotActiveMember} {
+			for _, p := range []string{mappingPath, lookupsPath} {
+				s := &stubs{gateErr: gerr}
+				w := do(s.mux(nil), "PUT", p, body, true)
+				if w.Code != 403 || s.saveMappingCalls+s.saveLookupsCalls != 0 {
+					t.Errorf("PUT %s %v %.20q: %d %s", p, gerr, body, w.Code, w.Body.String())
+				}
+			}
 		}
 	}
 	s := &stubs{disconnectErr: ErrNotPermitted}
@@ -164,6 +227,12 @@ func TestHandlers_ListCallsNoGate(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if w.Code != 200 || len(got.Connections) != 2 || s.gateCalls != 0 {
 		t.Fatalf("got %d %s gate=%d", w.Code, w.Body.String(), s.gateCalls)
+	}
+	s = &stubs{gateErr: ErrNotPermitted}
+	for _, p := range []string{mappingPath, lookupsPath} {
+		if w := do(s.mux(nil), "GET", p, "", true); w.Code != 200 || s.gateCalls != 0 {
+			t.Errorf("GET %s: %d gate=%d", p, w.Code, s.gateCalls)
+		}
 	}
 	s = &stubs{listErr: ErrNoSuchRecord}
 	known := do(s.mux(nil), "GET", listPath, "", true)
@@ -187,6 +256,22 @@ func TestHandlers_ConnectRejectsBadBodies(t *testing.T) {
 		w := do(s.mux(nil), "POST", listPath, body, true)
 		if w.Code != want.status || errText(t, w) != want.msg || s.gateCalls != 1 || s.connectCalls != 0 {
 			t.Errorf("%.12q: %d %s gate=%d connect=%d", body, w.Code, w.Body.String(), s.gateCalls, s.connectCalls)
+		}
+	}
+}
+
+func TestHandlers_SavesRejectBadBodies(t *testing.T) {
+	big := `{"fields":[{"target":"` + strings.Repeat("a", int(jsonbody.DefaultLimit)+10) + `"}]}`
+	for _, p := range []string{mappingPath, lookupsPath} {
+		for body, want := range map[string]struct {
+			status int
+			msg    string
+		}{"not json": {400, "invalid request body"}, big: {413, "request body exceeds the size limit"}} {
+			s := &stubs{}
+			w := do(s.mux(nil), "PUT", p, body, true)
+			if w.Code != want.status || errText(t, w) != want.msg || s.gateCalls != 1 || s.saveMappingCalls+s.saveLookupsCalls != 0 {
+				t.Errorf("%s %.12q: %d %s gate=%d", p, body, w.Code, w.Body.String(), s.gateCalls)
+			}
 		}
 	}
 }
@@ -237,6 +322,45 @@ func TestHandlers_ResponseShapes(t *testing.T) {
 	}
 }
 
+func TestHandlers_MappingAndLookupShapes(t *testing.T) {
+	path := "invoice.number"
+	s := &stubs{
+		mappingView: MappingView{System: "fake", Fields: []FieldView{
+			{Target: "a", Label: "A", SourcePath: &path, Origin: "client"},
+			{Target: "b", Label: "B", Origin: "none"},
+		}},
+		lookupsView: LookupsView{System: "fake", ExternalKey: "co-1"},
+	}
+	w := do(s.mux(nil), "GET", mappingPath, "", true)
+	if got := keys(t, w.Body.Bytes()); w.Code != 200 || !slices.Equal(got, []string{"fields", "system"}) {
+		t.Errorf("mapping: %d keys %v", w.Code, got)
+	}
+	var m struct {
+		Fields []json.RawMessage `json:"fields"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &m)
+	if got := keys(t, m.Fields[1]); !slices.Equal(got, []string{"default_path", "label", "line", "origin", "source_path", "target"}) {
+		t.Errorf("field keys = %v", got)
+	}
+	if !strings.Contains(w.Body.String(), `"source_path":null`) || !strings.Contains(w.Body.String(), `"default_path":null`) {
+		t.Errorf("absent paths not null: %s", w.Body.String())
+	}
+	w = do(s.mux(nil), "GET", lookupsPath, "", true)
+	if got := keys(t, w.Body.Bytes()); !slices.Equal(got, []string{"external_key", "lookups", "system"}) || !strings.Contains(w.Body.String(), `"lookups":[]`) {
+		t.Errorf("lookups: keys %v body %s", got, w.Body.String())
+	}
+	s.lookupsView.Lookups = []Lookup{{Kind: "item", ERPKey: "k"}}
+	w = do(s.mux(nil), "GET", lookupsPath, "", true)
+	var l struct {
+		Lookups []json.RawMessage `json:"lookups"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &l)
+	want := []string{"erp_key", "exemption_code", "hsn_code", "kind", "lga", "service_code", "state", "tax_category", "tin"}
+	if got := keys(t, l.Lookups[0]); !slices.Equal(got, want) || !strings.Contains(string(l.Lookups[0]), `"tin":null`) {
+		t.Errorf("entry keys = %v", got)
+	}
+}
+
 func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 	s := &stubs{}
 	do(s.mux(nil), "POST", disconnectPath, "", true)
@@ -247,6 +371,27 @@ func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 	do(s.mux(nil), "GET", listPath, "", true)
 	if s.gotEntity != "E" {
 		t.Errorf("list got entity %q, want E", s.gotEntity)
+	}
+	s = &stubs{mappingView: MappingView{System: "fake"}, lookupsView: LookupsView{System: "fake", ExternalKey: "co-1"}}
+	w := do(s.mux(nil), "PUT", mappingPath, `{"fields":[{"target":"a","source_path":"x.y"},{"target":"b","source_path":null}]}`, true)
+	if w.Code != 200 || s.gotEntity != "E" || s.gotSystem != "fake" || len(s.gotFields) != 2 ||
+		s.gotFields[0].SourcePath == nil || *s.gotFields[0].SourcePath != "x.y" || s.gotFields[1].SourcePath != nil {
+		t.Errorf("save mapping: %d %+v", w.Code, s.gotFields)
+	}
+	s.gotEntity = ""
+	w = do(s.mux(nil), "PUT", lookupsPath, `{"lookups":[{"kind":"item","erp_key":"k"}]}`, true)
+	if w.Code != 200 || s.gotEntity != "E" || s.gotSystem != "fake" || s.gotExternalKey != "co-1" || len(s.gotLookups) != 1 || s.gotLookups[0].ERPKey != "k" {
+		t.Errorf("save lookups: %d %+v key %q", w.Code, s.gotLookups, s.gotExternalKey)
+	}
+	s.gotEntity, s.gotSystem, s.gotExternalKey = "", "", ""
+	do(s.mux(nil), "GET", lookupsPath, "", true)
+	if s.gotEntity != "E" || s.gotSystem != "fake" || s.gotExternalKey != "co-1" {
+		t.Errorf("get lookups got %q %q %q", s.gotEntity, s.gotSystem, s.gotExternalKey)
+	}
+	s.gotSystem = ""
+	do(s.mux(nil), "GET", mappingPath, "", true)
+	if s.gotEntity != "E" || s.gotSystem != "fake" {
+		t.Errorf("get mapping got %q %q", s.gotEntity, s.gotSystem)
 	}
 }
 

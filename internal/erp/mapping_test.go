@@ -1,35 +1,18 @@
 package erp
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"math/big"
 	"reflect"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 func sp(s string) *string { return &s }
-
-// decEq compares two decimal strings by value, so "7.5" equals "7.50".
-func decEq(t *testing.T, what string, got *string, want string) {
-	t.Helper()
-	if got == nil {
-		t.Errorf("%s = nil, want %s", what, want)
-		return
-	}
-	g, ok1 := new(big.Rat).SetString(*got)
-	w, ok2 := new(big.Rat).SetString(want)
-	if !ok1 || !ok2 || g.Cmp(w) != 0 {
-		t.Errorf("%s = %q, want %s", what, *got, want)
-	}
-}
 
 // exact compares the stored text, for the amounts the mapping rounds to two places.
 func exact(t *testing.T, what string, got *string, want string) {
@@ -46,196 +29,32 @@ func shown(s *string) any {
 	return *s
 }
 
-func bodyOf(t *testing.T, number, date, customer string, lines ...fakeLine) Document {
-	t.Helper()
-	b, err := json.Marshal(map[string]any{
-		"number": number, "issue_date": date, "currency": "NGN", "customer_id": customer, "lines": lines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return Document{Ref: DocRef{SourceDocID: "d", SourceRevision: "1", Scope: "fake-co-1"}, ContentType: jsonType, Body: b}
-}
-
-func TestMapFake_MapsTheSeededInvoice(t *testing.T) {
+func TestDefaultMapping_HashesTheSeededDocumentsAsTheFixedMappingDid(t *testing.T) {
 	f := testFake(t)
-	doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-1-inv-1", Scope: "fake-co-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	party, err := f.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-cust-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	in, err := mapFake(doc, &party)
-	if err != nil {
-		t.Fatalf("mapFake: %v", err)
-	}
-	if in.InvoiceNumber != "FK1-0001" {
-		t.Errorf("InvoiceNumber = %q", in.InvoiceNumber)
-	}
-	if in.IssueDate == nil || in.IssueDate.Format("2006-01-02") != "2026-01-05" {
-		t.Errorf("IssueDate = %v", in.IssueDate)
-	}
-	exact(t, "Currency", in.Currency, "NGN")
-	exact(t, "BuyerName", in.BuyerName, "Adewale Traders Ltd")
-	exact(t, "BuyerTIN", in.BuyerTIN, "1234567897")
-	exact(t, "BuyerEmail", in.BuyerEmail, "accounts@adewale.example")
-	exact(t, "Subtotal", in.Subtotal, "100000.00")
-	exact(t, "VAT", in.VAT, "7500.00")
-	exact(t, "Total", in.Total, "107500.00")
-	if in.EntityID != "" || in.SupplierName != nil || in.SupplierTIN != nil {
-		t.Errorf("entity and supplier belong to the ingest: %q %v %v", in.EntityID, in.SupplierName, in.SupplierTIN)
-	}
-	if len(in.LineItems) != 1 {
-		t.Fatalf("lines = %d, want 1", len(in.LineItems))
-	}
-	l := in.LineItems[0]
-	exact(t, "Description", l.Description, "Consulting services")
-	decEq(t, "Quantity", l.Quantity, "1")
-	decEq(t, "UnitPrice", l.UnitPrice, "100000.00")
-	decEq(t, "TaxPercent", l.TaxPercent, "7.5")
-	exact(t, "LineTotal", l.LineTotal, "100000.00")
-	exact(t, "LineTax", l.LineTax, "7500.00")
-}
-
-func TestMapFake_RoundsEachLineHalfAwayFromZero(t *testing.T) {
-	doc := bodyOf(t, "R-1", "2026-05-01", "fake-co-1-cust-1",
-		fakeLine{"a", "3", "33.335", "7.5"},
-		fakeLine{"b", "1", "0.125", "0"},
-		fakeLine{"c", "2", "10.00", "7.5"},
-		// Each tax is 0.005, a tie: rounded per line it is 0.01, so VAT sums to 0.02 and not to 0.01.
-		fakeLine{"d", "1", "1.00", "0.5"},
-		fakeLine{"e", "1", "1.00", "0.5"},
-		// Tax is taken on the rounded line total: 0.105 rounds to 0.11, and 0.11 x 50% is 0.055 -> 0.06 (0.105 x 50% would give 0.05).
-		fakeLine{"f", "1", "0.105", "50"},
-	)
-	in, err := mapFake(doc, nil)
-	if err != nil {
-		t.Fatalf("mapFake: %v", err)
-	}
-	if len(in.LineItems) != 6 {
-		t.Fatalf("lines = %d, want 6", len(in.LineItems))
-	}
-	// 3 x 33.335 is 100.005; its tax is taken on the rounded 100.01 (7.50075).
-	want := [][2]string{{"100.01", "7.50"}, {"0.13", "0.00"}, {"20.00", "1.50"}, {"1.00", "0.01"}, {"1.00", "0.01"}, {"0.11", "0.06"}}
-	for i, w := range want {
-		exact(t, "LineTotal", in.LineItems[i].LineTotal, w[0])
-		exact(t, "LineTax", in.LineItems[i].LineTax, w[1])
-	}
-	exact(t, "Subtotal", in.Subtotal, "122.25")
-	exact(t, "VAT", in.VAT, "9.08")
-	exact(t, "Total", in.Total, "131.33")
-}
-
-func TestMapFake_NegativeLineRoundsAwayFromZero(t *testing.T) {
-	doc := bodyOf(t, "N-1", "2026-05-01", "fake-co-1-cust-1",
-		fakeLine{"credit", "1", "-0.125", "0"},
-		fakeLine{"credit tax", "1", "-0.05", "10"},
-	)
-	in, err := mapFake(doc, nil)
-	if err != nil {
-		t.Fatalf("mapFake: %v", err)
-	}
-	if len(in.LineItems) != 2 {
-		t.Fatalf("lines = %d, want 2", len(in.LineItems))
-	}
-	exact(t, "LineTotal", in.LineItems[0].LineTotal, "-0.13")
-	exact(t, "LineTotal", in.LineItems[1].LineTotal, "-0.05")
-	// -0.05 x 10% is -0.005, which rounds away from zero to -0.01.
-	exact(t, "LineTax", in.LineItems[1].LineTax, "-0.01")
-	exact(t, "Subtotal", in.Subtotal, "-0.18")
-	exact(t, "VAT", in.VAT, "-0.01")
-	exact(t, "Total", in.Total, "-0.19")
-}
-
-func TestMapFake_RefusesEachUnparseableField(t *testing.T) {
-	good := func() map[string]any {
-		return map[string]any{
-			"number": "X-1", "issue_date": "2026-05-01", "currency": "NGN", "customer_id": "fake-co-1-cust-1",
-			"lines": []map[string]string{{"description": "d", "quantity": "1", "unit_price": "10.00", "vat_rate": "7.5"}},
-		}
-	}
-	line := func(m map[string]any, k, v string) {
-		m["lines"].([]map[string]string)[0][k] = v
-	}
-	if _, err := mapFake(docFrom(t, good()), nil); err != nil {
-		t.Fatalf("the valid base must map: %v", err)
-	}
-	for _, c := range []struct {
-		name, field, bad string
-		doc              func() Document
-	}{
-		{"body", "body", "{", func() Document { d := docFrom(t, good()); d.Body = []byte("{"); return d }},
-		{"issue_date", "issue_date", "05/01/2026", func() Document { m := good(); m["issue_date"] = "05/01/2026"; return docFrom(t, m) }},
-		{"quantity", "quantity", "1,5", func() Document { m := good(); line(m, "quantity", "1,5"); return docFrom(t, m) }},
-		{"unit_price", "unit_price", "", func() Document { m := good(); line(m, "unit_price", ""); return docFrom(t, m) }},
-		{"vat_rate", "vat_rate", "abc", func() Document { m := good(); line(m, "vat_rate", "abc"); return docFrom(t, m) }},
-		{"number", "number", "  ", func() Document { m := good(); m["number"] = "  "; return docFrom(t, m) }},
+	m := f.DefaultMapping()
+	for _, c := range []struct{ scope, doc, cust, want string }{
+		{"fake-co-1", "fake-co-1-inv-1", "fake-co-1-cust-1", "010683e9ae9a0cdd2c108be2156e4b8ca7cf0c41e83b96ebd5f3a1665b830b08"},
+		{"fake-co-2", "fake-co-2-inv-4", "fake-co-2-cust-2", "8aa244547bbfb026cea2eb611b8de483984b20b8af92932d029ff01eca52bcce"},
+		{"fake-co-3", "fake-co-3-inv-2", "fake-co-3-cust-1", "bad2f4323457a1474329e645adb51ce89b042f6c2a32df03e033eb8468866598"},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := mapFake(c.doc(), nil)
-			if !errors.Is(err, ErrUnmappable) {
-				t.Fatalf("err = %v, want ErrUnmappable", err)
-			}
-			if !strings.Contains(err.Error(), c.field) {
-				t.Errorf("error %q does not name %q", err, c.field)
-			}
-			if c.bad != "" && strings.Contains(err.Error(), c.bad) {
-				t.Errorf("error %q repeats the bad value %q", err, c.bad)
-			}
-		})
-	}
-}
-
-func docFrom(t *testing.T, m map[string]any) Document {
-	t.Helper()
-	b, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return Document{Ref: DocRef{SourceDocID: "d", SourceRevision: "1", Scope: "fake-co-1"}, ContentType: jsonType, Body: b}
-}
-
-func TestMapFake_UnknownCustomerLeavesTheBuyerEmpty(t *testing.T) {
-	sc := scriptConnector{Connector: testFake(t), fetch: func(context.Context, Credentials, DocRef) (Document, error) {
-		return bodyOf(t, "U-1", "2026-05-01", "fake-co-1-gone", fakeLine{"d", "1", "10.00", "7.5"}), nil
-	}}
-	doc, err := sc.Fetch(ctx, cr, DocRef{SourceDocID: "x", Scope: "fake-co-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sc.FetchParty(ctx, cr, "fake-co-1", "fake-co-1-gone"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("FetchParty = %v, want ErrNotFound", err)
-	}
-	in, err := mapFake(doc, nil)
-	if err != nil {
-		t.Fatalf("mapFake: %v", err)
-	}
-	if in.InvoiceNumber != "U-1" || len(in.LineItems) != 1 {
-		t.Errorf("the invoice must still map: %+v", in)
-	}
-	if in.BuyerName != nil || in.BuyerTIN != nil || in.BuyerEmail != nil {
-		t.Errorf("buyer = %v %v %v, want all nil", shown(in.BuyerName), shown(in.BuyerTIN), shown(in.BuyerEmail))
-	}
-}
-
-func TestMapperFor_OnlyTheFakeHasAFixedMapping(t *testing.T) {
-	m, err := mapperFor("fake")
-	if err != nil || m == nil {
-		t.Fatalf("fake: %v, %v", m == nil, err)
-	}
-	doc, err := testFake(t).Fetch(ctx, cr, DocRef{SourceDocID: "fake-co-2-inv-1", Scope: "fake-co-2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if in, err := m(doc, nil); err != nil || in.InvoiceNumber != "FK2-0001" {
-		t.Errorf("the fake's mapper gave %q, %v", in.InvoiceNumber, err)
-	}
-	for _, sys := range []string{"quickbooks", ""} {
-		if m, err := mapperFor(sys); !errors.Is(err, ErrNoMapping) || m != nil {
-			t.Errorf("%q: mapper nil=%v, err = %v, want ErrNoMapping", sys, m == nil, err)
+		doc, err := f.Fetch(ctx, cr, DocRef{SourceDocID: c.doc, Scope: c.scope})
+		if err != nil {
+			t.Fatal(err)
 		}
+		party, err := f.FetchParty(ctx, cr, c.scope, c.cust)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapped, err := Apply(m, doc, &party)
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", c.doc, err)
+		}
+		if got := ContentHash(mapped.In); got != c.want {
+			t.Errorf("%s: hash = %s, want %s", c.doc, got, c.want)
+		}
+	}
+	if HashVersion != 1 {
+		t.Errorf("HashVersion = %d, want 1", HashVersion)
 	}
 }
 
@@ -456,5 +275,68 @@ func TestDiffers_AmountsOrLines(t *testing.T) {
 				t.Errorf("Differs = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// Fingerprint drops targets ContentHash never reads, so the two must name the same set.
+func TestHashedTargets_MatchWhatContentHashReads(t *testing.T) {
+	targets := Targets()
+	if len(targets) == 0 {
+		t.Fatal("no targets")
+	}
+	m := Mapping{}
+	for _, tg := range targets {
+		if tg.Line {
+			m[tg.Key] = "lines[].f_" + tg.Key
+		} else {
+			m[tg.Key] = "f_" + tg.Key
+		}
+	}
+	value := func(tg Target, alt bool) string {
+		switch {
+		case tg.Type == invoicefields.Date && alt:
+			return "2026-01-06"
+		case tg.Type == invoicefields.Date:
+			return "2026-01-05"
+		case alt:
+			return "11"
+		}
+		return "10"
+	}
+	hashWith := func(changed string) string {
+		head, line := map[string]any{}, map[string]any{}
+		for _, tg := range targets {
+			v := value(tg, tg.Key == changed)
+			if tg.Line {
+				line["f_"+tg.Key] = v
+			} else {
+				head["f_"+tg.Key] = v
+			}
+		}
+		head["lines"] = []any{line}
+		body, err := json.Marshal(head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapped, err := Apply(m, Document{Body: body}, nil)
+		if err != nil {
+			t.Fatalf("Apply changing %q: %v", changed, err)
+		}
+		if len(mapped.In.LineItems) != 1 {
+			t.Fatalf("want one line, got %d", len(mapped.In.LineItems))
+		}
+		return ContentHash(mapped.In)
+	}
+	base := hashWith("")
+	for _, tg := range targets {
+		moved := hashWith(tg.Key) != base
+		if want := hashedTargets[tg.Key]; moved != want {
+			t.Errorf("%s: ContentHash moves = %v, hashedTargets = %v", tg.Key, moved, want)
+		}
+	}
+	for k := range hashedTargets {
+		if _, ok := targetOf(k); !ok {
+			t.Errorf("hashedTargets names %q, which is not a target", k)
+		}
 	}
 }

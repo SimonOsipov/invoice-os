@@ -8,18 +8,11 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 )
 
-// Mapper turns one fetched vendor document and its party into a draft's input.
-type Mapper func(doc Document, party *Party) (invoice.CreateInput, error)
-
-var (
-	ErrNoMapping  = errors.New("erp: no fixed mapping for this system")
-	ErrUnmappable = errors.New("erp: document cannot be mapped")
-)
+var ErrUnmappable = errors.New("erp: document cannot be mapped")
 
 // HashVersion versions the hashedContent projection; a stored hash of another version is never compared.
 const HashVersion = 1
@@ -52,13 +45,6 @@ type invoiceAmounts struct{ Subtotal, VAT, Total *string }
 
 type lineAmounts struct{ Description, Quantity, UnitPrice, LineTotal, LineTax *string }
 
-func mapperFor(system string) (Mapper, error) {
-	if system == fakeSystem {
-		return mapFake, nil
-	}
-	return nil, ErrNoMapping
-}
-
 func unmappable(field string) error {
 	return fmt.Errorf("%w: %s", ErrUnmappable, field)
 }
@@ -80,71 +66,6 @@ func round2(r *big.Rat) *big.Rat {
 		q.Add(q, big.NewInt(int64(scaled.Sign())))
 	}
 	return new(big.Rat).SetFrac(q, big.NewInt(100))
-}
-
-func mapFake(doc Document, party *Party) (invoice.CreateInput, error) {
-	var body struct {
-		Number   string `json:"number"`
-		Date     string `json:"issue_date"`
-		Currency string `json:"currency"`
-		Lines    []struct {
-			Description string `json:"description"`
-			Quantity    string `json:"quantity"`
-			UnitPrice   string `json:"unit_price"`
-			VATRate     string `json:"vat_rate"`
-		} `json:"lines"`
-	}
-	if err := json.Unmarshal(doc.Body, &body); err != nil {
-		return invoice.CreateInput{}, unmappable("body")
-	}
-	number := strings.TrimSpace(body.Number)
-	if number == "" {
-		return invoice.CreateInput{}, unmappable("number")
-	}
-	date, err := time.Parse("2006-01-02", body.Date)
-	if err != nil {
-		return invoice.CreateInput{}, unmappable("issue_date")
-	}
-	in := invoice.CreateInput{InvoiceNumber: number, IssueDate: &date, Currency: &body.Currency}
-	if party != nil {
-		var p struct{ Name, TIN, Email string }
-		if err := json.Unmarshal(party.Body, &p); err != nil {
-			return invoice.CreateInput{}, unmappable("party")
-		}
-		in.BuyerName, in.BuyerTIN, in.BuyerEmail = &p.Name, &p.TIN, &p.Email
-	}
-	hundred := big.NewRat(100, 1)
-	subtotal, vat := new(big.Rat), new(big.Rat)
-	for _, l := range body.Lines {
-		qty, ok := parseDec(l.Quantity)
-		if !ok {
-			return invoice.CreateInput{}, unmappable("quantity")
-		}
-		price, ok := parseDec(l.UnitPrice)
-		if !ok {
-			return invoice.CreateInput{}, unmappable("unit_price")
-		}
-		rate, ok := parseDec(l.VATRate)
-		if !ok {
-			return invoice.CreateInput{}, unmappable("vat_rate")
-		}
-		total := round2(new(big.Rat).Mul(qty, price))
-		tax := round2(new(big.Rat).Quo(new(big.Rat).Mul(total, rate), hundred))
-		subtotal.Add(subtotal, total)
-		vat.Add(vat, tax)
-		in.LineItems = append(in.LineItems, invoice.LineItemInput{
-			Description: ptr(l.Description),
-			Quantity:    ptr(l.Quantity),
-			UnitPrice:   ptr(l.UnitPrice),
-			TaxPercent:  ptr(l.VATRate),
-			LineTotal:   ptr(total.FloatString(2)),
-			LineTax:     ptr(tax.FloatString(2)),
-		})
-	}
-	in.Subtotal = ptr(subtotal.FloatString(2))
-	in.VAT = ptr(vat.FloatString(2))
-	in.Total = ptr(new(big.Rat).Add(subtotal, vat).FloatString(2))
-	return in, nil
 }
 
 func ptr(s string) *string { return &s }

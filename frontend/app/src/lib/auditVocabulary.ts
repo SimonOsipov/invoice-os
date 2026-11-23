@@ -77,6 +77,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'erp.token.refreshed': { label: 'ERP token refreshed', domain: 'companies' },
   'erp.token.refresh_failed': { label: 'ERP token refresh failed', domain: 'companies' },
   'erp.connection.reauth_required': { label: 'ERP connection needs sign-in again', domain: 'companies' },
+  'erp.mapping.changed': { label: 'ERP field mapping changed', domain: 'companies' },
   'portfolio.entity.updated': { label: 'Company updated', domain: 'companies' },
   'portfolio.entity.onboarded': { label: 'Company onboarded', domain: 'companies' },
   'portfolio.entity.offboarded': { label: 'Company offboarded', domain: 'companies' },

@@ -221,6 +221,8 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	erpGrantID := uuid.NewString()
 	erpConnID := uuid.NewString()
 	erpDocID := uuid.NewString()
+	erpFieldMappingID := uuid.NewString()
+	erpLookupID := uuid.NewString()
 	erpWritebackID := uuid.NewString()
 	erpStateID := uuid.NewString()
 	customerID := uuid.NewString()
@@ -313,6 +315,15 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO erp_connections (id, tenant_id, entity_id, system, external_key, status, grant_id)
 		 VALUES ($1,$2,$3,'fake','fake-co-1','active',$4)`,
 		erpConnID, tenantID, entityID, erpGrantID)
+	requireEmpTables(t, pool)
+	plant("erp_field_mappings", "id", erpFieldMappingID,
+		`INSERT INTO erp_field_mappings (id, tenant_id, entity_id, system, target, source_path)
+		 VALUES ($1,$2,$3,'fake','line_description','description')`,
+		erpFieldMappingID, tenantID, entityID)
+	plant("erp_lookups", "id", erpLookupID,
+		`INSERT INTO erp_lookups (id, tenant_id, entity_id, system, external_key, kind, erp_key, tax_category)
+		 VALUES ($1,$2,$3,'fake','fake-co-1','tax_code','purge-witness','T1')`,
+		erpLookupID, tenantID, entityID)
 	plant("erp_oauth_states", "id", erpStateID,
 		`INSERT INTO erp_oauth_states (id, tenant_id, state_hash, connection_id, user_id, expires_at)
 		 VALUES ($1,$2,$3,$4,$5, now() + interval '10 minutes')`,
@@ -669,6 +680,14 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 	for _, want := range []string{"membership_clients", "invitation_clients", "erp_source_documents", "erp_writebacks"} {
 		if !slices.Contains(live, want) {
 			t.Errorf("%s is not among the live tenant_id tables — the client_access migration is not applied yet", want)
+		}
+	}
+	for _, want := range []string{"erp_field_mappings", "erp_lookups"} {
+		if !slices.Contains(live, want) {
+			t.Errorf("%s is not among the live tenant_id tables — the erp_mappings migration is not applied yet", want)
+		}
+		if !slices.Contains(db.PurgeTablesForTest, want) {
+			t.Errorf("purgeTables lacks %s", want)
 		}
 	}
 	if !slices.Contains(live, "erp_oauth_states") {

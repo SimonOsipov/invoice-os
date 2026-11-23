@@ -132,6 +132,7 @@ type ingestEnv struct {
 	val          *stubValidator
 	worker       *IngestWorker
 	fetches      atomic.Int64
+	partyFetches atomic.Int64
 	onFetch      func(ctx context.Context, ref DocRef) (Document, error) // nil: the fake
 	jobSeq       atomic.Int64
 }
@@ -159,6 +160,10 @@ func newIngestOn(t *testing.T, super, app *pgxpool.Pool, key string) *ingestEnv 
 				return e.onFetch(ctx, ref)
 			}
 			return base.Fetch(ctx, c, ref)
+		},
+		fetchParty: func(ctx context.Context, c Credentials, scope, id string) (Party, error) {
+			e.partyFetches.Add(1)
+			return base.FetchParty(ctx, c, scope, id)
 		},
 	}
 	reg, err := NewRegistry(e.script)
@@ -233,9 +238,7 @@ func snoozeOf(err error) (time.Duration, bool) {
 // --- documents -----------------------------------------------------------------------
 
 func fakeDocument(docID, number, customerID string, lines ...fakeLine) Document {
-	body, err := json.Marshal(map[string]any{
-		"number": number, "issue_date": "2026-01-05", "currency": "NGN", "customer_id": customerID, "lines": lines,
-	})
+	body, err := fakeInvoiceBody(seedInvoice{id: docID, number: number, date: "2026-01-05", customerID: customerID}, lines)
 	if err != nil {
 		panic(err)
 	}
@@ -247,27 +250,27 @@ func (e *ingestEnv) serve(doc Document) {
 	e.onFetch = func(context.Context, DocRef) (Document, error) { return doc, nil }
 }
 
-// mappedFrom is what the fixed mapping makes of doc, through the fake's own party.
+// mappedFrom is what the fake's default mapping makes of doc, through the fake's own party.
 func (e *ingestEnv) mappedFrom(doc Document) invoice.CreateInput {
 	e.t.Helper()
-	var body struct {
-		CustomerID string `json:"customer_id"`
-	}
-	if err := json.Unmarshal(doc.Body, &body); err != nil {
-		e.t.Fatalf("decode body: %v", err)
+	f := testFake(e.t)
+	m := f.DefaultMapping()
+	customerID, err := CustomerIDOf(m, doc)
+	if err != nil {
+		e.t.Fatalf("customer: %v", err)
 	}
 	var party *Party
-	if body.CustomerID != "" {
-		p, err := testFake(e.t).FetchParty(context.Background(), Credentials{}, e.key, body.CustomerID)
+	if customerID != "" {
+		p, err := f.FetchParty(context.Background(), Credentials{}, e.key, customerID)
 		if err == nil {
 			party = &p
 		}
 	}
-	in, err := mapFake(doc, party)
+	mapped, err := Apply(m, doc, party)
 	if err != nil {
 		e.t.Fatalf("map: %v", err)
 	}
-	return in
+	return mapped.In
 }
 
 // mapped is the mapped content of a seeded document as the fake serves it.
@@ -521,6 +524,7 @@ type plantDoc struct {
 	invoiceID, failure      *string
 	claimed                 *string
 	hash                    *string
+	fingerprint             *string // default: the fake's default mapping, when a hash is planted
 	hashVersion             *int
 	differs                 bool
 	changed, deleted        *time.Time
@@ -538,13 +542,17 @@ func (e *ingestEnv) plantDocument(p plantDoc) string {
 	if p.state == "" {
 		p.state = "pending"
 	}
+	if p.fingerprint == nil && p.hash != nil {
+		fp := Fingerprint(testFake(e.t).DefaultMapping())
+		p.fingerprint = &fp
+	}
 	var id string
 	mustScan(e.t, e.super,
 		`INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id, failure,
-		   claimed_number, content_hash, hash_version, differs_from_erp, changed_after_clearance_at, deleted_in_erp_at, updated_at)
-		 VALUES ($1, (SELECT entity_id FROM erp_connections WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now() - $14::bigint * interval '1 second')
+		   claimed_number, content_hash, hash_version, differs_from_erp, changed_after_clearance_at, deleted_in_erp_at, updated_at, mapping_fingerprint)
+		 VALUES ($1, (SELECT entity_id FROM erp_connections WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now() - $14::bigint * interval '1 second', $15)
 		 RETURNING id::text`,
-		[]any{e.tenant, p.conn, p.docID, p.rev, p.state, p.invoiceID, p.failure, p.claimed, p.hash, p.hashVersion, p.differs, p.changed, p.deleted, int64(p.updatedAgo.Seconds())}, &id)
+		[]any{e.tenant, p.conn, p.docID, p.rev, p.state, p.invoiceID, p.failure, p.claimed, p.hash, p.hashVersion, p.differs, p.changed, p.deleted, int64(p.updatedAgo.Seconds()), p.fingerprint}, &id)
 	return id
 }
 

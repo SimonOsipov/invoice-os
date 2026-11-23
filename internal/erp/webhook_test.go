@@ -117,7 +117,7 @@ func noDBHooks(t *testing.T, hc *hookConnector) *Webhooks {
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	return &Webhooks{Registry: reg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return &Webhooks{Registry: reg}
 }
 
 // receiveNoPanic turns a nil-pool dereference into a test failure that names the cause.
@@ -172,8 +172,7 @@ func newHookEnvOn(t *testing.T, super, app *pgxpool.Pool, rv *river.Client[pgx.T
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	e.hooks = &Webhooks{Pool: app, River: rv, Registry: reg,
-		Logger: slog.New(slog.NewTextHandler(&e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	e.hooks = &Webhooks{Pool: app, River: rv, Registry: reg}
 	return e
 }
 

@@ -30,7 +30,6 @@ type Webhooks struct {
 	Pool     *pgxpool.Pool
 	River    *river.Client[pgx.Tx]
 	Registry Registry
-	Logger   *slog.Logger
 }
 
 // maxWebhookScopes caps the distinct company keys one webhook may look up.

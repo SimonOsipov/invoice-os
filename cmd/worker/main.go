@@ -290,7 +290,7 @@ func main() {
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
 	app.Mux.Handle("POST /internal/erp/callback", erp.CallbackHandler(erpStore.Complete, app.Logger))
-	hooks := &erp.Webhooks{Pool: pool, River: q.River(), Registry: erpReg, Logger: app.Logger}
+	hooks := &erp.Webhooks{Pool: pool, River: q.River(), Registry: erpReg}
 	app.Mux.Handle("POST /internal/erp/webhooks/{system}", erp.WebhookHandler(hooks.Receive, app.Logger))
 	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
 	if account != nil {

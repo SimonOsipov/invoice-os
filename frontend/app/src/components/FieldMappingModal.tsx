@@ -39,7 +39,7 @@ const KIND_FIELDS: Record<string, (typeof LOOKUP_VALUE_KEYS)[number][]> = {
   customer: ['tin', 'state', 'lga'],
 }
 const blankLookup = (): Lookup => ({ kind: 'tax_code', erp_key: '', tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null })
-const clearValues = (l: Lookup): Lookup => ({ ...blankLookup(), kind: l.kind, erp_key: l.erp_key })
+const resetLookupValues = (l: Lookup): Lookup => ({ ...blankLookup(), kind: l.kind, erp_key: l.erp_key })
 const SMALL_BTN: React.CSSProperties = { height: 30, padding: '0 10px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12 }
 
 export function FieldMappingModal({
@@ -88,7 +88,7 @@ export function FieldMappingModal({
   function removeEntry(i: number) {
     const e = entries[i]
     const exists = savedLookups.some((s) => s.kind === e.kind && s.erp_key === e.erp_key)
-    setEntries((es) => (exists ? es.map((x, idx) => (idx === i ? clearValues(x) : x)) : es.filter((_, idx) => idx !== i)))
+    setEntries((es) => (exists ? es.map((x, idx) => (idx === i ? resetLookupValues(x) : x)) : es.filter((_, idx) => idx !== i)))
   }
 
   async function save() {
@@ -209,7 +209,7 @@ export function FieldMappingModal({
                     className="pf-input"
                     value={e.kind}
                     disabled={busy}
-                    onChange={(ev) => setEntry(i, { ...clearValues(e), kind: ev.target.value })}
+                    onChange={(ev) => setEntry(i, { ...resetLookupValues(e), kind: ev.target.value })}
                     style={{ ...MONO_INPUT, color: 'var(--fg-1)' }}
                   >
                     {Object.keys(KIND_FIELDS).map((k) => (

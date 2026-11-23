@@ -19,6 +19,7 @@ const E2E_ROOT = dirname(fileURLToPath(import.meta.url))
 const TOPOLOGY_DIR = join(E2E_ROOT, 'topology')
 
 const INVOICE_SURFACES = 'invoice-surfaces.spec.ts'
+const ERP_CONNECTORS = 'erp-connectors.spec.ts'
 const IMPORT_WIZARD = 'import-wizard.spec.ts'
 const IMPORT_REVIEW_API = 'import-review-api.spec.ts'
 
@@ -254,6 +255,9 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:notes: a credit note nets in the list, the Reports tiles and the register footer', 'click:batch-submit-confirm', 1],
   // Submits a row it created from the register with MOCK_TIN_UNBUILDABLE, so the mock adapter fails it as payload_not_built.
   [INVOICE_SURFACES, 'test:send again: a payload_not_built invoice goes back to queued, fails again, and the action fits its card', 'click:batch-submit-confirm', 1],
+  // ERPF-08-07: submits one invoice via the API on the entity this run created, in the spec's own
+  // shard tenant (shardTenants), after approving it; MOCK_TIN accepts, so it never touches shared rows.
+  [ERP_CONNECTORS, 'test:an accepted invoice is written back', 'call:submitAndAwait', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --

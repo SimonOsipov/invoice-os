@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Settings shows empty states, not the demo tenant. ctx-cast idiom of Sidebar.test.tsx.
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
-import { initialConnectors } from '../lib/connectors'
 import { COMPANY_ADMIN_ONLY } from '../lib/members'
 import type { PlatformCtx, SettingsTab } from '../types'
 import { SettingsView } from './SettingsView'
+
+vi.mock('./ConnectorDetail', () => ({
+  ConnectorDetail: (p: { connectionId: string; onBack: () => void }) => (
+    <div data-testid="connector-detail-stub" data-first={useState(p.connectionId)[0]}>
+      {p.connectionId}
+      <button type="button" onClick={p.onBack}>stub back</button>
+    </div>
+  ),
+}))
 
 function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, unknown> = {}): PlatformCtx {
   const ctx = {
@@ -15,8 +24,6 @@ function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, un
     handoff,
     settingsTab: tab,
     sandbox: true,
-    connectors: initialConnectors(handoff),
-    connectorMappings: {},
     activeEntity: null,
     entitiesState: 'ready',
     entitiesError: null,
@@ -24,50 +31,13 @@ function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, un
     members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
     membersState: 'ready',
     setSettingsTab: vi.fn(),
-    toggleConnector: vi.fn(),
+    authedFetch: vi.fn().mockResolvedValue({ connections: [], systems: [] }),
     ...over,
   }
   return ctx as unknown as PlatformCtx
 }
 
 afterEach(cleanup)
-
-describe('Settings > ERP connectors', () => {
-  it('hand-off: ERP connectors are all disconnected', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', true)} />)
-    expect(screen.getByText('0 / 6 CONNECTED')).toBeTruthy()
-    expect(screen.getAllByText('NOT CONNECTED')).toHaveLength(6)
-    expect(screen.getAllByText('No sync yet')).toHaveLength(6)
-    expect(screen.queryByText('Synced 2 min ago')).toBeNull()
-  })
-
-  // Control: green before and after.
-  it('persona: ERP connectors keep the demo connections', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    expect(screen.getByText('2 / 6 CONNECTED')).toBeTruthy()
-    expect(screen.getAllByText('Synced 2 min ago')).toHaveLength(2)
-    expect(screen.getAllByText('NOT CONNECTED')).toHaveLength(4)
-  })
-})
-
-// The detail panel is reachable only through Manage, which only a connected row shows.
-describe('Settings > ERP connectors > detail panel', () => {
-  it('hand-off: no Manage entry and no mock ERP host render', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', true)} />)
-    expect(screen.getAllByText('Connect')).toHaveLength(6)
-    expect(screen.queryAllByText('Manage')).toHaveLength(0)
-    expect(screen.queryByText(/honeywell\.ng/)).toBeNull()
-  })
-
-  // Control: Manage opens the panel that carries the mock host.
-  it('persona: Manage opens the detail panel with the mock ERP host', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    const manage = screen.getAllByText('Manage')
-    expect(manage).toHaveLength(2)
-    fireEvent.click(manage[0])
-    expect(screen.getAllByText(/erp\.honeywell\.ng:44300/).length).toBeGreaterThan(0)
-  })
-})
 
 describe('Settings > API & webhooks', () => {
   it('hand-off: no demo webhooks', () => {
@@ -146,10 +116,31 @@ describe('Settings > shell', () => {
     expect(tabs.map((t) => t.textContent)).toEqual(['01Company', '02Members', '03Roles', '04ERP connectors', '05API & webhooks', '06Signing & certificates', '07Workspace'])
   })
 
-  it.each(['connectors', 'api', 'signing'] as const)('%s: no 99 or 999 radius anywhere', (tab) => {
+  it.each(['api', 'signing'] as const)('%s: no 99 or 999 radius anywhere', (tab) => {
     const { container } = render(<SettingsView ctx={settingsCtx(tab, false)} />)
     expect(radii(container).length).toBeGreaterThan(5)
     expect(radii(container).filter((r) => /^(99|999)(px)?$/.test(r))).toHaveLength(0)
+  })
+
+  it('connectors: no 99 or 999 radius anywhere', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    const fake = { id: 'c1', entity_id: 'e1', system: 'fake', external_key: 'k', status: 'active', last_sync_at: null, created_at: '', updated_at: '' }
+    const authedFetch = vi.fn().mockResolvedValue({ connections: [fake], systems: ['fake', 'other'] })
+    const { container } = render(<SettingsView ctx={settingsCtx('connectors', false, { activeEntity: { id: 'e1' }, authedFetch })} />)
+    await waitFor(() => expect(screen.getAllByTestId('erp-connector-row')).toHaveLength(2))
+    expect(radii(container).length).toBeGreaterThan(5)
+    expect(radii(container).filter((r) => /^(99|999)(px)?$/.test(r))).toHaveLength(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('settingsView_connectorsTabMountsNoDetail', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    const authedFetch = vi.fn().mockResolvedValue({ connections: [], systems: ['fake'] })
+    render(<SettingsView ctx={settingsCtx('connectors', false, { activeEntity: { id: 'e1' }, authedFetch })} />)
+    await waitFor(() => expect(screen.getAllByTestId('erp-connector-row')).toHaveLength(1))
+    expect(screen.queryByText('Manage')).toBeNull()
+    expect(screen.queryByTestId('connector-env-pill')).toBeNull()
+    vi.unstubAllEnvs()
   })
 })
 
@@ -487,49 +478,6 @@ describe('Settings > Company card', () => {
   })
 })
 
-describe('Settings > connector list paint', () => {
-  it('status pills are radius-sm with a 50% dot; the category chip is radius-md', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    const pills = screen.getAllByText(/^(NOT )?CONNECTED$/)
-    expect(pills).toHaveLength(6)
-    pills.forEach((p) => {
-      expect(p.parentElement!.style.borderRadius).toBe('var(--radius-sm)')
-      expect((p.previousElementSibling as HTMLElement).style.borderRadius).toBe('50%')
-    })
-    const chips = screen.getAllByText(/^(ERP|ACCOUNTING)$/)
-    expect(chips.length).toBeGreaterThan(0)
-    chips.forEach((c) => expect(c.style.borderRadius).toBe('var(--radius-md)'))
-  })
-
-  it('Manage is a bordered --bg-2 --fg-1 button padded 0 15px', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    const [m] = screen.getAllByText('Manage')
-    expect(m.style.border).toContain('var(--line-2)')
-    expect(m.style.background).toBe('var(--bg-2)')
-    expect(m.style.color).toBe('var(--fg-1)')
-    expect(m.style.padding).toBe('0px 15px')
-    expect(m.style.borderRadius).toBe('var(--radius-btn)')
-  })
-
-  it('Connect text is --primary-foreground; Disconnect keeps --fg-2 on a transparent fill', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    const connect = screen.getAllByText('Connect')
-    const disconnect = screen.getAllByText('Disconnect')
-    expect(connect.length).toBeGreaterThan(0)
-    expect(disconnect.length).toBeGreaterThan(0)
-    connect.forEach((b) => expect(b.style.color).toBe('var(--primary-foreground)'))
-    disconnect.forEach((b) => {
-      expect(b.style.color).toBe('var(--fg-2)')
-      expect(b.style.background).toBe('transparent')
-    })
-  })
-
-  it('the monogram tile text is white, as the prototype #fff', () => {
-    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
-    expect(screen.getByText('SAP', { exact: true }).style.color).toBe('var(--primary-foreground)')
-  })
-})
-
 describe('Settings > API & webhooks paint', () => {
   it('the base URL box is radius-md and the copy buttons are radius-btn', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
@@ -652,5 +600,30 @@ describe('Settings > empty states stay EmptyState', () => {
     const s = screen.getByText('No signing certificate yet').parentElement as HTMLElement
     expect(s.style.border).toContain('dashed')
     expect(s.querySelector('svg')).toBeTruthy()
+  })
+})
+
+describe('Settings > ERP connectors detail', () => {
+  const open = (over: Record<string, unknown> = {}) =>
+    settingsCtx('connectors', false, { activeEntity: { id: 'e1' }, erpConnectionId: 'c1', openErpConnection: vi.fn(), ...over })
+
+  it('settingsView_theOpenConnectionRendersTheDetailAndBackClosesIt', () => {
+    const ctx = open()
+    render(<SettingsView ctx={ctx} />)
+    expect(screen.getByTestId('connector-detail-stub').textContent).toContain('c1')
+    expect(screen.queryByTestId('erp-connector-row')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'stub back' }))
+    expect(ctx.openErpConnection).toHaveBeenCalledWith(null)
+  })
+
+  it('settingsView_anotherConnectionRemountsTheDetail', () => {
+    const { rerender } = render(<SettingsView ctx={open()} />)
+    rerender(<SettingsView ctx={open({ erpConnectionId: 'c2' })} />)
+    expect(screen.getByTestId('connector-detail-stub').dataset.first).toBe('c2')
+  })
+
+  it('settingsView_noOpenConnectionRendersTheList', async () => {
+    render(<SettingsView ctx={open({ erpConnectionId: null })} />)
+    expect(screen.queryByTestId('connector-detail-stub')).toBeNull()
   })
 })

@@ -212,18 +212,6 @@ export type Mapping = Record<string, string | null>
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
 export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company' | 'workspace'
 
-export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
-
-export type ConnectorsState = Record<ConnectorId, boolean>
-
-// One row of a connector's ERP -> UBL field mapping: the ERP's native field name and
-// the UBL 2.1 path it feeds (see data.tsx for each connector's defaults).
-export type FieldMapRow = { erp: string; ubl: string }
-
-// Mappings edited in the field-mapping modal, by connector. A connector absent here
-// still renders its default mapping — only edited ones are held.
-export type ConnectorMappings = Partial<Record<ConnectorId, FieldMapRow[]>>
-
 // The signed-in caller shown in the sidebar footer. `tenantName`/`verified` come from
 // the GET /v1/me round trip (M2-13): when verified, the tenant name was proven against
 // the live backend; otherwise it falls back to the persona's static workspace label.
@@ -293,8 +281,6 @@ export type PlatformCtx = {
   switcherOpen: boolean
   sandbox: boolean
   settingsTab: SettingsTab
-  connectors: ConnectorsState
-  connectorMappings: ConnectorMappings
 
   // --- Manual create form · the one real round trip (INVCR-01-03) --------------
   // `filing` exists ALONGSIDE App.tsx's reqInFlight ref, not instead of it, and the pair
@@ -329,6 +315,10 @@ export type PlatformCtx = {
   refetchPolicies: () => void
   /** Id of the policy open in the builder; null shows the policy list. */
   editingPolicyId: string | null
+  /** Id of the ERP connection open in the connector detail; null shows the connector list. */
+  erpConnectionId: string | null
+  /** A cold connector link whose owner client is still being found; the detail reads nothing meanwhile. */
+  erpOwnerPending: boolean
 
   // --- Settings › Members tab -----------------------------------------------
   // The tenant's live membership directory, fetched ONCE in App.tsx and shared by the
@@ -525,8 +515,6 @@ export type PlatformCtx = {
   openDocumentReview: (documentId: string) => Promise<void>
   setSandbox: (v: boolean) => void
   setSettingsTab: (t: SettingsTab) => void
-  toggleConnector: (id: ConnectorId) => void
-  saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   // Rules screen. There is deliberately no editCustomRule/disableGoldenRule pair:
   // a tenant may switch off and remove its OWN rules, and may do nothing at
   // all to an inherited one.
@@ -540,6 +528,8 @@ export type PlatformCtx = {
   // Publishing is its own verb because saving no longer publishes: the server seals a
   // version, and sealing on every Save would silently override the policy in force.
   openPolicy: (id: string) => void
+  /** Pushes the detail of a connection, or the list for null; a no-op for the one already open. */
+  openErpConnection: (id: string | null) => void
   closePolicy: () => void
   createPolicy: () => Promise<void>
   deletePolicy: (id: string) => Promise<void>

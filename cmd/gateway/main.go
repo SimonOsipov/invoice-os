@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/erp/erpweb"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -146,6 +147,9 @@ func main() {
 	// A same-origin form and a mail link: no CORS.
 	app.Mux.Handle("GET /readiness-check/confirm", readiness.Confirm)
 	app.Mux.Handle("POST /readiness-check/confirm", readiness.Confirm)
+	if err := registerERPPages(app.Mux, os.Getenv, probed["worker"], gatewayToken, app.Logger); err != nil {
+		platform.Fatal(app.Logger, "gateway: %v", err)
+	}
 	blogRead := blogHandlers(routed["notifications"], gatewayToken, app.Logger)
 	app.Mux.Handle("GET /blog/categories", withCORS(blogRead.Categories))
 	app.Mux.Handle("OPTIONS /blog/categories", withCORS(blogRead.Categories))
@@ -353,6 +357,27 @@ func readinessCheckHandlers(worker *url.URL, gatewayToken string, log *slog.Logg
 	perIP.Shared(pool, log)
 	client := &http.Client{Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
 	return gateway.ReadinessCheckHandlers(worker, client, gatewayToken, perIP, posture != platform.PosturePreview, posture, log)
+}
+
+// registerERPPages mounts the vendor's redirect target when the ERP mode is not off, and the fake
+// consent form and webhook route when it is fake. The parameter is named Mux so the route scan reads the literals.
+func registerERPPages(Mux *http.ServeMux, getenv func(string) string, worker *url.URL, gatewayToken string, log *slog.Logger) error {
+	mode, err := erpweb.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)))
+	if err != nil {
+		return err
+	}
+	if mode == erpweb.ModeOff {
+		return nil
+	}
+	// The reset-retry transport never re-sends a POST, which matters: the callback spends its state.
+	client := &http.Client{Timeout: 30 * time.Second, Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
+	Mux.Handle("GET /erp/callback", gateway.ERPCallbackPageHandler(worker, client, gatewayToken, log))
+	if mode == erpweb.ModeFake {
+		Mux.Handle("GET /erp/fake/consent", erpweb.FakeConsentPage(erpweb.FakeCodes()))
+		hookClient := &http.Client{Timeout: gateway.ERPWebhookTimeout, Transport: platform.TraceTransport(platform.ResetRetryTransport(nil))}
+		Mux.Handle("POST /erp/webhooks/fake", gateway.ERPWebhookHandler(worker, hookClient, gatewayToken, "fake", log))
+	}
+	return nil
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.

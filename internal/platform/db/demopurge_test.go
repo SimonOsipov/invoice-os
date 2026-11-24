@@ -218,6 +218,13 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	anchorRuleID := uuid.NewString()
 	batchID := uuid.NewString()
 	mappingID := uuid.NewString()
+	erpGrantID := uuid.NewString()
+	erpConnID := uuid.NewString()
+	erpDocID := uuid.NewString()
+	erpFieldMappingID := uuid.NewString()
+	erpLookupID := uuid.NewString()
+	erpWritebackID := uuid.NewString()
+	erpStateID := uuid.NewString()
 	customerID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -301,6 +308,26 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO rollup_snapshots (tenant_id, entity_id, day, total, readiness_num, needs_attention, not_submitted, vat_kobo)
 		 VALUES ($1,$2,'2026-10-21',1,1,0,0,0)`,
 		tenantID, entityID)
+	plant("erp_grants", "id", erpGrantID,
+		`INSERT INTO erp_grants (id, tenant_id, system, kind) VALUES ($1,$2,'fake','api_key')`,
+		erpGrantID, tenantID)
+	plant("erp_connections", "id", erpConnID,
+		`INSERT INTO erp_connections (id, tenant_id, entity_id, system, external_key, status, grant_id)
+		 VALUES ($1,$2,$3,'fake','fake-co-1','active',$4)`,
+		erpConnID, tenantID, entityID, erpGrantID)
+	requireEmpTables(t, pool)
+	plant("erp_field_mappings", "id", erpFieldMappingID,
+		`INSERT INTO erp_field_mappings (id, tenant_id, entity_id, system, target, source_path)
+		 VALUES ($1,$2,$3,'fake','line_description','description')`,
+		erpFieldMappingID, tenantID, entityID)
+	plant("erp_lookups", "id", erpLookupID,
+		`INSERT INTO erp_lookups (id, tenant_id, entity_id, system, external_key, kind, erp_key, tax_category)
+		 VALUES ($1,$2,$3,'fake','fake-co-1','tax_code','purge-witness','T1')`,
+		erpLookupID, tenantID, entityID)
+	plant("erp_oauth_states", "id", erpStateID,
+		`INSERT INTO erp_oauth_states (id, tenant_id, state_hash, connection_id, user_id, expires_at)
+		 VALUES ($1,$2,$3,$4,$5, now() + interval '10 minutes')`,
+		erpStateID, tenantID, tokenHash(t, 32), erpConnID, userID)
 	plant("customers", "id", customerID,
 		`INSERT INTO customers (id, tenant_id, tin) VALUES ($1,$2,'90000000-0001')`,
 		customerID, tenantID)
@@ -308,6 +335,16 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO invoices (id, tenant_id, entity_id, import_batch_id, invoice_number, status, currency, total)
 		 VALUES ($1,$2,$3,$4,'PURGE-WITNESS-1','draft','NGN',100.00)`,
 		invoiceID, tenantID, entityID, batchID)
+	requireEsdTable(t, pool)
+	plant("erp_source_documents", "id", erpDocID,
+		`INSERT INTO erp_source_documents (id, tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id)
+		 VALUES ($1,$2,$3,$4,'purge-witness-doc','r1','drafted',$5)`,
+		erpDocID, tenantID, entityID, erpConnID, invoiceID)
+	requireEwbTable(t, pool)
+	plant("erp_writebacks", "id", erpWritebackID,
+		`INSERT INTO erp_writebacks (id, tenant_id, entity_id, connection_id, source_document_id, invoice_id, result_version, outcome, attempt, state, river_job_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,1,'accepted',1,'succeeded',1)`,
+		erpWritebackID, tenantID, entityID, erpConnID, erpDocID, invoiceID)
 	plant("line_items", "id", lineID,
 		`INSERT INTO line_items (id, tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
 		 VALUES ($1,$2,$3,1,'witness line',1.000,100.00,100.00)`,
@@ -640,10 +677,35 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 	}
 
 	// Control: the new join tables are in the live set, so their coverage below is not vacuous.
-	for _, want := range []string{"membership_clients", "invitation_clients"} {
+	for _, want := range []string{"membership_clients", "invitation_clients", "erp_source_documents", "erp_writebacks"} {
 		if !slices.Contains(live, want) {
 			t.Errorf("%s is not among the live tenant_id tables — the client_access migration is not applied yet", want)
 		}
+	}
+	for _, want := range []string{"erp_field_mappings", "erp_lookups"} {
+		if !slices.Contains(live, want) {
+			t.Errorf("%s is not among the live tenant_id tables — the erp_mappings migration is not applied yet", want)
+		}
+		if !slices.Contains(db.PurgeTablesForTest, want) {
+			t.Errorf("purgeTables lacks %s", want)
+		}
+	}
+	if !slices.Contains(live, "erp_oauth_states") {
+		t.Errorf("erp_oauth_states is not among the live tenant_id tables — the erp_token_custody migration is not applied yet")
+	}
+	// Leaf-first: a state references its connection, so the purge deletes the states first.
+	if si, ci := slices.Index(db.PurgeTablesForTest, "erp_oauth_states"), slices.Index(db.PurgeTablesForTest, "erp_connections"); si < 0 || ci < 0 || si > ci {
+		t.Errorf("purgeTables index of erp_oauth_states = %d, of erp_connections = %d, want both present and the states first", si, ci)
+	}
+
+	// The document references invoices and erp_connections, so its DELETE runs right before invoices'.
+	if i, j := indexOfTable(t, db.PurgeTablesForTest, "erp_source_documents"), indexOfTable(t, db.PurgeTablesForTest, "invoices"); i != j-1 {
+		t.Errorf("erp_source_documents is at %d in purgeTables and invoices at %d, want it immediately before invoices", i, j)
+	}
+
+	// The write-back rows reference the document, the invoice and the connection, so they go first.
+	if i, j := indexOfTable(t, db.PurgeTablesForTest, "erp_writebacks"), indexOfTable(t, db.PurgeTablesForTest, "erp_source_documents"); i != j-1 {
+		t.Errorf("erp_writebacks is at %d in purgeTables and erp_source_documents at %d, want it immediately before the documents", i, j)
 	}
 
 	declared := map[string]int{}

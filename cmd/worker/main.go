@@ -26,6 +26,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/docadapter"
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
@@ -109,6 +110,7 @@ func main() {
 	invStore := invoice.NewStore(pool)
 
 	// Queue is backfilled once queue.New, which needs this bundle, returns.
+	wbq := &erp.WriteBackEnqueuer{}
 	sw := &submission.SubmitWorker{
 		Pool:        pool,
 		Adapter:     adapter,
@@ -116,6 +118,7 @@ func main() {
 		Limiter:     limiter,
 		RateLimit:   rateLimit,
 		Logger:      app.Logger,
+		Results:     wbq,
 
 		InvoiceTypeLabels: codelist.LabelsTx,
 	}
@@ -124,6 +127,7 @@ func main() {
 		Adapter:     adapter,
 		InvoicePort: invStore,
 		Logger:      app.Logger,
+		Results:     wbq,
 	}
 
 	// One EXTRACTOR read selects both the extractor and the text reader, so the two cannot drift.
@@ -184,18 +188,41 @@ func main() {
 	aw := &accountevents.AuditWorker{Pool: pool}
 	ndw := &accountevents.NewDeviceWorker{Pool: pool, Sender: nl.Sender, Logger: app.Logger}
 
+	erpReg, err := erp.RegistryFromEnv(os.Getenv)
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
+	erpSecrets, err := erp.SecretsFromEnv(ctx, os.Getenv, erpReg)
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
+	// The re-check and the ERP ingest share one gate.
+	gate := invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil))
+	erpw := &erp.Workers{
+		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: erpReg, Secrets: erpSecrets, Logger: app.Logger},
+		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
+		Pull:         &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
+		Ingest:       &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
+		WriteBack:    &erp.WriteBackWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
+	}
+
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw, erpw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: queue: %v", err)
 	}
 	sw.Queue, pw.Queue, xw.River = q, q, q.River()
+	erpw.Refresh.Queue = q
+	erpw.Pull.Queue = q
+	wbq.Queue = q
 	xbw.River = q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
+
+	erpStore := erp.NewStore(pool, erpReg, erpSecrets, q).WithSecretScope(erp.SecretScopeFromEnv(os.Getenv))
 
 	// Each periodic task runs in one worker instance only.
 	leader := db.NewLeader(mustEnv("DATABASE_URL"))
@@ -210,7 +237,7 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("readiness-request-purge", (&readinesscheck.Store{Pool: pool}).PurgeExpired)))
 
-	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
+	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Secrets: erpSecrets, Logger: app.Logger}
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
 		um := &notifications.UnsubscribeMetadata{Pool: pool, Account: account, Logger: app.Logger}
@@ -239,12 +266,20 @@ func main() {
 	rechecker := &invoice.Rechecker{
 		Pool:    pool,
 		Store:   invStore,
-		Gate:    invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil)),
+		Gate:    gate,
 		Tenants: tenants,
 		Logger:  app.Logger,
 	}
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck", rechecker.RunOnce)))
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck-custom", rechecker.RunCustomOnce)))
+
+	// With no connector registered there is nothing to pull.
+	if len(erpReg) > 0 {
+		sweeper := &erp.Sweeper{Reader: readerPool, Pool: pool, River: q.River(), Registry: erpReg, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(erp.PullInterval, leader.Lead("erp-pull", sweeper.SweepOnce)))
+		keeper := &erp.SubscriptionKeeper{Reader: readerPool, Pool: pool, Registry: erpReg, Logger: app.Logger}
+		app.AddBackgroundWorker(codelist.NewWorker(erp.SubscriptionInterval, leader.Lead("erp-subscriptions", keeper.RunOnce)))
+	}
 
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, leader.Lead("rollup-snapshot", snap.RunOnce)))
@@ -259,6 +294,9 @@ func main() {
 			AI:  aiClient, Jev: jevClient},
 	}
 	registerPublicCheckRoutes(app.Mux, readinesscheck.NewService(checker, &readinesscheck.Store{Pool: pool, Contacts: rw.Store}, nl.Sender, app.Logger))
+	app.Mux.Handle("POST /internal/erp/callback", erp.CallbackHandler(erpStore.Complete, app.Logger))
+	hooks := &erp.Webhooks{Pool: pool, River: q.River(), Registry: erpReg}
+	app.Mux.Handle("POST /internal/erp/webhooks/{system}", erp.WebhookHandler(hooks.Receive, app.Logger))
 	var linker consolesession.RecoveryLinker // stays a nil interface when account is a nil *Client
 	if account != nil {
 		linker = account
@@ -412,7 +450,7 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker, erpw *erp.Workers) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
@@ -421,6 +459,7 @@ func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *ex
 	workspacepurge.AddPurgeTo(bundle, pjw)
 	accountevents.AddAuditTo(bundle, aw)
 	accountevents.AddNewDeviceTo(bundle, ndw)
+	erp.AddTo(bundle, erpw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

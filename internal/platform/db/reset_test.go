@@ -151,7 +151,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions", "erp_source_documents", "erp_writebacks"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -166,7 +166,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots -> business_entities; customers -> tenants),
+// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots/erp_connections -> business_entities; erp_connections -> erp_grants; erp_oauth_states -> erp_connections; erp_writebacks -> erp_source_documents; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -238,6 +238,45 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed rollup_snapshots fixture: %v", err)
 	}
 
+	erpGrantID := uuid.NewString()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_grants (id, tenant_id, system, kind) VALUES ($1, $2, 'fake', 'api_key')`,
+		erpGrantID, tenantID,
+	); err != nil {
+		t.Fatalf("seed erp_grants fixture: %v", err)
+	}
+	var erpConnID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id)
+		 VALUES ($1, $2, 'fake', 'fake-co-1', 'active', $3) RETURNING id`,
+		tenantID, entityID, erpGrantID,
+	).Scan(&erpConnID); err != nil {
+		t.Fatalf("seed erp_connections fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_oauth_states (tenant_id, state_hash, connection_id, user_id, expires_at)
+		 VALUES ($1, $2, $3, $4, now() + interval '10 minutes')`,
+		tenantID, tokenHash(t, 32), erpConnID, userID,
+	); err != nil {
+		t.Fatalf("seed erp_oauth_states fixture: %v", err)
+	}
+
+	requireEmpTables(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_field_mappings (tenant_id, entity_id, system, target, source_path)
+		 VALUES ($1, $2, 'fake', 'line_description', 'description')`,
+		tenantID, entityID,
+	); err != nil {
+		t.Fatalf("seed erp_field_mappings fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_lookups (tenant_id, entity_id, system, external_key, kind, erp_key, tax_category)
+		 VALUES ($1, $2, 'fake', 'fake-co-1', 'tax_code', 'reset-fixture', 'T1')`,
+		tenantID, entityID,
+	); err != nil {
+		t.Fatalf("seed erp_lookups fixture: %v", err)
+	}
+
 	crrRequireTable(t, pool)
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO custom_rule_revisions (tenant_id, rule_id, revision, entity_id, type, target, severity, message, enabled, created_by)
@@ -263,6 +302,25 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, marker, marker,
 	).Scan(&invoiceID); err != nil {
 		t.Fatalf("seed invoices fixture: %v", err)
+	}
+
+	requireEsdTable(t, pool)
+	var erpDocID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO erp_source_documents (tenant_id, entity_id, connection_id, source_doc_id, source_revision, state, invoice_id)
+		 VALUES ($1, $2, $3, $4, 'r1', 'drafted', $5) RETURNING id`,
+		tenantID, entityID, erpConnID, marker, invoiceID,
+	).Scan(&erpDocID); err != nil {
+		t.Fatalf("seed erp_source_documents fixture: %v", err)
+	}
+
+	requireEwbTable(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO erp_writebacks (tenant_id, entity_id, connection_id, source_document_id, invoice_id, result_version, outcome, attempt, state, river_job_id)
+		 VALUES ($1, $2, $3, $4, $5, 1, 'accepted', 1, 'succeeded', 1)`,
+		tenantID, entityID, erpConnID, erpDocID, invoiceID,
+	); err != nil {
+		t.Fatalf("seed erp_writebacks fixture: %v", err)
 	}
 
 	// approval_runs' RESTRICT FK to invoices is exactly what makes a bare TRUNCATE
@@ -568,6 +626,11 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	}
 	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
 		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
+	}
+	for _, table := range []string{"erp_oauth_states", "erp_connections", "erp_grants", "erp_source_documents", "erp_writebacks", "erp_field_mappings", "erp_lookups"} {
+		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n != 0 {
+			t.Errorf("%s rows after Reset = %d, want 0", table, n)
+		}
 	}
 }
 

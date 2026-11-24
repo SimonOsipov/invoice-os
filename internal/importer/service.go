@@ -1056,146 +1056,67 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		return BatchResult{}, err
 	}
 
-	// created pairs each successfully-created invoice with the sheet rows it
-	// came from. Store.Create RETURNS the Invoice with its LineItems ALREADY
-	// HYDRATED (store.go's Create tx appends every RETURNING-ed line item),
-	// so the gate below re-reads NOTHING for the whole batch (AC#13) -- and
-	// must not: Store.List leaves LineItems nil by design ([D7]), and
-	// MBSPayload is pure and CANNOT tell a nil LineItems from a genuinely
-	// line-less invoice, so a List-sourced batch would omit line_items and
-	// make line-items-required violate every PERFECTLY VALID invoice of a
-	// 500-row import. The rowIdxs travel WITH the invoice rather than in a
-	// parallel slice because a group can drop out mid-loop on a domain error:
-	// index alignment would be an invariant waiting to break.
-	type createdInvoice struct {
-		inv     invoice.Invoice
-		rowIdxs []int
-	}
-	var created []createdInvoice
-
-	readyCount := 0
-	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
-		inv, createErr := s.inv.Create(ctx, in)
-		if createErr == nil {
-			readyCount++
-			created = append(created, createdInvoice{inv: inv, rowIdxs: g.rowIdxs})
-			continue
-		}
-
-		msg, isDomainErr := domainCreateErrorMessage(createErr)
-		if !isDomainErr {
-			// An operational failure (e.g. a DB outage, a context
-			// cancellation, an unexpected bug) is NOT bad input -- never
-			// quarantine it as N invalid rows, and never leak createErr's raw
-			// Postgres text to the client. Best-effort finalize the batch as
-			// 'failed' (its own error, if any, is secondary to createErr) and
-			// abort with the real error so the handler 500s instead of lying
-			// about a 'completed' run.
-			_ = s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "failed")
-			return BatchResult{}, createErr
-		}
-
-		if errors.Is(createErr, invoice.ErrDuplicateNumber) {
-			// [dedup] A concurrent 23505 racing past the upfront
-			// ExistingNumbers precheck -- report the SAME enriched shape the
-			// precheck itself emits (DUP-04), never the bare generic form.
-			// No id: the racing tx's row may not even be visible yet.
-			errorsList = append(errorsList, storeDuplicateRowError(headerRow, g.rowIdxs, ""))
-		} else {
-			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(headerRow, g.rowIdxs),
-				Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
-				Message: msg,
-			})
-		}
-		quarantinedInvoices++
-		rowsInvalid += len(g.rowIdxs)
-		rowsValid -= len(g.rowIdxs)
+	// Quarantined groups are never created, so the gate sees exactly the created set.
+	ins := make([]invoice.CreateInput, len(readyGroups))
+	for i, g := range readyGroups {
+		ins[i] = buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
 	}
 
-	// [import-validates] Run every created draft through the SAME gate the
-	// manual POST /v1/invoices/{id}/validate path uses -- ONE 04 round trip
-	// for the whole file ([batch-of-one]), then one atomic ApplyValidation
-	// per invoice. This is what makes an import actually IMPORT AND VALIDATE:
-	// clean invoices land `validated`, dirty ones stay `draft` carrying their
-	// violations. Stamping violations without promoting was rejected -- it
-	// leaves a 500-invoice import with 500 unvalidated drafts and forces 500
-	// manual clicks.
-	//
-	// This runs BEFORE Finalize on purpose: a fault here must finalize the
-	// batch `failed` ONCE, not walk back a `completed` it already wrote.
-	//
-	// Quarantined groups cannot reach here at all -- they were never created,
-	// so `created` is exactly the set 04 sees (IMPV-09).
-	var ruleSetVersion *int
-	invoicesClean := 0
-	invoicesWithViolations := 0
 	var invoiceViolations []InvoiceViolations
-
-	// [Stage-1 F2] Same caller-side guard as the dry-run: an all-quarantined
-	// file creates zero invoices, and ValidateBatch would return version 0
-	// having evaluated nothing (its loop body never runs, so no
-	// rule_set_version_id can reach the DB either). Guard on len(created),
-	// never on the returned version -- nothing evaluated => null, not 0.
-	if len(created) > 0 {
-		invs := make([]invoice.Invoice, len(created))
-		for i, c := range created {
-			invs[i] = c.inv
-		}
-
-		outcome, valErr := s.gate.ValidateBatch(ctx, invs)
-		if valErr != nil {
-			// [Stage-1 F6] ABORT UNCONDITIONALLY -- never route this through
-			// domainCreateErrorMessage. ValidateBatch wraps ApplyValidation's
-			// error with %w, and ApplyValidation CAN return ErrValidation (a
-			// 22P02); domainCreateErrorMessage matches on errors.Is, so
-			// reusing it here would quarantine a DB FAULT as bad data --
-			// exactly the laundering [create-error-classification] forbids. A
-			// validator ErrUpstream is likewise an OUTAGE, not "everything is
-			// clean". Best-effort finalize `failed` (its own error is
-			// secondary to valErr) and propagate valErr RAW so the handler
-			// 500s instead of lying about a completed run.
-			_ = s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "failed")
-			return BatchResult{}, valErr
-		}
-
-		version := outcome.RuleSetVersion
-		ruleSetVersion = &version
-		// Clean/WithViolations come STRAIGHT from the outcome -- ValidateBatch
-		// already counted them with the same blocking predicate that decided
-		// each promotion. Recounting here would be a second predicate to keep
-		// in sync forever.
-		invoicesClean = outcome.Clean
-		invoicesWithViolations = outcome.WithViolations
-		unvalidated := make(map[string]bool, len(outcome.Unvalidated))
-		for _, id := range outcome.Unvalidated {
-			unvalidated[id] = true
-		}
-		for _, c := range created {
-			if unvalidated[c.inv.ID] {
+	out, err := CreateDrafts(ctx, s.inv, s.gate, ins, func(ctx context.Context, out DraftOutcome, status string) error {
+		for i, r := range out.Results {
+			if r.Err == nil {
+				continue
+			}
+			g := readyGroups[i]
+			if errors.Is(r.Err, invoice.ErrDuplicateNumber) {
+				// A 23505 racing past the ExistingNumbers precheck: same enriched shape, no id
+				// (the racing tx's row may not be visible yet).
+				errorsList = append(errorsList, storeDuplicateRowError(headerRow, g.rowIdxs, ""))
+			} else {
 				errorsList = append(errorsList, RowError{
-					Rows:      sheetRows(headerRow, c.rowIdxs),
-					InvoiceID: c.inv.ID,
+					Rows:    sheetRows(headerRow, g.rowIdxs),
+					Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
+					Message: r.Message,
+				})
+			}
+			quarantinedInvoices++
+			rowsInvalid += len(g.rowIdxs)
+			rowsValid -= len(g.rowIdxs)
+		}
+		for i, r := range out.Results {
+			if r.Invoice == nil {
+				continue
+			}
+			g := readyGroups[i]
+			if r.Unvalidated {
+				errorsList = append(errorsList, RowError{
+					Rows:      sheetRows(headerRow, g.rowIdxs),
+					InvoiceID: r.Invoice.ID,
 					Message:   unvalidatedMessage,
 				})
 				continue
 			}
-			vs := outcome.ByID[c.inv.ID]
-			if len(vs) == 0 {
+			if len(r.Violations) == 0 {
 				continue
 			}
 			invoiceViolations = append(invoiceViolations, InvoiceViolations{
-				InvoiceNumber: c.inv.InvoiceNumber,
-				InvoiceID:     c.inv.ID,
-				Rows:          sheetRows(headerRow, c.rowIdxs),
-				Violations:    vs,
+				InvoiceNumber: r.Invoice.InvoiceNumber,
+				InvoiceID:     r.Invoice.ID,
+				Rows:          sheetRows(headerRow, g.rowIdxs),
+				Violations:    r.Violations,
 			})
 		}
-	}
-
-	if err := s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "completed"); err != nil {
+		return s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, status)
+	})
+	if err != nil {
 		return BatchResult{}, err
+	}
+	readyCount := 0
+	for _, r := range out.Results {
+		if r.Invoice != nil {
+			readyCount++
+		}
 	}
 
 	return BatchResult{
@@ -1208,9 +1129,9 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		QuarantinedInvoices: quarantinedInvoices,
 		Errors:              errorsList,
 
-		RuleSetVersion:         ruleSetVersion,
-		InvoicesClean:          invoicesClean,
-		InvoicesWithViolations: invoicesWithViolations,
+		RuleSetVersion:         out.RuleSetVersion,
+		InvoicesClean:          out.InvoicesClean,
+		InvoicesWithViolations: out.InvoicesWithViolations,
 		InvoiceViolations:      invoiceViolations,
 	}, nil
 }

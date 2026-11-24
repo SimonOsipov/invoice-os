@@ -2044,3 +2044,45 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     expect(stateNow()!.e, 'floor: Back to the boot entry after a switch clamps to the active company').toBe(ENTITY_A)
   })
 })
+
+vi.mock('./components/ConnectorDetail', () => ({
+  ConnectorDetail: (p: { connectionId: string }) => <div data-testid="connector-detail-stub">{p.connectionId}</div>,
+}))
+vi.mock('./components/ConnectorsView', () => ({ ConnectorsView: () => <div data-testid="connector-list-stub" /> }))
+
+describe('ERPF-08-05: Back and Forward between the connector list and detail', () => {
+  it('popstate_backAndForwardBetweenListAndDetail', async () => {
+    const CONN = 'aaaaaaaa-0000-4000-8000-0000000000c1'
+    const ENT = 'aaaaaaaa-0000-4000-8000-000000000001'
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              url.includes('/portfolio/v1/entities')
+                ? { entities: [{ id: ENT, name: 'Alpha Ltd', tin: '11111111-0001', registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }], pagination: { limit: 200, offset: 0, total: 1 } }
+                : { entities: [], policies: [], members: [], roles: [], invoices: [], total: 0 },
+            ),
+        }),
+      ),
+    )
+    await bootAt('/settings/connectors')
+    await waitFor(() => expect(screen.getByTestId('connector-list-stub')).toBeTruthy())
+    await waitFor(() => expect(requireCtx().activeEntity).toBeTruthy())
+    await act(async () => requireCtx().openErpConnection(CONN))
+    expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN)
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN}`)
+
+    await traverse(-1)
+    expect(screen.getByTestId('connector-list-stub')).toBeTruthy()
+    expect(window.location.pathname).toBe('/settings/connectors')
+
+    await traverse(1)
+    expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN)
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN}`)
+  })
+})

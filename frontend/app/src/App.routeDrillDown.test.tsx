@@ -248,3 +248,100 @@ describe('E-9: a network-level rejection settles into ErrorState, not a crash or
     expect(document.querySelector('.apic-loading-spin'), 'no spinner node should survive a settled network rejection').toBeNull()
   })
 })
+
+vi.mock('./components/ConnectorDetail', () => ({
+  ConnectorDetail: (p: { connectionId: string }) => <div data-testid="connector-detail-stub">{p.connectionId}</div>,
+}))
+vi.mock('./components/ConnectorsView', () => ({ ConnectorsView: () => <div data-testid="connector-list-stub" /> }))
+
+const CONN_ID = 'aaaaaaaa-0000-4000-8000-0000000000c1'
+const ENT_A = 'aaaaaaaa-0000-4000-8000-000000000001'
+const ENT_B = 'aaaaaaaa-0000-4000-8000-000000000002'
+
+function stubEntities(erpList: unknown = { connections: [], systems: [] }) {
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  const row = (id: string, name: string, tin: string) => ({ id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve(
+            url.includes('/erp-connections')
+              ? erpList
+              : url.includes('/portfolio/v1/entities')
+              ? { entities: [row(ENT_A, 'Alpha Ltd', '11111111-0001'), row(ENT_B, 'Beta Ltd', '22222222-0001')], pagination: { limit: 200, offset: 0, total: 2 } }
+              : { entities: [], policies: [], members: [], roles: [], invoices: [], total: 0, clients: [], totals: {}, top_violations: [], rules: [] },
+          ),
+      }),
+    ),
+  )
+}
+const act_ = async (fn: () => void) => {
+  const { act } = await import('@testing-library/react')
+  await act(async () => fn())
+}
+
+describe('ERPF-08-05: the connector detail route', () => {
+  it('drillDown_aColdConnectionLinkOpensTheDetail', async () => {
+    stubEntities()
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN_ID))
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  it('drillDown_aMalformedConnectionsListIsNotThisClientAndRejectsNothing', async () => {
+    const unhandled: unknown[] = []
+    const on = (e: unknown) => unhandled.push(e)
+    process.on('unhandledRejection', on)
+    stubEntities({})
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub').textContent).toBe(CONN_ID))
+    await new Promise((r) => setTimeout(r, 20))
+    process.off('unhandledRejection', on)
+    expect(unhandled).toEqual([])
+  })
+
+  it('drillDown_aBadConnectionLinkIsCorrectedToTheList', async () => {
+    stubEntities()
+    await bootAt('/settings/connectors/x')
+    await waitFor(() => expect(screen.getByTestId('connector-list-stub')).toBeTruthy())
+    expect(window.location.pathname).toBe('/settings/connectors')
+  })
+
+  it('drillDown_aClientSwitchClosesTheDetail', async () => {
+    stubEntities()
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub')).toBeTruthy())
+    await act_(() => capturedCtx!.switchClient(ENT_B))
+    expect(capturedCtx!.erpConnectionId).toBeNull()
+    await act_(() => capturedCtx!.nav('settings', { settingsTab: 'connectors' }))
+    await waitFor(() => expect(screen.getByTestId('connector-list-stub')).toBeTruthy())
+    expect(screen.queryByTestId('connector-detail-stub')).toBeNull()
+  })
+
+  it('drillDown_settingsTabClearsTheConnection', async () => {
+    stubEntities()
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub')).toBeTruthy())
+    await act_(() => capturedCtx!.setSettingsTab('members'))
+    expect(capturedCtx!.erpConnectionId).toBeNull()
+    await act_(() => capturedCtx!.setSettingsTab('connectors'))
+    expect(window.location.pathname).toBe('/settings/connectors')
+    await waitFor(() => expect(screen.getByTestId('connector-list-stub')).toBeTruthy())
+  })
+
+  it('drillDown_openingTheOpenConnectionPushesNothing', async () => {
+    stubEntities()
+    await bootAt(`/settings/connectors/${CONN_ID}`)
+    await waitFor(() => expect(screen.getByTestId('connector-detail-stub')).toBeTruthy())
+    const before = window.history.length
+    await act_(() => capturedCtx!.openErpConnection(CONN_ID))
+    expect(window.history.length).toBe(before)
+    await act_(() => capturedCtx!.openErpConnection(null))
+    expect(window.history.length).toBe(before + 1)
+    expect(window.location.pathname).toBe('/settings/connectors')
+  })
+})

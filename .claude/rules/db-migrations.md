@@ -20,6 +20,8 @@ paths:
 - Give `invoice_app` SELECT and INSERT only on `document_uploaders`. `document.Store.Upsert` is its only writer.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
+- Give `invoice_app` SELECT, INSERT and UPDATE on `erp_source_documents`. An ERP document is never deleted; only the purge, the reset and the cascade remove one.
+- Give `invoice_app` SELECT and INSERT only on `erp_writebacks`. It is an append-only attempt log; only the purge, the reset and the cascade remove a row.
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
 - Give `invoice_app` UPDATE on `tenants.deletion_purge_started_at`. The trigger `tenants_purge_guard` refuses any change of `deletion_scheduled_at` or `deletion_purge_started_at` once the purge has started.
@@ -42,7 +44,7 @@ paths:
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Write `db/bootstrap.sql` so that Cloud SQL's `postgres` can run it: it is not a superuser. Set no SUPERUSER attribute; the guard refuses a superuser role.
 - Run `db/restore-check.sql` on Cloud SQL as `restore_auditor`: apply `db/restore-auditor.sql` once, then `SET ROLE restore_auditor`.
-- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, `public.identity_has_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id`, `public.invitee_account_state` and `public.account_event_memberships` to `invoice_app` only.
+- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, `public.identity_has_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id`, `public.invitee_account_state`, `public.account_event_memberships` and `public.erp_webhook_targets` to `invoice_app` only.
 - Give `invoice_app` SELECT and DELETE on `account_event_handoffs`, and SELECT, INSERT and DELETE on `account_known_devices`. Both are global: no RLS.
 - A `first_session` row of `account_event_handoffs` is an `account.signed_in`.
 - Grant `EXECUTE` on `public.purge_tenant` to `invoice_app` only. Call it inside `WithinTenantTx` for the tenant it purges, and commit right after it.
@@ -56,6 +58,7 @@ paths:
 - Grant `auth_hook_reader` SELECT on `tenants.id`, `tenants.name` and `tenants.deletion_due_at` only.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
+- Treat `invoice_migrator` as able to read `id`, `tenant_id`, `system`, `external_key` and `status` of every `erp_connections` row through `SET ROLE auth_hook_reader`.
 - Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
 - Grant `EXECUTE` on `public.public_check_ai_cost_today` to `invoice_app` only. It returns the NULL-tenant `ai_calls` cost of the current UTC day.
 - Treat `invoice_migrator` as able to read `tenant_id`, `cost` and `created_at` of NULL-tenant `ai_calls` rows through `SET ROLE auth_hook_reader`.
@@ -150,3 +153,6 @@ ceiling: a rollout runs old and new revisions together; one new instance per ser
 Give `invoice_app` SELECT, INSERT and DELETE on `readiness_checks`. It is global: no RLS. Only the erase routine deletes a row.
 Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `readiness_check_requests`. It is global: no RLS. `invoice_gateway` gets no grant.
 Give `invoice_app` SELECT, DELETE and UPDATE (`unsubscribed_at`) on `mail_unsubscribes`, and EXECUTE on `mail_unsubscribe_token`. Give `invoice_gateway` EXECUTE only. It is global: no RLS. Only the erase routine deletes a row.
+Give `invoice_app` SELECT, INSERT and UPDATE on `erp_connections`, and SELECT, INSERT and DELETE on `erp_grants`. Disconnect keeps a connection; only the purge, the reset and the cascade remove one. Give `invoice_app` UPDATE on `erp_grants` for `version`, `expires_at` and `updated_at` only (the refresh compare-and-swap; `secret_ref` is written at insert), and SELECT, INSERT, DELETE and UPDATE (`used_at`) on `erp_oauth_states`.
+
+Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `erp_field_mappings` and `erp_lookups`. A delete reverts a client's override or removes a lookup; the client cascade, the purge and the reset remove the rest.

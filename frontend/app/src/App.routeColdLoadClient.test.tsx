@@ -262,3 +262,179 @@ describe('cold load of /imports/<id>/review', () => {
     )
   })
 })
+
+// The overview answers per client, and the client is chosen by the real App: a stub that answers
+// every client alike (as the drill-down suite's does) could not tell the default from the owner.
+describe('cold load of /settings/connectors/<id>', () => {
+  const CONN_ID = 'cccccccc-3333-4333-8333-333333333333'
+  const conn = { id: CONN_ID, entity_id: ENTITY_SECOND, system: 'fake', external_key: null, status: 'active', last_sync_at: null, created_at: '', updated_at: '' }
+  const missing = () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) })
+
+  type ListOpts = { listGate?: Promise<void>; listFails?: boolean; failList?: string; clientCount?: number; track?: { active: number; max: number } }
+  function routeConnectorFetch(ownerEntity: string | null, o: ListOpts = {}) {
+    const base = routeFetchImpl()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (o.clientCount && url.includes('/portfolio/v1/entities?')) {
+          const extra = Array.from({ length: o.clientCount - 2 }, (_, i) => entityRow(`aaaaaaaa-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, `Mid ${i} Ltd`, `3333${String(i).padStart(4, '0')}-0001`))
+          const all = [entityRow(ENTITY_FIRST, 'Alpha Ltd', '11111111-0001'), entityRow(ENTITY_SECOND, 'Zulu Ltd', '22222222-0001'), ...extra]
+          return ok({ entities: all, pagination: { limit: 200, offset: 0, total: all.length } })
+        }
+        const m = /entities\/([^/]+)\/erp-connections(\/[^/]+\/overview)?$/.exec(url)
+        if (m && m[2]) {
+          return m[1] === ownerEntity
+            ? ok({ connection: conn, activity: { since: '', counts: { pulled: 0, pending: 0, drafted: 0, linked: 0, held: 0, failed: 0, deleted: 0 }, documents: [] }, writebacks: [], held: [] })
+            : missing()
+        }
+        if (m) {
+          if (o.listFails || m[1] === o.failList) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+          const list = ok({ connections: m[1] === ownerEntity ? [conn] : [], systems: [] })
+          if (o.track) {
+            const t = o.track
+            t.max = Math.max(t.max, ++t.active)
+            return new Promise<void>((r) => setTimeout(r, 5)).then(() => {
+              t.active--
+              return list
+            })
+          }
+          return o.listGate ? o.listGate.then(() => list) : list
+        }
+        // The catch-all body has no `fields`; the real mapping read always carries it.
+        if (/\/erp-mappings\//.test(url)) return ok({ fields: [{ target: 'invoice_no', label: 'Invoice no', source_path: 'DocNum', origin: 'platform' }] })
+        if (/\/erp-lookups\//.test(url)) return ok({ lookups: [] })
+        return base(url)
+      }),
+    )
+  }
+  function routeFetchImpl() {
+    routeFetch()
+    return (globalThis.fetch as unknown as (u: string) => Promise<unknown>).bind(globalThis)
+  }
+
+  async function boot(state: unknown = null) {
+    window.history.replaceState(state, '', `/settings/connectors/${CONN_ID}`)
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(<App />)
+  }
+
+  it('coldLoad_aConnectionOfANonDefaultClientOpensUnderItsOwnClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    // The mapping read lands in every run, not only a loaded one: the test no longer races it.
+    await waitFor(() => expect(screen.getAllByTestId('erp-mapping-row')).toHaveLength(1))
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+  })
+
+  const urls = () => (fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0])
+  const overviewReads = (entity: string) => urls().filter((u) => u.includes(`entities/${entity}/erp-connections/${CONN_ID}/overview`))
+  const listReads = () => urls().filter((u) => /entities\/[^/]+\/erp-connections$/.test(u))
+
+  // A reload keeps the stamp {e, m} of the entry: the boot starts on that client, so no search and no read under the default.
+  it('coldLoad_aReloadOfTheDetailKeepsItUnderItsClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot({ e: ENTITY_SECOND, m: 'an-earlier-mount' })
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(window.location.pathname).toBe(`/settings/connectors/${CONN_ID}`)
+    expect(overviewReads(ENTITY_FIRST), 'no overview read under the default client').toHaveLength(0)
+    expect(listReads(), 'no search').toHaveLength(0)
+    expect(overviewReads(ENTITY_SECOND)).toHaveLength(1)
+    await waitFor(() => expect(window.history.state?.e).toBe(ENTITY_SECOND))
+  })
+
+  it('coldLoad_aLinkWithNoStampSearchesThenReadsOnceUnderTheOwner', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(listReads().length).toBeGreaterThan(0)
+    expect(overviewReads(ENTITY_SECOND)).toHaveLength(1)
+    expect(overviewReads(ENTITY_FIRST), 'no overview read, so no 404, under the default client').toHaveLength(0)
+  })
+
+  it('coldLoad_aStampNamingAClientTheMemberCannotSeeIsIgnored', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    await boot({ e: ENTITY_UNKNOWN, m: 'an-earlier-mount' })
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+    expect(overviewReads(ENTITY_UNKNOWN)).toHaveLength(0)
+    expect(overviewReads(ENTITY_FIRST)).toHaveLength(0)
+    expect(listReads().length).toBeGreaterThan(0)
+    expect(urls().filter((u) => u.includes(ENTITY_UNKNOWN)), 'no request names a client outside the portfolio').toHaveLength(0)
+  })
+
+  it('coldLoad_theOwnerLoadsWithoutAFrameOfNotInTheClient', async () => {
+    routeConnectorFetch(ENTITY_SECOND)
+    let flashed = false
+    const watch = new MutationObserver((records) => {
+      for (const r of records)
+        for (const n of r.addedNodes)
+          if (n instanceof Element && (n.matches('[data-testid="erp-detail-not-found"]') || n.querySelector('[data-testid="erp-detail-not-found"]'))) flashed = true
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    watch.disconnect()
+    expect(flashed, 'a committed "This connection is not in ..." between the adoption and the owner overview').toBe(false)
+  })
+
+  it('coldLoad_theNotInSentenceWaitsForTheSearch', async () => {
+    let release!: () => void
+    const listGate = new Promise<void>((r) => (release = r))
+    routeConnectorFetch(null, { listGate })
+    await boot()
+    await waitFor(() => expect((fetch as unknown as { mock: { calls: string[][] } }).mock.calls.some((c) => /entities\/[^/]+\/erp-connections$/.test(c[0])), 'the search read a list').toBe(true))
+    expect(screen.queryByTestId('erp-detail-not-found')).toBeNull()
+    await act(async () => release())
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found')).toBeTruthy())
+  })
+
+  it('coldLoad_aListThatFailsEndsTheSearchAsNotFound', async () => {
+    routeConnectorFetch(ENTITY_SECOND, { listFails: true })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found').textContent).toContain('Alpha'))
+  })
+
+  it('coldLoad_aListThatFailsForOneClientDoesNotHideTheOwner', async () => {
+    routeConnectorFetch(ENTITY_SECOND, { failList: ENTITY_FIRST })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-header')).toBeTruthy())
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu')
+  })
+
+  it('coldLoad_leavingTheLinkBeforeTheSearchEndsAdoptsNothing', async () => {
+    let release!: () => void
+    const listGate = new Promise<void>((r) => (release = r))
+    routeConnectorFetch(ENTITY_SECOND, { listGate })
+    await boot()
+    await waitFor(() => expect(listReads().length, 'the search read a list').toBeGreaterThan(0))
+    fireEvent.click(screen.getByTestId('erp-detail-back'))
+    await act(async () => {
+      release()
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect(screen.getByTestId('company-switcher').textContent).toContain('Alpha')
+    expect(screen.queryByTestId('erp-detail-header')).toBeNull()
+    expect(window.history.state?.e ?? null, 'no adoption stamped the owner').not.toBe(ENTITY_SECOND)
+  })
+
+  it('coldLoad_theOwnerSearchHasAtMostFourListReadsInFlight', async () => {
+    const track = { active: 0, max: 0 }
+    routeConnectorFetch(null, { clientCount: 10, track })
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found')).toBeTruthy())
+    expect(listReads(), 'every client was searched').toHaveLength(10)
+    expect(track.max).toBe(4)
+  })
+
+  it('coldLoad_aConnectionOfNoClientStaysNotFound', async () => {
+    routeConnectorFetch(null)
+    await boot()
+    await waitFor(() => expect(screen.getByTestId('erp-detail-not-found').textContent).toContain('Alpha'))
+  })
+})

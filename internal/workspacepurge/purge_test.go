@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
 	"sort"
@@ -24,9 +25,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -263,6 +266,7 @@ type rig struct {
 	store    *memStore
 	accounts *fakeAccounts
 	logs     *logSink
+	secrets  *recSecrets
 	users    []string
 }
 
@@ -288,6 +292,7 @@ func newRig(t *testing.T) *rig {
 	}
 	r := &rig{t: t, super: open(superURL), app: open(appURL), reader: open(readerURL),
 		store: &memStore{keys: map[string]struct{}{}}, accounts: &fakeAccounts{}, logs: &logSink{}}
+	r.secrets = &recSecrets{MemorySecrets: erp.NewMemorySecrets(), r: r, fail: map[string]int{}, payloads: map[string]string{}}
 	rc, err := river.NewClient(riverpgxv5.New(r.app), &river.Config{}) // insert-only
 	if err != nil {
 		t.Fatalf("river client: %v", err)
@@ -311,6 +316,7 @@ func (r *rig) purger() *Purger {
 	if r.accounts != nil { // a nil *fakeAccounts in the interface would not be a nil reader
 		p.Accounts = r.accounts
 	}
+	p.Secrets = r.secrets
 	return p
 }
 
@@ -722,9 +728,12 @@ func TestPurge_WritesOneStaffRowWithNoPersonalData(t *testing.T) {
 		t.Fatal(err)
 	}
 	dueAt := r.dueAt(a)
+	_, ref := r.grant(a)
 
 	got, err := r.purger().Purge(context.Background(), a)
-	requireResult(t, got, err, Result{Purged: true, Members: 1, Objects: 2})
+	if err != nil || !got.Purged || got.Members != 1 || got.Objects != 2 || got.Secrets != 1 {
+		t.Fatalf("Purge = %+v, %v; want purged, members 1, objects 2, secrets 1", got, err)
+	}
 
 	rows := r.staff(a)
 	if len(rows) != 1 {
@@ -749,7 +758,7 @@ func TestPurge_WritesOneStaffRowWithNoPersonalData(t *testing.T) {
 	if s.Payload["due_at"] != dueAt.UTC().Format(time.RFC3339) || s.Payload["members"] != float64(1) || s.Payload["objects"] != float64(2) {
 		t.Errorf("payload = %v, want due_at %s, members 1, objects 2", s.Payload, dueAt.UTC().Format(time.RFC3339))
 	}
-	for _, leak := range []string{mail, "Adaeze", "Obi", admin, scheduledBy, "@"} {
+	for _, leak := range []string{mail, "Adaeze", "Obi", admin, scheduledBy, "@", ref, r.secrets.payloads[ref], erp.SecretPrefix} {
 		if strings.Contains(s.Raw, leak) {
 			t.Errorf("payload %s holds %q", s.Raw, leak)
 		}
@@ -2017,5 +2026,496 @@ func TestStaffPurgeNow_TheRemovedCreatorCanCreateAWorkspaceAgain(t *testing.T) {
 	}
 	if n := r.count(`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'`, derived, creator); n != 1 {
 		t.Errorf("active memberships of the creator = %d, want 1", n)
+	}
+}
+
+type secretCall struct {
+	ref                   string
+	tenantRows, staffRows int // the watched tenant's rows when Delete was called
+}
+
+// recSecrets is the store the purge deletes from. It fails Delete of a named ref a set number of times,
+// records each Delete with the watched tenant's rows at that moment, and names every other call.
+type recSecrets struct {
+	*erp.MemorySecrets
+	r        *rig
+	mu       sync.Mutex
+	watch    string
+	fail     map[string]int // ref -> Delete failures left
+	deletes  []secretCall
+	others   []string // Create, Access, AddVersion and DisableVersion calls
+	payloads map[string]string
+}
+
+func (s *recSecrets) Delete(ctx context.Context, id string) error {
+	c := secretCall{ref: id}
+	if s.watch != "" {
+		c.tenantRows, c.staffRows = s.r.tenantRows(s.watch), len(s.r.staff(s.watch))
+	}
+	s.mu.Lock()
+	s.deletes = append(s.deletes, c)
+	left := s.fail[id]
+	if left > 0 {
+		s.fail[id] = left - 1
+	}
+	s.mu.Unlock()
+	if left > 0 {
+		return fmt.Errorf("forced delete failure of %s", id)
+	}
+	return s.MemorySecrets.Delete(ctx, id)
+}
+
+func (s *recSecrets) note(call string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.others = append(s.others, call)
+}
+
+func (s *recSecrets) Create(ctx context.Context, id string, p []byte) error {
+	s.note("Create")
+	return s.MemorySecrets.Create(ctx, id, p)
+}
+
+func (s *recSecrets) Access(ctx context.Context, id string) ([]byte, string, error) {
+	s.note("Access")
+	return s.MemorySecrets.Access(ctx, id)
+}
+
+func (s *recSecrets) AddVersion(ctx context.Context, id string, p []byte) (string, error) {
+	s.note("AddVersion")
+	return s.MemorySecrets.AddVersion(ctx, id, p)
+}
+
+func (s *recSecrets) DisableVersion(ctx context.Context, id, v string) error {
+	s.note("DisableVersion")
+	return s.MemorySecrets.DisableVersion(ctx, id, v)
+}
+
+func (s *recSecrets) deleted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	refs := make([]string, len(s.deletes))
+	for i, c := range s.deletes {
+		refs[i] = c.ref
+	}
+	return refs
+}
+
+func (s *recSecrets) otherCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.others)
+}
+
+func (s *recSecrets) calls() []secretCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.deletes)
+}
+
+// seedSecret puts a secret with a random payload under ref, bypassing the recorder.
+func (r *rig) seedSecret(ref string) {
+	r.t.Helper()
+	payload := "payload-" + uuid.NewString()
+	if err := r.secrets.MemorySecrets.Create(context.Background(), ref, []byte(payload)); err != nil {
+		r.t.Fatalf("seed secret: %v", err)
+	}
+	r.secrets.payloads[ref] = payload
+}
+
+// held reports whether the store still has a secret named ref.
+func (r *rig) held(ref string) bool {
+	_, _, err := r.secrets.MemorySecrets.Access(context.Background(), ref)
+	return !errors.Is(err, erp.ErrSecretNotFound)
+}
+
+// grantRow inserts a grant of the tenant naming ref (no secret is stored) and returns its id.
+func (r *rig) grantRow(tenant, ref string) string {
+	r.t.Helper()
+	id := uuid.NewString()
+	r.exec(`INSERT INTO erp_grants (id, tenant_id, system, kind, secret_ref) VALUES ($1, $2, 'fake', 'oauth_refresh', $3)`, id, tenant, ref)
+	return id
+}
+
+// grant inserts a grant and stores its secret.
+func (r *rig) grant(tenant string) (id, ref string) {
+	r.t.Helper()
+	id = uuid.NewString()
+	ref = erp.SecretName("", id)
+	r.exec(`INSERT INTO erp_grants (id, tenant_id, system, kind, secret_ref) VALUES ($1, $2, 'fake', 'oauth_refresh', $3)`, id, tenant, ref)
+	r.seedSecret(ref)
+	return id, ref
+}
+
+func (r *rig) deleteJob(tenant, ref string) {
+	r.t.Helper()
+	args := erp.SecretDeleteArgs{TenantID: tenant, SecretRef: ref, ConnectionID: uuid.NewString(), System: "fake"}
+	if _, err := r.river.Insert(context.Background(), args, nil); err != nil {
+		r.t.Fatalf("insert the secret delete job: %v", err)
+	}
+}
+
+// released stores a secret no grant names and queues its delete job, as a release does.
+func (r *rig) released(tenant string) string {
+	r.t.Helper()
+	ref := erp.SecretName("", uuid.NewString())
+	r.seedSecret(ref)
+	r.deleteJob(tenant, ref)
+	return ref
+}
+
+func (r *rig) grantRows(tenant string) int {
+	return r.count(`SELECT count(*) FROM erp_grants WHERE tenant_id = $1`, tenant)
+}
+
+func (r *rig) secretJobs(tenant string) int {
+	return r.count(`SELECT count(*) FROM river_job WHERE kind = 'erp_secret_delete' AND args->>'tenant_id' = $1`, tenant)
+}
+
+func sortedCopy(s []string) []string {
+	c := slices.Clone(s)
+	sort.Strings(c)
+	return c
+}
+
+// requireNoLeak fails when text holds one of the payloads.
+func requireNoLeak(t *testing.T, what, text string, payloads ...string) {
+	t.Helper()
+	for _, p := range payloads {
+		if p == "" || strings.Contains(text, p) {
+			t.Errorf("%s holds a secret payload (or the control payload is empty): %q", what, text)
+		}
+	}
+}
+
+func TestPurge_DeletesTheTenantsERPSecretsBeforePurgeTenant(t *testing.T) {
+	r := newRig(t)
+	a, b := r.due(r.tenant()), r.tenant()
+	_, g1 := r.grant(a)
+	_, g2 := r.grant(a)
+	g3 := r.released(a)
+	_, h := r.grant(b)
+	hJob := r.released(b)
+	r.secrets.watch = a
+
+	got, err := r.purger().Purge(context.Background(), a)
+	if err != nil || !got.Purged {
+		t.Fatalf("Purge = %+v, %v; want purged", got, err)
+	}
+	if n := got.Secrets; n != 3 {
+		t.Errorf("Result.Secrets = %d, want 3", n)
+	}
+	calls := r.secrets.calls()
+	if len(calls) != 3 {
+		t.Fatalf("Delete calls = %d (%v), want 3", len(calls), r.secrets.deleted())
+	}
+	for _, c := range calls {
+		if c.tenantRows != 1 || c.staffRows != 0 {
+			t.Errorf("Delete(%s) saw tenant rows %d, staff rows %d; want 1 and 0: the secrets go before purge_tenant", c.ref, c.tenantRows, c.staffRows)
+		}
+	}
+	if want := sortedCopy([]string{g1, g2, g3}); !slices.Equal(sortedCopy(r.secrets.deleted()), want) {
+		t.Errorf("deleted = %v, want %v", r.secrets.deleted(), want)
+	}
+	for _, ref := range []string{g1, g2, g3} {
+		if r.held(ref) {
+			t.Errorf("A's secret %s remains", ref)
+		}
+	}
+	if !r.held(h) || !r.held(hJob) || r.grantRows(b) != 1 || r.secretJobs(b) != 1 || r.tenantRows(b) != 1 {
+		t.Error("B's secrets, grant, job or tenant was touched by A's purge")
+	}
+	if r.tenantRows(a) != 0 || r.grantRows(a) != 0 || r.secretJobs(a) != 0 || len(r.staff(a)) != 1 {
+		t.Errorf("A after the purge: tenant rows %d, grants %d, jobs %d, staff rows %d; want 0, 0, 0, 1",
+			r.tenantRows(a), r.grantRows(a), r.secretJobs(a), len(r.staff(a)))
+	}
+}
+
+func TestPurge_AnAlreadyGoneSecretCountsAsDeleted(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	r.grantRow(a, erp.SecretName("", uuid.NewString())) // its secret was never created
+	gone := erp.SecretName("", uuid.NewString())
+	r.seedSecret(gone)
+	if err := r.secrets.MemorySecrets.Delete(context.Background(), gone); err != nil {
+		t.Fatal(err)
+	}
+	r.deleteJob(a, gone) // the job's secret was already deleted
+
+	got, err := r.purger().Purge(context.Background(), a)
+	if err != nil || !got.Purged {
+		t.Fatalf("Purge = %+v, %v; want purged", got, err)
+	}
+	if n := got.Secrets; n != 2 {
+		t.Errorf("Result.Secrets = %d, want 2", n)
+	}
+	if n := len(r.secrets.deleted()); n != 2 {
+		t.Errorf("Delete calls = %d, want 2", n)
+	}
+	if r.tenantRows(a) != 0 {
+		t.Error("the tenant remains")
+	}
+}
+
+func TestPurge_AFailedSecretDeleteStopsAndResumes(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	_, g1 := r.grant(a)
+	_, g2 := r.grant(a)
+	r.secrets.fail[g1] = 2
+	payloads := []string{r.secrets.payloads[g1], r.secrets.payloads[g2]}
+	p := r.purger()
+	ctx := context.Background()
+
+	for run := 1; run <= 2; run++ {
+		err := p.purgeLogged(ctx, r.logs.logger(), a)
+		requireStepErr(t, err, a, "secrets")
+		requireNoLeak(t, "the step error", err.Error(), payloads...)
+		if r.tenantRows(a) != 1 || r.grantRows(a) != 2 || len(r.staff(a)) != 0 || !r.isDue(a) {
+			t.Errorf("run %d: tenant rows %d, grants %d, staff rows %d; want 1, 2, 0", run, r.tenantRows(a), r.grantRows(a), len(r.staff(a)))
+		}
+		recs := r.logs.find(slog.LevelError, errTenantMsg)
+		if len(recs) != run || recs[run-1].attrs["step"] != "secrets" || recs[run-1].attrs["tenant_id"] != a {
+			t.Fatalf("run %d: %q records = %+v, want %d, the last with step secrets", run, errTenantMsg, recs, run)
+		}
+	}
+	for _, rec := range r.logs.all() {
+		requireNoLeak(t, "a log line", rec.text(), payloads...)
+	}
+
+	if err := p.purgeLogged(ctx, r.logs.logger(), a); err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	if r.held(g1) || r.held(g2) || r.tenantRows(a) != 0 || r.grantRows(a) != 0 || len(r.staff(a)) != 1 {
+		t.Errorf("after the third run: g1 held %v, g2 held %v, tenant rows %d, grants %d, staff rows %d; want false, false, 0, 0, 1",
+			r.held(g1), r.held(g2), r.tenantRows(a), r.grantRows(a), len(r.staff(a)))
+	}
+	attempts := 0
+	for _, ref := range r.secrets.deleted() {
+		if ref == g1 {
+			attempts++
+		}
+	}
+	if attempts != 3 {
+		t.Errorf("Delete(g1) calls = %d, want 3: two failures, then the success", attempts)
+	}
+	recs := r.logs.find(slog.LevelInfo, infoPurged)
+	if len(recs) != 1 || recs[0].attrs["secrets"] != "2" {
+		t.Errorf("%q records = %+v, want one with secrets 2", infoPurged, recs)
+	}
+	if others := r.secrets.otherCalls(); len(others) != 0 {
+		t.Errorf("the purge made store calls %v besides Delete", others)
+	}
+}
+
+func TestPurge_NilSecretStore(t *testing.T) {
+	r := newRig(t)
+	clean, held := r.due(r.tenant()), r.due(r.tenant())
+	_, ref := r.grant(held)
+	p := r.purger()
+	p.Secrets = nil
+	ctx := context.Background()
+
+	got, err := p.Purge(ctx, clean)
+	if err != nil || !got.Purged || r.tenantRows(clean) != 0 {
+		t.Fatalf("a tenant with no ref, nil store: Purge = %+v, %v, tenant rows %d; want purged", got, err, r.tenantRows(clean))
+	}
+
+	// The cause is the missing store: the ref carries the prefix, so no other secrets-step error applies.
+	_, err = p.Purge(ctx, held)
+	requireStepErr(t, err, held, "secrets")
+	if !errors.Is(err, errNoSecretStore) {
+		t.Errorf("err = %v, want errNoSecretStore", err)
+	}
+	if r.tenantRows(held) != 1 || r.grantRows(held) != 1 || !r.held(ref) || len(r.staff(held)) != 0 {
+		t.Errorf("after the refused purge: tenant rows %d, grants %d, secret held %v, staff rows %d; want 1, 1, true, 0",
+			r.tenantRows(held), r.grantRows(held), r.held(ref), len(r.staff(held)))
+	}
+
+	p.Secrets = r.secrets
+	if got, err = p.Purge(ctx, held); err != nil || !got.Purged || r.held(ref) {
+		t.Errorf("with a store: Purge = %+v, %v, secret held %v; want purged and deleted", got, err, r.held(ref))
+	}
+}
+
+func TestPurge_AMixedSetDeletesNothing(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	_, good := r.grant(a)
+	r.grantRow(a, "pr-9-gateway-token")
+
+	_, err := r.purger().Purge(context.Background(), a)
+	requireStepErr(t, err, a, "secrets")
+	if n := len(r.secrets.deleted()); n != 0 || !r.held(good) {
+		t.Errorf("Delete calls %d, valid secret held %v; want 0, true", n, r.held(good))
+	}
+}
+
+func TestPurge_ARefWithoutTheERPPrefixIsRefused(t *testing.T) {
+	for _, ref := range []string{"pr-9-gateway-token", "erp-grant", ""} {
+		t.Run(ref, func(t *testing.T) {
+			r := newRig(t)
+			a := r.due(r.tenant())
+			r.grantRow(a, ref)
+			if ref != "" {
+				r.seedSecret(ref)
+			}
+
+			_, err := r.purger().Purge(context.Background(), a)
+			requireStepErr(t, err, a, "secrets")
+			if n := len(r.secrets.deleted()); n != 0 {
+				t.Errorf("the store saw %d Delete calls, want 0", n)
+			}
+			if r.tenantRows(a) != 1 || r.grantRows(a) != 1 || len(r.staff(a)) != 0 {
+				t.Errorf("tenant rows %d, grants %d, staff rows %d; want 1, 1, 0", r.tenantRows(a), r.grantRows(a), len(r.staff(a)))
+			}
+			if ref != "" && !r.held(ref) {
+				t.Errorf("the secret %q was deleted", ref)
+			}
+		})
+	}
+}
+
+func TestPurge_NoSecretOfAPurgedWorkspaceRemains(t *testing.T) {
+	cases := []struct {
+		name string
+		seed func(r *rig, a string) []string
+		want int // Result.Secrets of the run that purges
+		run  func(t *testing.T, r *rig, p *Purger, a string, refs []string)
+	}{
+		{"grants only", func(r *rig, a string) []string {
+			_, g1 := r.grant(a)
+			_, g2 := r.grant(a)
+			return []string{g1, g2}
+		}, 2, nil},
+		{"grants plus pending delete jobs", func(r *rig, a string) []string {
+			_, g1 := r.grant(a)
+			r.deleteJob(a, g1) // a job repeating a grant's ref
+			return []string{g1, r.released(a), r.released(a)}
+		}, 3, nil},
+		{"a grant shared by two connections", func(r *rig, a string) []string {
+			var entity string
+			if err := r.super.QueryRow(context.Background(), `INSERT INTO business_entities (tenant_id, name) VALUES ($1, 'Shared') RETURNING id::text`, a).Scan(&entity); err != nil {
+				r.t.Fatal(err)
+			}
+			id, ref := r.grant(a)
+			for _, key := range []string{"company-1", "company-2"} {
+				r.exec(`INSERT INTO erp_connections (tenant_id, entity_id, system, external_key, status, grant_id) VALUES ($1, $2, 'fake', $3, 'active', $4)`, a, entity, key, id)
+			}
+			return []string{ref}
+		}, 1, nil},
+		{"a delete failing twice", func(r *rig, a string) []string {
+			_, g1 := r.grant(a)
+			_, g2 := r.grant(a)
+			r.secrets.fail[g1] = 2
+			return []string{g1, g2}
+		}, 2, func(t *testing.T, r *rig, p *Purger, a string, _ []string) {
+			attempts := 0
+			for {
+				attempts++
+				_, err := p.Purge(context.Background(), a)
+				if err == nil {
+					break
+				}
+				requireStepErr(t, err, a, "secrets")
+				if attempts > 5 {
+					t.Fatal("the purge never completed")
+				}
+			}
+			if attempts != 3 {
+				t.Errorf("Purge runs = %d, want 3: two failures, then the success", attempts)
+			}
+		}},
+		{"a pending refresh job runs after the step", func(r *rig, a string) []string {
+			_, g1 := r.grant(a)
+			return []string{g1}
+		}, 1, refreshAfterTheStep},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t)
+			a, b := r.due(r.tenant()), r.tenant()
+			_, h := r.grant(b)
+			hJob := r.released(b)
+			refs := c.seed(r, a)
+			if len(refs) == 0 {
+				t.Fatal("control: the case seeded no secret")
+			}
+			for _, ref := range refs {
+				if !r.held(ref) {
+					t.Fatalf("control: seeded secret %s is not held", ref)
+				}
+			}
+			p := r.purger()
+
+			if c.run != nil {
+				c.run(t, r, p, a, refs)
+			} else if got, err := p.Purge(context.Background(), a); err != nil || !got.Purged || got.Secrets != c.want {
+				t.Fatalf("Purge = %+v, %v; want purged with secrets %d", got, err, c.want)
+			}
+
+			if r.tenantRows(a) != 0 {
+				t.Fatal("control: the tenant was not purged")
+			}
+			for _, ref := range refs {
+				if _, _, err := r.secrets.MemorySecrets.Access(context.Background(), ref); !errors.Is(err, erp.ErrSecretNotFound) {
+					t.Errorf("Access(%s) = %v, want ErrSecretNotFound", ref, err)
+				}
+			}
+			if !r.held(h) || !r.held(hJob) || r.grantRows(b) != 1 || r.secretJobs(b) != 1 {
+				t.Error("B's secrets, grant or job were touched")
+			}
+		})
+	}
+}
+
+// refreshAfterTheStep fails the purge after its secrets step, runs the grant's refresh job against the
+// deleted secret, then lets the purge finish and runs the job again.
+func refreshAfterTheStep(t *testing.T, r *rig, p *Purger, a string, refs []string) {
+	t.Helper()
+	ctx := context.Background()
+	var grant string
+	if err := r.super.QueryRow(ctx, `SELECT id::text FROM erp_grants WHERE secret_ref = $1`, refs[0]).Scan(&grant); err != nil {
+		t.Fatal(err)
+	}
+	name := "purge_staff_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	r.exec(`CREATE FUNCTION ` + name + `() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced staff failure' USING ERRCODE = 'check_violation'; END; $$`)
+	t.Cleanup(func() { _, _ = r.super.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+name+`() CASCADE`) })
+	r.exec(`CREATE TRIGGER ` + name + ` BEFORE INSERT ON staff_audit_log FOR EACH ROW
+		WHEN (NEW.event = 'workspace.purged' AND NEW.tenant_id = '` + a + `'::uuid) EXECUTE FUNCTION ` + name + `()`)
+
+	_, err := p.Purge(ctx, a)
+	requireStepErr(t, err, a, "purge")
+	if r.grantRows(a) != 1 || r.held(refs[0]) {
+		t.Fatalf("control: after the failed purge step grants = %d, secret held = %v; want 1, false", r.grantRows(a), r.held(refs[0]))
+	}
+
+	reg, rerr := erp.NewRegistry(erp.NewFake(&url.URL{}))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	w := &erp.RefreshWorker{Pool: r.app, Registry: reg, Secrets: r.secrets, Logger: r.logs.logger()}
+	work := func(id int64) error {
+		return w.Work(ctx, &river.Job[erp.RefreshArgs]{
+			JobRow: &rivertype.JobRow{ID: id, Kind: "erp_token_refresh", Attempt: 1, MaxAttempts: 8},
+			Args:   erp.RefreshArgs{TenantID: a, GrantID: grant, Version: erp.FirstGrantVersion},
+		})
+	}
+	if err := work(1); !errors.Is(err, erp.ErrSecretNotFound) {
+		t.Fatalf("refresh after the step = %v, want ErrSecretNotFound: the job must reach the deleted secret", err)
+	}
+
+	r.exec(`DROP TRIGGER ` + name + ` ON staff_audit_log`)
+	if got, err := p.Purge(ctx, a); err != nil || !got.Purged {
+		t.Fatalf("second Purge = %+v, %v; want purged", got, err)
+	}
+	if err := work(2); err != nil {
+		t.Errorf("refresh after the purge = %v, want nil: the grant is gone", err)
+	}
+	for _, call := range r.secrets.otherCalls() {
+		if call == "Create" || call == "AddVersion" {
+			t.Errorf("the refresh job wrote the store (%s) after the secret was deleted", call)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,13 +12,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/publiccheck"
 	"github.com/SimonOsipov/invoice-os/internal/readinesscheck"
 )
@@ -106,8 +110,52 @@ func TestWorkerMain_PublicCheckRoutesSitBehindTheGatewayToken(t *testing.T) {
 	}
 }
 
+// metadataStub stands in for the Cloud Run metadata server: it serves the project id and the region and
+// records every path asked, so a boot that skipped the read is visible.
+type metadataStub struct {
+	host  string
+	mu    sync.Mutex
+	paths []string
+}
+
+func newMetadataStub(t *testing.T) *metadataStub {
+	t.Helper()
+	m := &metadataStub{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.paths = append(m.paths, r.URL.Path)
+		m.mu.Unlock()
+		w.Header().Set("Metadata-Flavor", "Google")
+		switch r.URL.Path {
+		case "/computeMetadata/v1/project/project-id":
+			_, _ = io.WriteString(w, "erp-boot-project")
+		case "/computeMetadata/v1/instance/region":
+			_, _ = io.WriteString(w, "projects/1/regions/africa-south1")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	m.host = strings.TrimPrefix(srv.URL, "http://")
+	return m
+}
+
+func (m *metadataStub) asked(path string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Contains(m.paths, "/computeMetadata/v1/"+path)
+}
+
 // bootWorker starts the binary against the dev DB and returns its base URL once /healthz answers.
 func bootWorker(t *testing.T, deployEnv string) string {
+	t.Helper()
+	base, _ := bootWorkerWithMetadata(t, deployEnv)
+	return base
+}
+
+// bootWorkerWithMetadata is bootWorker that also returns the metadata stub a preview or nightly boot reads.
+// The ERP variables are those preview.sh sets; the stub keeps the boot off the network and off Secret Manager.
+func bootWorkerWithMetadata(t *testing.T, deployEnv string) (string, *metadataStub) {
 	t.Helper()
 	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || readerURL == "" {
@@ -116,6 +164,12 @@ func bootWorker(t *testing.T, deployEnv string) string {
 	port := freePort(t)
 	vars := map[string]string{"PORT": strconv.Itoa(port), "DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL,
 		"VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok", "DEPLOY_ENV": deployEnv}
+	md := newMetadataStub(t)
+	if deployEnv == "nightly" || strings.HasPrefix(deployEnv, "pr-") {
+		vars["ERP_REDIRECT_URL"] = "https://gateway.invalid/erp/callback"
+		vars["ERP_SECRET_SCOPE"] = "slot-1"
+		vars["GCE_METADATA_HOST"] = md.host
+	}
 	var out bytes.Buffer
 	cmd := exec.Command(buildWorker(t))
 	cmd.Env = bootEnv(vars)
@@ -133,13 +187,13 @@ func bootWorker(t *testing.T, deployEnv string) string {
 		if resp, err := http.Get(base + "/health"); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return base
+				return base, md
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("worker did not answer /health within %s\n%s", bootWait, out.String())
-	return ""
+	return "", nil
 }
 
 func post(t *testing.T, url, token string, body io.Reader) int {
@@ -205,5 +259,71 @@ func TestWorkerMain_CapturedMailRouteIsGone(t *testing.T) {
 		if got := post(route, ""); got == http.StatusNotFound {
 			t.Errorf("POST %s = 404, want the route registered", route)
 		}
+	}
+}
+
+// A preview worker builds its ERP registry and secret store at boot: it reads the project id and the region from the
+// metadata server, once, and makes no Secret Manager call.
+func TestWorker_PreviewBootReadsTheProjectAndRegionFromMetadata(t *testing.T) {
+	_, md := bootWorkerWithMetadata(t, "pr-1")
+	for _, path := range []string{"project/project-id", "instance/region"} {
+		if !md.asked(path) {
+			t.Errorf("the preview worker booted without reading %s from the metadata server (asked %v)", path, md.paths)
+		}
+	}
+}
+
+// The gateway forwards the callback here; the ID token is checked by Cloud Run, so only the gateway token is observable.
+func TestWorkerRoutes_ERPCallbackNeedsTheGatewayToken(t *testing.T) {
+	base := bootWorker(t, "pr-1")
+	const route = "/internal/erp/callback"
+	body := `{"state":"not-a-state","code":"","error":""}`
+	for name, tok := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
+		if got := post(t, base+route, tok, strings.NewReader(body)); got != http.StatusUnauthorized {
+			t.Errorf("POST %s with %s = %d, want 401", route, name, got)
+		}
+	}
+	// The control: past the guard the route answers its outcome, so the 401 above came from the guard and not from a missing route.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+route, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Gateway-Token", "gw-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(answer)) != `{"outcome":"invalid"}` {
+		t.Errorf("POST %s with the gateway token = %d %s, want 200 {\"outcome\":\"invalid\"}", route, resp.StatusCode, answer)
+	}
+}
+
+// The gateway forwards a vendor webhook here; the ID token is checked by Cloud Run, so only the gateway token is observable.
+func TestWorkerRoutes_ERPWebhookNeedsTheGatewayToken(t *testing.T) {
+	base := bootWorker(t, "pr-1")
+	const route = "/internal/erp/webhooks/fake"
+	b := []byte(`{"events":[{"company":"fake-co-none","invoice":"x"}]}`)
+	envelope := `{"headers":{"X-Fake-Signature":["` + erp.FakeWebhookSignature(b) + `"]},"body":"` + base64.StdEncoding.EncodeToString(b) + `"}`
+	for name, tok := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
+		if got := post(t, base+route, tok, strings.NewReader(envelope)); got != http.StatusUnauthorized {
+			t.Errorf("POST %s with %s = %d, want 401", route, name, got)
+		}
+	}
+	// The control: with the token a signed envelope for an unknown company is accepted, which only the mounted handler answers (an unmounted route is 404).
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+route, strings.NewReader(envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Gateway-Token", "gw-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(answer)) != `{"outcome":"accepted"}` {
+		t.Errorf("POST %s with the gateway token = %d %s, want 200 {\"outcome\":\"accepted\"}", route, resp.StatusCode, answer)
 	}
 }

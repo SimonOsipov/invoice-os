@@ -196,6 +196,8 @@ interface DetailFetchOptions {
   notesResponse?: MockResponse
   // GET .../custom-rules/names. Defaults to no names.
   names?: Record<string, string>
+  // GET .../erp-marks. Defaults to no marks, so the getInvoice fallback never answers it.
+  marksResponse?: unknown
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -301,6 +303,9 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         json: () => Promise.reject(new Error('the ubl route is text, not json')),
         text: () => Promise.resolve(UBL_FIXTURE),
       })
+    }
+    if (method === 'GET' && url.endsWith('/erp-marks')) {
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(opts.marksResponse ?? { marks: [] }) })
     }
     // The notes read of an accepted+IRN invoice: its own arm, so it takes no detailSequence slot.
     if (method === 'GET' && url.endsWith('/notes')) {
@@ -1322,7 +1327,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names') && !u.endsWith('/erp-marks')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2523,7 +2528,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names') && !u.endsWith('/erp-marks')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2559,7 +2564,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions') && !u.endsWith('/custom-rules/names') && !u.endsWith('/erp-marks')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 

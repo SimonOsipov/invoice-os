@@ -1,6 +1,7 @@
 ---
 paths:
   - "internal/audit/**"
+  - "internal/erp/**"
   - "internal/actor/**"
   - "internal/staffjobs/**"
   - "internal/accountevents/**"
@@ -20,10 +21,14 @@ paths:
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Write `erp.document.pulled`, `erp.document.skipped_duplicate` and `erp.document.changed_after_clearance` only from `internal/erp`, with actor `system` and payload `system`, `connection_id`, `source_doc_id`, `source_revision`, `invoice_id`, `invoice_number`, plus `linked` and `differs` on the duplicate and `deleted` on the change.
+- Write `erp.mapping.changed` only from `internal/erp`, with the caller as actor and payload `system` and `part` only.
+- Write `erp.connection.created`, `erp.connection.authorised`, `erp.connection.revoked` and `erp.token.deleted` only from `internal/erp`, with payload `system` and `connection_id` only. Write `erp.connection.reauth_required` (`system`, `connection_id`), `erp.token.refreshed` (`system`, `grant_id`) and `erp.token.refresh_failed` (`system`, `grant_id`, `reason`: `revoked` or `exhausted`) there too.
 - Write `evidence_bundle.exported` and `evidence_bundle.export_failed` only from `internal/archive`, with payload `entity_id`, `from`, `to`, `files` and `bytes`.
 - Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
 - Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled`, `workspace.purge_started` or `workspace.purge_refused` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload. A refusal row also carries `refusal`, one of `name_mismatch`, `underway`, `not_scheduled`, `house`, `same_approver`, `waiting_period`. A not-found tenant, a non-staff caller and a 400 from request-body or reason validation write no row.
+- Write `erp.writeback.succeeded` and `erp.writeback.failed` only from `internal/erp/writeback.go`, actor `system`, with `system`, `connection_id`, `source_doc_id`, `invoice_id`, `invoice_number`, `outcome` and `result_version`; plus `irn` on a succeeded accepted write and `failure` on a failed one. Both are workspace-level.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.

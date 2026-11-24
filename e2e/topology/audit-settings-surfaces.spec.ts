@@ -32,6 +32,9 @@ const PREVIEW_GLOB = '**/api/invoice/v1/evidence-bundle/preview?*'
 const ROLE_WRITE_GLOB = '**/api/invoice/v1/workflow-roles/*'
 const ROLE_WRITE_RE = /\/api\/invoice\/v1\/workflow-roles\/[^/?]+$/
 const MEMBERSHIP_GLOB = '**/api/tenancy/v1/memberships/*'
+const ERP_GLOB = '**/api/portfolio/v1/entities/*/erp-connections'
+const ERP_RE = /\/api\/portfolio\/v1\/entities\/[^/]+\/erp-connections(\/|\?|$)/
+const ENTITY_ID = 'aaaaaaaa-0000-0000-0000-0000000000ee'
 const MEMBERSHIP_RE = /\/api\/tenancy\/v1\/memberships\/[^/?]+$/
 
 let entity: { id: string; name: string }
@@ -1004,46 +1007,141 @@ test('ST-04 Settings › Roles: card, avatars, holder spacing, role modal, picke
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('ST-05 ERP connectors: status pills, connector detail pill, field-mapping modal', async ({ page }, testInfo) => {
+test('ST-05 ERP connectors: status pills and row paint on the real list', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [])
+  const posts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && ERP_RE.test(r.url())) posts.push(r.url())
+  })
+  // Only the list GET is stubbed; any other method goes through, and fails the no-POST check.
+  const wire = (id: string, status: string) => ({ id, entity_id: ENTITY_ID, system: 'fake', external_key: status === 'active' ? 'fake-co-1' : null, status, last_sync_at: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' })
+  await page.route(ERP_GLOB, (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ status: 200, headers: CORS, body: JSON.stringify({ systems: ['fake'], connections: [wire('aaaaaaaa-0000-0000-0000-000000000001', 'active'), wire('aaaaaaaa-0000-0000-0000-000000000002', 'disconnected')] }) })
+      : route.fallback(),
+  )
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
-  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-  const connected = page.getByText('CONNECTED', { exact: true }).first()
-  await expect(connected, 'Connect did not turn a connector on').toBeVisible()
+  const rows = page.getByTestId('erp-connector-row')
+  await expect(rows, 'fixture check: the stubbed list drew two rows').toHaveCount(2)
   await settle(page, main(page))
+  const active = rows.nth(0)
+  const gone = rows.nth(1)
+
   const reads: Record<string, unknown> = {}
-  for (const [label, text] of [['connected', 'CONNECTED'], ['idle', 'NOT CONNECTED']] as const) {
-    const pill = page.getByText(text, { exact: true }).first()
-    await expect(pill, `no ${text} pill`).toBeVisible()
-    const box = pill.locator('xpath=..')
+  for (const [label, row, text] of [['connected', active, 'CONNECTED'], ['disconnected', gone, 'DISCONNECTED']] as const) {
+    const box = row.getByTestId('erp-connector-status')
+    await expect(box, `fixture check: no ${text} pill`).toHaveText(text)
     reads[label] = {
       corners: await expectCorners(box, '4px', `${text} pill`),
       dot: (await styles(box.locator(':scope > span').first(), ['border-top-left-radius']))['border-top-left-radius'],
     }
-    expect((reads[label] as { dot: string }).dot, `${text} dot`).toBe('50%')
+    expect((reads[label] as { dot: string }).dot, `fixture check: ${text} dot`).toBe('50%')
   }
+
+  const connect = gone.getByTestId('erp-connector-connect')
+  const disconnect = active.getByTestId('erp-connector-disconnect')
+  const tile = active.locator(':scope > span').first()
+  const [onPrimary, action, fg2] = await Promise.all([resolveColor(main(page), '--primary-foreground'), resolveColor(main(page), '--action'), resolveColor(main(page), '--fg-2')])
+  const connectPaint = await styles(connect, ['color', 'background-color'])
+  const disconnectPaint = await styles(disconnect, ['color', 'background-color'])
+  const tilePaint = await styles(tile, ['color'])
+  expect(connectPaint, 'fixture check: Connect paint').toEqual({ color: onPrimary, 'background-color': action })
+  expect(disconnectPaint, 'fixture check: Disconnect paint').toEqual({ color: fg2, 'background-color': 'rgba(0, 0, 0, 0)' })
+  expect(tilePaint.color, 'fixture check: tile text').toBe(onPrimary)
   await attachShot(page, testInfo, 'settings-connectors')
 
-  await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
-  const envPill = tid(page, 'connector-env-pill')
-  await expect(envPill, 'the connector detail never opened').toBeVisible()
+  expect(posts, `a write reached erp-connections:\n${posts.join('\n')}`).toEqual([])
+  await attachJson(testInfo, 'st-05-measurements', { reads, connectPaint, disconnectPaint, tilePaint, onPrimary, action, fg2 })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Stubbed wire for ST-12 (a fixture check: it pins the layout, not the server's answers).
+const DETAIL_ID = 'aaaaaaaa-0000-0000-0000-0000000000d1'
+const DETAIL_ERP_RE = /\/api\/portfolio\/v1\/entities\/[^/]+\/erp-(connections|mappings|lookups)(\/|\?|$)/
+const DETAIL_GLOBS = {
+  list: '**/api/portfolio/v1/entities/*/erp-connections',
+  overview: '**/api/portfolio/v1/entities/*/erp-connections/*/overview',
+  mapping: '**/api/portfolio/v1/entities/*/erp-mappings/*',
+  lookups: '**/api/portfolio/v1/entities/*/erp-lookups/*?*',
+}
+
+test('ST-12 connector detail: four cards, header, reload and layout at every width', async ({ page }, testInfo) => {
+  const errors = gatedErrors(page, [])
+  const writes: string[] = []
+  page.on('request', (r) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method()) && DETAIL_ERP_RE.test(r.url())) writes.push(`${r.method()} ${r.url()}`)
+  })
+  const conn = { id: DETAIL_ID, entity_id: ENTITY_ID, system: 'fake', external_key: 'fake-co-1', status: 'active', last_sync_at: '2026-01-02T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+  const doc = (n: number, state: string) => ({ id: `bbbbbbbb-0000-0000-0000-00000000000${n}`, source_doc_id: `fake-co-1-inv-${n}`, source_revision: '1', state, failure: null, invoice_id: null, invoice_number: `FK1-000${n}`, differs_from_erp: false, changed_after_clearance_at: null, deleted_in_erp_at: null, updated_at: '2026-01-02T00:00:00Z' })
+  const held = [
+    { ...doc(3, 'held'), invoice_number: null, deleted_in_erp_at: '2026-01-02T00:00:00Z', reasons: ['deleted_in_erp'] },
+    { ...doc(4, 'failed'), invoice_number: null, failure: 'unmappable', reasons: ['failed'] },
+  ]
+  const overview = {
+    connection: conn,
+    activity: { since: '2026-01-01T00:00:00Z', counts: { pulled: 2, pending: 0, drafted: 1, linked: 1, held: 0, failed: 0, deleted: 0 }, documents: [doc(1, 'drafted'), doc(2, 'linked')] },
+    writebacks: [{ id: 'cccccccc-0000-0000-0000-000000000001', invoice_id: 'dddddddd-0000-0000-0000-000000000001', invoice_number: 'FK1-0001', outcome: 'accepted', state: 'succeeded', reason: null, attempt: 1, created_at: '2026-01-02T00:00:00Z' }],
+    held,
+  }
+  const mapping = {
+    system: 'fake',
+    fields: [
+      { target: 'invoice_number', label: 'Invoice number', line: false, source_path: 'number', default_path: 'number', origin: 'default' },
+      { target: 'line_description', label: 'Line description', line: true, source_path: 'lines[].item_id', default_path: 'lines[].description', origin: 'client' },
+    ],
+  }
+  const lookups = { system: 'fake', external_key: 'fake-co-1', lookups: [{ kind: 'tax_code', erp_key: 'VAT7', tax_category: 'standard', exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null }] }
+  const stub = (glob: string, body: unknown) => page.route(glob, (route) => (route.request().method() === 'GET' ? route.fulfill({ status: 200, headers: CORS, body: JSON.stringify(body) }) : route.fallback()))
+  await stub(DETAIL_GLOBS.list, { systems: ['fake'], connections: [conn] })
+  await stub(DETAIL_GLOBS.overview, overview)
+  await stub(DETAIL_GLOBS.mapping, mapping)
+  await stub(DETAIL_GLOBS.lookups, lookups)
+
+  await openSettings(page, 'firm')
+  await openTab(page, 'ERP connectors', 'connectors')
+  await tid(page, 'erp-connector-manage').click()
+  await expect(page, 'Manage did not open the connection address').toHaveURL(new RegExp(`/settings/connectors/${DETAIL_ID}$`))
+  await expect(tid(page, 'erp-detail-header'), 'the detail never opened').toBeVisible()
+  await page.reload()
+  await expect(tid(page, 'erp-detail-header'), 'a reload lost the detail').toBeVisible({ timeout: 30_000 })
+  await expect(page, 'a reload changed the address').toHaveURL(new RegExp(`/settings/connectors/${DETAIL_ID}$`))
+  await expect(tid(page, 'erp-held-row'), 'fixture check: two held rows').toHaveCount(2)
   await settle(page, main(page))
-  const envCorners = await expectCorners(envPill, '6px', 'env pill')
 
-  await page.getByRole('button', { name: 'Edit', exact: true }).first().click()
-  const modal = page.getByRole('dialog', { name: 'Edit field mapping' })
-  await expect(modal, 'the mapping modal never opened').toBeVisible()
-  const scrimEl = modal.locator('xpath=..')
-  await settle(page, modal, scrimEl)
-  const modalCorners = await expectCorners(modal, '10px', 'mapping modal')
-  await expectShadow(modal, SHADOW_CARD, 'mapping modal')
-  const scrim = await expectScrim(scrimEl, 'mapping modal')
-  await attachShot(page, testInfo, 'mapping-modal')
-  await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(modal, 'Cancel did not close the mapping modal').toHaveCount(0)
+  const cardIds = ['erp-detail-mapping', 'erp-detail-activity', 'erp-detail-writebacks', 'erp-detail-held']
+  const cards: Named = Object.fromEntries(cardIds.map((id) => [id, tid(page, id)]))
+  const paint: Record<string, unknown> = {}
+  for (const [id, card] of Object.entries({ 'erp-detail-header': tid(page, 'erp-detail-header'), ...cards })) {
+    paint[id] = { corners: await expectCorners(card, '6px', id), shadow: (await styles(card, ['box-shadow']))['box-shadow'] }
+    expect((paint[id] as { shadow: string }).shadow, `${id} shadow`).toBe('none')
+  }
 
-  await attachJson(testInfo, 'st-05-measurements', { reads, envCorners, modalCorners, scrim })
+  const hdr = tid(page, 'erp-detail-header')
+  const read = async () => {
+    const { rects, problems } = await boxes({
+      main: main(page),
+      header: hdr,
+      tile: hdr.locator(':scope > span').first(),
+      name: hdr.locator(':scope > div').first(),
+      pill: tid(page, 'erp-detail-status'),
+      ...cards,
+    })
+    // main scrolls, so a card below the fold is outside its visible rect by design; only the horizontal band is a claim.
+    insideX(rects, 'main', ['header', ...cardIds], problems)
+    noOverlap(rects, ['header', ...cardIds], problems)
+    inside(rects, 'header', ['tile', 'name', 'pill'], problems)
+    noOverlap(rects, ['tile', 'name', 'pill'], problems)
+    return { problems, rects }
+  }
+  const measured = await sweep(page, 'connector detail', read, [...WIDE_WIDTHS, ...PHONE_WIDTHS])
+  for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+    await page.setViewportSize({ width, height: 900 })
+    await assertPageDoesNotScrollSideways(page, `connector detail at ${width}px wide`)
+  }
+  await attachJson(testInfo, 'st-12-measurements', { paint, measured })
+  await attachShot(page, testInfo, 'connector-detail')
+  expect(writes, `a write reached erp-:\n${writes.join('\n')}`).toEqual([])
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -1342,44 +1440,6 @@ test('ST-11 the role delete confirm is a red block with a solid red button, neve
   await expect(modal, 'Cancel did not close the role modal').toHaveCount(0)
   expect(writes, `a role write reached the gateway:\n${writes.join('\n')}`).toEqual([])
   await attachJson(testInfo, 'st-11-measurements', { redBg, redText })
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('ST-12 connector detail: five cards, 6px, flat, inside main and clear of each other', async ({ page }, testInfo) => {
-  const errors = gatedErrors(page, [])
-  await openSettings(page, 'firm')
-  await openTab(page, 'ERP connectors', 'connectors')
-  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-  await expect(page.getByText('CONNECTED', { exact: true }).first(), 'Connect did not turn a connector on').toBeVisible()
-  await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
-  const envPill = tid(page, 'connector-env-pill')
-  await expect(envPill, 'the connector detail never opened').toBeVisible()
-  await settle(page, main(page))
-
-  const segments: Record<string, unknown> = {}
-  for (const [label, seg] of [['SANDBOX', envPill.getByRole('button', { name: 'SANDBOX' })], ['LIVE', tid(page, 'connector-env-pill-live')]] as const) {
-    const s = await styles(seg, ['opacity', 'border-top-left-radius'])
-    expect(s, `${label} segment`).toEqual({ opacity: '0.45', 'border-top-left-radius': '4px' })
-    segments[label] = s
-  }
-
-  const headings = ['Reconciliation · ERP ↔ clearance', 'Documents pulled', 'Sync activity', 'Master data mirror', 'Held documents']
-  const named: Named = {}
-  const paint: Record<string, unknown> = {}
-  for (const h of headings) {
-    const card = page.getByText(h, { exact: true }).locator('xpath=ancestor::div[contains(@style,"border-radius")][1]')
-    await expect(card, `the "${h}" card never drew`).toBeVisible()
-    paint[h] = { corners: await expectCorners(card, '6px', h), shadow: (await styles(card, ['box-shadow']))['box-shadow'] }
-    expect((paint[h] as { shadow: string }).shadow, `${h} shadow`).toBe('none')
-    named[h] = card
-  }
-  const { rects, problems } = await boxes({ main: main(page), ...named })
-  // main scrolls, so cards below the fold lie outside its visible rect by design; only the horizontal band is a claim.
-  insideX(rects, 'main', headings, problems)
-  noOverlap(rects, headings, problems)
-  expect(problems, 'connector detail card placement').toEqual([])
-  await attachJson(testInfo, 'st-12-measurements', { segments, paint, rects })
-  await attachShot(page, testInfo, 'connector-detail')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

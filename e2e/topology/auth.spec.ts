@@ -1304,7 +1304,8 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
 
   await sidebarNav(page).getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'ERP connectors', exact: true }).click()
-  await expect(page.getByText('0 / 6 CONNECTED')).toBeVisible()
+  await expect(page.locator('[data-testid="erp-connector-row"][data-system="fake"]').getByTestId('erp-connector-status')).toHaveText('NOT CONNECTED')
+  await expect(page.getByText(/\/ 6 CONNECTED/)).toHaveCount(0)
   await expect(page.getByText('Synced 2 min ago')).toHaveCount(0)
   await page.getByRole('button', { name: 'API & webhooks', exact: true }).click()
   await expect(page.getByText('No webhooks yet')).toBeVisible()

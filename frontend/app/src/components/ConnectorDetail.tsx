@@ -1,354 +1,478 @@
-// Connector detail — the per-connector integration surface behind the connector list's
-// Manage button (SettingsView). Everything numeric on this screen comes from
-// lib/connectors.ts `connectorDetail()`, which derives internally-consistent figures from
-// the connector id, so each connector reads distinct but never re-rolls between visits.
-//
-// The env pill is a read-only indicator here (both segments disabled) — unlike Header.tsx's,
-// which switches; saved field mappings live in the workspace (ctx) so they survive navigating
-// away from Settings entirely.
+// The ERP connector detail: one connection of the active client, as the platform holds it.
+// Server truth only: the overview read, the field mapping and its lookups.
 
-import { useMemo } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import { CONNECTOR_TAX_CODES, type ConnectorDef } from '../data'
-import { connectorDetail, mappingFor, type SyncEventKind } from '../lib/connectors'
-import { fmtPlain } from '../lib/format'
-import { arrowGlyph, backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
+import { ApiError, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+
+import { backGlyph, warnTriGlyph } from '../glyphs'
+import {
+  ACTIVITY_EMPTY,
+  ACTIVITY_HEAD,
+  activitySummary,
+  BACK_TO_CONNECTORS,
+  clientLine,
+  documentOutcome,
+  getErpLookups,
+  getErpMapping,
+  getErpOverview,
+  HELD_EMPTY,
+  HELD_HEAD,
+  HELD_SUB,
+  heldReasonText,
+  LOADING_CONNECTION,
+  LOADING_MAPPING,
+  LOOKUPS_EMPTY,
+  LOOKUPS_HEAD,
+  LOOKUPS_NEED_KEY,
+  lookupKindText,
+  lookupValueLabel,
+  LOOKUP_VALUE_KEYS,
+  MAPPING_ADMIN_ONLY,
+  MAPPING_CUSTOM,
+  MAPPING_EDIT,
+  MAPPING_HEAD,
+  MAPPING_NOT_MAPPED,
+  MAPPING_SUB,
+  notFoundTitle,
+  OPEN_INVOICE,
+  RECONNECT,
+  WRITEBACK_EMPTY,
+  WRITEBACK_HEAD,
+  writebackResultText,
+  writebackText,
+  type ErpOverview,
+  type LookupsView,
+  type MappingView,
+} from '../lib/erpConnectionDetail'
+import {
+  CONNECTORS_BAD_CONSENT_URL,
+  CONNECTORS_POPUP_BLOCKED,
+  CONNECTORS_POPUP_LINK,
+  connectBody,
+  connectErp,
+  POLL_MAX_TICKS,
+  POLL_MS,
+  statusPill,
+  syncLine,
+  systemLabel,
+  type ConnectorRow,
+} from '../lib/erpConnections'
+import { closeConsentTab, openConsentTab, sendToConsent } from '../lib/erpConsent'
+import { fmtDateTime } from '../lib/format'
+import { viewerIsAdmin } from '../lib/members'
 import type { PlatformCtx } from '../types'
+import { FieldMappingModal } from './FieldMappingModal'
 
 const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
 const CARD_HEAD: React.CSSProperties = { padding: '13px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }
+const ROW: React.CSSProperties = { display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--line-1)' }
+const SUB: React.CSSProperties = { fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }
+const NOTE: React.CSSProperties = { fontSize: 12, color: 'var(--fg-3)' }
+const GHOST: React.CSSProperties = { flex: 'none', height: 30, fontSize: 12.5, padding: '0 12px' }
+// The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
+const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
 
-// Env-switch segment, at this card header's smaller scale.
-const SEG: React.CSSProperties = { border: 0, cursor: 'pointer', height: 24, padding: '0 9px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 6 }
+const PILL = {
+  green: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
+  amber: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
+  neutral: { bg: 'var(--bg-3)', border: 'var(--line-2)', text: 'var(--fg-3)' },
+} as const
 
-// Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the
-// document outcomes are the ones that get colour.
-const DOT_COLOR: Record<SyncEventKind, string> = {
-  transmitted: 'var(--status-green-text)',
-  validated: 'var(--status-green-text)',
-  held: 'var(--status-red-text)',
-  scheduled: 'var(--fg-4)',
-  pull: 'var(--fg-4)',
+const DOT: Record<string, string> = {
+  drafted: 'var(--status-green-text)',
+  linked: 'var(--status-green-text)',
+  held: 'var(--status-amber-text)',
+  failed: 'var(--status-red-text)',
+  deleted: 'var(--status-red-text)',
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div>
-      <div className="label" style={{ marginBottom: 6 }}>
-        {label}
-      </div>
-      <div className="money" style={{ fontSize: 15, fontWeight: 700, color: color ?? 'var(--fg-1)' }}>
-        {value}
-      </div>
-    </div>
-  )
-}
-
-function FunnelStep({ n, label, sub }: { n: number; label: string; sub: string }) {
-  return (
-    <div style={{ minWidth: 0 }}>
-      <div className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>
-        {fmtPlain(n)}
-      </div>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', marginTop: 4 }}>{label}</div>
-      <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{sub}</div>
-    </div>
-  )
-}
-
-function Arrow() {
-  return (
-    <span style={{ color: 'var(--fg-4)', display: 'inline-flex', marginTop: 10 }} aria-hidden="true">
-      {arrowGlyph}
-    </span>
-  )
-}
+type Landed = { key: string; overview: ErpOverview }
+// A saved view, kept until the next read of its key lands over it.
+type Saved<T> = { key: string; view: T }
 
 export function ConnectorDetail({
   ctx,
-  def,
-  env,
+  entityId,
+  connectionId,
   onBack,
-  onEditMapping,
 }: {
   ctx: PlatformCtx
-  def: ConnectorDef
-  env: 'LIVE' | 'SANDBOX'
+  entityId: string
+  connectionId: string
   onBack: () => void
-  onEditMapping: () => void
 }) {
-  const d = useMemo(() => connectorDetail(def), [def])
-  const mapping = mappingFor(def, ctx.connectorMappings)
-  const live = env === 'LIVE'
-  const volMax = Math.max(...d.volume)
-  const driftClean = d.funnel.drift === 0
+  const base = gatewayBase()
+  const admin = viewerIsAdmin(ctx.members)
+  const rosterLanded = ctx.membersState === 'ready' || ctx.membersState === 'empty'
+  const clientName = ctx.activeEntity?.name ?? ''
+  const key = `${entityId}/${connectionId}`
 
-  return (
-    <>
-      <button
-        onClick={onBack}
-        className="pf-btn"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, padding: 0, marginBottom: 14 }}
-      >
-        {backGlyph} All connectors
-      </button>
+  const overview = useAsync<Landed>(
+    () =>
+      base
+        ? getErpOverview(ctx.authedFetch, base, entityId, connectionId).then((o) => ({ key, overview: o }))
+        : Promise.reject(new Error('no gateway configured')),
+    // A cold link reads nothing until its owner client is known (App's search).
+    { immediate: !ctx.erpOwnerPending, deps: [entityId, connectionId, ctx.erpOwnerPending] },
+  )
+  // The last landed overview: a refetch nulls overview.data, and the panels must stay put meanwhile.
+  const [mirror, setMirror] = useState<Landed | null>(null)
+  const [seen, setSeen] = useState<Landed | null>(null)
+  if (overview.data && overview.data !== seen) {
+    setSeen(overview.data)
+    setMirror(overview.data)
+  }
+  const shown = mirror && mirror.key === key ? mirror.overview : null
+  const conn = shown?.connection ?? null
+  const system = conn?.system ?? null
+  const externalKey = conn?.external_key ?? null
+  const pendingNow = conn?.status === 'pending'
 
-      {/* Header */}
-      <div style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
-        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>{def.mono}</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ fontSize: 16, fontWeight: 700 }}>{def.name}</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', letterSpacing: '0.06em' }}>{def.cat}</span>
+  const mappingRead = useAsync<MappingView>(
+    () => (base && system ? getErpMapping(ctx.authedFetch, base, entityId, system) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: system !== null, deps: [entityId, system] },
+  )
+  const lookupsRead = useAsync<LookupsView>(
+    () =>
+      base && system && externalKey
+        ? getErpLookups(ctx.authedFetch, base, entityId, system, externalKey)
+        : Promise.reject(new Error('no gateway configured')),
+    { immediate: system !== null && externalKey !== null, deps: [entityId, system, externalKey] },
+  )
+  const mapKey = `${entityId}/${system}`
+  const lookKey = `${mapKey}/${externalKey}`
+  const [savedMap, setSavedMap] = useState<Saved<MappingView> | null>(null)
+  const [savedLook, setSavedLook] = useState<Saved<LookupsView> | null>(null)
+  const mapping = savedMap?.key === mapKey ? savedMap.view : mappingRead.data
+  const lookups = savedLook?.key === lookKey ? savedLook.view : lookupsRead.data
+  const [editing, setEditing] = useState(false)
+
+  const [busy, setBusy] = useState(false)
+  const [blocked, setBlocked] = useState<{ key: string; url: string } | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
+  useEffect(() => {
+    if (!flash) return
+    const t = window.setTimeout(() => setFlash(null), 3000)
+    return () => window.clearTimeout(t)
+  }, [flash])
+
+  const busyRef = useRef(false)
+  const aliveRef = useRef(true)
+  const entityRef = useRef(entityId)
+  entityRef.current = entityId
+  const runRef = useRef(overview.run)
+  runRef.current = overview.run
+  const pendingRef = useRef(pendingNow)
+  pendingRef.current = pendingNow
+  const loadingRef = useRef(false)
+  loadingRef.current = overview.status === 'loading'
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
+
+  // The poll runs while the connection waits for sign-in; it ends with the connection, the view or the cap.
+  useEffect(() => {
+    if (!pendingNow) return
+    let ticks = 0
+    const id = window.setInterval(() => {
+      if (ticks >= POLL_MAX_TICKS || (ticks > 0 && !pendingRef.current)) return window.clearInterval(id)
+      // A slow answer must land: a new run would discard it.
+      if (loadingRef.current) return
+      ticks++
+      runRef.current()
+    }, POLL_MS)
+    return () => window.clearInterval(id)
+  }, [entityId, connectionId, pendingNow])
+
+  // A refetch that fails after the panels landed keeps them and says why.
+  useEffect(() => {
+    if (overview.status === 'error' && shown && overview.error) setFlash(overview.error.message)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overview.status])
+
+  // 401/403 committed nothing; anything else may have, so the overview is read again.
+  function failed(err: unknown) {
+    const status = err instanceof ApiError ? err.status : null
+    setFlash(err instanceof Error ? err.message : String(err))
+    if (status === 403) ctx.refetchMembers()
+    if (status !== 401 && status !== 403) runRef.current()
+  }
+
+  async function reconnect() {
+    if (busyRef.current || !base || !conn) return
+    busyRef.current = true
+    const eid = entityId
+    const row: ConnectorRow = { key: conn.id, system: conn.system, connection: conn }
+    const tab = openConsentTab()
+    setBusy(true)
+    setBlocked(null)
+    try {
+      const answer = await connectErp(ctx.authedFetch, base, eid, connectBody(row))
+      // The user asked for this consent, so it opens even when the view is gone.
+      const url = sendToConsent(tab, answer)
+      if (url === null) throw new ApiError('malformed', CONNECTORS_BAD_CONSENT_URL)
+      if (!aliveRef.current || entityRef.current !== eid) return
+      if (!tab) setBlocked({ key, url })
+      // The header reads the answered connection now, so it is pending and the poll starts.
+      const { consent_url: _consent, ...landed } = answer
+      setMirror((m) => (m && m.key === key ? { ...m, overview: { ...m.overview, connection: landed } } : m))
+    } catch (err) {
+      closeConsentTab(tab)
+      if (aliveRef.current && entityRef.current === eid) failed(err)
+    } finally {
+      busyRef.current = false
+      if (aliveRef.current) setBusy(false)
+    }
+  }
+
+  const back = (
+    <button
+      type="button"
+      data-testid="erp-detail-back"
+      onClick={onBack}
+      className="pf-btn"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, padding: 0, marginBottom: 14 }}
+    >
+      {backGlyph} {BACK_TO_CONNECTORS}
+    </button>
+  )
+
+  if (shown === null || conn === null) {
+    let body: React.ReactNode = <Loading label={LOADING_CONNECTION} />
+    if (overview.status === 'error' && overview.error) {
+      body =
+        overview.error.status === 404 ? (
+          <div data-testid="erp-detail-not-found" style={{ ...CARD, padding: '20px 22px', fontSize: 14, fontWeight: 600 }}>
+            {notFoundTitle(clientName)}
           </div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {def.host} · {def.module}
-          </div>
-        </div>
-        <div data-testid="connector-env-pill" style={{ flex: 'none', display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
-          {/* Both segments are disabled: this pill reports the connector's environment, it
-              does not switch it (there is no setter on this screen). LIVE is disabled for the
-              Header.tsx reason; SANDBOX because an enabled control that cannot act is a lie. */}
-          <button
-            type="button"
-            disabled
-            aria-pressed={!live}
-            style={{ ...SEG, opacity: 0.45, cursor: 'not-allowed', filter: 'none', background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--primary-foreground)' }}
-          >
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: live ? 'var(--status-amber-text)' : 'var(--primary-foreground)' }} />
-            SANDBOX
-          </button>
-          <button
-            type="button"
-            data-testid="connector-env-pill-live"
-            disabled
-            aria-pressed={live}
-            title="Live filing switches on at NRS accreditation."
-            style={{ ...SEG, background: 'transparent', color: 'var(--fg-4)', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
-          >
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--fg-4)' }} />
-            LIVE
-          </button>
-        </div>
-        <button className="v2-btn v2-btn-primary pf-btn" style={{ flex: 'none', height: 34, fontSize: 13, padding: '0 14px', gap: 6 }}>
-          <span style={{ display: 'inline-flex' }}>{refreshGlyph}</span> Sync now
-        </button>
-      </div>
+        ) : (
+          <ErrorState error={overview.error} onRetry={overview.run} />
+        )
+    }
+    return (
+      <>
+        {back}
+        {body}
+      </>
+    )
+  }
 
-      {/* Health strip */}
-      <div className="pf-health" style={{ ...CARD, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: 16, overflow: 'hidden' }}>
-        {[
-          { label: 'Last sync', value: d.lastSync },
-          { label: 'Frequency', value: d.frequency },
-          { label: 'Queue depth', value: String(d.queueDepth) },
-          { label: 'Token expires', value: d.tokenExpires },
-          { label: 'Error rate · 24h', value: d.errorRate },
-        ].map((t, i) => (
-          <div key={t.label} style={{ padding: '13px 15px', borderLeft: i === 0 ? 0 : '1px solid var(--line-1)' }}>
-            <Stat label={t.label} value={t.value} />
+  const label = systemLabel(conn.system)
+  const row: ConnectorRow = { key: conn.id, system: conn.system, connection: conn }
+  const pill = statusPill(row)
+  const tone = PILL[pill.tone]
+  const link = blocked && blocked.key === key && conn.status !== 'active' ? blocked : null
+  // The modal edits the lookups too: it opens only once they are read, or when there are none to read.
+  const canEdit = admin && mapping != null && (externalKey === null || lookups != null)
+
+  let mappingBody: React.ReactNode
+  if (mapping == null) {
+    mappingBody =
+      mappingRead.status === 'error' && mappingRead.error ? (
+        <ErrorState error={mappingRead.error} onRetry={mappingRead.run} />
+      ) : (
+        <Loading label={LOADING_MAPPING} />
+      )
+  } else {
+    mappingBody = (
+      <>
+        {mapping.fields.map((f) => (
+          <div key={f.target} data-testid="erp-mapping-row" data-target={f.target} style={{ ...ROW, display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) 12px minmax(0, 0.85fr)', gap: 8 }}>
+            <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {f.source_path === null ? (
+                <span style={{ fontSize: 12, color: 'var(--fg-3)' }}>{MAPPING_NOT_MAPPED}</span>
+              ) : (
+                <code className="mono" style={{ fontSize: 11.5, color: 'var(--action)' }}>{f.source_path}</code>
+              )}
+              {f.origin === 'client' && (
+                <span className="mono" style={{ marginLeft: 8, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' }}>{MAPPING_CUSTOM}</span>
+              )}
+            </span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-4)' }} aria-hidden="true">→</span>
+            <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>{f.label}</span>
           </div>
         ))}
-      </div>
+        <div className="label" style={{ margin: '14px 0 4px' }}>{LOOKUPS_HEAD}</div>
+        {externalKey === null ? (
+          <div style={NOTE}>{LOOKUPS_NEED_KEY}</div>
+        ) : lookups ? (
+          lookups.lookups.length === 0 ? (
+            <div style={NOTE}>{LOOKUPS_EMPTY}</div>
+          ) : (
+            lookups.lookups.map((l) => (
+              <div key={`${l.kind}/${l.erp_key}`} data-testid="erp-lookup-row" style={ROW}>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>{lookupKindText(l.kind)}</span>
+                <code className="mono" style={{ fontSize: 11.5 }}>{l.erp_key}</code>
+                <span style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                  {LOOKUP_VALUE_KEYS.filter((k) => l[k]).map((k) => `${lookupValueLabel[k]} ${l[k]}`).join(' · ')}
+                </span>
+              </div>
+            ))
+          )
+        ) : lookupsRead.status === 'error' && lookupsRead.error ? (
+          <ErrorState error={lookupsRead.error} onRetry={lookupsRead.run} />
+        ) : (
+          <Loading label={LOADING_MAPPING} />
+        )}
+      </>
+    )
+  }
 
-      {/* Reconciliation funnel */}
-      <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={CARD_HEAD}>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>Reconciliation · ERP ↔ clearance</span>
-          <span
-            className="mono"
-            style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 'var(--radius-sm)', padding: '4px 9px', background: driftClean ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${driftClean ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, color: driftClean ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}
+  const { counts, documents } = shown.activity
+  return (
+    <>
+      {back}
+
+      <div data-testid="erp-detail-header" style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 15, marginBottom: 16 }}>
+        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>{label.mono}</span>
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>{label.name}</span>
+          <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3, overflowWrap: 'anywhere' }}>{clientLine(clientName, conn.external_key)}</div>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>{syncLine(row)}</div>
+          {link && (
+            <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 4 }}>
+              {CONNECTORS_POPUP_BLOCKED}{' '}
+              <a data-testid="erp-consent-link" href={link.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--action)' }}>
+                {CONNECTORS_POPUP_LINK}
+              </a>
+            </div>
+          )}
+          {flash && (
+            <div data-testid="erp-detail-flash" title={flash} style={{ marginTop: 4, fontSize: 12.5, color: 'var(--status-red-text)', overflowWrap: 'anywhere' }}>
+              {flash}
+            </div>
+          )}
+        </div>
+        <span data-testid="erp-detail-status" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '4px 10px' }}>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.text }} />
+          <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>{pill.text}</span>
+        </span>
+        {admin && conn.status === 'reconsent' && (
+          <button
+            type="button"
+            data-testid="erp-detail-reconnect"
+            disabled={busy}
+            onClick={() => void reconnect()}
+            className="pf-btn"
+            style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--action)', background: 'var(--action)', color: 'var(--primary-foreground)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, ...(busy ? DISABLED : null) }}
           >
-            DRIFT {d.funnel.drift}
-          </span>
-        </div>
-        <div style={{ padding: '20px 20px 18px' }}>
-          {/* Labels state the honest claim; the funnel fields keep the pipeline-stage names. */}
-          <div className="pf-funnel" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr auto 1fr', gap: 14, alignItems: 'start' }}>
-            <FunnelStep n={d.funnel.inErp} label="In ERP" sub="Pulled · 30 days" />
-            <Arrow />
-            <FunnelStep n={d.funnel.validated} label="Validated" sub="Passed rule pack" />
-            <Arrow />
-            <FunnelStep n={d.funnel.transmitted} label="Submitted" sub="Queued for clearance" />
-            <Arrow />
-            <FunnelStep n={d.funnel.accepted} label="Cleared" sub="Simulated · IRN + CSID assigned" />
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line-1)' }}>
-            {driftClean ? 'Every submitted document has cleared.' : `${d.funnel.drift} document${d.funnel.drift === 1 ? '' : 's'} submitted, not yet cleared.`}
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
-            Clearance is simulated until NRS accreditation — nothing here has been filed with NRS.
-          </div>
-        </div>
+            {RECONNECT}
+          </button>
+        )}
       </div>
 
-      {/* Volume */}
-      <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={CARD_HEAD}>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>Documents pulled</span>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-            {fmtPlain(d.volumeTotal)} PULLED · 30 DAYS
-          </span>
-        </div>
-        <div style={{ padding: '20px 20px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 76 }}>
-            {d.volume.map((v, i) => (
-              <div key={i} title={`${v} documents`} style={{ flex: 1, height: `${Math.max(4, (v / volMax) * 100)}%`, background: 'var(--action)', opacity: 0.55, borderRadius: 2 }} />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Field mapping + sync activity */}
       <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16, marginBottom: 16 }}>
-        <div style={{ ...CARD, overflow: 'hidden' }}>
+        <div data-testid="erp-detail-mapping" style={{ ...CARD, overflow: 'hidden' }}>
           <div style={CARD_HEAD}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Field mapping</div>
-              <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 3 }}>
-                ERP → UBL
-              </div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{MAPPING_HEAD}</div>
+              <div className="mono" style={{ ...SUB, marginTop: 3 }}>{MAPPING_SUB}</div>
             </div>
-            <button onClick={onEditMapping} className="v2-btn v2-btn-ghost pf-btn" style={{ flex: 'none', height: 30, fontSize: 12.5, padding: '0 12px' }}>
-              Edit
-            </button>
+            {canEdit && (
+              <button type="button" data-testid="erp-detail-mapping-edit" onClick={() => setEditing(true)} className="v2-btn v2-btn-ghost pf-btn" style={GHOST}>
+                {MAPPING_EDIT}
+              </button>
+            )}
           </div>
-          <div style={{ padding: '4px 20px 12px' }}>
-            {/* Index keys: a user can edit two rows onto the same UBL path in the modal,
-                so neither column is a stable identity. The list is static per render. */}
-            {mapping.map((m, i) => (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.85fr) 12px minmax(0, 1.15fr)', gap: 8, alignItems: 'baseline', padding: '10px 0', borderBottom: '1px solid var(--line-1)' }}>
-                <code className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)', overflowWrap: 'anywhere' }}>{m.erp}</code>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-4)' }} aria-hidden="true">
-                  →
-                </span>
-                <code className="mono" style={{ fontSize: 11.5, color: 'var(--action)', overflowWrap: 'anywhere' }}>{m.ubl}</code>
+          <div style={{ padding: '4px 20px 14px' }}>
+            {!admin && rosterLanded && (
+              <div data-testid="erp-detail-mapping-admin-only" style={{ ...NOTE, padding: '8px 0' }}>
+                {MAPPING_ADMIN_ONLY}
               </div>
-            ))}
+            )}
+            {mappingBody}
           </div>
         </div>
 
-        <div style={{ ...CARD, overflow: 'hidden' }}>
+        <div data-testid="erp-detail-activity" style={{ ...CARD, overflow: 'hidden' }}>
           <div style={CARD_HEAD}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Sync activity</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-              TODAY
-            </span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{ACTIVITY_HEAD}</span>
           </div>
           <div style={{ padding: '4px 20px 12px' }}>
-            {d.activity.map((a, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--line-1)' }}>
-                <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)', width: 36 }}>{a.time}</span>
-                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: DOT_COLOR[a.kind], transform: 'translateY(-2px)' }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <code className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: a.doc === '—' ? 'var(--fg-3)' : 'var(--fg-1)' }}>{a.doc}</code>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2, lineHeight: 1.45 }}>{a.desc}</div>
-                </div>
+            <div style={{ ...NOTE, padding: '10px 0' }}>{activitySummary(counts)}</div>
+            {documents.length === 0 && <div style={NOTE}>{ACTIVITY_EMPTY}</div>}
+            {documents.map((d) => (
+              <div key={d.id} data-testid="erp-activity-row" style={ROW}>
+                <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>{fmtDateTime(d.updated_at)}</span>
+                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: DOT[d.state] ?? 'var(--fg-4)' }} />
+                <code className="mono" style={{ fontSize: 11.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{d.source_doc_id}</code>
+                <span className="mono" style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--fg-2)' }}>{documentOutcome(d)}</span>
+                {d.invoice_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>{d.invoice_number}</span>}
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Master data + write-back */}
-      <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: 16, marginBottom: 16 }}>
-        <div style={{ ...CARD, overflow: 'hidden' }}>
-          <div style={CARD_HEAD}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Master data mirror</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-              REFRESHED 2 MIN AGO
-            </span>
-          </div>
-          <div style={{ padding: '16px 20px' }}>
-            <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'Customers', value: fmtPlain(d.master.customers) },
-                { label: 'Tax codes', value: String(d.master.taxCodes) },
-                { label: 'Items / SKUs', value: fmtPlain(d.master.items) },
-                { label: 'Units of measure', value: String(d.master.uoms) },
-              ].map((s) => (
-                <div key={s.label}>
-                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>{s.value}</div>
-                  <div className="label" style={{ marginTop: 3 }}>
-                    {s.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="label" style={{ marginBottom: 8 }}>
-              Tax codes
-            </div>
-            {CONNECTOR_TAX_CODES.map((t) => (
-              <div key={t.code} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 0', borderTop: '1px solid var(--line-1)' }}>
-                <code className="mono" style={{ flex: 'none', width: 48, fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>{t.code}</code>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)' }}>{t.desc}</span>
-                <span className="mono" style={{ flex: 'none', fontSize: 12, color: 'var(--fg-3)' }}>{t.rate}</span>
-              </div>
-            ))}
-          </div>
+      <div data-testid="erp-detail-writebacks" style={{ ...CARD, overflow: 'hidden', marginBottom: 16 }}>
+        <div style={CARD_HEAD}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{WRITEBACK_HEAD}</span>
         </div>
-
-        <div style={{ ...CARD, overflow: 'hidden' }}>
-          <div style={CARD_HEAD}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Write-back to ERP</span>
-          </div>
-          <div style={{ padding: '16px 20px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'Stamped back', value: fmtPlain(d.writeBack.stamped), color: 'var(--status-green-text)' },
-                { label: 'Pending', value: String(d.writeBack.pending), color: 'var(--status-amber-text)' },
-                { label: 'Failed', value: String(d.writeBack.failed), color: 'var(--status-red-text)' },
-              ].map((s) => (
-                <div key={s.label} style={{ minWidth: 0 }}>
-                  <div className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', color: s.color }}>{s.value}</div>
-                  <div className="label" style={{ marginTop: 3 }}>
-                    {s.label}
-                  </div>
-                </div>
-              ))}
+        <div style={{ padding: '4px 20px 12px' }}>
+          {shown.writebacks.length === 0 && <div style={{ ...NOTE, padding: '10px 0' }}>{WRITEBACK_EMPTY}</div>}
+          {shown.writebacks.map((w) => (
+            <div key={w.id} data-testid="erp-writeback-row" style={ROW}>
+              <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>{fmtDateTime(w.created_at)}</span>
+              <code className="mono" style={{ fontSize: 11.5, fontWeight: 600 }}>{w.invoice_number ?? w.invoice_id}</code>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)' }}>{`${writebackResultText(w.outcome)} · ${writebackText(w)}`}</span>
+              <button type="button" onClick={() => ctx.openImportedInvoice(w.invoice_id)} className="v2-btn v2-btn-ghost pf-btn" style={{ ...GHOST, height: 28 }}>
+                {OPEN_INVOICE}
+              </button>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>IRN + CSID stamped</span>
-              <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>{d.writeBack.pct}%</span>
-            </div>
-            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 12 }}>
-              <div style={{ width: `${d.writeBack.pct}%`, height: '100%', background: 'var(--action)' }} />
-            </div>
-            <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>IRN + CSID synced back into {def.name} invoice records.</p>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* Held documents */}
-      <div style={{ ...CARD, overflow: 'hidden' }}>
+      <div data-testid="erp-detail-held" style={{ ...CARD, overflow: 'hidden' }}>
         <div style={CARD_HEAD}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
             <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', display: 'grid', placeItems: 'center' }}>{warnTriGlyph}</span>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Held documents</div>
-              <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{fmtPlain(d.heldTotal)} pulled, not submitted</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{HELD_HEAD}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{HELD_SUB}</div>
             </div>
           </div>
-          <button className="v2-btn v2-btn-ghost pf-btn" style={{ flex: 'none', height: 30, fontSize: 12.5, padding: '0 12px' }}>
-            Backfill history
-          </button>
         </div>
-        {d.held.map((h, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
-            <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: 'var(--status-red-text)' }} />
-            <code className="mono" style={{ flex: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)' }}>{h.doc}</code>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.reason}</span>
-            <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>{h.age}</span>
-            <button className="v2-btn v2-btn-ghost pf-btn" style={{ flex: 'none', height: 28, fontSize: 12, padding: '0 11px' }}>
-              Review
-            </button>
-          </div>
-        ))}
-        {d.heldTotal > d.held.length && (
-          <div className="mono" style={{ padding: '11px 20px', fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-            SHOWING {d.held.length} OF {fmtPlain(d.heldTotal)} — OLDEST FIRST
-          </div>
-        )}
+        <div style={{ padding: '4px 20px 12px' }}>
+          {shown.held.length === 0 && <div style={{ ...NOTE, padding: '10px 0' }}>{HELD_EMPTY}</div>}
+          {shown.held.map((h) => (
+            <div key={h.id} data-testid="erp-held-row" data-source-doc-id={h.source_doc_id} style={ROW}>
+              <code className="mono" style={{ fontSize: 12.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{h.source_doc_id}</code>
+              {h.invoice_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>{h.invoice_number}</span>}
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                {h.reasons.map((r) => heldReasonText(r, h.failure)).join(' · ')}
+              </span>
+              {h.invoice_id && (
+                <button type="button" data-testid="erp-held-open" onClick={() => ctx.openImportedInvoice(h.invoice_id!)} className="v2-btn v2-btn-ghost pf-btn" style={{ ...GHOST, height: 28 }}>
+                  {OPEN_INVOICE}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
+
+      {editing && mapping != null && system !== null && (
+        <FieldMappingModal
+          ctx={ctx}
+          entityId={entityId}
+          system={system}
+          systemName={label.name}
+          externalKey={externalKey}
+          mapping={mapping}
+          lookups={lookups ?? null}
+          onSaved={(next) => {
+            if (next.mapping) setSavedMap({ key: mapKey, view: next.mapping })
+            if (next.lookups) setSavedLook({ key: lookKey, view: next.lookups })
+          }}
+          onClose={() => setEditing(false)}
+        />
+      )}
     </>
   )
 }

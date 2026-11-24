@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/erp"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/portfolio"
 )
 
@@ -21,6 +23,12 @@ func main() {
 	app, err := platform.New("portfolio")
 	if err != nil {
 		platform.Fatal(slog.Default(), "portfolio: startup: %v", err)
+	}
+
+	// A hosted boot with ERP_FAKE set to true is refused here, before the pool.
+	erpRegistry, err := erp.RegistryFromEnv(os.Getenv)
+	if err != nil {
+		platform.Fatal(app.Logger, "portfolio: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — a
@@ -61,6 +69,22 @@ func main() {
 		func(ctx context.Context, id string) (portfolio.Entity, error) {
 			return store.SetStatus(ctx, id, "active")
 		}, app.Logger))
+
+	// Insert-only River client: disconnect enqueues the secret delete in its transaction.
+	erpQueue, err := queue.New(pool, queue.Config{})
+	if err != nil {
+		platform.Fatal(app.Logger, "portfolio: queue: %v", err)
+	}
+	erpStore := erp.NewStore(pool, erpRegistry, nil, erpQueue)
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections", erp.ListHandler(erpStore.List, erpStore.Systems, app.Logger))
+	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections", erp.ConnectHandler(erpStore.Gate, erpStore.Connect, app.Logger))
+	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections/{connection}/disconnect", erp.DisconnectHandler(erpStore.Disconnect, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections/{connection}/overview", erp.OverviewHandler(erpStore.Overview, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/invoices/{invoice}/erp-marks", erp.MarksHandler(erpStore.Marks, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-mappings/{system}", erp.MappingHandler(erpStore.Mapping, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/entities/{id}/erp-mappings/{system}", erp.SaveMappingHandler(erpStore.Gate, erpStore.SaveMapping, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-lookups/{system}", erp.LookupsHandler(erpStore.Lookups, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/entities/{id}/erp-lookups/{system}", erp.SaveLookupsHandler(erpStore.Gate, erpStore.SaveLookups, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

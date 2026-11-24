@@ -355,9 +355,8 @@ func TestSyncAll_FetchFailureSeedLogNamesTheListAndTheFetchError(t *testing.T) {
 
 func TestSyncAll_ConnectionRefusedSeedsFromSavedCopyAndReturnsTheFetchError(t *testing.T) {
 	f := newSeedFixture(t)
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := srv.URL
-	srv.Close()
+	// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+	url := "http://127.0.0.1:1"
 
 	err := failOnce(t, f, url)
 

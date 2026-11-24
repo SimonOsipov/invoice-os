@@ -809,6 +809,9 @@ const (
 // nlRealAI is the set of nightly services that answer with the real model.
 var nlRealAI = map[string]bool{"invoice": true, "submission": true, "worker": true}
 
+var nlIntuitKeys = []string{"INTUIT_CLIENT_ID=nightly-intuit-client-id:latest", "INTUIT_CLIENT_SECRET=nightly-intuit-client-secret:latest",
+	"INTUIT_WEBHOOK_VERIFIER=nightly-intuit-webhook-verifier:latest"}
+
 var nlContactKeys = []string{"HUBSPOT_TOKEN=nightly-hubspot-token:7", "RESEND_API_KEY=nightly-resend-read-key:latest",
 	"RESEND_SEGMENT_ID=nightly-resend-segment-id:latest", "RESEND_TOPIC_ID=nightly-resend-topic-id:latest"}
 
@@ -986,6 +989,38 @@ func TestPreviewContactPreflightNamesEveryMissingSecret(t *testing.T) {
 	}
 }
 
+var intuitSecrets = []string{"nightly-intuit-client-id", "nightly-intuit-client-secret", "nightly-intuit-webhook-verifier"}
+
+func TestPreviewIntuitPreflight_NamesEachMissingSecret(t *testing.T) {
+	t.Parallel()
+	runs := []previewRun{}
+	for _, n := range intuitSecrets {
+		r := runPreview(t, func(dir string) { writeIn(t, dir, "missing", n+"\n") }, "intuit-preflight", "nightly")
+		runs = append(runs, r)
+		if r.code != 1 {
+			t.Errorf("%s missing: exit %d, want 1", n, r.code)
+		}
+		for _, o := range intuitSecrets {
+			if got := strings.Contains(r.stderr, o); got != (o == n) {
+				t.Errorf("%s missing: stderr names %s = %v:\n%s", n, o, got, r.stderr)
+			}
+		}
+	}
+	d := runPreview(t, func(dir string) { writeIn(t, dir, "disabled", intuitSecrets[1]+"\n") }, "intuit-preflight", "nightly")
+	if d.code != 1 || !strings.Contains(d.stderr, intuitSecrets[1]) || strings.Contains(d.stderr, intuitSecrets[0]) || strings.Contains(d.stderr, intuitSecrets[2]) {
+		t.Errorf("disabled: exit %d, stderr %q", d.code, d.stderr)
+	}
+	ok := runPreview(t, nil, "intuit-preflight", "nightly")
+	if ok.code != 0 || !strings.Contains(ok.stdout, "nightly intuit secrets present") {
+		t.Errorf("all present: exit %d, stdout %q, stderr %q", ok.code, ok.stdout, ok.stderr)
+	}
+	for _, rr := range append(runs, d, ok) {
+		if strings.Contains(rr.file(t, "calls"), "versions access") {
+			t.Error("preflight read a secret value")
+		}
+	}
+}
+
 func TestPreviewNightlyIssuer(t *testing.T) {
 	t.Parallel()
 	got := nameGoldens(t, "nightly")
@@ -1021,7 +1056,16 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 		if svc == "notifications" || svc == "worker" {
 			want += "," + strings.Join(nlContactKeys, ",")
 		}
+		if svc == "portfolio" || svc == "worker" {
+			want += "," + strings.Join(nlIntuitKeys, ",")
+		}
 		got := flagValue(ni[svc], "--set-secrets")
+		if strings.Contains(flagValue(pr[svc], "--set-secrets"), "INTUIT_") || strings.Contains(flagValue(pr[svc], "--set-secrets"), "nightly-intuit-") {
+			t.Errorf("pr-7 %s mounts an Intuit secret", svc)
+		}
+		if svc != "portfolio" && svc != "worker" && (strings.Contains(got, "INTUIT_") || strings.Contains(got, "nightly-intuit-")) {
+			t.Errorf("nightly %s mounts an Intuit secret: %q", svc, got)
+		}
 		if got != want {
 			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
 		}
@@ -1500,7 +1544,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids", "intuit-preflight"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()

@@ -129,9 +129,8 @@ func TestValidatorCheckCustomRule_MapsTheValidationAnswers(t *testing.T) {
 	}
 
 	t.Run("a closed connection is an upstream error", func(t *testing.T) {
-		dead := httptest.NewServer(http.NotFoundHandler())
-		url := dead.URL
-		dead.Close()
+		// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+		url := "http://127.0.0.1:1"
 		if err := NewValidator(url, checkS2SToken, nil).CheckCustomRule(ctx, goodCheckInput()); !errors.Is(err, ErrUpstream) {
 			t.Errorf("CheckCustomRule on a closed server = %v, want ErrUpstream", err)
 		}

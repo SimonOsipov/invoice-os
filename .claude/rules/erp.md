@@ -7,7 +7,8 @@ paths:
 # ERP connectors
 
 - Build connectors only through `erp.RegistryFromEnv`.
-- Run the fake connector on a preview and the nightly; locally only with `ERP_FAKE=true`. Refuse to boot a hosted deployment with `ERP_FAKE` set to true. Name the variable in a boot error, never its value.
+- Pick the connector set by posture: a preview runs the fake; the nightly runs the sandbox (the fake plus `quickbooks` against Intuit's sandbox); locally only `ERP_SANDBOX=true` (sandbox) or `ERP_FAKE=true` (fake), sandbox first. Refuse to boot a hosted deployment with either set to true. Name the variable in a boot error, never its value.
+- In sandbox mode read `INTUIT_CLIENT_ID`, `INTUIT_CLIENT_SECRET` and `INTUIT_WEBHOOK_VERIFIER`; a missing or whitespace-padded one is a boot error that names the variable, never its value.
 - Never let a request choose the connector mode.
 - Check the admin role as the first statement of every ERP connection write transaction, except a system job's.
 - Let every member who can see the client list its connections. Scope the list by the seam's client scope only; answer a client outside it 404.

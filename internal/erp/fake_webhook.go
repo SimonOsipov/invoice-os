@@ -10,7 +10,7 @@ import (
 	"net/http"
 )
 
-// fakeWebhookKey is a fixture, not a secret: the fake runs only on a preview, the nightly and a local ERP_FAKE run.
+// fakeWebhookKey is a fixture, not a secret: the fake runs only on a preview, the nightly and a local ERP_FAKE or ERP_SANDBOX run.
 const (
 	fakeWebhookKey      = "erpf-fake-webhook-key"
 	fakeSignatureHeader = "X-Fake-Signature"

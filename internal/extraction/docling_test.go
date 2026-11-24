@@ -396,9 +396,8 @@ func TestDoclingReader_Only422IsDocumentUnreadable(t *testing.T) {
 	}
 
 	// A sidecar that is down is an outage, not a bad file.
-	down := httptest.NewServer(http.NotFoundHandler())
-	url := down.URL
-	down.Close()
+	// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+	url := "http://127.0.0.1:1"
 	_, err := dcNewReader(t, url).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
 	if err == nil || errors.Is(err, extraction.ErrDocumentUnreadable) {
 		t.Errorf("transport error = %v, want a non-nil error that is not ErrDocumentUnreadable", err)

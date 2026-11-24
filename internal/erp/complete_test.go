@@ -903,6 +903,44 @@ func TestComplete_ReauthoriseReleasesTheOldGrant(t *testing.T) {
 
 // --- AC 8: the worker route ---------------------------------------------------------------
 
+func TestCallbackHandler_PassesTheRealm(t *testing.T) {
+	var got CallbackInput
+	h := CallbackHandler(func(_ context.Context, in CallbackInput) (Outcome, error) {
+		got = in
+		return OutcomeInvalid, nil
+	}, slog.Default())
+	post := func(body string) {
+		req := httptest.NewRequest(http.MethodPost, "/internal/erp/callback", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	post(`{"state":"s","code":"c","error":"e","realm_id":"r-1"}`)
+	if got.RealmID != "r-1" || got.State != "s" || got.Code != "c" || got.Error != "e" {
+		t.Errorf("input = %+v, want the realm r-1 with the other fields", got)
+	}
+	post(`{"state":"s","code":"c","error":""}`)
+	if got.RealmID != "" {
+		t.Errorf("RealmID = %q without realm_id, want empty", got.RealmID)
+	}
+}
+
+func TestComplete_HandsTheRealmToTheExchange(t *testing.T) {
+	r := newCompleteRig(t)
+	_, state := r.connect(t, r.e1)
+	var seen ExchangeRequest
+	r.ex.override = func(ctx context.Context, req ExchangeRequest) (ExchangeResult, error) {
+		seen = req
+		return r.ex.Fake.Exchange(ctx, req)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := r.store.Complete(ctx, CallbackInput{State: state, Code: "fake-co-1", RealmID: "4620816365"})
+	wantOutcome(t, "with a realm", string(out), err, "connected")
+	if seen != (ExchangeRequest{Code: "fake-co-1", RealmID: "4620816365"}) {
+		t.Errorf("exchange saw %+v, want the code and the realm", seen)
+	}
+}
+
 func TestCallbackHandler_BodyLimitAndNoEcho(t *testing.T) {
 	r := newCompleteRig(t)
 	logs := captureLogs(t)

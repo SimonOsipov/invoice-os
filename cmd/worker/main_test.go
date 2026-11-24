@@ -303,6 +303,55 @@ func TestWorkerMain_HostedBootWithERPFakeIsFatal(t *testing.T) {
 	}
 }
 
+// A hosted boot with ERP_SANDBOX set refuses, names the variable and never its value.
+func TestWorkerMain_HostedBootWithERPSandboxIsFatal(t *testing.T) {
+	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
+	if appURL == "" || readerURL == "" {
+		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL")
+	}
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(down.Close)
+	out, err := run(t, buildWorker(t), map[string]string{
+		"DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL, "VALIDATION_URL": down.URL, "S2S_TOKEN": "tok",
+		"GATEWAY_URL": "http://gateway.invalid", "GATEWAY_TOKEN": "gw-token", "APP_ADAPTER": "mock",
+		"DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
+		"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
+		"DEPLOY_ENV": "production", "ERP_SANDBOX": "true",
+	})
+	if !exitedOne(err) {
+		t.Fatalf("ended with %v, want exit status 1 through platform.Fatal\n%s", err, out)
+	}
+	if !strings.Contains(out, "ERP_SANDBOX") {
+		t.Errorf("output does not name ERP_SANDBOX\n%s", out)
+	}
+	if strings.Contains(out, "ERP_SANDBOX=true") || strings.Contains(out, "ERP_SANDBOX is true") {
+		t.Errorf("output quotes the value of ERP_SANDBOX\n%s", out)
+	}
+}
+
+// A nightly boot without the Intuit variables refuses and names the first one.
+func TestWorkerMain_NightlyWithoutIntuitIsFatal(t *testing.T) {
+	appURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_READER_URL")
+	if appURL == "" || readerURL == "" {
+		t.Skip("worker boot test skipped: set DATABASE_URL and DATABASE_READER_URL")
+	}
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(down.Close)
+	out, err := run(t, buildWorker(t), map[string]string{
+		"DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL, "VALIDATION_URL": down.URL, "S2S_TOKEN": "tok",
+		"GATEWAY_URL": "http://gateway.invalid", "GATEWAY_TOKEN": "gw-token", "APP_ADAPTER": "mock",
+		"DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
+		"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
+		"DEPLOY_ENV": "nightly", "ERP_REDIRECT_URL": "https://gw.example/erp/callback",
+	})
+	if !exitedOne(err) {
+		t.Fatalf("ended with %v, want exit status 1 through platform.Fatal\n%s", err, out)
+	}
+	if !strings.Contains(out, "INTUIT_CLIENT_ID") {
+		t.Errorf("output does not name INTUIT_CLIENT_ID\n%s", out)
+	}
+}
+
 const (
 	iapRoute = "/internal/console-sessions/recovery-token"
 	iapOps   = "/projects/111111111111/global/backendServices/1111111111111111111"

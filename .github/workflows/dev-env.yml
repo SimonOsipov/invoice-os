@@ -350,6 +350,9 @@ jobs:
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'
         run: bash scripts/ci/preview.sh contact-preflight "$PR"
+      - name: Check the Intuit secrets
+        if: needs.changes.outputs.nightly == 'true'
+        run: bash scripts/ci/preview.sh intuit-preflight "$PR"
       - id: token_version
         name: Read the HubSpot token version
         if: needs.changes.outputs.nightly == 'true'

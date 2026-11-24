@@ -142,14 +142,17 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
+		{fmt.Errorf("wrapped: %w", ErrUnsupported), 501, "this system cannot connect yet"},
 		{ErrKeylessPending, 409, "another connection of this system is already waiting for consent"},
 		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
 		{invalidMapping("line_quantity", "a line field reads one []"), 400, "line_quantity: a line field reads one []"},
 		{invalidLookup("external_key: required"), 400, "external_key: required"},
 	} {
+		var logs bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logs, nil))
 		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err, mappingErr: c.err, saveMappingErr: c.err, lookupsErr: c.err, saveLookupsErr: c.err, overviewErr: c.err, marksErr: c.err}
 		for name, w := range map[string]*httptest.ResponseRecorder{
-			"connect":    do(s.mux(nil), "POST", listPath, `{"system":"fake"}`, true),
+			"connect":    do(s.mux(log), "POST", listPath, `{"system":"fake"}`, true),
 			"disconnect": do(s.mux(nil), "POST", disconnectPath, "", true),
 			"list":       do(s.mux(nil), "GET", listPath, "", true),
 			"mapping":    do(s.mux(nil), "GET", mappingPath, "", true),
@@ -162,6 +165,9 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 			if w.Code != c.status || errText(t, w) != c.msg {
 				t.Errorf("%v on %s: got %d %q, want %d %q", c.err, name, w.Code, errText(t, w), c.status, c.msg)
 			}
+		}
+		if c.status != 500 && logs.Len() != 0 {
+			t.Errorf("%v logged an error line: %s", c.err, logs.String())
 		}
 	}
 }

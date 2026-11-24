@@ -25,7 +25,7 @@ func main() {
 		platform.Fatal(slog.Default(), "portfolio: startup: %v", err)
 	}
 
-	// A hosted boot with ERP_FAKE set to true is refused here, before the pool.
+	// A hosted boot with ERP_FAKE or ERP_SANDBOX set to true is refused here, before the pool.
 	erpRegistry, err := erp.RegistryFromEnv(os.Getenv)
 	if err != nil {
 		platform.Fatal(app.Logger, "portfolio: %v", err)

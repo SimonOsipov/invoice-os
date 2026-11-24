@@ -147,6 +147,7 @@ func TestERPCallbackPage_RefusesShapeWithoutCallingTheWorker(t *testing.T) {
 		{"a state one character too long", url.Values{"state": {good + "A"}}},
 		{"a state with an injected newline", url.Values{"state": {good + "\nX-Evil: 1"}}},
 		{"a code of 2049 bytes", url.Values{"state": {good}, "code": {strings.Repeat("c", 2049)}}},
+		{"a realm of 65 bytes", url.Values{"state": {good}, "code": {"fake-co-1"}, "realmId": {strings.Repeat("r", 65)}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -169,6 +170,11 @@ func TestERPCallbackPage_RefusesShapeWithoutCallingTheWorker(t *testing.T) {
 	if rec.Code != http.StatusOK || ecOutcomeOf(t, rec) != "connected" || e.w.count() != 1 {
 		t.Errorf("a 2048-byte code = %d %q with %d worker calls, want 200 connected with 1", rec.Code, ecOutcomeOf(t, rec), e.w.count())
 	}
+	before := e.w.count()
+	rec = e.get(url.Values{"state": {good}, "code": {"fake-co-1"}, "realmId": {strings.Repeat("r", 64)}})
+	if rec.Code != http.StatusOK || e.w.count()-before != 1 {
+		t.Errorf("a 64-byte realm = %d with %d worker calls, want 200 with 1", rec.Code, e.w.count()-before)
+	}
 }
 
 func TestERPCallbackPage_ForwardsAndRenders(t *testing.T) {
@@ -186,8 +192,8 @@ func TestERPCallbackPage_ForwardsAndRenders(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.outcome, func(t *testing.T) {
 			e := ecStart(t, ecOutcome(c.outcome), nil)
-			state, code, vendorErr := ecState(), "code-"+uuid.NewString(), "err-"+uuid.NewString()
-			rec := e.get(url.Values{"state": {state}, "code": {code}, "error": {vendorErr}})
+			state, code, vendorErr, realm := ecState(), "code-"+uuid.NewString(), "err-"+uuid.NewString(), "realm-"+uuid.NewString()
+			rec := e.get(url.Values{"state": {state}, "code": {code}, "error": {vendorErr}, "realmId": {realm}})
 
 			if rec.Code != c.status {
 				t.Errorf("status = %d, want %d", rec.Code, c.status)
@@ -209,8 +215,8 @@ func TestERPCallbackPage_ForwardsAndRenders(t *testing.T) {
 			if err := json.Unmarshal(call.body, &body); err != nil {
 				t.Fatalf("worker body %q: %v", call.body, err)
 			}
-			if len(body) != 3 || body["state"] != state || body["code"] != code || body["error"] != vendorErr {
-				t.Errorf("worker body = %v, want exactly state, code and error as received", body)
+			if len(body) != 4 || body["state"] != state || body["code"] != code || body["error"] != vendorErr || body["realm_id"] != realm {
+				t.Errorf("worker body = %v, want exactly state, code, error and realm_id as received", body)
 			}
 
 			h := rec.Header()
@@ -226,7 +232,7 @@ func TestERPCallbackPage_ForwardsAndRenders(t *testing.T) {
 			if ct := h.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 				t.Errorf("Content-Type = %q, want text/html", ct)
 			}
-			e.wantNoEcho(t, rec, state, code, vendorErr)
+			e.wantNoEcho(t, rec, state, code, vendorErr, realm)
 		})
 	}
 
@@ -238,8 +244,8 @@ func TestERPCallbackPage_ForwardsAndRenders(t *testing.T) {
 			t.Errorf("data-outcome = %q, want denied", ecOutcomeOf(t, rec))
 		}
 		var body map[string]string
-		if err := json.Unmarshal(e.w.only(t).body, &body); err != nil || len(body) != 3 || body["code"] != "" || body["error"] != "access_denied" {
-			t.Errorf("worker body = %v (%v), want the three fields with an empty code", body, err)
+		if err := json.Unmarshal(e.w.only(t).body, &body); err != nil || len(body) != 4 || body["code"] != "" || body["realm_id"] != "" || body["error"] != "access_denied" {
+			t.Errorf("worker body = %v (%v), want the four fields with an empty code and realm", body, err)
 		}
 	})
 }

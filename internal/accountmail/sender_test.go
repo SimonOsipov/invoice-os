@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -131,23 +132,25 @@ func TestResend_StatusErrors(t *testing.T) {
 	}
 }
 
-// refusedURL is a loopback URL whose port is held by a bound, non-listening
-// socket: dialing is refused and no later listener can take the port.
-func refusedURL(t *testing.T) string {
+// refused returns a loopback URL and a transport whose dial always fails as a
+// refused connection, so a listener that later takes the port cannot be reached.
+func refused(t *testing.T) (string, http.RoundTripper) {
 	t.Helper()
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("socket: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = syscall.Close(fd) })
-	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
-		t.Fatalf("bind: %v", err)
+	host := ln.Addr().String()
+	_ = ln.Close()
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+		a, err := net.ResolveTCPAddr(network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return nil, &net.OpError{Op: "dial", Net: network, Addr: a, Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
 	}
-	sa, err := syscall.Getsockname(fd)
-	if err != nil {
-		t.Fatalf("getsockname: %v", err)
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d", sa.(*syscall.SockaddrInet4).Port)
+	return "http://" + host, tr
 }
 
 // hangingServer holds each request until the client gives up.
@@ -175,8 +178,9 @@ func shortTimeout(d time.Duration) http.RoundTripper {
 }
 
 func TestResend_NoResponseIsStatusZero(t *testing.T) {
+	refusedBase, refusedRT := refused(t)
 	cases := map[string]error{
-		"refused connection": NewResend(refusedURL(t), testKey, nil).Send(t.Context(), msgs(1)),
+		"refused connection": NewResend(refusedBase, testKey, refusedRT).Send(t.Context(), msgs(1)),
 		"timeout":            NewResend(hangingServer(t).URL, testKey, shortTimeout(50*time.Millisecond)).Send(t.Context(), msgs(1)),
 	}
 	for name, err := range cases {
@@ -193,12 +197,12 @@ func TestResend_NoResponseIsStatusZero(t *testing.T) {
 
 // A listener that grabs the refused URL's port must not make it connect.
 func TestResend_RefusedURLStaysRefusedWhenItsPortIsListenedOn(t *testing.T) {
-	base := refusedURL(t)
+	base, rt := refused(t)
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatalf("parse %q: %v", base, err)
 	}
-	// A held port makes Listen fail (the fix); a freed one lets a live server in (the bug).
+	// The helper's port is free, so a live server can take it; the transport must still refuse.
 	if ln, err := net.Listen("tcp", u.Host); err == nil {
 		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, `{}`)
@@ -207,7 +211,7 @@ func TestResend_RefusedURLStaysRefusedWhenItsPortIsListenedOn(t *testing.T) {
 		t.Cleanup(func() { _ = srv.Close() })
 	}
 
-	if err := NewResend(base, testKey, nil).Send(t.Context(), msgs(1)); err == nil {
+	if err := NewResend(base, testKey, rt).Send(t.Context(), msgs(1)); err == nil {
 		t.Errorf("refused connection: err = nil, want a failure (a live server took %s)", u.Host)
 	}
 }
@@ -244,9 +248,10 @@ func TestResend_ErrorTextCarriesNoSecret(t *testing.T) {
 		http.Redirect(w, r, "http://"+testAddr+"/x", http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(redirect.Close)
+	refusedBase, refusedRT := refused(t)
 	fails = append(fails,
 		failure{"redirect", redirect.URL, nil},
-		failure{"refused connection", refusedURL(t), nil},
+		failure{"refused connection", refusedBase, refusedRT},
 		failure{"timeout", hangingServer(t).URL, shortTimeout(50 * time.Millisecond)},
 	)
 

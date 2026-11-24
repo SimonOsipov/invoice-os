@@ -442,8 +442,6 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 	return qs
 }
 
-// workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
-// bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
 // erpWorkers builds every ERP job worker; SecretDelete holds the registry to revoke a grant at the vendor.
 func erpWorkers(pool *pgxpool.Pool, reg erp.Registry, secrets erp.SecretStore, invStore *invoice.Store, gate *invoice.Gate, logger *slog.Logger) *erp.Workers {
 	return &erp.Workers{
@@ -455,6 +453,8 @@ func erpWorkers(pool *pgxpool.Pool, reg erp.Registry, secrets erp.SecretStore, i
 	}
 }
 
+// workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
+// bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
 func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker, erpw *erp.Workers) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)

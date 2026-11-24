@@ -42,8 +42,7 @@ type intuitConfig struct {
 // intuitEndpoints are Intuit's URLs; tests point them at a stub through newQuickBooksAt.
 type intuitEndpoints struct{ auth, token, revoke, api string }
 
-// QuickBooks is the QuickBooks Online connector; it can sign in and refresh, and every other call but the
-// static ones answers ErrUnsupported.
+// QuickBooks is the QuickBooks Online connector. Pulling, fetching, writing back and webhooks answer ErrUnsupported.
 type QuickBooks struct {
 	redirect *url.URL
 	cfg      intuitConfig

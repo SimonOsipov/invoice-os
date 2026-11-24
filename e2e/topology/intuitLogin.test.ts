@@ -73,6 +73,8 @@ describe('intuitSignInCode', () => {
     expect(intuitSignInCode('1234567')).toBeNull()
     expect(intuitSignInCode('ref 12 code 482913')).toBe('482913')
     expect(intuitSignInCode(null)).toBeNull()
+    // An HTML colour is not a code.
+    expect(intuitSignInCode('<td style="color:#333333">code 482913</td>')).toBe('482913')
   })
 })
 

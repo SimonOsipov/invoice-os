@@ -501,6 +501,14 @@ func TestQuickBooks_ValidateOtherAnswers(t *testing.T) {
 	if err := run(200, "{}"); err == nil {
 		t.Error("200 without CompanyInfo: nil error")
 	}
+	// CompanyInfo past the 1 MiB read limit is not read.
+	huge := `{"pad":"` + strings.Repeat("x", intuitMaxBody) + `","CompanyInfo":{}}`
+	if err := run(200, huge); err == nil {
+		t.Error("CompanyInfo beyond the body limit: nil error")
+	}
+	if err := run(200, `{"pad":"x","CompanyInfo":{}}`); err != nil {
+		t.Errorf("small body with CompanyInfo: %v", err)
+	}
 }
 
 func TestQuickBooks_ValidateErrorsQuoteNothing(t *testing.T) {

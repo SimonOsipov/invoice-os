@@ -808,13 +808,13 @@ func TestSecretDeleteWorker_RevokeSkips(t *testing.T) {
 		}
 	})
 	t.Run("secret already deleted", func(t *testing.T) {
-		r, spy, _, _ := revokeRig(t, nil)
+		r, spy, _, buf := revokeRig(t, nil)
 		j, g, _ := disconnectJob(t, r)
 		if err := r.mem.Delete(context.Background(), SecretName("", g)); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.work(j, 1); err != nil || spy.calls != 0 {
-			t.Errorf("err %v, %d Revoke calls, want nil and 0", err, spy.calls)
+		if err := r.work(j, 1); err != nil || spy.calls != 0 || buf.Len() != 0 {
+			t.Errorf("err %v, %d Revoke calls, log %q, want nil, 0 and no log", err, spy.calls, buf.String())
 		}
 	})
 	t.Run("system not registered", func(t *testing.T) {

@@ -39,7 +39,7 @@ export function consentUrlProblems(url: string, gatewayUrl: string): string[] {
 }
 
 export function intuitSignInCode(text: string | null | undefined): string | null {
-  return /(?<!\d)\d{6}(?!\d)/.exec(text ?? '')?.[0] ?? null
+  return /(?<![\d#])\d{6}(?!\d)/.exec(text ?? '')?.[0] ?? null
 }
 
 // No subject match: Intuit's subject is unmeasured and may carry the code.

@@ -270,10 +270,8 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifier: %v", err)
 	}
-	// Point tenancy at a server we immediately close: dials will be refused.
-	dead := httptest.NewServer(http.NotFoundHandler())
-	deadURL, _ := url.Parse(dead.URL)
-	dead.Close()
+	// Point tenancy at port 1, which nothing listens on: dials are refused.
+	deadURL, _ := url.Parse("http://127.0.0.1:1")
 
 	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": deadURL}, GatewayToken: testGatewayToken})
 	tok, err := issuer.Mint(auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant})

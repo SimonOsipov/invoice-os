@@ -181,7 +181,9 @@ func TestResend_NoResponseIsStatusZero(t *testing.T) {
 	refusedBase, refusedRT := refused(t)
 	cases := map[string]error{
 		"refused connection": NewResend(refusedBase, testKey, refusedRT).Send(t.Context(), msgs(1)),
-		"timeout":            NewResend(hangingServer(t).URL, testKey, shortTimeout(50*time.Millisecond)).Send(t.Context(), msgs(1)),
+		// Port 1 is never handed out by bind(0): a real dial keeps the OS refusal path.
+		"refused real dial": NewResend("http://127.0.0.1:1", testKey, nil).Send(t.Context(), msgs(1)),
+		"timeout":           NewResend(hangingServer(t).URL, testKey, shortTimeout(50*time.Millisecond)).Send(t.Context(), msgs(1)),
 	}
 	for name, err := range cases {
 		var se *SendError
@@ -203,13 +205,15 @@ func TestResend_RefusedURLStaysRefusedWhenItsPortIsListenedOn(t *testing.T) {
 		t.Fatalf("parse %q: %v", base, err)
 	}
 	// The helper's port is free, so a live server can take it; the transport must still refuse.
-	if ln, err := net.Listen("tcp", u.Host); err == nil {
-		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = io.WriteString(w, `{}`)
-		})}
-		go func() { _ = srv.Serve(ln) }()
-		t.Cleanup(func() { _ = srv.Close() })
+	ln, err := net.Listen("tcp", u.Host)
+	if err != nil {
+		t.Skipf("another process took %s before the listener: %v", u.Host, err)
 	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 
 	if err := NewResend(base, testKey, rt).Send(t.Context(), msgs(1)); err == nil {
 		t.Errorf("refused connection: err = nil, want a failure (a live server took %s)", u.Host)

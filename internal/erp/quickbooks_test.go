@@ -261,7 +261,6 @@ func TestQuickBooks_UnsupportedMethods(t *testing.T) {
 		t.Errorf("DefaultMapping = %#v, want empty non-nil", m)
 	}
 	errs := map[string]error{}
-	_, errs["Refresh"] = q.Refresh(ctx, c)
 	errs["Validate"] = q.Validate(ctx, c, "")
 	_, errs["ListChanged"] = q.ListChanged(ctx, c, "", nil)
 	_, errs["Fetch"] = q.Fetch(ctx, c, DocRef{})
@@ -269,12 +268,139 @@ func TestQuickBooks_UnsupportedMethods(t *testing.T) {
 	_, errs["WriteBack"] = q.WriteBack(ctx, c, DocRef{}, WriteBack{})
 	_, errs["VerifyWebhook"] = q.VerifyWebhook(ctx, nil, nil)
 	errs["EnsureSubscriptions"] = q.EnsureSubscriptions(ctx, c, "")
-	if len(errs) != 8 {
+	if len(errs) != 7 {
 		t.Fatalf("%d methods checked", len(errs))
 	}
 	for name, err := range errs {
 		if !errors.Is(err, ErrUnsupported) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func qbSecret(access, refresh string) []byte {
+	b, _ := json.Marshal(qbToken{Access: access, Refresh: refresh})
+	return b
+}
+
+func TestQuickBooks_RefreshPostsTheStoredRefreshToken(t *testing.T) {
+	cfg := testIntuitConfig()
+	s := &intuitStub{status: 200, body: stubTokens()}
+	q := quickBooksOver(t, cfg, s, 5*time.Second)
+	r1 := "r-" + uuid.NewString()
+	if _, err := q.Refresh(context.Background(), Credentials{Kind: GrantOAuthRefresh, Secret: qbSecret("a1", r1)}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if s.count() != 1 {
+		t.Fatalf("%d requests, want 1", s.count())
+	}
+	r, form := s.reqs[0], s.forms[0]
+	if r.Method != http.MethodPost || r.URL.Path != "/token" {
+		t.Errorf("request = %s %s", r.Method, r.URL.Path)
+	}
+	if form.Get("grant_type") != "refresh_token" || form.Get("refresh_token") != r1 {
+		t.Errorf("form = %v", form)
+	}
+	user, pass, ok := r.BasicAuth()
+	if !ok || user != cfg.clientID || pass != cfg.clientSecret {
+		t.Errorf("Authorization header does not decode to the client id and secret (ok %v)", ok)
+	}
+}
+
+func TestQuickBooks_RefreshKeepsTheTokenIntuitReturns(t *testing.T) {
+	rows := []struct{ name, body, wantRefresh string }{
+		{"rotated", `{"access_token":"a2","refresh_token":"r2","expires_in":3600}`, "r2"},
+		{"omitted", `{"access_token":"a2","expires_in":3600}`, "r1"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: 200, body: r.body}, 5*time.Second)
+			got, err := q.Refresh(context.Background(), Credentials{Secret: qbSecret("a1", "r1")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tok qbToken
+			if err := json.Unmarshal(got.Secret, &tok); err != nil || tok.Access != "a2" || tok.Refresh != r.wantRefresh {
+				t.Errorf("secret = %+v (%v), want access a2 refresh %s", tok, err, r.wantRefresh)
+			}
+			if got.Kind != GrantOAuthRefresh || got.ExpiresAt == nil || !near(*got.ExpiresAt, time.Now().Add(time.Hour), 5*time.Second) {
+				t.Errorf("kind %q ExpiresAt %v, want about now + 1h", got.Kind, got.ExpiresAt)
+			}
+		})
+	}
+}
+
+func TestQuickBooks_RefreshInvalidGrantIsRevoked(t *testing.T) {
+	rows := []struct {
+		name    string
+		status  int
+		body    string
+		delay   time.Duration
+		revoked bool
+	}{
+		{"invalid_grant", 400, `{"error":"invalid_grant"}`, 0, true},
+		{"invalid_client", 400, `{"error":"invalid_client"}`, 0, false},
+		{"500", 500, "upstream down", 0, false},
+		{"timeout", 200, stubTokens(), 300 * time.Millisecond, false},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: r.status, body: r.body, delay: r.delay}, 50*time.Millisecond)
+			_, err := q.Refresh(context.Background(), Credentials{Secret: qbSecret("a1", "r1")})
+			if err == nil || errors.Is(err, ErrGrantRevoked) != r.revoked {
+				t.Errorf("err = %v, want an error with revoked=%v", err, r.revoked)
+			}
+		})
+	}
+}
+
+func TestQuickBooks_RefreshUnreadableSecret(t *testing.T) {
+	for name, secret := range map[string][]byte{"empty": nil, "bad json": []byte("{"), "no refresh": []byte(`{"access":"a"}`)} {
+		t.Run(name, func(t *testing.T) {
+			s := &intuitStub{status: 200, body: stubTokens()}
+			q := quickBooksOver(t, testIntuitConfig(), s, time.Second)
+			_, err := q.Refresh(context.Background(), Credentials{Secret: secret})
+			if err == nil || errors.Is(err, ErrGrantRevoked) || s.count() != 0 {
+				t.Errorf("err %v, %d requests, want a non-revoked error and 0 requests", err, s.count())
+			}
+		})
+	}
+}
+
+func TestQuickBooks_RefreshNoExpiryIsAnError(t *testing.T) {
+	q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: 200, body: `{"access_token":"a2","refresh_token":"r2"}`}, time.Second)
+	if _, err := q.Refresh(context.Background(), Credentials{Secret: qbSecret("a1", "r1")}); err == nil {
+		t.Error("want an error for a reply with no expiry")
+	}
+}
+
+func TestQuickBooks_RefreshErrorsQuoteNothing(t *testing.T) {
+	refresh := "canary-r-" + uuid.NewString()
+	leak := "leak-" + uuid.NewString()
+	replies := []struct {
+		status int
+		body   string
+	}{
+		{400, `{"error":"invalid_grant","error_description":"` + leak + `"}`},
+		{400, `{"error":"invalid_client","error_description":"` + leak + `"}`},
+		{500, leak + " " + refresh},
+		{200, `{"access_token":"` + leak + `"}`},
+	}
+	for _, rp := range replies {
+		q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: rp.status, body: rp.body}, 5*time.Second)
+		_, err := q.Refresh(context.Background(), Credentials{Secret: qbSecret("canary-a", refresh)})
+		if err == nil {
+			t.Fatalf("status %d: want an error", rp.status)
+		}
+		for _, canary := range []string{refresh, "canary-a", leak, "invalid_client", "upstream"} {
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("status %d: error %q contains %q", rp.status, err.Error(), canary)
+			}
+		}
+	}
+	_, err := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: 200, body: "{}"}, time.Second).
+		Refresh(context.Background(), Credentials{Secret: []byte(`{"refresh":"` + refresh + `","x`)})
+	if err == nil || strings.Contains(err.Error(), refresh) {
+		t.Errorf("unreadable secret error = %v", err)
 	}
 }

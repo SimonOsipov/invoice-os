@@ -36,7 +36,7 @@ type intuitConfig struct {
 // intuitEndpoints are Intuit's URLs; tests point them at a stub through newQuickBooksAt.
 type intuitEndpoints struct{ auth, token, revoke, api string }
 
-// QuickBooks is the QuickBooks Online connector; it can sign in, and every other call but the
+// QuickBooks is the QuickBooks Online connector; it can sign in and refresh, and every other call but the
 // static ones answers ErrUnsupported.
 type QuickBooks struct {
 	redirect *url.URL
@@ -123,8 +123,31 @@ func (q *QuickBooks) Exchange(ctx context.Context, req ExchangeRequest) (Exchang
 	}, nil
 }
 
-func (*QuickBooks) Refresh(context.Context, Credentials) (GrantMaterial, error) {
-	return GrantMaterial{}, ErrUnsupported
+func (q *QuickBooks) Refresh(ctx context.Context, c Credentials) (GrantMaterial, error) {
+	var old qbToken
+	if err := json.Unmarshal(c.Secret, &old); err != nil || old.Refresh == "" {
+		return GrantMaterial{}, errors.New("erp: quickbooks refresh: unreadable secret")
+	}
+	// No access token and no expiry on the seed, so the source always calls Intuit. It keeps the
+	// refresh token we sent when the reply omits one.
+	tok, err := q.oauth.TokenSource(context.WithValue(ctx, oauth2.HTTPClient, q.http),
+		&oauth2.Token{RefreshToken: old.Refresh}).Token()
+	if err != nil {
+		var re *oauth2.RetrieveError
+		if errors.As(err, &re) && re.ErrorCode == "invalid_grant" {
+			return GrantMaterial{}, fmt.Errorf("erp: quickbooks refresh: %w", ErrGrantRevoked)
+		}
+		return GrantMaterial{}, intuitErr("refresh", err)
+	}
+	if tok.Expiry.IsZero() {
+		return GrantMaterial{}, errors.New("erp: quickbooks refresh: incomplete reply")
+	}
+	secret, err := json.Marshal(qbToken{Access: tok.AccessToken, Refresh: tok.RefreshToken})
+	if err != nil {
+		return GrantMaterial{}, errors.New("erp: quickbooks refresh: encode failed")
+	}
+	exp := tok.Expiry
+	return GrantMaterial{Kind: GrantOAuthRefresh, Secret: secret, ExpiresAt: &exp}, nil
 }
 
 func (*QuickBooks) Validate(context.Context, Credentials, string) error { return ErrUnsupported }

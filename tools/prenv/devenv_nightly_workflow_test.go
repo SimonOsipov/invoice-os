@@ -364,6 +364,7 @@ func contactProblems(jobs map[string]workflowJob) []string {
 		ver   = "Read the HubSpot token version"
 		start = "Start the contacts (guard the portal, delete leftovers)"
 		up    = "Upload the contacts start result"
+		intu  = "Check the Intuit secrets"
 		sec   = "Create the PR's secrets (generated, never copied from production)"
 	)
 	if i := []int{idx(pe, pre), idx(pe, ver), idx(pe, start), idx(pe, up), idx(pe, sec)}; !slices.IsSorted(i) || i[0] < 0 {
@@ -373,6 +374,12 @@ func contactProblems(jobs map[string]workflowJob) []string {
 		if s, ok := nlStep(pe, n); !ok || s.keys["if"] != nlOn {
 			bad("prepare-env step " + n + " is not nightly only")
 		}
+	}
+	if i := idx(pe, intu); i < 0 || i != idx(pe, pre)+1 {
+		bad("prepare-env Intuit preflight is not right after the contact preflight")
+	}
+	if s, ok := nlStep(pe, intu); !ok || s.keys["if"] != nlOn || strings.TrimSpace(nlCode(s.keys["run"])) != `bash scripts/ci/preview.sh intuit-preflight "$PR"` {
+		bad("prepare-env Intuit preflight is not nightly only or does not run intuit-preflight")
 	}
 	if s, ok := nlStep(pe, pre); !ok || strings.TrimSpace(nlCode(s.keys["run"])) != `bash scripts/ci/preview.sh contact-preflight "$PR"` {
 		bad("prepare-env preflight step does not run contact-preflight")
@@ -1359,7 +1366,7 @@ func TestDevEnvNightly_MailOnWaitsForE2E(t *testing.T) {
 func TestDevEnvNightly_GuardRunsBeforeAnyDeploy(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
-	pf := "      - name: Check the contact secrets\n        if: " + nlOn + "\n        run: bash scripts/ci/preview.sh contact-preflight \"$PR\"\n"
+	pf := "      - name: Check the contact secrets\n        if: " + nlOn + "\n        run: bash scripts/ci/preview.sh contact-preflight \"$PR\"\n      - name: Check the Intuit secrets\n        if: " + nlOn + "\n        run: bash scripts/ci/preview.sh intuit-preflight \"$PR\"\n"
 	tv := "      - id: token_version\n        name: Read the HubSpot token version\n        if: " + nlOn + "\n"
 	for _, c := range []struct{ old, repl, want string }{
 		{pf + tv, tv + pf, "out of order"},

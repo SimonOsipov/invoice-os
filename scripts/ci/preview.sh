@@ -24,6 +24,7 @@
 #   preview.sh mock-token <pr|nightly>   print the preview's mock issuer token
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
+#   preview.sh intuit-preflight nightly  fail when a nightly Intuit secret is missing or not enabled
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
 #   preview.sh contact-token-version nightly print the number of the token's latest version
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
@@ -67,6 +68,7 @@ mail_arg() { [ "${1:-}" = nightly ] || die "nightly is required, got '${1:-}'"; 
 MAIL_SECRETS=(nightly-gotrue-smtp-pass nightly-resend-sending-key nightly-resend-read-key nightly-resend-receiving-domain)
 CONTACT_SECRETS=(nightly-hubspot-token nightly-resend-read-key nightly-resend-receiving-domain nightly-resend-segment-id nightly-resend-topic-id)
 HUBSPOT_TOKEN_SECRET=nightly-hubspot-token
+INTUIT_SECRETS=(nightly-intuit-client-id nightly-intuit-client-secret nightly-intuit-webhook-verifier)
 
 # digits_arg <value>: a Secret Manager version number.
 digits_arg() { [[ "${1:-}" =~ ^[0-9]+$ ]] || die "a version number is required, got '${1:-}'"; }
@@ -378,6 +380,12 @@ secrets_of() {
         RESEND_SEGMENT_ID=nightly-resend-segment-id:latest RESEND_TOPIC_ID=nightly-resend-topic-id:latest)
       ;;
   esac
+  case "$2" in
+    portfolio | worker)
+      [ "$pr" != nightly ] || out+=(INTUIT_CLIENT_ID=nightly-intuit-client-id:latest INTUIT_CLIENT_SECRET=nightly-intuit-client-secret:latest
+        INTUIT_WEBHOOK_VERIFIER=nightly-intuit-webhook-verifier:latest)
+      ;;
+  esac
   local IFS=,
   printf '%s' "${out[*]-}"
 }
@@ -559,6 +567,7 @@ preflight() {
 
 cmd_mail_preflight() { preflight mail "${MAIL_SECRETS[@]}"; }
 cmd_contact_preflight() { preflight contact "${CONTACT_SECRETS[@]}"; }
+cmd_intuit_preflight() { preflight intuit "${INTUIT_SECRETS[@]}"; }
 
 # read_secret <gcloud args>: 3 tries, 20 s apart, as nightly.yml. Prints the value only on success.
 read_secret() {
@@ -1006,6 +1015,7 @@ case "${1:-}" in
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
+  intuit-preflight) mail_arg "${2:-}"; cmd_intuit_preflight ;;
   contact-token) mail_arg "${2:-}"; cmd_contact_token "${3:-}" ;;
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
   deal-stage) deal_stage ;;
@@ -1014,5 +1024,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|intuit-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

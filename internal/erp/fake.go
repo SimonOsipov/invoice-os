@@ -109,6 +109,8 @@ func (*Fake) Refresh(_ context.Context, c Credentials) (GrantMaterial, error) {
 	return newFakeGrant(false, false)
 }
 
+func (*Fake) Revoke(context.Context, Credentials) error { return nil }
+
 func (*Fake) Validate(_ context.Context, _ Credentials, scope string) error {
 	if _, ok := fakeSeed[scope]; !ok {
 		return ErrUnknownScope

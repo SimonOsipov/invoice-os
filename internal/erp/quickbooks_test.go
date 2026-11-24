@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,14 +21,20 @@ type intuitStub struct {
 	mu     sync.Mutex
 	reqs   []*http.Request
 	forms  []url.Values
+	bodies [][]byte // JSON requests only
 	status int
 	body   string
 	delay  time.Duration
 }
 
 func (s *intuitStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var raw []byte
+	if r.Header.Get("Content-Type") == "application/json" {
+		raw, _ = io.ReadAll(r.Body)
+	}
 	_ = r.ParseForm()
 	s.mu.Lock()
+	s.bodies = append(s.bodies, raw)
 	s.reqs = append(s.reqs, r)
 	s.forms = append(s.forms, r.PostForm)
 	status, body, delay := s.status, s.body, s.delay
@@ -274,6 +281,42 @@ func TestQuickBooks_UnsupportedMethods(t *testing.T) {
 		if !errors.Is(err, ErrUnsupported) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestQuickBooks_RevokePostsTheRefreshToken(t *testing.T) {
+	cfg := testIntuitConfig()
+	s := &intuitStub{status: 200, body: "{}"}
+	q := quickBooksOver(t, cfg, s, 5*time.Second)
+	r1 := "r-" + uuid.NewString()
+	creds := Credentials{Kind: GrantOAuthRefresh, Secret: qbSecret("a1", r1)}
+	if err := q.Revoke(context.Background(), creds); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if s.count() != 1 {
+		t.Fatalf("%d requests, want 1", s.count())
+	}
+	r := s.reqs[0]
+	id, secret, ok := r.BasicAuth()
+	if r.Method != http.MethodPost || r.URL.Path != "/revoke" || !ok || id != cfg.clientID || secret != cfg.clientSecret {
+		t.Errorf("request = %s %s basic %v", r.Method, r.URL.Path, ok)
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if body := s.bodies[0]; string(body) != `{"token":"`+r1+`"}` {
+		t.Errorf("body = %s", body)
+	}
+
+	canary := "canary-" + uuid.NewString()
+	bad := quickBooksOver(t, cfg, &intuitStub{status: 400, body: canary}, 5*time.Second)
+	err := bad.Revoke(context.Background(), creds)
+	if err == nil || strings.Contains(err.Error(), canary) || !strings.Contains(err.Error(), "400") {
+		t.Errorf("400 error = %v, want the status and no body", err)
+	}
+	none := &intuitStub{status: 200, body: "{}"}
+	if err := quickBooksOver(t, cfg, none, time.Second).Revoke(context.Background(), Credentials{Secret: []byte("junk")}); err == nil || none.count() != 0 {
+		t.Errorf("unreadable secret: err %v, %d requests, want an error and none", err, none.count())
 	}
 }
 

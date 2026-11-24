@@ -122,6 +122,8 @@ type Connector interface {
 	Exchange(ctx context.Context, req ExchangeRequest) (ExchangeResult, error)
 	Refresh(ctx context.Context, c Credentials) (GrantMaterial, error)
 	Validate(ctx context.Context, c Credentials, scope string) error
+	// Revoke ends the grant at the vendor; called only by SecretDeleteWorker.
+	Revoke(ctx context.Context, c Credentials) error
 	ListChanged(ctx context.Context, c Credentials, scope string, cursor []byte) (Changes, error)
 	Fetch(ctx context.Context, c Credentials, ref DocRef) (Document, error)
 	FetchParty(ctx context.Context, c Credentials, scope, partyID string) (Party, error)

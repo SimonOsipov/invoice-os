@@ -1,6 +1,7 @@
 package erp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -192,6 +193,34 @@ func (q *QuickBooks) Validate(ctx context.Context, c Credentials, scope string) 
 	}
 	if _, ok := body["CompanyInfo"]; !ok {
 		return errors.New("erp: quickbooks validate: reply has no CompanyInfo")
+	}
+	return nil
+}
+
+// Revoke ends the grant at Intuit by revoking the refresh token. Errors name the status only.
+func (q *QuickBooks) Revoke(ctx context.Context, c Credentials) error {
+	var tok qbToken
+	if err := json.Unmarshal(c.Secret, &tok); err != nil || tok.Refresh == "" {
+		return errors.New("erp: quickbooks revoke: unreadable secret")
+	}
+	body, err := json.Marshal(map[string]string{"token": tok.Refresh})
+	if err != nil {
+		return errors.New("erp: quickbooks revoke: encode failed")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, q.ep.revoke, bytes.NewReader(body))
+	if err != nil {
+		return errors.New("erp: quickbooks revoke: request failed")
+	}
+	req.SetBasicAuth(q.cfg.clientID, q.cfg.clientSecret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := q.http.Do(req)
+	if err != nil {
+		return intuitErr("revoke", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("erp: quickbooks revoke: status %d", resp.StatusCode)
 	}
 	return nil
 }

@@ -62,13 +62,13 @@ func TestRegistry_SystemsOfAnEmptyRegistryIsEmptyNotNil(t *testing.T) {
 
 // Nothing calls most of these methods through the interface until later stories, so a
 // removed or retyped one would otherwise go unseen.
-func TestConnector_DeclaresItsThirteenMethods(t *testing.T) {
+func TestConnector_DeclaresItsFourteenMethods(t *testing.T) {
 	typ := reflect.TypeOf((*Connector)(nil)).Elem()
 	var got []string
 	for i := range typ.NumMethod() {
 		got = append(got, typ.Method(i).Name)
 	}
-	want := []string{"Authorize", "Capabilities", "DefaultMapping", "EnsureSubscriptions", "Exchange", "Fetch", "FetchParty", "ListChanged", "Refresh", "System", "Validate", "VerifyWebhook", "WriteBack"}
+	want := []string{"Authorize", "Capabilities", "DefaultMapping", "EnsureSubscriptions", "Exchange", "Fetch", "FetchParty", "ListChanged", "Refresh", "Revoke", "System", "Validate", "VerifyWebhook", "WriteBack"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Connector methods = %v, want %v", got, want)
 	}

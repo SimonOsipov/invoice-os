@@ -198,13 +198,7 @@ func main() {
 	}
 	// The re-check and the ERP ingest share one gate.
 	gate := invoice.NewGate(invStore, invoice.NewValidator(validationURL, s2sToken, nil))
-	erpw := &erp.Workers{
-		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: erpReg, Secrets: erpSecrets, Logger: app.Logger},
-		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: erpSecrets},
-		Pull:         &erp.PullWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
-		Ingest:       &erp.IngestWorker{Pool: pool, Registry: erpReg, Invoices: invStore, Gate: gate, Logger: app.Logger},
-		WriteBack:    &erp.WriteBackWorker{Pool: pool, Registry: erpReg, Logger: app.Logger},
-	}
+	erpw := erpWorkers(pool, erpReg, erpSecrets, invStore, gate, app.Logger)
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
@@ -450,6 +444,17 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
+// erpWorkers builds every ERP job worker; SecretDelete holds the registry to revoke a grant at the vendor.
+func erpWorkers(pool *pgxpool.Pool, reg erp.Registry, secrets erp.SecretStore, invStore *invoice.Store, gate *invoice.Gate, logger *slog.Logger) *erp.Workers {
+	return &erp.Workers{
+		Refresh:      &erp.RefreshWorker{Pool: pool, Registry: reg, Secrets: secrets, Logger: logger},
+		SecretDelete: &erp.SecretDeleteWorker{Pool: pool, Secrets: secrets, Registry: reg, Logger: logger},
+		Pull:         &erp.PullWorker{Pool: pool, Registry: reg, Logger: logger},
+		Ingest:       &erp.IngestWorker{Pool: pool, Registry: reg, Invoices: invStore, Gate: gate, Logger: logger},
+		WriteBack:    &erp.WriteBackWorker{Pool: pool, Registry: reg, Logger: logger},
+	}
+}
+
 func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker, erpw *erp.Workers) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)

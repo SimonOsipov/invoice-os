@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -38,6 +39,13 @@ func releaseGrant(ctx context.Context, tx pgx.Tx, q *queue.Client, grantID, conn
 	args := SecretDeleteArgs{TenantID: tenantID, SecretRef: *secretRef, ConnectionID: connectionID, System: system}
 	if revoke {
 		args.Revoke, args.GrantKind = true, kind
+		var key *string
+		if err := tx.QueryRow(ctx, `SELECT external_key FROM erp_connections WHERE id = $1`, connectionID).Scan(&key); err != nil {
+			return err
+		}
+		if key != nil {
+			args.ExternalKey = *key
+		}
 	}
 	_, err = q.EnqueueTx(ctx, tx, tenantID, "erp_secret_delete:"+grantID, args, nil)
 	return err
@@ -54,6 +62,8 @@ type SecretDeleteArgs struct {
 	// which the row no longer holds when the job runs.
 	Revoke    bool   `json:"revoke,omitempty"`
 	GrantKind string `json:"grant_kind,omitempty"`
+	// ExternalKey is the vendor company of the released connection; empty on a job enqueued before it existed.
+	ExternalKey string `json:"external_key,omitempty"`
 }
 
 func (SecretDeleteArgs) Kind() string     { return "erp_secret_delete" }
@@ -110,6 +120,16 @@ func (w *SecretDeleteWorker) revoke(ctx context.Context, args SecretDeleteArgs) 
 	}
 }
 
+// realmShared reports whether another active connection, of any tenant, holds the vendor company:
+// a vendor revoke may end the app's authorization for the whole company.
+func (w *SecretDeleteWorker) realmShared(ctx context.Context, args SecretDeleteArgs) (bool, error) {
+	var shared bool
+	err := db.WithinTenantTx(ctx, w.Pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.erp_webhook_targets($1, $2))`, args.System, args.ExternalKey).Scan(&shared)
+	})
+	return shared, err
+}
+
 const secretDeleteRetryCap = time.Hour
 
 // NextRetry is attempt^4 seconds (River's default) capped at an hour.
@@ -124,7 +144,16 @@ func (*SecretDeleteWorker) NextRetry(job *river.Job[SecretDeleteArgs]) time.Time
 func (w *SecretDeleteWorker) Work(ctx context.Context, job *river.Job[SecretDeleteArgs]) error {
 	args := job.Args
 	if args.Revoke {
-		w.revoke(ctx, args)
+		shared := false
+		if args.ExternalKey != "" {
+			var err error
+			if shared, err = w.realmShared(ctx, args); err != nil {
+				return fmt.Errorf("erp: realm lookup: %w", err)
+			}
+		}
+		if !shared {
+			w.revoke(ctx, args)
+		}
 	}
 	if err := w.Secrets.Delete(ctx, args.SecretRef); err != nil {
 		return fmt.Errorf("erp: delete secret: %w", err)

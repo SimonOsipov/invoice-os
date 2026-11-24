@@ -748,6 +748,9 @@ func TestSecretDeleteWorker_RevokesBeforeTheDelete(t *testing.T) {
 	if !reflect.DeepEqual(*order, []string{"revoke", "delete"}) {
 		t.Errorf("call order = %v, want revoke then delete", *order)
 	}
+	if spy.calls != 1 {
+		t.Errorf("%d Revoke calls, want 1", spy.calls)
+	}
 	if spy.got.Kind != GrantOAuthRefresh || string(spy.got.Secret) != string(secret) {
 		t.Errorf("Revoke got kind %q and secret %q, want %q and the stored %q", spy.got.Kind, spy.got.Secret, GrantOAuthRefresh, secret)
 	}
@@ -756,6 +759,31 @@ func TestSecretDeleteWorker_RevokesBeforeTheDelete(t *testing.T) {
 	}
 	if n := len(r.audit(t, "erp.token.deleted")); n != 1 {
 		t.Errorf("%d erp.token.deleted rows, want 1", n)
+	}
+}
+
+func TestSecretDeleteWorker_SharedRealmSkipsTheRevoke(t *testing.T) {
+	r, spy, _, _ := revokeRig(t, nil)
+	key := "fake-co-" + uuid.NewString()
+	e := r.client(t, "Client One")
+	c, g := seedActive(t, r.super, r.mem, r.tenant, e, key)
+	other := seedTenant(t, r.super, "firm")
+	seedConnRow(t, r.super, connRow{tenant: other, entity: seedClient(t, r.super, other, "Other"), key: key, status: "active"})
+	if _, err := r.store.Disconnect(r.admin, e, c); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	jobs := r.jobs(t)
+	if len(jobs) != 1 {
+		t.Fatalf("%d delete jobs, want 1", len(jobs))
+	}
+	if err := r.work(jobs[0], 1); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if spy.calls != 0 {
+		t.Errorf("%d Revoke calls, want 0 while another tenant holds the realm", spy.calls)
+	}
+	if holds(r.mem, SecretName("", g)) {
+		t.Error("the secret survives its delete job")
 	}
 }
 

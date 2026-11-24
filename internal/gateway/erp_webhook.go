@@ -23,7 +23,7 @@ var erpWebhookDropped = []string{"Cookie", "Forwarded", "X-Forwarded-For", "X-Fo
 // ERPWebhookHandler forwards a vendor's change notification to the worker, which verifies the
 // signature. It reads no database and logs no body, header or address.
 //
-// ceiling: no throttle or Armor rule; mounted only when the ERP mode is fake.
+// ceiling: no throttle or Armor rule; mounted only when the ERP mode runs the fake.
 func ERPWebhookHandler(worker *url.URL, client *http.Client, gatewayToken, system string, log *slog.Logger) http.Handler {
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

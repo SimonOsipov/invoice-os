@@ -101,6 +101,7 @@ export function canDisconnect(row: ConnectorRow): boolean {
 
 export function systemLabel(system: string): { name: string; mono: string } {
   if (system === 'fake') return { name: 'Fake ERP', mono: 'FAKE' }
+  if (system === 'quickbooks') return { name: 'QuickBooks Online', mono: 'QBO' }
   return { name: system, mono: system.slice(0, 3).toUpperCase() }
 }
 

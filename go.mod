@@ -10,53 +10,55 @@ tool (
 require (
 	cloud.google.com/go/compute/metadata v0.10.0
 	cloud.google.com/go/secretmanager v1.24.0
-	github.com/aws/aws-sdk-go-v2 v1.47.4
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.5
-	github.com/aws/smithy-go v1.28.6
+	github.com/aws/aws-sdk-go-v2 v1.48.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
+	github.com/aws/smithy-go v1.28.9
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/getsentry/sentry-go/slog v0.50.0
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/cel-go v0.29.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
-	github.com/klauspost/compress v1.20.3
+	github.com/jackc/pgx/v5 v5.13.0
+	github.com/klauspost/compress v1.20.4
 	github.com/klippa-app/go-pdfium v1.19.8
-	github.com/pressly/goose/v3 v3.29.0
-	github.com/riverqueue/river v0.49.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.49.0
-	github.com/riverqueue/river/rivertype v0.49.0
+	github.com/pressly/goose/v3 v3.30.1
+	github.com/riverqueue/river v0.51.2
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.2
+	github.com/riverqueue/river/rivertype v0.51.2
 	github.com/shopspring/decimal v1.6.0
 	github.com/xuri/excelize/v2 v2.11.1
-	go.yaml.in/yaml/v3 v3.0.5
-	golang.org/x/crypto v0.58.0
+	go.yaml.in/yaml/v3 v3.0.6
+	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.62.0
-	golang.org/x/text v0.43.0
-	google.golang.org/grpc v1.84.0
+	golang.org/x/text v0.44.0
+	google.golang.org/api v0.304.0
+	google.golang.org/grpc v1.85.0
+	google.golang.org/protobuf v1.36.12
 	rsc.io/qr v0.2.0
 )
 
 require (
-	cel.dev/expr v0.25.2 // indirect
+	cel.dev/expr v0.25.3 // indirect
 	cloud.google.com/go/auth v0.24.1-0.20261001053825-dbc26066f70a // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect
 	cloud.google.com/go/iam v1.14.0 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
-	github.com/ClickHouse/ch-go v0.74.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.49.0 // indirect
-	github.com/andybalholm/brotli v1.2.8 // indirect
+	github.com/ClickHouse/ch-go v0.75.0 // indirect
+	github.com/ClickHouse/clickhouse-go/v2 v2.51.0 // indirect
+	github.com/andybalholm/brotli v1.3.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.24 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.7 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.7 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.7 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.22 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.8 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.7 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.7 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.12 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.12 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.12 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.13 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
@@ -84,40 +86,40 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lmittmann/tint v1.1.3 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/mfridman/interpolate v0.2.0 // indirect
 	github.com/mfridman/xflag v0.1.0 // indirect
 	github.com/microsoft/go-mssqldb v1.11.2 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
-	github.com/paulmach/orb v0.13.0 // indirect
+	github.com/paulmach/orb v0.14.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
-	github.com/prometheus/procfs v0.22.0 // indirect
+	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/richardlehane/mscfb v1.0.9 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/riverqueue/river/cmd/river v0.40.0 // indirect
-	github.com/riverqueue/river/riverdriver v0.49.0 // indirect
+	github.com/riverqueue/river/riverdriver v0.51.2 // indirect
 	github.com/riverqueue/river/riverdriver/riversqlite v0.40.0 // indirect
-	github.com/riverqueue/river/rivershared v0.49.0 // indirect
+	github.com/riverqueue/river/rivershared v0.51.2 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
-	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/gjson v1.20.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
-	github.com/vertica/vertica-sql-go v1.3.8 // indirect
+	github.com/vertica/vertica-sql-go v1.3.9 // indirect
 	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
-	github.com/yandex-cloud/go-genproto v0.126.0 // indirect
+	github.com/yandex-cloud/go-genproto v0.137.0 // indirect
 	github.com/ydb-platform/ydb-go-genproto v0.0.0-20260810123728-f0c151ab31b9 // indirect
 	github.com/ydb-platform/ydb-go-sdk-auth-environ v0.5.3 // indirect
-	github.com/ydb-platform/ydb-go-sdk/v3 v3.155.1 // indirect
+	github.com/ydb-platform/ydb-go-sdk/v3 v3.156.1 // indirect
 	github.com/ydb-platform/ydb-go-yc v0.12.5 // indirect
 	github.com/ydb-platform/ydb-go-yc-metadata v0.6.2 // indirect
 	github.com/ziutek/mymysql v1.5.4 // indirect
@@ -130,19 +132,17 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49 // indirect
+	golang.org/x/exp v0.0.0-20261109185158-a52e3aef5920 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	google.golang.org/api v0.304.0 // indirect
 	google.golang.org/genproto v0.0.0-20261012220534-4341edf3f941 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
 	howett.net/plist v1.0.1 // indirect
-	modernc.org/libc v1.78.0 // indirect
+	modernc.org/libc v1.80.2 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
+	modernc.org/sqlite v1.62.0 // indirect
 )

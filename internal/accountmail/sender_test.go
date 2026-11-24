@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -130,13 +131,23 @@ func TestResend_StatusErrors(t *testing.T) {
 	}
 }
 
-// refusedURL is the URL of a server that has been closed: dialing it fails.
+// refusedURL is a loopback URL whose port is held by a bound, non-listening
+// socket: dialing is refused and no later listener can take the port.
 func refusedURL(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.NotFoundHandler())
-	u := srv.URL
-	srv.Close()
-	return u
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatalf("socket: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatalf("getsockname: %v", err)
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", sa.(*syscall.SockaddrInet4).Port)
 }
 
 // hangingServer holds each request until the client gives up.
@@ -180,22 +191,21 @@ func TestResend_NoResponseIsStatusZero(t *testing.T) {
 	}
 }
 
-// A later listener may take the freed port; the refused URL must still refuse (BUG-177).
+// A listener that grabs the refused URL's port must not make it connect.
 func TestResend_RefusedURLStaysRefusedWhenItsPortIsListenedOn(t *testing.T) {
 	base := refusedURL(t)
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatalf("parse %q: %v", base, err)
 	}
-	ln, err := net.Listen("tcp", u.Host)
-	if err != nil {
-		t.Fatalf("listen on freed %s: %v", u.Host, err)
+	// A held port makes Listen fail (the fix); a freed one lets a live server in (the bug).
+	if ln, err := net.Listen("tcp", u.Host); err == nil {
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{}`)
+		})}
+		go func() { _ = srv.Serve(ln) }()
+		t.Cleanup(func() { _ = srv.Close() })
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{}`)
-	})}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
 
 	if err := NewResend(base, testKey, nil).Send(t.Context(), msgs(1)); err == nil {
 		t.Errorf("refused connection: err = nil, want a failure (a live server took %s)", u.Host)

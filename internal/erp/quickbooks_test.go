@@ -2,14 +2,255 @@ package erp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-func TestQuickBooks_SurfaceBeforeSignIn(t *testing.T) {
+// intuitStub is a recording token endpoint.
+type intuitStub struct {
+	mu     sync.Mutex
+	reqs   []*http.Request
+	forms  []url.Values
+	status int
+	body   string
+	delay  time.Duration
+}
+
+func (s *intuitStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	s.mu.Lock()
+	s.reqs = append(s.reqs, r)
+	s.forms = append(s.forms, r.PostForm)
+	status, body, delay := s.status, s.body, s.delay
+	s.mu.Unlock()
+	time.Sleep(delay)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
+func (s *intuitStub) count() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.reqs) }
+
+const stubOKBody = `{"access_token":"a-%s","refresh_token":"r-%s","expires_in":3600,"token_type":"bearer"}`
+
+func stubTokens() string {
+	id := uuid.NewString()
+	return strings.ReplaceAll(stubOKBody, "%s", id)
+}
+
+func quickBooksOver(t *testing.T, cfg intuitConfig, s *intuitStub, timeout time.Duration) *QuickBooks {
+	t.Helper()
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	redirect, _ := url.Parse("https://gw.example/erp/callback")
+	return newQuickBooksAt(redirect, cfg,
+		intuitEndpoints{auth: intuitAuthURL, token: srv.URL + "/token", revoke: srv.URL + "/revoke", api: srv.URL},
+		&http.Client{Timeout: timeout})
+}
+
+func testIntuitConfig() intuitConfig {
+	return intuitConfig{clientID: "v-" + uuid.NewString(), clientSecret: "v-" + uuid.NewString()}
+}
+
+func TestQuickBooks_AuthorizeBuildsTheIntuitConsentURL(t *testing.T) {
+	cfg := testIntuitConfig()
+	redirect, _ := url.Parse("https://gw.example/erp/callback")
+	q := NewQuickBooks(redirect, cfg)
+	state := "v-" + uuid.NewString()
+	res, err := q.Authorize(context.Background(), AuthorizeRequest{State: state})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	u, err := url.Parse(res.ConsentURL)
+	if err != nil || u.Scheme+"://"+u.Host+u.Path != "https://appcenter.intuit.com/connect/oauth2" {
+		t.Fatalf("consent URL = %q (%v)", res.ConsentURL, err)
+	}
+	want := url.Values{
+		"client_id":     {cfg.clientID},
+		"redirect_uri":  {redirect.String()},
+		"response_type": {"code"},
+		"scope":         {"com.intuit.quickbooks.accounting"},
+		"state":         {state},
+	}
+	got := u.Query()
+	if len(got) != len(want) {
+		t.Errorf("query = %v, want exactly the keys %v", got, want)
+	}
+	for k, v := range want {
+		if got.Get(k) != v[0] {
+			t.Errorf("%s = %q, want %q", k, got.Get(k), v[0])
+		}
+	}
+}
+
+func TestQuickBooks_AuthorizeSendsTheRedirectAsRegistered(t *testing.T) {
+	const reg = "https://gateway-nightly-123.africa-south1.run.app/erp/callback"
+	redirect, err := url.Parse(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewQuickBooks(redirect, testIntuitConfig()).Authorize(context.Background(), AuthorizeRequest{State: "v-" + uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(res.ConsentURL)
+	if got := u.Query().Get("redirect_uri"); got != reg {
+		t.Errorf("redirect_uri = %q, want %q", got, reg)
+	}
+}
+
+func TestQuickBooks_AuthorizeMakesNoCallAndNeedsAState(t *testing.T) {
+	s := &intuitStub{status: 200, body: "{}"}
+	q := quickBooksOver(t, testIntuitConfig(), s, time.Second)
+	if _, err := q.Authorize(context.Background(), AuthorizeRequest{State: ""}); err == nil {
+		t.Error("empty state: want an error")
+	}
+	if _, err := q.Authorize(context.Background(), AuthorizeRequest{State: "v-" + uuid.NewString()}); err != nil {
+		t.Errorf("Authorize: %v", err)
+	}
+	if n := s.count(); n != 0 {
+		t.Errorf("%d requests, want 0", n)
+	}
+}
+
+func TestQuickBooks_ExchangePostsTheCode(t *testing.T) {
+	cfg := testIntuitConfig()
+	s := &intuitStub{status: 200, body: stubTokens()}
+	q := quickBooksOver(t, cfg, s, 5*time.Second)
+	code := "v-" + uuid.NewString()
+	if _, err := q.Exchange(context.Background(), ExchangeRequest{Code: code, RealmID: "4620816365"}); err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if s.count() != 1 {
+		t.Fatalf("%d requests, want 1", s.count())
+	}
+	r, form := s.reqs[0], s.forms[0]
+	if r.Method != http.MethodPost || r.URL.Path != "/token" {
+		t.Errorf("request = %s %s", r.Method, r.URL.Path)
+	}
+	if form.Get("grant_type") != "authorization_code" || form.Get("code") != code || form.Get("redirect_uri") != q.redirect.String() {
+		t.Errorf("form = %v", form)
+	}
+	user, pass, ok := r.BasicAuth()
+	if !ok || user != cfg.clientID || pass != cfg.clientSecret {
+		t.Errorf("Authorization header does not decode to the client id and secret (ok %v)", ok)
+	}
+}
+
+func TestQuickBooks_ExchangeReturnsTheRealmAndARefreshGrant(t *testing.T) {
+	access, refresh := "a-"+uuid.NewString(), "r-"+uuid.NewString()
+	body, _ := json.Marshal(map[string]any{"access_token": access, "refresh_token": refresh, "expires_in": 3600, "token_type": "bearer"})
+	s := &intuitStub{status: 200, body: string(body)}
+	q := quickBooksOver(t, testIntuitConfig(), s, 5*time.Second)
+	res, err := q.Exchange(context.Background(), ExchangeRequest{Code: "v-" + uuid.NewString(), RealmID: "4620816365"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExternalKey != "4620816365" || res.Grant.Kind != GrantOAuthRefresh {
+		t.Errorf("key %q kind %q", res.ExternalKey, res.Grant.Kind)
+	}
+	if res.Grant.ExpiresAt == nil || !near(*res.Grant.ExpiresAt, time.Now().Add(time.Hour), 5*time.Second) {
+		t.Errorf("ExpiresAt = %v, want about now + 1h", res.Grant.ExpiresAt)
+	}
+	var tok qbToken
+	if err := json.Unmarshal(res.Grant.Secret, &tok); err != nil || tok.Access != access || tok.Refresh != refresh {
+		t.Errorf("secret does not hold both tokens (err %v)", err)
+	}
+}
+
+func TestQuickBooks_ExchangeRefusesABadRealmBeforeAnyCall(t *testing.T) {
+	rows := []struct {
+		name, code, realm string
+		ok                bool
+	}{
+		{"empty code", "", "4620816365", false},
+		{"empty realm", "c", "", false},
+		{"non-digit", "c", "12a4", false},
+		{"65 digits", "c", strings.Repeat("7", 65), false},
+		{"64 digits", "c", strings.Repeat("7", 64), true},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			s := &intuitStub{status: 200, body: stubTokens()}
+			q := quickBooksOver(t, testIntuitConfig(), s, 5*time.Second)
+			_, err := q.Exchange(context.Background(), ExchangeRequest{Code: r.code, RealmID: r.realm})
+			want := 0
+			if r.ok {
+				want = 1
+			}
+			if (err == nil) != r.ok || s.count() != want {
+				t.Errorf("err %v, %d requests, want ok=%v and %d requests", err, s.count(), r.ok, want)
+			}
+		})
+	}
+}
+
+func TestQuickBooks_ExchangeFailures(t *testing.T) {
+	rows := []struct {
+		name   string
+		status int
+		body   string
+		delay  time.Duration
+	}{
+		{"400", 400, `{"error":"invalid_grant"}`, 0},
+		{"500", 500, "upstream down", 0},
+		{"no refresh token", 200, `{"access_token":"x","expires_in":3600}`, 0},
+		{"no expiry", 200, `{"access_token":"x","refresh_token":"y"}`, 0},
+		{"timeout", 200, stubTokens(), 300 * time.Millisecond},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			s := &intuitStub{status: r.status, body: r.body, delay: r.delay}
+			q := quickBooksOver(t, testIntuitConfig(), s, 50*time.Millisecond)
+			if _, err := q.Exchange(context.Background(), ExchangeRequest{Code: "c", RealmID: "123"}); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+}
+
+func TestQuickBooks_ExchangeErrorsQuoteNothing(t *testing.T) {
+	cfg := testIntuitConfig()
+	code, realm := "v-"+uuid.NewString(), "9"+strings.Repeat("3", 15)
+	replies := []struct {
+		status int
+		body   string
+	}{
+		{400, `{"error":"invalid_grant","error_description":"leak-` + uuid.NewString() + `"}`},
+		{500, "leak-" + uuid.NewString()},
+		{200, `{"access_token":"leak-` + uuid.NewString() + `"}`},
+	}
+	for _, rp := range replies {
+		s := &intuitStub{status: rp.status, body: rp.body}
+		q := quickBooksOver(t, cfg, s, 5*time.Second)
+		_, err := q.Exchange(context.Background(), ExchangeRequest{Code: code, RealmID: realm})
+		if err == nil {
+			t.Fatalf("status %d: want an error", rp.status)
+		}
+		msg := err.Error()
+		for _, canary := range []string{code, realm, cfg.clientSecret, "leak-", "invalid_grant", "upstream"} {
+			if strings.Contains(msg, canary) {
+				t.Errorf("status %d: error %q contains %q", rp.status, msg, canary)
+			}
+		}
+	}
+	q := quickBooksOver(t, cfg, &intuitStub{status: 200, body: "{}"}, time.Second)
+	_, err := q.Exchange(context.Background(), ExchangeRequest{Code: code, RealmID: "x" + realm})
+	if err == nil || strings.Contains(err.Error(), realm) || strings.Contains(err.Error(), code) {
+		t.Errorf("bad realm error = %v", err)
+	}
+}
+
+func TestQuickBooks_UnsupportedMethods(t *testing.T) {
 	redirect, _ := url.Parse("https://gw.example/erp/callback")
 	q := NewQuickBooks(redirect, intuitConfig{clientID: "v-" + uuid.NewString()})
 	ctx, c := context.Background(), Credentials{}
@@ -20,8 +261,6 @@ func TestQuickBooks_SurfaceBeforeSignIn(t *testing.T) {
 		t.Errorf("DefaultMapping = %#v, want empty non-nil", m)
 	}
 	errs := map[string]error{}
-	_, errs["Authorize"] = q.Authorize(ctx, AuthorizeRequest{})
-	_, errs["Exchange"] = q.Exchange(ctx, ExchangeRequest{})
 	_, errs["Refresh"] = q.Refresh(ctx, c)
 	errs["Validate"] = q.Validate(ctx, c, "")
 	_, errs["ListChanged"] = q.ListChanged(ctx, c, "", nil)
@@ -30,7 +269,7 @@ func TestQuickBooks_SurfaceBeforeSignIn(t *testing.T) {
 	_, errs["WriteBack"] = q.WriteBack(ctx, c, DocRef{}, WriteBack{})
 	_, errs["VerifyWebhook"] = q.VerifyWebhook(ctx, nil, nil)
 	errs["EnsureSubscriptions"] = q.EnsureSubscriptions(ctx, c, "")
-	if len(errs) != 10 {
+	if len(errs) != 8 {
 		t.Fatalf("%d methods checked", len(errs))
 	}
 	for name, err := range errs {

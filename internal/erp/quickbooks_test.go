@@ -261,14 +261,13 @@ func TestQuickBooks_UnsupportedMethods(t *testing.T) {
 		t.Errorf("DefaultMapping = %#v, want empty non-nil", m)
 	}
 	errs := map[string]error{}
-	errs["Validate"] = q.Validate(ctx, c, "")
 	_, errs["ListChanged"] = q.ListChanged(ctx, c, "", nil)
 	_, errs["Fetch"] = q.Fetch(ctx, c, DocRef{})
 	_, errs["FetchParty"] = q.FetchParty(ctx, c, "", "")
 	_, errs["WriteBack"] = q.WriteBack(ctx, c, DocRef{}, WriteBack{})
 	_, errs["VerifyWebhook"] = q.VerifyWebhook(ctx, nil, nil)
 	errs["EnsureSubscriptions"] = q.EnsureSubscriptions(ctx, c, "")
-	if len(errs) != 7 {
+	if len(errs) != 6 {
 		t.Fatalf("%d methods checked", len(errs))
 	}
 	for name, err := range errs {
@@ -402,5 +401,77 @@ func TestQuickBooks_RefreshErrorsQuoteNothing(t *testing.T) {
 		Refresh(context.Background(), Credentials{Secret: []byte(`{"refresh":"` + refresh + `","x`)})
 	if err == nil || strings.Contains(err.Error(), refresh) {
 		t.Errorf("unreadable secret error = %v", err)
+	}
+}
+
+func TestQuickBooks_ValidateReadsCompanyInfo(t *testing.T) {
+	s := &intuitStub{status: 200, body: `{"CompanyInfo":{"Id":"1"}}`}
+	q := quickBooksOver(t, testIntuitConfig(), s, 5*time.Second)
+	if err := q.Validate(context.Background(), Credentials{Secret: qbSecret("a1", "r1")}, "4620816365"); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if s.count() != 1 {
+		t.Fatalf("%d requests, want 1", s.count())
+	}
+	r := s.reqs[0]
+	if r.Method != http.MethodGet || r.URL.Path != "/v3/company/4620816365/companyinfo/4620816365" || r.URL.Query().Get("minorversion") != "75" {
+		t.Errorf("request = %s %s", r.Method, r.URL)
+	}
+	if r.Header.Get("Authorization") != "Bearer a1" || r.Header.Get("Accept") != "application/json" {
+		t.Errorf("headers = %v", r.Header)
+	}
+}
+
+func TestQuickBooks_ValidateUnknownRealm(t *testing.T) {
+	for _, status := range []int{403, 404} {
+		s := &intuitStub{status: status, body: "{}"}
+		q := quickBooksOver(t, testIntuitConfig(), s, 5*time.Second)
+		if err := q.Validate(context.Background(), Credentials{Secret: qbSecret("a1", "r1")}, "123"); !errors.Is(err, ErrUnknownScope) {
+			t.Errorf("status %d: %v", status, err)
+		}
+	}
+	for _, scope := range []string{"", "abc"} {
+		s := &intuitStub{status: 200, body: "{}"}
+		q := quickBooksOver(t, testIntuitConfig(), s, 5*time.Second)
+		if err := q.Validate(context.Background(), Credentials{Secret: qbSecret("a1", "r1")}, scope); !errors.Is(err, ErrUnknownScope) {
+			t.Errorf("scope %q: %v", scope, err)
+		}
+		if s.count() != 0 {
+			t.Errorf("scope %q: %d requests", scope, s.count())
+		}
+	}
+}
+
+func TestQuickBooks_ValidateOtherAnswers(t *testing.T) {
+	cr := Credentials{Secret: qbSecret("a1", "r1")}
+	run := func(status int, body string) error {
+		q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: status, body: body}, 5*time.Second)
+		return q.Validate(context.Background(), cr, "123")
+	}
+	if err := run(401, "{}"); err == nil || errors.Is(err, ErrUnknownScope) {
+		t.Errorf("401: %v", err)
+	}
+	var rl *RateLimitError
+	if err := run(429, "{}"); !errors.As(err, &rl) || rl.RetryAfter != 60*time.Second {
+		t.Errorf("429: %v", err)
+	}
+	if err := run(200, "{}"); err == nil {
+		t.Error("200 without CompanyInfo: nil error")
+	}
+}
+
+func TestQuickBooks_ValidateErrorsQuoteNothing(t *testing.T) {
+	access, canary, realm := "a-"+uuid.NewString(), "c-"+uuid.NewString(), "4620816365"
+	for _, status := range []int{401, 500, 403, 429} {
+		q := quickBooksOver(t, testIntuitConfig(), &intuitStub{status: status, body: canary}, 5*time.Second)
+		err := q.Validate(context.Background(), Credentials{Secret: qbSecret(access, "r1")}, realm)
+		if err == nil {
+			t.Fatalf("status %d: nil error", status)
+		}
+		for _, bad := range []string{access, canary, realm} {
+			if strings.Contains(err.Error(), bad) {
+				t.Errorf("status %d: error quotes %q: %v", status, bad, err)
+			}
+		}
 	}
 }

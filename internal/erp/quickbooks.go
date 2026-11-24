@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,10 @@ const (
 	intuitSandboxAPI = "https://sandbox-quickbooks.api.intuit.com"
 	intuitScope      = "com.intuit.quickbooks.accounting"
 	intuitCallTime   = 10 * time.Second
+
+	intuitMinorVersion = "75"
+	intuitMaxBody      = 1 << 20
+	intuitRetryAfter   = 60 * time.Second
 )
 
 // realmPattern bounds the realm before it reaches a URL path.
@@ -150,7 +155,46 @@ func (q *QuickBooks) Refresh(ctx context.Context, c Credentials) (GrantMaterial,
 	return GrantMaterial{Kind: GrantOAuthRefresh, Secret: secret, ExpiresAt: &exp}, nil
 }
 
-func (*QuickBooks) Validate(context.Context, Credentials, string) error { return ErrUnsupported }
+// Validate proves the grant and the realm by reading the company's CompanyInfo. Errors name the
+// status only: Intuit's reply is never quoted.
+func (q *QuickBooks) Validate(ctx context.Context, c Credentials, scope string) error {
+	if !realmPattern.MatchString(scope) {
+		return fmt.Errorf("erp: quickbooks validate: %w", ErrUnknownScope)
+	}
+	var tok qbToken
+	if err := json.Unmarshal(c.Secret, &tok); err != nil || tok.Access == "" {
+		return errors.New("erp: quickbooks validate: unreadable secret")
+	}
+	u := q.ep.api + "/v3/company/" + scope + "/companyinfo/" + scope + "?minorversion=" + intuitMinorVersion
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return errors.New("erp: quickbooks validate: request failed")
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Access)
+	req.Header.Set("Accept", "application/json")
+	resp, err := q.http.Do(req)
+	if err != nil {
+		return intuitErr("validate", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusForbidden, http.StatusNotFound:
+		return fmt.Errorf("erp: quickbooks validate: status %d: %w", resp.StatusCode, ErrUnknownScope)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("erp: quickbooks validate: %w", &RateLimitError{RetryAfter: intuitRetryAfter})
+	default:
+		return fmt.Errorf("erp: quickbooks validate: status %d", resp.StatusCode)
+	}
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, intuitMaxBody)).Decode(&body); err != nil {
+		return errors.New("erp: quickbooks validate: unreadable reply")
+	}
+	if _, ok := body["CompanyInfo"]; !ok {
+		return errors.New("erp: quickbooks validate: reply has no CompanyInfo")
+	}
+	return nil
+}
 
 func (*QuickBooks) ListChanged(context.Context, Credentials, string, []byte) (Changes, error) {
 	return Changes{}, ErrUnsupported

@@ -24,10 +24,9 @@ func mountCheck(app *platform.App, pattern, validationURL string) {
 	})
 }
 
+// closedValidationURL is port 1: bind(0) never hands it out, so a dial is refused and no listener can take it.
 func closedValidationURL() string {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	srv.Close()
-	return srv.URL
+	return "http://127.0.0.1:1"
 }
 
 func postCheck(t *testing.T, h http.Handler, path string) {

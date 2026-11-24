@@ -84,9 +84,8 @@ func TestFleetReader_RefusesEveryOtherAnswer(t *testing.T) {
 		}
 	}
 
-	srv := httptest.NewServer(answer(200, `{"status":"ok","services":[]}`))
-	srv.Close()
-	if _, err := readServer(t, srv, time.Second); err == nil {
+	// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+	if _, err := readServer(t, &httptest.Server{URL: "http://127.0.0.1:1"}, time.Second); err == nil {
 		t.Error("closed server: want an error")
 	}
 }

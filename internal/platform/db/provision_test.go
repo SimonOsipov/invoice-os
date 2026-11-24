@@ -514,8 +514,14 @@ func TestSuperuserDSNNotRetainedForRequestPath(t *testing.T) {
 		t.Fatalf("Provision: %v", err)
 	}
 
+	// pgx Conn.Close does not wait for the server backend to exit, so poll until
+	// the count is back at `before` or lower; a connection kept open never is.
 	after := mustCount(t, monitor, `SELECT count(*) FROM pg_stat_activity WHERE usename = $1`, superCfg.User)
-	if after != before {
+	for deadline := time.Now().Add(5 * time.Second); after > before && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		after = mustCount(t, monitor, `SELECT count(*) FROM pg_stat_activity WHERE usename = $1`, superCfg.User)
+	}
+	if after > before {
 		t.Errorf("pg_stat_activity shows %d %q connection(s) after Provision returned (had %d before) — the provisioning connection was not closed / was retained past Provision's return", after, superCfg.User, before)
 	}
 

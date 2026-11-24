@@ -296,9 +296,8 @@ func TestDeleteUser_OtherStatusIsAStatusError(t *testing.T) {
 }
 
 func TestDeleteUser_TransportFailureIsStatusZero(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := srv.URL
-	srv.Close()
+	// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+	url := "http://127.0.0.1:1"
 	c := newClient(t, url, signing(t))
 	id := uuid.NewString()
 	err := c.DeleteUser(context.Background(), id)
@@ -602,9 +601,8 @@ func TestUserEmail_ARefusalIsAStatusError(t *testing.T) {
 		})
 	}
 	t.Run("closed server", func(t *testing.T) {
-		srv := httptest.NewServer(http.NotFoundHandler())
-		url := srv.URL
-		srv.Close()
+		// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+		url := "http://127.0.0.1:1"
 		c := newClient(t, url, signing(t))
 		id := uuid.NewString()
 		_, err := c.UserEmail(context.Background(), id)
@@ -943,9 +941,8 @@ func TestGenerateRecoveryLink_OtherAnswersAreStatusErrors(t *testing.T) {
 	})
 
 	t.Run("transport failure", func(t *testing.T) {
-		srv := httptest.NewServer(http.NotFoundHandler())
-		base := srv.URL
-		srv.Close()
+		// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+		base := "http://127.0.0.1:1"
 		_, err := newClient(t, base, signing(t)).GenerateRecoveryLink(ctx, "ada@ascomply.test")
 		var se *gotrueadmin.StatusError
 		if !errors.As(err, &se) || se.Status != 0 {

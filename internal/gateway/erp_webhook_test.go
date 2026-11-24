@@ -138,9 +138,8 @@ func TestERPWebhook_MapsTheWorkerAnswer(t *testing.T) {
 }
 
 func TestERPWebhook_UnreachableOrSlowWorkerIs503(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	u, _ := url.Parse(srv.URL)
-	srv.Close()
+	// Port 1 is never handed out by bind(0), so nothing listens: a dial is refused, and no listener can take it.
+	u, _ := url.Parse("http://127.0.0.1:1")
 	if rec := postHook(hookHandler(u, nil), []byte("x"), nil); rec.Code != 503 {
 		t.Errorf("closed worker = %d, want 503", rec.Code)
 	}

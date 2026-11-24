@@ -30,7 +30,7 @@ const (
 )
 
 // CallbackInput is what the vendor's redirect carried; none of it is ever logged.
-type CallbackInput struct{ State, Code, Error string }
+type CallbackInput struct{ State, Code, Error, RealmID string }
 
 const (
 	completeBudget     = 20 * time.Second // inside the gateway's 30 s call
@@ -75,7 +75,7 @@ func (s *Store) Complete(ctx context.Context, in CallbackInput) (Outcome, error)
 		return OutcomeFailed, nil
 	}
 	xctx, xcancel := context.WithTimeout(ctx, exchangeBudget)
-	res, err := connector.Exchange(xctx, ExchangeRequest{Code: in.Code})
+	res, err := connector.Exchange(xctx, ExchangeRequest{Code: in.Code, RealmID: in.RealmID})
 	xcancel()
 	if err != nil { // the error may quote the vendor's reply, so only the system is logged
 		slog.WarnContext(ctx, "erp: code exchange failed", slog.String("system", c.system))
@@ -242,9 +242,10 @@ func (s *Store) settleTx2Error(ctx context.Context, tenantID, connectionID, gran
 }
 
 type callbackRequest struct {
-	State string `json:"state"`
-	Code  string `json:"code"`
-	Error string `json:"error"`
+	State   string `json:"state"`
+	Code    string `json:"code"`
+	Error   string `json:"error"`
+	RealmID string `json:"realm_id"`
 }
 
 // CallbackHandler serves POST /internal/erp/callback for the gateway. It answers the outcome only and
@@ -263,7 +264,7 @@ func CallbackHandler(complete func(context.Context, CallbackInput) (Outcome, err
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		out, err := complete(r.Context(), CallbackInput{State: req.State, Code: req.Code, Error: req.Error})
+		out, err := complete(r.Context(), CallbackInput{State: req.State, Code: req.Code, Error: req.Error, RealmID: req.RealmID})
 		if err != nil {
 			log.ErrorContext(r.Context(), "erp: complete callback", slog.Any("err", err))
 			writeError(w, http.StatusInternalServerError, "internal server error")

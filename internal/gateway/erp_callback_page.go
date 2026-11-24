@@ -19,6 +19,7 @@ import (
 const (
 	erpCallbackTimeout   = 30 * time.Second // above the worker's 20 s callback budget
 	erpMaxCode           = 2048
+	erpMaxRealm          = 64
 	maxERPCallbackAnswer = 4096
 )
 
@@ -48,7 +49,7 @@ var erpOutcomePages = map[string]erpOutcomePage{
 var erpCallbackPageHTML string
 
 // ERPCallbackPageHandler serves the page the vendor redirects the browser to: it checks the shape of
-// state and code, forwards state, code and error to the worker, and renders its outcome. Nothing the
+// state, code and realm, forwards state, code, error and realm to the worker, and renders its outcome. Nothing the
 // request carried reaches a log line or the page.
 //
 // ceiling: no throttle; a random 256-bit state cannot be enumerated (as /readiness-check/confirm).
@@ -81,18 +82,18 @@ func (p *erpCallbackPage) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	state, code, vendorErr := q.Get("state"), q.Get("code"), q.Get("error")
-	if !erpStateRE.MatchString(state) || len(code) > erpMaxCode {
+	state, code, vendorErr, realm := q.Get("state"), q.Get("code"), q.Get("error"), q.Get("realmId")
+	if !erpStateRE.MatchString(state) || len(code) > erpMaxCode || len(realm) > erpMaxRealm {
 		p.write(w, r, "invalid")
 		return
 	}
-	p.write(w, r, p.forward(r.Context(), state, code, vendorErr))
+	p.write(w, r, p.forward(r.Context(), state, code, vendorErr, realm))
 }
 
 // forward returns the worker's outcome. A worker 500 means tx2 did not commit (failed); a timeout or any
 // other answer may follow a commit, so the result is unknown.
-func (p *erpCallbackPage) forward(ctx context.Context, state, code, vendorErr string) string {
-	raw, err := json.Marshal(map[string]string{"state": state, "code": code, "error": vendorErr})
+func (p *erpCallbackPage) forward(ctx context.Context, state, code, vendorErr, realm string) string {
+	raw, err := json.Marshal(map[string]string{"state": state, "code": code, "error": vendorErr, "realm_id": realm})
 	if err != nil {
 		return "unknown"
 	}

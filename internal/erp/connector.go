@@ -46,7 +46,8 @@ type AuthorizeRequest struct{ State string }
 // AuthorizeResult is built locally, with no network call.
 type AuthorizeResult struct{ ConsentURL string }
 
-type ExchangeRequest struct{ Code string }
+// ExchangeRequest: RealmID is the vendor's company key from the redirect (QuickBooks realmId).
+type ExchangeRequest struct{ Code, RealmID string }
 
 // ExchangeResult is what the callback stores: the vendor's company key and the grant, whose Secret
 // is connector-owned opaque bytes.

@@ -269,6 +269,15 @@ func TestFake_AuthorizeBuildsTheConsentURL(t *testing.T) {
 	}
 }
 
+func TestFake_ExchangeIgnoresTheRealm(t *testing.T) {
+	f := NewFake(testRedirect)
+	a, errA := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-1"})
+	b, errB := f.Exchange(ctx, ExchangeRequest{Code: "fake-co-1", RealmID: "x"})
+	if errA != nil || errB != nil || a.ExternalKey != b.ExternalKey || a.Grant.Kind != b.Grant.Kind {
+		t.Errorf("results differ with the realm: %+v %v / %+v %v", a, errA, b, errB)
+	}
+}
+
 func TestFake_ExchangeCodes(t *testing.T) {
 	f := NewFake(testRedirect)
 	codes := fakeCodes()

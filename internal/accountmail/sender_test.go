@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -176,6 +177,28 @@ func TestResend_NoResponseIsStatusZero(t *testing.T) {
 		if se.Status != 0 {
 			t.Errorf("%s: SendError.Status = %d, want 0", name, se.Status)
 		}
+	}
+}
+
+// A later listener may take the freed port; the refused URL must still refuse (BUG-177).
+func TestResend_RefusedURLStaysRefusedWhenItsPortIsListenedOn(t *testing.T) {
+	base := refusedURL(t)
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse %q: %v", base, err)
+	}
+	ln, err := net.Listen("tcp", u.Host)
+	if err != nil {
+		t.Fatalf("listen on freed %s: %v", u.Host, err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if err := NewResend(base, testKey, nil).Send(t.Context(), msgs(1)); err == nil {
+		t.Errorf("refused connection: err = nil, want a failure (a live server took %s)", u.Host)
 	}
 }
 

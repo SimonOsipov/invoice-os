@@ -85,6 +85,7 @@ export const UNITS: Unit[] = [
       'design-system.spec.ts',
       'environment-posture.spec.ts',
       'erp-connectors.spec.ts',
+      'erp-quickbooks.spec.ts',
       'member-access-role.spec.ts',
       'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',

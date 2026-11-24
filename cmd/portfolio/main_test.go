@@ -133,6 +133,25 @@ func TestPortfolioMain_PreviewWithoutRedirectRefusesToBoot(t *testing.T) {
 	}
 }
 
+func TestPortfolioMain_NightlyWithoutIntuitRefusesToBoot(t *testing.T) {
+	bin := buildPortfolio(t)
+	ctx, cancel := context.WithTimeout(t.Context(), bootWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = bootEnv(freePort(t), map[string]string{"DEPLOY_ENV": "nightly", "ERP_REDIRECT_URL": "https://gw.example/erp/callback"})
+	var out lockedBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("portfolio ended with %v, want exit status 1 through platform.Fatal\n%s", err, &out)
+	}
+	if !strings.Contains(out.String(), "INTUIT_CLIENT_ID") {
+		t.Errorf("output does not name INTUIT_CLIENT_ID\n%s", &out)
+	}
+}
+
 func TestPortfolioMain_HostedWithoutERPFakeBoots(t *testing.T) {
 	bin := buildPortfolio(t)
 	port := freePort(t)

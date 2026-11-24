@@ -3,6 +3,7 @@ package erp
 import (
 	"errors"
 	"net/url"
+	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/erp/erpweb"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -25,21 +26,52 @@ func ModeFromEnv(getenv func(string) string, posture platform.PostureKind) (Mode
 // envRedirectURL is the callback URL the vendor sends the browser back to; error text names it, never its value.
 const envRedirectURL = "ERP_REDIRECT_URL"
 
-// RegistryFromEnv is the only way to build connectors. It reads ERP_REDIRECT_URL only when it builds one.
+// The Intuit app's variables; error text names them, never their values.
+const (
+	envIntuitClientID        = "INTUIT_CLIENT_ID"
+	envIntuitClientSecret    = "INTUIT_CLIENT_SECRET"
+	envIntuitWebhookVerifier = "INTUIT_WEBHOOK_VERIFIER"
+)
+
+// RegistryFromEnv is the only way to build connectors. It reads ERP_REDIRECT_URL only when it builds
+// one, and the INTUIT_* variables only in sandbox mode, where QuickBooks joins the fake.
 func RegistryFromEnv(getenv func(string) string) (Registry, error) {
 	posture := platform.Posture(platform.DeployEnvFrom(getenv))
 	mode, err := ModeFromEnv(getenv, posture)
 	if err != nil {
 		return nil, err
 	}
-	if mode.RunsFake() {
-		redirect, err := redirectFromEnv(getenv, posture)
-		if err != nil {
-			return nil, err
-		}
+	if !mode.RunsFake() {
+		return NewRegistry()
+	}
+	redirect, err := redirectFromEnv(getenv, posture)
+	if err != nil {
+		return nil, err
+	}
+	if mode != ModeSandbox {
 		return NewRegistry(NewFake(redirect))
 	}
-	return NewRegistry()
+	cfg, err := intuitFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	return NewRegistry(NewFake(redirect), NewQuickBooks(redirect, cfg))
+}
+
+// intuitFromEnv reads the three variables in a fixed order; a padded value is a paste slip.
+func intuitFromEnv(getenv func(string) string) (intuitConfig, error) {
+	var vals [3]string
+	for i, name := range []string{envIntuitClientID, envIntuitClientSecret, envIntuitWebhookVerifier} {
+		v := getenv(name)
+		if v == "" {
+			return intuitConfig{}, errors.New("erp: " + name + " is not set")
+		}
+		if strings.TrimSpace(v) != v {
+			return intuitConfig{}, errors.New("erp: " + name + " has surrounding whitespace")
+		}
+		vals[i] = v
+	}
+	return intuitConfig{clientID: vals[0], clientSecret: vals[1], webhookVerifier: vals[2]}, nil
 }
 
 // redirectFromEnv wants an absolute URL, https outside a local run.

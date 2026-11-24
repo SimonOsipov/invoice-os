@@ -312,6 +312,8 @@ func statusForErr(err error) (int, string) {
 		return http.StatusConflict, "another connection of this system is already waiting for consent"
 	case errors.Is(err, ErrAlreadyDisconnected):
 		return http.StatusConflict, "already disconnected"
+	case errors.Is(err, ErrUnsupported):
+		return http.StatusNotImplemented, "this system cannot connect yet"
 	case errors.Is(err, ErrInvalidMapping), errors.Is(err, ErrInvalidLookup):
 		return http.StatusBadRequest, err.Error()
 	}

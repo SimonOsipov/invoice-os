@@ -142,6 +142,7 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{ErrNoSuchRecord, 404, "not found"},
 		{ErrAlreadyConnected, 409, "already connected"},
 		{ErrAlreadyDisconnected, 409, "already disconnected"},
+		{fmt.Errorf("wrapped: %w", ErrUnsupported), 501, "this system cannot connect yet"},
 		{ErrKeylessPending, 409, "another connection of this system is already waiting for consent"},
 		{fmt.Errorf("wrapped: %w", ErrNoSuchRecord), 404, "not found"},
 		{invalidMapping("line_quantity", "a line field reads one []"), 400, "line_quantity: a line field reads one []"},

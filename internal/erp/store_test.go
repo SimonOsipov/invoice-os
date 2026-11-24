@@ -999,6 +999,36 @@ func TestStore_ConnectRefusesBadInputAndWritesNothing(t *testing.T) {
 	}
 }
 
+func TestStore_ConnectToAConnectorThatCannotAuthorizeKeepsNothing(t *testing.T) {
+	super, app := storePools(t)
+	tenant := seedTenant(t, super, "firm")
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	reg, err := NewRegistry(NewFake(testRedirect), NewQuickBooks(testRedirect, intuitConfig{}))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	store := NewStore(app, reg, nil, nil)
+
+	_, _, created, err := store.Connect(admin, e1, ConnectInput{System: "quickbooks"})
+	wantErr(t, "Connect quickbooks", err, ErrUnsupported)
+	if created {
+		t.Error("created = true on a refused connect")
+	}
+	if n := connCount(t, super, tenant); n != 0 {
+		t.Errorf("%d connections, want 0", n)
+	}
+	if n := countOf(t, super, "SELECT count(*) FROM erp_oauth_states WHERE tenant_id = $1", tenant); n != 0 {
+		t.Errorf("%d OAuth states, want 0", n)
+	}
+	if n := eventCount(t, super, tenant, "erp.connection.created"); n != 0 {
+		t.Errorf("%d erp.connection.created rows, want 0", n)
+	}
+	if _, _, created, err := store.Connect(admin, e1, ConnectInput{System: "fake"}); err != nil || !created {
+		t.Errorf("control: fake Connect = created %v, %v", created, err)
+	}
+}
+
 // secondSystem is a registry entry that is not the fake.
 type secondSystem struct{ *Fake }
 

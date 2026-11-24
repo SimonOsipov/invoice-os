@@ -92,6 +92,28 @@ func TestPortfolioMain_HostedWithERPFakeRefusesToBoot(t *testing.T) {
 	}
 }
 
+func TestPortfolioMain_HostedWithERPSandboxRefusesToBoot(t *testing.T) {
+	bin := buildPortfolio(t)
+	ctx, cancel := context.WithTimeout(t.Context(), bootWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = bootEnv(freePort(t), map[string]string{"DEPLOY_ENV": "production", "ERP_SANDBOX": "true"})
+	var out lockedBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("portfolio ended with %v, want exit status 1 through platform.Fatal\n%s", err, &out)
+	}
+	if !strings.Contains(out.String(), "ERP_SANDBOX") {
+		t.Errorf("output does not name ERP_SANDBOX\n%s", &out)
+	}
+	if strings.Contains(out.String(), "=true") {
+		t.Errorf("output carries the flag value\n%s", &out)
+	}
+}
+
 func TestPortfolioMain_PreviewWithoutRedirectRefusesToBoot(t *testing.T) {
 	bin := buildPortfolio(t)
 	ctx, cancel := context.WithTimeout(t.Context(), bootWait)

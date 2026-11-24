@@ -9,18 +9,30 @@ import (
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
-func TestModeFromEnv_EphemeralPosturesAreAlwaysFake(t *testing.T) {
-	for _, p := range []platform.PostureKind{platform.PosturePreview, platform.PostureNightly} {
-		for _, v := range []string{"", "false", "banana"} {
-			get := func(k string) string {
-				if k == "ERP_FAKE" {
-					t.Errorf("%s read ERP_FAKE", p)
-				}
-				return v
+func TestModeFromEnv_NightlyIsSandboxWithoutReadingAFlag(t *testing.T) {
+	for _, v := range []string{"", "false", "true", "banana"} {
+		get := func(k string) string {
+			if k == "ERP_FAKE" || k == "ERP_SANDBOX" {
+				t.Errorf("nightly read %s", k)
 			}
-			if m, err := ModeFromEnv(get, p); err != nil || m != ModeFake {
-				t.Errorf("%s %q: %v, %v", p, v, m, err)
+			return v
+		}
+		if m, err := ModeFromEnv(get, platform.PostureNightly); err != nil || m != ModeSandbox {
+			t.Errorf("%q: %v, %v", v, m, err)
+		}
+	}
+}
+
+func TestModeFromEnv_PreviewIsAlwaysFake(t *testing.T) {
+	for _, v := range []string{"", "false", "true", "banana"} {
+		get := func(k string) string {
+			if k == "ERP_FAKE" || k == "ERP_SANDBOX" {
+				t.Errorf("preview read %s", k)
 			}
+			return v
+		}
+		if m, err := ModeFromEnv(get, platform.PosturePreview); err != nil || m != ModeFake {
+			t.Errorf("%q: %v, %v", v, m, err)
 		}
 	}
 }
@@ -34,28 +46,58 @@ func TestModeFromEnv_HostedWithTheFlagRefuses(t *testing.T) {
 	}
 }
 
+func TestModeFromEnv_HostedWithTheSandboxFlagRefuses(t *testing.T) {
+	for _, v := range []string{"true", "1", "TRUE"} {
+		_, err := ModeFromEnv(env(map[string]string{"ERP_SANDBOX": v}), platform.PostureHosted)
+		if err == nil || !strings.Contains(err.Error(), "ERP_SANDBOX") || strings.Contains(err.Error(), v) {
+			t.Errorf("%q: %v", v, err)
+		}
+	}
+}
+
 func TestModeFromEnv_HostedWithoutTheFlagIsOff(t *testing.T) {
-	for _, v := range []string{"", "false"} {
-		if m, err := ModeFromEnv(env(map[string]string{"ERP_FAKE": v}), platform.PostureHosted); err != nil || m != ModeOff {
-			t.Errorf("%q: %v, %v", v, m, err)
+	for _, name := range []string{"ERP_FAKE", "ERP_SANDBOX"} {
+		for _, v := range []string{"", "false"} {
+			if m, err := ModeFromEnv(env(map[string]string{name: v}), platform.PostureHosted); err != nil || m != ModeOff {
+				t.Errorf("%s %q: %v, %v", name, v, m, err)
+			}
 		}
 	}
 }
 
 func TestModeFromEnv_LocalFollowsTheFlag(t *testing.T) {
-	want := map[string]Mode{"true": ModeFake, "": ModeOff, "false": ModeOff}
-	for v, w := range want {
-		if m, err := ModeFromEnv(env(map[string]string{"ERP_FAKE": v}), platform.PostureLocal); err != nil || m != w {
-			t.Errorf("%q: %v, %v", v, m, err)
+	for _, c := range []struct {
+		env  map[string]string
+		want Mode
+	}{
+		{map[string]string{"ERP_FAKE": "true"}, ModeFake},
+		{map[string]string{"ERP_FAKE": "false"}, ModeOff},
+		{map[string]string{"ERP_SANDBOX": "true"}, ModeSandbox},
+		{map[string]string{"ERP_SANDBOX": "true", "ERP_FAKE": "true"}, ModeSandbox},
+		{map[string]string{"ERP_SANDBOX": "false", "ERP_FAKE": "true"}, ModeFake},
+		{map[string]string{}, ModeOff},
+	} {
+		if m, err := ModeFromEnv(env(c.env), platform.PostureLocal); err != nil || m != c.want {
+			t.Errorf("%v: %v, %v", c.env, m, err)
 		}
 	}
 }
 
 func TestModeFromEnv_UnreadableFlagRefuses(t *testing.T) {
-	for _, p := range []platform.PostureKind{platform.PostureHosted, platform.PostureLocal} {
-		_, err := ModeFromEnv(env(map[string]string{"ERP_FAKE": "banana"}), p)
-		if err == nil || !strings.Contains(err.Error(), "not a boolean") || strings.Contains(err.Error(), "banana") {
-			t.Errorf("%s: %v", p, err)
+	for _, name := range []string{"ERP_FAKE", "ERP_SANDBOX"} {
+		for _, p := range []platform.PostureKind{platform.PostureHosted, platform.PostureLocal} {
+			_, err := ModeFromEnv(env(map[string]string{name: "banana"}), p)
+			if err == nil || !strings.Contains(err.Error(), name+" is not a boolean") || strings.Contains(err.Error(), "banana") {
+				t.Errorf("%s %s: %v", name, p, err)
+			}
+		}
+	}
+}
+
+func TestModeRunsFake(t *testing.T) {
+	for m, want := range map[Mode]bool{ModeOff: false, ModeFake: true, ModeSandbox: true} {
+		if m.RunsFake() != want {
+			t.Errorf("%v.RunsFake() = %v, want %v", m, m.RunsFake(), want)
 		}
 	}
 }

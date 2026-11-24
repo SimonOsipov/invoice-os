@@ -12,10 +12,12 @@ import (
 type Mode = erpweb.Mode
 
 const (
-	ModeOff  = erpweb.ModeOff
-	ModeFake = erpweb.ModeFake
+	ModeOff     = erpweb.ModeOff
+	ModeFake    = erpweb.ModeFake
+	ModeSandbox = erpweb.ModeSandbox
 )
 
+// ModeFromEnv is erpweb.ModeFromEnv: the nightly is the sandbox, a preview the fake, a hosted deployment refuses both flags.
 func ModeFromEnv(getenv func(string) string, posture platform.PostureKind) (Mode, error) {
 	return erpweb.ModeFromEnv(getenv, posture)
 }
@@ -30,7 +32,7 @@ func RegistryFromEnv(getenv func(string) string) (Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mode == ModeFake {
+	if mode.RunsFake() {
 		redirect, err := redirectFromEnv(getenv, posture)
 		if err != nil {
 			return nil, err

@@ -39,6 +39,9 @@ func TestGatewayRoutes_ERPPagesFollowTheMode(t *testing.T) {
 		{"the nightly", map[string]string{"DEPLOY_ENV": "nightly"}, true, false},
 		{"local without the flag", map[string]string{}, false, false},
 		{"local with the flag", map[string]string{"ERP_FAKE": "true"}, true, false},
+		{"local with the sandbox flag", map[string]string{"ERP_SANDBOX": "true"}, true, false},
+		{"a preview with the sandbox flag", map[string]string{"DEPLOY_ENV": "pr-3", "ERP_SANDBOX": "true"}, true, false},
+		{"production with the sandbox flag on", map[string]string{"DEPLOY_ENV": "production", "ERP_SANDBOX": "true"}, false, true},
 		{"production with the fake flag on", map[string]string{"DEPLOY_ENV": "production", "ERP_FAKE": "true"}, false, true},
 	}
 	for _, c := range cases {

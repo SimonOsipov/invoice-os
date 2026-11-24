@@ -1004,7 +1004,7 @@ func TestStore_ConnectToAConnectorThatCannotAuthorizeKeepsNothing(t *testing.T) 
 	tenant := seedTenant(t, super, "firm")
 	admin := seedMember(t, super, tenant, "admin", "active", true)
 	e1 := seedClient(t, super, tenant, "Client One")
-	reg, err := NewRegistry(NewFake(testRedirect), NewQuickBooks(testRedirect, intuitConfig{}))
+	reg, err := NewRegistry(NewFake(testRedirect), refuseAuthorize{NewQuickBooks(testRedirect, intuitConfig{})})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -1033,6 +1033,13 @@ func TestStore_ConnectToAConnectorThatCannotAuthorizeKeepsNothing(t *testing.T) 
 type secondSystem struct{ *Fake }
 
 func (secondSystem) System() string { return "second" }
+
+// refuseAuthorize is a connector whose Authorize is unsupported.
+type refuseAuthorize struct{ Connector }
+
+func (refuseAuthorize) Authorize(context.Context, AuthorizeRequest) (AuthorizeResult, error) {
+	return AuthorizeResult{}, ErrUnsupported
+}
 
 // --- AC 8, 9: disconnect ---------------------------------------------------------------
 

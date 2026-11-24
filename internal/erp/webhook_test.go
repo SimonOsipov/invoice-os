@@ -95,6 +95,11 @@ func (h *hookConnector) FetchParty(ctx context.Context, c Credentials, scope, pa
 	return h.Connector.FetchParty(ctx, c, scope, partyID)
 }
 
+func (h *hookConnector) Revoke(ctx context.Context, c Credentials) error {
+	h.forbid("Revoke")
+	return h.Connector.Revoke(ctx, c)
+}
+
 func (h *hookConnector) WriteBack(ctx context.Context, c Credentials, ref DocRef, wb WriteBack) (DocRef, error) {
 	h.forbid("WriteBack")
 	return h.Connector.WriteBack(ctx, c, ref, wb)

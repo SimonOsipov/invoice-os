@@ -980,6 +980,23 @@ jobs:
           echo "::add-mask::$mock"
           echo "MOCK_ISSUER_TOKEN=$mock" >>"$GITHUB_ENV"
           if [ "$PR" = nightly ]; then echo "MOCK_ISSUER_TOKEN_FOR=nightly" >>"$GITHUB_ENV"; else echo "MOCK_ISSUER_TOKEN_FOR=pr-$PR" >>"$GITHUB_ENV"; fi
+      - name: Read the Intuit sign-in
+        if: needs.changes.outputs.nightly == 'true' && matrix.shard == 'ui-surfaces'
+        # A failed read leaves its variable unset: the spec then fails naming it.
+        run: |
+          set -uo pipefail
+          export_secret() {
+            local v
+            if v=$(bash scripts/ci/preview.sh "$2" "$PR"); then
+              echo "::add-mask::$v"
+              echo "$1=$v" >>"$GITHUB_ENV"
+            else
+              echo "::warning::could not read $1"
+            fi
+          }
+          export_secret INTUIT_LOGIN_EMAIL intuit-login-email
+          export_secret INTUIT_LOGIN_PASSWORD intuit-login-password
+          export_secret RESEND_READ_KEY mail-read-key
       - name: Topology (${{ matrix.shard }})
         env:
           SHARD: ${{ matrix.shard }}

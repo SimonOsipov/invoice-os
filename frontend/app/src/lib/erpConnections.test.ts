@@ -147,6 +147,7 @@ describe('row logic', () => {
 describe('copy', () => {
   it('labels_perStatusAndSystem', () => {
     expect(systemLabel('fake')).toEqual({ name: 'Fake ERP', mono: 'FAKE' })
+    expect(systemLabel('quickbooks')).toEqual({ name: 'QuickBooks Online', mono: 'QBO' })
     expect(systemLabel('xero')).toEqual({ name: 'xero', mono: 'XER' })
     const pill = (s: ErpStatus | null) => statusPill(rowOf(s ? conn({ status: s }) : null))
     expect(pill('active')).toEqual({ text: 'CONNECTED', tone: 'green' })

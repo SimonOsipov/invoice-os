@@ -24,6 +24,12 @@ var (
 	cr            = Credentials{}
 )
 
+func TestFake_RevokeIsANoOp(t *testing.T) {
+	if err := NewFake(testRedirect).Revoke(context.Background(), Credentials{Kind: GrantOAuthRefresh, Secret: []byte("x")}); err != nil {
+		t.Errorf("Revoke = %v, want nil", err)
+	}
+}
+
 func TestFake_ImplementsConnector(t *testing.T) {
 	if got := NewFake(testRedirect).System(); got != "fake" {
 		t.Fatalf("System = %q", got)

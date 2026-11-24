@@ -591,3 +591,67 @@ func TestRefresh_FinalAttemptReconsentsWhenTheJobContextIsDead(t *testing.T) {
 		t.Errorf("%d reauth_required, want 1", n)
 	}
 }
+
+// quickBooksRig points the rig's worker at the real QuickBooks connector over a stub token endpoint.
+func quickBooksRig(t *testing.T, s *intuitStub) (r *refreshRig, grant, ref string) {
+	t.Helper()
+	r = newRefreshRig(t)
+	reg, err := NewRegistry(quickBooksOver(t, testIntuitConfig(), s, 5*time.Second))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	r.worker.Registry = reg
+	grant = uuid.NewString()
+	ref = SecretName("", grant)
+	mustExec(t, r.super,
+		"INSERT INTO erp_grants (id, tenant_id, system, kind, secret_ref) VALUES ($1, $2, 'quickbooks', 'oauth_refresh', $3)", grant, r.tenant, ref)
+	if err := r.mem.Create(context.Background(), ref, qbSecret("a1", "r1")); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+	return r, grant, ref
+}
+
+func TestRefresh_QuickBooksStoresTheRotatedToken(t *testing.T) {
+	s := &intuitStub{status: 200, body: `{"access_token":"a2","refresh_token":"r2","expires_in":3600}`}
+	r, g, ref := quickBooksRig(t, s)
+	if err := r.work(801, g, 1, 1); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	var tok qbToken
+	if err := json.Unmarshal([]byte(r.latest(t, ref)), &tok); err != nil || tok.Access != "a2" || tok.Refresh != "r2" {
+		t.Errorf("latest secret = %+v (%v), want a2/r2", tok, err)
+	}
+	var exp time.Time
+	mustScan(t, r.super, "SELECT expires_at FROM erp_grants WHERE id = $1", []any{g}, &exp)
+	if !near(exp, time.Now().Add(time.Hour), 10*time.Second) {
+		t.Errorf("expires_at = %v, want about now + 1h", exp)
+	}
+	jobs := r.nextJobs(t)
+	if len(jobs) != 1 {
+		t.Fatalf("%d next jobs, want 1", len(jobs))
+	}
+	var at time.Time
+	mustScan(t, r.super, "SELECT scheduled_at FROM river_job WHERE id = $1", []any{jobs[0].id}, &at)
+	if !near(at, exp.Add(-5*time.Minute), time.Second) {
+		t.Errorf("next job scheduled at %v, want %v", at, exp.Add(-5*time.Minute))
+	}
+}
+
+func TestRefresh_QuickBooksInvalidGrantReconsents(t *testing.T) {
+	s := &intuitStub{status: 400, body: `{"error":"invalid_grant"}`}
+	r, g, _ := quickBooksRig(t, s)
+	c := seedConnRow(t, r.super, connRow{tenant: r.tenant, entity: seedClient(t, r.super, r.tenant, "One"), key: "k1", status: "active", grant: g})
+	if err := r.work(802, g, 1, 1); !isCancel(err) {
+		t.Fatalf("Work = %v, want a JobCancel error", err)
+	}
+	if st := stateOf(t, r.super, c); st.status != "reconsent" {
+		t.Errorf("connection is %s, want reconsent", st.status)
+	}
+	failed := r.events(t, "erp.token.refresh_failed")
+	if len(failed) != 1 || failed[0].payload["reason"] != "revoked" {
+		t.Errorf("refresh_failed = %+v, want one revoked", failed)
+	}
+	if n := len(r.nextJobs(t)); n != 0 {
+		t.Errorf("%d next jobs, want 0", n)
+	}
+}

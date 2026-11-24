@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -240,7 +241,7 @@ func TestRelease_DisconnectEnqueuesOneDeleteJob(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("%d erp_secret_delete jobs, want 1", len(jobs))
 	}
-	want := map[string]any{"tenant_id": r.tenant, "secret_ref": SecretName("", g), "connection_id": c, "system": "fake"}
+	want := map[string]any{"tenant_id": r.tenant, "secret_ref": SecretName("", g), "connection_id": c, "system": "fake", "revoke": true, "grant_kind": "oauth_refresh"}
 	if got := jobs[0].argMap(t); !reflect.DeepEqual(got, want) {
 		t.Errorf("job args = %v, want exactly %v", got, want)
 	}
@@ -317,7 +318,7 @@ func (r *releaseRig) releaseIn(t *testing.T, conn, grant string, after error) er
 		if _, err := tx.Exec(ctx, "UPDATE erp_connections SET grant_id = NULL WHERE id = $1", conn); err != nil {
 			return err
 		}
-		if err := releaseGrant(ctx, tx, r.q, grant, conn); err != nil {
+		if err := releaseGrant(ctx, tx, r.q, grant, conn, false); err != nil {
 			return err
 		}
 		return after
@@ -342,6 +343,10 @@ func TestRelease_ReconnectReleaseEnqueuesOneDeleteJob(t *testing.T) {
 	}
 	if got := jobs[0].argMap(t); got["secret_ref"] != SecretName("", g) || got["connection_id"] != c {
 		t.Errorf("job args = %v, want secret_ref %s and connection_id %s", got, SecretName("", g), c)
+	} else if _, ok := got["revoke"]; ok {
+		t.Errorf("job args = %v, a reconnect's release must not revoke", got)
+	} else if _, ok := got["grant_kind"]; ok {
+		t.Errorf("job args = %v, a reconnect's release carries no grant_kind", got)
 	}
 	if n := r.idempotencyKeys(t, "erp_secret_delete:"+g); n != 1 {
 		t.Errorf("%d idempotency keys, want 1", n)
@@ -670,5 +675,192 @@ func TestRelease_NoSecretOfAReleasedGrantRemains(t *testing.T) {
 			t.Errorf("job errors = %v, want one job with none", got)
 		}
 		r.wantSecrets(t, "after the job", []string{g1}, []string{*g2, neighbour})
+	})
+}
+
+// --- vendor revoke ----------------------------------------------------------------------
+
+type revokeSpy struct {
+	Connector
+	order *[]string
+	got   *Credentials
+	calls int
+	fn    func(ctx context.Context) error
+}
+
+func (s *revokeSpy) Revoke(ctx context.Context, c Credentials) error {
+	s.calls++
+	*s.order = append(*s.order, "revoke")
+	cc := c
+	cc.Secret = append([]byte(nil), c.Secret...)
+	*s.got = cc
+	if s.fn != nil {
+		return s.fn(ctx)
+	}
+	return nil
+}
+
+type orderedSecrets struct {
+	SecretStore
+	order *[]string
+}
+
+func (o orderedSecrets) Delete(ctx context.Context, id string) error {
+	*o.order = append(*o.order, "delete")
+	return o.SecretStore.Delete(ctx, id)
+}
+
+// revokeRig is a release rig whose worker revokes through a spy and logs into buf.
+func revokeRig(t *testing.T, fn func(ctx context.Context) error) (*releaseRig, *revokeSpy, *[]string, *strings.Builder) {
+	t.Helper()
+	r := newReleaseRig(t, 0)
+	var order []string
+	spy := &revokeSpy{Connector: testFake(t), order: &order, got: &Credentials{}, fn: fn}
+	var buf strings.Builder
+	r.worker = &SecretDeleteWorker{
+		Pool: r.app, Secrets: orderedSecrets{SecretStore: r.mem, order: &order},
+		Registry: Registry{"fake": spy}, Logger: slog.New(slog.NewTextHandler(&buf, nil)),
+	}
+	return r, spy, &order, &buf
+}
+
+func disconnectJob(t *testing.T, r *releaseRig) (deleteJob, string, []byte) {
+	t.Helper()
+	e := r.client(t, "Client One")
+	c, g := seedActive(t, r.super, r.mem, r.tenant, e, "fake-co-1")
+	secret, _, _ := r.mem.Access(context.Background(), SecretName("", g))
+	if _, err := r.store.Disconnect(r.admin, e, c); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	jobs := r.jobs(t)
+	if len(jobs) != 1 {
+		t.Fatalf("%d delete jobs, want 1", len(jobs))
+	}
+	return jobs[0], g, secret
+}
+
+func TestSecretDeleteWorker_RevokesBeforeTheDelete(t *testing.T) {
+	r, spy, order, _ := revokeRig(t, nil)
+	j, g, secret := disconnectJob(t, r)
+	if err := r.work(j, 1); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if !reflect.DeepEqual(*order, []string{"revoke", "delete"}) {
+		t.Errorf("call order = %v, want revoke then delete", *order)
+	}
+	if spy.calls != 1 {
+		t.Errorf("%d Revoke calls, want 1", spy.calls)
+	}
+	if spy.got.Kind != GrantOAuthRefresh || string(spy.got.Secret) != string(secret) {
+		t.Errorf("Revoke got kind %q and secret %q, want %q and the stored %q", spy.got.Kind, spy.got.Secret, GrantOAuthRefresh, secret)
+	}
+	if holds(r.mem, SecretName("", g)) {
+		t.Error("the secret survives its delete job")
+	}
+	if n := len(r.audit(t, "erp.token.deleted")); n != 1 {
+		t.Errorf("%d erp.token.deleted rows, want 1", n)
+	}
+}
+
+func TestSecretDeleteWorker_SharedRealmSkipsTheRevoke(t *testing.T) {
+	r, spy, _, _ := revokeRig(t, nil)
+	key := "fake-co-" + uuid.NewString()
+	e := r.client(t, "Client One")
+	c, g := seedActive(t, r.super, r.mem, r.tenant, e, key)
+	other := seedTenant(t, r.super, "firm")
+	seedConnRow(t, r.super, connRow{tenant: other, entity: seedClient(t, r.super, other, "Other"), key: key, status: "active"})
+	if _, err := r.store.Disconnect(r.admin, e, c); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	jobs := r.jobs(t)
+	if len(jobs) != 1 {
+		t.Fatalf("%d delete jobs, want 1", len(jobs))
+	}
+	if err := r.work(jobs[0], 1); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if spy.calls != 0 {
+		t.Errorf("%d Revoke calls, want 0 while another tenant holds the realm", spy.calls)
+	}
+	if holds(r.mem, SecretName("", g)) {
+		t.Error("the secret survives its delete job")
+	}
+}
+
+func TestSecretDeleteWorker_AFailedRevokeStillDeletes(t *testing.T) {
+	canary := "canary-" + uuid.NewString()
+	for name, c := range map[string]struct {
+		fn      func(ctx context.Context) error
+		timeout time.Duration
+	}{
+		"error":   {fn: func(context.Context) error { return errors.New(canary) }},
+		"timeout": {fn: func(ctx context.Context) error { <-ctx.Done(); return errors.New(canary + ctx.Err().Error()) }, timeout: 50 * time.Millisecond},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, spy, _, buf := revokeRig(t, c.fn)
+			r.worker.revokeTimeout = c.timeout
+			j, g, secret := disconnectJob(t, r)
+			if err := r.work(j, 1); err != nil {
+				t.Fatalf("Work: %v, want nil", err)
+			}
+			if spy.calls != 1 {
+				t.Errorf("%d Revoke calls, want 1", spy.calls)
+			}
+			if holds(r.mem, SecretName("", g)) {
+				t.Error("the secret survives a failed revoke")
+			}
+			if n := len(r.audit(t, "erp.token.deleted")); n != 1 {
+				t.Errorf("%d erp.token.deleted rows, want 1", n)
+			}
+			log := buf.String()
+			if !strings.Contains(log, "system=fake") || strings.Contains(log, canary) || strings.Contains(log, string(secret)) {
+				t.Errorf("log %q, want the system and no canary or secret", log)
+			}
+		})
+	}
+}
+
+func TestSecretDeleteWorker_RevokeSkips(t *testing.T) {
+	withoutRevoke := func(t *testing.T, j deleteJob) deleteJob {
+		m := j.argMap(t)
+		delete(m, "revoke")
+		delete(m, "grant_kind")
+		b, _ := json.Marshal(m)
+		return deleteJob{id: j.id, args: b}
+	}
+	t.Run("no Revoke flag", func(t *testing.T) {
+		r, spy, _, _ := revokeRig(t, nil)
+		j, g, _ := disconnectJob(t, r)
+		if err := r.work(withoutRevoke(t, j), 1); err != nil || spy.calls != 0 || holds(r.mem, SecretName("", g)) {
+			t.Errorf("err %v, %d Revoke calls, secret held %v; want nil, 0, false", err, spy.calls, holds(r.mem, SecretName("", g)))
+		}
+	})
+	t.Run("secret already deleted", func(t *testing.T) {
+		r, spy, _, buf := revokeRig(t, nil)
+		j, g, _ := disconnectJob(t, r)
+		if err := r.mem.Delete(context.Background(), SecretName("", g)); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.work(j, 1); err != nil || spy.calls != 0 || buf.Len() != 0 {
+			t.Errorf("err %v, %d Revoke calls, log %q, want nil, 0 and no log", err, spy.calls, buf.String())
+		}
+	})
+	t.Run("system not registered", func(t *testing.T) {
+		r, spy, _, _ := revokeRig(t, nil)
+		r.worker.Registry = Registry{}
+		j, g, _ := disconnectJob(t, r)
+		if err := r.work(j, 1); err != nil || spy.calls != 0 || holds(r.mem, SecretName("", g)) {
+			t.Errorf("err %v, %d Revoke calls, secret held %v; want nil, 0, false", err, spy.calls, holds(r.mem, SecretName("", g)))
+		}
+	})
+	t.Run("unsupported", func(t *testing.T) {
+		r, spy, _, buf := revokeRig(t, func(context.Context) error { return ErrUnsupported })
+		j, g, _ := disconnectJob(t, r)
+		if err := r.work(j, 1); err != nil || spy.calls != 1 || holds(r.mem, SecretName("", g)) {
+			t.Errorf("err %v, %d Revoke calls, secret held %v; want nil, 1, false", err, spy.calls, holds(r.mem, SecretName("", g)))
+		}
+		if buf.Len() != 0 {
+			t.Errorf("log %q, want none for ErrUnsupported", buf.String())
+		}
 	})
 }

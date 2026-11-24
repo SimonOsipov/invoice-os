@@ -69,3 +69,44 @@ func TestDevEnvGateStillReadsTheE2EAndTopologyResults(t *testing.T) {
 	}
 	t.Fatal("e2e-gate has no node e2e/mergeGate.ts step")
 }
+
+func TestDevEnvTopology_IntuitSignInIsNightlyUIShardOnly(t *testing.T) {
+	t.Parallel()
+	const name = "Read the Intuit sign-in"
+	for id, j := range nlJobs(readWorkflow(t, "dev-env.yml")) {
+		n := 0
+		for _, s := range j.steps() {
+			if s.keys["name"] == name {
+				n++
+			}
+		}
+		if (id == "topology") != (n == 1) || n > 1 {
+			t.Errorf("job %s has %d steps %q, want exactly one in topology and none elsewhere", id, n, name)
+		}
+	}
+	steps := devEnvJob(t, "topology").steps()
+	at := func(name string) int {
+		for i, s := range steps {
+			if s.keys["name"] == name {
+				return i
+			}
+		}
+		return -1
+	}
+	read, mock, run := at(name), at("Read the mock issuer token"), at("Topology (${{ matrix.shard }})")
+	if !(0 <= mock && mock < read && read < run) {
+		t.Fatalf("step order: mock %d, intuit %d, topology %d", mock, read, run)
+	}
+	if got, want := steps[read].keys["if"], "needs.changes.outputs.nightly == 'true' && matrix.shard == 'ui-surfaces'"; got != want {
+		t.Errorf("if = %q, want %q", got, want)
+	}
+	code := nlCode(steps[read].keys["run"])
+	if strings.Count(code, "$GITHUB_ENV") != 1 || strings.Index(code, "::add-mask::") < 0 || strings.Index(code, "::add-mask::") > strings.Index(code, "$GITHUB_ENV") {
+		t.Errorf("the run block must mask before its GITHUB_ENV write:\n%s", code)
+	}
+	for _, v := range []string{"INTUIT_LOGIN_EMAIL", "INTUIT_LOGIN_PASSWORD", "RESEND_READ_KEY"} {
+		if !strings.Contains(code, "export_secret "+v+" ") {
+			t.Errorf("run block does not export %s", v)
+		}
+	}
+}

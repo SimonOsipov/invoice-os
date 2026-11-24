@@ -25,6 +25,8 @@
 #   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
 #   preview.sh intuit-preflight nightly  fail when a nightly Intuit secret is missing or not enabled
+#   preview.sh intuit-login-email nightly    print the Intuit sign-in email the nightly spec uses
+#   preview.sh intuit-login-password nightly print the Intuit sign-in password the nightly spec uses
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
 #   preview.sh contact-token-version nightly print the number of the token's latest version
 #   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
@@ -1016,6 +1018,8 @@ case "${1:-}" in
   mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
   intuit-preflight) mail_arg "${2:-}"; cmd_intuit_preflight ;;
+  intuit-login-email) mail_arg "${2:-}"; read_secret latest --secret nightly-intuit-login-email --project "$PROJECT" ;;
+  intuit-login-password) mail_arg "${2:-}"; read_secret latest --secret nightly-intuit-login-password --project "$PROJECT" ;;
   contact-token) mail_arg "${2:-}"; cmd_contact_token "${3:-}" ;;
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
   deal-stage) deal_stage ;;
@@ -1024,5 +1028,5 @@ case "${1:-}" in
   cap) cmd_cap "${2:-}" ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|intuit-preflight|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|claim|bucket|database|migrate|grant|deploy|token|teardown|reach|mail-preflight|mail-on|mail-off|check-mail-on|check-mail-off|mail-read-key|mail-domain|mock-token|mail-blog-ids|contact-preflight|intuit-preflight|intuit-login-email|intuit-login-password|contact-token|contact-token-version|deal-stage|prs|databases|cap|invariants|budget" ;;
 esac

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -393,6 +394,49 @@ func TestComplete_ConnectsWithAGoodCode(t *testing.T) {
 	mustScan(t, r.super, "SELECT version FROM erp_grants WHERE id = $1", []any{*s.grant}, &version)
 	if jobs[0].args["version"] != float64(version) {
 		t.Errorf("refresh job claims version %v, want the grant's own version %d", jobs[0].args["version"], version)
+	}
+}
+
+// AC-2e: the QuickBooks connector, against a stub Intuit, connects through Store.Complete.
+func TestComplete_QuickBooksConnects(t *testing.T) {
+	super, app := storePools(t)
+	tenant := seedTenant(t, super, "firm")
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), "DELETE FROM river_job WHERE args->>'tenant_id' = $1", tenant)
+	})
+	admin := seedMember(t, super, tenant, "admin", "active", true)
+	e1 := seedClient(t, super, tenant, "Client One")
+	stub := &intuitStub{status: 200, body: stubTokens()}
+	q := quickBooksOver(t, testIntuitConfig(), stub, 5*time.Second)
+	store := storeOver(t, app, NewMemorySecrets(), q)
+
+	conn, consent, _, err := store.Connect(admin, e1, ConnectInput{System: "quickbooks"})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	u, err := url.Parse(consent)
+	if err != nil || u.Query().Get("state") == "" {
+		t.Fatalf("consent URL %q (%v)", consent, err)
+	}
+	realm := "4620816365"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := store.Complete(ctx, CallbackInput{State: u.Query().Get("state"), Code: "v-" + uuid.NewString(), RealmID: realm})
+	wantOutcome(t, "quickbooks", string(out), err, "connected")
+
+	s := stateOf(t, super, conn.ID)
+	if s.status != "active" || deref(s.key) != realm || s.grant == nil {
+		t.Fatalf("connection = %+v, want active with key %s and a grant", s, realm)
+	}
+	var kind string
+	var expires *time.Time
+	mustScan(t, super, "SELECT kind, expires_at FROM erp_grants WHERE id = $1", []any{*s.grant}, &kind, &expires)
+	if kind != "oauth_refresh" || expires == nil || !near(*expires, time.Now().Add(time.Hour), 10*time.Second) {
+		t.Errorf("grant kind %q expires %v", kind, expires)
+	}
+	jobs := refreshJobsOf(t, super, tenant)
+	if len(jobs) != 1 || !near(jobs[0].scheduledAt, expires.Add(-5*time.Minute), 2*time.Second) {
+		t.Errorf("refresh jobs = %+v, want one at expiry - 5 min", jobs)
 	}
 }
 

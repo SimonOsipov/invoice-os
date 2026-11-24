@@ -1544,7 +1544,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids", "intuit-preflight"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "check-mail-on", "check-mail-off", "mail-read-key", "mail-domain", "mail-blog-ids", "intuit-preflight", "intuit-login-email", "intuit-login-password"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -1560,7 +1560,7 @@ func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
 	t.Parallel()
 	const shimOutput = "shim-output"
-	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain", "mock-token": "nightly-mock-issuer-token"} {
+	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain", "mock-token": "nightly-mock-issuer-token", "intuit-login-email": "nightly-intuit-login-email", "intuit-login-password": "nightly-intuit-login-password"} {
 		t.Run(cmd, func(t *testing.T) {
 			t.Parallel()
 			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+name, shimOutput) }, cmd, "nightly")
@@ -1579,6 +1579,8 @@ var secretReads = []struct{ cmd, secret string }{
 	{"mail-read-key", "nightly-resend-read-key"},
 	{"mail-domain", "nightly-resend-receiving-domain"},
 	{"mock-token", "nightly-mock-issuer-token"},
+	{"intuit-login-email", "nightly-intuit-login-email"},
+	{"intuit-login-password", "nightly-intuit-login-password"},
 }
 
 func TestPreviewSecretReadRetriesOneTransientFailure(t *testing.T) {

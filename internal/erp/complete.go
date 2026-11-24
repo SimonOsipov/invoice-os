@@ -194,7 +194,7 @@ func (s *Store) activate(ctx context.Context, tx pgx.Tx, tenantID string, c cons
 		return "", err
 	}
 	if oldGrant != nil {
-		if err := releaseGrant(ctx, tx, s.q, *oldGrant, c.connectionID); err != nil {
+		if err := releaseGrant(ctx, tx, s.q, *oldGrant, c.connectionID, false); err != nil {
 			return "", err
 		}
 	}

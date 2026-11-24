@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -752,11 +753,9 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
 			return true
 		}
-		if u, ok := as.Rhs[0].(*ast.UnaryExpr); ok {
-			if cl, ok := u.X.(*ast.CompositeLit); ok && wtRender(cl.Type) == "erp.Workers" {
-				if id, ok := as.Lhs[0].(*ast.Ident); ok {
-					erpName = id.Name
-				}
+		if c, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "erpWorkers" {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok {
+				erpName = id.Name
 			}
 		}
 		return true
@@ -2481,8 +2480,6 @@ func TestWorkerMain_WiresTheResultSink(t *testing.T) {
 				if v := fieldOf(lit, "Results"); v != nil {
 					results[wtCallName(lit.Type)] = wtExprString(v)
 				}
-			case "erp.Workers":
-				writeBackSet = fieldOf(lit, "WriteBack") != nil
 			}
 		}
 		if len(as.Lhs) == 1 && len(as.Rhs) == 1 && wbq != "" && wtExprString(as.Lhs[0]) == wbq+".Queue" {
@@ -2497,6 +2494,13 @@ func TestWorkerMain_WiresTheResultSink(t *testing.T) {
 			t.Errorf("%s Results = %q, want %s", k, results[k], wbq)
 		}
 	}
+	// The erp.Workers literal lives in erpWorkers, which main calls.
+	ast.Inspect(f, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.CompositeLit); ok && wtRender(lit.Type) == "erp.Workers" {
+			writeBackSet = fieldOf(lit, "WriteBack") != nil
+		}
+		return true
+	})
 	if !writeBackSet {
 		t.Error("the erp.Workers literal sets no WriteBack")
 	}
@@ -2512,5 +2516,25 @@ func TestWorkerMain_WiresTheResultSink(t *testing.T) {
 	})
 	if bundle == nil || len(bundle.Args) != 11 {
 		t.Error("workerBundle no longer takes 11 arguments")
+	}
+}
+
+func TestERPWorkers_SecretDeleteGetsTheRegistry(t *testing.T) {
+	reg, err := erp.NewRegistry(erp.NewFake(&url.URL{Scheme: "https", Host: "gw.example", Path: "/erp/callback"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := erpWorkers(nil, reg, erp.NewMemorySecrets(), nil, nil, logger)
+	if got, want := w.SecretDelete.Registry.Systems(), reg.Systems(); len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("SecretDelete registry systems = %v, want %v", got, want)
+	}
+	if w.SecretDelete.Logger != logger {
+		t.Error("SecretDelete has no logger")
+	}
+	for name, got := range map[string]erp.Registry{"Refresh": w.Refresh.Registry, "Pull": w.Pull.Registry, "Ingest": w.Ingest.Registry, "WriteBack": w.WriteBack.Registry} {
+		if !slices.Equal(got.Systems(), reg.Systems()) {
+			t.Errorf("%s registry systems = %v, want %v", name, got.Systems(), reg.Systems())
+		}
 	}
 }

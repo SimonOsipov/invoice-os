@@ -253,7 +253,7 @@ func (s *Store) Disconnect(ctx context.Context, entityID, connectionID string) (
 			return err
 		}
 		if grantID != nil {
-			if err := releaseGrant(ctx, tx, s.q, *grantID, connectionID); err != nil {
+			if err := releaseGrant(ctx, tx, s.q, *grantID, connectionID, true); err != nil {
 				return err
 			}
 		}

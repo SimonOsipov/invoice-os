@@ -15,6 +15,7 @@ import { consoleHandoffUrl, readConsoleStart, requestConsoleCode } from './lib/c
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
+import { listErpConnections } from './lib/erpConnections'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber, withSupplierDefaults } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
@@ -144,12 +145,9 @@ import { ExtractionReview } from './components/ExtractionReview'
 import type {
   AuditPrefilter,
   Client,
-  ConnectorId,
-  ConnectorMappings,
   CreateStep,
   Draft,
   DraftLineNRSKey,
-  FieldMapRow,
   Mapping,
   Mode,
   PlatformCtx,
@@ -331,6 +329,43 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // Derived, not mirrored: `active` must resolve in the commit the fetch lands, before any navigation.
   const clients = useMemo(() => buildClients(entitiesList), [entitiesList])
 
+  // --- boot deep link (INVCR-01-09, D4) — the READ half -------------------------------
+  //
+  // ONE lazy parse of the boot URL, here in Workspace rather than App: App renders
+  // <Workspace> only once `session != null`, so a read up there would run before the
+  // session exists on the deep-link hand-off path. The three initializers below are
+  // DERIVED from this single value — there is deliberately no boot effect that navigates,
+  // because StrictMode double-invokes effects and a navigating one would fire twice.
+  //
+  // A stored destination only applies to a boot that landed on the bare root — the landing
+  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
+  // Path and query come from the SAME source in one shot, so a restored destination's own
+  // query (now captured alongside the path) can never be swapped for the live bare root's.
+  const [{ path: bootPath, search: bootSearch }] = useState(() => {
+    if (window.location.pathname !== '/') {
+      return { path: window.location.pathname, search: window.location.search }
+    }
+    const restored = readDestination()
+    return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
+  })
+  // One parse of the boot URL; the seeds below all read it, so path and query stay one
+  // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
+  // arrives back at the bare root with the path in storage, and reading the live pathname
+  // would open the detail view with a null id. Covered by
+  // App.signedOutDeepLink.test.tsx's restored-drill-down specs.
+  const [seed] = useState(() => parseLocation(bootPath, bootSearch))
+  // The connector detail a boot URL names, and the client its history entry was stamped with: a reload
+  // keeps history.state, so it names the client the member was on. Read here, before the mount alignment overwrites it.
+  const [bootConnectionId] = useState(() =>
+    seed.view === 'settings' && seed.settingsTab === 'connectors' ? seed.connectionId : null,
+  )
+  const [bootStampId] = useState(() => {
+    const e = (window.history.state as { e?: unknown } | null)?.e
+    return bootConnectionId !== null && typeof e === 'string' ? e : null
+  })
+  // True until the owner of a cold connector link is known: the detail reads nothing before then.
+  const [ownerPending, setOwnerPending] = useState(bootConnectionId !== null)
+
   // [entity-picker] keystone: the active selection is a real entity id, never an index
   // into a mock array. null until the user (or the fallback below) picks one.
   const [activeEntityId, setActiveEntityId] = useState<string | null>(null)
@@ -346,8 +381,12 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // with nothing chosen, or the shared emptyClient() placeholder with genuinely nothing
   // to resolve (AC-3's bootstrap window, either persona).
   const active: Client = useMemo(
-    () => resolveActiveClient(clients, activeEntityId),
-    [clients, activeEntityId],
+    () =>
+      resolveActiveClient(
+        clients,
+        activeEntityId ?? (clients.some((c) => c.entityId === bootStampId) ? bootStampId : null),
+      ),
+    [clients, activeEntityId, bootStampId],
   )
 
   // Latest-value mirror of active.entityId for the popstate handler, whose deps are [] --
@@ -392,31 +431,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     [entitiesList, active.entityId],
   )
 
-  // --- boot deep link (INVCR-01-09, D4) — the READ half -------------------------------
-  //
-  // ONE lazy parse of the boot URL, here in Workspace rather than App: App renders
-  // <Workspace> only once `session != null`, so a read up there would run before the
-  // session exists on the deep-link hand-off path. The three initializers below are
-  // DERIVED from this single value — there is deliberately no boot effect that navigates,
-  // because StrictMode double-invokes effects and a navigating one would fire twice.
-  //
-  // A stored destination only applies to a boot that landed on the bare root — the landing
-  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
-  // Path and query come from the SAME source in one shot, so a restored destination's own
-  // query (now captured alongside the path) can never be swapped for the live bare root's.
-  const [{ path: bootPath, search: bootSearch }] = useState(() => {
-    if (window.location.pathname !== '/') {
-      return { path: window.location.pathname, search: window.location.search }
-    }
-    const restored = readDestination()
-    return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
-  })
-  // One parse of the boot URL; the seeds below all read it, so path and query stay one
-  // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
-  // arrives back at the bare root with the path in storage, and reading the live pathname
-  // would open the detail view with a null id. Covered by
-  // App.signedOutDeepLink.test.tsx's restored-drill-down specs.
-  const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
   const bootView: View = availableView(seed.view, mode)
@@ -482,9 +496,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // Settings opens on Members: parseLocation returns that tab for a URL that names none.
   // SETTINGS_TABS' array order decides only which renders first.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => availableSettingsTab(seed.settingsTab, mode))
-  // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
-  // mapping survives navigating away from Settings and back.
-  const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
@@ -504,6 +515,39 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(
     bootView === 'workflows' ? seed.policyId : null,
   )
+  // Screen lifetime, like editingPolicyId: only the connectors tab carries it.
+  const [erpConnectionId, setErpConnectionId] = useState<string | null>(
+    bootView === 'settings' && availableSettingsTab(seed.settingsTab, mode) === 'connectors' ? seed.connectionId : null,
+  )
+  // A cold connector link with no usable stamp: the owner is the client whose list holds the connection.
+  // The detail reads once, under the owner. ceiling: 4 list reads in flight; raise it if a firm's client count makes the search slow.
+  useEffect(() => {
+    if (!ownerPending || entitiesList.length === 0) return
+    const done = () => setOwnerPending(false)
+    if (erpConnectionId !== bootConnectionId || !base || clients.some((c) => c.entityId === bootStampId)) return done()
+    let live = true
+    let owner: string | null = null
+    let next = 0
+    const worker = async () => {
+      while (live && owner === null && next < entitiesList.length) {
+        const e = entitiesList[next++]
+        // .catch, not .then(ok, err): a malformed body throws inside ok, which err would not see.
+        await listErpConnections(authedFetch, base, e.id)
+          .then((l) => {
+            if (l.connections.some((c) => c.id === bootConnectionId)) owner = e.id
+          })
+          .catch(() => undefined)
+      }
+    }
+    Promise.all(Array.from({ length: Math.min(4, entitiesList.length) }, worker)).then(() => {
+      if (!live) return
+      if (owner) adoptBatchClient(owner)
+      done()
+    })
+    return () => {
+      live = false
+    }
+  }, [ownerPending, entitiesList, erpConnectionId])
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
   // one persona is one tenant and the server answers for that tenant alone.
@@ -664,6 +708,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
       q: invoiceQuery,
       auditInvoice: auditPrefilter?.invoiceId ?? null,
       reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
+      connectionId: bootView === 'settings' ? erpConnectionId : null,
     })
     window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
     clearDestination()
@@ -720,6 +765,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
       setDetailLine(null)
       setExtractionJobId(at.jobId)
       setEditingPolicyId(at.policyId)
+      setErpConnectionId(
+        at.view === 'settings' && availableSettingsTab(at.settingsTab, mode) === 'connectors' ? at.connectionId : null,
+      )
       // History is one stack across identities, so a Company entry from an earlier in-house
       // session resurfaces here; `mode` is stable for this mount, so the [] closure holds.
       // popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace
@@ -787,7 +835,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
     setEditingPolicyId(policyNext)
-    const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
+    const connNext = view === 'settings' && tabNext === 'connectors' ? (params?.connectionId ?? null) : null
+    setErpConnectionId(connNext)
+    const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext, connectionId: connNext })
     window.history.pushState({ e: active.entityId, m: mountKey }, '', url)
     reportAppPage()
   }
@@ -858,6 +908,8 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     // dashboard, and leaving this set means the next visit to Workflows reopens the
     // builder mid-edit instead of the policy list the user asked for.
     setEditingPolicyId(null)
+    // A connection belongs to ONE client; the detail must never render under another.
+    setErpConnectionId(null)
     // A job belongs to ONE entity. Routing makes /extraction reachable by Back, so leaving
     // this set renders the company just left under the incoming company's chrome.
     setExtractionJobId(null)
@@ -1615,12 +1667,9 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // A tab click stays on the same screen, so it replaces.
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
+    setErpConnectionId(null)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
     window.history.replaceState(replaceStamp(), '', url)
-  }
-
-  function saveConnectorMapping(id: ConnectorId, rows: FieldMapRow[]) {
-    setConnectorMappings((m) => ({ ...m, [id]: rows }))
   }
 
   function openRule(key: string) {
@@ -1629,6 +1678,11 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
 
   function closeRule() {
     setOpenRuleKey(null)
+  }
+
+  function openErpConnection(id: string | null) {
+    if (id === erpConnectionId) return
+    navigate('settings', { settingsTab: 'connectors', connectionId: id })
   }
 
   function openPolicy(id: string) {
@@ -1784,7 +1838,6 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     switcherOpen,
     sandbox,
     settingsTab,
-    connectorMappings,
     filing,
     filingError,
     handOffReading,
@@ -1794,6 +1847,8 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     policiesError: policiesAsync.error,
     refetchPolicies: policiesAsync.run,
     editingPolicyId,
+    erpConnectionId,
+    erpOwnerPending: ownerPending,
     members,
     membersState,
     membersError: membersAsync.error,
@@ -1863,10 +1918,10 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     openDocumentReview,
     setSandbox,
     setSettingsTab,
-    saveConnectorMapping,
     openRule,
     closeRule,
     openPolicy,
+    openErpConnection,
     closePolicy,
     createPolicy,
     deletePolicy,

@@ -1056,6 +1056,95 @@ test('ST-05 ERP connectors: status pills and row paint on the real list', async 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Stubbed wire for ST-12 (a fixture check: it pins the layout, not the server's answers).
+const DETAIL_ID = 'aaaaaaaa-0000-0000-0000-0000000000d1'
+const DETAIL_ERP_RE = /\/api\/portfolio\/v1\/entities\/[^/]+\/erp-(connections|mappings|lookups)(\/|\?|$)/
+const DETAIL_GLOBS = {
+  list: '**/api/portfolio/v1/entities/*/erp-connections',
+  overview: '**/api/portfolio/v1/entities/*/erp-connections/*/overview',
+  mapping: '**/api/portfolio/v1/entities/*/erp-mappings/*',
+  lookups: '**/api/portfolio/v1/entities/*/erp-lookups/*?*',
+}
+
+test('ST-12 connector detail: four cards, header, reload and layout at every width', async ({ page }, testInfo) => {
+  const errors = gatedErrors(page, [])
+  const writes: string[] = []
+  page.on('request', (r) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method()) && DETAIL_ERP_RE.test(r.url())) writes.push(`${r.method()} ${r.url()}`)
+  })
+  const conn = { id: DETAIL_ID, entity_id: ENTITY_ID, system: 'fake', external_key: 'fake-co-1', status: 'active', last_sync_at: '2026-01-02T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+  const doc = (n: number, state: string) => ({ id: `bbbbbbbb-0000-0000-0000-00000000000${n}`, source_doc_id: `fake-co-1-inv-${n}`, source_revision: '1', state, failure: null, invoice_id: null, invoice_number: `FK1-000${n}`, differs_from_erp: false, changed_after_clearance_at: null, deleted_in_erp_at: null, updated_at: '2026-01-02T00:00:00Z' })
+  const held = [
+    { ...doc(3, 'held'), invoice_number: null, deleted_in_erp_at: '2026-01-02T00:00:00Z', reasons: ['deleted_in_erp'] },
+    { ...doc(4, 'failed'), invoice_number: null, failure: 'unmappable', reasons: ['failed'] },
+  ]
+  const overview = {
+    connection: conn,
+    activity: { since: '2026-01-01T00:00:00Z', counts: { pulled: 2, pending: 0, drafted: 1, linked: 1, held: 0, failed: 0, deleted: 0 }, documents: [doc(1, 'drafted'), doc(2, 'linked')] },
+    writebacks: [{ id: 'cccccccc-0000-0000-0000-000000000001', invoice_id: 'dddddddd-0000-0000-0000-000000000001', invoice_number: 'FK1-0001', outcome: 'accepted', state: 'succeeded', reason: null, attempt: 1, created_at: '2026-01-02T00:00:00Z' }],
+    held,
+  }
+  const mapping = {
+    system: 'fake',
+    fields: [
+      { target: 'invoice_number', label: 'Invoice number', line: false, source_path: 'number', default_path: 'number', origin: 'default' },
+      { target: 'line_description', label: 'Line description', line: true, source_path: 'lines[].item_id', default_path: 'lines[].description', origin: 'client' },
+    ],
+  }
+  const lookups = { system: 'fake', external_key: 'fake-co-1', lookups: [{ kind: 'tax_code', erp_key: 'VAT7', tax_category: 'standard', exemption_code: null, hsn_code: null, service_code: null, tin: null, state: null, lga: null }] }
+  const stub = (glob: string, body: unknown) => page.route(glob, (route) => (route.request().method() === 'GET' ? route.fulfill({ status: 200, headers: CORS, body: JSON.stringify(body) }) : route.fallback()))
+  await stub(DETAIL_GLOBS.list, { systems: ['fake'], connections: [conn] })
+  await stub(DETAIL_GLOBS.overview, overview)
+  await stub(DETAIL_GLOBS.mapping, mapping)
+  await stub(DETAIL_GLOBS.lookups, lookups)
+
+  await openSettings(page, 'firm')
+  await openTab(page, 'ERP connectors', 'connectors')
+  await tid(page, 'erp-connector-manage').click()
+  await expect(page, 'Manage did not open the connection address').toHaveURL(new RegExp(`/settings/connectors/${DETAIL_ID}$`))
+  await expect(tid(page, 'erp-detail-header'), 'the detail never opened').toBeVisible()
+  await page.reload()
+  await expect(tid(page, 'erp-detail-header'), 'a reload lost the detail').toBeVisible({ timeout: 30_000 })
+  await expect(page, 'a reload changed the address').toHaveURL(new RegExp(`/settings/connectors/${DETAIL_ID}$`))
+  await expect(tid(page, 'erp-held-row'), 'fixture check: two held rows').toHaveCount(2)
+  await settle(page, main(page))
+
+  const cardIds = ['erp-detail-mapping', 'erp-detail-activity', 'erp-detail-writebacks', 'erp-detail-held']
+  const cards: Named = Object.fromEntries(cardIds.map((id) => [id, tid(page, id)]))
+  const paint: Record<string, unknown> = {}
+  for (const [id, card] of Object.entries({ 'erp-detail-header': tid(page, 'erp-detail-header'), ...cards })) {
+    paint[id] = { corners: await expectCorners(card, '6px', id), shadow: (await styles(card, ['box-shadow']))['box-shadow'] }
+    expect((paint[id] as { shadow: string }).shadow, `${id} shadow`).toBe('none')
+  }
+
+  const hdr = tid(page, 'erp-detail-header')
+  const read = async () => {
+    const { rects, problems } = await boxes({
+      main: main(page),
+      header: hdr,
+      tile: hdr.locator(':scope > span').first(),
+      name: hdr.locator(':scope > div').first(),
+      pill: tid(page, 'erp-detail-status'),
+      ...cards,
+    })
+    // main scrolls, so a card below the fold is outside its visible rect by design; only the horizontal band is a claim.
+    insideX(rects, 'main', ['header', ...cardIds], problems)
+    noOverlap(rects, ['header', ...cardIds], problems)
+    inside(rects, 'header', ['tile', 'name', 'pill'], problems)
+    noOverlap(rects, ['tile', 'name', 'pill'], problems)
+    return { problems, rects }
+  }
+  const measured = await sweep(page, 'connector detail', read, [...WIDE_WIDTHS, ...PHONE_WIDTHS])
+  for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+    await page.setViewportSize({ width, height: 900 })
+    await assertPageDoesNotScrollSideways(page, `connector detail at ${width}px wide`)
+  }
+  await attachJson(testInfo, 'st-12-measurements', { paint, measured })
+  await attachShot(page, testInfo, 'connector-detail')
+  expect(writes, `a write reached erp-:\n${writes.join('\n')}`).toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 // Status pills are the spans that hold a 5px dot and a mono label.
 const STATUS_PILLS = (root: Element) =>
   [...root.querySelectorAll('span')]

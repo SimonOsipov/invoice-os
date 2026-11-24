@@ -1,7 +1,7 @@
 // The fake ERP's invoices arrive as drafts over the deployed gateway: the preview runs the fake connector.
 // Every step acts on a client this run created; assertions are containment, never a tenant total.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, listInvoices, getAuditLog, PERSONAS } from './client'
+import { login, createEntity, createInvoice, listInvoices, getAuditLog, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { connectFake } from './erpFake'
 
@@ -9,8 +9,21 @@ const FAKE_KEY = 'fake-co-1' // fakeSeed key in internal/erp/fake_seed.go
 const NUMBERS = ['FK1-0001', 'FK1-0002', 'FK1-0003'] // fakeSeed fake-co-1 invoice numbers
 const FAKE_TOTAL = 107500 // fake line 100000.00 at 7.5% (fakeInvoiceBody in internal/erp/fake.go)
 const OWN_TOTAL = 5000
+const DOC_IDS = NUMBERS.map((_, i) => `fake-co-1-inv-${i + 1}`) // fakeSeed fake-co-1 document ids
 const PULLED = 'erp.document.pulled' // recordPulled in internal/erp/ingest.go
 const SKIPPED = 'erp.document.skipped_duplicate' // recordSkipped in internal/erp/ingest.go
+
+interface OverviewDoc {
+  source_doc_id: string
+  state: string
+  invoice_id: string | null
+  invoice_number: string | null
+}
+
+interface Overview {
+  activity: { since: string; counts: { pulled: number }; documents: OverviewDoc[] }
+  held: (OverviewDoc & { reasons: string[] })[]
+}
 
 interface Payload {
   connection_id: string
@@ -62,6 +75,31 @@ test.describe.serial('ERP ingest (API E2E, over the deployed gateway)', () => {
     expect(same.map((i) => i.id)).toContain(ownId)
     expect(same.every((i) => i.id === ownId)).toBe(true)
     expect(Number(same.find((i) => i.id === ownId)?.total)).toBe(OWN_TOTAL)
+  })
+
+  test('the connection overview lists the pulled documents and the held linked duplicate', async () => {
+    // The linked duplicate's document may land after the invoice list is complete: poll for it.
+    const read = async () => {
+      const res = await rawFetch(`/api/portfolio/v1/entities/${entityId}/erp-connections/${connId}/overview`, {
+        headers: { Authorization: `Bearer ${admin}` },
+      })
+      expect(res.status).toBe(200)
+      return res.body as Overview
+    }
+    await expect.poll(async () => (await read()).held.map((h) => h.source_doc_id), { timeout: 20_000 }).toContain(DOC_IDS[1])
+    const ov = await read()
+
+    const docs = ov.activity.documents
+    expect(docs.map((d) => d.source_doc_id)).toEqual(expect.arrayContaining(DOC_IDS))
+    expect(ov.activity.counts.pulled).toBeGreaterThanOrEqual(DOC_IDS.length)
+    for (const [i, id] of DOC_IDS.entries()) {
+      const d = docs.find((x) => x.source_doc_id === id)
+      expect(d?.invoice_number, id).toBe(NUMBERS[i])
+      expect(['drafted', 'linked'], id).toContain(d?.state)
+    }
+    const dup = ov.held.find((h) => h.source_doc_id === DOC_IDS[1])
+    expect(dup?.invoice_id).toBe(ownId)
+    expect(dup?.reasons).toContain('differs_from_erp')
   })
 
   test('the pull is audited: pulled invoices and the linked duplicate with its mark', async () => {

@@ -1,5 +1,5 @@
 // RED specs (task-396, BUG-03-07 item 6, Mode A) — pin the '19-check MBS rule pack' copy
-// and the untouched readinessNote fence before the executor edits data.tsx/lib/connectorDetailMock.ts.
+// and the untouched readinessNote fence before the executor edits data.tsx.
 // vitest environment is 'node' (vitest.config.ts) — no jsdom, no component rendered.
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { CFG } from './data'
-import { CONNECTOR_DEFS, connectorDetail } from './lib/connectorDetailMock'
 
 // Recursively walks `rootDir` for .ts/.tsx files containing `needle`. Duplicated from
 // importFlow.test.ts's own scanForIdentifier — test-only helper in an independently
@@ -40,15 +39,6 @@ describe('rule-pack copy (BUG-03-07 item 6)', () => {
     const needle = '16-ch' + 'eck'
     const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
     expect(hits.sort()).toEqual([])
-  })
-
-  it('the validated activity-feed copy reads 19-check', () => {
-    // connectorDetail's activity feed always includes 'validated' entries (fixed literal,
-    // independent of the seeded PRNG) — positive companion guards this against a filter
-    // that vacuously passes over zero rows.
-    const validated = connectorDetail(CONNECTOR_DEFS[0]).activity.filter((e) => e.kind === 'validated')
-    expect(validated.length).toBeGreaterThan(0)
-    validated.forEach((e) => expect(e.desc).toBe('Passed 19-check MBS rule pack'))
   })
 
   // Fence pin (AC-4): these four are dead fields no component reads, and item 6 does not

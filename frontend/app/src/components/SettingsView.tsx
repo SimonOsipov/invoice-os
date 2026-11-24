@@ -24,6 +24,7 @@ import { API_BASE, CERTS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
 import { COMPANY_ADMIN_ONLY, companySetupAccess } from '../lib/members'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
+import { ConnectorDetail } from './ConnectorDetail'
 import { ConnectorsView } from './ConnectorsView'
 import { EntityFormModal } from './EntityFormModal'
 import type { Entity } from '../lib/portfolio'
@@ -229,7 +230,18 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
       {settingsTab === 'workspace' && <WorkspaceSettings ctx={ctx} />}
 
-      {settingsTab === 'connectors' && <ConnectorsView ctx={ctx} />}
+      {settingsTab === 'connectors' &&
+        (activeEntity && ctx.erpConnectionId ? (
+          <ConnectorDetail
+            key={`${activeEntity.id}/${ctx.erpConnectionId}`}
+            ctx={ctx}
+            entityId={activeEntity.id}
+            connectionId={ctx.erpConnectionId}
+            onBack={() => ctx.openErpConnection(null)}
+          />
+        ) : (
+          <ConnectorsView ctx={ctx} />
+        ))}
 
       {/* API & webhooks */}
       {settingsTab === 'api' && (

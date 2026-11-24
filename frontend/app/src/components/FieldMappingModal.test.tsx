@@ -1,166 +1,236 @@
 // @vitest-environment jsdom
-// FieldMappingModal against the prototype mapping modal.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CONNECTOR_DEFS, mappingFor } from '../lib/connectorDetailMock'
+import { ApiError } from '@invoice-os/api-client'
+
+import type { FieldView, Lookup, LookupsView, MappingView } from '../lib/erpConnectionDetail'
 import type { PlatformCtx } from '../types'
 import { FieldMappingModal } from './FieldMappingModal'
 
-const def = CONNECTOR_DEFS[0]
+const MAP_URL = 'https://gw.test/api/portfolio/v1/entities/e1/erp-mappings/fake'
+const LOOK_URL = 'https://gw.test/api/portfolio/v1/entities/e1/erp-lookups/fake?external_key=k'
 
-function mount() {
-  const save = vi.fn()
-  const onClose = vi.fn()
-  const ctx = { connectorMappings: {}, saveConnectorMapping: save } as unknown as PlatformCtx
-  const r = render(<FieldMappingModal ctx={ctx} def={def} onClose={onClose} />)
-  return { ...r, save, onClose }
+const field = (target: string, o: Partial<FieldView> = {}): FieldView => ({
+  target, label: target.toUpperCase(), line: false, source_path: 'a.' + target, default_path: 'a.' + target, origin: 'default', ...o,
+})
+const lk = (o: Partial<Lookup> = {}): Lookup => ({
+  kind: 'customer', erp_key: 'C1', tax_category: null, exemption_code: null, hsn_code: null, service_code: null, tin: '12345678-0001', state: null, lga: null, ...o,
+})
+const mapping = (): MappingView => ({
+  system: 'fake',
+  fields: [
+    field('invoice_number', { source_path: 'mine.no', origin: 'client' }),
+    field('issue_date'),
+    field('line_qty', { line: true }),
+  ],
+})
+const lookups = (): LookupsView => ({ system: 'fake', external_key: 'k', lookups: [lk(), lk({ erp_key: 'C2', tin: '12345678-0002' })] })
+
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((a) => {
+    resolve = a
+  })
+  return { promise, resolve }
 }
-const panel = () => screen.getByRole('dialog', { name: 'Edit field mapping' })
-const scrim = () => panel().parentElement as HTMLElement
-const btn = (name: string) => screen.getByRole('button', { name })
 
-afterEach(cleanup)
+type Init = { method?: string; body?: { fields?: unknown; lookups?: unknown } }
+const puts = (f: ReturnType<typeof vi.fn>) => f.mock.calls.filter((c) => (c[1] as Init | undefined)?.method === 'PUT') as [string, Init][]
 
-describe('FieldMappingModal > scrim and panel', () => {
-  it('the scrim is the D-1 colour-mix with blur(6px) on both backdrop properties', () => {
-    mount()
-    const s = scrim()
-    expect(s.style.background).toBe('color-mix(in srgb, var(--surface) 55%, transparent)')
-    expect(s.style.backdropFilter).toBe('blur(6px)')
-    expect((s.style as unknown as Record<string, string>).WebkitBackdropFilter).toBe('blur(6px)')
-  })
+function mount(o: { fetch?: (url: string, init: Init) => unknown; externalKey?: string | null } = {}) {
+  const f = vi.fn(async (url: string, init: Init) => (o.fetch ? o.fetch(url, init) : url.includes('erp-mappings') ? mapping() : lookups()))
+  const ctx = { authedFetch: f, refetchMembers: vi.fn() } as unknown as PlatformCtx
+  const onSaved = vi.fn()
+  const onClose = vi.fn()
+  const externalKey = o.externalKey === undefined ? 'k' : o.externalKey
+  const r = render(
+    <FieldMappingModal ctx={ctx} entityId="e1" system="fake" systemName="Fake ERP" externalKey={externalKey} mapping={mapping()} lookups={externalKey === null ? null : lookups()} onSaved={onSaved} onClose={onClose} />,
+  )
+  return { ...r, f, ctx, onSaved, onClose }
+}
+const row = (t: string) => screen.getAllByTestId('field-mapping-row').find((r) => r.dataset.target === t)!
+const save = () => screen.getByTestId('field-mapping-save') as HTMLButtonElement
+const edit = (el: HTMLElement, v: string) => fireEvent.change(el, { target: { value: v } })
+const clickSave = () => act(async () => { fireEvent.click(save()) })
 
-  it('the panel is 640 wide, --bg-2, a --line-2 border, --radius-lg and --shadow-card', () => {
-    mount()
-    const p = panel()
-    expect(p.style.width).toBe('640px')
-    expect(p.style.background).toBe('var(--bg-2)')
-    expect(p.style.borderRadius).toBe('var(--radius-lg)')
-    expect(p.style.boxShadow).toBe('var(--shadow-card)')
-    expect(p.style.border).toContain('var(--line-2)')
-  })
-
-  it('no oklch paint remains anywhere in the modal', () => {
-    const { container } = mount()
-    expect(container.innerHTML.length).toBeGreaterThan(500)
-    expect(container.innerHTML).not.toContain('oklch')
-  })
+beforeEach(() => {
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+})
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
 })
 
-describe('FieldMappingModal > header', () => {
-  it('pads 16px 20px, with a 15/700 title, a mono 10 --fg-3 caption and an --action arrow glyph', () => {
+describe('FieldMappingModal', () => {
+  it('fieldMappingModal_showsEveryTargetAndTheLookups', () => {
     mount()
-    const title = screen.getByText('Edit field mapping', { exact: true })
-    expect(title.style.fontSize).toBe('15px')
-    expect(title.style.fontWeight).toBe('700')
-    const head = title.parentElement!.parentElement!.parentElement as HTMLElement
-    expect(head.style.padding).toBe('16px 20px')
-    const cap = screen.getByText('ERP FIELD → NRS UBL PATH', { exact: true })
-    expect(cap.className).toBe('mono')
-    expect(cap.style.fontSize).toBe('10px')
-    expect(cap.style.color).toBe('var(--fg-3)')
-    const icon = title.parentElement!.previousElementSibling as HTMLElement
-    expect(icon.style.color).toBe('var(--action)')
-    expect(icon.querySelector('path')?.getAttribute('d')).toBe('M5 12h14M13 6l6 6-6 6')
+    expect(screen.getAllByTestId('field-mapping-row')).toHaveLength(3)
+    expect((within(row('invoice_number')).getByLabelText('INVOICE_NUMBER path') as HTMLInputElement).value).toBe('mine.no')
+    expect((within(row('issue_date')).getByLabelText('ISSUE_DATE path') as HTMLInputElement).value).toBe('a.issue_date')
+    expect(within(row('line_qty')).getByText('LINE')).toBeTruthy()
+    expect(screen.getAllByTestId('lookup-row')).toHaveLength(2)
+    expect(screen.getAllByTestId('field-mapping-default')).toHaveLength(1)
   })
 
-  it('the close button is 30x30, borderless, transparent, --fg-3, with the 16px close glyph', () => {
+  it('fieldMappingModal_savesOnlyTheChangedRows', async () => {
+    const f = mount({ fetch: (u) => (u.includes('erp-mappings') ? mapping() : lookups()) })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'new.date')
+    edit(screen.getAllByLabelText('TIN')[1], '12345678-0009')
+    await clickSave()
+    const p = puts(f.f)
+    expect(p).toHaveLength(2)
+    expect(p[0][0]).toBe(MAP_URL)
+    expect(p[0][1].body).toEqual({ fields: [{ target: 'issue_date', source_path: 'new.date' }] })
+    expect(p[1][0]).toBe(LOOK_URL)
+    expect(p[1][1].body).toEqual({ lookups: [lk({ erp_key: 'C2', tin: '12345678-0009' })] })
+    expect(f.onClose).toHaveBeenCalledTimes(1)
+    expect(f.onSaved).toHaveBeenCalledTimes(2)
+  })
+
+  it('fieldMappingModal_useDefaultSendsNull', async () => {
+    const f = mount()
+    fireEvent.click(screen.getByTestId('field-mapping-default'))
+    expect((screen.getByLabelText('INVOICE_NUMBER path') as HTMLInputElement).value).toBe('a.invoice_number')
+    await clickSave()
+    expect(puts(f.f)[0][1].body).toEqual({ fields: [{ target: 'invoice_number', source_path: null }] })
+  })
+
+  it('fieldMappingModal_onlyLookupsChangedSkipsTheFieldPut', async () => {
+    const f = mount()
+    edit(screen.getAllByLabelText('TIN')[0], '12345678-0008')
+    await clickSave()
+    const p = puts(f.f)
+    expect(p).toHaveLength(1)
+    expect(p[0][0]).toBe(LOOK_URL)
+  })
+
+  it('fieldMappingModal_onlyFieldsChangedSkipsTheLookupsPut', async () => {
+    const f = mount()
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'new.date')
+    await clickSave()
+    const p = puts(f.f)
+    expect(p).toHaveLength(1)
+    expect(p[0][0]).toBe(MAP_URL)
+    expect(f.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('fieldMappingModal_theScrimDoesNotCloseItWhileSaving', async () => {
+    const held = deferred<MappingView>()
+    const f = mount({ fetch: () => held.promise })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    fireEvent.click(screen.getByTestId('field-mapping-modal').parentElement!)
+    expect(f.onClose).not.toHaveBeenCalled()
+    await act(async () => held.resolve(mapping()))
+    fireEvent.click(screen.getByTestId('field-mapping-modal').parentElement!)
+    expect(f.onClose).toHaveBeenCalled()
+  })
+
+  it('fieldMappingModal_clearingADefaultRowLeavesSaveDisabled', () => {
     mount()
-    const c = btn('Close')
-    expect(c.style.width).toBe('30px')
-    expect(c.style.height).toBe('30px')
-    expect(c.style.border).toMatch(/^(0|0px|none)/)
-    expect(c.style.background).toBe('transparent')
-    expect(c.style.color).toBe('var(--fg-3)')
-    expect(c.querySelector('svg')?.getAttribute('width')).toBe('16')
+    edit(screen.getByLabelText('ISSUE_DATE path'), '')
+    expect(save().disabled).toBe(true)
+    expect(within(row('issue_date')).queryByText('Blank saves as Use default'), 'a default row has no override to drop').toBeNull()
+    expect(within(row('issue_date')).queryByTestId('field-mapping-default')).toBeNull()
   })
-})
 
-describe('FieldMappingModal > rows (D-11)', () => {
-  it('keeps one label per input, so every input has an accessible name', () => {
-    const rows = mappingFor(def, {})
+  it('fieldMappingModal_clearingAClientRowSaysItUsesTheDefault', () => {
     mount()
-    expect(rows.length).toBeGreaterThan(0)
-    expect(screen.getAllByLabelText('ERP source field')).toHaveLength(rows.length)
-    expect(screen.getAllByLabelText('NRS UBL target')).toHaveLength(rows.length)
-    expect(document.querySelectorAll('label')).toHaveLength(rows.length * 2)
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), '')
+    expect(within(row('invoice_number')).getByText('Blank saves as Use default')).toBeTruthy()
+    expect(within(row('invoice_number')).queryByTestId('field-mapping-default')).toBeNull()
+    expect(save().disabled).toBe(false)
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), '   ')
+    expect(within(row('invoice_number')).getByText('Blank saves as Use default')).toBeTruthy()
+    edit(screen.getByLabelText('INVOICE_NUMBER path'), 'x.y')
+    expect(within(row('invoice_number')).queryByText('Blank saves as Use default')).toBeNull()
+    expect(within(row('invoice_number')).getByTestId('field-mapping-default')).toBeTruthy()
   })
 
-  it('rows stack with a 10px gap and no row dividers', () => {
-    mount()
-    const first = screen.getAllByLabelText('ERP source field')[0]
-    const row = first.closest('label')!.parentElement as HTMLElement
-    expect(row.style.gridTemplateColumns).toBe('minmax(0, 1fr) auto minmax(0, 1fr)')
-    expect(row.style.gap).toBe('10px')
-    expect(row.style.borderBottom).toBe('')
-    const list = row.parentElement as HTMLElement
-    expect(list.style.gap).toBe('10px')
-    expect(list.style.padding).toBe('16px 20px')
+  it('fieldMappingModal_saveDisabledUntilAChange', async () => {
+    const held = deferred<MappingView>()
+    const f = mount({ fetch: () => held.promise })
+    expect(save().disabled).toBe(true)
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    expect(save().disabled).toBe(false)
+    await clickSave()
+    expect(save().disabled).toBe(true)
+    expect(save().textContent).toBe('Saving…')
+    expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Close' }) as HTMLButtonElement).disabled).toBe(true)
+    await clickSave()
+    expect(puts(f.f)).toHaveLength(1)
+    await act(async () => held.resolve(mapping()))
   })
 
-  it('inputs are 34 tall mono 12 on --bg-1 with a --line-2 border and radius-md; the target is --action', () => {
-    mount()
-    const [erp] = screen.getAllByLabelText('ERP source field') as HTMLInputElement[]
-    const [ubl] = screen.getAllByLabelText('NRS UBL target') as HTMLInputElement[]
-    for (const i of [erp, ubl]) {
-      expect(i.style.height).toBe('34px')
-      expect(i.style.fontSize).toBe('12px')
-      expect(i.style.padding).toBe('0px 10px')
-      expect(i.style.background).toBe('var(--bg-1)')
-      expect(i.style.borderRadius).toBe('var(--radius-md)')
-      expect(i.style.border).toContain('var(--line-2)')
-    }
-    expect(erp.style.color).toBe('var(--fg-1)')
-    expect(ubl.style.color).toBe('var(--action)')
+  it('fieldMappingModal_a400KeepsItOpenWithTheSentence', async () => {
+    const f = mount({ fetch: () => { throw new ApiError('http', 'invoice_number: unknown path', 400) } })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    expect(screen.getByTestId('field-mapping-error').textContent).toBe('invoice_number: unknown path')
+    expect(f.onClose).not.toHaveBeenCalled()
+    expect(f.ctx.refetchMembers).not.toHaveBeenCalled()
+    expect(save().disabled).toBe(false)
   })
 
-  it('each row carries the 14px arrow glyph in --fg-4 between its inputs', () => {
-    mount()
-    const row = screen.getAllByLabelText('ERP source field')[0].closest('label')!.parentElement as HTMLElement
-    const arrow = row.children[1] as HTMLElement
-    expect(arrow.style.color).toBe('var(--fg-4)')
-    expect(arrow.getAttribute('aria-hidden')).toBe('true')
-    expect(arrow.querySelector('path')?.getAttribute('d')).toBe('M5 12h14M13 6l6 6-6 6')
-  })
-})
-
-describe('FieldMappingModal > footer and behaviour', () => {
-  it('Cancel and Save are 36 tall pf-btn buttons; Save is --action with --primary-foreground text', () => {
-    mount()
-    const cancel = btn('Cancel')
-    const save = btn('Save mapping')
-    for (const b of [cancel, save]) {
-      expect(b.className).toBe('pf-btn')
-      expect(b.style.height).toBe('36px')
-      expect(b.style.borderRadius).toBe('var(--radius-btn)')
-    }
-    expect(cancel.style.background).toBe('var(--bg-2)')
-    expect(cancel.style.color).toBe('var(--fg-2)')
-    expect(save.style.background).toBe('var(--action)')
-    expect(save.style.color).toBe('var(--primary-foreground)')
+  it('fieldMappingModal_a403RefetchesTheRoster', async () => {
+    const f = mount({ fetch: () => { throw new ApiError('http', 'Only an admin can edit the mapping.', 403) } })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    expect(screen.getByTestId('field-mapping-error').textContent).toContain('admin')
+    expect(f.ctx.refetchMembers).toHaveBeenCalledTimes(1)
   })
 
-  it('Save lifts the edited draft once and closes; Cancel and the scrim discard', () => {
-    const { save, onClose } = mount()
-    const [erp] = screen.getAllByLabelText('ERP source field') as HTMLInputElement[]
-    fireEvent.change(erp, { target: { value: 'ZZ-EDITED' } })
-    fireEvent.click(btn('Save mapping'))
-    expect(save).toHaveBeenCalledTimes(1)
-    const [id, rows] = save.mock.calls[0]
-    expect(id).toBe(def.id)
-    expect(rows[0].erp).toBe('ZZ-EDITED')
-    expect(onClose).toHaveBeenCalledTimes(1)
-    onClose.mockClear()
-    fireEvent.click(btn('Cancel'))
-    fireEvent.click(scrim())
-    expect(onClose).toHaveBeenCalledTimes(2)
-    expect(save).toHaveBeenCalledTimes(1)
+  it('fieldMappingModal_fieldsLandLookupsFail', async () => {
+    const next = { ...mapping(), fields: [field('issue_date', { source_path: 'x', origin: 'client' })] }
+    const f = mount({
+      fetch: (u) => {
+        if (u.includes('erp-mappings')) return next
+        throw new ApiError('http', 'customer tin: not a fileable TIN', 400)
+      },
+    })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    edit(screen.getAllByLabelText('TIN')[0], 'nope')
+    await clickSave()
+    expect(f.onSaved).toHaveBeenCalledTimes(1)
+    expect(f.onSaved).toHaveBeenCalledWith({ mapping: next })
+    expect(f.onClose).not.toHaveBeenCalled()
+    expect(screen.getByTestId('field-mapping-error').textContent).toBe('customer tin: not a fileable TIN')
+    // The retry sends the lookups alone: the landed field row is no longer a change.
+    await clickSave()
+    expect(puts(f.f).map((p) => p[0])).toEqual([MAP_URL, LOOK_URL, LOOK_URL])
   })
 
-  it('a click inside the panel does not close it', () => {
-    const { onClose } = mount()
-    fireEvent.click(panel())
-    expect(onClose).not.toHaveBeenCalled()
+  it('fieldMappingModal_noCompanyNoLookups', async () => {
+    const f = mount({ externalKey: null })
+    expect(screen.queryAllByTestId('lookup-row')).toHaveLength(0)
+    expect(screen.queryByTestId('lookup-add')).toBeNull()
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    expect(puts(f.f).every((p) => p[0] === MAP_URL)).toBe(true)
+  })
+
+  it('fieldMappingModal_unmountMidSaveCallsNothing', async () => {
+    const held = deferred<MappingView>()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = mount({ fetch: () => held.promise })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    f.unmount()
+    await act(async () => held.resolve(mapping()))
+    expect(f.onSaved).not.toHaveBeenCalled()
+    expect(f.onClose).not.toHaveBeenCalled()
+    expect(err).not.toHaveBeenCalled()
+  })
+
+  it('fieldMappingModal_a401ShowsTheSentenceOnly', async () => {
+    const f = mount({ fetch: () => { throw new ApiError('http', 'Your session ended.', 401) } })
+    edit(screen.getByLabelText('ISSUE_DATE path'), 'x')
+    await clickSave()
+    await waitFor(() => expect(screen.getByTestId('field-mapping-error').textContent).toBe('Your session ended.'))
+    expect(f.ctx.refetchMembers).not.toHaveBeenCalled()
+    expect(f.onClose).not.toHaveBeenCalled()
   })
 })

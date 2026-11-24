@@ -79,6 +79,8 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections", erp.ListHandler(erpStore.List, erpStore.Systems, app.Logger))
 	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections", erp.ConnectHandler(erpStore.Gate, erpStore.Connect, app.Logger))
 	app.Mux.HandleFunc("POST /v1/entities/{id}/erp-connections/{connection}/disconnect", erp.DisconnectHandler(erpStore.Disconnect, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-connections/{connection}/overview", erp.OverviewHandler(erpStore.Overview, app.Logger))
+	app.Mux.HandleFunc("GET /v1/entities/{id}/invoices/{invoice}/erp-marks", erp.MarksHandler(erpStore.Marks, app.Logger))
 	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-mappings/{system}", erp.MappingHandler(erpStore.Mapping, app.Logger))
 	app.Mux.HandleFunc("PUT /v1/entities/{id}/erp-mappings/{system}", erp.SaveMappingHandler(erpStore.Gate, erpStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("GET /v1/entities/{id}/erp-lookups/{system}", erp.LookupsHandler(erpStore.Lookups, app.Logger))

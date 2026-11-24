@@ -1,7 +1,8 @@
 // Settings > ERP connectors on the deployed preview: connect and disconnect the fake ERP through its
-// consent tab, and the row's layout. Every step acts on a client this run created.
+// consent tab, the row's layout, and the connection detail. Every step acts on a client this run created.
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { login, createEntity, rawFetch, type Persona } from '../api/client'
+import { login, createEntity, rawFetch, listInvoices, editInvoice, validateInvoice, approveUntilClosed, firmApproverTokens, submitAndAwait, type Persona } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { signInAs } from '../personaSession'
 import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -9,7 +10,11 @@ import { shardTenants } from './targets'
 
 const SHARD = shardTenants('erp-connectors.spec.ts')
 const PERSONA: Persona = { ...SHARD.a, tenantId: SHARD.a.id }
-const CO1 = 'fake-co-1' // erpweb.FakeCompanies
+const CO3 = 'fake-co-3' // erpweb.FakeCompanies; fakeSeed in internal/erp/fake_seed.go holds a voided document
+const VOIDED = 'fake-co-3-inv-6' // fakeSeed fake-co-3 voided document id
+const FIRST_NO = 'FK3-0001' // fakeSeed fake-co-3 first invoice number
+const ITEM_PATH = 'lines[].item_id' // the path e2e/api/erp-mapping.spec.ts saves
+const ACCEPT_TIN = '99999999-0001' // mock NRS script: accepts
 const OUTCOME_CONNECTED = 'connected' // erp.Outcome* in internal/erp/complete.go
 
 type Conn = { id: string; system: string; external_key: string | null; status: string }
@@ -23,6 +28,7 @@ let connId = ''
 test.beforeAll(async () => {
   expect(test.info().project.name, 'erp-connectors.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces')
   token = await login(PERSONA)
+  await ensureFirmPolicyActive(token) // the shard seed leaves the firm policy a draft; the approval below needs it
   // "Zenith" sorts after every seeded entity, so it never becomes another spec's default client.
   entity = await createEntity(token, { name: `Zenith ERP connectors ${Date.now()}`, tin: freshTin() })
 })
@@ -69,7 +75,7 @@ test('an admin connects the fake ERP through the fake consent page', async ({ pa
   await expect(pillOf(row)).toHaveText('NOT CONNECTED')
 
   const [popup] = await Promise.all([context.waitForEvent('page'), row.getByTestId('erp-connector-connect').click()])
-  await popup.locator('select').selectOption(CO1)
+  await popup.locator('select').selectOption(CO3)
   await popup.getByRole('button', { name: 'Allow', exact: true }).click()
   await expect(popup.locator('main[data-outcome]')).toHaveAttribute('data-outcome', OUTCOME_CONNECTED)
   await popup.close()
@@ -77,8 +83,8 @@ test('an admin connects the fake ERP through the fake consent page', async ({ pa
   // The app tab polls the list; no reload.
   await expect(pillOf(row)).toHaveText('CONNECTED', { timeout: 30_000 })
   const conns = await listConnections()
-  const made = conns.find((c) => c.system === 'fake' && c.status === 'active' && c.external_key === CO1)
-  expect(made, `no active fake connection for ${CO1} in:\n${JSON.stringify(conns)}`).toBeDefined()
+  const made = conns.find((c) => c.system === 'fake' && c.status === 'active' && c.external_key === CO3)
+  expect(made, `no active fake connection for ${CO3} in:\n${JSON.stringify(conns)}`).toBeDefined()
   connId = made!.id
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -134,12 +140,102 @@ test('the connector row fits at every width', async ({ page }) => {
   await openConnectors(page)
   const row = rowById(page, connId)
   await expect(pillOf(row)).toHaveText('CONNECTED')
+  await expect(row.getByTestId('erp-connector-manage'), 'a connected row carries Manage').toBeVisible()
   await row.getByTestId('erp-connector-disconnect').click()
   await expect(page.getByTestId('erp-disconnect-confirm')).toBeVisible()
   await sweep(page, connId, true)
   await page.getByTestId('erp-disconnect-keep').click()
   await expect(page.getByTestId('erp-disconnect-confirm')).toHaveCount(0)
   await sweep(page, connId, false)
+})
+
+const header = (page: Page) => page.getByTestId('erp-detail-header')
+const detailUrl = () => new RegExp(`/settings/connectors/${connId}$`)
+
+async function openDetail(page: Page): Promise<void> {
+  await openConnectors(page)
+  await rowById(page, connId).getByTestId('erp-connector-manage').click()
+  await expect(page).toHaveURL(detailUrl())
+  await expect(header(page)).toBeVisible()
+}
+
+// The pull sweep ticks once a minute: reload until the panel shows the wanted row.
+async function reloadUntil(page: Page, want: () => Locator): Promise<void> {
+  await expect(async () => {
+    await page.reload()
+    await expect(header(page)).toBeVisible({ timeout: 15_000 })
+    await expect(want()).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 180_000, intervals: [5_000] })
+}
+
+test('Manage opens the connection detail and a reload keeps it', async ({ page }) => {
+  expect(connId, 'the connect test captured no connection').not.toBe('')
+  const errors = collectErrors(page)
+  await openDetail(page)
+  await page.reload()
+  await expect(header(page)).toBeVisible({ timeout: 30_000 })
+  await expect(page).toHaveURL(detailUrl())
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the pull lands in Sync activity', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+  await openDetail(page)
+  await reloadUntil(page, () => page.getByTestId('erp-activity-row').filter({ hasText: FIRST_NO }))
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the voided document is held', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+  await openDetail(page)
+  const held = () => page.locator(`[data-testid="erp-held-row"][data-source-doc-id="${VOIDED}"]`)
+  await reloadUntil(page, held)
+  await expect(held()).toContainText('Deleted or voided in the ERP')
+  await expect(held().getByTestId('erp-held-open'), 'a voided document with no invoice has nothing to open').toHaveCount(0)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('an admin edits one mapping row', async ({ page }) => {
+  const errors = collectErrors(page)
+  await openDetail(page)
+  await page.getByTestId('erp-detail-mapping-edit').click()
+  const modal = page.getByTestId('field-mapping-modal')
+  await expect(modal).toBeVisible()
+  await modal.locator('[data-testid="field-mapping-row"][data-target="line_description"] input').fill(ITEM_PATH)
+  await page.getByTestId('field-mapping-save').click()
+  await expect(modal).toHaveCount(0, { timeout: 30_000 })
+
+  await page.reload()
+  const mapped = page.locator('[data-testid="erp-mapping-row"][data-target="line_description"]')
+  await expect(mapped).toContainText(ITEM_PATH, { timeout: 30_000 })
+  await expect(mapped).toContainText('CUSTOM')
+  const res = await rawFetch(`/api/portfolio/v1/entities/${entity.id}/erp-mappings/fake`, { headers: { Authorization: `Bearer ${token}` } })
+  expect(res.status).toBe(200)
+  const field = (res.body as { fields: { target: string; source_path: string | null; origin: string }[] }).fields.find((f) => f.target === 'line_description')
+  expect(field, 'the live mapping read agrees').toMatchObject({ source_path: ITEM_PATH, origin: 'client' })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('an accepted invoice is written back', async ({ page }) => {
+  test.setTimeout(480_000)
+  const errors = collectErrors(page)
+  let id = ''
+  await expect
+    .poll(async () => (id = (await listInvoices(token, { entity_id: entity.id, limit: 100 })).invoices.find((i) => i.invoice_number === FIRST_NO)?.id ?? ''), { timeout: 180_000, intervals: [5_000] })
+    .not.toBe('')
+  await editInvoice(token, id, { buyer_tin: ACCEPT_TIN }) // the pulled draft fails only buyer-tin-format
+  await validateInvoice(token, id)
+  await approveUntilClosed(id, await firmApproverTokens(SHARD.a.id))
+  await submitAndAwait(token, id, 'accepted')
+
+  await openDetail(page)
+  const row = () => page.getByTestId('erp-writeback-row').filter({ hasText: FIRST_NO })
+  await reloadUntil(page, row)
+  await expect(row()).toContainText('ACCEPTED')
+  await expect(row()).toContainText('Written back')
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('an admin disconnects it after one confirmation', async ({ page }) => {

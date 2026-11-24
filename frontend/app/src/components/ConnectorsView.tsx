@@ -29,19 +29,18 @@ import {
   DISCONNECT_KEEP,
   disconnectQuestion,
   listErpConnections,
-  safeConsentUrl,
+  POLL_MAX_TICKS,
+  POLL_MS,
   statusPill,
   syncLine,
   systemLabel,
   type ConnectorRow,
   type ErpListing,
 } from '../lib/erpConnections'
+import { MANAGE } from '../lib/erpConnectionDetail'
+import { closeConsentTab, openConsentTab, sendToConsent } from '../lib/erpConsent'
 import { viewerIsAdmin } from '../lib/members'
 import type { PlatformCtx } from '../types'
-
-const POLL_MS = 3000
-// A consent state lives 10 minutes, so a run is 200 ticks of 3 s.
-const POLL_MAX_TICKS = 200
 
 // The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
 const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
@@ -149,17 +148,14 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
     if (busyRef.current || !base || entityId === null) return
     busyRef.current = true
     const eid = entityId
-    // Opened before any await: a window opened after one is a blocked popup.
-    const tab = window.open('', '_blank')
-    if (tab) tab.opener = null
+    const tab = openConsentTab()
     setBusyKey(row.key)
     setBlocked(null)
     try {
       const answer = await connectErp(ctx.authedFetch, base, eid, connectBody(row))
-      const url = safeConsentUrl(answer.consent_url)
-      if (url === null) throw new ApiError('malformed', CONNECTORS_BAD_CONSENT_URL)
       // The user asked for this consent, so it opens even when the view is gone.
-      if (tab) tab.location.href = url
+      const url = sendToConsent(tab, answer)
+      if (url === null) throw new ApiError('malformed', CONNECTORS_BAD_CONSENT_URL)
       if (!aliveRef.current || entityRef.current !== eid) return
       if (!tab) setBlocked({ entityId: eid, system: row.system, url })
       // The row shows the answered connection now, so it reads pending and the poll has a pending listing to read.
@@ -171,7 +167,7 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
       )
       startPoll()
     } catch (err) {
-      tab?.close()
+      closeConsentTab(tab)
       if (aliveRef.current && entityRef.current === eid) failed(err)
     } finally {
       busyRef.current = false
@@ -242,6 +238,18 @@ export function ConnectorsView({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.text }} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>{pill.text}</span>
                 </span>
+                {row.connection && (
+                  <button
+                    type="button"
+                    data-testid="erp-connector-manage"
+                    disabled={busy}
+                    onClick={() => ctx.openErpConnection(row.connection!.id)}
+                    className="pf-btn"
+                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, ...(busy ? DISABLED : null) }}
+                  >
+                    {MANAGE}
+                  </button>
+                )}
                 {admin && canConnect(row, shown.systems) && (
                   <button
                     type="button"

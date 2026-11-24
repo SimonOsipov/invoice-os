@@ -37,6 +37,11 @@ type stubs struct {
 	gotSystem, gotExternalKey                                      string
 	gotFields                                                      []FieldChange
 	gotLookups                                                     []Lookup
+
+	overviewErr, marksErr error
+	overview              Overview
+	marks                 []DocumentMark
+	gotInvoice            string
 }
 
 func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
@@ -82,6 +87,16 @@ func (s *stubs) mux(log *slog.Logger) *http.ServeMux {
 			s.gotEntity, s.gotSystem, s.gotExternalKey, s.gotLookups = e, sys, k, l
 			return s.lookupsView, s.saveLookupsErr
 		}, log))
+	m.HandleFunc("GET /v1/entities/{id}/erp-connections/{connection}/overview", OverviewHandler(
+		func(_ context.Context, e, c string) (Overview, error) {
+			s.gotEntity, s.gotConn = e, c
+			return s.overview, s.overviewErr
+		}, log))
+	m.HandleFunc("GET /v1/entities/{id}/invoices/{invoice}/erp-marks", MarksHandler(
+		func(_ context.Context, e, inv string) ([]DocumentMark, error) {
+			s.gotEntity, s.gotInvoice = e, inv
+			return s.marks, s.marksErr
+		}, log))
 	return m
 }
 
@@ -109,6 +124,8 @@ const (
 	disconnectPath = "/v1/entities/E/erp-connections/C/disconnect"
 	mappingPath    = "/v1/entities/E/erp-mappings/fake"
 	lookupsPath    = "/v1/entities/E/erp-lookups/fake?external_key=co-1"
+	overviewPath   = "/v1/entities/E/erp-connections/C/overview"
+	marksPath      = "/v1/entities/E/invoices/I/erp-marks"
 )
 
 func TestHandlers_StatusForEveryStoreError(t *testing.T) {
@@ -130,7 +147,7 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 		{invalidMapping("line_quantity", "a line field reads one []"), 400, "line_quantity: a line field reads one []"},
 		{invalidLookup("external_key: required"), 400, "external_key: required"},
 	} {
-		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err, mappingErr: c.err, saveMappingErr: c.err, lookupsErr: c.err, saveLookupsErr: c.err}
+		s := &stubs{connectErr: c.err, disconnectErr: c.err, listErr: c.err, mappingErr: c.err, saveMappingErr: c.err, lookupsErr: c.err, saveLookupsErr: c.err, overviewErr: c.err, marksErr: c.err}
 		for name, w := range map[string]*httptest.ResponseRecorder{
 			"connect":    do(s.mux(nil), "POST", listPath, `{"system":"fake"}`, true),
 			"disconnect": do(s.mux(nil), "POST", disconnectPath, "", true),
@@ -139,6 +156,8 @@ func TestHandlers_StatusForEveryStoreError(t *testing.T) {
 			"saveMap":    do(s.mux(nil), "PUT", mappingPath, "{}", true),
 			"lookups":    do(s.mux(nil), "GET", lookupsPath, "", true),
 			"saveLook":   do(s.mux(nil), "PUT", lookupsPath, "{}", true),
+			"overview":   do(s.mux(nil), "GET", overviewPath, "", true),
+			"marks":      do(s.mux(nil), "GET", marksPath, "", true),
 		} {
 			if w.Code != c.status || errText(t, w) != c.msg {
 				t.Errorf("%v on %s: got %d %q, want %d %q", c.err, name, w.Code, errText(t, w), c.status, c.msg)
@@ -179,7 +198,8 @@ func TestHandlers_NoIdentityIs401(t *testing.T) {
 	s := &stubs{}
 	m := s.mux(nil)
 	for _, c := range [][3]string{{"GET", listPath, ""}, {"POST", listPath, "{}"}, {"POST", disconnectPath, ""},
-		{"GET", mappingPath, ""}, {"PUT", mappingPath, "{}"}, {"GET", lookupsPath, ""}, {"PUT", lookupsPath, "{}"}} {
+		{"GET", mappingPath, ""}, {"PUT", mappingPath, "{}"}, {"GET", lookupsPath, ""}, {"PUT", lookupsPath, "{}"},
+		{"GET", overviewPath, ""}, {"GET", marksPath, ""}} {
 		if w := do(m, c[0], c[1], c[2], false); w.Code != 401 {
 			t.Errorf("%s %s = %d, want 401", c[0], c[1], w.Code)
 		}
@@ -392,6 +412,61 @@ func TestHandlers_PathValuesReachTheStore(t *testing.T) {
 	do(s.mux(nil), "GET", mappingPath, "", true)
 	if s.gotEntity != "E" || s.gotSystem != "fake" {
 		t.Errorf("get mapping got %q %q", s.gotEntity, s.gotSystem)
+	}
+}
+
+func TestMarksHandler_AnswersSnakeCaseAndEmptyArray(t *testing.T) {
+	for name, none := range map[string][]DocumentMark{"nil": nil, "empty": {}} {
+		s := &stubs{marks: none}
+		w := do(s.mux(nil), "GET", marksPath, "", true)
+		if got := strings.TrimSpace(w.Body.String()); w.Code != 200 || got != `{"marks":[]}` {
+			t.Errorf("%s marks: %d %s, want 200 {\"marks\":[]}", name, w.Code, got)
+		}
+		if s.gotEntity != "E" || s.gotInvoice != "I" {
+			t.Errorf("%s marks: the store got %q %q, want E and I", name, s.gotEntity, s.gotInvoice)
+		}
+	}
+
+	changed := time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC)
+	s := &stubs{marks: []DocumentMark{{ConnectionID: "c1", System: "fake", SourceDocID: "d1", State: "linked", ChangedAfterClearanceAt: &changed}}}
+	w := do(s.mux(nil), "GET", marksPath, "", true)
+	var body struct {
+		Marks []json.RawMessage `json:"marks"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 || len(body.Marks) != 1 {
+		t.Fatalf("one mark: %d %s (%v)", w.Code, w.Body.String(), err)
+	}
+	want := []string{"changed_after_clearance_at", "connection_id", "deleted_in_erp_at", "differs_from_erp", "source_doc_id", "state", "system"}
+	if got := keys(t, body.Marks[0]); !slices.Equal(got, want) {
+		t.Errorf("mark keys = %v, want %v", got, want)
+	}
+	if got := string(body.Marks[0]); !strings.Contains(got, `"changed_after_clearance_at":"2026-11-20T09:30:00Z"`) || !strings.Contains(got, `"deleted_in_erp_at":null`) {
+		t.Errorf("mark = %s, want the time as RFC 3339 and the unset time null", got)
+	}
+}
+
+func TestOverviewHandler_NotFoundIs404(t *testing.T) {
+	s := &stubs{overviewErr: ErrNoSuchRecord}
+	w := do(s.mux(nil), "GET", overviewPath, "", true)
+	if got := strings.TrimSpace(w.Body.String()); w.Code != 404 || got != `{"error":"not found"}` {
+		t.Errorf("not found: %d %s, want 404 {\"error\":\"not found\"}", w.Code, got)
+	}
+
+	// The control: an answer is 200 with the contract's top-level and activity keys.
+	s = &stubs{}
+	w = do(s.mux(nil), "GET", overviewPath, "", true)
+	if got := keys(t, w.Body.Bytes()); w.Code != 200 || !slices.Equal(got, []string{"activity", "connection", "held", "writebacks"}) {
+		t.Fatalf("overview: %d keys %v, want 200 and connection, activity, writebacks, held", w.Code, got)
+	}
+	if s.gotEntity != "E" || s.gotConn != "C" {
+		t.Errorf("the store got %q %q, want E and C", s.gotEntity, s.gotConn)
+	}
+	var body struct {
+		Activity json.RawMessage `json:"activity"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if got := keys(t, body.Activity); !slices.Equal(got, []string{"counts", "documents", "since"}) {
+		t.Errorf("activity keys = %v, want counts, documents, since", got)
 	}
 }
 

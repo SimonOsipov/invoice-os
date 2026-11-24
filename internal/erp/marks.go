@@ -9,9 +9,13 @@ import (
 
 // DocumentMark is what one linked ERP document says about its invoice.
 type DocumentMark struct {
-	ConnectionID, System, SourceDocID, State string
-	DiffersFromERP                           bool
-	ChangedAfterClearanceAt, DeletedInERPAt  *time.Time
+	ConnectionID            string     `json:"connection_id"`
+	System                  string     `json:"system"`
+	SourceDocID             string     `json:"source_doc_id"`
+	State                   string     `json:"state"`
+	DiffersFromERP          bool       `json:"differs_from_erp"`
+	ChangedAfterClearanceAt *time.Time `json:"changed_after_clearance_at"`
+	DeletedInERPAt          *time.Time `json:"deleted_in_erp_at"`
 }
 
 // InvoiceMarks lists the marks of every document linked to the invoice, in the caller's tenant transaction.

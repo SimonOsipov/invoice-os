@@ -1307,9 +1307,6 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
   await expect(page.locator('[data-testid="erp-connector-row"][data-system="fake"]').getByTestId('erp-connector-status')).toHaveText('NOT CONNECTED')
   await expect(page.getByText(/\/ 6 CONNECTED/)).toHaveCount(0)
   await expect(page.getByText('Synced 2 min ago')).toHaveCount(0)
-  for (const vendor of ['SAP S/4HANA', 'Oracle NetSuite', 'QuickBooks Online', 'Sage 300', 'Odoo', 'Microsoft Dynamics 365']) {
-    await expect(page.getByText(vendor)).toHaveCount(0)
-  }
   await page.getByRole('button', { name: 'API & webhooks', exact: true }).click()
   await expect(page.getByText('No webhooks yet')).toBeVisible()
   await expect(page.getByText(/honeywell\.ng/)).toHaveCount(0)

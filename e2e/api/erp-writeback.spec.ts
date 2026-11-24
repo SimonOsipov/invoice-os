@@ -12,6 +12,7 @@ import {
   submitAndAwait,
   getInvoice,
   getAuditLog,
+  rawFetch,
   PERSONAS,
 } from './client'
 import { freshTin } from './fixtures'
@@ -24,6 +25,8 @@ const ACCEPT_TIN = '99999999-0001' // mock NRS script: accepts
 const REJECT_TIN = '99999999-0002' // mock NRS script: rejects
 const SUCCEEDED = 'erp.writeback.succeeded' // write in internal/erp/writeback.go
 const IRN_SHAPE = /-FBMOCK01-\d{8}$/ // fixture check: the mock-backed IRN shape, mockServiceID in internal/submission/mock_script.go
+
+const ACCEPTED_DOC = 'fake-co-1-inv-1' // fakeSeed fake-co-1 document id of FK1-0001
 
 interface Payload {
   connection_id: string
@@ -81,6 +84,29 @@ test.describe.serial('ERP write-back (API E2E, over the deployed gateway)', () =
     expect(entry.outcome).toBe('accepted')
     expect(entry.irn).toBe(inv.irn)
     expect(entry.irn).toMatch(IRN_SHAPE) // fixture check, mock-backed
+  })
+
+  test("the overview and the marks show the accepted invoice's write-back", async () => {
+    const get = (path: string) => rawFetch(`/api/portfolio/v1/entities/${entityId}${path}`, { headers: { Authorization: `Bearer ${admin}` } })
+    const done = async () => {
+      const res = await get(`/erp-connections/${connId}/overview`)
+      expect(res.status).toBe(200)
+      const ov = res.body as { writebacks: { invoice_id: string; invoice_number: string; outcome: string; state: string; reason: string | null }[] }
+      return ov.writebacks.filter((w) => w.invoice_id === ids[ACCEPTED_NO] && w.state === 'succeeded')
+    }
+    await expect.poll(async () => (await done()).length, { timeout: 60_000, intervals: [3_000] }).toBeGreaterThan(0)
+    const [attempt] = await done()
+    expect(attempt).toMatchObject({ invoice_number: ACCEPTED_NO, outcome: 'accepted', state: 'succeeded', reason: null })
+
+    const marks = await get(`/invoices/${ids[ACCEPTED_NO]}/erp-marks`)
+    expect(marks.status).toBe(200)
+    const list = (marks.body as { marks: { connection_id: string; source_doc_id: string; changed_after_clearance_at: string | null }[] }).marks
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({ connection_id: connId, source_doc_id: ACCEPTED_DOC, changed_after_clearance_at: null })
+
+    const unknown = await get(`/invoices/00000000-0000-4000-8000-000000000000/erp-marks`)
+    expect(unknown.status).toBe(404)
+    expect(unknown.body).toEqual({ error: 'not found' })
   })
 
   test("a rejected ERP invoice's result is written back without an IRN", async () => {

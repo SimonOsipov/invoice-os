@@ -35,7 +35,7 @@ export type AuditedAtom = {
 // (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
 // Shape (b): suspended, bootPath/bootSearch, seed, sandbox,
-// connectorMappings, policies, members, roles. Named, not indexed --
+// policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
 // Every route a screen reading an always-mounted atom can be on: the 14 ROUTE_PATHS
@@ -314,15 +314,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Durable by design (App.tsx#navigate); popstate re-clamps it by `mode` at App.tsx#onPopState. A tab choice is not company data.',
   },
   {
-    binding: 'connectorMappings, setConnectorMappings',
-    name: 'connectorMappings',
-    kind: 'useState',
-    resetBySwitchClient: false,
-    routes: ['/settings', '/settings/<tab>'],
-    verdict: 'correctly-reset',
-    note: 'Never fetched; keyed by ConnectorId only (App.tsx#saveConnectorMapping), never by entity, so it has no company dimension to go stale.',
-  },
-  {
     binding: 'openRuleKey, setOpenRuleKey',
     name: 'openRuleKey',
     kind: 'useState',
@@ -351,6 +342,46 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     verdict: 'stale-and-reachable',
     citation: { in: 'function switchClient(id: string)', text: 'setEditingPolicyId(null)' },
     note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /workflows/<id> entry at App.tsx#onPopState (ROUTE-07-04). App.tsx#navigate writes it too -- screen lifetime, so a bare Workflows visit clears it itself. Reaches WorkflowsView as ctx.editingPolicyId. Collapsed cross-company by ROUTE-06-02.',
+  },
+  {
+    binding: 'erpConnectionId, setErpConnectionId',
+    name: 'erpConnectionId',
+    kind: 'useState',
+    resetBySwitchClient: true,
+    routes: ['/settings/connectors', '/settings/connectors/<id>'],
+    verdict: 'stale-and-reachable',
+    citation: { in: 'function switchClient(id: string)', text: 'setErpConnectionId(null)' },
+    note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /settings/connectors/<id> entry at App.tsx#onPopState; the stale-entry clamp reduces that path to /settings first. App.tsx#navigate writes it too -- screen lifetime. Reaches SettingsView as ctx.erpConnectionId.',
+  },
+  {
+    binding: 'bootConnectionId',
+    name: 'bootConnectionId',
+    kind: 'useState',
+    resetBySwitchClient: false,
+    routes: ['/settings/connectors/<id>'],
+    verdict: 'correctly-reset',
+    citation: { text: 'const [bootConnectionId] = useState(() =>' },
+    note: 'Boot-only constant: the connection a boot URL names. Read once by the owner search; a switch never rewrites it.',
+  },
+  {
+    binding: 'bootStampId',
+    name: 'bootStampId',
+    kind: 'useState',
+    resetBySwitchClient: false,
+    routes: ['/settings/connectors/<id>'],
+    verdict: 'correctly-reset',
+    citation: { text: 'const [bootStampId] = useState(() => {' },
+    note: 'Boot-only constant: the client id history.state carried at mount, read before the mount alignment overwrites it. Used only when the portfolio lists it.',
+  },
+  {
+    binding: 'ownerPending, setOwnerPending',
+    name: 'ownerPending',
+    kind: 'useState',
+    resetBySwitchClient: false,
+    routes: ['/settings/connectors/<id>'],
+    verdict: 'correctly-reset',
+    citation: { text: 'const [ownerPending, setOwnerPending] = useState(bootConnectionId !== null)' },
+    note: 'Boot-only: true from a cold connector link until its owner client is known, then false for the mount. Never set again, so a switch has nothing to reset. Reaches the detail as ctx.erpOwnerPending.',
   },
   {
     binding: 'members, setMembers',

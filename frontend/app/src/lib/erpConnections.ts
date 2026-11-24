@@ -3,6 +3,10 @@
 import type { AuthedFetch } from './portfolio'
 import { fmtDateTime } from './format'
 
+export const POLL_MS = 3000
+// A consent state lives 10 minutes, so a run is 200 ticks of 3 s.
+export const POLL_MAX_TICKS = 200
+
 export type ErpStatus = 'pending' | 'active' | 'reconsent' | 'disconnected'
 
 export type ErpConnectionWire = {
